@@ -13,11 +13,15 @@
 #include <exception>
 #include <fmt/core.h>
 
+#include <seastar/core/abort_source.hh>
+#include <seastar/core/semaphore.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/sharded.hh>
 #include <seastar/core/future.hh>
 
 #include "gms/inet_address.hh"
+#include "service/topology_guard.hh"
+#include "streaming/stream_reason.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "replica/database_fwd.hh"
 #include "mutation/frozen_mutation.hh"
@@ -295,6 +299,95 @@ struct tablet_repair_sched_info {
     bool sched_by_scheduler = false;
     bool for_tablet_rebuild = false;
     locator::tablet_repair_incremental_mode incremental_mode;
+};
+
+namespace repair {
+class shard_repair_task_impl;
+}
+
+// The state of a single shard repair that the row level repair machinery
+// works with.
+class repair_info {
+public:
+    repair_service& rs;
+    seastar::sharded<replica::database>& db;
+    seastar::sharded<netw::messaging_service>& messaging;
+    gms::gossiper& gossiper;
+private:
+    locator::effective_replication_map_ptr _erm;
+    std::string _keyspace;
+    streaming::stream_reason _reason;
+    // The abort source of the task owning this repair.
+    seastar::abort_source& _as;
+public:
+    dht::token_range_vector ranges;
+    std::vector<table_id> table_ids;
+    std::vector<sstring> cfs;
+    repair_uniq_id global_repair_id;
+    std::vector<sstring> data_centers;
+    std::vector<sstring> hosts;
+    std::unordered_set<locator::host_id> ignore_nodes;
+    std::unordered_map<dht::token_range, repair_neighbors> neighbors;
+    repair_stats stats;
+    uint64_t nr_ranges_finished = 0;
+    size_t nr_failed_ranges = 0;
+    int ranges_index = 0;
+    std::unordered_set<sstring> dropped_tables;
+    std::unordered_set<locator::host_id> nodes_down;
+    bool hints_batchlog_flushed = false;
+    bool small_table_optimization = false;
+    size_t small_table_optimization_ranges_reduced_factor = 1;
+private:
+    bool _aborted = false;
+    service::frozen_topology_guard _frozen_topology_guard;
+    service::topology_guard _topology_guard = {service::null_topology_guard};
+    std::optional<semaphore> _user_ranges_parallelism;
+    uint64_t _ranges_complete = 0;
+public:
+    tablet_repair_sched_info sched_info;
+public:
+    repair_info(repair_service& repair,
+            sstring keyspace,
+            locator::effective_replication_map_ptr erm_,
+            dht::token_range_vector ranges_,
+            std::vector<table_id> table_ids_,
+            repair_uniq_id global_repair_id_,
+            std::vector<sstring> data_centers_,
+            std::vector<sstring> hosts_,
+            std::unordered_set<locator::host_id> ignore_nodes_,
+            std::unordered_map<dht::token_range, repair_neighbors> neighbors_,
+            streaming::stream_reason reason_,
+            bool hints_batchlog_flushed,
+            bool small_table_optimization,
+            std::optional<int> ranges_parallelism,
+            service::frozen_topology_guard topo_guard,
+            seastar::abort_source& as,
+            tablet_repair_sched_info sched_info_ = tablet_repair_sched_info(),
+            size_t small_table_optimization_ranges_reduced_factor_ = 1);
+
+    void check_in_abort_or_shutdown();
+    repair_neighbors get_repair_neighbors(const dht::token_range& range);
+    size_t ranges_size() const noexcept;
+    // Returns the token metadata version pinned by this repair's
+    // effective_replication_map, or nullopt if it does not hold one.
+    std::optional<locator::token_metadata::version_t> pinned_token_metadata_version() const noexcept {
+        return _erm ? std::optional(_erm->get_token_metadata().get_version()) : std::nullopt;
+    }
+    void update_statistics(const repair_stats& o) {
+        stats.add(o);
+    }
+    const std::vector<sstring>& table_names() const {
+        return cfs;
+    }
+    const std::string& get_keyspace() const noexcept {
+        return _keyspace;
+    }
+    streaming::stream_reason reason() const noexcept {
+        return _reason;
+    }
+    locator::effective_replication_map_ptr get_erm();
+
+    friend class repair::shard_repair_task_impl;
 };
 
 namespace std {

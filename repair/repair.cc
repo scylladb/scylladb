@@ -680,13 +680,13 @@ void repair::task_manager_module::abort_repairs_pinning_stale_versions(locator::
             on_internal_error_noexcept(rlogger, format("repair task {} in _repairs is not a shard_repair_task_impl", task_id));
             continue;
         }
-        if (impl->reason() != streaming::stream_reason::repair) {
+        if (impl->info.reason() != streaming::stream_reason::repair) {
             continue;
         }
-        auto pinned_version = impl->pinned_token_metadata_version();
+        auto pinned_version = impl->info.pinned_token_metadata_version();
         if (pinned_version && *pinned_version < current_version) {
             rlogger.warn("repair[{}]: Aborting repair job because it pins stale token metadata version {} which blocks a topology barrier for version {}, keyspace={}, tables={}",
-                    impl->global_repair_id.uuid(), *pinned_version, current_version, impl->get_keyspace(), impl->table_names());
+                    impl->info.global_repair_id.uuid(), *pinned_version, current_version, impl->info.get_keyspace(), impl->info.table_names());
             it->second->abort();
         }
     }
@@ -699,9 +699,9 @@ float repair::task_manager_module::report_progress() {
         auto it = get_local_tasks().find(x.second);
         if (it != get_local_tasks().end()) {
             auto& impl = dynamic_cast<repair::shard_repair_task_impl&>(*it->second->_impl);
-            if (impl.reason() == streaming::stream_reason::repair) {
-                nr_ranges_total += impl.ranges_size();
-                nr_ranges_finished += impl.nr_ranges_finished;
+            if (impl.info.reason() == streaming::stream_reason::repair) {
+                nr_ranges_total += impl.info.ranges_size();
+                nr_ranges_finished += impl.info.nr_ranges_finished;
             }
         }
     }
@@ -773,28 +773,54 @@ repair::shard_repair_task_impl::shard_repair_task_impl(tasks::task_manager::modu
         service::frozen_topology_guard topo_guard,
         tablet_repair_sched_info sched_info,
         size_t small_table_optimization_ranges_reduced_factor_)
-    : repair_task_impl(module, id, 0, "shard", std::move(keyspace), "", "", parent_id_.uuid(), reason_)
-    , rs(repair)
+    : repair_task_impl(module, id, 0, "shard", keyspace, "", "", parent_id_.uuid(), reason_)
+    , info(repair, std::move(keyspace), std::move(erm_), std::move(ranges_), std::move(table_ids_), parent_id_, std::move(data_centers_), std::move(hosts_),
+            std::move(ignore_nodes_), std::move(neighbors_), reason_, hints_batchlog_flushed, small_table_optimization,
+            ranges_parallelism, topo_guard, _as, std::move(sched_info), small_table_optimization_ranges_reduced_factor_)
+    , mm(repair.get_migration_manager())
+    , _flush_time(flush_time)
+{}
+
+repair_info::repair_info(repair_service& repair,
+        sstring keyspace,
+        locator::effective_replication_map_ptr erm_,
+        dht::token_range_vector ranges_,
+        std::vector<table_id> table_ids_,
+        repair_uniq_id global_repair_id_,
+        std::vector<sstring> data_centers_,
+        std::vector<sstring> hosts_,
+        std::unordered_set<locator::host_id> ignore_nodes_,
+        std::unordered_map<dht::token_range, repair_neighbors> neighbors_,
+        streaming::stream_reason reason_,
+        bool hints_batchlog_flushed,
+        bool small_table_optimization,
+        std::optional<int> ranges_parallelism,
+        service::frozen_topology_guard topo_guard,
+        seastar::abort_source& as,
+        tablet_repair_sched_info sched_info_,
+        size_t small_table_optimization_ranges_reduced_factor_)
+    : rs(repair)
     , db(repair.get_db())
     , messaging(repair.get_messaging().container())
-    , mm(repair.get_migration_manager())
     , gossiper(repair.get_gossiper())
-    , erm(std::move(erm_))
+    , _erm(std::move(erm_))
+    , _keyspace(std::move(keyspace))
+    , _reason(reason_)
+    , _as(as)
     , ranges(std::move(ranges_))
-    , cfs(get_table_names(db.local(), table_ids_))
     , table_ids(std::move(table_ids_))
-    , global_repair_id(parent_id_)
+    , cfs(get_table_names(db.local(), table_ids))
+    , global_repair_id(global_repair_id_)
     , data_centers(std::move(data_centers_))
     , hosts(std::move(hosts_))
     , ignore_nodes(std::move(ignore_nodes_))
     , neighbors(std::move(neighbors_))
-    , _hints_batchlog_flushed(std::move(hints_batchlog_flushed))
-    , _small_table_optimization(small_table_optimization)
+    , hints_batchlog_flushed(std::move(hints_batchlog_flushed))
+    , small_table_optimization(small_table_optimization)
     , small_table_optimization_ranges_reduced_factor(small_table_optimization_ranges_reduced_factor_)
-    , _user_ranges_parallelism(ranges_parallelism ? std::optional<semaphore>(semaphore(*ranges_parallelism)) : std::nullopt)
-    , _flush_time(flush_time)
     , _frozen_topology_guard(topo_guard)
-    , sched_info(sched_info)
+    , _user_ranges_parallelism(ranges_parallelism ? std::optional<semaphore>(semaphore(*ranges_parallelism)) : std::nullopt)
+    , sched_info(std::move(sched_info_))
 {
     rlogger.debug("repair[{}]: Setting user_ranges_parallelism to {}", global_repair_id.uuid(),
             _user_ranges_parallelism ? std::to_string(_user_ranges_parallelism->available_units()) : "unlimited");
@@ -802,26 +828,26 @@ repair::shard_repair_task_impl::shard_repair_task_impl(tasks::task_manager::modu
 
 void repair::shard_repair_task_impl::check_failed_ranges() {
     rlogger.info("repair[{}]: stats: repair_reason={}, keyspace={}, tables={}, ranges_nr={}, {}",
-        global_repair_id.uuid(), _reason, _status.keyspace, table_names(), ranges.size(), _stats.get_stats());
-    if (nr_failed_ranges || _aborted || _failed_because) {
+        info.global_repair_id.uuid(), _reason, _status.keyspace, info.table_names(), info.ranges.size(), info.stats.get_stats());
+    if (info.nr_failed_ranges || info._aborted || _failed_because) {
         sstring failed_because = "N/A";
-        if (!_aborted) {
+        if (!info._aborted) {
             failed_because = _failed_because ? *_failed_because : "unknown";
         }
         auto msg = seastar::format("repair[{}]: {} out of {} ranges failed, keyspace={}, tables={}, repair_reason={}, nodes_down_during_repair={}, aborted_by_user={}, failed_because={}",
-                global_repair_id.uuid(), nr_failed_ranges, ranges_size(), _status.keyspace, table_names(), _reason, nodes_down, _aborted, failed_because);
+                info.global_repair_id.uuid(), info.nr_failed_ranges, info.ranges_size(), _status.keyspace, info.table_names(), _reason, info.nodes_down, info._aborted, failed_because);
         rlogger.warn("{}", msg);
         throw std::runtime_error(msg);
     } else {
-        if (dropped_tables.size()) {
-            rlogger.warn("repair[{}]: completed successfully, keyspace={}, ignoring dropped tables={}", global_repair_id.uuid(), _status.keyspace, dropped_tables);
+        if (info.dropped_tables.size()) {
+            rlogger.warn("repair[{}]: completed successfully, keyspace={}, ignoring dropped tables={}", info.global_repair_id.uuid(), _status.keyspace, info.dropped_tables);
         } else {
-            rlogger.info("repair[{}]: completed successfully, keyspace={}", global_repair_id.uuid(), _status.keyspace);
+            rlogger.info("repair[{}]: completed successfully, keyspace={}", info.global_repair_id.uuid(), _status.keyspace);
         }
     }
 }
 
-void repair::shard_repair_task_impl::check_in_abort_or_shutdown() {
+void repair_info::check_in_abort_or_shutdown() {
     try {
         _as.check();
         _topology_guard.check();
@@ -829,48 +855,48 @@ void repair::shard_repair_task_impl::check_in_abort_or_shutdown() {
         if (!_aborted) {
             _aborted = true;
             rlogger.warn("repair[{}]: Repair job aborted by user, job={}, keyspace={}, tables={}",
-                global_repair_id.uuid(), global_repair_id.uuid(), _status.keyspace, table_names());;
+                global_repair_id.uuid(), global_repair_id.uuid(), _keyspace, table_names());;
         }
         throw;
     }
 }
 
-repair_neighbors repair::shard_repair_task_impl::get_repair_neighbors(const dht::token_range& range) {
+repair_neighbors repair_info::get_repair_neighbors(const dht::token_range& range) {
     return neighbors.empty() ?
-        repair_neighbors(get_neighbors(gossiper, *get_erm(), _status.keyspace, range, data_centers, hosts, ignore_nodes, _small_table_optimization)) :
+        repair_neighbors(get_neighbors(gossiper, *get_erm(), _keyspace, range, data_centers, hosts, ignore_nodes, small_table_optimization)) :
         neighbors[range];
 }
 
-size_t repair::shard_repair_task_impl::ranges_size() const noexcept {
+size_t repair_info::ranges_size() const noexcept {
     return ranges.size() * table_ids.size();
 }
 
-locator::effective_replication_map_ptr repair::shard_repair_task_impl::get_erm() {
-    if (!erm && table_ids.size() != 1) {
-        on_internal_error(rlogger, "shard_repair_task_impl::erm must be non-null when the task repairs more than one table.");
+locator::effective_replication_map_ptr repair_info::get_erm() {
+    if (!_erm && table_ids.size() != 1) {
+        on_internal_error(rlogger, "repair_info::_erm must be non-null when the repair spans more than one table.");
     }
-    return erm ? erm : db.local().find_column_family(table_ids[0]).get_effective_replication_map();
+    return _erm ? _erm : db.local().find_column_family(table_ids[0]).get_effective_replication_map();
 }
 
 // Repair a single local range, multiple column families.
 // Comparable to RepairSession in Origin
 future<> repair::shard_repair_task_impl::repair_range(const dht::token_range& range, table_info table) {
-    check_in_abort_or_shutdown();
-    ranges_index++;
-    repair_neighbors r_neighbors = get_repair_neighbors(range);
+    info.check_in_abort_or_shutdown();
+    info.ranges_index++;
+    repair_neighbors r_neighbors = info.get_repair_neighbors(range);
     auto neighbors = std::move(r_neighbors.all);
     auto mandatory_neighbors = std::move(r_neighbors.mandatory);
     auto live_neighbors = neighbors |
-                std::views::filter([this] (const locator::host_id& node) { return gossiper.is_alive(node); }) |
+                std::views::filter([this] (const locator::host_id& node) { return info.gossiper.is_alive(node); }) |
                 std::ranges::to<std::vector>();
     for (auto& node : mandatory_neighbors) {
         auto it = std::find(live_neighbors.begin(), live_neighbors.end(), node);
         if (it == live_neighbors.end()) {
-            nr_failed_ranges++;
-            nodes_down.insert(node);
+            info.nr_failed_ranges++;
+            info.nodes_down.insert(node);
             auto status = format("failed: mandatory neighbor={} is not alive", node);
             rlogger.error("repair[{}]: Repair {} out of {} ranges, keyspace={}, table={}, range={}, peers={}, live_peers={}, status={}",
-                    global_repair_id.uuid(), ranges_index, ranges_size(), _status.keyspace, table.name, range, neighbors, live_neighbors, status);
+                    info.global_repair_id.uuid(), info.ranges_index, info.ranges_size(), _status.keyspace, table.name, range, neighbors, live_neighbors, status);
             // If the task is aborted, its state will change to failed. One can wait for this with task_manager::task::done().
             abort();
             co_await coroutine::return_exception(std::runtime_error(fmt::format("Repair mandatory neighbor={} is not alive, keyspace={}, mandatory_neighbors={}",
@@ -878,16 +904,16 @@ future<> repair::shard_repair_task_impl::repair_range(const dht::token_range& ra
         }
     }
     if (live_neighbors.size() != neighbors.size()) {
-        nr_failed_ranges++;
+        info.nr_failed_ranges++;
         std::unordered_set<locator::host_id> live_neighbors_set(live_neighbors.begin(), live_neighbors.end());
         for (auto& node : neighbors) {
             if (!live_neighbors_set.contains(node)) {
-                nodes_down.insert(node);
+                info.nodes_down.insert(node);
             }
         }
         auto status = live_neighbors.empty() ? "skipped_no_live_peers" : "partial";
         rlogger.warn("repair[{}]: Repair {} out of {} ranges, keyspace={}, table={}, range={}, peers={}, live_peers={}, status={}",
-                global_repair_id.uuid(), ranges_index, ranges_size(), _status.keyspace, table.name, range, neighbors, live_neighbors, status);
+                info.global_repair_id.uuid(), info.ranges_index, info.ranges_size(), _status.keyspace, table.name, range, neighbors, live_neighbors, status);
         if (live_neighbors.empty()) {
             co_return;
         }
@@ -896,26 +922,26 @@ future<> repair::shard_repair_task_impl::repair_range(const dht::token_range& ra
     if (neighbors.empty()) {
         auto status = "skipped_no_followers";
         rlogger.warn("repair[{}]: Repair {} out of {} ranges,  keyspace={}, table={}, range={}, peers={}, live_peers={}, status={}",
-                global_repair_id.uuid(), ranges_index, ranges_size(), _status.keyspace, table.name, range, neighbors, live_neighbors, status);
+                info.global_repair_id.uuid(), info.ranges_index, info.ranges_size(), _status.keyspace, table.name, range, neighbors, live_neighbors, status);
         co_return;
     }
     rlogger.debug("repair[{}]: Repair {} out of {} ranges, keyspace={}, table={}, range={}, peers={}, live_peers={}",
-        global_repair_id.uuid(), ranges_index, ranges_size(), _status.keyspace, table.name, range, neighbors, live_neighbors);
-    co_await mm.sync_schema(db.local(), neighbors);
+        info.global_repair_id.uuid(), info.ranges_index, info.ranges_size(), _status.keyspace, table.name, range, neighbors, live_neighbors);
+    co_await mm.sync_schema(info.db.local(), neighbors);
 
     // Row level repair
-    if (dropped_tables.contains(table.name)) {
+    if (info.dropped_tables.contains(table.name)) {
         co_return;
     }
     try {
-        auto dropped = co_await streaming::with_table_drop_silenced(db.local(), mm, table.id, [&] (const table_id& uuid) {
-            return repair_cf_range_row_level(*this, table.name, table.id, range, neighbors, _small_table_optimization, _flush_time, _frozen_topology_guard);
+        auto dropped = co_await streaming::with_table_drop_silenced(info.db.local(), mm, table.id, [&] (const table_id& uuid) {
+            return repair_cf_range_row_level(*this, table.name, table.id, range, neighbors, info.small_table_optimization, _flush_time, info._frozen_topology_guard);
         });
         if (dropped) {
-            dropped_tables.insert(table.name);
+            info.dropped_tables.insert(table.name);
         }
     } catch (...) {
-        nr_failed_ranges++;
+        info.nr_failed_ranges++;
         throw;
     }
 }
@@ -1172,30 +1198,30 @@ private:
 };
 
 future<> repair::shard_repair_task_impl::release_resources() noexcept {
-    erm = {};
-    cfs = {};
-    data_centers = {};
-    hosts = {};
-    ignore_nodes = {};
-    neighbors = {};
-    dropped_tables = {};
-    nodes_down = {};
-    _topology_guard = {service::null_topology_guard};
+    info._erm = {};
+    info.cfs = {};
+    info.data_centers = {};
+    info.hosts = {};
+    info.ignore_nodes = {};
+    info.neighbors = {};
+    info.dropped_tables = {};
+    info.nodes_down = {};
+    info._topology_guard = {service::null_topology_guard};
     return make_ready_future();
 }
 
 future<> repair::shard_repair_task_impl::do_repair_ranges() {
     // Repair tables in the keyspace one after another
-    SCYLLA_ASSERT(table_names().size() == table_ids.size());
-    for (size_t idx = 0; idx < table_ids.size(); idx++) {
+    SCYLLA_ASSERT(info.table_names().size() == info.table_ids.size());
+    for (size_t idx = 0; idx < info.table_ids.size(); idx++) {
         table_info table_info{
-            .name = table_names()[idx],
-            .id = table_ids[idx],
+            .name = info.table_names()[idx],
+            .id = info.table_ids[idx],
         };
         // repair all the ranges in limited parallelism
         rlogger.info("repair[{}]: Started to repair {} out of {} tables in keyspace={}, table={}, table_id={}, repair_reason={}",
-                global_repair_id.uuid(), idx + 1, table_ids.size(), _status.keyspace, table_info.name, table_info.id, _reason);
-        co_await coroutine::parallel_for_each(ranges, [this, table_info] (auto&& range) -> future<> {
+                info.global_repair_id.uuid(), idx + 1, info.table_ids.size(), _status.keyspace, table_info.name, table_info.id, _reason);
+        co_await coroutine::parallel_for_each(info.ranges, [this, table_info] (auto&& range) -> future<> {
             // It is possible that most of the ranges are skipped. In this case
             // this lambda will just log a message and exit. With a lot of
             // ranges, this can result in stalls, as there are no opportunities
@@ -1203,13 +1229,13 @@ future<> repair::shard_repair_task_impl::do_repair_ranges() {
             // prevent this.
             co_await coroutine::maybe_yield();
 
-            _topology_guard.check();
+            info._topology_guard.check();
             // Get the system range parallelism
-            auto permit = co_await seastar::get_units(rs.get_repair_module().range_parallelism_semaphore(), 1);
+            auto permit = co_await seastar::get_units(info.rs.get_repair_module().range_parallelism_semaphore(), 1);
             // Get the range parallelism specified by user
-            auto user_permit = _user_ranges_parallelism ? co_await seastar::get_units(*_user_ranges_parallelism, 1) : semaphore_units<>();
+            auto user_permit = info._user_ranges_parallelism ? co_await seastar::get_units(*info._user_ranges_parallelism, 1) : semaphore_units<>();
             co_await repair_range(range, table_info);
-            if (2 * (_ranges_complete + 1) > ranges_size()) {
+            if (2 * (info._ranges_complete + 1) > info.ranges_size()) {
                 // The test that arms this injection releases it only after a
                 // concurrent tablet migration (move_tablet, a raft topology
                 // operation) completes. Under CI load that can take much longer
@@ -1219,36 +1245,36 @@ future<> repair::shard_repair_task_impl::do_repair_ranges() {
                 // injection sync points.
                 co_await utils::get_local_injector().inject("repair_shard_repair_task_impl_do_repair_ranges", utils::wait_for_message(5min));
             }
-            ++_ranges_complete;
+            ++info._ranges_complete;
             if (_reason == streaming::stream_reason::bootstrap) {
-                rs.get_metrics().bootstrap_finished_ranges += small_table_optimization_ranges_reduced_factor;
+                info.rs.get_metrics().bootstrap_finished_ranges += info.small_table_optimization_ranges_reduced_factor;
             } else if (_reason == streaming::stream_reason::replace) {
-                rs.get_metrics().replace_finished_ranges += small_table_optimization_ranges_reduced_factor;
+                info.rs.get_metrics().replace_finished_ranges += info.small_table_optimization_ranges_reduced_factor;
             } else if (_reason == streaming::stream_reason::rebuild) {
-                rs.get_metrics().rebuild_finished_ranges += small_table_optimization_ranges_reduced_factor;
+                info.rs.get_metrics().rebuild_finished_ranges += info.small_table_optimization_ranges_reduced_factor;
             } else if (_reason == streaming::stream_reason::decommission) {
-                rs.get_metrics().decommission_finished_ranges += small_table_optimization_ranges_reduced_factor;
+                info.rs.get_metrics().decommission_finished_ranges += info.small_table_optimization_ranges_reduced_factor;
             } else if (_reason == streaming::stream_reason::removenode) {
-                rs.get_metrics().removenode_finished_ranges += small_table_optimization_ranges_reduced_factor;
+                info.rs.get_metrics().removenode_finished_ranges += info.small_table_optimization_ranges_reduced_factor;
             } else if (_reason == streaming::stream_reason::repair) {
-                rs.get_metrics().repair_finished_ranges_sum += small_table_optimization_ranges_reduced_factor;
-                nr_ranges_finished++;
+                info.rs.get_metrics().repair_finished_ranges_sum += info.small_table_optimization_ranges_reduced_factor;
+                info.nr_ranges_finished++;
             }
             rlogger.debug("repair[{}]: node ops progress bootstrap={}, replace={}, rebuild={}, decommission={}, removenode={}, repair={}",
-                global_repair_id.uuid(),
-                rs.get_metrics().bootstrap_finished_percentage(),
-                rs.get_metrics().replace_finished_percentage(),
-                rs.get_metrics().rebuild_finished_percentage(),
-                rs.get_metrics().decommission_finished_percentage(),
-                rs.get_metrics().removenode_finished_percentage(),
-                rs.get_metrics().repair_finished_percentage());
+                info.global_repair_id.uuid(),
+                info.rs.get_metrics().bootstrap_finished_percentage(),
+                info.rs.get_metrics().replace_finished_percentage(),
+                info.rs.get_metrics().rebuild_finished_percentage(),
+                info.rs.get_metrics().decommission_finished_percentage(),
+                info.rs.get_metrics().removenode_finished_percentage(),
+                info.rs.get_metrics().repair_finished_percentage());
         });
 
         if (_reason != streaming::stream_reason::repair) {
             try {
-                auto& table = db.local().find_column_family(table_info.id);
+                auto& table = info.db.local().find_column_family(table_info.id);
                 rlogger.debug("repair[{}]: Trigger off-strategy compaction for keyspace={}, table={}",
-                    global_repair_id.uuid(), table.schema()->ks_name(), table.schema()->cf_name());
+                    info.global_repair_id.uuid(), table.schema()->ks_name(), table.schema()->cf_name());
                 table.trigger_offstrategy_compaction();
             } catch (replica::no_such_column_family&) {
                 // Ignore dropped table
@@ -1260,8 +1286,8 @@ future<> repair::shard_repair_task_impl::do_repair_ranges() {
 
 future<tasks::task_manager::task::progress> repair::shard_repair_task_impl::get_progress() const {
     co_return tasks::task_manager::task::progress{
-        .completed = _ranges_complete,
-        .total = ranges_size()
+        .completed = info._ranges_complete,
+        .total = info.ranges_size()
     };
 }
 
@@ -1270,10 +1296,10 @@ future<tasks::task_manager::task::progress> repair::shard_repair_task_impl::get_
 // is assumed to be a indivisible in the sense that all the tokens in has the
 // same nodes as replicas.
 future<> repair::shard_repair_task_impl::run() {
-    _topology_guard = {_frozen_topology_guard};
-    rs.get_repair_module().add_shard_task_id(global_repair_id.id, _status.id);
+    info._topology_guard = {info._frozen_topology_guard};
+    info.rs.get_repair_module().add_shard_task_id(info.global_repair_id.id, _status.id);
     auto remove_shard_task_id = defer([this] noexcept {
-        rs.get_repair_module().remove_shard_task_id(global_repair_id.id);
+        info.rs.get_repair_module().remove_shard_task_id(info.global_repair_id.id);
     });
     try {
         co_await do_repair_ranges();
@@ -1285,7 +1311,7 @@ future<> repair::shard_repair_task_impl::run() {
         // would print the bare type name and drop the reason for the failure.
         _failed_because.emplace(fmt::to_string(seastar::formattable(std::current_exception())));
         rlogger.debug("repair[{}]: got error in do_repair_ranges: {}",
-            global_repair_id.uuid(), seastar::formattable(std::current_exception()));
+            info.global_repair_id.uuid(), seastar::formattable(std::current_exception()));
     }
     check_failed_ranges();
     co_return;
