@@ -1308,16 +1308,22 @@ future<raft_server> groups_manager::acquire_server(table_id table_id, raft::grou
 void groups_manager::start() {
     _started = true;
 
-    // Register the commitlog's flush handler, the one that tells every group how
-    // far the commitlog has closed segments. Gated on the configuration flag, not
-    // on the cluster feature: the feature can enable while the node runs, and
-    // update() then starts groups without start() running again, so a handler
-    // registered behind the feature could be missing. The flag also decides
-    // whether system.raft_groups has a schema at all: asking for its id without
-    // the flag aborts.
-    if (auto* commitlog = _db.commitlog();
-            commitlog && _db.get_config().check_experimental(
-                    db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES)) {
+    // Register the commitlog's flush handler, which tells every group how far the
+    // commitlog has closed segments. Gated on the configuration flag: the cluster
+    // feature can enable while the node runs, and update() then starts groups
+    // without start() running again, so a handler registered behind the feature
+    // could be missing. The flag also decides whether system.raft_groups has a
+    // schema at all: asking for its id without the flag aborts.
+    if (_db.get_config().check_experimental(
+                db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES)) {
+        auto* commitlog = _db.commitlog();
+        if (!commitlog) {
+            // Fail at startup: without the commitlog the first group trips an assert.
+            throw std::runtime_error(
+                    "strongly consistent tables require the commitlog, which is disabled");
+        }
+        check_commitlog_can_hold_a_raft_entry(*commitlog);
+
         // A round names one table, and only a round naming system.raft_groups says
         // which of a group's segments are closed: a segment holding a live segment
         // record is dirty under system.raft_groups because of the record's own
