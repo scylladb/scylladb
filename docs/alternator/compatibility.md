@@ -444,7 +444,8 @@ they should be easy to detect. Here is a list of these unimplemented features:
 
 * Continuous backup (the ability to restore any point in time) is also not
   supported: UpdateContinuousBackups, DescribeContinuousBackups,
-  RestoreTableToPointInTime
+  RestoreTableToPointInTime. Note, that call to UpdateContinuousBackups
+  is not required for ExportTableToPointInTime to work.
 
 * DynamoDB's encryption-at-rest settings are not supported. The Encryption-
   at-rest feature is available in ScyllaDB, but needs to be
