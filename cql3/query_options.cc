@@ -13,7 +13,12 @@
 #include "db/consistency_level_type.hh"
 #include "cql3/column_identifier.hh"
 
+#include <seastar/core/on_internal_error.hh>
+#include "utils/log.hh"
+
 namespace cql3 {
+
+static logging::logger query_options_logger("query_options");
 
 const cql_config default_cql_config(cql_config::default_tag{});
 
@@ -167,28 +172,38 @@ utils::result_with_exception_ptr<db::consistency_level> query_options::check_ser
     return bo::failure(std::make_exception_ptr(exceptions::protocol_exception("Consistency level for LWT is missing for a request with conditions")));
 }
 
-void query_options::cache_pk_function_call(computed_function_values::key_type id, computed_function_values::mapped_type value) const {
-    _cached_pk_fn_calls.emplace(id, std::move(value));
-}
-
-const computed_function_values& query_options::cached_pk_function_calls() const {
-    return _cached_pk_fn_calls;
-}
-
-computed_function_values&& query_options::take_cached_pk_function_calls() {
-    return std::move(_cached_pk_fn_calls);
-}
-
-void query_options::set_cached_pk_function_calls(computed_function_values vals) {
-    _cached_pk_fn_calls = std::move(vals);
-}
-
-computed_function_values::mapped_type* query_options::find_cached_pk_function_call(computed_function_values::key_type id) const {
-    auto it = _cached_pk_fn_calls.find(id);
-    if (it != _cached_pk_fn_calls.end()) {
-        return &it->second;
+void query_options::cache_pk_function_call(size_t index, raw_value value) const {
+    if (index != _cached_pk_fn_calls.size()) {
+        on_internal_error(query_options_logger,
+                format("caching partition key function call {} out of order, {} calls are cached",
+                        index, _cached_pk_fn_calls.size()));
     }
-    return nullptr;
+    _cached_pk_fn_calls.push_back(std::move(value));
+}
+
+computed_function_values query_options::take_cached_pk_function_calls() {
+    computed_function_values vals;
+    for (size_t i = 0; i < _cached_pk_fn_calls.size(); ++i) {
+        vals.emplace(i, std::move(_cached_pk_fn_calls[i]).to_bytes_opt());
+    }
+    _cached_pk_fn_calls.clear();
+    return vals;
+}
+
+void query_options::set_cached_pk_function_calls(const computed_function_values& vals) {
+    // The calls were computed in slot order before they were handed to us, so
+    // the keys are 0..vals.size()-1 and the vector can be rebuilt by indexing
+    // into them.
+    _cached_pk_fn_calls.clear();
+    _cached_pk_fn_calls.reserve(vals.size());
+    for (size_t i = 0; i < vals.size(); ++i) {
+        auto it = vals.find(i);
+        if (it == vals.end()) {
+            on_internal_error(query_options_logger,
+                    format("cached partition key function call values have a hole at slot {}", i));
+        }
+        _cached_pk_fn_calls.push_back(raw_value::make_value(it->second));
+    }
 }
 
 }

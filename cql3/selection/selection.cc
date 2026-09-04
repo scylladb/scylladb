@@ -841,7 +841,12 @@ result_set_builder::restrictions_filter::restrictions_filter(::shared_ptr<const 
     , _per_partition_remaining(_per_partition_limit)
     , _rows_fetched_for_last_partition(rows_fetched_for_last_partition)
     , _last_pkey(std::move(last_pkey))
-{ }
+{
+    // The filters can hold temporaries standing in for non-pure function calls
+    // in partition key restrictions, and this is an evaluation site outside
+    // statement_restrictions.
+    _restrictions->evaluate_pk_function_calls(_options);
+}
 
 bool result_set_builder::restrictions_filter::do_filter(const selection& selection,
                                                          const std::vector<bytes>& partition_key,
@@ -864,6 +869,7 @@ bool result_set_builder::restrictions_filter::do_filter(const selection& selecti
                         .static_and_regular_columns = static_and_regular_columns,
                         .selection = &selection,
                         .options = &_options,
+                        .temporaries = _options.cached_pk_function_calls(),
                     })) {
         _current_partition_does_not_match = true;
         return false;
@@ -877,6 +883,7 @@ bool result_set_builder::restrictions_filter::do_filter(const selection& selecti
                         .static_and_regular_columns = static_and_regular_columns,
                         .selection = &selection,
                         .options = &_options,
+                        .temporaries = _options.cached_pk_function_calls(),
                     })) {
         return false;
     }
