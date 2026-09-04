@@ -225,7 +225,7 @@ expr::expression external_search_plan::deliver(const external_search_function& f
     std::unreachable();
 }
 
-expr::expression external_search_plan::lower(const expr::expression& e, search_clause clause, bool& unnamed) {
+expr::expression external_search_plan::lower(const expr::expression& e, search_clause clause, bool& lowered_any, bool& unnamed) {
     return expr::search_and_replace(e, [&] (const expr::expression& candidate) -> std::optional<expr::expression> {
         const auto* fc = expr::as_if<expr::function_call>(&candidate);
         if (!fc) {
@@ -235,6 +235,7 @@ expr::expression external_search_plan::lower(const expr::expression& e, search_c
         if (!fun) {
             return std::nullopt;
         }
+        lowered_any = true;
         auto& source = claim(*fc, *fun, clause);
         return deliver(*fun, candidate, source, unnamed);
     });
@@ -243,24 +244,38 @@ expr::expression external_search_plan::lower(const expr::expression& e, search_c
 void external_search_plan::bind_ordering(const expr::expression& prepared_ordering) {
     // A bare call: the rows are returned in the order the index ranked them, so nothing is
     // computed or sorted here, and no temporary is allocated unless SELECT asks for a value.
-    const auto* fc = expr::as_if<expr::function_call>(&prepared_ordering);
-    const auto* fun = fc ? functions::as_external_search_function(*fc) : nullptr;
-    if (!fun) {
+    if (const auto* fc = expr::as_if<expr::function_call>(&prepared_ordering)) {
+        if (const auto* fun = functions::as_external_search_function(*fc)) {
+            if (fun->value() == search_value::fragment) {
+                throw exceptions::invalid_request_exception(seastar::format(
+                        "{}() cannot rank rows: it is an excerpt of one, not a measure of it", fun->display_name()));
+            }
+            auto& source = claim(*fc, *fun, search_clause::ordering);
+            if (source.is_rescoring_enabled) {
+                // A rescoring index: the coordinator recomputes the similarity and sorts the rows by it.
+                _ordering_expr = make_similarity_expression(source.index, std::make_pair(source.column, source.query_value), _db, _schema);
+            }
+            return;
+        }
+    }
+
+    // Any other expression is lowered like one in the SELECT clause and becomes the score the rows
+    // are sorted by.
+    bool lowered_any = false;
+    bool unnamed = false;
+    auto ordering = lower(prepared_ordering, search_clause::ordering, lowered_any, unnamed);
+    if (!lowered_any) {
         // The regular-ordering path skips a scoring ordering, so reject it here rather than let the
         // clause be silently ignored.
         throw exceptions::invalid_request_exception(
                 "An ORDER BY expression must name at least one search, through ANN() or BM25()");
     }
-    if (fun->value() == search_value::fragment) {
+    if (expr::type_of(ordering) != float_type) {
         throw exceptions::invalid_request_exception(seastar::format(
-                "{}() cannot rank rows: it is an excerpt of one, not a measure of it", fun->display_name()));
+                "An ORDER BY expression over searches must be a score, but {} is {}",
+                prepared_ordering, expr::type_of(ordering)->as_cql3_type()));
     }
-
-    auto& source = claim(*fc, *fun, search_clause::ordering);
-    if (source.is_rescoring_enabled) {
-        // A rescoring index: the coordinator recomputes the similarity and sorts the rows by it.
-        _ordering_expr = make_similarity_expression(source.index, std::make_pair(source.column, source.query_value), _db, _schema);
-    }
+    _ordering_expr = std::move(ordering);
 }
 
 void external_search_plan::bind_selectors(std::vector<selection::prepared_selector>& prepared_selectors) {
@@ -269,9 +284,10 @@ void external_search_plan::bind_selectors(std::vector<selection::prepared_select
         // as the call it replaced, but a tuple or a similarity function does not, so such a
         // selector is given the name explicitly, from a copy taken before lowering.
         const auto written = ps.expr;
+        bool lowered_any = false;
         bool unnamed = false;
 
-        ps.expr = lower(ps.expr, search_clause::selectors, unnamed);
+        ps.expr = lower(ps.expr, search_clause::selectors, lowered_any, unnamed);
 
         if (unnamed && !ps.alias) {
             ps.alias = ::make_shared<column_identifier>(fmt::format("{:result_set_metadata}", written), true);
@@ -297,6 +313,9 @@ void external_search_plan::bind_restrictions(const restrictions::statement_restr
 }
 
 ::shared_ptr<select_statement> external_search_plan::make_statement(external_statement_args args) const {
+    if (_sources.size() > 1) {
+        throw exceptions::invalid_request_exception("Combining several searches in one query is not supported yet");
+    }
     const auto& source = _sources.front();
 
     if (source.family == search_family::ann) {

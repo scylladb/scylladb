@@ -158,7 +158,7 @@ private:
             bool& unnamed);
 
     /// Lowers every external call in `e`, nested occurrences included.
-    expr::expression lower(const expr::expression& e, search_clause clause, bool& unnamed);
+    expr::expression lower(const expr::expression& e, search_clause clause, bool& lowered_any, bool& unnamed);
 };
 
 /// A comparator ranking result rows by a score read from `column_index`, descending, with rows whose
