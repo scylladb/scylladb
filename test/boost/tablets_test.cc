@@ -2015,8 +2015,7 @@ future<> apply_resize_plan(token_metadata& tm, const migration_plan& plan) {
 static
 future<group0_guard> save_token_metadata(cql_test_env& e, group0_guard guard,
         locator::tablet_metadata_change_hint hint = {}) {
-    auto& stm = e.shared_token_metadata().local();
-    auto tm = stm.get();
+    auto tm = e.local_token_metadata_ptr();
 
     e.get_topology_state_machine().local()._topology.version = tm->get_version();
 
@@ -2279,8 +2278,7 @@ void rebalance_tablets(cql_test_env& e,
     // We should not introduce inconsistency between on-disk state and in-memory state
     // as that may violate invariants and cause failures in later operations
     // causing test flakiness.
-    auto& stm = e.shared_token_metadata().local();
-    save_tablet_metadata(e.local_db(), stm.get()->tablets(), guard.write_timestamp()).get();
+    save_tablet_metadata(e.local_db(), e.local_token_metadata_ptr()->tablets(), guard.write_timestamp()).get();
     e.get_storage_service().local().update_tablet_metadata({}).get();
 
     testlog.debug("rebalance_tablets(): done");
@@ -3119,8 +3117,7 @@ alter_result alter_replication(cql_test_env& e,
                                table_id table,
                                replication_strategy_config_options alter_options)
 {
-    auto& stm = e.shared_token_metadata().local();
-    auto tmptr = stm.get();
+    auto tmptr = e.local_token_metadata_ptr();
     auto& old_tablets = tmptr->tablets().get_tablet_map(table);
     auto& ks = e.local_db().find_keyspace(ks_name);
     auto& rs = ks.get_replication_strategy();
@@ -3182,8 +3179,7 @@ SEASTAR_THREAD_TEST_CASE(test_replica_allocation_with_rack_list_rf) {
 
             rebalance_tablets(e);
 
-            auto& stm = e.shared_token_metadata().local();
-            auto tmptr = stm.get();
+            auto tmptr = e.local_token_metadata_ptr();
             auto& tm_topo = tmptr->get_topology();
 
             check_rack_list(tm_topo, tmptr->tablets().get_tablet_map(table1), dc1, dc1_racks, bad_nodes);
@@ -3203,8 +3199,7 @@ SEASTAR_THREAD_TEST_CASE(test_replica_allocation_with_rack_list_rf) {
 
             rebalance_tablets(e);
 
-            auto& stm = e.shared_token_metadata().local();
-            auto tmptr = stm.get();
+            auto tmptr = e.local_token_metadata_ptr();
             auto& tm_topo = tmptr->get_topology();
 
             check_rack_list(tm_topo, tmptr->tablets().get_tablet_map(table1), dc1, rack_list{}, bad_nodes);
@@ -3225,8 +3220,7 @@ SEASTAR_THREAD_TEST_CASE(test_replica_allocation_with_rack_list_rf) {
 
             rebalance_tablets(e);
 
-            auto& stm = e.shared_token_metadata().local();
-            auto tmptr = stm.get();
+            auto tmptr = e.local_token_metadata_ptr();
             auto& tm_topo = tmptr->get_topology();
 
             check_rack_list(tm_topo, tmptr->tablets().get_tablet_map(table1), dc1, rack_list{rack1.rack}, bad_nodes);
@@ -3302,8 +3296,7 @@ SEASTAR_THREAD_TEST_CASE(test_per_shard_count_respected_with_rack_list) {
 
         rebalance_tablets(e);
 
-        auto& stm = e.shared_token_metadata().local();
-        auto tmptr = stm.get();
+        auto tmptr = e.local_token_metadata_ptr();
         auto& tm_topo = tmptr->get_topology();
 
         // Check that we respect the 10 tablets/shard goal when using a subset of racks.
@@ -3460,8 +3453,7 @@ SEASTAR_THREAD_TEST_CASE(test_per_shard_goal_size_scaling_is_not_order_dependent
 
             rebalance_tablets(e, &load_stats);
 
-            auto& stm = e.shared_token_metadata().local();
-            large_tablet_count = stm.get()->tablets().get_tablet_map(large_table).tablet_count();
+            large_tablet_count = e.local_token_metadata_ptr()->tablets().get_tablet_map(large_table).tablet_count();
         }, std::move(cfg)).get();
 
         return large_tablet_count;
@@ -3960,8 +3952,7 @@ SEASTAR_THREAD_TEST_CASE(test_table_creation_during_decommission) {
         auto table1 = add_table(e, ks_name).get();
         auto s = e.local_db().find_schema(table1);
 
-        auto& stm = e.shared_token_metadata().local();
-        auto& tmap = stm.get()->tablets().get_tablet_map(table1);
+        auto& tmap = e.local_token_metadata_ptr()->tablets().get_tablet_map(table1);
 
         // Verify we do not treat leaving nodes as having capacity.
         BOOST_REQUIRE_EQUAL(tmap.tablet_count(), 2);
@@ -3993,8 +3984,7 @@ SEASTAR_THREAD_TEST_CASE(test_table_creation_during_rack_decommission) {
 
         rebalance_tablets(e);
 
-        auto& stm = e.shared_token_metadata().local();
-        auto& tmap = stm.get()->tablets().get_tablet_map(table1);
+        auto& tmap = e.local_token_metadata_ptr()->tablets().get_tablet_map(table1);
 
         tmap.for_each_tablet([&](auto tid, auto& tinfo) {
             for (auto& replica : tinfo.replicas) {
@@ -4141,8 +4131,7 @@ SEASTAR_THREAD_TEST_CASE(test_decommission_rack_load_failure) {
             co_return;
         });
 
-        auto& stm = e.shared_token_metadata().local();
-        topo.get_shared_load_stats().set_default_tablet_sizes(stm.get());
+        topo.get_shared_load_stats().set_default_tablet_sizes(e.local_token_metadata_ptr());
 
         BOOST_REQUIRE_THROW(rebalance_tablets(e, &topo.get_shared_load_stats()), std::runtime_error);
     }).get();
@@ -4174,8 +4163,7 @@ SEASTAR_THREAD_TEST_CASE(test_decommission_rf_not_met) {
             co_return;
         });
 
-        auto& stm = e.shared_token_metadata().local();
-        topo.get_shared_load_stats().set_default_tablet_sizes(stm.get());
+        topo.get_shared_load_stats().set_default_tablet_sizes(e.local_token_metadata_ptr());
 
         BOOST_REQUIRE_THROW(rebalance_tablets(e, &topo.get_shared_load_stats()), std::runtime_error);
     }).get();
@@ -4577,8 +4565,7 @@ SEASTAR_THREAD_TEST_CASE(test_plan_fails_when_removing_last_replica) {
         });
 
         std::unordered_set<host_id> skiplist = {host1};
-        auto& stm = e.shared_token_metadata().local();
-        topo.get_shared_load_stats().set_default_tablet_sizes(stm.get());
+        topo.get_shared_load_stats().set_default_tablet_sizes(e.local_token_metadata_ptr());
         BOOST_REQUIRE_THROW(rebalance_tablets(e, &topo.get_shared_load_stats(), skiplist), std::runtime_error);
     }).get();
 }
@@ -4975,8 +4962,7 @@ static table_id create_table_and_set_tablet_sizes(cql_test_env& e, topology_buil
     auto& load_stats = topo.get_shared_load_stats();
     load_stats.set_size(table, table_size_bytes);
 
-    auto& stm = e.shared_token_metadata().local();
-    auto& tmap = stm.get()->tablets().get_tablet_map(table);
+    auto& tmap = e.local_token_metadata_ptr()->tablets().get_tablet_map(table);
     tmap.for_each_tablet([&] (tablet_id tid, const tablet_info& tinfo) {
         auto replicas = tinfo.replicas;
         for (auto& r : tinfo.replicas) {
@@ -5183,8 +5169,7 @@ SEASTAR_THREAD_TEST_CASE(test_per_shard_goal_mixed_dc_rf) {
         rebalance_tablets(e);
 
         {
-            auto& stm = e.shared_token_metadata().local();
-            auto tm = stm.get();
+            auto tm = e.local_token_metadata_ptr();
             // When pow2_count is switched to false, 256 should be changed to 200.
             BOOST_REQUIRE_EQUAL(tm->tablets().get_tablet_map(table1).tablet_count(), 256);
             BOOST_REQUIRE_EQUAL(tm->tablets().get_tablet_map(table2).tablet_count(), 64);
@@ -6911,8 +6896,7 @@ SEASTAR_THREAD_TEST_CASE(test_ensure_node_for_load_sketch) {
         topo.set_node_state(host1, node_state::removing);
 
         auto& talloc = e.get_tablet_allocator().local();
-        auto& stm = e.shared_token_metadata().local();
-        talloc.balance_tablets(stm.get(), nullptr, nullptr, topo.get_shared_load_stats().get()).get();
+        talloc.balance_tablets(e.local_token_metadata_ptr(), nullptr, nullptr, topo.get_shared_load_stats().get()).get();
     }).get();
 }
 
