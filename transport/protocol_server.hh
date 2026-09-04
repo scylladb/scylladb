@@ -44,8 +44,10 @@ public:
     /// This variant is used by the REST API so failure is acceptable.
     virtual future<> request_stop_server() = 0;
 
-    virtual future<utils::chunked_vector<foreign_ptr<std::unique_ptr<client_data>>>> get_client_data() {
-        return make_ready_future<utils::chunked_vector<foreign_ptr<std::unique_ptr<client_data>>>>();
+    // Batched as one chunked_vector, not one foreign_ptr per connection, to avoid
+    // per-connection allocations when connection counts are large (SCYLLADB-4230).
+    virtual future<utils::chunked_vector<client_data>> get_client_data() {
+        return make_ready_future<utils::chunked_vector<client_data>>();
     }
 
     protocol_server(seastar::scheduling_group sg) noexcept : _sched_group(std::move(sg)) {}
