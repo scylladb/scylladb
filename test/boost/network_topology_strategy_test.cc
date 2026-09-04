@@ -1042,7 +1042,7 @@ SEASTAR_TEST_CASE(test_rack_list_rejected_when_feature_not_enabled) {
     cfg.db_config->tablets_mode_for_new_keyspaces(db::tablets_mode_t::mode::enabled);
     cfg.disabled_features.insert("RACK_LIST_RF");
     return do_with_cql_env_thread([] (auto& e) {
-        auto& topo = e.shared_token_metadata().local().get()->get_topology();
+        auto& topo = e.local_token_metadata_ptr()->get_topology();
         auto loc = topo.get_location();
         auto create_stmt = fmt::format("CREATE KEYSPACE test WITH REPLICATION = {{'class': 'NetworkTopologyStrategy',"
                     " '{}': ['{}']}}", loc.dc, loc.rack);
@@ -1094,7 +1094,7 @@ SEASTAR_TEST_CASE(test_altering_to_numeric_forbidden) {
 SEASTAR_TEST_CASE(test_rack_list_rejected_when_using_vnodes) {
     auto cfg = cql_test_config();
     return do_with_cql_env_thread([] (auto& e) {
-        auto& topo = e.shared_token_metadata().local().get()->get_topology();
+        auto& topo = e.local_token_metadata_ptr()->get_topology();
         auto loc = topo.get_location();
         auto create_stmt = [&] (bool tablets) {
             return fmt::format("CREATE KEYSPACE abc WITH REPLICATION = {{'class': 'NetworkTopologyStrategy',"

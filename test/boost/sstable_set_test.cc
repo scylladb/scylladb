@@ -523,7 +523,7 @@ SEASTAR_TEST_CASE(test_tablet_sstable_set_preserves_arbitrary_boundaries) {
         auto& sgm = column_family_test::get_storage_group_manager(table);
         std::ranges::sort(emitted_keys, dht::decorated_key::less_comparator(s));
 
-        auto original_tmap = env.shared_token_metadata().local().get()->tablets().get_tablet_map(s->id()).clone();
+        auto original_tmap = env.local_token_metadata_ptr()->tablets().get_tablet_map(s->id()).clone();
         auto last_tokens = original_tmap.get_sorted_tokens().get();
         auto raw_last_tokens = last_tokens
                 | std::views::transform([] (dht::token t) { return dht::raw_token(t); })

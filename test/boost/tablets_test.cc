@@ -2267,7 +2267,7 @@ void rebalance_tablets(cql_test_env& e,
     shared_load_stats local_stats;
     if (!load_stats) {
         // Provide default capacity for each node.
-        e.shared_token_metadata().local().get()->get_topology().for_each_node([&] (const auto& node) {
+        e.local_token_metadata_ptr()->get_topology().for_each_node([&] (const auto& node) {
             local_stats.set_capacity(node.host_id(), default_target_tablet_size * node.get_shard_count());
         });
         load_stats = &local_stats;
@@ -3596,7 +3596,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_sketch_uses_correct_disk_capacity) {
 
         auto& stm = e.shared_token_metadata().local();
 
-        locator::host_id local_host = e.shared_token_metadata().local().get()->get_my_id();
+        locator::host_id local_host = e.local_token_metadata_ptr()->get_my_id();
         locator::host_id host1 = topo.add_node(node_state::normal, 1);
 
         load_stats stats;
@@ -5023,7 +5023,7 @@ SEASTAR_THREAD_TEST_CASE(test_size_based_load_balancing_table_load) {
         std::vector<host_id> hosts;
 
         // Add disk capacity for the default node. Add all subsequent nodes to the same DC/rack
-        e.shared_token_metadata().local().get()->get_topology().for_each_node([&] (const auto& node) {
+        e.local_token_metadata_ptr()->get_topology().for_each_node([&] (const auto& node) {
             dc_rack = node.dc_rack();
             auto host = node.host_id();
             auto num_shards = node.get_shard_count();
