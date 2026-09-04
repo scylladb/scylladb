@@ -572,6 +572,95 @@ struct convert<db::object_storage_endpoint_param> {
 };
 
 template<>
+<<<<<<< HEAD
+||||||| parent of f2cbf2d92d (db: keep the good object storage endpoints when one entry is bad)
+struct convert<audit::audit_rule> {
+    static bool decode(const Node& node, audit::audit_rule& rule) {
+        if (!node.IsMap()) {
+            return false;
+        }
+        auto get_string_list = [](const Node& n, const char* field) -> std::vector<sstring> {
+            if (!n.IsSequence()) {
+                throw audit::audit_exception(fmt::format(
+                    "Bad configuration: '{}' must be a YAML sequence", field));
+            }
+            std::vector<sstring> result;
+            for (const auto& elem : n) {
+                result.emplace_back(elem.as<std::string>());
+            }
+            return result;
+        };
+        for (const auto& field : audit::audit_rule_required_fields) {
+            if (!node[field]) {
+                throw audit::audit_exception(fmt::format(
+                    "Bad configuration: audit rule missing required field '{}'", field));
+            }
+        }
+        rule.sinks = get_string_list(node["sinks"], "sinks");
+        rule.categories = audit::parse_categories(get_string_list(node["categories"], "categories"));
+        rule.qualified_table_names = get_string_list(node["qualified_table_names"], "qualified_table_names");
+        rule.roles = get_string_list(node["roles"], "roles");
+        audit::validate_audit_rule(rule);
+        return true;
+    }
+};
+
+template<>
+=======
+struct convert<std::vector<db::object_storage_endpoint_param>> {
+    // Decode each entry on its own, so a malformed entry costs its own
+    // endpoint rather than the whole option.
+    static bool decode(const Node& node, std::vector<db::object_storage_endpoint_param>& endpoints) {
+        if (!node.IsSequence()) {
+            return false;
+        }
+
+        endpoints.clear();
+        for (size_t i = 0; i < node.size(); ++i) {
+            try {
+                endpoints.push_back(db::object_storage_endpoint_param::decode(node[i]));
+            } catch (const std::exception& e) {
+                cfglogger.error("Ignoring object_storage_endpoints entry {}: {}", i, e.what());
+            }
+        }
+        return true;
+    }
+};
+
+template<>
+struct convert<audit::audit_rule> {
+    static bool decode(const Node& node, audit::audit_rule& rule) {
+        if (!node.IsMap()) {
+            return false;
+        }
+        auto get_string_list = [](const Node& n, const char* field) -> std::vector<sstring> {
+            if (!n.IsSequence()) {
+                throw audit::audit_exception(fmt::format(
+                    "Bad configuration: '{}' must be a YAML sequence", field));
+            }
+            std::vector<sstring> result;
+            for (const auto& elem : n) {
+                result.emplace_back(elem.as<std::string>());
+            }
+            return result;
+        };
+        for (const auto& field : audit::audit_rule_required_fields) {
+            if (!node[field]) {
+                throw audit::audit_exception(fmt::format(
+                    "Bad configuration: audit rule missing required field '{}'", field));
+            }
+        }
+        rule.sinks = get_string_list(node["sinks"], "sinks");
+        rule.categories = audit::parse_categories(get_string_list(node["categories"], "categories"));
+        rule.qualified_table_names = get_string_list(node["qualified_table_names"], "qualified_table_names");
+        rule.roles = get_string_list(node["roles"], "roles");
+        audit::validate_audit_rule(rule);
+        return true;
+    }
+};
+
+template<>
+>>>>>>> f2cbf2d92d (db: keep the good object storage endpoints when one entry is bad)
 struct convert<utils::UUID> {
     static bool decode(const Node& node, utils::UUID& uuid) {
         std::string uuid_string;
