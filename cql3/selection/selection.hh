@@ -117,6 +117,10 @@ private:
     const bool _collect_collection_timestamps;
     const bool _contains_static_columns;
     bool _is_trivial;
+    // True when _metadata aliases column_specification objects already owned by
+    // the schema's column_definitions; false when collect_metadata() allocated
+    // fresh ones for this selection (which must be charged to it).
+    bool _metadata_is_schema_owned;
 protected:
     using trivial = bool_class<class trivial_tag>;
 
@@ -126,7 +130,8 @@ protected:
         bool collect_timestamps,
         bool collect_TTLs,
         bool collect_collection_timestamps,
-        trivial is_trivial = trivial::no);
+        trivial is_trivial = trivial::no,
+        bool metadata_is_schema_owned = false);
 
     virtual ~selection() {}
 public:
@@ -223,6 +228,12 @@ public:
      * selectors (including casts or aggregates).
      */
     bool is_trivial() const { return _is_trivial; }
+
+    /// Returns the actual size of the derived object.
+    virtual size_t object_size() const { return sizeof(*this); }
+
+    /// Returns heap memory owned by this object beyond sizeof(*this).
+    virtual size_t external_memory_usage() const;
 
     friend class result_set_builder;
 };

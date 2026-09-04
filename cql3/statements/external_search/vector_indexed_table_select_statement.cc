@@ -12,6 +12,7 @@
 #include "cql3/expr/expr-utils.hh"
 #include "cql3/functions/functions.hh"
 #include "cql3/functions/scoring_fcts.hh"
+#include "cql3/memory_usage.hh"
 #include "cql3/statements/raw/select_statement.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/util.hh"
@@ -225,6 +226,27 @@ future<shared_ptr<cql_transport::messages::result_message>> vector_indexed_table
     }
 
     co_return co_await query_base_table(qp, state, options, pkeys.value(), timeout);
+}
+
+size_t vector_indexed_table_select_statement::external_memory_usage() const {
+    size_t s = select_statement::external_memory_usage();
+
+    // _index: independently-allocated index_metadata (name + options map), not schema-owned.
+    const auto& im = _index.metadata();
+    s += sstring_external_memory_usage(_index.target_column());
+    s += sstring_external_memory_usage(im.name());
+    s += unordered_map_node_external_memory_usage(im.options());
+    for (const auto& [k, v] : im.options()) {
+        s += sstring_external_memory_usage(k) + sstring_external_memory_usage(v);
+    }
+
+    // _prepared_ann_ordering: pair<const column_definition*, expr::expression>
+    s += _prepared_ann_ordering.second.external_memory_usage();
+
+    // _prepared_filter
+    s += _prepared_filter.external_memory_usage();
+
+    return s;
 }
 
 } // namespace statements
