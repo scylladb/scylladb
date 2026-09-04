@@ -787,6 +787,20 @@ def test_storage_service_system_keyspace_repair(rest_api):
     resp.raise_for_status()
     assert not [stats for stats in resp.json() if stats["sequence_number"] == sequence_number], "Repair task for keyspace with local replication strategy was created"
 
+# Nodetool sends the parallelism option as the name of Cassandra's
+# RepairParallelism enum, while other callers send the enum's ordinal. Both
+# have to be accepted, and anything else has to be rejected.
+@pytest.mark.parametrize("parallelism", ["sequential", "parallel", "dc_parallel", "0", "1", "2"])
+def test_storage_service_repair_parallelism(rest_api, parallelism):
+    resp = rest_api.send("POST", "storage_service/repair_async/system", {"parallelism": parallelism})
+    resp.raise_for_status()
+    assert resp.json() > 0, "Repair got invalid sequence number"
+
+@pytest.mark.parametrize("parallelism", ["3", "-1", "par", "1x"])
+def test_storage_service_repair_parallelism_invalid(rest_api, parallelism):
+    resp = rest_api.send("POST", "storage_service/repair_async/system", {"parallelism": parallelism})
+    assert resp.status_code == requests.codes.bad_request
+
 @pytest.mark.parametrize("tablets_enabled", ["true", "false"])
 def test_storage_service_get_natural_endpoints(cql, rest_api, tablets_enabled, skip_without_tablets):
     with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }} AND TABLETS = {{ 'enabled': {tablets_enabled} }}") as keyspace:
