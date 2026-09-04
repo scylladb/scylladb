@@ -162,9 +162,9 @@ struct fsm_config {
     std::optional<leaseguard_config> leaseguard;
     // Servers to prefer as leader, best first. The first one which can vote gets the
     // earliest election timeout slot - unless its own clock is unusable while leases
-    // are on - and everybody else randomizes after it. A bias, not a guarantee.
-    // Invoked whenever the election timer is armed; must neither block nor throw.
-    // Empty / unset => ordinary Raft.
+    // are on - and everybody else randomizes after it. A bias, not a guarantee. The
+    // rest of the list is for preferred_handover_target(). Invoked whenever either is
+    // needed; must neither block nor throw. Empty / unset => ordinary Raft.
     std::function<std::vector<server_id>()> get_priority_members;
 };
 
@@ -732,6 +732,10 @@ public:
     // transfer with no one to hand leadership to. It then waits out `timeout` with the log limiter
     // consumed - the group takes no writes for that whole time - before tick_leader() cancels it.
     void transfer_leadership(logical_clock::duration timeout = logical_clock::duration(0), server_id target = {});
+    // The first of get_priority_members() ahead of us which can vote, is alive and,
+    // with leases on, has a working clock; nullopt if there is none, we are the
+    // preferred leader ourselves, or we are not the leader at all.
+    std::optional<server_id> preferred_handover_target() const;
 
     void stop();
 

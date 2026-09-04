@@ -98,8 +98,8 @@ public:
         std::optional<leaseguard_configuration> leaseguard;
         // Servers to prefer as leader, best first. The first one which can vote
         // campaigns before everybody else and normally wins; a bias, not a guarantee.
-        // Invoked whenever the election timer is armed; must neither block nor throw.
-        // Empty / unset => ordinary Raft.
+        // The rest of the list is for preferred_handover_target(). Invoked whenever
+        // either is needed; must neither block nor throw. Empty / unset => ordinary Raft.
         std::function<std::vector<server_id>()> get_priority_members;
     };
 
@@ -292,6 +292,13 @@ public:
     // Returns an empty ID if there is an ongoing election.
     // The information is only relevant for the current_term() only.
     virtual raft::server_id current_leader() const = 0;
+
+    // The server which should lead instead of this one and could take over now: the
+    // first priority member ahead of this one which can vote, is alive and, with
+    // leases on, has a working clock. Meant for stepdown(). Nullopt if this server is
+    // not the leader or nobody fits. The transfer may still fail, e.g. if the target
+    // does not catch up in time.
+    virtual std::optional<raft::server_id> preferred_handover_target() const = 0;
 
     // The function should be called periodically to advance logical clock.
     virtual void tick() = 0;
