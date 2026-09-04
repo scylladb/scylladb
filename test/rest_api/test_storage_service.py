@@ -390,10 +390,14 @@ def test_storage_service_snapshot(cql, this_dc, rest_api):
                     'value': [{'ks': ks0, 'cf': cf00, 'total': 1, 'live': 0}]
                 })
 
+                # Truncating writes a tombstone and leaves the sstables for
+                # compaction to reclaim, so the snapshot still shares its files
+                # with the table and none of them is live on the snapshot's own
+                # account.
                 cql.execute(f"TRUNCATE {table00}")
                 verify_snapshot_details(rest_api, {
                     'key': snapshot0,
-                    'value': [{'ks': ks0, 'cf': cf00, 'total': 1, 'live': 1}]
+                    'value': [{'ks': ks0, 'cf': cf00, 'total': 1, 'live': 0}]
                 })
 
             with new_test_table(cql, keyspace0, "p text PRIMARY KEY") as table01:
@@ -406,7 +410,9 @@ def test_storage_service_snapshot(cql, this_dc, rest_api):
                     verify_snapshot_details(rest_api, {
                         'key': snapshot1,
                         'value': [
-                            {'ks': ks0, 'cf': cf00, 'total': 0, 'live': 0},
+                            # cf00 was truncated above, which no longer discards
+                            # its sstable, so the snapshot still captures one.
+                            {'ks': ks0, 'cf': cf00, 'total': 1, 'live': 0},
                             {'ks': ks0, 'cf': cf01, 'total': 1, 'live': 0}
                         ]
                     })
@@ -420,7 +426,7 @@ def test_storage_service_snapshot(cql, this_dc, rest_api):
                             verify_snapshot_details(rest_api, {
                                 'key': snapshot2,
                                 'value': [
-                                    {'ks': ks0, 'cf': cf00, 'total': 0, 'live': 0},
+                                    {'ks': ks0, 'cf': cf00, 'total': 1, 'live': 0},
                                     {'ks': ks0, 'cf': cf01, 'total': 1, 'live': 0},
                                     {'ks': ks1, 'cf': cf10, 'total': 0, 'live': 0}
                                 ]
@@ -431,7 +437,7 @@ def test_storage_service_snapshot(cql, this_dc, rest_api):
                             verify_snapshot_details(rest_api, {
                                 'key': snapshot3,
                                 'value': [
-                                    {'ks': ks0, 'cf': cf00, 'total': 0, 'live': 0},
+                                    {'ks': ks0, 'cf': cf00, 'total': 1, 'live': 0},
                                     {'ks': ks0, 'cf': cf01, 'total': 1, 'live': 0},
                                     {'ks': ks1, 'cf': cf10, 'total': 0, 'live': 0}
                                 ]
