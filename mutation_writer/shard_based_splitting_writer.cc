@@ -23,6 +23,11 @@ private:
     mutation_reader_consumer _consumer;
     unsigned _current_shard;
     std::vector<std::optional<shard_writer>> _shards;
+    // Token range tombstones delete whole partitions, so every shard's output
+    // needs them, not just the one holding the current partition. They arrive
+    // before any partition, when no shard writer exists yet, so they are kept
+    // here and replayed into each writer as it is created.
+    token_range_tombstone_list _token_range_tombstones;
 
     future<> write_to_shard(mutation_fragment_v2&& mf) {
         auto& writer = *_shards[_current_shard];
@@ -40,8 +45,11 @@ public:
         _current_shard = dht::static_shard_of(*_schema, ps.key().token()); // FIXME: Use table sharder
         if (!_shards[_current_shard]) {
             _shards[_current_shard] = shard_writer(_schema, _permit, _consumer);
+            for (const auto& trt : _token_range_tombstones) {
+                co_await write_to_shard(mutation_fragment_v2(*_schema, _permit, token_range_tombstone(trt)));
+            }
         }
-        return write_to_shard(mutation_fragment_v2(*_schema, _permit, std::move(ps)));
+        co_await write_to_shard(mutation_fragment_v2(*_schema, _permit, std::move(ps)));
     }
 
     future<> consume(static_row&& sr) {
@@ -53,7 +61,8 @@ public:
     }
 
     future<> consume(token_range_tombstone&& trt) {
-        return _shards[_current_shard]->consume(mutation_fragment_v2(*_schema, _permit, std::move(trt)));
+        _token_range_tombstones.apply(trt);
+        return make_ready_future<>();
     }
 
     future<> consume(range_tombstone_change&& rt) {

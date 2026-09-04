@@ -101,6 +101,8 @@ public:
     }
 
     future<> consume(token_range_tombstone&& trt) {
+        // Ahead of every partition, which is where the single bucket writer
+        // wants them too.
         return _bucket_writer.consume(mutation_fragment_v2(*_schema, _permit, std::move(trt)));
     }
 

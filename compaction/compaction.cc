@@ -382,6 +382,12 @@ struct compaction_writer {
 class compacted_fragments_writer {
     compaction& _c;
     std::optional<compaction_writer> _compaction_writer = {};
+    // Token range tombstones delete whole partitions, so every sstable this
+    // produces needs them, and they arrive before any partition, when no writer
+    // has been created yet. Kept here and written into each writer as it is
+    // created; a split produces several, and one which lost them would bring
+    // back everything they delete.
+    token_range_tombstone_list _token_range_tombstones;
     using creator_func_t = std::function<compaction_writer(const dht::decorated_key&)>;
     using stop_func_t = std::function<void(compaction_writer*)>;
     creator_func_t _create_compaction_writer;
@@ -414,6 +420,7 @@ private:
     bool can_split_large_partition() const;
     void track_last_position(position_in_partition_view pos);
     void split_large_partition();
+    void maybe_create_compaction_writer(const dht::decorated_key& dk);
     void do_consume_new_partition(const dht::decorated_key& dk);
     stop_iteration do_consume_end_of_partition();
 public:
@@ -1206,11 +1213,18 @@ void compacted_fragments_writer::split_large_partition() {
     _current_partition.is_splitting_partition = false;
 }
 
-void compacted_fragments_writer::do_consume_new_partition(const dht::decorated_key& dk) {
-    maybe_abort_compaction();
+void compacted_fragments_writer::maybe_create_compaction_writer(const dht::decorated_key& dk) {
     if (!_compaction_writer) {
         _compaction_writer = _create_compaction_writer(dk);
+        for (const auto& trt : _token_range_tombstones) {
+            _compaction_writer->writer.consume(token_range_tombstone(trt));
+        }
     }
+}
+
+void compacted_fragments_writer::do_consume_new_partition(const dht::decorated_key& dk) {
+    maybe_abort_compaction();
+    maybe_create_compaction_writer(dk);
 
     _c.on_new_partition();
     _compaction_writer->writer.consume_new_partition(dk);
@@ -1254,7 +1268,10 @@ stop_iteration compacted_fragments_writer::consume(clustering_row&& cr, row_tomb
 
 stop_iteration compacted_fragments_writer::consume(token_range_tombstone&& trt) {
     maybe_abort_compaction();
-    return _compaction_writer->writer.consume(std::move(trt));
+    // No writer exists yet: these precede every partition. Remembered and
+    // written into each writer as it is created.
+    _token_range_tombstones.apply(trt);
+    return stop_iteration::no;
 }
 
 stop_iteration compacted_fragments_writer::consume(range_tombstone_change&& rtc) {
@@ -1273,6 +1290,18 @@ stop_iteration compacted_fragments_writer::consume_end_of_partition() {
 }
 
 void compacted_fragments_writer::consume_end_of_stream() {
+    if (!_compaction_writer && !_token_range_tombstones.empty()) {
+        // A stream of nothing but token range tombstones still has to produce
+        // an sstable, or the deletion is lost. There is no partition to name
+        // the output after, so a key with no components, decorated with the
+        // first token the tombstones delete, stands in for one where the
+        // writer creator needs a position on the ring. It is never written.
+        const auto& first = *_token_range_tombstones.begin();
+        auto token = first.start_exclusive().is_minimum()
+                ? dht::first_token()
+                : dht::next_token(first.start_exclusive());
+        maybe_create_compaction_writer(dht::decorated_key(std::move(token), partition_key::make_empty()));
+    }
     if (_compaction_writer) {
         _stop_compaction_writer(&*_compaction_writer);
         _compaction_writer = std::nullopt;
