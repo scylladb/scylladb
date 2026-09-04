@@ -29,4 +29,5 @@ def parse():
     parser.add_argument('--endpoint-snitch', default=None, dest='endpointSnitch', help="Set endpoint snitch")
     parser.add_argument('--replace-node-first-boot', default=None, dest='replaceNodeFirstBoot', help="Host ID of a dead node to replace.")
     parser.add_argument('--replace-address-first-boot', default=None, dest='replaceAddressFirstBoot', help="[[deprecated]] IP address of a dead node to replace.")
+    parser.add_argument('--blocked-reactor-notify-ms', default='25', dest='blocked_reactor_notify_ms', help="Set the blocked reactor notification timeout in milliseconds. Defaults to 25.")
     return parser.parse_known_args()
