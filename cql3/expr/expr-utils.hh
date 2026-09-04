@@ -45,6 +45,16 @@ extern bool is_satisfied_by(
 
 extern bool recurse_until(const expression& e, const noncopyable_function<bool (const expression&)>& predicate_fun);
 
+/// Whether two expressions evaluate to the same value on every binding (`always`), on none of them
+/// (`never`), or neither of the two can be proved (`unknown`).
+enum class equality { always, never, unknown };
+
+/// Decides which of the three holds without evaluating either expression. Answers `always` or
+/// `never` only where it can prove them, so everything it does not look into is `unknown`.
+/// Expressions that read a row are compared within one row, and two nulls are `always` equal -
+/// value identity, not the CQL comparison that would answer null.
+equality unevaluated_equality(const expression& a, const expression& b);
+
 // Looks into the expression and finds the given expression variant
 // for which the predicate function returns true.
 // If nothing is found returns nullptr.

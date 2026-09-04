@@ -285,6 +285,19 @@ def test_bm25_in_select_bind_marker_mismatch_raises(cql, fts_setup_with_mock, ve
         cql.execute(stmt, ["world", "hello", "hello"])
 
 
+def test_bm25_in_select_one_named_bind_marker(cql, fts_setup_with_mock, vector_store_mock):
+    """One named marker written in all three clauses is one variable: the client binds a single
+    value, so the terms cannot disagree and nothing is left for execution to compare."""
+    table, _ = fts_setup_with_mock
+
+    stmt = cql.prepare(
+        f"SELECT id, BM25(content, :term) AS score FROM {table} "
+        f"WHERE BM25(content, :term) > 0 ORDER BY BM25(content, :term) LIMIT {NUM_ROWS}")
+    vector_store_mock.set_next_bm25_response(200, bm25_response(RESPONSE_PK_REVERSED))
+    rows = list(cql.execute(stmt, {"term": "hello"}))
+    assert [r.id for r in rows] == RESPONSE_PK_REVERSED
+
+
 def test_bm25_in_select_nested_unaliased_column_name(cql, fts_setup_with_mock):
     """SELECT CAST(BM25(...) AS double) without an alias must not leak internal @external_value in the column name."""
     table, _ = fts_setup_with_mock

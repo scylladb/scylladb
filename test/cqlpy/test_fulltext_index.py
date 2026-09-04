@@ -492,6 +492,14 @@ def test_bm25_aggregation_rejected(cql, fulltext_table):
         cql.execute(f"SELECT count(*) FROM {fulltext_table} WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT 10")
 
 
+def test_bm25_group_by_rejected(cql, fulltext_table):
+    """GROUP BY is aggregation too, and must be rejected whether or not the score is selected."""
+    with pytest.raises(InvalidRequest, match="cannot be run with aggregation"):
+        cql.execute(f"SELECT p FROM {fulltext_table} WHERE BM25(content, 'hello') > 0 GROUP BY p ORDER BY BM25(content, 'hello') LIMIT 10")
+    with pytest.raises(InvalidRequest, match="cannot be run with aggregation"):
+        cql.execute(f"SELECT BM25(content, 'hello') FROM {fulltext_table} WHERE BM25(content, 'hello') > 0 GROUP BY p ORDER BY BM25(content, 'hello') LIMIT 10")
+
+
 def test_bm25_per_partition_limit_rejected(cql, fulltext_table):
     """PER PARTITION LIMIT must be rejected for full-text search queries."""
     with pytest.raises(InvalidRequest, match="do not support per-partition limits"):
@@ -652,7 +660,7 @@ def test_bm25_different_search_terms_rejected(cql, fulltext_table):
 
 def test_bm25_literal_as_column_reference_rejected(cql, fulltext_table):
     """BM25 with a string literal as the first argument must be rejected with a clear error."""
-    with pytest.raises(InvalidRequest, match="First argument to BM25 must be a column"):
+    with pytest.raises(InvalidRequest, match=re.escape("First argument to BM25() must be a column")):
         cql.execute(f"SELECT * FROM {fulltext_table} WHERE BM25('content', 'hello') > 0 ORDER BY BM25('content', 'hello') LIMIT 1")
 
 

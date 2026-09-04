@@ -50,6 +50,111 @@ bool operator==(const expression& e1, const expression& e2) {
     }, e1);
 }
 
+namespace {
+
+/// Compares two element lists pairwise. `injective` says whether the node maps distinct lists onto
+/// distinct values - true of a list or a vector, whose length and order are part of the value, false
+/// of a set, a map or a function call, where distinct lists can still arrive at one value.
+equality compare_elements(const std::vector<expression>& a, const std::vector<expression>& b, bool injective) {
+    if (a.size() != b.size()) {
+        return injective ? equality::never : equality::unknown;
+    }
+
+    auto result = equality::always;
+    for (size_t i = 0; i < a.size(); ++i) {
+        switch (unevaluated_equality(a[i], b[i])) {
+        case equality::always:
+            break;
+        case equality::never:
+            if (injective) {
+                return equality::never;
+            }
+            result = equality::unknown;
+            break;
+        case equality::unknown:
+            result = equality::unknown;
+            break;
+        }
+    }
+    return result;
+}
+
+/// The function a call resolved to, or nullptr while it is still just a name.
+const functions::function* resolved_function(const function_call& call) {
+    const auto* func = std::get_if<shared_ptr<functions::function>>(&call.func);
+    return func ? func->get() : nullptr;
+}
+
+} // anonymous namespace
+
+equality unevaluated_equality(const expression& a, const expression& b) {
+    return visit(overloaded_functor{
+        // A constant is the value itself, so a pair of them settles it either way.
+        [&] (const constant& a_const) {
+            const auto* b_const = as_if<constant>(&b);
+            if (!b_const) {
+                return equality::unknown;
+            }
+            return a_const == *b_const ? equality::always : equality::never;
+        },
+        // One bind index is one value in the query options, whichever receiver each occurrence was
+        // prepared against. Two indexes may still be given one value, so they settle nothing.
+        [&] (const bind_variable& a_bind) {
+            const auto* b_bind = as_if<bind_variable>(&b);
+            return b_bind && a_bind.bind_index == b_bind->bind_index ? equality::always : equality::unknown;
+        },
+        // Within one row a column reads one value; two columns may happen to hold the same one.
+        [&] (const column_value& a_col) {
+            const auto* b_col = as_if<column_value>(&b);
+            return b_col && a_col.col == b_col->col ? equality::always : equality::unknown;
+        },
+        // One slot holds one value. replaced_expr is metadata and says nothing about it.
+        [&] (const temporary& a_temp) {
+            const auto* b_temp = as_if<temporary>(&b);
+            return b_temp && a_temp.index == b_temp->index ? equality::always : equality::unknown;
+        },
+        [&] (const collection_constructor& a_coll) {
+            const auto* b_coll = as_if<collection_constructor>(&b);
+            if (!b_coll || a_coll.style != b_coll->style || a_coll.type != b_coll->type) {
+                return equality::unknown;
+            }
+            const bool injective = a_coll.style == collection_constructor::style_type::list_or_vector
+                    || a_coll.style == collection_constructor::style_type::vector;
+            return compare_elements(a_coll.elements, b_coll->elements, injective);
+        },
+        [&] (const tuple_constructor& a_tuple) {
+            const auto* b_tuple = as_if<tuple_constructor>(&b);
+            if (!b_tuple || a_tuple.type != b_tuple->type) {
+                return equality::unknown;
+            }
+            return compare_elements(a_tuple.elements, b_tuple->elements, true);
+        },
+        // A pure function sends equal arguments to one value, so a match argument for argument
+        // proves the values equal. It may send different arguments there too, so nothing else does.
+        [&] (const function_call& a_call) {
+            const auto* b_call = as_if<function_call>(&b);
+            const auto* func = resolved_function(a_call);
+            if (!b_call || !func || !func->is_pure() || func != resolved_function(*b_call)) {
+                return equality::unknown;
+            }
+            return compare_elements(a_call.args, b_call->args, false);
+        },
+        // Likewise a cast, which need not be injective either - a narrowing one is not.
+        [&] (const cast& a_cast) {
+            const auto* b_cast = as_if<cast>(&b);
+            if (!b_cast || a_cast.type != b_cast->type) {
+                return equality::unknown;
+            }
+            return unevaluated_equality(a_cast.arg, b_cast->arg) == equality::always
+                    ? equality::always : equality::unknown;
+        },
+        // Everything else is left unknown rather than guessed at.
+        [&] (const auto&) {
+            return equality::unknown;
+        },
+    }, a);
+}
+
 expression::expression(const expression& o)
         : _v(std::make_unique<impl>(*o._v)) {
 }
