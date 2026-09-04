@@ -1888,12 +1888,36 @@ future<> gossiper::apply_new_states(endpoint_state local_state, const endpoint_s
 
             const versioned_value* local_val = local_state.get_application_state_ptr(remote_key);
             if (!local_val || remote_value.version() > local_val->version()) {
+                // The copies below allocate, so the loop can tear local_state.
+                // SCHEMA only: SCHEMA changes just on DDL, so a test can stop
+                // the DDL and check that the dropped value stays missing.
+                if (remote_key == application_state::SCHEMA) {
+                    utils::get_local_injector().inject("apply_new_states_fail",
+                            [] { throw std::runtime_error("injected apply failure"); });
+                }
                 changed.emplace(remote_key, remote_value);
                 local_state.add_application_state(remote_key, remote_value);
             }
         }
     } catch (...) {
         ep = std::current_exception();
+    }
+
+    // Never replicate a state the loop failed to build. Outside a shadow
+    // round local_state already carries the incoming heartbeat, normally a
+    // higher version than the application states the loop failed to copy.
+    // Storing local_state would advertise a max above the missing states,
+    // and peers only send values above the advertised max.
+    if (ep) {
+        if (shadow_round) {
+            // A shadow round always discarded exceptions. Its caller applies
+            // every node in one loop and handles no per-node errors, so
+            // throwing would skip the remaining nodes. Returning still leaves
+            // the partial state unstored.
+            logger.warn("Failed to apply gossip state for {} in shadow round: {}", host_id, ep);
+            co_return;
+        }
+        maybe_rethrow_exception(std::move(ep));
     }
 
     auto addr = local_state.get_ip();
@@ -1921,8 +1945,6 @@ future<> gossiper::apply_new_states(endpoint_state local_state, const endpoint_s
             on_fatal_internal_error(logger, msg);
         }
     }
-
-    maybe_rethrow_exception(std::move(ep));
 }
 
 future<> gossiper::do_on_change_notifications(inet_address addr, locator::host_id id, const gms::application_state_map& states, permit_id pid) const {
