@@ -11,6 +11,7 @@
 #include <seastar/testing/test_case.hh>
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/loop.hh>
+#include <seastar/core/metrics_api.hh>
 
 #include <fmt/ranges.h>
 #include "db/config.hh"
@@ -22,6 +23,7 @@
 #include "sstables/sstables.hh"
 #include "sstable_test.hh"
 #include "test/lib/cql_test_env.hh"
+#include "test/lib/eventually.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/simple_schema.hh"
 #include "test/lib/sstable_utils.hh"
@@ -578,6 +580,59 @@ SEASTAR_TEST_CASE(test_tablet_sstable_set_preserves_arbitrary_boundaries) {
             BOOST_REQUIRE_MESSAGE(selected_from_copy == expected,
                                   fmt::format("select() mismatch for single-key range i={}", i));
         }
+    }, std::move(cfg));
+}
+
+// table_stats::pending_compactions (replica/database.hh) backs the "pending_compaction"
+// gauge (replica/table.cc); it must be refreshed on flush/compaction so the gauge tracks
+// table::estimate_pending_compactions().
+SEASTAR_TEST_CASE(test_pending_compaction_gauge_is_updated) {
+    cql_test_config cfg;
+    cfg.db_config->enable_keyspace_column_family_metrics(true);
+    return do_with_cql_env_thread([](cql_test_env& env) {
+        // Pin all tablets to shard 0 so the 4 flushed sstables land in one
+        // table's local view, regardless of the test binary's smp::count.
+        guarantee_all_tablet_replicas_on_shard0(env).get();
+
+        env.execute_cql("CREATE KEYSPACE pcg_ks WITH REPLICATION = "
+                         "{'class': 'NetworkTopologyStrategy', 'replication_factor': 1} "
+                         "AND TABLETS = {'enabled': true, 'initial': 1}").get();
+        env.execute_cql("CREATE TABLE pcg_ks.pcg_cf (pk int PRIMARY KEY, v int) "
+                        "WITH compaction = {'class': 'SizeTieredCompactionStrategy'}")
+                .get();
+
+        auto& table = env.local_db().find_column_family("pcg_ks", "pcg_cf");
+        table.disable_auto_compaction().get();
+
+        // Flush enough similarly-sized sstables to exceed min_threshold, so STCS
+        // reports a real pending-compaction backlog.
+        for (int i = 0; i < 4; i++) {
+            env.execute_cql(fmt::format("INSERT INTO pcg_ks.pcg_cf (pk, v) VALUES ({}, {})", i, i)).get();
+            table.flush().get();
+        }
+
+        auto real_backlog = table.estimate_pending_compactions().get();
+        BOOST_REQUIRE_GT(real_backlog, 0u);
+
+        auto scrape_gauge = [] {
+            const auto& value_map = seastar::metrics::impl::get_value_map();
+            const auto& metric_family = value_map.at("column_family_pending_compaction");
+            auto gauge_value = std::numeric_limits<double>::quiet_NaN();
+            for (const auto& [labels, reg] : metric_family) {
+                if (labels.labels().at("cf").value() == "pcg_cf" && labels.labels().at("ks").value() == "pcg_ks") {
+                    gauge_value = (*reg)().d();
+                    break;
+                }
+            }
+            return gauge_value;
+        };
+
+        // The refresh triggered by the last flush runs detached, so give it a chance to land.
+        eventually([&] {
+            auto gauge_value = scrape_gauge();
+            testlog.info("real estimated backlog={}, scraped gauge={}", real_backlog, gauge_value);
+            BOOST_REQUIRE_EQUAL(gauge_value, double(real_backlog));
+        });
     }, std::move(cfg));
 }
 
