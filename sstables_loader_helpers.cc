@@ -11,19 +11,50 @@
 #include <seastar/core/file.hh>
 #include <seastar/core/units.hh>
 #include <seastar/core/fstream.hh>
+#include "gms/feature_service.hh"
 #include "replica/database.hh"
 #include "sstables/shared_sstable.hh"
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
+#include "sstables/storage.hh"
 #include "utils/error_injection.hh"
+
+// Restores a backup sstable into a table which keeps its sstables on object
+// storage. The components are not streamed through this node: they are copied
+// inside the object storage, or, if the destination bucket already holds them,
+// shared with the backup sstable and not copied at all.
+static future<minimal_sst_info> clone_backup_sstable(replica::table& table, const sstables::shared_sstable& sstable, logging::logger& logger) {
+    // sstable::load() always sets an identifier, taken from the Scylla component
+    // or derived from the generation, so a backup sstable opened for restore has one.
+    auto source_sid = sstable->sstable_identifier();
+    if (!source_sid) {
+        on_internal_error(logger, fmt::format("Backup sstable {} has no sstable_id", sstable->get_filename()));
+    }
+    const auto& shards = sstable->get_shards_for_this_sstable();
+    if (shards.size() != 1) {
+        on_internal_error(logger, "Fully-contained sstable must belong to one shard only");
+    }
+
+    auto& sst_manager = table.get_sstables_manager();
+    auto storage = sstables::make_storage(sst_manager, table.schema(), table.get_storage_options(), sstables::sstable_state::normal);
+    auto gen = table.get_sstable_generation_generator()();
+    auto desc = co_await storage->clone_from(*sstable, gen, sst_manager.get_features().sstable_reference_sharing);
+    logger.debug("SSTable gen={} sid={} restored from sid={}: shard {}", gen, desc.sid, *source_sid, shards.front());
+    co_return minimal_sst_info{shards.front(), gen, desc.version, desc.format, desc.sid, *source_sid};
+}
 
 future<minimal_sst_info> download_sstable(replica::database& db, replica::table& table, sstables::shared_sstable sstable, logging::logger& logger) {
     constexpr auto foptions = file_open_options{.extent_allocation_size_hint = 32_MiB, .sloppy_size = true};
     constexpr auto stream_options = file_output_stream_options{.buffer_size = 128_KiB, .write_behind = 10};
-    auto components = sstable->all_components();
 
     utils::get_local_injector().inject("fail_download_sstable", [] { throw std::runtime_error("Failing sstable download"); });
     co_await utils::get_local_injector().inject("pause_download_sstable", utils::wait_for_message(std::chrono::seconds(60)));
+
+    if (table.get_storage_options().is_object_storage_type()) {
+        co_return co_await clone_backup_sstable(table, sstable, logger);
+    }
+
+    auto components = sstable->all_components();
 
     // Move the TOC to the front to be processed first since `sstables::create_stream_sink` takes care
     // of creating behind the scene TemporaryTOC instead of usual one. This assures that in case of failure
@@ -52,6 +83,11 @@ future<minimal_sst_info> download_sstable(replica::database& db, replica::table&
     auto scylla_it = std::ranges::find_if(components, [](const auto& component) { return component.first == component_type::Scylla; });
     if (scylla_it != std::next(components.begin())) {
         swap(*scylla_it, *std::next(components.begin()));
+    }
+
+    auto source_sid = sstable->sstable_identifier();
+    if (!source_sid) {
+        on_internal_error(logger, fmt::format("Backup sstable {} has no sstable_id", sstable->get_filename()));
     }
 
     auto gen = table.get_sstable_generation_generator()();
@@ -102,7 +138,7 @@ future<minimal_sst_info> download_sstable(replica::database& db, replica::table&
                     on_internal_error(logger, "Fully-contained sstable must belong to one shard only");
                 }
                 logger.debug("SSTable gen={} sid={}: shards {}", gen, sst->sstable_identifier(), fmt::join(shards, ", "));
-                co_return minimal_sst_info{shards.front(), gen, descriptor.version, descriptor.format};
+                co_return minimal_sst_info{shards.front(), gen, descriptor.version, descriptor.format, std::nullopt, *source_sid};
             }
         } catch (...) {
             logger.info("Error downloading SSTable component {}. Reason: {}", it->first, std::current_exception());
