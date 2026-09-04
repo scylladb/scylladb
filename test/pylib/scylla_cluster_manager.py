@@ -684,14 +684,16 @@ class ScyllaClusterManager:
         await self.cluster.server_stop(server_id, gracefully=True)
 
     @manager_op(blockable=True, timeout=None)
-    async def _rebuild_node(self, server_id: ServerNum, expected_error: str | None) -> None:
+    async def _rebuild_node(self, server_id: ServerNum, expected_error: str | None,
+                            source_dc: str | None = None, force: bool = False) -> None:
         """Run rebuild node on Scylla REST API for a specified server."""
 
-        self.logger.info("rebuild_node %s", server_id)
+        self.logger.info("rebuild_node %s source_dc=%s force=%s", server_id, source_dc, force)
         assert server_id in self.cluster.running, "Can't rebuild not running node"
         server = self.cluster.running[server_id]
         try:
-            await self.cluster.api.rebuild_node(server.ip_addr, timeout=ScyllaServer.TOPOLOGY_TIMEOUT)
+            await self.cluster.api.rebuild_node(server.ip_addr, timeout=ScyllaServer.TOPOLOGY_TIMEOUT,
+                                                source_dc=source_dc, force=force)
         except (RuntimeError, HTTPError) as exc:
             if expected_error:
                 if expected_error not in str(exc):
@@ -709,8 +711,6 @@ class ScyllaClusterManager:
                 raise RuntimeError(
                     f"rebuild succeeded when it should have failed (server: {server},"
                     f" expected_error: \"{expected_error}\"), check log file at {server.log_filename}")
-
-        await self.cluster.server_stop(server_id, gracefully=True)
 
     @manager_op
     async def server_get_config(self, server_id: ServerNum) -> dict[str, object]:
@@ -1423,12 +1423,17 @@ class ScyllaClusterManager:
 
     async def rebuild_node(self,
                            server_id: ServerNum,
+                           source_dc: str | None = None,
+                           force: bool = False,
                            expected_error: str | None = None,
                            timeout: float | None = ScyllaServer.TOPOLOGY_TIMEOUT) -> None:
         """Tell a node to rebuild with Scylla REST API."""
 
+        if expected_error is not None:
+            self.ignore_log_patterns.append(re.escape(expected_error))
         async with asyncio.timeout(timeout):
-            await self._rebuild_node(server_id, expected_error=expected_error)
+            await self._rebuild_node(server_id, expected_error=expected_error,
+                                     source_dc=source_dc, force=force)
         self._driver_update()
 
     async def wait_for_host_known(self,
