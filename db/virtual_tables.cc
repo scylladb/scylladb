@@ -11,6 +11,7 @@
 #include <boost/algorithm/string.hpp>
 #include <boost/lexical_cast.hpp>
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/timer.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/json/json_elements.hh>
@@ -48,6 +49,7 @@
 #include "utils/build_id.hh"
 #include "utils/error_injection.hh"
 #include "utils/log.hh"
+#include "utils/sequential_producer.hh"
 #include "replica/exceptions.hh"
 #include "service/paxos/paxos_state.hh"
 #include "idl/storage_proxy.dist.hh"
@@ -927,6 +929,89 @@ public:
 class clients_table : public streaming_virtual_table {
     service::storage_service& _ss;
 
+    using client_data_vec = utils::chunked_vector<client_data>;
+    using shard_client_data = std::vector<client_data_vec>;
+
+    // Every shard's execute() needs the node-wide client list; collect it once on shard 0 for all
+    // concurrent callers instead of one fan-out per shard (SCYLLADB-4230).
+    struct client_data_cache {
+        std::vector<foreign_ptr<std::unique_ptr<shard_client_data>>> cd_vec;
+        lowres_clock::time_point expiry;
+    };
+
+    static future<lw_shared_ptr<client_data_cache>> collect_client_data(service::storage_service& ss) {
+        auto cache = make_lw_shared<client_data_cache>();
+        cache->cd_vec.resize(this_smp_shard_count());
+
+        auto servers = ss.protocol_servers();
+        co_await smp::invoke_on_all([&cd_vec_ = cache->cd_vec, &servers_ = servers] () -> future<> {
+            auto& cd_vec = cd_vec_;
+            auto& servers = servers_;
+
+            auto scd = std::make_unique<shard_client_data>();
+            for (const auto& ps : servers) {
+                client_data_vec cds = co_await ps->get_client_data();
+                if (cds.size() != 0) {
+                    scd->emplace_back(std::move(cds));
+                }
+            }
+            cd_vec[this_shard_id()] = make_foreign(std::move(scd));
+        });
+
+        cache->expiry = lowres_clock::now() + client_data_cache_ttl;
+        co_return cache;
+    }
+
+    static constexpr std::chrono::milliseconds client_data_cache_ttl{500};
+
+    // Not function-local, so shutdown_client_data_cache() can reach it; shard-0 only, so no locking.
+    struct shard0_state {
+        lw_shared_ptr<client_data_cache> cache;
+        std::optional<sequential_producer<lw_shared_ptr<client_data_cache>>> producer;
+        std::optional<timer<lowres_clock>> release_timer;
+        // Closed at shutdown to wait out an in-flight collection, then reset so a later lifecycle
+        // (unit tests) starts fresh against its own storage_service.
+        std::optional<seastar::gate> gate;
+    };
+    static shard0_state& get_shard0_state() {
+        static shard0_state state;
+        return state;
+    }
+
+    // Capturing ss is safe: the shard-0 storage_service outlives the producer, which shutdown resets.
+    static future<lw_shared_ptr<client_data_cache>> get_client_data_on_shard0(service::storage_service& ss) {
+        auto& state = get_shard0_state();
+        if (!state.producer) {
+            state.producer.emplace([&ss] { return collect_client_data(ss); });
+            state.gate.emplace();
+            // The snapshot pins every shard's client_data and the next query may never come, so
+            // drop it at expiry rather than on the next call; producer.clear() releases its copy too.
+            state.release_timer.emplace([&state] {
+                // Lets tests deterministically hit the window where the snapshot is still held.
+                if (utils::get_local_injector().enter("clients_table_keep_snapshot")) {
+                    return;
+                }
+                state.cache = nullptr;
+                // A collection in flight is about to publish a fresh cache/timer; clearing
+                // producer here would start a second overlapping node-wide fan-out.
+                if (state.gate->get_count() == 0) {
+                    state.producer->clear();
+                }
+            });
+        }
+
+        if (state.cache && lowres_clock::now() < state.cache->expiry) {
+            co_return state.cache;
+        }
+        // Throws gate_closed_exception during shutdown; propagates to execute()'s caller rather
+        // than resuming to touch state that's being (or has been) torn down.
+        auto h = state.gate->hold();
+        auto cache = co_await (*state.producer)();
+        state.cache = cache;
+        state.release_timer->rearm(cache->expiry);
+        co_return cache;
+    }
+
     static schema_ptr build_schema() {
         auto id = generate_legacy_id(system_keyspace::NAME, "clients");
         return schema_builder(this_smp_shard_count(), system_keyspace::NAME, "clients", std::make_optional(id))
@@ -961,28 +1046,12 @@ class clients_table : public streaming_virtual_table {
     }
 
     future<> execute(reader_permit permit, result_collector& result, const query_restrictions& qr) override {
-        // Collect. One foreign_ptr per shard wraps a whole chunked_vector<client_data>,
-        // instead of one foreign_ptr per connection, to avoid hundreds of thousands of
-        // tiny cross-shard allocations at high connection counts (SCYLLADB-4230).
-        using client_data_vec = utils::chunked_vector<client_data>;
-        using shard_client_data = std::vector<client_data_vec>;
-        std::vector<foreign_ptr<std::unique_ptr<shard_client_data>>> cd_vec;
-        cd_vec.resize(this_smp_shard_count());
-
-        auto servers = co_await _ss.container().invoke_on(0, [] (auto& ss) { return ss.protocol_servers(); });
-        co_await smp::invoke_on_all([&cd_vec_ = cd_vec, &servers_ = servers] () -> future<> {
-            auto& cd_vec = cd_vec_;
-            auto& servers = servers_;
-
-            auto scd = std::make_unique<shard_client_data>();
-            for (const auto& ps : servers) {
-                client_data_vec cds = co_await ps->get_client_data();
-                if (cds.size() != 0) {
-                    scd->emplace_back(std::move(cds));
-                }
-            }
-            cd_vec[this_shard_id()] = make_foreign(std::move(scd));
+        // Shared by every shard and freed on shard 0 (foreign_ptr), so only read from it.
+        foreign_ptr<lw_shared_ptr<client_data_cache>> cache = co_await _ss.container().invoke_on(0,
+                [] (service::storage_service& ss) -> future<foreign_ptr<lw_shared_ptr<client_data_cache>>> {
+            co_return make_foreign(co_await get_client_data_on_shard0(ss));
         });
+        const std::vector<foreign_ptr<std::unique_ptr<shard_client_data>>>& cd_vec = cache->cd_vec;
 
         // Partition
         struct decorated_ip {
@@ -1090,6 +1159,24 @@ public:
             , _ss(ss)
     {
         _shard_aware = true;
+    }
+
+    // Statics outlive smp in unit tests, too late to free cross-shard rows. Public, since clang
+    // can't friend a namespace function from this anonymous-namespace class.
+    static future<> shutdown_client_data_cache() {
+        auto& state = get_shard0_state();
+        if (state.release_timer) {
+            state.release_timer->cancel();
+        }
+        // sequential_producer::clear() doesn't cancel or await an in-flight collection; close
+        // the gate first so one already suspended here finishes before we tear down.
+        if (state.gate) {
+            co_await state.gate->close();
+        }
+        state.cache = nullptr;
+        state.producer.reset();
+        state.release_timer.reset();
+        state.gate.reset();
     }
 };
 
@@ -2367,6 +2454,14 @@ future<> initialize_virtual_tables(
             }).finally([holder = std::move(*holder)] {});
         });
     }
+}
+
+future<> uninitialize_virtual_tables() {
+    // system_keyspace::shutdown() runs on every shard; the cache's gate must be closed only once.
+    if (this_shard_id() != 0) {
+        return make_ready_future<>();
+    }
+    return clients_table::shutdown_client_data_cache();
 }
 
 virtual_tables_registry::virtual_tables_registry() : unique_ptr(std::make_unique<virtual_tables_registry_impl>()) {
