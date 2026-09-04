@@ -140,7 +140,7 @@ Glossary
       See `ScyllaDB Shard per Core Architecture <https://www.scylladb.com/product/technology/shard-per-core-architecture/>`_ for more information.
 
     Size-tiered compaction strategy
-      Triggers when the system has enough (four by default) similarly sized SSTables.  See :doc:`Compaction Strategies</architecture/compaction/compaction-strategies/>`.
+      Merges SSTables of approximately the same size, triggered when the system has two or more of them - or ``min_threshold``, four by default, if ``compaction_enforce_min_threshold`` is enabled. Deprecated as a table property: ``SizeTieredCompactionStrategy`` is now an alias of the incremental compaction strategy.  See :doc:`Compaction Strategies</architecture/compaction/compaction-strategies/>`.
 
     Snapshot
       Snapshots in ScyllaDB are an essential part of the backup and restore mechanism. Whereas in other databases a backup starts with creating a copy of a data file (cold backup, hot backup, shadow copy backup), in ScyllaDB the process starts with creating a table or keyspace snapshot.  See :doc:`ScyllaDB Snapshots </kb/snapshots>`.

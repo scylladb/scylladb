@@ -8,6 +8,7 @@
  * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.1 and Apache-2.0)
  */
 
+#include "cql3/statements/cf_prop_defs.hh"
 #include "cql3/statements/view_prop_defs.hh"
 #include "exceptions/exceptions.hh"
 #include "utils/assert.hh"
@@ -121,6 +122,10 @@ std::pair<view_ptr, cql3::cql_warnings_vec> create_view_statement::prepare_view(
 
     auto schema_extensions = _properties.properties()->make_schema_extensions(db.extensions());
     _properties.validate_raw(view_prop_defs::op_type::create, db, keyspace(), schema_extensions);
+    if (auto warning = check_deprecated_compaction_strategy(_properties.properties()->get_compaction_strategy_class(),
+                db.get_config().allow_deprecated_size_tiered_compaction_strategy())) {
+        warnings.emplace_back(std::move(*warning));
+    }
 
     // View and base tables must be in the same keyspace, to ensure that RF
     // is the same (because we assign a view replica to each base replica).

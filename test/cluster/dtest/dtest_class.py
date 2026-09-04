@@ -298,7 +298,7 @@ def create_cf(  # noqa: PLR0912, PLR0913
     columns=None,
     validation="UTF8Type",
     compact_storage=False,
-    compaction_strategy="SizeTieredCompactionStrategy",
+    compaction_strategy="IncrementalCompactionStrategy",
     primary_key=None,
     clustering=None,
     default_ttl=None,

@@ -211,6 +211,10 @@ std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepa
         // See https://github.com/scylladb/scylladb/issues/20945
         mylogger.warn("{}", *warning);
     }
+    if (auto warning = check_deprecated_compaction_strategy(_properties.properties()->get_compaction_strategy_class(),
+                db.get_config().allow_deprecated_size_tiered_compaction_strategy())) {
+        stmt_warning(std::move(*warning));
+    }
     const bool has_default_ttl = _properties.properties()->get_default_time_to_live() > 0;
 
     auto stmt = ::make_shared<create_table_statement>(*_cf_name, _properties.properties(), _if_not_exists, _static_columns, _ttl_column, _properties.properties()->get_id());

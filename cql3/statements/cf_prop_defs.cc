@@ -424,6 +424,21 @@ void cf_prop_defs::validate_minimum_int(const sstring& field, int32_t minimum_va
     }
 }
 
+std::optional<sstring> check_deprecated_compaction_strategy(std::optional<compaction::compaction_strategy_type> strategy, bool allow) {
+    if (strategy != compaction::compaction_strategy_type::size_tiered) {
+        return std::nullopt;
+    }
+    auto deprecated = format("{} is deprecated and is now an alias of {}",
+            compaction::compaction_strategy::name(compaction::compaction_strategy_type::size_tiered),
+            compaction::compaction_strategy::name(compaction::compaction_strategy_type::incremental));
+    if (!allow) {
+        throw exceptions::configuration_exception(format("{}, which should be used instead. To keep accepting the "
+                "deprecated name, set the allow_deprecated_size_tiered_compaction_strategy configuration option.",
+                deprecated));
+    }
+    return format("{}, which it will be compacted with. Please ask for the latter explicitly instead.", deprecated);
+}
+
 std::optional<compaction::compaction_strategy_type> cf_prop_defs::get_compaction_strategy_class() const {
     // Unfortunately, in our implementation, the compaction strategy begins
     // stored in the compaction strategy options, and then the validate()
