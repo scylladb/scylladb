@@ -2200,4 +2200,22 @@ SEASTAR_TEST_CASE(test_large_allocations) {
 }
 #endif
 
+// Reproducer for SCYLLADB-2898.
+//
+// Static-column index views do not contain base clustering-key columns, so CK
+// restrictions must not be pushed into the index-table clustering prefix.
+SEASTAR_TEST_CASE(test_global_index_on_static_column_with_ck_restriction) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE t (pk int, ck int, s int static, r int, PRIMARY KEY (pk, ck))").get();
+        e.execute_cql("CREATE INDEX ON t(s)").get();
+        e.execute_cql("INSERT INTO t (pk, ck, s, r) VALUES (1, 2, 5, 10)").get();
+        eventually([&] {
+            auto res = e.execute_cql("SELECT * FROM t WHERE pk = 1 AND s = 5 AND ck = 2").get();
+            assert_that(res).is_rows().with_rows({
+                {{int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(5)}, {int32_type->decompose(10)}},
+            });
+        });
+    });
+}
+
 BOOST_AUTO_TEST_SUITE_END()
