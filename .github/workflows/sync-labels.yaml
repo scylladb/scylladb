@@ -7,6 +7,9 @@ on:
   issues:
     types: [labeled, unlabeled]
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   label-sync:
     if: ${{ github.repository == 'scylladb/scylladb' }}
@@ -21,7 +24,7 @@ jobs:
           GITHUB_CONTEXT: ${{ toJson(github) }}
         run: echo "$GITHUB_CONTEXT"
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           sparse-checkout: |
             .github/scripts/sync_labels.py
