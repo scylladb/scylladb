@@ -10,6 +10,7 @@
 #include "test/lib/random_schema.hh"
 #include "test/lib/random_utils.hh"
 #include "dht/i_partitioner.hh"
+#include "replica/database.hh"
 
 namespace tests {
 
@@ -88,6 +89,32 @@ dht::decorated_key generate_partition_key(schema_ptr s, std::optional<shard_id> 
 
 dht::decorated_key generate_partition_key(schema_ptr s, local_shard_only lso, std::optional<key_size> size) {
     return generate_partition_key(std::move(s), lso == local_shard_only::yes ? std::optional(this_shard_id()) : std::nullopt, size);
+}
+
+std::vector<dht::decorated_key> generate_partition_keys(size_t n, replica::table& tbl, std::optional<shard_id> shard, std::optional<key_size> size) {
+    auto s = tbl.schema();
+    return generate_keys<partition_key, dht::decorated_key, dht::decorated_key::less_comparator>(
+            n,
+            s,
+            dht::decorated_key::less_comparator(s),
+            s->partition_key_type()->types(),
+            [&tbl, shard, tokens = std::set<dht::token>()] (const partition_key& pkey) mutable -> std::optional<dht::decorated_key> {
+                auto dkey = dht::decorate_key(*tbl.schema(), pkey);
+                if (shard && *shard != tbl.shard_for_reads(dkey.token())) {
+                    return {};
+                }
+                if (!tokens.insert(dkey.token()).second) {
+                    return {};
+                }
+                return dkey;
+            },
+            false,
+            size);
+}
+
+dht::decorated_key generate_partition_key(replica::table& tbl, std::optional<shard_id> shard, std::optional<key_size> size) {
+    auto&& keys = generate_partition_keys(1, tbl, shard, size);
+    return std::move(keys.front());
 }
 
 std::vector<clustering_key> generate_clustering_keys(size_t n, schema_ptr s, bool allow_prefixes, std::optional<key_size> size) {
