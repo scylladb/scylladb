@@ -164,10 +164,19 @@ db::batchlog_manager::batchlog_manager(cql3::query_processor& qp, db::system_key
     });
 }
 
-future<db::all_batches_replayed> db::batchlog_manager::do_batch_log_replay(post_replay_cleanup cleanup) {
-    return container().invoke_on(0, [cleanup] (auto& bm) -> future<db::all_batches_replayed> {
+future<db::all_batches_replayed> db::batchlog_manager::do_batch_log_replay(post_replay_cleanup cleanup,
+        std::optional<seastar::semaphore::duration> sem_timeout) {
+    return container().invoke_on(0, [cleanup, sem_timeout] (auto& bm) -> future<db::all_batches_replayed> {
         auto gate_holder = bm._gate.hold();
-        auto sem_units = co_await get_units(bm._sem, 1);
+        // Bounding this wait keeps a caller that gives up on us (e.g. via
+        // seastar::with_timeout()) from leaving a replay parked behind _sem
+        // indefinitely if an earlier replay is itself stuck: each queued
+        // waiter times out and drops out on its own instead of piling up.
+        auto sem_units = sem_timeout
+                ? co_await get_units(bm._sem, 1, *sem_timeout)
+                : co_await get_units(bm._sem, 1);
+
+        co_await utils::get_local_injector().inject("do_batch_log_replay_wait", utils::wait_for_message(5min));
 
         auto dest = bm._cpu++ % this_smp_shard_count();
         blogger.debug("Batchlog replay on shard {}: starts", dest);

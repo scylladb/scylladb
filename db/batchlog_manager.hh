@@ -15,11 +15,13 @@
 #include <seastar/core/gate.hh>
 #include <seastar/core/metrics_registration.hh>
 #include <seastar/core/abort_source.hh>
+#include <seastar/core/semaphore.hh>
 
 #include "db_clock.hh"
 
 #include <chrono>
 #include <limits>
+#include <optional>
 
 namespace cql3 {
 
@@ -107,7 +109,10 @@ public:
     future<> drain();
     future<> stop();
 
-    future<all_batches_replayed> do_batch_log_replay(post_replay_cleanup cleanup);
+    // sem_timeout bounds only the wait to acquire _sem (e.g. behind an
+    // already-stuck replay); it does not cancel a replay already in progress.
+    future<all_batches_replayed> do_batch_log_replay(post_replay_cleanup cleanup,
+            std::optional<seastar::semaphore::duration> sem_timeout = std::nullopt);
 
     future<size_t> count_all_batches() const;
     gc_clock::time_point get_last_replay() const {
