@@ -228,6 +228,26 @@ takes a 64-bit ``blob`` argument and converts it to a ``bigint`` value. For exam
 ``0x0000000000000003`` and ``blobAsBigint(0x0000000000000003)`` is ``3``.
 
 
+Math functions
+``````````````
+
+CQL provides the following math functions: ``abs``, ``exp``, ``log``, ``log10``, and ``round``.
+The return type for these functions is always the same as the input type.
+
+===================== ==========================================================================================
+ Function name         Description
+===================== ==========================================================================================
+ ``abs``               Returns the absolute value of the input.
+ ``exp``               Returns the number e to the power of the input.
+ ``log``               Returns the natural log of the input.
+ ``log10``             Returns the log base 10 of the input.
+ ``round``             Rounds the input to the nearest whole number using rounding mode ``HALF_UP``.
+===================== ==========================================================================================
+
+These functions accept the numeric CQL types: ``tinyint``, ``smallint``, ``int``, ``bigint``, ``varint``,
+``float``, ``double``, ``decimal``, and ``counter``.
+
+
 .. _vector-similarity-functions:
 
 Vector similarity functions
