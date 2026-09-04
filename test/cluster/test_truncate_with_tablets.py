@@ -19,6 +19,14 @@ import asyncio
 
 logger = logging.getLogger(__name__)
 
+# Truncating by writing a token range tombstone leaves none of what these tests
+# look at: no truncation record, no replay position saved, no sstables
+# discarded under disabled compaction. The old path is still taken by a cluster
+# which has not enabled the feature, so these keep testing it by suppressing
+# the feature rather than by being rewritten.
+LEGACY_TRUNCATE_CFG = {'error_injections_at_startup': [
+        {'name': 'suppress_features', 'value': 'TOKEN_RANGE_TOMBSTONES'}]}
+
 
 @pytest.mark.parametrize("feature_config", feature_configs(FeatureConfigurations.EVENTUAL_CONSISTENCY,
                                                            FeatureConfigurations.LOGSTOR_EVENTUAL_CONSISTENCY))
@@ -285,7 +293,7 @@ async def test_truncate_while_truncate_already_waiting(manager: ScyllaClusterMan
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_replay_position_check_during_truncate(manager, feature_config: FeatureConfig):
     logger.info("Bootstrapping cluster")
-    cfg = feature_config.get_cluster_cfg({'auto_snapshot': True})
+    cfg = feature_config.get_cluster_cfg({'auto_snapshot': True}) | LEGACY_TRUNCATE_CFG
     keyspace_opts = feature_config.get_keyspace_opts(
         "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}")
     cmdline = ['--smp=1']
@@ -387,7 +395,7 @@ async def test_split_emitted_during_truncate(manager: ScyllaClusterManager):
     logger.info("Bootstrapping cluster")
     cfg = { 'tablets_mode_for_new_keyspaces': 'enabled',
             'tablet_load_stats_refresh_interval_in_seconds': 1,
-          }
+          } | LEGACY_TRUNCATE_CFG
     cmdline = [
         '--logger-log-level', 'table=debug',
         '--logger-log-level', 'load_balancer=debug',
