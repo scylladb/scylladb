@@ -10,18 +10,16 @@
 #include "cql3/statements/external_search/ann_search.hh"
 
 #include "cql3/statements/external_search/external_function.hh"
-#include "cql3/statements/external_search/fulltext_indexed_table_select_statement.hh"
-#include "cql3/statements/external_search/vector_indexed_table_select_statement.hh"
+#include "cql3/statements/external_search/external_search_select_statement.hh"
 #include "cql3/expr/expr-utils.hh"
+#include "cql3/functions/functions.hh"
 #include "cql3/functions/scoring_fcts.hh"
 #include "cql3/restrictions/statement_restrictions.hh"
 #include "exceptions/exceptions.hh"
 #include "index/secondary_index_manager.hh"
 #include "index/vector_index.hh"
 #include "types/types.hh"
-#include "utils/log.hh"
-
-#include <seastar/core/on_internal_error.hh>
+#include "utils/assert.hh"
 
 #include <algorithm>
 #include <cmath>
@@ -29,8 +27,6 @@
 #include <utility>
 
 namespace cql3::statements {
-
-static logging::logger plan_log("external_search_plan");
 
 namespace {
 
@@ -43,12 +39,13 @@ std::string_view query_value_name(search_family family) {
     return family == search_family::ann ? "query vector" : "search term";
 }
 
-/// The error for a call in SELECT or WHERE that refers to a search the ORDER BY did not introduce.
-sstring clause_mismatch_message(const external_search_function& fun, search_clause clause, bool kind_is_run) {
+/// The error for a call in SELECT or WHERE that refers to a search the ORDER BY did not introduce:
+/// no search of that family at all, or one on another column.
+sstring clause_mismatch_message(const external_search_function& fun, search_clause clause, bool on_another_column) {
     if (clause == search_clause::restrictions) {
         return seastar::format("{}() in WHERE names a search that the ORDER BY clause does not run", fun.display_name());
     }
-    if (kind_is_run) {
+    if (on_another_column) {
         return fun.family() == search_family::ann
                 ? seastar::format("{}() in SELECT must reference the same column as the ANN ordering", fun.display_name())
                 : seastar::format("{}() in SELECT must reference the same column as BM25() in WHERE and ORDER BY", fun.display_name());
@@ -64,6 +61,7 @@ sstring agreement_message(const external_search_function& fun, std::string_view 
             ? seastar::format("{}() in SELECT must use the same {} as the ANN ordering", fun.display_name(), value_name)
             : seastar::format("{}() in SELECT must use the same {} as BM25() in WHERE and ORDER BY", fun.display_name(), value_name);
 }
+
 
 /// The index that will answer a search of this family on this column.
 secondary_index::index resolve_index(search_family family, data_dictionary::database db, const schema_ptr& schema,
@@ -88,33 +86,6 @@ secondary_index::index resolve_index(search_family family, data_dictionary::data
     return *it;
 }
 
-/// The two statement classes take one family's ordering info each; a source holds the same data for
-/// either family, so this is a field-by-field copy.
-ann_ordering_info to_ann_ordering_info(const search_source& source) {
-    return ann_ordering_info{
-            .index = source.index,
-            .prepared_ann_ordering = std::make_pair(source.column, source.query_value),
-            .is_rescoring_enabled = source.is_rescoring_enabled,
-            .temporaries = {.score = source.score_slot, .rank = source.rank_slot},
-            .deferred_select_vectors = source.deferred
-                    | std::views::transform([] (const deferred_query_value& deferred) { return deferred.value; })
-                    | std::ranges::to<std::vector>(),
-    };
-}
-
-bm25_ordering_info to_bm25_ordering_info(const search_source& source) {
-    return bm25_ordering_info{
-            .index = source.index,
-            .search_term = source.query_value,
-            .temporaries = {.score = source.score_slot, .rank = source.rank_slot, .fragment = source.fragment_slot},
-            .deferred_select_terms = source.deferred
-                    | std::views::transform([] (const deferred_query_value& deferred) {
-                          return deferred_select_term{deferred.value, deferred.function_name};
-                      })
-                    | std::ranges::to<std::vector>(),
-    };
-}
-
 } // anonymous namespace
 
 external_search_plan::external_search_plan(data_dictionary::database db, schema_ptr schema, prepare_context& ctx,
@@ -125,7 +96,7 @@ external_search_plan::external_search_plan(data_dictionary::database db, schema_
     , _temporaries_allocator(temporaries_allocator) {
 }
 
-search_source& external_search_plan::claim(const expr::function_call& fc, const external_search_function& fun, search_clause clause) {
+search_source& external_search_plan::search_of(const expr::function_call& fc, const external_search_function& fun, search_clause clause) {
     auto [column, query_value] = external_search::extract_call_arguments(fc, fun.display_name());
 
     auto it = std::ranges::find_if(_sources, [&] (const search_source& source) {
@@ -134,11 +105,10 @@ search_source& external_search_plan::claim(const expr::function_call& fc, const 
 
     if (it == _sources.end()) {
         if (clause != search_clause::ordering) {
-            // Only ORDER BY introduces a search. The message differs by whether the statement runs
-            // no search of this family (a missing clause) or one on another column (a mismatch).
-            const bool kind_is_run = std::ranges::any_of(
+            // Only ORDER BY introduces a search.
+            const bool on_another_column = std::ranges::any_of(
                     _sources, [&] (const search_source& source) { return source.family == fun.family(); });
-            throw exceptions::invalid_request_exception(clause_mismatch_message(fun, clause, kind_is_run));
+            throw exceptions::invalid_request_exception(clause_mismatch_message(fun, clause, on_another_column));
         }
         auto index = resolve_index(fun.family(), _db, _schema, *column);
         _sources.push_back(search_source{
@@ -160,23 +130,25 @@ search_source& external_search_plan::claim(const expr::function_call& fc, const 
 
     // Every call sharing a source must use the same query value. With a bind marker on either
     // side that can only be checked at execution.
+    auto message = agreement_message(fun, query_value_name(fun.family()));
     const auto values_equal = external_search::unevaluated_equality(query_value, it->query_value);
     if (values_equal != external_search::equality::always) {
         if (values_equal == external_search::equality::never) {
-            throw exceptions::invalid_request_exception(agreement_message(fun, query_value_name(fun.family())));
+            throw exceptions::invalid_request_exception(message);
         }
-        // The call is replaced by a temporary, so nothing else registers the bind markers in its
-        // arguments.
+        // Bind markers are registered by walking the prepared clauses, and this call is about to
+        // leave them, replaced by a temporary. So the markers in query_value are registered here.
         expr::fill_prepare_context(query_value, _ctx);
-        it->deferred.push_back({std::move(query_value), sstring(fun.display_name())});
+        it->deferred.push_back({std::move(query_value), std::move(message)});
     }
     return *it;
 }
 
-expr::expression external_search_plan::deliver(const external_search_function& fun, const expr::expression& call_expr, search_source& source,
+expr::expression external_search_plan::replacement_for(const external_search_function& fun, const expr::expression& call_expr, search_source& source,
         bool& unnamed) {
-    // A temporary replacing a whole call remembers it, for the selector's name. The two inside the
-    // (score, rank) tuple remember nothing; that selector is named by bind_selectors().
+    // A temporary standing for a whole call keeps it in replaced_expr, and an unaliased selector is
+    // named after it. The two temporaries inside the (score, rank) tuple keep nothing: the tuple
+    // stands for the call, and bind_selectors() names that selector itself.
     auto slot = [&] (std::optional<size_t>& index, data_type type, std::optional<expr::expression> replaced) {
         if (!index) {
             index = _temporaries_allocator.allocate();
@@ -237,8 +209,8 @@ expr::expression external_search_plan::lower(const expr::expression& e, search_c
             return std::nullopt;
         }
         lowered_any = true;
-        auto& source = claim(*fc, *fun, clause);
-        return deliver(*fun, candidate, source, unnamed);
+        auto& source = search_of(*fc, *fun, clause);
+        return replacement_for(*fun, candidate, source, unnamed);
     });
 }
 
@@ -251,7 +223,7 @@ void external_search_plan::bind_ordering(const expr::expression& prepared_orderi
                 throw exceptions::invalid_request_exception(seastar::format(
                         "{}() cannot rank rows: it is an excerpt of one, not a measure of it", fun->display_name()));
             }
-            auto& source = claim(*fc, *fun, search_clause::ordering);
+            auto& source = search_of(*fc, *fun, search_clause::ordering);
             if (source.is_rescoring_enabled) {
                 // A rescoring index: the coordinator recomputes the similarity and sorts the rows by it.
                 _ordering_expr = ann_search::similarity_expression(source.index, source.column, source.query_value, _db, _schema);
@@ -298,47 +270,20 @@ void external_search_plan::bind_selectors(std::vector<selection::prepared_select
 
 void external_search_plan::bind_restrictions(const restrictions::statement_restrictions& restrictions) {
     for (const auto& binop : restrictions.get_scoring_function_restrictions()) {
-        // statement_restrictions only diverts a relation whose left-hand side is a call to an
-        // external function, so the cast cannot fail.
+        // statement_restrictions holds out exactly the relations whose left-hand side is a call to
+        // an external search function.
         const auto& fc = expr::as<expr::function_call>(binop.lhs);
         const auto* fun = functions::as_external_search_function(fc);
-        if (!fun) {
-            on_internal_error(plan_log, seastar::format("no search claimed the external function call {}", fc));
-        }
-        if (_sources.empty()) {
-            throw exceptions::invalid_request_exception(
-                    "A scoring function in the WHERE clause requires a matching ORDER BY clause");
-        }
-        claim(fc, *fun, search_clause::restrictions);
+        throwing_assert(fun);
+        search_of(fc, *fun, search_clause::restrictions);
     }
 }
 
 ::shared_ptr<select_statement> external_search_plan::make_statement(external_statement_args args) const {
-    if (_sources.size() > 1) {
-        throw exceptions::invalid_request_exception("Combining several searches in one query is not supported yet");
-    }
-    const auto& source = _sources.front();
-
-    if (source.family == search_family::ann) {
-        return vector_indexed_table_select_statement::prepare(_db, args.schema, args.bound_terms, args.parameters,
-                std::move(args.selection), std::move(args.restrictions), std::move(args.group_by_cell_indices), args.is_reversed,
-                std::move(args.ordering_comparator), std::move(args.limit), std::move(args.per_partition_limit), args.stats,
-                to_ann_ordering_info(source), std::move(args.attrs));
-    }
-    return fulltext_indexed_table_select_statement::prepare(_db, args.schema, args.bound_terms, args.parameters,
-            std::move(args.selection), std::move(args.restrictions), std::move(args.group_by_cell_indices), args.is_reversed,
-            std::move(args.ordering_comparator), std::move(args.limit), std::move(args.per_partition_limit), args.stats,
-            to_bm25_ordering_info(source), std::move(args.attrs));
+    return external_search_select_statement::prepare(_db, _sources, std::move(args));
 }
 
-select_statement::ordering_comparator_type descending_score_ordering_comparator(
-        const expr::expression& score_expr, uint32_t column_index) {
-    // Every score is a float; nothing in the types says so, so check it here rather than let the
-    // comparator read another type's bytes as one.
-    if (expr::type_of(score_expr) != float_type) {
-        on_internal_error(plan_log,
-                seastar::format("rows cannot be ranked by {}, which is {} rather than a score", score_expr, expr::type_of(score_expr)->name()));
-    }
+select_statement::ordering_comparator_type descending_score_ordering_comparator(uint32_t column_index) {
     return [column_index] (const raw::select_statement::result_row_type& r1, const raw::select_statement::result_row_type& r2) {
         auto& c1 = r1[column_index];
         auto& c2 = r2[column_index];

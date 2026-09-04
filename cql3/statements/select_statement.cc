@@ -11,9 +11,7 @@
 #include "cql3/statements/strong_consistency/select_statement.hh"
 #include "cql3/statements/strong_consistency/statement_helpers.hh"
 #include "cql3/statements/select_statement.hh"
-#include "cql3/statements/external_search/vector_indexed_table_select_statement.hh"
 #include "cql3/statements/external_search/external_search_plan.hh"
-#include "cql3/statements/external_search/fulltext_indexed_table_select_statement.hh"
 #include "cql3/statements/index_latency.hh"
 #include "cql3/expr/expression.hh"
 #include "cql3/expr/evaluate.hh"
@@ -2117,8 +2115,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     expr::temporary_allocator temporaries_allocator;
     external_search_plan external_searches(db, schema, ctx, temporaries_allocator);
 
-    // A scoring ORDER BY is prepared once, here; preparing it inside the plan per clause would
-    // register its bind markers more than once.
+    // A scoring ORDER BY is prepared, and its bind markers registered, before the plan looks at it.
     if (!_parameters->orderings().empty()) {
         if (const auto* scoring_ord = std::get_if<raw::select_statement::scoring_function_ordering>(&_parameters->orderings().front().second)) {
             auto prepared_ordering = expr::prepare_expression(scoring_ord->func_expr, db, schema->ks_name(), schema.get(), nullptr);
@@ -2163,7 +2160,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
         // column of the result row, so the score is appended as a trailing selector, hidden from
         // the client below.
         prepared_selectors.push_back(selection::prepared_selector{.expr = *score, .alias = nullptr});
-        ordering_comparator = descending_score_ordering_comparator(*score, prepared_selectors.size() - 1);
+        ordering_comparator = descending_score_ordering_comparator(prepared_selectors.size() - 1);
         hide_last_column = true;
     }
 

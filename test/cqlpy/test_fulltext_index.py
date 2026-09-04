@@ -521,7 +521,7 @@ def test_bm25_on_nonexistent_column_fails(cql, fulltext_table):
 
 def test_bm25_where_only_rejected(cql, fulltext_table):
     """WHERE BM25 without an ORDER BY BM25 clause must be rejected."""
-    with pytest.raises(InvalidRequest, match="requires a matching ORDER BY clause"):
+    with pytest.raises(InvalidRequest, match="names a search that the ORDER BY clause does not run"):
         cql.execute(f"SELECT * FROM {fulltext_table} WHERE BM25(content, 'hello') > 0 LIMIT 1")
 
 

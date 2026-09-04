@@ -38,17 +38,18 @@ enum class search_clause {
 /// one, because a bind marker is involved. Execution compares the bound values.
 struct deferred_query_value {
     expr::expression value;
-    /// The function the call was written with, for the error message.
-    sstring function_name;
+    /// The error to raise when the bound values turn out to differ, built here while the call the
+    /// user wrote is still known.
+    sstring disagreement_message;
 };
 
-/// One search an external index will be asked to run, and the temporaries its results are
-/// delivered in.
+/// One search an external index will be asked to run: the source of the values the calls referring
+/// to it return, and the temporaries those values are delivered in.
 ///
-/// A source is identified by its family and the column it searches, so every call on that column
-/// shares it, and a query using several of them makes one request. All calls sharing a source must
-/// use the same query value; where a bind marker makes that undecidable at prepare time, the
-/// comparison is recorded in `deferred` for execution.
+/// A search is identified by its family and the column it searches, so every call on that column
+/// refers to the same search, and a query using several of them makes one request. All calls
+/// referring to one search must use the same query value; where a bind marker makes that
+/// undecidable at prepare time, the comparison is recorded in `deferred` for execution.
 struct search_source {
     functions::search_family family;
     secondary_index::index index;
@@ -60,16 +61,24 @@ struct search_source {
     bool is_rescoring_enabled = false;
 
     /// Temporaries the score and the rank are delivered in, each allocated on the first call asking
-    /// for it. A source with none allocated is only ordered by.
+    /// for it. A search with neither allocated is only ordered by: no value of it is returned.
     std::optional<size_t> score_slot;
     std::optional<size_t> rank_slot;
-    /// BM25 only: an excerpt of the searched text, fetched by a second request.
+    /// BM25 only: the temporary an excerpt of the searched text is delivered in, fetched by a second
+    /// request from the text of `column`.
     std::optional<size_t> fragment_slot;
 
     std::vector<deferred_query_value> deferred;
 
-    bool reports_anything() const {
+    /// True when the query returns some value of this search.
+    bool is_selected() const {
         return score_slot || rank_slot || fragment_slot;
+    }
+
+    /// True when the rows have to be matched to this search's answer by primary key, which a score
+    /// or a rank is. An excerpt is matched by position instead.
+    bool needs_primary_key() const {
+        return score_slot || rank_slot;
     }
 };
 
@@ -146,24 +155,24 @@ public:
     ::shared_ptr<select_statement> make_statement(external_statement_args args) const;
 
 private:
-    /// The source `fc` refers to. In ORDER BY a call with no matching source creates one; elsewhere
-    /// it is an error. A query value that only execution can compare with the source's is recorded
-    /// in the source's `deferred`.
-    search_source& claim(const expr::function_call& fc, const functions::external_search_function& fun, search_clause clause);
+    /// The search the call `fc` refers to. In ORDER BY a call with no matching search adds one;
+    /// elsewhere it is an error. A query value that only execution can compare with the search's is
+    /// recorded in the search's `deferred`.
+    search_source& search_of(const expr::function_call& fc, const functions::external_search_function& fun, search_clause clause);
 
-    /// The expression `call_expr` is lowered to, allocating the temporary on first use. Sets
-    /// `unnamed` when the result does not format as the call it replaced, so that an unaliased
-    /// selector holding it needs an explicit name.
-    expr::expression deliver(const functions::external_search_function& fun, const expr::expression& call_expr, search_source& source,
+    /// The expression that replaces the call `call_expr`, allocating the temporary it reads on first
+    /// use. Sets `unnamed` when the result does not format as the call, so that an unaliased selector
+    /// holding it needs an explicit name.
+    expr::expression replacement_for(const functions::external_search_function& fun, const expr::expression& call_expr, search_source& source,
             bool& unnamed);
 
     /// Lowers every external call in `e`, nested occurrences included.
     expr::expression lower(const expr::expression& e, search_clause clause, bool& lowered_any, bool& unnamed);
 };
 
-/// A comparator ranking result rows by a score read from `column_index`, descending, with rows whose
-/// score is not a usable number last. Used with the hidden selector added for ordering_expr().
-select_statement::ordering_comparator_type descending_score_ordering_comparator(
-        const expr::expression& score_expr, uint32_t column_index);
+/// A comparator ranking result rows by the float in column `column_index`, descending, with rows
+/// whose score is null or not a finite number last. Used with the hidden selector added for
+/// ordering_expr(), which is a float.
+select_statement::ordering_comparator_type descending_score_ordering_comparator(uint32_t column_index);
 
 } // namespace cql3::statements
