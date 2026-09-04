@@ -250,7 +250,9 @@ protected:
 private:
     virtual future<::shared_ptr<cql_transport::messages::result_message>> do_execute(query_processor& qp,
             service::query_state& state, const query_options& options) const override;
-            
+
+    bool needs_post_filtering() const override;
+
     future<::shared_ptr<cql_transport::messages::result_message>> actually_do_execute(query_processor& qp,
             service::query_state& state, const query_options& options) const;
 
