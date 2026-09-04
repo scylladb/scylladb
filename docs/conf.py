@@ -65,7 +65,8 @@ extensions = [
     "scylladb_include_flag",
     "scylladb_dynamic_substitutions",
     "scylladb_swagger",
-    "scylladb_metrics"
+    "scylladb_metrics",
+    "scylladb_llms_confdir",
 ]
 
 # The suffix(es) of source filenames.
