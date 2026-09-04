@@ -13,8 +13,16 @@
 #include <memory>
 #include <span>
 #include <vector>
+#include <seastar/core/abort_source.hh>
 #include <seastar/core/future.hh>
+#include <seastar/util/noncopyable_function.hh>
+#include "schema/schema_fwd.hh"
+#include "service_permit.hh"
 #include "utils/rjson.hh"
+
+namespace service {
+class storage_proxy;
+}
 
 namespace alternator {
 
@@ -92,5 +100,32 @@ std::unique_ptr<export_pipeline_interface> create_in_memory_sink_pipeline(in_mem
 // You should not use the same in_memory_test_storage object for sink and source pipeline simultaneously -
 // you need to complete sink pipeline first, then create and run source pipeline.
 std::unique_ptr<import_pipeline_interface> create_in_memory_source_pipeline(in_memory_test_storage &, std::function<seastar::future<>(rjson::value)> on_item);
+
+/// Perform a full table scan over an Alternator table, calling `cb` for
+/// every item found. The callback receives an `rjson::value` representing
+/// one DynamoDB-style item (JSON object with typed attribute values).
+///
+/// Guarantees:
+///  - Every item in the table is visited exactly once as long as table is not modified during the scan -
+///    it's unspecified if newly added items during the scan are visited or not.
+///    Similarly it's unspecified if deleted items during the scan are visited or not.
+///  - Calls to `cb` are sequential (never parallel).
+///  - Items may be visited in any order (not necessarily sort-key order).
+///  - Aborting `as` stops the scan by throwing `abort_requested_exception`.
+///
+/// The function underneath performs global scan over whole table, using single-threaded query_pager.
+/// The scan uses LOCAL_QUORUM consistency and bypasses the cache to avoid polluting it.
+/// The scan takes ownership of `permit` and holds it for the duration of the scan.
+
+seastar::future<> scan_table(
+    service::storage_proxy& proxy,
+    schema_ptr schema,
+    seastar::abort_source& as,
+    service_permit permit,
+    seastar::noncopyable_function<seastar::future<>(rjson::value)> cb);
+
+/// Hardcoded page size for scan_table - nothing special about the number itself, but it's hardcoded.
+/// The number is public so tests could use it to verify pagination works.
+static constexpr uint32_t scan_table_page_size = 4096u;
 
 } // namespace alternator
