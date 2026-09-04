@@ -43,6 +43,8 @@
 #include <tuple>
 #include <variant>
 #include <vector>
+#include <algorithm>
+#include <ranges>
 #include <filesystem>
 
 namespace {
@@ -1248,4 +1250,85 @@ SEASTAR_TEST_CASE(vector_store_client_test_bm25_request) {
 
     co_await vs.stop();
     co_await server->stop();
+}
+
+// get_index_status_per_node() reports every configured node with its role and
+// connectivity, and the state the reachable ones report for the index. A host
+// that cannot be resolved is reported once as `unknown`, and is not queried.
+SEASTAR_TEST_CASE(vector_store_client_get_index_status_per_node) {
+    using index_status = vector_store_client::index_status;
+    using node_role = vector_store_client::node_role;
+    using node_connectivity = vector_store_client::node_connectivity;
+    auto primary = co_await make_vs_mock_server();
+    auto secondary = co_await make_vs_mock_server();
+    auto cfg = make_config();
+    cfg.db_config->vector_store_primary_uri.set(format("http://primary.node:{},http://unresolved.node:6080", primary->port()));
+    cfg.db_config->vector_store_secondary_uri.set(format("http://secondary.node:{}", secondary->port()));
+    co_await do_with_cql_env(
+            [&](cql_test_env& env) -> future<> {
+                auto as = abort_source_timeout();
+                co_await create_test_table(env, "ks", "idx");
+                auto& vs = env.local_qp().vector_store_client();
+                configure(vs).with_dns({{"primary.node", std::vector<std::string>{primary->host()}},
+                        {"unresolved.node", std::vector<std::string>{}},
+                        {"secondary.node", std::vector<std::string>{secondary->host()}}});
+                vs.start_background_tasks();
+
+                primary->next_index_status_response({status_type::ok, R"({"status":"BOOTSTRAPPING","count":7,"build_progress":42.5})"});
+                secondary->next_index_status_response({status_type::ok, R"({"status":"SERVING","count":9,"build_progress":100.0})"});
+
+                // Wait until both reachable nodes are resolved and answer.
+                std::vector<vector_store_client::index_node_status> nodes;
+                BOOST_CHECK(co_await repeat_until([&]() -> future<bool> {
+                    nodes = co_await vs.get_index_status_per_node("ks", "idx", as.reset());
+                    auto up = std::ranges::count_if(nodes, [](const auto& n) {
+                        return n.connectivity == node_connectivity::up;
+                    });
+                    co_return up == 2;
+                }));
+
+                auto find = [&](const sstring& host) -> std::optional<vector_store_client::index_node_status> {
+                    for (const auto& n : nodes) {
+                        if (n.host == host) {
+                            return n;
+                        }
+                    }
+                    return std::nullopt;
+                };
+
+                auto p = find("primary.node");
+                BOOST_REQUIRE(p.has_value());
+                BOOST_CHECK(p->role == node_role::primary);
+                BOOST_CHECK(p->connectivity == node_connectivity::up);
+                BOOST_CHECK_EQUAL(p->port, primary->port());
+                BOOST_CHECK(p->state.status == index_status::bootstrapping);
+                BOOST_CHECK(p->state.count == 7);
+                BOOST_REQUIRE(p->state.build_progress.has_value());
+                BOOST_CHECK_CLOSE(*p->state.build_progress, 42.5, 0.001);
+                BOOST_REQUIRE(!primary->index_status_requests().empty());
+                BOOST_CHECK_EQUAL(primary->index_status_requests().back().path, "/api/v1/indexes/ks/idx/status");
+
+                auto s = find("secondary.node");
+                BOOST_REQUIRE(s.has_value());
+                BOOST_CHECK(s->role == node_role::secondary);
+                BOOST_CHECK(s->connectivity == node_connectivity::up);
+                BOOST_CHECK(s->state.status == index_status::serving);
+                BOOST_CHECK(s->state.count == 9);
+
+                // An unresolved node is reported, but not queried: no address,
+                // unknown connectivity and no index state.
+                auto u = find("unresolved.node");
+                BOOST_REQUIRE(u.has_value());
+                BOOST_CHECK(u->role == node_role::primary);
+                BOOST_CHECK(u->connectivity == node_connectivity::unknown);
+                BOOST_CHECK(!u->ip.has_value());
+                BOOST_CHECK(u->state.status == index_status::unknown);
+                BOOST_CHECK(!u->state.count.has_value());
+                BOOST_CHECK(!u->state.build_progress.has_value());
+            },
+            cfg)
+            .finally(seastar::coroutine::lambda([&] -> future<> {
+                co_await primary->stop();
+                co_await secondary->stop();
+            }));
 }
