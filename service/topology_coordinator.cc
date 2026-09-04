@@ -4750,7 +4750,6 @@ future<topology_coordinator::tablet_load_stats_collect_result> topology_coordina
     locator::load_stats stats;
     static constexpr std::chrono::seconds wait_for_live_nodes_timeout{30};
 
-    std::unordered_map<table_id, size_t> total_replicas;
     bool table_load_stats_invalid = false;
 
     for (auto& [dc, nodes] : tm->get_datacenter_token_owners_nodes()) {
@@ -4777,6 +4776,14 @@ future<topology_coordinator::tablet_load_stats_collect_result> topology_coordina
 
             locator::load_stats node_stats;
             if (!_gossiper.is_alive(dst)) {
+                if (is_excluded(dst_server)) {
+                    // An excluded node is banned from rejoining, so its stats are never coming back
+                    // and waiting for them only keeps the collection invalid. The split-ready
+                    // sequence number is a minimum over the nodes which did report, so the
+                    // survivors alone can carry a resize past a node which will never answer.
+                    rtlogger.debug("raft topology: Not refreshing table load on {} because it is excluded.", dst);
+                    co_return;
+                }
                 if (require == require_live_nodes::no && _load_stats_per_node.contains(dst) &&
                         !utils::get_local_injector().enter("force_down_node_load_stats_invalid")) {
                     node_stats = _load_stats_per_node[dst];
@@ -4802,46 +4809,36 @@ future<topology_coordinator::tablet_load_stats_collect_result> topology_coordina
             dc_stats += node_stats;
         });
 
-        for (auto& [table_id, table_stats] : dc_stats.tables) {
-            co_await coroutine::maybe_yield();
-
-            if (!_db.column_family_exists(table_id)) {
-                continue;
-            }
-            auto& t = _db.find_column_family(table_id);
-            auto& rs = t.get_effective_replication_map()->get_replication_strategy();
-            if (!rs.uses_tablets()) {
-                continue;
-            }
-            const auto* nts_ptr = dynamic_cast<const locator::network_topology_strategy*>(&rs);
-            if (!nts_ptr) {
-                on_internal_error(rtlogger, "Cannot convert replication_strategy that uses tablets into network_topology_strategy");
-            }
-
-            auto rf_for_this_dc = nts_ptr->get_replication_factor(dc);
-            if (rf_for_this_dc <= 0) {
-                continue;
-            }
-            total_replicas[table_id] += rf_for_this_dc;
-            rtlogger.debug("raft topology: Refreshed table load stats for DC {}, table={}, RF={}, size_in_bytes={}, split_ready_seq_number={}",
-                          dc, table_id, rf_for_this_dc, table_stats.size_in_bytes, table_stats.split_ready_seq_number);
-        }
-
         stats += dc_stats;
     }
 
     for (auto& [table_id, table_load_stats] : stats.tables) {
-        if (!total_replicas.contains(table_id)) {
+        co_await coroutine::maybe_yield();
+
+        if (!tm->tablets().has_tablet_map(table_id)) {
             continue;
         }
-        auto table_total_replicas = total_replicas.at(table_id);
-        if (table_total_replicas == 0) {
+        auto& tmap = tm->tablets().get_tablet_map(table_id);
+
+        size_t reporting_replicas = 0;
+        for (const auto& tinfo : tmap.tablets()) {
+            co_await coroutine::maybe_yield();
+            for (const auto& r : tinfo.replicas) {
+                if (!is_excluded(raft::server_id(r.host.uuid()))) {
+                    ++reporting_replicas;
+                }
+            }
+        }
+        if (!reporting_replicas) {
             continue;
         }
-        // Takes into account the RF of each DC, so we can compute the average total size
-        // for a single table replica. This allows the load balancer to compute, in turn,
-        // the average tablet size by dividing total size by tablet count.
-        table_load_stats.size_in_bytes /= table_total_replicas;
+        // The sum has one term per tablet replica which reported, so we can compute the average
+        // total size for a single table replica by dividing it by their number to get the average
+        // tablet size, and multiplying that by the tablet count.
+        auto avg_tablet_size = table_load_stats.size_in_bytes / reporting_replicas;
+        table_load_stats.size_in_bytes = avg_tablet_size * tmap.tablet_count();
+        rtlogger.debug("raft topology: Refreshed table load stats for table={}, tablets={}, reporting_replicas={}, size_in_bytes={}, split_ready_seq_number={}",
+                      table_id, tmap.tablet_count(), reporting_replicas, table_load_stats.size_in_bytes, table_load_stats.split_ready_seq_number);
     }
 
     if (table_load_stats_invalid) {
