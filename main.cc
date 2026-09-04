@@ -1882,7 +1882,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             checkpoint(stop_signal, "creating tracing");
             sharded<tracing::tracing>& tracing = tracing::tracing::tracing_instance();
-            tracing.start(std::ref(qp), sstring("trace_keyspace_helper")).get();
+            tracing.start(std::ref(qp), std::ref(mm), sstring("trace_keyspace_helper")).get();
             auto destroy_tracing = defer_verbose_shutdown("tracing instance", [&tracing] {
                 tracing.stop().get();
             });
@@ -2605,7 +2605,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
 
             checkpoint(stop_signal, "starting tracing");
-            tracing.invoke_on_all(&tracing::tracing::start, std::ref(mm)).get();
+            tracing.invoke_on_all(&tracing::tracing::start).get();
             auto stop_tracing = defer_verbose_shutdown("tracing", [&tracing] {
                 tracing.invoke_on_all(&tracing::tracing::shutdown).get();
             });

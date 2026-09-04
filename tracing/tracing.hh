@@ -316,6 +316,7 @@ public:
 
 private:
     cql3::query_processor& _qp;
+    service::migration_manager& _mm;
     // A number of currently active tracing sessions
     uint64_t _active_sessions = 0;
 
@@ -419,10 +420,10 @@ public:
         return !_down;
     }
 
-    tracing(cql3::query_processor& qp, sstring tracing_backend_helper_class_name);
+    tracing(cql3::query_processor& qp, service::migration_manager& mm, sstring tracing_backend_helper_class_name);
 
     // Initialize a tracing backend (e.g. tracing_keyspace or logstash)
-    future<> start(service::migration_manager& mm);
+    future<> start();
 
     future<> stop();
 

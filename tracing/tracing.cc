@@ -27,8 +27,9 @@ std::vector<sstring> trace_type_names = {
     "REPAIR"
 };
 
-tracing::tracing(cql3::query_processor& qp, sstring tracing_backend_helper_class_name)
+tracing::tracing(cql3::query_processor& qp, service::migration_manager& mm, sstring tracing_backend_helper_class_name)
         : _qp(qp)
+        , _mm(mm)
         , _write_timer([this] { write_timer_callback(); })
         , _thread_name(seastar::format("shard {:d}", this_shard_id()))
         , _tracing_backend_helper_class_name(std::move(tracing_backend_helper_class_name))
@@ -130,7 +131,7 @@ trace_state_ptr tracing::create_session(const trace_info& secondary_session_info
     }
 }
 
-future<> tracing::start(service::migration_manager& mm) {
+future<> tracing::start() {
     try {
         _tracing_backend_helper_ptr = create_object<i_tracing_backend_helper>(_tracing_backend_helper_class_name, *this);
     } catch (no_such_class& e) {
@@ -140,7 +141,7 @@ future<> tracing::start(service::migration_manager& mm) {
         throw;
     }
 
-    co_await _tracing_backend_helper_ptr->start(_qp, mm);
+    co_await _tracing_backend_helper_ptr->start(_qp, _mm);
     _down = false;
     _write_timer.arm(write_period);
 }
