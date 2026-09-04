@@ -15,7 +15,7 @@ import urllib.parse
 import ssl
 
 from test.pylib.skip_types import skip_env
-from .util import get_cert
+from .util import get_cert, client_ssl_context
 
 @pytest.fixture(scope="module")
 def https_url(dynamodb):
@@ -50,20 +50,11 @@ def https_cert(dynamodb):
     ('TLSv1_1', False),
     ('TLSv1_2', True),
     ('TLSv1_3', True)])
-def test_tls_versions(https_url, https_cert, tls_version_and_support_required):
+def test_tls_versions(dynamodb, https_url, tls_version_and_support_required):
     tls_version, support_required = tls_version_and_support_required
-    context = ssl.create_default_context()
+    context = client_ssl_context(dynamodb)
     context.minimum_version = getattr(ssl.TLSVersion, tls_version)
     context.maximum_version = context.minimum_version
-    # check_hostname and verify_mode is needed when we use self-signed
-    # certificates in tests.
-    context.check_hostname = False
-    context.verify_mode = ssl.CERT_NONE
-    # Under mTLS, the server requires a client certificate at the TLS
-    # handshake level, regardless of what we're testing here (the supported
-    # TLS versions) - so load it if we're testing with --mtls.
-    if https_cert:
-        context.load_cert_chain(certfile=https_cert[0], keyfile=https_cert[1])
     with urllib3.PoolManager(ssl_context=context, retries=0) as pool:
         try:
             # preload_content=False tells the library not to read the content
