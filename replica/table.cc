@@ -4284,7 +4284,9 @@ future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, c
         std::exception_ptr ex;
 
         tlogger.debug("snapshot {}: writing schema.cql", name);
-        auto schema_desc = s->describe(replica::make_schema_describe_helper(table_shards), cql3::describe_option::STMTS);
+        // With internals, so that schema.cql records the table's dropped columns: without them, an
+        // sstable that still holds a dropped column's data is unreadable once restored.
+        auto schema_desc = s->describe(replica::make_schema_describe_helper(table_shards), cql3::describe_option::STMTS_AND_INTERNALS);
         co_await write_schema_as_cql(*writer, std::move(schema_desc)).handle_exception([&] (std::exception_ptr ptr) {
             tlogger.error("Failed writing schema file in snapshot in {} with exception {}", name, ptr);
             ex = std::move(ptr);

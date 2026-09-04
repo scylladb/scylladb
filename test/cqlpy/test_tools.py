@@ -158,6 +158,35 @@ def table_with_counters(cql, keyspace):
     return table, schema
 
 
+def dropped_column_table(cql, keyspace):
+    table = util.unique_name()
+    # 'tombstone_gc' is set explicitly because the described schema is fed back to
+    # scylla-sstable, whose schema loader treats every keyspace as local-replication and
+    # therefore rejects the 'repair' mode that a regular keyspace would default to.
+    schema = (f"CREATE TABLE {keyspace}.{table} (pk int PRIMARY KEY, v int, w int) "
+              f"WITH compaction = {{'class': 'NullCompactionStrategy'}} "
+              f"AND tombstone_gc = {{'mode': 'timeout'}}")
+
+    cql.execute(schema)
+
+    # Write rows that include the soon-to-be-dropped column 'v' at an explicit, older
+    # timestamp, then flush so the 'v' data physically lands in an sstable.
+    for pk in range(0, 10):
+        cql.execute(f"INSERT INTO {keyspace}.{table} (pk, v, w) VALUES ({pk}, {pk}, {pk}) USING TIMESTAMP 1000")
+
+    nodetool.flush(cql, f"{keyspace}.{table}")
+
+    cql.execute(f"ALTER TABLE {keyspace}.{table} DROP v")
+
+    # This is the description a snapshot's schema.cql is written from: the dropped column is
+    # listed in the CREATE TABLE statement and its drop is recorded with an
+    # "ALTER TABLE ... DROP ... USING TIMESTAMP" statement. The drop timestamp is newer
+    # than the data written above, so the pre-drop 'v' cells must be masked, not resurrected.
+    schema = cql.execute(f"DESCRIBE TABLE {keyspace}.{table} WITH INTERNALS").one().create_statement
+
+    return table, schema
+
+
 def get_sstables_for_table(data_dir, keyspace, table):
     def sstable_has_no_temporary_toc(sst):
         path, basename = os.path.split(sst)
@@ -373,6 +402,28 @@ def test_scylla_sstable_dump_data(request, cql, test_keyspace, scylla_path, scyl
     assert out
     if output_format == "json":
         assert json.loads(out)
+
+
+# Reproduces the tool side of scylladb/scylladb#13350: a snapshot's schema.cql describes a
+# table's dropped columns using "ALTER TABLE ... DROP ... USING TIMESTAMP" statements (and
+# "ALTER TABLE ... ADD" if a column was re-added). scylla-sstable must be able to load such a
+# schema, otherwise sstables that still hold data of a dropped column can't be read with the
+# schema.cql produced by snapshots.
+def test_scylla_sstable_dump_data_with_dropped_column(cql, test_keyspace, scylla_path, scylla_data_dir):
+    with scylla_sstable(dropped_column_table, cql, test_keyspace, scylla_data_dir) as (_, schema_file, sstables):
+        out = subprocess.check_output(
+                [scylla_path, "sstable", "dump-data", "--schema-file", schema_file, "--output-format", "json"] + sstables)
+
+    print(out)
+
+    assert out
+    assert json.loads(out)
+
+    out_text = out.decode()
+    # The live column 'w' is dumped, but the dropped column 'v' (dropped at a timestamp newer
+    # than its data) must be masked, i.e. it must not be resurrected in the dumped rows.
+    assert '"w"' in out_text, "live column 'w' should be present in the dumped data"
+    assert '"v"' not in out_text, "dropped column 'v' should be masked, not present in the dumped data"
 
 
 class deletion_time:

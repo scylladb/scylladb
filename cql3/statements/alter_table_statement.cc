@@ -300,7 +300,10 @@ std::pair<schema_ptr, std::vector<view_ptr>> alter_table_statement::prepare_sche
         throw exceptions::invalid_request_exception("Cannot use ALTER TABLE on Materialized View. (Did you mean ALTER MATERIALIZED VIEW)?");
     }
 
-    const bool is_cdc_log_table = cdc::is_log_for_some_table(db.real_database(), s->ks_name(), s->cf_name());
+    // Ask through data_dictionary rather than cdc::is_log_for_some_table(), which needs the live
+    // replica::database that offline callers (e.g. the scylla-sstable schema loader) don't have.
+    auto cdc_base_table = db.get_cdc_base_table(*s);
+    const bool is_cdc_log_table = cdc_base_table && cdc::cdc_enabled(*cdc_base_table);
     // Only a CDC log table will have this partitioner name. User tables should
     // not be able to set this. Note that we perform a similar check when trying to
     // re-enable CDC for a table, when the log table has been replaced by a user table.
