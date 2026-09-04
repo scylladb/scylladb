@@ -8,6 +8,7 @@
 
 #include <fmt/ranges.h>
 #include <seastar/coroutine/maybe_yield.hh>
+#include <ranges>
 
 #include "types/types.hh"
 #include "types/tuple.hh"
@@ -296,10 +297,8 @@ tablet_map_to_mutations(const tablet_map& tablets, table_id id, const sstring& k
     if (tablets.target_pow2_tablet_count() > 0) {
         m.set_static_cell("target_pow2_tablet_count", data_value(int64_t(tablets.target_pow2_tablet_count())), ts);
     }
-
-    tablet_id tid = tablets.first_tablet();
     size_t tablets_in_mutation = 0;
-    for (auto&& tablet : tablets.tablets()) {
+    for (auto&& [tablet, tid] : std::views::zip(tablets.tablets(), tablets.tablet_ids())) {
         if (++tablets_in_mutation >= min_tablets_in_mutation && seastar::need_preempt()) {
             tablets_in_mutation = 0;
             co_await coroutine::maybe_yield();
@@ -340,8 +339,6 @@ tablet_map_to_mutations(const tablet_map& tablets, table_id id, const sstring& k
             const auto& raft_info = tablets.get_tablet_raft_info(tid);
             m.set_clustered_cell(ck, "raft_group_id", raft_info.group_id.uuid(), ts);
         }
-
-        tid = *tablets.next_tablet(tid);
     }
     co_await process_mutation(std::move(m));
 }
@@ -773,7 +770,7 @@ using updating = bool_class<struct updating_tag>;
 
 // is_updating == updating::yes means we're making random updates of an already populated tablet_map.
 // Otherwise, we're populating a tablet_map constructed with tablet_map::initialized_later.
-tablet_id process_one_row(replica::database* db, table_id table, tablet_map& map, tablet_id tid,
+std::optional<tablet_id> process_one_row(replica::database* db, table_id table, tablet_map& map, tablet_id tid,
                           const cql3::untyped_result_set_row& row, updating is_updating) {
     tablet_replica_set tablet_replicas;
     if (row.has("replicas")) {
@@ -884,7 +881,7 @@ tablet_id process_one_row(replica::database* db, table_id table, tablet_map& map
         }
     }
 
-    return *map.next_tablet(tid);
+    return map.next_tablet(tid);
 }
 
 struct tablet_metadata_builder {
@@ -969,7 +966,9 @@ struct tablet_metadata_builder {
         }
 
         if (row.has("last_token")) {
-            current->tid = process_one_row(db, current->table, current->map, current->tid, row, updating::no);
+            if (auto next_tid = process_one_row(db, current->table, current->map, current->tid, row, updating::no)) {
+                current->tid = *next_tid;
+            }
         }
     }
 
