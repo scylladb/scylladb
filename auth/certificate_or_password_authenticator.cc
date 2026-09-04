@@ -54,7 +54,7 @@ authentication_option_set certificate_or_password_authenticator::alterable_optio
     return _pwd_auth->alterable_options();
 }
 
-future<std::optional<authenticated_user>>
+future<std::optional<sstring>>
 certificate_or_password_authenticator::authenticate(session_dn_func f) const {
     if (!f) {
         // No TLS on this connection (e.g. plain-text port or maintenance

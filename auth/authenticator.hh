@@ -108,9 +108,9 @@ public:
     ///
     /// Authenticate (early) using transport info
     ///
-    /// \returns nullopt if not supported/required. exceptional future if failed
+    /// \returns the name of the authenticated role, nullopt if not supported/required, exceptional future if failed
     ///
-    virtual future<std::optional<authenticated_user>> authenticate(session_dn_func) const;
+    virtual future<std::optional<sstring>> authenticate(session_dn_func) const;
 
     ///
     /// Create an authentication record for a new user. This is required before the user can log-in.

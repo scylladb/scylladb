@@ -1498,9 +1498,9 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_st
                 co_return std::nullopt;
             };
         }
-        auto opt_user = co_await a.authenticate(std::move(dn_func));
-        if (opt_user) {
-            client_state.set_login(std::move(*opt_user));
+        auto role_name = co_await a.authenticate(std::move(dn_func));
+        if (role_name) {
+            client_state.set_login(auth::authenticated_user(*role_name));
             co_await client_state.check_user_can_login();
             client_state.maybe_update_per_service_level_params();
             update_scheduling_group();
