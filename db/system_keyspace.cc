@@ -3183,10 +3183,100 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
         co_return ret;
     }
 
+    // Static columns repeat on every clustering row, so take them off the
+    // first row seen rather than going back to the beginning of the result.
+    bool statics_read = false;
+    auto read_statics = [&] (const cql3::untyped_result_set_row& some_row) {
+        if (some_row.has("version")) {
+            ret.version = some_row.get_as<service::topology::version_t>("version");
+        }
+
+        if (some_row.has("fence_version")) {
+            ret.fence_version = some_row.get_as<service::topology::version_t>("fence_version");
+        }
+
+        if (some_row.has("transition_state")) {
+            ret.tstate = service::transition_state_from_string(some_row.get_as<sstring>("transition_state"));
+        }
+
+        if (some_row.has("new_cdc_generation_data_uuid")) {
+            ret.new_cdc_generation_data_uuid = some_row.get_as<utils::UUID>("new_cdc_generation_data_uuid");
+        }
+
+        if (some_row.has("committed_cdc_generations")) {
+            ret.committed_cdc_generations = decode_cdc_generations_ids(deserialize_set_column(*topology(), some_row, "committed_cdc_generations"));
+        }
+
+        if (some_row.has("new_keyspace_rf_change_data")) {
+            ret.new_keyspace_rf_change_ks_name = some_row.get_as<sstring>("new_keyspace_rf_change_ks_name");
+            ret.new_keyspace_rf_change_data = some_row.get_map<sstring,sstring>("new_keyspace_rf_change_data");
+        }
+
+        if (some_row.has("unpublished_cdc_generations")) {
+            ret.unpublished_cdc_generations = decode_cdc_generations_ids(deserialize_set_column(*topology(), some_row, "unpublished_cdc_generations"));
+        }
+
+        if (some_row.has("global_topology_request")) {
+            auto req = service::global_topology_request_from_string(
+                    some_row.get_as<sstring>("global_topology_request"));
+            ret.global_request.emplace(req);
+        }
+
+        if (some_row.has("global_topology_request_id")) {
+            ret.global_request_id = some_row.get_as<utils::UUID>("global_topology_request_id");
+        }
+
+        if (some_row.has("global_requests")) {
+            for (auto&& v : deserialize_set_column(*topology(), some_row, "global_requests")) {
+                ret.global_requests_queue.push_back(value_cast<utils::UUID>(v));
+            }
+        }
+
+        if (some_row.has("paused_rf_change_requests")) {
+            for (auto&& v : deserialize_set_column(*topology(), some_row, "paused_rf_change_requests")) {
+                ret.paused_rf_change_requests.insert(value_cast<utils::UUID>(v));
+            }
+        }
+
+        if (some_row.has("ongoing_rf_changes")) {
+            for (auto&& v : deserialize_set_column(*topology(), some_row, "ongoing_rf_changes")) {
+                ret.ongoing_rf_changes.insert(value_cast<utils::UUID>(v));
+            }
+        }
+
+        if (some_row.has("ongoing_restore_requests")) {
+            for (auto&& v : deserialize_set_column(*topology(), some_row, "ongoing_restore_requests")) {
+                ret.ongoing_restore_requests.insert(value_cast<utils::UUID>(v));
+            }
+        }
+
+        if (some_row.has("enabled_features")) {
+            ret.enabled_features = decode_features(deserialize_set_column(*topology(), some_row, "enabled_features"));
+        }
+
+        if (some_row.has("session")) {
+            ret.session = service::session_id(some_row.get_as<utils::UUID>("session"));
+        }
+
+        if (some_row.has("tablet_balancing_enabled")) {
+            ret.tablet_balancing_enabled = some_row.get_as<bool>("tablet_balancing_enabled");
+        } else {
+            ret.tablet_balancing_enabled = true;
+        }
+
+        if (some_row.has("ignore_nodes")) {
+            ret.ignored_nodes = decode_nodes_ids(deserialize_set_column(*topology(), some_row, "ignore_nodes"));
+        }
+    };
+
     for (auto& row : *rs) {
+        if (!std::exchange(statics_read, true)) {
+            read_statics(row);
+        }
+
         if (!row.has("host_id")) {
-            // There are no clustering rows, only the static row.
-            // Skip the whole loop, the static row is handled later.
+            // There are no clustering rows, only the static row, whose
+            // columns read_statics() has just taken.
             break;
         }
 
@@ -3344,123 +3434,39 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
         }
     }
 
-    {
-        // Here we access static columns, any row will do.
-        auto& some_row = *rs->begin();
-
-        if (some_row.has("version")) {
-            ret.version = some_row.get_as<service::topology::version_t>("version");
+    if (!ret.tstate) {
+        // Any remaining transition_nodes must be in rebuilding state.
+        auto it = std::find_if(ret.transition_nodes.begin(), ret.transition_nodes.end(),
+                [] (auto& p) { return p.second.state != service::node_state::rebuilding; });
+        if (it != ret.transition_nodes.end()) {
+            on_internal_error(slogger, format(
+                "load_topology_state: topology not in transition state"
+                " but transition node {} in rebuilding state is present", it->first));
         }
+    }
 
-        if (some_row.has("fence_version")) {
-            ret.fence_version = some_row.get_as<service::topology::version_t>("fence_version");
+    if (!ret.committed_cdc_generations.empty()) {
+        // Sanity check for CDC generation data consistency.
+        auto gen_id = ret.committed_cdc_generations.back();
+        auto gen_rows = co_await execute_cql(
+            format("SELECT range_end FROM {}.{} WHERE key = '{}' AND id = ? LIMIT 1",
+                    NAME, CDC_GENERATIONS_V3, cdc::CDC_GENERATIONS_V3_KEY),
+            gen_id.id);
+        if (gen_rows->empty()) {
+            on_internal_error(slogger, format(
+                "load_topology_state: last committed CDC generation time UUID ({}) present, but data missing", gen_id.id));
         }
+        slogger.debug("load_topology_state: last committed CDC generation time UUID ({}) present", gen_id.id);
+    } else {
+        if (!ret.normal_nodes.empty()) {
+            on_internal_error(slogger,
+                "load_topology_state: normal nodes present but no committed CDC generations");
+        }
+    }
 
-        if (some_row.has("transition_state")) {
-            ret.tstate = service::transition_state_from_string(some_row.get_as<sstring>("transition_state"));
-        } else {
-            // Any remaining transition_nodes must be in rebuilding state.
-            auto it = std::find_if(ret.transition_nodes.begin(), ret.transition_nodes.end(),
-                    [] (auto& p) { return p.second.state != service::node_state::rebuilding; });
-            if (it != ret.transition_nodes.end()) {
-                on_internal_error(slogger, format(
-                    "load_topology_state: topology not in transition state"
-                    " but transition node {} in rebuilding state is present", it->first));
-            }
-        }
-
-        if (some_row.has("new_cdc_generation_data_uuid")) {
-            ret.new_cdc_generation_data_uuid = some_row.get_as<utils::UUID>("new_cdc_generation_data_uuid");
-        }
-
-        if (some_row.has("committed_cdc_generations")) {
-            ret.committed_cdc_generations = decode_cdc_generations_ids(deserialize_set_column(*topology(), some_row, "committed_cdc_generations"));
-        }
-
-        if (some_row.has("new_keyspace_rf_change_data")) {
-            ret.new_keyspace_rf_change_ks_name = some_row.get_as<sstring>("new_keyspace_rf_change_ks_name");
-            ret.new_keyspace_rf_change_data = some_row.get_map<sstring,sstring>("new_keyspace_rf_change_data");
-        }
-
-        if (!ret.committed_cdc_generations.empty()) {
-            // Sanity check for CDC generation data consistency.
-            auto gen_id = ret.committed_cdc_generations.back();
-            auto gen_rows = co_await execute_cql(
-                format("SELECT range_end FROM {}.{} WHERE key = '{}' AND id = ? LIMIT 1",
-                        NAME, CDC_GENERATIONS_V3, cdc::CDC_GENERATIONS_V3_KEY),
-                gen_id.id);
-            if (gen_rows->empty()) {
-                on_internal_error(slogger, format(
-                    "load_topology_state: last committed CDC generation time UUID ({}) present, but data missing", gen_id.id));
-            }
-            slogger.debug("load_topology_state: last committed CDC generation time UUID ({}) present", gen_id.id);
-        } else {
-            if (!ret.normal_nodes.empty()) {
-                on_internal_error(slogger,
-                    "load_topology_state: normal nodes present but no committed CDC generations");
-            }
-        }
-
-        if (some_row.has("unpublished_cdc_generations")) {
-            ret.unpublished_cdc_generations = decode_cdc_generations_ids(deserialize_set_column(*topology(), some_row, "unpublished_cdc_generations"));
-        }
-
-        if (some_row.has("global_topology_request")) {
-            auto req = service::global_topology_request_from_string(
-                    some_row.get_as<sstring>("global_topology_request"));
-            ret.global_request.emplace(req);
-        }
-
-        if (some_row.has("global_topology_request_id")) {
-            ret.global_request_id = some_row.get_as<utils::UUID>("global_topology_request_id");
-        }
-
-        if (some_row.has("global_requests")) {
-            for (auto&& v : deserialize_set_column(*topology(), some_row, "global_requests")) {
-                ret.global_requests_queue.push_back(value_cast<utils::UUID>(v));
-            }
-        }
-
-        if (some_row.has("paused_rf_change_requests")) {
-            for (auto&& v : deserialize_set_column(*topology(), some_row, "paused_rf_change_requests")) {
-                ret.paused_rf_change_requests.insert(value_cast<utils::UUID>(v));
-            }
-        }
-
-        if (some_row.has("ongoing_rf_changes")) {
-            for (auto&& v : deserialize_set_column(*topology(), some_row, "ongoing_rf_changes")) {
-                ret.ongoing_rf_changes.insert(value_cast<utils::UUID>(v));
-            }
-        }
-
-        if (some_row.has("ongoing_restore_requests")) {
-            for (auto&& v : deserialize_set_column(*topology(), some_row, "ongoing_restore_requests")) {
-                ret.ongoing_restore_requests.insert(value_cast<utils::UUID>(v));
-            }
-        }
-
-        if (some_row.has("enabled_features")) {
-            ret.enabled_features = decode_features(deserialize_set_column(*topology(), some_row, "enabled_features"));
-        }
-
-        if (some_row.has("session")) {
-            ret.session = service::session_id(some_row.get_as<utils::UUID>("session"));
-        }
-
-        if (some_row.has("tablet_balancing_enabled")) {
-            ret.tablet_balancing_enabled = some_row.get_as<bool>("tablet_balancing_enabled");
-        } else {
-            ret.tablet_balancing_enabled = true;
-        }
-
-        if (some_row.has("ignore_nodes")) {
-            ret.ignored_nodes = decode_nodes_ids(deserialize_set_column(*topology(), some_row, "ignore_nodes"));
-        }
-
-        ret.excluded_tablet_nodes = ret.ignored_nodes;
-        for (const auto& [id, _]: ret.left_nodes_rs) {
-            ret.excluded_tablet_nodes.insert(id);
-        }
+    ret.excluded_tablet_nodes = ret.ignored_nodes;
+    for (const auto& [id, _]: ret.left_nodes_rs) {
+        ret.excluded_tablet_nodes.insert(id);
     }
 
     co_return ret;
