@@ -1746,12 +1746,14 @@ static set_type_impl::native_type prepare_tokens(const std::unordered_set<dht::t
 
 std::unordered_set<dht::token> decode_tokens(const set_type_impl::native_type& tokens) {
     std::unordered_set<dht::token> tset;
+    tset.reserve(tokens.size());
     for (auto& t: tokens) {
-        auto str = value_cast<sstring>(t);
-        if (str != dht::token::from_sstring(str).to_sstring()) {
+        const auto& str = value_cast<sstring>(t);
+        auto token = dht::token::from_sstring(str);
+        if (str != token.to_sstring()) {
             on_internal_error(slogger, format("decode_tokens: invalid token string '{}'", str));
         }
-        tset.insert(dht::token::from_sstring(str));
+        tset.insert(token);
     }
     return tset;
 }
