@@ -236,9 +236,6 @@ private:
     // Becomes true during start(), becomes false on abort() or a background error
     bool _is_alive = false;
 
-    // Signaled when apply index is changed
-    condition_variable _applied_index_changed;
-
     // Signaled when _snapshot_desc_idx is changed
     condition_variable _snapshot_desc_idx_changed;
 
@@ -535,9 +532,7 @@ future<> server_impl::start() {
 
     // Wait for all committed entries to be applied before returning
     // to make sure that the user's state machine is up-to-date.
-    while (_applied_idx < commit_idx) {
-        co_await _applied_index_changed.wait();
-    }
+    co_await wait_for_apply(commit_idx, nullptr);
 
     co_return;
 }
@@ -1564,7 +1559,6 @@ future<> server_impl::applier_fiber() {
             resolve_subsumed(_awaited_applies, batch);
         }
         _applied_idx = snp.idx;
-        _applied_index_changed.broadcast();
         signal_applied();
         _stats.sm_load_snapshot++;
     };
@@ -1665,7 +1659,6 @@ future<> server_impl::applier_fiber() {
             co_await override_snapshot_thresholds();
 
             _applied_idx = last_idx;
-            _applied_index_changed.broadcast();
             signal_applied();
             notify_waiters(_awaited_applies, batch_ids);
 
