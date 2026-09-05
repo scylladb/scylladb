@@ -85,6 +85,11 @@ public:
     topology_node_mutation_builder& set(const char* cell, const std::unordered_set<dht::token>& value);
     topology_node_mutation_builder& set(const char* cell, const std::set<sstring>& value);
 
+    // Moves the node to the left state. The row stays - left_nodes is a
+    // permanent ban list - but the columns nobody reads for a left node go,
+    // because every reader of system.topology pays for them forever.
+    topology_node_mutation_builder& mark_left();
+
     canonical_mutation build();
 };
 
