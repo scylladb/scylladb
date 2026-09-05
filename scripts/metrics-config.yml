@@ -63,6 +63,12 @@
         "_queue_name + \"_rx_bytes\"": ["queue"]
         "_queue_name + \"_tx_frags\"": ["queue"]
         "_queue_name + \"_rx_frags\"": ["queue"]
+"utils/object_storage_metrics.cc":
+  groups:
+    "27": "object_storage"
+  params:
+    lower_method_name: ["get", "post", "put", "delete", "head", "options", "trace", "connect", "patch"]
+    method_name: ["GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS", "TRACE", "CONNECT", "PATCH"]
 "utils/s3/client.cc":
   groups:
     "254": "s3"

@@ -19,6 +19,7 @@
 
 #include <seastar/core/align.hh>
 #include <seastar/core/gate.hh>
+#include <seastar/core/metrics.hh>
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/units.hh>
@@ -31,6 +32,7 @@
 #include "utils/exceptions.hh"
 #include "utils/http.hh"
 #include "utils/http_client_error_processing.hh"
+#include "utils/object_storage_metrics.hh"
 #include "utils/overloaded_functor.hh"
 
 static logger gcp_storage("gcp_storage");
@@ -298,6 +300,9 @@ class utils::gcp::storage::client::impl {
     seastar::semaphore _unlimited;
     seastar::semaphore& _limits;
     seastar::http::client _client;
+    uint64_t _read_bytes = 0;
+    uint64_t _write_bytes = 0;
+    std::optional<utils::http_client_metrics> _metrics;
     shared_ptr<seastar::tls::certificate_credentials> _certs;
     seastar::gate _gate;
     future<> authorize(request_wrapper& req, const std::string& scope);
@@ -315,6 +320,17 @@ public:
     auto try_get_units(size_t s) const {
         return seastar::try_get_units(_limits, s);
     }
+    void count_read_bytes(uint64_t bytes) {
+        _read_bytes += bytes;
+    }
+    void count_write_bytes(uint64_t bytes) {
+        _write_bytes += bytes;
+    }
+    utils::object_storage_bytes bytes() const {
+        return {.read = _read_bytes, .written = _write_bytes};
+    }
+    void register_metrics(utils::object_storage_metrics_labels);
+    void unregister_metrics();
     future<> close();
 };
 
@@ -399,6 +415,7 @@ public:
                         auto n = std::min(buf.size(), len - result);
                         std::copy_n(buf.get(), n, dst + result);
                         result += n;
+                        _impl->count_read_bytes(n);
                     }
                 },
                 httpclient::method_type::GET,
@@ -654,6 +671,14 @@ utils::gcp::storage::client::impl::send_with_retry(const std::string& path, cons
     co_return res;
 }
 
+void utils::gcp::storage::client::impl::register_metrics(utils::object_storage_metrics_labels labels) {
+    _metrics.emplace(_client, std::move(labels));
+}
+
+void utils::gcp::storage::client::impl::unregister_metrics() {
+    _metrics.reset();
+}
+
 future<> utils::gcp::storage::client::impl::close() {
     co_await _gate.close();
     co_await _client.close();
@@ -792,12 +817,14 @@ future<> utils::gcp::storage::client::object_data_sink::do_single_upload(std::de
             case status_type::ok:
             case status_type::created:
                 _completed = true;
+                _impl->count_write_bytes(len);
                 gcp_storage.debug("{}:{} completed ({} bytes)", _bucket, _object_name, offset+len);
                 co_return; // done and happy
             default:
                 if (int(res.result()) == 308) {
                     uint64_t first = 0, new_last = 0;
-                    if (parse_response_range(res.reply, first, new_last) && last != new_last) {
+                    auto acknowledged = parse_response_range(res.reply, first, new_last);
+                    if (acknowledged && last != new_last) {
                         auto written = (new_last + 1) - offset;
 
                         gcp_storage.debug("{}:{} partial upload ({} bytes)", _bucket, _object_name, written);
@@ -805,6 +832,11 @@ future<> utils::gcp::storage::client::object_data_sink::do_single_upload(std::de
                         if (!final && (len - written) < min_gcp_storage_chunk_size) {
                             written = len - std::min(min_gcp_storage_chunk_size, len);
                         }
+
+                        // The rewind above can put some acknowledged bytes back in
+                        // the queue to keep the next chunk aligned, so they go over
+                        // the wire twice. Count the bytes the object keeps, once.
+                        _impl->count_write_bytes(written);
 
                         auto to_remove = written;
                         while (to_remove) {
@@ -825,6 +857,12 @@ future<> utils::gcp::storage::client::object_data_sink::do_single_upload(std::de
                         continue;
                     }
                     // incomplete. ok for partial
+                    if (acknowledged) {
+                        // Acknowledged through our last byte. A 308 without a
+                        // Range header means GCS persisted none of this chunk,
+                        // and then there is nothing to count.
+                        _impl->count_write_bytes(len);
+                    }
                     gcp_storage.debug("{}:{} chunk {}:{} done", _bucket, _object_name, offset, offset+len);
                     co_return;
                 }
@@ -955,6 +993,7 @@ future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::
                     auto bufs = co_await util::read_entire_stream(in);
                     for (auto&& buf : bufs) {
                         s.position += buf.size();
+                        _impl->count_read_bytes(buf.size());
                         s.buffers.emplace_back(std::move(buf));
                     }
                     gcp_storage.debug("Read object {}:{} ({}-{}/{})", _bucket, _object_name, old, s.position, _size);
@@ -1489,6 +1528,18 @@ future<utils::gcp::storage::object_info> storage::client::get_object_info(std::s
             fmt::format("Could not retrieve object metadata {}:{}: {} ({})", bucket, object_name, res.result(), get_gcp_error_message(res.body())));
     }
     co_return create_info(rjson::parse(res.body()));
+}
+
+utils::object_storage_bytes utils::gcp::storage::client::bytes() const {
+    return _impl->bytes();
+}
+
+void utils::gcp::storage::client::register_metrics(utils::object_storage_metrics_labels labels) {
+    _impl->register_metrics(std::move(labels));
+}
+
+void utils::gcp::storage::client::unregister_metrics() {
+    _impl->unregister_metrics();
 }
 
 future<> utils::gcp::storage::client::close() {

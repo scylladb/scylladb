@@ -28,6 +28,10 @@
 #include "utils/s3/creds.hh"
 #include "utils/memory_data_sink.hh"
 #include "utils/lister.hh"
+#include "utils/http.hh"
+#include "utils/object_storage_metrics.hh"
+
+#include <seastar/core/metrics.hh>
 
 using namespace seastar;
 using namespace sstables;
@@ -92,6 +96,53 @@ fmt::formatter<sstables::object_name>::format(const sstables::object_name& n, fm
     return fmt::format_to(ctx.out(), "{}", n.str());
 }
 
+// The host the client connects to, so that the object_storage metrics name an
+// endpoint the same way the s3 group already does. The port comes along when it
+// is not the one the scheme implies, because two configured endpoints can differ
+// by port alone and a label pair has to tell them apart.
+static std::string endpoint_label(const db::object_storage_endpoint_param& ep) {
+    auto endpoint = [&ep] {
+        if (ep.is_gs_storage()) {
+            auto& epc = ep.get_gs_storage();
+            return epc.endpoint.empty() || epc.endpoint == "default"
+                ? gcp::storage::client::DEFAULT_ENDPOINT
+                : epc.endpoint;
+        }
+        return ep.get_s3_storage().endpoint;
+    }();
+    auto url = utils::http::parse_simple_url(endpoint);
+    if (url.port == (url.is_https() ? 443 : 80)) {
+        return url.host;
+    }
+    return fmt::format("{}:{}", url.host, url.port);
+}
+
+// Bytes moved to and from objects. The backends count them, and the storage
+// manager keeps one client wrapper per endpoint per shard, so the labels are
+// unique here.
+class object_storage_byte_metrics {
+    seastar::metrics::metric_groups _metrics;
+public:
+    object_storage_byte_metrics(const db::object_storage_endpoint_param& ep, std::function<utils::object_storage_bytes()> bytes) {
+        namespace sm = seastar::metrics;
+        std::vector<sm::label_instance> labels{sm::label("type")(ep.type()), sm::label("endpoint")(endpoint_label(ep))};
+        try {
+            _metrics.add_group("object_storage", {
+                sm::make_counter("total_read_bytes", [bytes] { return bytes().read; },
+                        sm::description("Total number of bytes read from objects"), labels),
+                sm::make_counter("total_write_bytes", [bytes] { return bytes().written; },
+                        sm::description("Total number of bytes written to objects"), labels),
+            });
+        } catch (const seastar::metrics::double_registration& e) {
+            // An endpoint dropped from the configuration keeps its client for as
+            // long as sstables reference it, so a client created after the same
+            // endpoint is added back can find the labels taken. Losing the metrics
+            // is not a reason to fail the operation that created the client.
+            osclog.warn("Not reporting object storage bytes for {}: {}", ep.key(), e.what());
+        }
+    }
+};
+
 static shared_ptr<s3::client> make_s3_client(const db::object_storage_endpoint_param& ep, std::function<shared_ptr<s3::client>(std::string)> factory, unsigned connections_per_shard) {
     auto& epc = ep.get_s3_storage();
     return s3::client::make(epc.endpoint, epc.region, epc.iam_role_arn, std::move(factory), connections_per_shard);
@@ -100,11 +151,15 @@ static shared_ptr<s3::client> make_s3_client(const db::object_storage_endpoint_p
 class s3_client_wrapper : public sstables::object_storage_client {
     shared_ptr<s3::client> _client;
     shard_client_factory _cf;
+    object_storage_byte_metrics _byte_metrics;
 public:
     s3_client_wrapper(const db::object_storage_endpoint_param& ep, shard_client_factory cf, unsigned connections_per_shard)
         : _client(make_s3_client(ep, std::bind_front(&s3_client_wrapper::shard_client, this), connections_per_shard))
         , _cf(std::move(cf))
-    {}
+        , _byte_metrics(ep, [this] { return _client->bytes(); })
+    {
+        _client->report_object_storage_metrics({.type = ep.type(), .endpoint = endpoint_label(ep)});
+    }
     shared_ptr<s3::client> shard_client(std::string host) const {
         auto lc = _cf(host);
         return lc ? dynamic_pointer_cast<s3_client_wrapper>(lc)->_client : shared_ptr<s3::client>{};
@@ -177,6 +232,13 @@ class gs_client_wrapper : public sstables::object_storage_client {
     semaphore& _memory;
     std::function<shared_ptr<gcp::storage::client>()> _shard_client;
     seastar::gate _config_update_gate;
+    // What the replaced clients moved, kept so that the reported total only grows
+    // across a config update. Shared with the fibers that close those clients:
+    // an endpoint dropped from the configuration takes this wrapper with it,
+    // while a client replaced a moment earlier can still be draining.
+    seastar::lw_shared_ptr<utils::object_storage_bytes> _replaced_bytes = seastar::make_lw_shared<utils::object_storage_bytes>();
+    utils::object_storage_metrics_labels _metrics_labels;
+    object_storage_byte_metrics _byte_metrics;
 public:
     gs_client_wrapper(const db::object_storage_endpoint_param& ep, semaphore& memory, shard_client_factory cf)
         : _client(make_gcs_client(ep, memory))
@@ -188,7 +250,19 @@ public:
             }
             return dynamic_pointer_cast<gs_client_wrapper>(lc)->_client;
         })
-    {}
+        , _metrics_labels{.type = ep.type(), .endpoint = endpoint_label(ep), .class_name = "all"}
+        , _byte_metrics(ep, [this] {
+            auto bytes = _client->bytes();
+            return utils::object_storage_bytes{
+                .read = _replaced_bytes->read + bytes.read,
+                .written = _replaced_bytes->written + bytes.written,
+            };
+        })
+    {
+        // One http client serves every scheduling group on this shard, hence the
+        // fixed class label.
+        _client->register_metrics(_metrics_labels);
+    }
 
     future<> put_object(object_name name, ::memory_data_sink_buffers bufs, object_storage_attributes attributes, abort_source* as) override {
         auto sink = _client->create_upload_sink(name.bucket(), name.object(), make_gcs_metadata(attributes), as);
@@ -369,11 +443,28 @@ public:
         auto holder = _config_update_gate.hold();
         auto new_client = make_gcs_client(ep, _memory);
         auto old_client = std::exchange(_client, std::move(new_client));
+        // Both clients carry the same metric labels and the old one closes in
+        // the background, so it has to release them before the new one takes
+        // them over.
+        old_client->unregister_metrics();
+        _client->register_metrics(_metrics_labels);
+        // Folded in before the close, so that the reported total does not dip
+        // while the replaced client drains.
+        auto snapshot = old_client->bytes();
+        _replaced_bytes->read += snapshot.read;
+        _replaced_bytes->written += snapshot.written;
         (void)old_client->close()
                 .handle_exception([](std::exception_ptr ex) {
                     osclog.error("Failed to close old GCS client during config update: {}", ex);
                 })
-                .finally([old_client = std::move(old_client), h = std::move(holder)] {
+                .finally([old_client = std::move(old_client), replaced = _replaced_bytes, snapshot, h = std::move(holder)] {
+                    // Whatever it finished while draining goes on top. Its counters
+                    // only grow, so the delta cannot be negative. The counters are
+                    // held by reference rather than through the wrapper, which this
+                    // fiber can outlive.
+                    auto drained = old_client->bytes();
+                    replaced->read += drained.read - snapshot.read;
+                    replaced->written += drained.written - snapshot.written;
                     osclog.info("Old GCS client cleanup done, use_count={}", old_client.use_count());
                 });
     }

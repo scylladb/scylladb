@@ -31,12 +31,15 @@
 #include "test/lib/test_utils.hh"
 #include "test/lib/tmpdir.hh"
 #include "test/lib/gcs_fixture.hh"
+#include "db/object_storage_endpoint_param.hh"
+#include "sstables/object_storage_client.hh"
 #include "test/lib/test_utils.hh"
 #include "utils/assert.hh"
 #include "utils/UUID_gen.hh"
 #include "utils/io-wrappers.hh"
 #include "utils/error_injection.hh"
 
+#include <seastar/core/metrics_api.hh>
 #include <seastar/testing/test_fixture.hh>
 
 using namespace std::string_view_literals;
@@ -162,6 +165,26 @@ static future<> test_read_write_helper(const local_gcs_wrapper& env, size_t dest
     env.objects_to_delete.emplace_back(name);
     co_await create_object_of_size(c, env.bucket, name, dest_size, &written, specific_buffer_size);
     co_await compare_object_data(env, name, std::move(written));
+}
+
+// Sums an object_storage metric across the metrics registered for the GCS backend.
+static uint64_t gs_metric(std::string_view name) {
+    auto all_metrics = seastar::metrics::impl::get_values();
+    const auto& all_metadata = *all_metrics->metadata;
+    auto family_name = seastar::sstring(fmt::format("object_storage_{}", name));
+    auto family = std::ranges::find_if(all_metadata, [&](const auto& x) { return x.mf.name == family_name; });
+    BOOST_REQUIRE(family != all_metadata.end());
+    const auto& values = all_metrics->values[std::distance(all_metadata.begin(), family)];
+    uint64_t total = 0;
+    for (size_t i = 0; i < family->metrics.size(); ++i) {
+        const auto& labels = family->metrics[i].labels();
+        auto type = labels.find("type");
+        BOOST_REQUIRE(type != labels.end());
+        if (type->second.value() == "gs") {
+            total += values[i].ui();
+        }
+    }
+    return total;
 }
 
 BOOST_AUTO_TEST_SUITE(gcs_tests, *seastar::testing::async_fixture<gcs_fixture>())
@@ -518,6 +541,77 @@ SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_read_chunked_partial_encrypted, local
 
 SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_read_chunked_partial_encrypted_with_skip, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
     co_await chunked_read_helper(*this, true, true, true);
+}
+
+// The client reports its http metrics only under labels an owner supplies. In
+// production that owner is the sstables object storage client, which also reports
+// the bytes; the fixture's client is created directly, so the test names it.
+SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_metrics, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
+    auto& env = *this;
+    auto& c = env.client();
+    c.register_metrics({.type = "gs", .endpoint = "test", .class_name = "all"});
+
+    auto puts = gs_metric("total_put_requests");
+    auto gets = gs_metric("total_get_requests");
+    auto bytes_before = c.bytes();
+
+    constexpr size_t object_size = 1024 * 1024;
+    co_await test_read_write_helper(env, object_size);
+
+    BOOST_REQUIRE_GT(gs_metric("total_put_requests"), puts);
+    BOOST_REQUIRE_GT(gs_metric("total_get_requests"), gets);
+    auto bytes_after = c.bytes();
+    BOOST_REQUIRE_GE(bytes_after.written - bytes_before.written, object_size);
+    BOOST_REQUIRE_GE(bytes_after.read - bytes_before.read, object_size);
+}
+
+// A config update replaces the GCS client, and its counters start at zero, so
+// the wrapper carries what the replaced client moved. The replaced client is
+// closed in the background, and until that close completes the reported total
+// must not fall below what it already reported.
+SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_metrics_across_config_update, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
+    auto& env = *this;
+    auto ep = db::object_storage_endpoint_param(db::object_storage_endpoint_param::gs_storage{
+        .endpoint = env.endpoint,
+        .credentials_file = "none",
+    });
+
+    seastar::semaphore memory{16 * 1024 * 1024};
+    auto client = sstables::make_object_storage_client(ep, memory, [](std::string) {
+        return seastar::shared_ptr<sstables::object_storage_client>{};
+    });
+
+    auto name = make_name();
+    env.objects_to_delete.emplace_back(name);
+    constexpr size_t object_size = 1024 * 1024;
+    auto out = seastar::output_stream<char>(client->make_upload_sink(sstables::object_name(env.bucket, name), {}));
+    co_await out.write(seastar::temporary_buffer<char>(object_size).share());
+    co_await out.flush();
+    co_await out.close();
+
+    auto written = gs_metric("total_write_bytes");
+    BOOST_REQUIRE_GE(written, object_size);
+
+    // Hold a request in flight: the client's gate, which its close() waits on,
+    // cannot be closed while it runs, so the replaced client stays alive and
+    // the window this test is about stays open.
+    utils::get_local_injector().enable("gcp_storage_stall_requests", true);
+    auto stop_stalling = defer([]() noexcept {
+        utils::get_local_injector().disable("gcp_storage_stall_requests");
+    });
+    auto stalled = client->object_exists(sstables::object_name(env.bucket, name));
+    BOOST_REQUIRE(!stalled.available());
+
+    client->update_config_sync(ep);
+
+    // Sampled before the replaced client has drained, which is what makes this
+    // observable: nothing has yielded since update_config_sync() returned.
+    BOOST_REQUIRE_GE(gs_metric("total_write_bytes"), written);
+
+    BOOST_REQUIRE(co_await std::move(stalled));
+    BOOST_REQUIRE_GE(gs_metric("total_write_bytes"), written);
+
+    co_await client->close();
 }
 
 BOOST_AUTO_TEST_SUITE_END()

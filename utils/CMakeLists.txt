@@ -39,6 +39,7 @@ target_sources(utils
     managed_bytes.cc
     multiprecision_int.cc
     murmur_hash.cc
+    object_storage_metrics.cc
     on_internal_error.cc
     pretty_printers.cc
     rate_limiter.cc

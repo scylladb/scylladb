@@ -13,6 +13,7 @@ import uuid
 from test.pylib.minio_server import MinioServer
 from cassandra.protocol import ConfigurationException
 from cassandra.query import SimpleStatement, ConsistencyLevel
+from test.pylib.rest_client import ScyllaMetricsClient
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
 from test.pylib.object_storage import format_tuples, keyspace_options
@@ -365,6 +366,25 @@ async def test_get_object_store_endpoints(manager: ScyllaClusterManager, config_
     assert json.loads(res[name]) == objconf[0]
 
 
+async def get_object_storage_put_requests(server_ip, storage_type: str) -> float:
+    # Reported by the backend client itself, under labels its owner supplies, so
+    # this stops moving if the owner fails to name a client it has replaced.
+    label = storage_type.lower()
+    metrics = await ScyllaMetricsClient().query(server_ip)
+    puts = metrics.get('scylla_object_storage_total_put_requests', {'type': label})
+    assert puts is not None, f'No scylla_object_storage_total_put_requests for type={label}'
+    return puts
+
+
+async def get_object_storage_written_bytes(server_ip, storage_type: str) -> float:
+    # The fixture spells the type in upper case, the metric label in lower.
+    label = storage_type.lower()
+    metrics = await ScyllaMetricsClient().query(server_ip)
+    written = metrics.get('scylla_object_storage_total_write_bytes', {'type': label})
+    assert written is not None, f'No scylla_object_storage_total_write_bytes for type={label}'
+    return written
+
+
 async def test_create_keyspace_after_config_update(manager: ScyllaClusterManager, object_storage):
     print('Trying to create a keyspace with an endpoint not configured in object_storage_endpoints should trip storage_manager::is_known_endpoint()')
     server = await manager.server_add()
@@ -401,6 +421,10 @@ async def test_create_keyspace_after_config_update(manager: ScyllaClusterManager
     res = cql.execute(f"SELECT value FROM random_ks.test WHERE name = 'test_key';")
     assert res.one().value == 123, f'Unexpected value after flush: {res.one().value}'
 
+    print('The flush wrote objects, so the object storage metrics report the bytes')
+    written = await get_object_storage_written_bytes(server.ip_addr, object_storage.type)
+    assert written > 0, f'No bytes counted for {object_storage.type} after the flush'
+
     # Now that a live object_storage_client exists for this endpoint, push a
     # config update that modifies the endpoint parameters.  This exercises the
     # update_config_sync path on an already-instantiated client
@@ -423,9 +447,29 @@ async def test_create_keyspace_after_config_update(manager: ScyllaClusterManager
     res = cql.execute(f"SELECT value FROM random_ks.test WHERE name = 'after_reconfig';")
     assert res.one().value == 456, f'Unexpected value after reconfiguration flush: {res.one().value}'
 
+    # A config update replaces the GCS client, so its request metrics have to be
+    # registered again for the replacement, while the bytes are reported a layer
+    # up by the wrapper the update keeps. Sample both after the flush above, by
+    # when every shard has picked up the new configuration, and require both to
+    # advance across the writes that follow: the requests show the replacement is
+    # named, the bytes show its traffic reaches the reported total.
+    written_before = await get_object_storage_written_bytes(server.ip_addr, object_storage.type)
+    puts_before = await get_object_storage_put_requests(server.ip_addr, object_storage.type)
+
+    print('The reconfigured client reports the writes that follow it')
+    await cql.run_async(f"INSERT INTO random_ks.test (name, value) VALUES ('after_metrics', 789);")
+    await manager.api.flush_keyspace(server.ip_addr, 'random_ks')
+
+    written_after = await get_object_storage_written_bytes(server.ip_addr, object_storage.type)
+    assert written_after > written_before, \
+        f'{object_storage.type} bytes did not advance after the reconfiguration: {written_before} -> {written_after}'
+    puts_after = await get_object_storage_put_requests(server.ip_addr, object_storage.type)
+    assert puts_after > puts_before, \
+        f'{object_storage.type} PUT requests did not advance after the reconfiguration: {puts_before} -> {puts_after}'
+
     print('Verify all data is intact')
     rows = {r.name: r.value for r in cql.execute(f'SELECT * FROM random_ks.test;')}
-    assert rows == {'test_key': 123, 'after_reconfig': 456}, f'Unexpected table content: {rows}'
+    assert rows == {'test_key': 123, 'after_reconfig': 456, 'after_metrics': 789}, f'Unexpected table content: {rows}'
 
 
 async def test_tablet_move_updates_registry(manager: ScyllaClusterManager, s3_storage):

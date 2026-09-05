@@ -21,6 +21,7 @@
 #include <seastar/net/tls.hh>
 
 #include "utils/rjson.hh"
+#include "utils/object_storage_metrics.hh"
 #include "utils/chunked_vector.hh"
 #include "utils/seekable_source.hh"
 
@@ -185,6 +186,21 @@ namespace utils::gcp::storage {
          * Retrieves object metadata.
          */
         future<object_info> get_object_info(std::string_view bucket, std::string_view object_name, seastar::abort_source* as = nullptr) const;
+        /**
+         * Bytes moved to and from objects by this client, for its owner to report.
+         */
+        utils::object_storage_bytes bytes() const;
+        /**
+         * Registers the http client metrics for this client under the labels the
+         * caller supplies. The caller must hold at most one registered client per
+         * label set, otherwise registration throws.
+         */
+        void register_metrics(utils::object_storage_metrics_labels);
+        /**
+         * Releases the metrics, so that a replacement client can register the same
+         * labels while this one is still closing.
+         */
+        void unregister_metrics();
         /**
          * Destroys resources. Must be called before releasing object
          */
