@@ -444,7 +444,7 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
 
                 // Allocate tablet sizes to nodes
                 for (auto& [table, tablet_sizes]: tablet_sizes_in_rack.at(rack)) {
-                    load_sketch load(e.shared_token_metadata().local().get(), make_lw_shared<locator::load_stats>(stats));
+                    load_sketch load(e.local_token_metadata_ptr(), make_lw_shared<locator::load_stats>(stats));
 
                     // Add nodes to load_sketch and to the nodes_used heap
                     std::vector<node_used_size> nodes_used;

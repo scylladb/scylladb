@@ -266,7 +266,7 @@ SEASTAR_TEST_CASE(vector_store_client_ann_test_disabled) {
     co_await do_with_cql_env([](cql_test_env& env) -> future<> {
         auto as = abort_source_timeout();
         auto schema = co_await create_test_table(env, "ks", "vs");
-        auto& vs = env.local_qp().vector_store_client();
+        auto& vs = env.vector_store_client().local();
 
         auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
         BOOST_REQUIRE(!keys);
@@ -281,7 +281,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_addr_unavailable) {
             [](cql_test_env& env) -> future<> {
                 auto schema = co_await create_test_table(env, "ks", "vs");
                 auto as = abort_source_timeout();
-                auto& vs = env.local_qp().vector_store_client();
+                auto& vs = env.vector_store_client().local();
                 configure(vs)
                         .with_dns_refresh_interval(seconds(1))
                         .with_dns({{"bad.authority.here", std::nullopt}})
@@ -304,7 +304,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_service_unavailable) {
             [&server](cql_test_env& env) -> future<> {
                 auto schema = co_await create_test_table(env, "ks", "vs");
                 auto as = abort_source_timeout();
-                auto& vs = env.local_qp().vector_store_client();
+                auto& vs = env.vector_store_client().local();
                 configure(vs).with_dns_refresh_interval(seconds(1)).with_dns({{"good.authority.here", server->host()}});
 
                 vs.start_background_tasks();
@@ -327,7 +327,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_service_aborted) {
             [&server](cql_test_env& env) -> future<> {
                 auto schema = co_await create_test_table(env, "ks", "vs");
                 auto as = abort_source_timeout();
-                auto& vs = env.local_qp().vector_store_client();
+                auto& vs = env.vector_store_client().local();
                 configure(vs).with_dns_refresh_interval(milliseconds(10)).with_dns_resolver([&server](auto const& host) -> future<std::optional<inet_address>> {
                     BOOST_CHECK_EQUAL(host, "good.authority.here");
                     co_await sleep(milliseconds(100));
@@ -355,7 +355,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_request) {
             [&server](cql_test_env& env) -> future<> {
                 auto schema = co_await create_test_table(env, "ks", "idx");
                 auto as = abort_source_timeout();
-                auto& vs = env.local_qp().vector_store_client();
+                auto& vs = env.vector_store_client().local();
                 configure(vs).with_dns_refresh_interval(seconds(1)).with_dns({{"good.authority.here", "127.0.0.1"}});
 
                 vs.start_background_tasks();
@@ -435,7 +435,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_filtering_ann_request) {
             [&server](cql_test_env& env) -> future<> {
                 auto schema = co_await create_test_table(env, "ks", "idx");
                 auto as = abort_source_timeout();
-                auto& vs = env.local_qp().vector_store_client();
+                auto& vs = env.vector_store_client().local();
                 configure(vs).with_dns_refresh_interval(seconds(1)).with_dns({{"good.authority.here", "127.0.0.1"}});
 
                 vs.start_background_tasks();
@@ -469,7 +469,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_filtering_ann_cql) {
                 co_await env.execute_cql("CREATE CUSTOM INDEX embedding_idx ON ks.idx (embedding) USING 'vector_index'");
                 co_await env.execute_cql("INSERT INTO ks.idx (pk1, pk2, ck1, ck2, embedding) VALUES (5, 7, 9, 2, [0.1, 0.2, 0.3])");
 
-                auto& vs = env.local_qp().vector_store_client();
+                auto& vs = env.vector_store_client().local();
                 configure(vs).with_dns({{"good.authority.here", "127.0.0.1"}});
                 vs.start_background_tasks();
 
@@ -570,7 +570,7 @@ SEASTAR_TEST_CASE(vector_store_client_uri_update) {
             [&](cql_test_env& env) -> future<> {
                 auto as = abort_source_timeout();
                 auto schema = co_await create_test_table(env, "ks", "idx");
-                auto& vs = env.local_qp().vector_store_client();
+                auto& vs = env.vector_store_client().local();
                 constexpr auto DNS_REFRESH_INTERVAL = std::chrono::milliseconds(10);
                 configure(vs).with_dns_refresh_interval(DNS_REFRESH_INTERVAL).with_dns({{"good.authority.here", "127.0.0.1"}});
 
@@ -605,7 +605,7 @@ SEASTAR_TEST_CASE(vector_store_client_multiple_ips_high_availability) {
             [&](cql_test_env& env) -> future<> {
                 auto as = abort_source_timeout();
                 auto schema = co_await create_test_table(env, "ks", "idx");
-                auto& vs = env.local_qp().vector_store_client();
+                auto& vs = env.vector_store_client().local();
                 configure(vs).with_dns({{"good.authority.here", std::vector<std::string>{unavail_s->host(), responding_s->host()}}});
                 vs.start_background_tasks();
                 std::expected<vector_store_client::primary_keys, vector_store_client::ann_error> keys;
@@ -639,7 +639,7 @@ SEASTAR_TEST_CASE(vector_store_client_multiple_ips_load_balancing) {
             [&](cql_test_env& env) -> future<> {
                 auto as = abort_source_timeout();
                 auto schema = co_await create_test_table(env, "ks", "idx");
-                auto& vs = env.local_qp().vector_store_client();
+                auto& vs = env.vector_store_client().local();
                 configure(vs).with_dns({{"good.authority.here", std::vector<std::string>{s1->host(), s2->host()}}});
                 vs.start_background_tasks();
 
@@ -670,7 +670,7 @@ SEASTAR_TEST_CASE(vector_store_client_multiple_uris_high_availability) {
             [&](cql_test_env& env) -> future<> {
                 auto as = abort_source_timeout();
                 auto schema = co_await create_test_table(env, "ks", "idx");
-                auto& vs = env.local_qp().vector_store_client();
+                auto& vs = env.vector_store_client().local();
                 configure(vs).with_dns({{"s1.node", std::vector<std::string>{unavail_s->host()}}, {"s2.node", std::vector<std::string>{responding_s->host()}}});
                 vs.start_background_tasks();
                 std::expected<vector_store_client::primary_keys, vector_store_client::ann_error> keys;
@@ -704,7 +704,7 @@ SEASTAR_TEST_CASE(vector_store_client_multiple_uris_load_balancing) {
             [&](cql_test_env& env) -> future<> {
                 auto as = abort_source_timeout();
                 auto schema = co_await create_test_table(env, "ks", "idx");
-                auto& vs = env.local_qp().vector_store_client();
+                auto& vs = env.vector_store_client().local();
                 configure(vs).with_dns({{"s1.node", std::vector<std::string>{s1->host()}}, {"s2.node", std::vector<std::string>{s2->host()}}});
                 vs.start_background_tasks();
 
@@ -734,7 +734,7 @@ SEASTAR_TEST_CASE(vector_search_metrics_test) {
                 auto schema = co_await create_test_table(env, "ks", "test");
                 auto result = co_await env.execute_cql("CREATE CUSTOM INDEX idx ON ks.test (embedding) USING 'vector_index'");
                 result.get()->throw_if_exception();
-                auto& vs = env.local_qp().vector_store_client();
+                auto& vs = env.vector_store_client().local();
                 configure{vs};
                 vs.start_background_tasks();
 
@@ -757,7 +757,7 @@ SEASTAR_TEST_CASE(vector_store_client_node_recovery_after_backoff) {
             [&](cql_test_env& env) -> future<> {
                 auto as = abort_source_timeout();
                 auto schema = co_await create_test_table(env, "ks", "idx");
-                auto& vs = env.local_qp().vector_store_client();
+                auto& vs = env.vector_store_client().local();
                 configure(vs).with_dns({{HOSTNAME, std::vector<std::string>{unavail_server->host()}}});
                 vs.start_background_tasks();
 
@@ -799,7 +799,7 @@ SEASTAR_TEST_CASE(vector_store_client_single_status_check_after_concurrent_failu
                 constexpr auto NUM_OF_PARALLEL_REQUESTS = 50;
                 auto as = abort_source_timeout();
                 auto schema = co_await create_test_table(env, "ks", "idx");
-                auto& vs = env.local_qp().vector_store_client();
+                auto& vs = env.vector_store_client().local();
                 configure(vs).with_dns({{"unavail.node", std::vector<std::string>{unavail_s->host()}}});
                 vs.start_background_tasks();
 
@@ -839,7 +839,7 @@ SEASTAR_TEST_CASE(vector_store_client_updates_backoff_max_time_from_read_connect
             [&](cql_test_env& env) -> future<> {
                 auto as = abort_source_timeout();
                 auto schema = co_await create_test_table(env, "ks", "idx");
-                auto& vs = env.local_qp().vector_store_client();
+                auto& vs = env.vector_store_client().local();
                 configure(vs).with_dns({{"unavail.node", std::vector<std::string>{unavail_s->host()}}});
                 vs.start_background_tasks();
 
@@ -887,7 +887,7 @@ SEASTAR_TEST_CASE(vector_store_client_secondary_uri) {
             [&](cql_test_env& env) -> future<> {
                 auto as = abort_source_timeout();
                 auto schema = co_await create_test_table(env, "ks", "idx");
-                auto& vs = env.local_qp().vector_store_client();
+                auto& vs = env.vector_store_client().local();
                 configure(vs).with_dns(
                         {{"primary.node", std::vector<std::string>{primary->host()}}, {"secondary.node", std::vector<std::string>{secondary->host()}}});
                 vs.start_background_tasks();
@@ -911,7 +911,7 @@ SEASTAR_TEST_CASE(vector_store_client_secondary_uri_only) {
             [&](cql_test_env& env) -> future<> {
                 auto as = abort_source_timeout();
                 auto schema = co_await create_test_table(env, "ks", "idx");
-                auto& vs = env.local_qp().vector_store_client();
+                auto& vs = env.vector_store_client().local();
                 configure(vs).with_dns({{"secondary.node", std::vector<std::string>{secondary->host()}}});
                 vs.start_background_tasks();
 
@@ -935,7 +935,7 @@ SEASTAR_TEST_CASE(vector_store_client_https) {
             [&](cql_test_env& env) -> future<> {
                 auto as = abort_source_timeout();
                 auto schema = co_await create_test_table(env, "ks", "idx");
-                auto& vs = env.local_qp().vector_store_client();
+                auto& vs = env.vector_store_client().local();
                 configure(vs).with_dns({{certs.server_cert_cn(), std::vector<std::string>{server->host()}}});
                 vs.start_background_tasks();
 
@@ -1017,7 +1017,7 @@ SEASTAR_TEST_CASE(vector_store_client_https_wrong_hostname) {
             [&](cql_test_env& env) -> future<> {
                 auto as = abort_source_timeout();
                 auto schema = co_await create_test_table(env, "ks", "idx");
-                auto& vs = env.local_qp().vector_store_client();
+                auto& vs = env.vector_store_client().local();
                 configure(vs).with_dns({{hostname, std::vector<std::string>{server->host()}}});
                 vs.start_background_tasks();
 
@@ -1043,7 +1043,7 @@ SEASTAR_TEST_CASE(vector_store_client_https_wrong_cacert_verification_error) {
             [&](cql_test_env& env) -> future<> {
                 auto as = abort_source_timeout();
                 auto schema = co_await create_test_table(env, "ks", "idx");
-                auto& vs = env.local_qp().vector_store_client();
+                auto& vs = env.vector_store_client().local();
                 configure(vs).with_dns({{certs.server_cert_cn(), std::vector<std::string>{server->host()}}});
                 vs.start_background_tasks();
 
@@ -1070,7 +1070,7 @@ SEASTAR_TEST_CASE(vector_store_client_https_wrong_cacert_verification_error_host
             [&](cql_test_env& env) -> future<> {
                 auto as = abort_source_timeout();
                 auto schema = co_await create_test_table(env, "ks", "idx");
-                auto& vs = env.local_qp().vector_store_client();
+                auto& vs = env.vector_store_client().local();
                 configure(vs).with_dns({{server->host(), std::vector<std::string>{server->host()}}});
                 vs.start_background_tasks();
 
@@ -1099,7 +1099,7 @@ SEASTAR_TEST_CASE(vector_store_client_high_availability_unreachable) {
     co_await do_with_cql_env(
             [&](cql_test_env& env) -> future<> {
                 auto schema = co_await create_test_table(env, "ks", "test");
-                auto& vs = env.local_qp().vector_store_client();
+                auto& vs = env.vector_store_client().local();
                 configure(vs).with_dns(
                         {{"unreachable.node", std::vector<std::string>{unreachable.host}}, {"server.node", std::vector<std::string>{server->host()}}});
                 vs.start_background_tasks();
@@ -1132,7 +1132,7 @@ SEASTAR_TEST_CASE(vector_store_client_abort_due_to_query_timeout) {
     co_await do_with_cql_env(
             [&](cql_test_env& env) -> future<> {
                 auto schema = co_await create_test_table(env, "ks", "test");
-                auto& vs = env.local_qp().vector_store_client();
+                auto& vs = env.vector_store_client().local();
                 configure(vs).with_dns({{"server.node", std::vector<std::string>{server->host()}}});
                 vs.start_background_tasks();
                 auto result = co_await env.execute_cql("CREATE CUSTOM INDEX idx ON ks.test (embedding) USING 'vector_index'");
