@@ -2545,6 +2545,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             startlog.info("Verifying that all of the tablet keyspaces use rack list replication factors");
             db.local().check_rack_list_everywhere(cfg->enforce_rack_list());
 
+            startlog.info("Verifying that the keyspaces agree with storage_mode_for_new_keyspaces");
+            db.local().check_storage_mode_for_new_keyspaces();
+
             // The table-based audit backend needs Raft (via join_cluster)
             // to create its keyspace and table.
             checkpoint(stop_signal, "starting audit storage");
@@ -2823,6 +2826,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 #endif
 
             if (bool enabled = cfg->alternator_port() || cfg->alternator_https_port()) {
+                // Alternator on object storage is untested, so it is refused
+                // rather than left to fail somewhere further in.
+                if (cfg->storage_mode_for_new_keyspaces() == db::keyspace_storage_mode_t::mode::object_storage) {
+                    throw std::runtime_error("Alternator is not supported when storage_mode_for_new_keyspaces is object_storage");
+                }
                 ss.local().register_protocol_server(alternator_ctl, enabled).get();
             }
 

@@ -1990,6 +1990,14 @@ public:
     std::vector<sstring> get_non_system_keyspaces() const;
     std::vector<sstring> get_user_keyspaces() const;
     std::vector<sstring> get_all_keyspaces() const;
+    // Keyspaces created by Scylla itself are always local and do not count.
+    enum class user_storage_kind {
+        none,
+        local,
+        object_storage,
+        mixed,
+    };
+    user_storage_kind get_user_storage_kind() const;
     std::vector<sstring> get_non_local_strategy_keyspaces() const;
     std::vector<sstring> get_non_local_vnode_based_strategy_keyspaces() const;
     // All static_effective_replication_map_ptr must hold a vnode_effective_replication_map
@@ -2295,6 +2303,7 @@ public:
     // * If not `enforce_rack_list`, a warning will be printed for all keyspaces
     //   that use numeric replication factors, but no exception should be thrown.
     void check_rack_list_everywhere(const bool enforce_rack_list) const;
+    void check_storage_mode_for_new_keyspaces() const;
 
 private:
     // SSTable sampling might require considerable amounts of memory,

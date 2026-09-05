@@ -473,6 +473,14 @@ public:
         if (cfg.strongly_consistent_tables) {
             options += " and consistency = 'global'";
         }
+        if (cfg.keyspace_storage_options) {
+            // storage_options::from_map() takes the type plus the entries to_map() emits.
+            sstring storage = format("'type': '{}'", cfg.keyspace_storage_options->type_string());
+            for (const auto& [key, value] : cfg.keyspace_storage_options->to_map()) {
+                storage += format(", '{}': '{}'", key, value);
+            }
+            options += format(" and storage = {{{}}}", storage);
+        }
         auto query = seastar::format("create keyspace {} with replication = {{ 'class' : 'org.apache.cassandra.locator.NetworkTopologyStrategy', 'replication_factor' : 1}}{};", name,
                             options);
         return execute_cql(query).discard_result();

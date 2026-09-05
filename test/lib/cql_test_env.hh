@@ -20,6 +20,7 @@
 #include "db/view/view_update_generator.hh"
 #include "service/qos/service_level_controller.hh"
 #include "replica/database.hh"
+#include "data_dictionary/storage_options.hh"
 #include "transport/messages/result_message_base.hh"
 #include "cql3/query_options_fwd.hh"
 #include "cql3/values.hh"
@@ -109,6 +110,7 @@ public:
     std::optional<cql3::query_processor::memory_config> qp_mcfg;
     bool need_remote_proxy = false;
     std::optional<uint64_t> initial_tablets; // When engaged, the default keyspace will use tablets.
+    std::optional<data_dictionary::storage_options> keyspace_storage_options;
     locator::host_id host_id;
     gms::inet_address broadcast_address = gms::inet_address("localhost");
     bool ms_listen = false;
