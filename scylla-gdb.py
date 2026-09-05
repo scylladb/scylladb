@@ -2724,8 +2724,7 @@ class scylla_memory(gdb.Command):
         scylla_memory.print_replica_stats()
 
         gdb.write('Small pools:\n')
-        small_pools = cpu_mem['small_pools']
-        nr = small_pools['nr_small_pools']
+        nr, small_pools_a = scylla_small_objects.get_small_pools()
         gdb.write('{objsize:>5} {span_size:>6} {use_count:>10} {memory:>12} {unused:>12} {wasted_percent:>5}\n'
                   .format(objsize='objsz', span_size='spansz', use_count='usedobj', memory='memory',
                           unused='unused', wasted_percent='wst%'))
@@ -2733,7 +2732,7 @@ class scylla_memory(gdb.Command):
         sc = span_checker()
         free_object_size = gdb.parse_and_eval('sizeof(\'seastar::memory::free_object\')')
         for i in range(int(nr)):
-            sp = small_pools['_u']['a'][i]
+            sp = small_pools_a[i]
             object_size = int(sp['_object_size'])
             # Skip pools that are smaller than sizeof(free_object), they won't have any content
             if object_size < free_object_size:
@@ -5434,18 +5433,25 @@ class scylla_small_objects(gdb.Command):
         self._last_object_size = None
 
     @staticmethod
-    def get_object_sizes():
+    def get_small_pools():
         cpu_mem = thread_local_var('seastar::memory::cpu_mem')
         small_pools = cpu_mem['small_pools']
         nr = int(small_pools['nr_small_pools'])
-        return [int(small_pools['_u']['a'][i]['_object_size']) for i in range(nr)]
+        small_pools_a: list[dict] = []
+        try:
+            small_pools_a = small_pools['_pools']
+        except gdb.error:
+            small_pools_a = small_pools['_u']['a']
+        return nr, small_pools_a
+
+    @staticmethod
+    def get_object_sizes():
+        nr, small_pools_a = scylla_small_objects.get_small_pools()
+        return [int(small_pools_a[i]['_object_size']) for i in range(nr)]
 
     @staticmethod
     def find_small_pools(object_size):
-        cpu_mem = thread_local_var('seastar::memory::cpu_mem')
-        small_pools = cpu_mem['small_pools']
-        small_pools_a = small_pools['_u']['a']
-        nr = int(small_pools['nr_small_pools'])
+        nr, small_pools_a = scylla_small_objects.get_small_pools()
         return [small_pools_a[i]
                 for i in range(nr)
                 if int(small_pools_a[i]['_object_size']) == object_size]
