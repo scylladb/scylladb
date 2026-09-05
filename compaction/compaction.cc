@@ -742,6 +742,30 @@ protected:
         return bool(_sstable_set) && _table_s.tombstone_gc_enabled();
     }
 
+    // Whether the output rotates into several sstables by size, forming a run.
+    // The fragments of a run must not overlap, and each has to describe the
+    // exact extent of the partitions it holds so that a read opens only the
+    // fragments it needs. A token range tombstone written into every fragment
+    // would make each claim the tombstone's whole range, so when a run is being
+    // produced the tombstones go into an sstable of their own instead, with a
+    // run of its own.
+    bool tombstones_in_own_sstable() const noexcept {
+        return _max_sstable_size != std::numeric_limits<uint64_t>::max();
+    }
+
+    // The writer for the sstable holding only this compaction's token range
+    // tombstones. See tombstones_in_own_sstable().
+    compaction_writer create_token_range_tombstone_writer() {
+        auto sst = _sstable_creator(this_shard_id());
+        setup_new_sstable(sst);
+
+        auto monitor = std::make_unique<compaction_write_monitor>(sst, _table_s, maximum_timestamp(), _sstable_level);
+        sstables::sstable_writer_config cfg = make_sstable_writer_config(_type);
+        cfg.run_identifier = sstables::run_id::create_random_id();
+        cfg.monitor = monitor.get();
+        return compaction_writer{std::move(monitor), sst->get_writer(*_schema, 1, cfg, get_encoding_stats()), sst};
+    }
+
     compaction_writer create_gc_compaction_writer(sstables::run_id gc_run) const {
         auto sst = _sstable_creator(this_shard_id());
 
@@ -1258,8 +1282,10 @@ void compacted_fragments_writer::split_large_partition() {
 void compacted_fragments_writer::maybe_create_compaction_writer(const dht::decorated_key& dk) {
     if (!_compaction_writer) {
         _compaction_writer = _create_compaction_writer(dk);
-        for (const auto& trt : _token_range_tombstones) {
-            _compaction_writer->writer.consume(token_range_tombstone(trt));
+        if (!_c.tombstones_in_own_sstable()) {
+            for (const auto& trt : _token_range_tombstones) {
+                _compaction_writer->writer.consume(token_range_tombstone(trt));
+            }
         }
     }
 }
@@ -1332,6 +1358,24 @@ stop_iteration compacted_fragments_writer::consume_end_of_partition() {
 }
 
 void compacted_fragments_writer::consume_end_of_stream() {
+    if (_c.tombstones_in_own_sstable()) {
+        if (_compaction_writer) {
+            _stop_compaction_writer(&*_compaction_writer);
+            _compaction_writer = std::nullopt;
+        }
+        if (!_token_range_tombstones.empty()) {
+            // The data went into a run of its own above; the tombstones get an
+            // sstable of their own so that no fragment of the run has to claim
+            // their range. See compaction::tombstones_in_own_sstable().
+            _compaction_writer = _c.create_token_range_tombstone_writer();
+            for (const auto& trt : _token_range_tombstones) {
+                _compaction_writer->writer.consume(token_range_tombstone(trt));
+            }
+            _stop_compaction_writer(&*_compaction_writer);
+            _compaction_writer = std::nullopt;
+        }
+        return;
+    }
     if (!_compaction_writer && !_token_range_tombstones.empty()) {
         // A stream of nothing but token range tombstones still has to produce
         // an sstable, or the deletion is lost. There is no partition to name

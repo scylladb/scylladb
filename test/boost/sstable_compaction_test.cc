@@ -6973,4 +6973,62 @@ SEASTAR_TEST_CASE(test_compaction_drops_sstable_deleted_by_token_range_tombstone
     });
 }
 
+// When the output is split into a run by size, the token range tombstones go
+// into an sstable of their own rather than into every fragment, so that each
+// fragment describes only the partitions it holds and a read opens only the
+// fragments it needs.
+SEASTAR_TEST_CASE(test_compaction_writes_token_range_tombstones_to_their_own_sstable) {
+    return test_env::do_with_async([] (test_env& env) {
+        simple_schema ss;
+        auto s = ss.schema();
+        auto cf = env.make_table_for_tests(s);
+        auto close_cf = deferred_stop(cf);
+        auto sst_gen = env.make_sst_factory(s);
+
+        // Older than the data below, so it deletes none of it and has to be
+        // carried through the compaction as is.
+        auto tomb = tombstone(ss.new_timestamp(), gc_clock::now());
+        auto mt = make_lw_shared<replica::memtable>(s);
+        mt->apply(token_range_tombstone::full_ring(tomb));
+        auto deletion = make_sstable_containing(sst_gen, mt).get();
+        column_family_test(cf).add_sstable(deletion).get();
+
+        utils::chunked_vector<mutation> muts;
+        for (auto i = 0; i < 100; i++) {
+            auto m = mutation(s, ss.make_pkey(i));
+            // Incompressible, so that the fragment size limit below bites.
+            ss.add_row(m, ss.make_ckey(0), tests::random::get_sstring(1024));
+            muts.push_back(std::move(m));
+        }
+        auto data = make_sstable_containing(sst_gen, std::move(muts)).get();
+        column_family_test(cf).add_sstable(data).get();
+
+        auto creator = [&] { return env.make_sstable(s); };
+        // Small enough that the data is written as several fragments.
+        auto desc = compaction::compaction_descriptor({deletion, data}, compaction::compaction_descriptor::default_level, 8 * 1024);
+        auto ret = compact_sstables(env, std::move(desc), cf, creator).get();
+
+        std::vector<shared_sstable> with_tombstones, without;
+        for (auto& sst : ret.new_sstables) {
+            auto reusable = env.reusable_sst(s, sst).get();
+            (reusable->token_range_tombstones().empty() ? without : with_tombstones).push_back(reusable);
+        }
+        BOOST_REQUIRE_MESSAGE(without.size() > 1, fmt::format("expected a run of several fragments, got {}", without.size()));
+        BOOST_REQUIRE_EQUAL(with_tombstones.size(), 1);
+        auto& tsst = with_tombstones.front();
+        BOOST_REQUIRE(!tsst->has_partitions());
+        BOOST_REQUIRE_EQUAL(tsst->token_range_tombstones().search(ss.make_pkey(0).token()), tomb);
+        // The tombstone's sstable is not part of the data run, whose fragments
+        // all share one run id.
+        for (auto& sst : without) {
+            BOOST_REQUIRE(sst->has_partitions());
+            BOOST_REQUIRE(sst->run_identifier() == without.front()->run_identifier());
+            BOOST_REQUIRE(sst->run_identifier() != tsst->run_identifier());
+            // Its extent is that of its partitions, not the tombstone's.
+            BOOST_REQUIRE(sst->get_first_ring_position().has_key());
+            BOOST_REQUIRE(sst->get_last_ring_position().has_key());
+        }
+    });
+}
+
 BOOST_AUTO_TEST_SUITE_END()
