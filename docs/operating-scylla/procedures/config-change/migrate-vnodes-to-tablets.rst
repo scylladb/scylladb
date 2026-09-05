@@ -202,7 +202,21 @@ Procedure
 
    #. Restart the node:
 
-      .. include:: /rst_include/scylla-commands-start-index.rst
+      .. tabs::
+
+         .. group-tab:: Supported OS
+
+            .. code-block:: shell
+
+               sudo systemctl start --no-block scylla-server
+
+         .. group-tab:: Docker
+
+            .. code-block:: shell
+
+               docker exec -it some-scylla supervisorctl start scylla
+
+            (with *some-scylla* container already running)
 
    #. Wait until the node is UP and has returned to the ScyllaDB cluster using :doc:`nodetool status </operating-scylla/nodetool-commands/status/>`.
       This operation may take a long time due to resharding. To monitor
@@ -372,7 +386,21 @@ following:
 
       #. Restart the node:
 
-         .. include:: /rst_include/scylla-commands-start-index.rst
+         .. tabs::
+
+            .. group-tab:: Supported OS
+
+               .. code-block:: shell
+
+                  sudo systemctl start --no-block scylla-server
+
+            .. group-tab:: Docker
+
+               .. code-block:: shell
+
+                  docker exec -it some-scylla supervisorctl start scylla
+
+               (with *some-scylla* container already running)
 
       #. Wait until the node is UP and has returned to the ScyllaDB cluster using :doc:`nodetool status </operating-scylla/nodetool-commands/status/>`.
          This operation may take a long time due to resharding. To monitor
