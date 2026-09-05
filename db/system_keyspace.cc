@@ -3191,6 +3191,17 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
         }
 
         raft::server_id host_id{row.get_as<utils::UUID>("host_id")};
+        service::node_state nstate = service::node_state_from_string(row.get_as<sstring>("node_state"));
+
+        if (nstate == service::node_state::left
+                && !force_load_hosts.contains(locator::host_id(host_id.uuid()))) {
+            // Nothing but the id survives for such a node, and a cluster keeps
+            // one of these rows for every node it has ever lost, so decoding the
+            // rest of the row would be pure waste.
+            ret.left_nodes.emplace(host_id);
+            continue;
+        }
+
         auto datacenter = row.get_as<sstring>("datacenter");
         auto rack = row.get_as<sstring>("rack");
         auto release_version = row.get_as<sstring>("release_version");
@@ -3200,8 +3211,6 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
         uint8_t ignore_msb = row.get_as<int32_t>("ignore_msb");
         sstring cleanup_status = row.get_as<sstring>("cleanup_status");
         utils::UUID request_id = row.get_as<utils::UUID>("request_id");
-
-        service::node_state nstate = service::node_state_from_string(row.get_as<sstring>("node_state"));
 
         std::optional<service::ring_slice> ring_slice;
         if (row.has("tokens")) {
@@ -3313,9 +3322,7 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
             map = &ret.normal_nodes;
         } else if (nstate == service::node_state::left) {
             ret.left_nodes.emplace(host_id);
-            if (force_load_hosts.contains(locator::host_id(host_id.uuid()))) {
-                map = &ret.left_nodes_rs;
-            }
+            map = &ret.left_nodes_rs;
         } else if (nstate == service::node_state::none) {
             map = &ret.new_nodes;
         } else {
