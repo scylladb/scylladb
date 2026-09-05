@@ -146,8 +146,13 @@ class TCPRESTClient(RESTClient):
 class ScyllaRESTAPIClient:
     """Async Scylla REST API client"""
 
-    def __init__(self, port: int = 10000):
+    def __init__(self, port: int = 10000, build_mode: str | None = None):
         self.client = TCPRESTClient(port)
+        # The build mode of the server this client talks to, or None when whoever
+        # created the client did not know it. A cluster test always reaches its
+        # servers through a client that knows the mode. Other clients, such as the
+        # one nodetool builds at import time, are created without it.
+        self.build_mode = build_mode
 
     async def get_host_id(self, server_ip: IPAddress) -> HostID:
         """Get server id (UUID)"""
@@ -241,6 +246,17 @@ class ScyllaRESTAPIClient:
         )
         assert isinstance(data, list)
         return data
+
+    def _fail_if_injections_unavailable(self, injection: str) -> None:
+        """Fail the test if error injections are compiled out, i.e. in release mode.
+
+           Does nothing when the client was not told the build mode, since then
+           there is nothing to check against.
+        """
+        if self.build_mode == "release":
+            pytest.fail(f"The error injection {injection} cannot be enabled because error "
+                        "injections are disabled in release mode, so the test must be marked "
+                        "with skip_mode(mode='release')")
 
     async def enable_injection(self, node_ip: str, injection: str, one_shot: bool, parameters: dict[str, Any] = {}) -> None:
         """Enable error injection named `injection` on `node_ip`. Depending on `one_shot`,
@@ -803,20 +819,21 @@ class InjectionHandler():
 async def inject_error(api: ScyllaRESTAPIClient, node_ip: IPAddress, injection: str,
                        parameters: dict[str, Any] = {}) -> AsyncIterator[InjectionHandler]:
     """Attempts to inject an error. Works only in specific build modes: debug,dev,sanitize.
-       It will fail a test if attempting to enable an injection has no effect.
+       It will fail a test that asks for an injection in release mode.
        Intended for suites that start their own Scylla (e.g. cluster), so the build mode
        is known. Suites that can run against a foreign server (e.g. cqlpy) should keep
        their own skipping helper.
        This is a context manager for enabling and disabling when done, therefore it can't be
        used for one shot.
     """
+    api._fail_if_injections_unavailable(injection)
     await api.enable_injection(node_ip, injection, False, parameters)
     enabled = await api.get_enabled_injections(node_ip)
     logging.info(f"Error injections enabled on {node_ip}: {enabled}")
+    # Sanity check for non-release modes.
     if injection not in enabled:
-        pytest.fail(f"Failed to enable the error injection {injection}. Error injections are "
-                    "disabled in release mode, so the test must be marked with "
-                    "skip_mode(mode='release')")
+        pytest.fail(f"Enabling the error injection {injection} on {node_ip} had no effect. "
+                    f"Error injections enabled on the node: {enabled}")
     try:
         yield InjectionHandler(api, injection, node_ip)
     finally:
@@ -826,19 +843,17 @@ async def inject_error(api: ScyllaRESTAPIClient, node_ip: IPAddress, injection: 
 
 async def inject_error_one_shot(api: ScyllaRESTAPIClient, node_ip: IPAddress, injection: str, parameters: dict[str, Any] = {}) -> InjectionHandler:
     """Attempts to inject an error. Works only in specific build modes: debug,dev,sanitize.
-       It will fail a test if attempting to enable an injection has no effect.
+       It will fail a test that asks for an injection in release mode.
        Intended for suites that start their own Scylla (e.g. cluster), so the build mode
        is known. Suites that can run against a foreign server (e.g. cqlpy) should keep
        their own skipping helper.
        This is a one-shot injection enable.
     """
+    api._fail_if_injections_unavailable(injection)
+    logger.info(f"Enabling one-shot error injection {injection} on {node_ip}")
     await api.enable_injection(node_ip, injection, True, parameters)
-    enabled = await api.get_enabled_injections(node_ip)
-    logging.info(f"Error injections enabled on {node_ip}: {enabled}")
-    if injection not in enabled:
-        pytest.fail(f"Failed to enable the error injection {injection}. Error injections are "
-                    "disabled in release mode, so the test must be marked with "
-                    "skip_mode(mode='release')")
+    # We can't do the sanity check from inject_error here because the one-shot
+    # injection might be entered and disabled at this point.
     return InjectionHandler(api, injection, node_ip)
 
 

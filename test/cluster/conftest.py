@@ -77,6 +77,7 @@ def pytest_addoption(parser):
 
 @pytest.fixture(scope="module")
 async def _scylla_cluster_manager(request: pytest.FixtureRequest,
+                                  build_mode: str,
                                   suite_log_dir: Path,
                                   testpy_cluster_factory: ClusterFactory,
                                   testpy_uname: str) -> AsyncGenerator[ScyllaClusterManager]:
@@ -106,6 +107,7 @@ async def _scylla_cluster_manager(request: pytest.FixtureRequest,
             port=int(request.config.getoption('port')),
             use_ssl=bool(request.config.getoption('ssl')),
             auth_provider=auth_provider,
+            build_mode=build_mode,
         )
         try:
             await mgr.start()

@@ -222,6 +222,7 @@ class ScyllaClusterManager:
         port: CQL port for driver connections
         use_ssl: use SSL for driver connections
         auth_provider: authentication provider for driver connections
+        build_mode: build mode of the Scylla servers, or None if unknown
     """
     # Per test, created by before_test() and removed by after_test().
     test_case_log_file: pathlib.Path
@@ -233,7 +234,8 @@ class ScyllaClusterManager:
                  base_dir: str,
                  port: int,
                  use_ssl: bool,
-                 auth_provider: Any | None) -> None:
+                 auth_provider: Any | None,
+                 build_mode: str | None = None) -> None:
         # The manager must be constructed on its own, always-running loop:
         # its operations run there (see manager_op), whichever loop or thread
         # they are called from.
@@ -258,7 +260,7 @@ class ScyllaClusterManager:
         # The suite's provider, restored per test: tests override
         # self.auth_provider to connect as someone else.
         self._suite_auth_provider = auth_provider
-        self.api = ScyllaRESTAPIClient()
+        self.api = ScyllaRESTAPIClient(build_mode=build_mode)
         self.metrics = ScyllaMetricsClient()
         self.thread_pool = ThreadPoolExecutor()
 

@@ -110,7 +110,7 @@ class ScyllaCluster:
         self.is_dirty: bool = False
         self.start_exception: Optional[Exception] = None
         self.keyspace_count = 0
-        self.api = ScyllaRESTAPIClient()
+        self.api = ScyllaRESTAPIClient(build_mode=self.mode)
         self.stop_lock = asyncio.Lock()
         # Cleanups a test registered through ScyllaClusterManager.add_teardown_callback(),
         # as (callback, name) pairs.  They are fired by run_teardown_callbacks()
