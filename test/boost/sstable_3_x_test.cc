@@ -87,6 +87,10 @@ public:
         return &*_sst;
     }
 
+    const sstable_ptr& get_sstable() const noexcept {
+        return _sst;
+    }
+
     mutation_reader make_reader(
             const dht::partition_range& range,
             const query::partition_slice& slice,
@@ -3302,19 +3306,6 @@ static void do_validate_stats_metadata(schema_ptr s, sstable_assertions& written
     check_estimated_histogram(orig_stats.estimated_cells_count, written_stats.estimated_cells_count);
 }
 
-static void check_min_max_column_names(sstable_assertions& written_sst, std::vector<bytes> min_components, std::vector<bytes> max_components) {
-    const auto& st = written_sst->get_stats_metadata();
-    BOOST_TEST_MESSAGE(fmt::format("min {}/{} max {}/{}", st.min_column_names.elements.size(), min_components.size(), st.max_column_names.elements.size(), max_components.size()));
-    BOOST_REQUIRE(st.min_column_names.elements.size() == min_components.size());
-    for (auto i = 0U; i < st.min_column_names.elements.size(); i++) {
-        BOOST_REQUIRE(min_components[i] == st.min_column_names.elements[i].value);
-    }
-    BOOST_REQUIRE(st.max_column_names.elements.size() == max_components.size());
-    for (auto i = 0U; i < st.max_column_names.elements.size(); i++) {
-        BOOST_REQUIRE(max_components[i] == st.max_column_names.elements[i].value);
-    }
-}
-
 struct validate_stats_metadata_tag { };
 using validate_stats_metadata = bool_class<validate_stats_metadata_tag>;
 
@@ -3344,7 +3335,7 @@ static void write_mut_and_validate_version(test_env& env, schema_ptr s, const ss
     // complete and those version transforms are gone
     auto sst = make_sstable_containing(env.make_sstable(s, version), {mut}).get();
     auto written_sst = validate_read(env, sst, {mut});
-    check_min_max_column_names(written_sst, std::move(min_components), std::move(max_components));
+    check_min_max_column_names(written_sst.get_sstable(), std::move(min_components), std::move(max_components));
 }
 
 static void write_mut_and_validate(test_env& env, schema_ptr s, const sstring& table_name, mutation& mut,
