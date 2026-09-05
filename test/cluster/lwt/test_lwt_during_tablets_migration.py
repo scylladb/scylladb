@@ -17,7 +17,7 @@ from test.cluster.lwt.lwt_common import (
     DEFAULT_WORKERS,
     DEFAULT_NUM_KEYS,
 )
-from test.cluster.util import new_test_keyspace
+from test.cluster.util import new_test_keyspace, FeatureConfig
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.tablets import get_tablet_replicas
 
@@ -98,7 +98,8 @@ async def tablet_migration_ops(stop_event: asyncio.Event,
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.skip_mode(mode='debug', reason='debug mode is too slow for this test')
-async def test_multi_column_lwt_during_migration(manager: ScyllaClusterManager, scale_timeout):
+async def test_multi_column_lwt_during_migration(manager: ScyllaClusterManager, scale_timeout,
+                                                 storage_config: FeatureConfig):
     """
     Test scenario:
       1. Start N servers with tablets enabled
@@ -111,10 +112,10 @@ async def test_multi_column_lwt_during_migration(manager: ScyllaClusterManager, 
     """
 
     # Setup cluster
-    cfg = {
+    cfg = storage_config.get_cluster_cfg({
         "tablets_mode_for_new_keyspaces": "enabled",
         "rf_rack_valid_keyspaces": False,
-    }
+    })
 
     servers = await manager.servers_add(4, config=cfg)
     await manager.disable_tablet_balancing()
@@ -124,8 +125,9 @@ async def test_multi_column_lwt_during_migration(manager: ScyllaClusterManager, 
 
     async with new_test_keyspace(
         manager,
-        f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {rf}}} "
-        f"AND tablets = {{'initial': 5}}",
+        storage_config.get_keyspace_opts(
+            f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {rf}}} "
+            f"AND tablets = {{'initial': 5}}"),
     ) as ks:
         stop_event_ = asyncio.Event()
         tester = BaseLWTTester(
@@ -159,9 +161,12 @@ async def test_multi_column_lwt_during_migration(manager: ScyllaClusterManager, 
             migration_task = asyncio.create_task(
                 tablet_migration_ops(stop_event_, manager, servers, tester, NUM_MIGRATIONS)
             )
+            # 10*2+15 = 35s before scaling, 10*5+15 = 65s on object storage,
+            # which migrates a tablet considerably slower.
+            per_migration = 5 if storage_config.on_object_storage else 2
             await asyncio.wait_for(
                 migration_task,
-                timeout=scale_timeout(NUM_MIGRATIONS * 2 + 15),  # 10*2+15 = 35s before scaling
+                timeout=scale_timeout(NUM_MIGRATIONS * per_migration + 15),
             )
             logger.info("LWT during migrating phase: %d ops", tester.get_phase_ops(PHASE_MIGRATING))
 

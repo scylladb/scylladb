@@ -18,14 +18,13 @@ import uuid
 
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.internal_types import ServerInfo
-from test.pylib.object_storage import format_tuples
 from test.pylib.util import wait_for_cql_and_get_hosts
 from test.pylib.tablets import get_all_tablet_replicas
 
 from test.pylib import nodetool
 
 from test.pylib.encryption_provider import KeyProviderFactory, KeyProvider, make_key_provider_factory, KMSKeyProviderFactory, LocalFileSystemKeyProviderFactory
-from test.cluster.util import new_test_keyspace, new_test_table
+from test.cluster.util import new_test_keyspace, new_test_table, FeatureConfig
 from test.cluster.dtest.tools.assertions import assert_one
 
 from typing import Callable, Coroutine
@@ -45,14 +44,12 @@ def workdir():
     with tempfile.TemporaryDirectory() as tmp_dir:
         yield tmp_dir
 
-async def test_file_streaming_respects_encryption(manager: ScyllaClusterManager, storage, workdir):
+async def test_file_streaming_respects_encryption(manager: ScyllaClusterManager,
+                                                  storage_config: FeatureConfig, workdir):
     # pylint: disable=missing-function-docstring
-    cfg = {
+    cfg = storage_config.get_cluster_cfg({
         'tablets_mode_for_new_keyspaces': 'enabled',
-    }
-
-    if storage:
-        cfg['object_storage_endpoints'] = storage.create_endpoint_conf()
+    })
 
     cmdline = ['--smp=1']
     servers = []
@@ -61,12 +58,8 @@ async def test_file_streaming_respects_encryption(manager: ScyllaClusterManager,
 
     cql = manager.cql
     await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
-    ks_cmd = "CREATE KEYSPACE ks WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}"
-    if storage:
-        storage = format_tuples(type=storage.type,
-                                endpoint=storage.address,
-                                bucket=storage.bucket_name)
-        ks_cmd += f" AND STORAGE = {storage}"
+    ks_cmd = storage_config.get_keyspace_opts(
+        "CREATE KEYSPACE ks WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}")
     cql.execute(ks_cmd)
     cql.execute(f"""CREATE TABLE ks.t(pk text primary key) WITH scylla_encryption_options = {{
         'cipher_algorithm' : 'AES/ECB/PKCS5Padding',

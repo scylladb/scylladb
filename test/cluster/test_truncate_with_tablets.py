@@ -23,15 +23,16 @@ logger = logging.getLogger(__name__)
 @pytest.mark.parametrize("feature_config", feature_configs(FeatureConfigurations.EVENTUAL_CONSISTENCY,
                                                            FeatureConfigurations.LOGSTOR_EVENTUAL_CONSISTENCY))
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_truncate_while_migration(manager: ScyllaClusterManager, feature_config: FeatureConfig):
+async def test_truncate_while_migration(manager: ScyllaClusterManager, feature_config: FeatureConfig,
+                                        storage_config: FeatureConfig):
 
     logger.info('Bootstrapping cluster')
     cfg = { 'tablets_mode_for_new_keyspaces': 'enabled',
             'error_injections_at_startup': ['migration_streaming_wait']
             }
-    cfg = feature_config.get_cluster_cfg(cfg)
-    keyspace_opts = feature_config.get_keyspace_opts(
-        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}")
+    cfg = storage_config.get_cluster_cfg(feature_config.get_cluster_cfg(cfg))
+    keyspace_opts = storage_config.get_keyspace_opts(feature_config.get_keyspace_opts(
+        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}"))
 
     servers = []
     servers.append(await manager.server_add(config=cfg))
@@ -77,12 +78,14 @@ async def get_raft_leader_and_log(manager: ScyllaClusterManager, servers):
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_truncate_with_concurrent_drop(manager: ScyllaClusterManager):
+async def test_truncate_with_concurrent_drop(manager: ScyllaClusterManager,
+                                             storage_config: FeatureConfig):
 
     logger.info('Bootstrapping cluster')
-    cfg = { 'tablets_mode_for_new_keyspaces': 'enabled',
-            'error_injections_at_startup': ['truncate_table_wait']
-            }
+    cfg = storage_config.get_cluster_cfg({
+        'tablets_mode_for_new_keyspaces': 'enabled',
+        'error_injections_at_startup': ['truncate_table_wait']
+    })
 
     servers = []
     servers.append(await manager.server_add(config=cfg))
@@ -93,7 +96,9 @@ async def test_truncate_with_concurrent_drop(manager: ScyllaClusterManager):
     hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
 
     # Create a keyspace with tablets and initial_tablets == 2, then insert data
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}") as ks:
+    keyspace_opts = storage_config.get_keyspace_opts(
+        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}")
+    async with new_test_keyspace(manager, keyspace_opts) as ks:
         await cql.run_async(f'CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);')
 
         keys = range(1024)
@@ -131,13 +136,14 @@ async def test_truncate_with_concurrent_drop(manager: ScyllaClusterManager):
                                                            FeatureConfigurations.STRONG_CONSISTENCY,
                                                            FeatureConfigurations.LOGSTOR_STRONG_CONSISTENCY))
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_truncate_while_node_restart(manager: ScyllaClusterManager, feature_config: FeatureConfig):
+async def test_truncate_while_node_restart(manager: ScyllaClusterManager, feature_config: FeatureConfig,
+                                           storage_config: FeatureConfig):
 
     logger.info('Bootstrapping cluster')
     cfg = { 'tablets_mode_for_new_keyspaces': 'enabled' }
-    cfg = feature_config.get_cluster_cfg(cfg)
-    keyspace_opts = feature_config.get_keyspace_opts(
-        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}")
+    cfg = storage_config.get_cluster_cfg(feature_config.get_cluster_cfg(cfg))
+    keyspace_opts = storage_config.get_keyspace_opts(feature_config.get_keyspace_opts(
+        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}"))
 
     servers = []
     servers.append(await manager.server_add(config=cfg))
@@ -181,10 +187,11 @@ async def test_truncate_while_node_restart(manager: ScyllaClusterManager, featur
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_truncate_with_coordinator_crash(manager: ScyllaClusterManager):
+async def test_truncate_with_coordinator_crash(manager: ScyllaClusterManager,
+                                               storage_config: FeatureConfig):
 
     logger.info('Bootstrapping cluster')
-    cfg = { 'tablets_mode_for_new_keyspaces': 'enabled' }
+    cfg = storage_config.get_cluster_cfg({'tablets_mode_for_new_keyspaces': 'enabled'})
 
     servers = []
     servers.append(await manager.server_add(config=cfg))
@@ -194,7 +201,9 @@ async def test_truncate_with_coordinator_crash(manager: ScyllaClusterManager):
     hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
 
     # Create a keyspace with tablets and initial_tablets == 2, then insert data
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}") as ks:
+    keyspace_opts = storage_config.get_keyspace_opts(
+        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}")
+    async with new_test_keyspace(manager, keyspace_opts) as ks:
         await cql.run_async(f'CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);')
 
         keys = range(1024)
@@ -228,15 +237,16 @@ async def test_truncate_with_coordinator_crash(manager: ScyllaClusterManager):
 @pytest.mark.parametrize("feature_config", feature_configs(FeatureConfigurations.EVENTUAL_CONSISTENCY,
                                                            FeatureConfigurations.LOGSTOR_EVENTUAL_CONSISTENCY))
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_truncate_while_truncate_already_waiting(manager: ScyllaClusterManager, feature_config: FeatureConfig):
+async def test_truncate_while_truncate_already_waiting(manager: ScyllaClusterManager, feature_config: FeatureConfig,
+                                                       storage_config: FeatureConfig):
 
     logger.info('Bootstrapping cluster')
     cfg = { 'tablets_mode_for_new_keyspaces': 'enabled',
             'error_injections_at_startup': ['migration_streaming_wait']
             }
-    cfg = feature_config.get_cluster_cfg(cfg)
-    keyspace_opts = feature_config.get_keyspace_opts(
-        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}")
+    cfg = storage_config.get_cluster_cfg(feature_config.get_cluster_cfg(cfg))
+    keyspace_opts = storage_config.get_keyspace_opts(feature_config.get_keyspace_opts(
+        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}"))
 
     servers = []
     servers.append(await manager.server_add(config=cfg))
@@ -283,11 +293,12 @@ async def test_truncate_while_truncate_already_waiting(manager: ScyllaClusterMan
                                                            FeatureConfigurations.STRONG_CONSISTENCY,
                                                            FeatureConfigurations.LOGSTOR_STRONG_CONSISTENCY))
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_replay_position_check_during_truncate(manager, feature_config: FeatureConfig):
+async def test_replay_position_check_during_truncate(manager, feature_config: FeatureConfig,
+                                                     storage_config: FeatureConfig):
     logger.info("Bootstrapping cluster")
-    cfg = feature_config.get_cluster_cfg({'auto_snapshot': True})
-    keyspace_opts = feature_config.get_keyspace_opts(
-        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}")
+    cfg = storage_config.get_cluster_cfg(feature_config.get_cluster_cfg({'auto_snapshot': True}))
+    keyspace_opts = storage_config.get_keyspace_opts(feature_config.get_keyspace_opts(
+        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}"))
     cmdline = ['--smp=1']
     servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
     server = servers[0]
@@ -322,13 +333,14 @@ async def test_replay_position_check_during_truncate(manager, feature_config: Fe
 @pytest.mark.parametrize("feature_config", feature_configs(FeatureConfigurations.EVENTUAL_CONSISTENCY,
                                                            FeatureConfigurations.LOGSTOR_EVENTUAL_CONSISTENCY))
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_parallel_truncate(manager: ScyllaClusterManager, feature_config: FeatureConfig):
+async def test_parallel_truncate(manager: ScyllaClusterManager, feature_config: FeatureConfig,
+                                 storage_config: FeatureConfig):
 
     logger.info('Bootstrapping cluster')
-    cfg = feature_config.get_cluster_cfg(
-        {'tablets_mode_for_new_keyspaces': 'enabled', 'error_injections_at_startup': ['migration_streaming_wait']})
-    keyspace_opts = feature_config.get_keyspace_opts(
-        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}")
+    cfg = storage_config.get_cluster_cfg(feature_config.get_cluster_cfg(
+        {'tablets_mode_for_new_keyspaces': 'enabled', 'error_injections_at_startup': ['migration_streaming_wait']}))
+    keyspace_opts = storage_config.get_keyspace_opts(feature_config.get_keyspace_opts(
+        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}"))
 
     servers = []
     servers.append(await manager.server_add(config=cfg))
@@ -370,7 +382,8 @@ async def test_parallel_truncate(manager: ScyllaClusterManager, feature_config: 
                                 query_template="SELECT COUNT(*) FROM {ks}.{table}", ks=ks, table='test1', keys=keys, partition_key='pk') == 0
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_split_emitted_during_truncate(manager: ScyllaClusterManager):
+async def test_split_emitted_during_truncate(manager: ScyllaClusterManager,
+                                             storage_config: FeatureConfig):
     """Tests that truncation handles new compaction groups introduced by tablet
     split after compaction was already disabled on existing groups.
 
@@ -385,9 +398,10 @@ async def test_split_emitted_during_truncate(manager: ScyllaClusterManager):
     long as they contain no sstables older than the truncation time.
     """
     logger.info("Bootstrapping cluster")
-    cfg = { 'tablets_mode_for_new_keyspaces': 'enabled',
-            'tablet_load_stats_refresh_interval_in_seconds': 1,
-          }
+    cfg = storage_config.get_cluster_cfg({
+        'tablets_mode_for_new_keyspaces': 'enabled',
+        'tablet_load_stats_refresh_interval_in_seconds': 1,
+    })
     cmdline = [
         '--logger-log-level', 'table=debug',
         '--logger-log-level', 'load_balancer=debug',
@@ -397,7 +411,9 @@ async def test_split_emitted_during_truncate(manager: ScyllaClusterManager):
     server = servers[0]
 
     cql = manager.get_cql()
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
+    keyspace_opts = storage_config.get_keyspace_opts(
+        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}")
+    async with new_test_keyspace(manager, keyspace_opts) as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH tablets = {{'min_tablet_count': 1}};")
 
         keys = range(10)

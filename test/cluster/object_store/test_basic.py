@@ -266,10 +266,12 @@ async def test_misconfigured_storage(manager: ScyllaClusterManager, object_stora
                       f" REPLICATION = {replication_opts} AND STORAGE = {storage_opts};"))
 
 
-async def test_storage_type_endpoint_mismatch(manager: ScyllaClusterManager, s3_storage, gs_storage):
+@pytest.mark.parametrize('object_storage', [('s3', 'gs')], indirect=True, ids=['s3+gs'])
+async def test_storage_type_endpoint_mismatch(manager: ScyllaClusterManager, object_storage):
     '''creating a keyspace whose STORAGE type doesn't match the configured type of the
     given endpoint (S3 endpoint used with type GS, or vice versa) must not be allowed,
     even though the endpoint name itself is known.'''
+    s3_storage, gs_storage = object_storage
     objconf = s3_storage.create_endpoint_conf() + gs_storage.create_endpoint_conf()
     cfg = {'enable_user_defined_functions': False,
            'object_storage_endpoints': objconf,
@@ -428,7 +430,8 @@ async def test_create_keyspace_after_config_update(manager: ScyllaClusterManager
     assert rows == {'test_key': 123, 'after_reconfig': 456}, f'Unexpected table content: {rows}'
 
 
-async def test_tablet_move_updates_registry(manager: ScyllaClusterManager, s3_storage):
+@pytest.mark.parametrize('object_storage', ['s3'], indirect=True)
+async def test_tablet_move_updates_registry(manager: ScyllaClusterManager, object_storage):
     """
     Verify that moving a tablet from one node to another correctly
     updates the (node-local) sstables registry: the destination node
@@ -442,7 +445,7 @@ async def test_tablet_move_updates_registry(manager: ScyllaClusterManager, s3_st
     streaming over object storage (ifGenerationMatch ignored, SCYLLADB-2044).
     """
     cfg = {
-        'object_storage_endpoints': s3_storage.create_endpoint_conf(),
+        'object_storage_endpoints': object_storage.create_endpoint_conf(),
     }
     servers = await manager.servers_add(2, config=cfg)
     await manager.disable_tablet_balancing()
@@ -456,7 +459,7 @@ async def test_tablet_move_updates_registry(manager: ScyllaClusterManager, s3_st
         host_ids[s] = await manager.get_host_id(s.server_id)
         driver_host[s] = host_by_ip[str(s.rpc_address)]
 
-    ks_opts = keyspace_options(s3_storage, rf=1)
+    ks_opts = keyspace_options(object_storage, rf=1)
     async with new_test_keyspace(manager, ks_opts) as ks:
         await cql.run_async(f"CREATE TABLE {ks}.t1 (pk int PRIMARY KEY, v int) WITH tablets = {{'max_tablet_count': 1}}")
         for i in range(10):
@@ -517,7 +520,8 @@ async def test_tablet_move_updates_registry(manager: ScyllaClusterManager, s3_st
         logger.info("Source registry entries cleaned up successfully")
 
 
-async def test_decommission_migrates_registry(manager: ScyllaClusterManager, s3_storage):
+@pytest.mark.parametrize('object_storage', ['s3'], indirect=True)
+async def test_decommission_migrates_registry(manager: ScyllaClusterManager, object_storage):
     """
     Verify registry behavior around decommission.
     This test checks that the tablet owned by the decommissioned node is migrated to the surviving node,
@@ -530,7 +534,7 @@ async def test_decommission_migrates_registry(manager: ScyllaClusterManager, s3_
     streaming over object storage (ifGenerationMatch ignored, SCYLLADB-2044).
     """
     cfg = {
-        'object_storage_endpoints': s3_storage.create_endpoint_conf(),
+        'object_storage_endpoints': object_storage.create_endpoint_conf(),
     }
     servers = await manager.servers_add(2, config=cfg)
     # Avoid racing with the pre-decommission registry check below.
@@ -545,7 +549,7 @@ async def test_decommission_migrates_registry(manager: ScyllaClusterManager, s3_
     for s in servers:
         host_ids[s] = await manager.get_host_id(s.server_id)
 
-    ks_opts = keyspace_options(s3_storage, rf=1)
+    ks_opts = keyspace_options(object_storage, rf=1)
     async with new_test_keyspace(manager, ks_opts) as ks:
         await cql.run_async(f"CREATE TABLE {ks}.t1 (pk int PRIMARY KEY, v int) WITH tablets = {{'max_tablet_count': 1}}")
         for i in range(10):
@@ -598,7 +602,8 @@ async def test_decommission_migrates_registry(manager: ScyllaClusterManager, s3_
         assert len(rows) == 10, f"Expected 10 rows, got {len(rows)}"
 
 
-async def test_repair_creates_registry_entries(manager: ScyllaClusterManager, s3_storage):
+@pytest.mark.parametrize('object_storage', ['s3'], indirect=True)
+async def test_repair_creates_registry_entries(manager: ScyllaClusterManager, object_storage):
     """
     Verify that non-incremental (tablet) repair on an object-storage keyspace
     creates sstables registry entries on the repaired node via streaming.
@@ -625,7 +630,7 @@ async def test_repair_creates_registry_entries(manager: ScyllaClusterManager, s3
     streaming over object storage (ifGenerationMatch ignored, SCYLLADB-2044).
     """
     cfg = {
-        'object_storage_endpoints': s3_storage.create_endpoint_conf(),
+        'object_storage_endpoints': object_storage.create_endpoint_conf(),
         'rf_rack_valid_keyspaces': False,
         'hinted_handoff_enabled': False,
     }
@@ -645,7 +650,7 @@ async def test_repair_creates_registry_entries(manager: ScyllaClusterManager, s3
     dst_host_id = await manager.get_host_id(dst_node.server_id)
     src_host = host_by_ip[str(src_node.rpc_address)]
 
-    ks_opts = keyspace_options(s3_storage, rf=2)
+    ks_opts = keyspace_options(object_storage, rf=2)
     async with new_test_keyspace(manager, ks_opts) as ks:
         await cql.run_async(f"CREATE TABLE {ks}.t1 (pk int PRIMARY KEY, v int)")
         table_id = await get_table_id(cql, ks, 't1')

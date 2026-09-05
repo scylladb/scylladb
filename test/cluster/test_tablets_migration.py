@@ -37,10 +37,16 @@ async def await_api_task(task, allowed_exception: Optional[Type[Exception]]=None
             raise
 
 
-@pytest.mark.parametrize("action", ['move', 'add_replica', 'del_replica'])
-async def test_tablet_transition_sanity(manager: ScyllaClusterManager, action):
+@pytest.mark.parametrize("action", ['move', 'add_replica',
+    pytest.param('del_replica', marks=pytest.mark.skip_storage('s3', 'gs',
+                          reason='del_replica leaves the tablet under RF, so the coordinator restores '
+                                 'the replica via failed-rebuild retry and races the post-delete check; '
+                                 'needs deeper investigation'))])
+async def test_tablet_transition_sanity(manager: ScyllaClusterManager, action,
+                                        storage_config: FeatureConfig):
     logger.info("Bootstrapping cluster")
-    cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled'}
+    cfg = storage_config.get_cluster_cfg(
+        {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled'})
     host_ids = []
     servers = []
     hosts_by_rack = defaultdict(list)
@@ -60,7 +66,9 @@ async def test_tablet_transition_sanity(manager: ScyllaClusterManager, action):
 
     cql = manager.get_cql()
 
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1}") as ks:
+    keyspace_opts = storage_config.get_keyspace_opts(
+        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1}")
+    async with new_test_keyspace(manager, keyspace_opts) as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
         keys = range(256)
         await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in keys])
@@ -161,7 +169,9 @@ def pick_replica_and_free_host_in_rack(replicas, rack_hosts):
 
 @pytest.mark.parametrize("action", ['add_replica', 'del_replica'])
 @pytest.mark.parametrize("constraint", ['rf_rack_valid', 'views', 'rack_list'])
-async def test_tablet_replica_change_requires_force_with_rack_constraints(manager: ScyllaClusterManager, action, constraint):
+async def test_tablet_replica_change_requires_force_with_rack_constraints(manager: ScyllaClusterManager, action,
+                                                                          constraint,
+                                                                          storage_config: FeatureConfig):
     """Adding or removing a single tablet replica changes the number of replicas the tablet
     has in one rack. Keyspaces which use rack lists, as well as keyspaces which are required
     to be RF-rack-valid, must keep that number fixed, so such calls have to be rejected
@@ -170,15 +180,18 @@ async def test_tablet_replica_change_requires_force_with_rack_constraints(manage
     RF-rack-validity is required either by the rf_rack_valid_keyspaces option or by the
     keyspace having materialized views.
     """
-    cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled',
-           'rf_rack_valid_keyspaces': constraint == 'rf_rack_valid'}
+    cfg = storage_config.get_cluster_cfg(
+        {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled',
+         'rf_rack_valid_keyspaces': constraint == 'rf_rack_valid'})
     servers, hosts_by_rack = await make_rack_aware_cluster(manager, cfg)
 
     rf = "'dc1': ['r1', 'r2']" if constraint == 'rack_list' else "'replication_factor': 2"
     cql = manager.get_cql()
 
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', "
-                                          f"{rf}}} AND tablets = {{'initial': 1}}") as ks:
+    keyspace_opts = storage_config.get_keyspace_opts(
+        "WITH replication = {'class': 'NetworkTopologyStrategy', "
+        f"{rf}}} AND tablets = {{'initial': 1}}")
+    async with new_test_keyspace(manager, keyspace_opts) as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
         if constraint == 'views':
             await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.test_view AS SELECT * FROM {ks}.test "
@@ -211,19 +224,23 @@ async def test_tablet_replica_change_requires_force_with_rack_constraints(manage
         assert sorted(r[0] for r in await get_single_tablet_replicas(manager, servers[0], ks)) == expected_replicas
 
 
-async def test_tablet_replica_change_without_rack_constraints(manager: ScyllaClusterManager):
+async def test_tablet_replica_change_without_rack_constraints(manager: ScyllaClusterManager,
+                                                              storage_config: FeatureConfig):
     """When the keyspace neither uses rack lists nor is required to be RF-rack-valid, adding
     and removing tablet replicas is allowed. Adding a replica to a rack which already holds
     one is still rejected, because it reduces availability, the same way the move API does.
     """
-    cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled',
-           'rf_rack_valid_keyspaces': False}
+    cfg = storage_config.get_cluster_cfg(
+        {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled',
+         'rf_rack_valid_keyspaces': False})
     servers, hosts_by_rack = await make_rack_aware_cluster(manager, cfg)
 
     cql = manager.get_cql()
 
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', "
-                                          "'replication_factor': 2} AND tablets = {'initial': 1}") as ks:
+    keyspace_opts = storage_config.get_keyspace_opts(
+        "WITH replication = {'class': 'NetworkTopologyStrategy', "
+        "'replication_factor': 2} AND tablets = {'initial': 1}")
+    async with new_test_keyspace(manager, keyspace_opts) as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
 
         replicas = await get_single_tablet_replicas(manager, servers[0], ks)
@@ -249,8 +266,10 @@ async def test_tablet_replica_change_without_rack_constraints(manager: ScyllaClu
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_bootstrap_starts_while_tablet_migration_is_blocked(manager: ScyllaClusterManager, scale_timeout):
-    cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled'}
+async def test_bootstrap_starts_while_tablet_migration_is_blocked(manager: ScyllaClusterManager, scale_timeout,
+                                                                  storage_config: FeatureConfig):
+    cfg = storage_config.get_cluster_cfg(
+        {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled'})
     servers = []
     hosts_by_rack = defaultdict(list)
 
@@ -268,7 +287,9 @@ async def test_bootstrap_starts_while_tablet_migration_is_blocked(manager: Scyll
     await manager.disable_tablet_balancing()
 
     cql = manager.get_cql()
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1}") as ks:
+    keyspace_opts = storage_config.get_keyspace_opts(
+        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1}")
+    async with new_test_keyspace(manager, keyspace_opts) as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
         await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in range(256)])
 
@@ -313,8 +334,10 @@ async def test_bootstrap_starts_while_tablet_migration_is_blocked(manager: Scyll
 @pytest.mark.parametrize("fail_replica", ["source", "destination"])
 @pytest.mark.parametrize("fail_stage", ["streaming", "allow_write_both_read_old", "write_both_read_old", "write_both_read_new", "use_new", "cleanup", "cleanup_target", "end_migration", "revert_migration"])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.skip_storage('gs', reason='GCS flavor of this test gets stuck, deeper investigation is needed')
 async def test_node_failure_during_tablet_migration(manager: ScyllaClusterManager, fail_replica, fail_stage, build_mode,
-                                                    feature_config: FeatureConfig):
+                                                    feature_config: FeatureConfig,
+                                                    storage_config: FeatureConfig):
     if fail_stage == 'cleanup' and fail_replica == 'destination':
         skip_env('Failing destination during cleanup is pointless')
     if fail_stage == 'cleanup_target' and fail_replica == 'source':
@@ -328,9 +351,9 @@ async def test_node_failure_during_tablet_migration(manager: ScyllaClusterManage
         'write_request_timeout_in_ms': request_timeout_ms,
         'read_request_timeout_in_ms': request_timeout_ms,
     }
-    cfg = feature_config.get_cluster_cfg(cfg)
-    keyspace_opts = feature_config.get_keyspace_opts(
-        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1}")
+    cfg = storage_config.get_cluster_cfg(feature_config.get_cluster_cfg(cfg))
+    keyspace_opts = storage_config.get_keyspace_opts(feature_config.get_keyspace_opts(
+        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1}"))
     host_ids = []
     servers = []
 
@@ -478,12 +501,13 @@ async def test_node_failure_during_tablet_migration(manager: ScyllaClusterManage
 
 @pytest.mark.parametrize("feature_config", feature_configs(FeatureConfigurations.EVENTUAL_CONSISTENCY,
     FeatureConfigurations.LOGSTOR_EVENTUAL_CONSISTENCY))
-async def test_tablet_back_and_forth_migration(manager: ScyllaClusterManager, feature_config: FeatureConfig):
+async def test_tablet_back_and_forth_migration(manager: ScyllaClusterManager, feature_config: FeatureConfig,
+                                               storage_config: FeatureConfig):
     logger.info("Bootstrapping cluster")
-    cfg = feature_config.get_cluster_cfg(
-        {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled'})
-    keyspace_opts = feature_config.get_keyspace_opts(
-        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}")
+    cfg = storage_config.get_cluster_cfg(feature_config.get_cluster_cfg(
+        {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled'}))
+    keyspace_opts = storage_config.get_keyspace_opts(feature_config.get_keyspace_opts(
+        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}"))
     host_ids = []
     servers = []
 
@@ -528,6 +552,8 @@ async def test_tablet_back_and_forth_migration(manager: ScyllaClusterManager, fe
         await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({3}, {3});")
         await assert_rows(3)
 
+# This test moves SSTable files into the local staging directory by path,
+# which object storage has no equivalent of, so it stays local-only.
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_staging_backlog_is_preserved_with_file_based_streaming(manager: ScyllaClusterManager):
     logger.info("Bootstrapping cluster")
@@ -625,7 +651,8 @@ async def test_staging_backlog_is_preserved_with_file_based_streaming(manager: S
 
 @pytest.mark.parametrize("migration_stage_and_injection", [("cleanup", "cleanup_tablet_wait"), ("end_migration", "handle_tablet_migration_end_migration")], ids=["cleanup", "end_migration"])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_restart_leaving_replica_during_cleanup(manager: ScyllaClusterManager, migration_stage_and_injection):
+async def test_restart_leaving_replica_during_cleanup(manager: ScyllaClusterManager, migration_stage_and_injection,
+                                                      storage_config: FeatureConfig):
     """
     Migrate a tablet from one node to another, and while in some migration
     cleanup stage, either before or after the tablet is cleaned, restart the
@@ -639,13 +666,15 @@ async def test_restart_leaving_replica_during_cleanup(manager: ScyllaClusterMana
     """
     stage, injection = migration_stage_and_injection
 
-    cfg = { 'tablet_load_stats_refresh_interval_in_seconds': 1 }
+    cfg = storage_config.get_cluster_cfg({'tablet_load_stats_refresh_interval_in_seconds': 1})
     servers = await manager.servers_add(2, config=cfg)
 
     await manager.disable_tablet_balancing()
 
     cql = manager.get_cql()
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}") as ks:
+    keyspace_opts = storage_config.get_keyspace_opts(
+        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}")
+    async with new_test_keyspace(manager, keyspace_opts) as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH tablets = {{'min_tablet_count': 8}};")
 
         total_keys = 10
@@ -711,15 +740,21 @@ async def test_restart_leaving_replica_during_cleanup(manager: ScyllaClusterMana
     FeatureConfigurations.STRONG_CONSISTENCY, FeatureConfigurations.LOGSTOR_EVENTUAL_CONSISTENCY,
     FeatureConfigurations.LOGSTOR_STRONG_CONSISTENCY))
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_restart_in_cleanup_stage_after_cleanup(manager: ScyllaClusterManager, feature_config: FeatureConfig):
+@pytest.mark.skip_storage('s3', 'gs',
+                          reason='SIGKILL can race with the registry update that follows an object '
+                                 'deletion, so a restart hits a 404 on an object the registry still '
+                                 'lists; needs deeper investigation')
+async def test_restart_in_cleanup_stage_after_cleanup(manager: ScyllaClusterManager, feature_config: FeatureConfig,
+                                                      storage_config: FeatureConfig):
     """
     Migrate a tablet from one node to another, and restart the leaving replica during
     the tablet cleanup stage, after tablet cleanup is completed.
     Reproduces issue #24857
     """
-    keyspace_opts = feature_config.get_keyspace_opts(
-        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}")
-    cfg = feature_config.get_cluster_cfg({'tablet_load_stats_refresh_interval_in_seconds': 1})
+    keyspace_opts = storage_config.get_keyspace_opts(feature_config.get_keyspace_opts(
+        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}"))
+    cfg = storage_config.get_cluster_cfg(
+        feature_config.get_cluster_cfg({'tablet_load_stats_refresh_interval_in_seconds': 1}))
 
     servers = await manager.servers_add(2, config=cfg)
 

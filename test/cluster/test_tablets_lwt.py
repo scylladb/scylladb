@@ -12,7 +12,7 @@ from cassandra.protocol import InvalidRequest, WriteTimeout
 from cassandra import Unauthorized
 
 from test.cluster.lwt.lwt_common import wait_for_tablet_count
-from test.cluster.util import new_test_keyspace, unique_name, reconnect_driver
+from test.cluster.util import new_test_keyspace, unique_name, reconnect_driver, FeatureConfig
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for_cql_and_get_hosts
 from test.pylib.internal_types import ServerInfo
@@ -44,12 +44,14 @@ async def inject_error_one_shot_on(manager, error_name, servers):
     await asyncio.gather(*errs)
 
 
-async def test_lwt(manager: ScyllaClusterManager):
+async def test_lwt(manager: ScyllaClusterManager,
+                   storage_config: FeatureConfig):
     logger.info("Bootstrapping cluster")
     cmdline = [
         '--logger-log-level', 'paxos=trace'
     ]
-    servers = await manager.servers_add(3, cmdline=cmdline, auto_rack_dc='my_dc')
+    cfg = storage_config.get_cluster_cfg({})
+    servers = await manager.servers_add(3, config=cfg, cmdline=cmdline, auto_rack_dc='my_dc')
     cql = manager.get_cql()
     hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
     quorum = len(hosts) // 2 + 1
@@ -58,7 +60,9 @@ async def test_lwt(manager: ScyllaClusterManager):
 
     # We use capital letters to check that the proper quotes are used in paxos store queries.
     ks = unique_name() + '_Test'
-    await cql.run_async(f"CREATE KEYSPACE IF NOT EXISTS \"{ks}\" WITH replication={{'class': 'NetworkTopologyStrategy', 'replication_factor': 3}} AND tablets={{'initial': 1}}")
+    await cql.run_async(storage_config.get_keyspace_opts(
+        f"CREATE KEYSPACE IF NOT EXISTS \"{ks}\" WITH replication="
+        f"{{'class': 'NetworkTopologyStrategy', 'replication_factor': 3}} AND tablets={{'initial': 1}}"))
 
     async def check_paxos_state_table(exists: bool, replicas: int):
         async def query_host(h: Host):
@@ -106,7 +110,7 @@ async def test_lwt(manager: ScyllaClusterManager):
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_lwt_during_migration(manager: ScyllaClusterManager):
+async def test_lwt_during_migration(manager: ScyllaClusterManager, storage_config: FeatureConfig):
     # Scenario:
     # 1. A cluster with three nodes, a table with one tablet and RF=2
     # 2. Run the tablet migration and suspend it during streaming
@@ -119,7 +123,8 @@ async def test_lwt_during_migration(manager: ScyllaClusterManager):
         '--logger-log-level', 'paxos=trace',
         '--smp', '2'
     ]
-    servers = await manager.servers_add(3, cmdline=cmdline, property_file=[
+    cfg = storage_config.get_cluster_cfg({})
+    servers = await manager.servers_add(3, config=cfg, cmdline=cmdline, property_file=[
         {'dc': 'my_dc', 'rack': 'r1'},
         {'dc': 'my_dc', 'rack': 'r2'},
         {'dc': 'my_dc', 'rack': 'r1'}
@@ -130,7 +135,9 @@ async def test_lwt_during_migration(manager: ScyllaClusterManager):
     logger.info("Disable tablet balancing")
     await manager.disable_tablet_balancing()
 
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1}") as ks:
+    keyspace_opts = storage_config.get_keyspace_opts(
+        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1}")
+    async with new_test_keyspace(manager, keyspace_opts) as ks:
         logger.info("Create a table")
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
 
@@ -206,7 +213,8 @@ async def test_lwt_during_migration(manager: ScyllaClusterManager):
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_lwt_state_is_preserved_on_tablet_migration(manager: ScyllaClusterManager):
+async def test_lwt_state_is_preserved_on_tablet_migration(manager: ScyllaClusterManager,
+                                                          storage_config: FeatureConfig):
     # Scenario:
     # 1. Cells c1 and c2 of some partition are not set.
     # 2. An LWT on {n1, n2} writes 1 to c1, stores accepts on {n1, n2} and learn on n1.
@@ -227,7 +235,8 @@ async def test_lwt_state_is_preserved_on_tablet_migration(manager: ScyllaCluster
     cmdline = [
         '--logger-log-level', 'paxos=trace'
     ]
-    servers = await manager.servers_add(3, cmdline=cmdline, auto_rack_dc='my_dc')
+    cfg = storage_config.get_cluster_cfg({})
+    servers = await manager.servers_add(3, config=cfg, cmdline=cmdline, auto_rack_dc='my_dc')
     cql = manager.get_cql()
 
     async def set_injection(set_to: list[ServerInfo], injection: str):
@@ -244,7 +253,9 @@ async def test_lwt_state_is_preserved_on_tablet_migration(manager: ScyllaCluster
     await manager.disable_tablet_balancing()
 
     logger.info("Create a keyspace")
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1}") as ks:
+    keyspace_opts = storage_config.get_keyspace_opts(
+        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1}")
+    async with new_test_keyspace(manager, keyspace_opts) as ks:
         logger.info("Create a table")
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c1 int, c2 int);")
 
@@ -263,7 +274,7 @@ async def test_lwt_state_is_preserved_on_tablet_migration(manager: ScyllaCluster
         await cql.run_async(lwt1, host=hosts[0])
 
         # Step3: start n4, migrate the single table tablet from n2 to n4.
-        servers += [await manager.server_add(cmdline=cmdline, property_file={'dc': 'my_dc', 'rack': 'rack2'})]
+        servers += [await manager.server_add(config=cfg, cmdline=cmdline, property_file={'dc': 'my_dc', 'rack': 'rack2'})]
         n4_host_id = await manager.get_host_id(servers[3].server_id)
         logger.info("Migrating the tablet from n2 to n4")
         n2_host_id = await manager.get_host_id(servers[1].server_id)
@@ -327,7 +338,8 @@ async def test_no_lwt_with_tablets_feature(manager: ScyllaClusterManager):
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_lwt_state_is_preserved_on_tablet_rebuild(manager: ScyllaClusterManager):
+async def test_lwt_state_is_preserved_on_tablet_rebuild(manager: ScyllaClusterManager,
+                                                        storage_config: FeatureConfig):
     # Scenario:
     # 1. A cluster with 3 nodes, rf=3.
     # 2. A successful LWT(c := 1) with cl_learn = 1 comes, stores accepts on n1 and n2, learn -- only on n1.
@@ -341,7 +353,8 @@ async def test_lwt_state_is_preserved_on_tablet_rebuild(manager: ScyllaClusterMa
     cmdline = [
         '--logger-log-level', 'paxos=trace'
     ]
-    servers = await manager.servers_add(3, cmdline=cmdline, auto_rack_dc='my_dc')
+    cfg = storage_config.get_cluster_cfg({})
+    servers = await manager.servers_add(3, config=cfg, cmdline=cmdline, auto_rack_dc='my_dc')
     cql = manager.get_cql()
 
     logger.info("Resolve hosts")
@@ -351,7 +364,9 @@ async def test_lwt_state_is_preserved_on_tablet_rebuild(manager: ScyllaClusterMa
     await manager.disable_tablet_balancing()
 
     logger.info("Create a keyspace")
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1}") as ks:
+    keyspace_opts = storage_config.get_keyspace_opts(
+        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1}")
+    async with new_test_keyspace(manager, keyspace_opts) as ks:
         logger.info("Create a table")
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
 
@@ -388,6 +403,7 @@ async def test_lwt_state_is_preserved_on_tablet_rebuild(manager: ScyllaClusterMa
             wait_dead=True
         )
         servers += [await manager.server_add(replace_cfg=replace_cfg,
+                                             config=cfg,
                                              cmdline=cmdline,
                                              property_file={'dc': 'my_dc', 'rack': 'rack1'})]
         # Check we've actually run rebuild
@@ -454,7 +470,8 @@ async def test_lwt_concurrent_base_table_recreation(manager: ScyllaClusterManage
 
 @pytest.mark.skip_mode(mode='debug', reason='aarch64/debug is unpredictably slow', platform_key='aarch64')
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_lwt_timeout_while_creating_paxos_state_table(manager: ScyllaClusterManager, build_mode):
+async def test_lwt_timeout_while_creating_paxos_state_table(manager: ScyllaClusterManager, build_mode,
+                                                            storage_config: FeatureConfig):
     timeout = 10000 if build_mode == 'debug' else 1000
     config = {
         'write_request_timeout_in_ms': timeout,
@@ -467,11 +484,13 @@ async def test_lwt_timeout_while_creating_paxos_state_table(manager: ScyllaClust
     }
 
     logger.info("Bootstrap a cluster with three nodes")
-    servers = await manager.servers_add(3, config=config)
+    servers = await manager.servers_add(3, config=storage_config.get_cluster_cfg(config))
     cql = manager.get_cql()
 
     logger.info("Create a keyspace")
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
+    keyspace_opts = storage_config.get_keyspace_opts(
+        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}")
+    async with new_test_keyspace(manager, keyspace_opts) as ks:
         logger.info(f"Create table {ks}.test")
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
 
@@ -581,7 +600,7 @@ async def test_paxos_state_table_permissions(manager: ScyllaClusterManager):
         cql = manager.get_cql()
 
 
-async def test_lwt_coordinator_shard(manager: ScyllaClusterManager):
+async def test_lwt_coordinator_shard(manager: ScyllaClusterManager, storage_config: FeatureConfig):
     # The test checks that an LWT coordinator runs on a replica shard, and not on a 'default' (zero) shard.
     # Scenario:
     # 1. Start a cluster with one node with --smp 2
@@ -597,14 +616,17 @@ async def test_lwt_coordinator_shard(manager: ScyllaClusterManager):
         '--logger-log-level', 'paxos=trace',
         '--smp', '2'
     ]
-    servers = [await manager.server_add(cmdline=cmdline)]
+    cfg = storage_config.get_cluster_cfg({})
+    servers = [await manager.server_add(config=cfg, cmdline=cmdline)]
     cql = manager.get_cql()
 
     logger.info("Disable tablet balancing")
     await manager.disable_tablet_balancing()
 
     logger.info("Create a keyspace")
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
+    keyspace_opts = storage_config.get_keyspace_opts(
+        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}")
+    async with new_test_keyspace(manager, keyspace_opts) as ks:
         logger.info("Create a table")
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
 
@@ -619,7 +641,7 @@ async def test_lwt_coordinator_shard(manager: ScyllaClusterManager):
                                       *(n1_host_id, 1), tablet.last_token)
 
         logger.info("Starting a second node")
-        servers += [await manager.server_add(cmdline=cmdline)]
+        servers += [await manager.server_add(config=cfg, cmdline=cmdline)]
 
         logger.info("Wait for cql and get hosts")
         hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
@@ -635,7 +657,8 @@ async def test_lwt_coordinator_shard(manager: ScyllaClusterManager):
 
 @pytest.mark.skip_mode(mode='debug', reason='dev is enought: the test checks non-critical functionality')
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_error_message_for_timeout_due_to_write_uncertainty(manager: ScyllaClusterManager):
+async def test_error_message_for_timeout_due_to_write_uncertainty(manager: ScyllaClusterManager,
+                                                                  storage_config: FeatureConfig):
     # LWT can sometimes return WriteTimeout when it is uncertain whether the transaction
     # was applied. In this case, the user should retry the transaction.
     #
@@ -656,11 +679,14 @@ async def test_error_message_for_timeout_due_to_write_uncertainty(manager: Scyll
     cmdline = [
         '--logger-log-level', 'paxos=trace'
     ]
-    servers = await manager.servers_add(3, cmdline=cmdline, auto_rack_dc="mydc")
+    cfg = storage_config.get_cluster_cfg({})
+    servers = await manager.servers_add(3, config=cfg, cmdline=cmdline, auto_rack_dc="mydc")
     (cql, hosts) = await manager.get_ready_cql(servers)
 
     logger.info("Create a keyspace")
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1}") as ks:
+    keyspace_opts = storage_config.get_keyspace_opts(
+        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1}")
+    async with new_test_keyspace(manager, keyspace_opts) as ks:
         logger.info("Create a table")
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
 
@@ -695,7 +721,8 @@ async def test_error_message_for_timeout_due_to_write_uncertainty(manager: Scyll
 
 @pytest.mark.skip_mode(mode='debug', reason='dev is enought')
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_no_uncertainty_for_reads(manager: ScyllaClusterManager):
+async def test_no_uncertainty_for_reads(manager: ScyllaClusterManager,
+                                        storage_config: FeatureConfig):
     # This test verifies that LWT reads do not produce 'uncertainty' timeouts.
     #
     # The scenario is similar to the write-uncertainty test:
@@ -714,11 +741,14 @@ async def test_no_uncertainty_for_reads(manager: ScyllaClusterManager):
     cmdline = [
         '--logger-log-level', 'paxos=trace'
     ]
-    servers = await manager.servers_add(3, cmdline=cmdline, auto_rack_dc="mydc")
+    cfg = storage_config.get_cluster_cfg({})
+    servers = await manager.servers_add(3, config=cfg, cmdline=cmdline, auto_rack_dc="mydc")
     (cql, hosts) = await manager.get_ready_cql(servers)
 
     logger.info("Create a keyspace")
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1}") as ks:
+    keyspace_opts = storage_config.get_keyspace_opts(
+        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1}")
+    async with new_test_keyspace(manager, keyspace_opts) as ks:
         logger.info("Create a table")
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
 
@@ -755,7 +785,8 @@ async def test_no_uncertainty_for_reads(manager: ScyllaClusterManager):
         assert row.c == 2
 
 
-async def test_lwts_for_special_tables(manager: ScyllaClusterManager):
+async def test_lwts_for_special_tables(manager: ScyllaClusterManager,
+                                       storage_config: FeatureConfig):
     """
     SELECT commands with SERIAL consistency level are historically allowed for vnode-based views,
     even though they don't provide linearizability guarantees. We prohibit LWTs for tablet-based views,
@@ -765,9 +796,12 @@ async def test_lwts_for_special_tables(manager: ScyllaClusterManager):
     cmdline = [
         '--logger-log-level', 'paxos=trace'
     ]
-    await manager.servers_add(1, cmdline=cmdline)
+    cfg = storage_config.get_cluster_cfg({})
+    await manager.servers_add(1, config=cfg, cmdline=cmdline)
     cql = manager.get_cql()
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1 } AND tablets = {'initial': 1}") as ks:
+    keyspace_opts = storage_config.get_keyspace_opts(
+        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1 } AND tablets = {'initial': 1}")
+    async with new_test_keyspace(manager, keyspace_opts) as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int, c int, v int, PRIMARY KEY(pk, c)) WITH cdc = {{'enabled': true}}")
         await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.tv AS SELECT * FROM {ks}.test WHERE pk IS NOT NULL AND c IS NOT NULL PRIMARY KEY (pk, c)")
 
@@ -782,7 +816,11 @@ async def test_lwts_for_special_tables(manager: ScyllaClusterManager):
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_lwt_shutdown(manager: ScyllaClusterManager):
+@pytest.mark.skip_storage('s3', 'gs',
+                          reason='a node aborts during shutdown (exit code -6) on object storage, '
+                                 'intermittently on either backend; deeper investigation is needed')
+async def test_lwt_shutdown(manager: ScyllaClusterManager,
+                            storage_config: FeatureConfig):
     """
     This is a regression test for #26355:
     * Start a cluster with two nodes (s0, s1) and a tablet-based table.
@@ -800,12 +838,15 @@ async def test_lwt_shutdown(manager: ScyllaClusterManager):
     cmdline = [
         '--logger-log-level', 'paxos=trace'
     ]
-    [s0, s1] = await manager.servers_add(2, cmdline=cmdline, property_file=[
+    cfg = storage_config.get_cluster_cfg({})
+    [s0, s1] = await manager.servers_add(2, config=cfg, cmdline=cmdline, property_file=[
         {'dc': 'my_dc', 'rack': 'r1'},
         {'dc': 'my_dc', 'rack': 'r2'}
     ])
     (cql, [h0, _]) = await manager.get_ready_cql([s0, s1])
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1}") as ks:
+    keyspace_opts = storage_config.get_keyspace_opts(
+        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1}")
+    async with new_test_keyspace(manager, keyspace_opts) as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v int)")
 
         logger.info(f"Enable 'paxos_state_learn_after_mutate' injection on {s0.ip_addr}")
@@ -861,7 +902,8 @@ async def test_lwt_shutdown(manager: ScyllaClusterManager):
 
 @pytest.mark.skip_mode(mode='debug', reason='dev is enough')
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_tablets_merge_waits_for_lwt(manager: ScyllaClusterManager, scale_timeout):
+async def test_tablets_merge_waits_for_lwt(manager: ScyllaClusterManager, scale_timeout,
+                                           storage_config: FeatureConfig):
     """
     This is a regression test for #26437 and SCYLLADB-1524:
     1. A cluster with one node, a table with rf=1 and two tablets on the same shard.
@@ -878,10 +920,10 @@ async def test_tablets_merge_waits_for_lwt(manager: ScyllaClusterManager, scale_
         '--logger-log-level', 'load_balancer=debug',
         '--logger-log-level', 'tablets=debug'
     ]
-    config = {
+    config = storage_config.get_cluster_cfg({
         # to force faster tablet balancer reactions
         'tablet_load_stats_refresh_interval_in_seconds': 1
-    }
+    })
     s0 = await manager.server_add(cmdline=cmdline,
                                   config=config,
                                   property_file={'dc': 'dc1', 'rack': 'r1'})
@@ -892,7 +934,9 @@ async def test_tablets_merge_waits_for_lwt(manager: ScyllaClusterManager, scale_
     await manager.api.enable_injection(s0.ip_addr, "tablet_migration_bypass", one_shot=False)
 
     logger.info("Create a keyspace")
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}") as ks:
+    keyspace_opts = storage_config.get_keyspace_opts(
+        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}")
+    async with new_test_keyspace(manager, keyspace_opts) as ks:
         logger.info("Create a table")
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
 
@@ -956,7 +1000,8 @@ async def test_tablets_merge_waits_for_lwt(manager: ScyllaClusterManager, scale_
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_column_mapping_migrated_with_tablet(manager: ScyllaClusterManager):
+async def test_column_mapping_migrated_with_tablet(manager: ScyllaClusterManager,
+                                                   storage_config: FeatureConfig):
     """Reproducer for CUSTOMER-509: after tablet migration, the destination node
     must hold column mappings for schema versions referenced in the migrated
     $paxos state.
@@ -995,12 +1040,15 @@ async def test_column_mapping_migrated_with_tablet(manager: ScyllaClusterManager
     """
     logger.info("Start node n1")
     cmdline = ['--logger-log-level', 'paxos=trace']
-    servers = [await manager.server_add(cmdline=cmdline)]
+    cfg = storage_config.get_cluster_cfg({})
+    servers = [await manager.server_add(config=cfg, cmdline=cmdline)]
     cql = manager.get_cql()
     logger.info("Disable tablet balancing")
     await manager.disable_tablet_balancing()
     logger.info("Create keyspace with rf=1 and a single tablet")
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
+    keyspace_opts = storage_config.get_keyspace_opts(
+        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}")
+    async with new_test_keyspace(manager, keyspace_opts) as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v int);")
 
         # ──────────────────────────────────────────────────────────────────────
@@ -1022,7 +1070,7 @@ async def test_column_mapping_migrated_with_tablet(manager: ScyllaClusterManager
 
         # Step 3: Add node n2. It bootstraps from group0 snapshot and only stores mapping(V2).
         logger.info("Add node n2")
-        servers += [await manager.server_add(cmdline=cmdline)]
+        servers += [await manager.server_add(config=cfg, cmdline=cmdline)]
         hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
 
         # Step 4: Migrate the tablet from n1 to n2, pausing after streaming but
@@ -1098,7 +1146,7 @@ async def test_column_mapping_migrated_with_tablet(manager: ScyllaClusterManager
 
         # Step 9: Add node n3. It bootstraps and only stores mapping(V3).
         logger.info("Add node n3")
-        servers += [await manager.server_add(cmdline=cmdline)]
+        servers += [await manager.server_add(config=cfg, cmdline=cmdline)]
         hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
 
         # Step 10: Migrate tablet n2 -> n3. The streaming fetch must copy
