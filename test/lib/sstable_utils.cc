@@ -77,14 +77,30 @@ future<sstables::shared_sstable> make_sstable_containing(sstables::shared_sstabl
 
         // validate the sstable
         auto rd = sst->as_mutation_source().make_mutation_reader(s, sem.make_tracking_only_permit(nullptr, "test", db::no_timeout, {}));
-        for (auto&& m : merged) {
-            auto mo = co_await read_mutation_from_mutation_reader(rd);
-            BOOST_REQUIRE(mo);
-            assert_that(*mo).is_equal_to_compacted(m);
-            co_await coroutine::maybe_yield();
+        // The comparison below fails by *throwing* -- BOOST_REQUIRE and BOOST_FAIL both abort that
+        // way -- and until 2026-08-21 that exception unwound straight past `rd.close()`. The reader's
+        // permit was then destroyed unclosed, which seastar treats as fatal, so every validation
+        // mismatch killed the process with "permit ... was not closed before destruction" on top of
+        // a hundred-line backtrace, burying the assertion that had actually failed and stopping the
+        // test case at the first failing fixture. Closing on the exception path instead lets the
+        // mismatch propagate as an ordinary Boost failure, which is what a caller iterating over
+        // fixtures needs in order to report *which* of them failed rather than only the first.
+        std::exception_ptr ex;
+        try {
+            for (auto&& m : merged) {
+                auto mo = co_await read_mutation_from_mutation_reader(rd);
+                BOOST_REQUIRE(mo);
+                assert_that(*mo).is_equal_to_compacted(m);
+                co_await coroutine::maybe_yield();
+            }
+        } catch (...) {
+            ex = std::current_exception();
         }
         co_await rd.close();
         co_await sem.stop();
+        if (ex) {
+            std::rethrow_exception(ex);
+        }
     }
     co_return sst;
 }

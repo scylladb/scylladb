@@ -160,6 +160,7 @@ public:
     gms::feature tablet_options { *this, "TABLET_OPTIONS"sv };
     gms::feature tablet_load_stats_v2 { *this, "TABLET_LOAD_STATS_V2"sv };
     gms::feature sstable_compression_dicts { *this, "SSTABLE_COMPRESSION_DICTS"sv };
+    gms::feature parquet_sstable_format { *this, "PARQUET_SSTABLE_FORMAT"sv };
     gms::feature repair_based_tablet_rebuild { *this, "REPAIR_BASED_TABLET_REBUILD"sv };
     gms::feature enforced_raft_rpc_scheduling_group { *this, "ENFORCED_RAFT_RPC_SCHEDULING_GROUP"sv };
     gms::feature load_and_stream_abort_rpc_message { *this, "LOAD_AND_STREAM_ABORT_RPC_MESSAGE"sv };

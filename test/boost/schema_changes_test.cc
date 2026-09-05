@@ -91,3 +91,34 @@ SEASTAR_TEST_CASE(test_schema_changes_ms) {
 SEASTAR_TEST_CASE(test_schema_changes_mt) {
     return test_schema_changes_int(sstable_version_types::mt);
 }
+
+// Changing only a parquet option must change both schema equality and the digest.
+// user_properties::operator== and calculate_digest once covered storage_format but
+// not parquet_options, so an options-only ALTER compared equal and hashed the same.
+//
+// Both halves need care to actually reach the code under test, and the first
+// version of this test reached neither: schemas built without an explicit id
+// differ at the _id clause before properties are compared, and the default
+// version mode is a time UUID, which differs on every build whatever the digest
+// does. Hence the shared table_id and with_hash_version().
+SEASTAR_THREAD_TEST_CASE(test_parquet_options_affect_schema_equality_and_digest) {
+    const auto id = table_id(utils::UUID_gen::get_time_UUID());
+    auto make = [&] (const char* rows) {
+        return schema_builder(1, "ks", "parquet_options_digest", id)
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("v", int32_type)
+            .set_storage_format(storage_format_type::parquet)
+            .set_parquet_options({{"rows_per_row_group", rows}})
+            .with_hash_version()
+            .build();
+    };
+    auto s1 = make("5000");
+    auto s2 = make("9000");
+    // The version is the digest here, so this is digest coverage.
+    BOOST_REQUIRE(s1->version() != s2->version());
+
+    // Same id, same (pinned) version: only the options differ, so this is
+    // equality coverage.
+    auto s2_pinned = schema_builder(s2).with_version(s1->version()).build();
+    BOOST_REQUIRE(!(*s1 == *s2_pinned));
+}
