@@ -1394,19 +1394,21 @@ The "ownership" table for non-local SSTables when using object storage (S3/GS).
 Schema:
 ```cql
 CREATE TABLE system.sstables (
-    owner uuid,
+    table_id uuid,
+    node_owner uuid,
     generation timeuuid,
     status text,
     sstable_id uuid,
     state text,
     version text,
     format text,
-    PRIMARY KEY (owner, generation)
+    PRIMARY KEY ((table_id, node_owner), generation)
 ) WITH CLUSTERING ORDER BY (generation ASC);
 ```
 
 **Columns:**
-- `owner`: UUID of the owning table
+- `table_id`: UUID of the owning table
+- `node_owner`: host_id of the node the entry belongs to
 - `generation`: Local SSTable generation identifier (clustering key)
 - `status`: Current lifecycle status of this node's local SSTable entry
 - `sstable_id`: Stable identifier of the SSTable data. For newly created SSTables it is derived from the generation, but it can survive local generation changes such as tablet migration.

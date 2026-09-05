@@ -386,6 +386,17 @@ Object-storage SSTable lifecycle:
 
 The `status` and `state` fields in `system.sstables` describe the local SSTable entry lifecycle. They do not describe a global lifecycle state for the object-storage component set identified by `sstable_id`.
 
+### Restore into object-storage tables
+
+Tablet-aware restore, the `/storage_service/tablets/restore` API, can restore into a table which keeps its SSTables on object storage. The component objects are not downloaded and uploaded again by the node: they stay in the object storage. An object storage copies an object within one endpoint only, so the backup and the table have to use the same endpoint. A restore which names another endpoint is rejected right away.
+
+There are two ways to restore a backup SSTable, and which one is used depends on where its components are:
+
+- If the components are already stored as the objects the table names for the `sstable_id` of the backup SSTable, nothing is copied. This is the case for a backup which uses the managed layout of the bucket, and for a backup of an SSTable this bucket still holds. The restore only creates the `system.sstables` entry and the `refs/nodes/{host_id}/{generation}` reference object of the receiving replica. The reference keeps the components alive for as long as the restored table needs them, whatever happens to the table or the backup they came from. Sharing needs the `SSTABLE_REFERENCE_SHARING` cluster feature.
+- Otherwise the components are copied inside the object storage, into the managed layout of the bucket, under a new `sstable_id` derived from the new generation, the same way a newly written SSTable gets one. A copy cannot keep the `sstable_id` of the backup SSTable, because `sstable_id` is the prefix of the component object names: copies which different replicas make of the same backup SSTable would overwrite each other, and would overwrite the objects of the table the backup was taken from, if it still uses the bucket. The `Scylla.db` component holds the `sstable_id`, so it is written again with the new one instead of being copied.
+
+In both cases the entry is created with the `creating` status, before any object is written, and gets the `sealed` status once the restored SSTable is attached to the table. So a restore which fails or is aborted leaves entries which are not `sealed`. Boot time garbage collection removes them together with the objects they own: a shared reference is dropped, and the components it pointed at stay as long as another reference remains.
+
 ## Downloading, deleting, uploading SSTables
 
 To manually manage sstables on S3, AWS CLI commands can be used, but first it's mandatory to have awscli  
