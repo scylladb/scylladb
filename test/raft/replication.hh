@@ -298,6 +298,31 @@ extern raft::snapshot_id delay_apply_snapshot;
 // sending of a snapshot with that id will be delayed until snapshot_sync is signaled
 extern raft::snapshot_id delay_send_snapshot;
 
+// Lets a test stall the state machine of individual nodes. While a node is
+// blocked its applier fiber is stuck inside state_machine::apply(), so it
+// applies nothing, never takes a snapshot, and therefore never truncates its
+// raft log - which is what a slow state machine looks like to the rest of the
+// cluster.
+class apply_gate {
+    std::unordered_set<raft::server_id> _blocked;
+    seastar::condition_variable _unblocked;
+public:
+    seastar::future<> wait_while_blocked(raft::server_id id) {
+        return _unblocked.wait([this, id] { return !_blocked.contains(id); });
+    }
+    void block(raft::server_id id) {
+        _blocked.insert(id);
+    }
+    void unblock(raft::server_id id) {
+        _blocked.erase(id);
+        _unblocked.broadcast();
+    }
+    bool is_blocked(raft::server_id id) const {
+        return _blocked.contains(id);
+    }
+};
+extern apply_gate sm_apply_gate;
+
 // Test connectivity configuration
 struct rpc_config {
     bool drops = false;
@@ -415,6 +440,7 @@ public:
         _id(id), _apply(std::move(apply)), _apply_entries(apply_entries), _snapshots(snapshots),
         hasher(make_lw_shared<hasher_int>()) {}
     future<> apply(raft::log_entry_ptr_list commands) override {
+        co_await sm_apply_gate.wait_while_blocked(_id);
         auto n = _apply(_id, commands, hasher);
         _seen += n;
         if (n && _seen >= _apply_entries) {
@@ -425,7 +451,7 @@ public:
             _done.set_value();
         }
         tlogger.debug("sm::apply[{}] got {}/{} entries", _id, _seen, _apply_entries);
-        return make_ready_future<>();
+        co_return;
     }
 
     future<raft::snapshot_id> take_snapshot() override {

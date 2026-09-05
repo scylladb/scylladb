@@ -244,6 +244,10 @@ void fsm::become_leader() {
         leader_state().lease_wait_done = leader_state().last_prev_term_idx == index_t{0};
     }
 
+    // A leader bounds its log with log_limiter_semaphore instead, so drop any
+    // outstanding "my log is full" state to avoid prodding a leader spuriously
+    // if we step down later.
+    _log_full_reported = false;
     // a new leader needs to commit at least one entry to make sure that
     // all existing entries in its log are committed as well. Also it should
     // send append entries RPC as soon as possible to establish its leadership
@@ -776,6 +780,14 @@ void fsm::tick_leader() {
             case follower_progress::state::SNAPSHOT:
                 continue;
             }
+            if (progress.log_full) {
+                // Unconditionally, unlike the replication below: the flag is only
+                // refreshed by an append_reply, so a follower which is caught up
+                // on both match_idx and commit_idx would otherwise never be
+                // probed again and the flag would stay stale-true forever.
+                send_throttled_heartbeat(progress);
+                continue;
+            }
             if (progress.match_idx < _log.last_idx() || progress.commit_idx < _commit_idx) {
                 logger.trace("tick[{}]: replicate to {} because match={} < last_idx={} || "
                     "follower commit_idx={} < commit_idx={}",
@@ -955,6 +967,25 @@ void fsm::tick() {
     }
 }
 
+bool fsm::report_log_full() {
+    const bool log_full = log_is_full();
+    if (log_full != _log_full_reported) {
+        _log_full_reported = log_full;
+        if (log_full) {
+            logger.warn("[{}]: in-memory log reached the limit of {} bytes (usage {}), refusing "
+                    "further entries from the leader until a snapshot shrinks it. "
+                    "Committed but not yet applied entries: {}. This means the state machine "
+                    "is applying entries slower than the leader is producing them.",
+                    _tag, _config.max_follower_log_size, _log.memory_usage(),
+                    _commit_idx - _log.get_snapshot().idx);
+        } else {
+            logger.info("[{}]: in-memory log usage is back to {} bytes, accepting entries again",
+                    _tag, _log.memory_usage());
+        }
+    }
+    return log_full;
+}
+
 void fsm::append_entries(server_id from, append_request&& request) {
     logger.trace("append_entries[{}] received ct={}, prev idx={} prev term={} commit idx={}, idx={} num entries={}",
             _tag, request.current_term, request.prev_log_idx, request.prev_log_term,
@@ -974,9 +1005,46 @@ void fsm::append_entries(server_id from, append_request&& request) {
                 _tag, request.prev_log_idx, request.prev_log_term, term);
         // Reply false if log doesn't contain an entry at
         // prevLogIndex whose term matches prevLogTerm (§5.3).
-        send_to(from, append_reply{_current_term, _commit_idx, append_reply::rejected{request.prev_log_idx, _log.last_idx()}, _clock_ok});
+        //
+        // Deliberately not reporting log_full here, even if we are full. This
+        // reply says the leader's picture of our log is wrong, so a fullness flag
+        // computed against that log is not actionable - and we positively want
+        // what it will send next: entries which overwrite our tail. Truncating
+        // them is the only way uncommitted entries can leave our log, since we
+        // can neither apply nor snapshot them away, so telling the leader to stop
+        // would block the one thing that frees us. Indefinitely, at that: we only
+        // report full while our applier is behind, which is exactly when we
+        // cannot snapshot a divergence away either.
+        send_to(from, append_reply{_current_term, _commit_idx,
+                append_reply::rejected{request.prev_log_idx, _log.last_idx()}, _clock_ok,
+                /* log_full = */ false});
         return;
     }
+
+    // Learn what this request says is committed before deciding below whether we
+    // can shrink, rather than deciding against the commit index the previous
+    // request left behind. This is safe for the same reason the call after the
+    // append is: everything up to prev_log_idx matched by term, so by the log
+    // matching property it is identical to the leader's log, and it is at or
+    // below leader_commit_idx. It is also a subset of that call, since
+    // last_new_idx is never below prev_log_idx.
+    advance_commit_idx(std::min(request.leader_commit_idx, request.prev_log_idx));
+
+    // Refusing entries is only safe if our log shrinks on its own. The applier
+    // fiber takes a snapshot once it applies past the snapshot index, and it can
+    // only apply committed entries; max_follower_log_size is above
+    // snapshot_threshold_log_size, so the byte trigger for taking a snapshot is
+    // guaranteed to fire. If nothing is committed beyond the snapshot we cannot
+    // shrink, and refusing would deadlock the group: the leader needs us to
+    // accept entries in order to commit anything at all, in particular the dummy
+    // entry it appends on election, without which maybe_commit() does not
+    // advance the commit index at all. Note that being a zero-sized entry does
+    // not help the dummy here, since it sits above the entries we are refusing
+    // and skipping those would leave a gap in the log.
+    //
+    // This is the same condition log_is_full() reports to the leader, so that
+    // what we tell it agrees with what we actually do.
+    const bool can_shrink = can_shrink_log();
 
     // If there are no entries it means that the leader wants
     // to ensure forward progress. Reply with the last index
@@ -984,14 +1052,22 @@ void fsm::append_entries(server_id from, append_request&& request) {
     index_t last_new_idx = request.prev_log_idx;
 
     if (!request.entries.empty()) {
-        last_new_idx = _log.maybe_append(std::move(request.entries));
+        const index_t appended = _log.maybe_append(std::move(request.entries),
+                _config.max_follower_log_size, !can_shrink);
+        if (appended != index_t{0}) {
+            last_new_idx = appended;
+        }
     }
 
     // Do not advance commit index further than last_new_idx, or we could incorrectly
     // mark outdated entries as committed (see #9965).
     advance_commit_idx(std::min(request.leader_commit_idx, last_new_idx));
 
-    send_to(from, append_reply{_current_term, _commit_idx, append_reply::accepted{last_new_idx}, _clock_ok});
+    // Reported after the append, so that it reflects the state the leader will
+    // be looking at when it decides whether to keep replicating to us.
+    const bool log_full = report_log_full();
+    send_to(from, append_reply{_current_term, _commit_idx,
+            append_reply::accepted{last_new_idx}, _clock_ok, log_full});
 }
 
 void fsm::append_entries_reply(server_id from, append_reply&& reply) {
@@ -1010,6 +1086,33 @@ void fsm::append_entries_reply(server_id from, append_reply&& reply) {
     // Recorded for rejected replies too: a follower that is behind may well
     // catch up, and its clock health is unrelated to log matching.
     progress.clock_ok = reply.clock_ok;
+
+    // Record this before any of the early returns below: the flag gates
+    // can_send_to(), so a stale value would either keep us hammering a full
+    // follower or keep us from resuming once it has room again. In particular
+    // the "looking for a leader" ping below relies on the flag being up to date
+    // by the time it calls replicate_to().
+    //
+    // A rejected reply always carries false (see append_entries()), so this also
+    // un-throttles us whenever the follower tells us our picture of its log is
+    // wrong - which is required, because the retry may be the entry that
+    // truncates its uncommitted tail and frees it. A stray reject therefore
+    // un-throttles us too, since this runs above the is_stray_reject() check;
+    // that costs one discarded batch, strays are rare by design, and the next
+    // accepted reply re-establishes the flag.
+    //
+    // Do not be tempted to also rewind next_idx to last_new_idx + 1 here on the
+    // grounds that accepted() only ever moves it forward. While throttled we
+    // send nothing but the entry-less heartbeat, which append_entries() answers
+    // with accepted{prev_log_idx} - the follower confirms the index we asked
+    // about, not its own tail. So pinning next_idx to whatever the last reply
+    // that arrived happened to say (they are one-way, hence lost and reordered)
+    // would make every later heartbeat ask about that same index, and match_idx
+    // would never move again: the entries above it would be on the follower but
+    // never counted towards a quorum, so never committed, applied or freed.
+    // Left optimistic it self-corrects - the gap makes the follower reject, and
+    // rejected.last_idx gives us its real tail.
+    progress.log_full = reply.log_full;
 
     if (progress.state == follower_progress::state::PIPELINE) {
         if (progress.in_flight) {
@@ -1286,6 +1389,46 @@ void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
     }
 }
 
+void fsm::send_throttled_heartbeat(follower_progress& progress) {
+    SCYLLA_ASSERT(progress.log_full);
+
+    const index_t prev_idx = progress.next_idx - index_t{1};
+    const std::optional<term_t> prev_term = _log.term_for(prev_idx);
+    if (!prev_term) {
+        // The follower is so far behind that the entry preceding next_idx is
+        // already inside our snapshot, so we cannot verify the log matching
+        // property and have to transfer the snapshot instead. replicate_to()
+        // already knows how, so delegate rather than repeat it here.
+        //
+        // Clearing the flag is what lets can_send_to() through, and it is safe:
+        // with term_for(prev_idx) empty, replicate_to() can only take its own
+        // snapshot branch, never send entries. become_snapshot() then blocks any
+        // further sending until the transfer completes, and the transfer
+        // truncates the follower's log, so the flag it reported is stale anyway -
+        // install_snapshot_reply() clears it for the same reason.
+        logger.trace("send_throttled_heartbeat[{}->{}]: next={} is below our snapshot, transferring it",
+                _tag, progress.id, progress.next_idx);
+        progress.log_full = false;
+        replicate_to(progress, true);
+        return;
+    }
+
+    logger.trace("send_throttled_heartbeat[{}->{}]: prev idx={} commit idx={}",
+            _tag, progress.id, prev_idx, _commit_idx);
+
+    // Note that we deliberately do not touch progress.in_flight: replicate_to()
+    // does not count empty requests either. Carrying leader_commit_idx is the
+    // important part - it is what lets a throttled follower commit and apply
+    // everything it already has, take a snapshot and free memory.
+    send_to(progress.id, append_request{
+        .current_term = _current_term,
+        .prev_log_idx = prev_idx,
+        .prev_log_term = *prev_term,
+        .leader_commit_idx = _commit_idx,
+        .entries = log_entry_ptr_list()
+    });
+}
+
 void fsm::replicate() {
     SCYLLA_ASSERT(is_leader());
     for (auto& [id, progress] : leader_state().tracker) {
@@ -1312,6 +1455,11 @@ void fsm::install_snapshot_reply(server_id from, snapshot_reply&& reply) {
     progress.become_probe();
 
     if (reply.success) {
+        // The follower applied the snapshot with no trailing entries, so its log
+        // has just been truncated and most likely has room again. Assume so
+        // rather than waiting a tick to be told: if we guess wrong the very next
+        // append_reply corrects us, at the cost of one discarded request.
+        progress.log_full = false;
         // If snapshot was successfully transferred start replication immediately
         replicate_to(progress, false);
     }
@@ -1352,6 +1500,25 @@ bool fsm::apply_snapshot(snapshot_descriptor snp, size_t max_trailing_entries, s
     if (is_leader()) {
         logger.trace("apply_snapshot[{}]: signal {} available units", _tag, units);
         leader_state().log_limiter_semaphore->signal(units);
+    } else if (_log_full_reported && !log_is_full() && current_leader()) {
+        // We told the leader our log was full, so it stopped replicating to us
+        // and is now only probing us once per tick. Truncating the log just made
+        // room, so prod it instead of waiting for the next probe.
+        //
+        // Reuse the "looking for a leader" message: the leader answers it by
+        // calling replicate_to() straight away (see append_entries_reply), and
+        // since it clears follower_progress::log_full from this very reply,
+        // replication resumes immediately with real entries.
+        //
+        // This is only an optimization - tick_leader() would eventually probe us
+        // anyway - so it is fine that the message may be dropped.
+        logger.trace("apply_snapshot[{}]: log usage is down to {}, asking {} to resume replication",
+                _tag, _log.memory_usage(), current_leader());
+        // Goes through report_log_full() like every other reply, so that the
+        // "accepting entries again" transition is logged exactly once.
+        const bool log_full = report_log_full();
+        send_to(current_leader(), append_reply{_current_term, _commit_idx,
+                append_reply::rejected{index_t{0}, index_t{0}}, _clock_ok, log_full});
     }
     _sm_events.signal();
     return true;

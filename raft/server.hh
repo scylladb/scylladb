@@ -329,6 +329,9 @@ public:
     virtual future<> wait_log_idx_term(std::pair<index_t, term_t> idx_log) = 0;
     virtual std::pair<index_t, term_t> log_last_idx_term() = 0;
     virtual void elapse_election() = 0;
+    // Memory used by the in-memory part of the log, in bytes. Also exported as
+    // the raft_log_memory_usage metric.
+    virtual size_t log_memory_usage() const = 0;
     // Server id of this server
     virtual raft::server_id id() const = 0;
     virtual void set_applier_queue_max_size(size_t queue_max_size) = 0;

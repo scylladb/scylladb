@@ -18,6 +18,8 @@ seastar::semaphore snapshot_sync(0);
 raft::snapshot_id delay_apply_snapshot{utils::UUID(0, 0xdeadbeaf)};
 // sending of a snapshot with that id will be delayed until snapshot_sync is signaled
 raft::snapshot_id delay_send_snapshot{utils::UUID(0xdeadbeaf, 0)};
+// state machines of the nodes registered here stall inside apply()
+apply_gate sm_apply_gate;
 
 std::vector<raft::server_id> to_raft_id_vec(std::vector<node_id> nodes) noexcept {
     std::vector<raft::server_id> ret;

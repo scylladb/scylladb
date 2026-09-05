@@ -74,6 +74,13 @@ void follower_progress::become_snapshot(index_t snp_idx) {
 }
 
 bool follower_progress::can_send_to() {
+    if (log_full) {
+        // The follower would refuse anything we send, so do not waste the
+        // bandwidth. fsm::tick_leader() keeps probing it with empty requests.
+        // Checked before the switch so that PIPELINE's in_flight accounting and
+        // PROBE's probe_sent are left untouched while we are throttled.
+        return false;
+    }
     switch (state) {
     case state::PROBE:
         return !probe_sent;

@@ -527,3 +527,85 @@ SEASTAR_THREAD_TEST_CASE(test_commit_waiter_dropped_before_notifying_above_snaps
     BOOST_CHECK_NO_THROW(fut.get());
 #endif
 }
+
+// A follower whose state machine is slow used to grow its in-memory raft log
+// without bound: it applied nothing, so it never snapshotted, so its log was
+// never truncated, yet the leader kept feeding it entries (fsm::tick_leader
+// hands back one in-flight slot per tick, so ~one append_request per tick got
+// through indefinitely). The follower now refuses to grow its log past
+// max_log_size + snapshot_trailing_size, and tells the leader so, which makes
+// the leader stop replicating to it until it has room again.
+SEASTAR_THREAD_TEST_CASE(test_follower_log_is_bounded_when_apply_is_slow) {
+    const size_t command_size = sizeof(size_t);
+    const size_t max_log_size = 10 * command_size;
+    const size_t snapshot_trailing_size = command_size;
+    // The bound enforced by the follower, see fsm_config::max_follower_log_size.
+    const size_t bound = max_log_size + snapshot_trailing_size;
+
+    test_case test_config {
+        .nodes = 3,
+        .config = std::vector<raft::server::configuration>(3,
+            raft::server::configuration {
+                .snapshot_threshold = 5,
+                .snapshot_threshold_log_size = 5 * command_size,
+                .snapshot_trailing = 1,
+                .snapshot_trailing_size = snapshot_trailing_size,
+                .max_log_size = max_log_size,
+                // Keep add_entry on the node we call it on, so that the test
+                // drives the leader directly.
+                .enable_forwarding = false,
+                .max_command_size = command_size,
+            })
+    };
+    // Must exceed the number of entries added below, or the state machine's
+    // done promise fires early.
+    auto cluster = raft_cluster<std::chrono::steady_clock>{
+        std::move(test_config),
+        ::apply_changes,
+        1000,  // apply_entries
+        0,
+        0, false, tick_delay, rpc_config{}
+    };
+    cluster.start_all().get();
+    auto stop = defer([&cluster] noexcept {
+        // Never leave a blocked state machine behind: stop_all() waits for the
+        // applier fibers.
+        sm_apply_gate.unblock(to_raft_id(1));
+        cluster.stop_all().get();
+    });
+
+    const auto slow_id = to_raft_id(1);
+    auto& slow = cluster.get_server(1);
+
+    // Stall node 1's state machine. Nodes 0 and 2 are still a majority, so the
+    // cluster keeps committing and node 0 keeps trying to replicate to node 1.
+    sm_apply_gate.block(slow_id);
+
+    // Enough entries that the unbounded log would grow well past the bound.
+    const size_t entries = 200;
+    cluster.add_entries(entries, 0).get();
+
+    BOOST_TEST_MESSAGE(fmt::format("slow follower log memory usage: {} (bound {})",
+            slow.log_memory_usage(), bound));
+    // The hatch in fsm::append_entries() is closed here - the slow follower has a
+    // large backlog of committed but unapplied entries, so can_shrink_log() is
+    // true and it refuses strictly at the limit. Were it open, the worst case is
+    // one snapshot_trailing_size higher; do not tighten this to an equality.
+    BOOST_CHECK_LE(slow.log_memory_usage(), bound);
+    // Sanity check that the test actually replicated to the follower rather than
+    // passing trivially because nothing ever reached it. Note we cannot require
+    // a non-empty log here: a follower which falls far enough behind that the
+    // leader truncates past its next_idx gets repaired by a snapshot transfer,
+    // which drops its log entirely.
+    BOOST_CHECK_GT(slow.log_last_idx_term().first, raft::index_t{0});
+
+    // The leader is unaffected and stays within its own limit.
+    BOOST_CHECK_LE(cluster.get_server(0).log_memory_usage(), max_log_size);
+
+    // Once the state machine unblocks, the follower drains its log, snapshots,
+    // tells the leader it has room, and catches up.
+    sm_apply_gate.unblock(slow_id);
+    cluster.wait_log_all().get();
+    slow.read_barrier(nullptr).get();
+    BOOST_CHECK_LE(slow.log_memory_usage(), bound);
+}
