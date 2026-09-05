@@ -2178,6 +2178,52 @@ def semicolon_separated(*flags):
     f = ' '.join(flags)
     return re.sub(' +', ';', f)
 
+def ninja_escape_path(path):
+    return path.replace('$', '$$').replace(' ', '$ ').replace(':', '$:')
+
+
+def ninja_unescape_path(path):
+    return re.sub(r'\$(.)', r'\1', path)
+
+
+def cmake_input_files(cmake_build_dir):
+    """List the files cmake read when generating cmake_build_dir/build.ninja.
+
+    A submodule's own build.ninja knows how to re-run cmake when its
+    configuration changes, but scylla's build.ninja embeds settings queried
+    from that configuration (the flags in seastar.pc, for instance), so
+    configure.py has to re-run as well. cmake records the full list of inputs
+    in the edge which regenerates the submodule's build.ninja; reuse it
+    instead of guessing which files make up the configuration.
+    """
+    build_ninja = os.path.join(cmake_build_dir, 'build.ninja')
+    inputs = []
+    try:
+        with open(build_ninja) as f:
+            for line in f:
+                if not line.startswith('build '):
+                    continue
+                parts = line.rstrip('\n').split(': RERUN_CMAKE | ', 1)
+                if len(parts) != 2:
+                    continue
+                for dep in re.split(r'(?<!\$) ', parts[1]):
+                    if not dep or dep.startswith('|'):
+                        continue
+                    dep = ninja_unescape_path(dep)
+                    if not os.path.isabs(dep):
+                        # deps are relative to the cmake build directory
+                        dep = os.path.join(cmake_build_dir, dep)
+                    dep = os.path.abspath(dep)
+                    # keep in-tree files relative, like the rest of build.ninja
+                    if dep.startswith(curdir + os.sep):
+                        dep = os.path.relpath(dep, curdir)
+                    inputs.append(dep)
+                break
+    except FileNotFoundError:
+        pass
+    return inputs
+
+
 def real_relpath(path, start):
     return os.path.relpath(os.path.realpath(path), os.path.realpath(start))
 
@@ -3098,12 +3144,21 @@ def write_build_file(f,
         build_ninja_files += [f'{outdir}/{mode}/seastar/build.ninja']
         build_ninja_files += [f'{outdir}/{mode}/abseil/build.ninja']
 
+    # Re-run configure.py (and with it, cmake) whenever the cmake
+    # configuration of a submodule changes.
+    cmake_deps = [f'{args.seastar_path}/CMakeLists.txt']
+    for mode in build_modes:
+        for submodule in ['seastar', 'abseil']:
+            cmake_deps += cmake_input_files(f'{outdir}/{mode}/{submodule}')
+    cmake_deps = sorted(set(ninja_escape_path(dep) for dep in cmake_deps))
+    cmake_deps_list = ' '.join(cmake_deps)
+
     f.write(textwrap.dedent('''\
         rule configure
           command = ./configure.py --out={buildfile_final_name}.new --out-final-name={buildfile_final_name} $configure_args && mv {buildfile_final_name}.new {buildfile_final_name}
           generator = 1
           description = CONFIGURE $configure_args
-        build {buildfile_final_name} {build_ninja_list}: configure | configure.py SCYLLA-VERSION-GEN $builddir/SCYLLA-PRODUCT-FILE $builddir/SCYLLA-VERSION-FILE $builddir/SCYLLA-RELEASE-FILE {args.seastar_path}/CMakeLists.txt
+        build {buildfile_final_name} {build_ninja_list}: configure | configure.py SCYLLA-VERSION-GEN $builddir/SCYLLA-PRODUCT-FILE $builddir/SCYLLA-VERSION-FILE $builddir/SCYLLA-RELEASE-FILE {cmake_deps_list}
         rule cscope
             command = find -name '*.[chS]' -o -name "*.cc" -o -name "*.hh" | cscope -bq -i-
             description = CSCOPE
@@ -3112,12 +3167,15 @@ def write_build_file(f,
             command = rm -rf build
             description = CLEAN
         build clean: clean
+        # A missing cmake input file is not an error: the submodule
+        # configuration changed, and re-running configure.py picks that up.
+        build {cmake_deps_list}: phony
         rule mode_list
             command = echo {modes_list}
             description = List configured modes
         build mode_list: mode_list
         default {modes_list}
-        ''').format(modes_list=' '.join(default_modes), build_ninja_list=" ".join(build_ninja_files), **globals()))
+        ''').format(modes_list=' '.join(default_modes), build_ninja_list=" ".join(build_ninja_files), cmake_deps_list=cmake_deps_list, **globals()))
     unit_test_list = set(test for test in build_artifacts if test in set(tests))
     f.write(textwrap.dedent('''\
         rule unit_test_list
