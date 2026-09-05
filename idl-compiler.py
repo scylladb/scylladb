@@ -1485,12 +1485,20 @@ def add_view(cout, cls):
 
         if is_vector(m.type):
             elem_type = element_type(m.type)
+            # A versioned member is absent from a stream written by a version
+            # which did not have it, so reading its count would run off the
+            # end. An empty vector_deserializer stands in for it, the way the
+            # default value does for the members below.
+            if m.attribute:
+                vector_deser = f"(in.size()>0) ? vector_deserializer<{elem_type}>(in) : vector_deserializer<{elem_type}>()"
+            else:
+                vector_deser = f"vector_deserializer<{elem_type}>(in)"
             fprintln(cout, reindent(4, """
                 auto {name}() const {{
                   return seastar::with_serialized_stream(v, [] (auto& v) {{
                    auto in = v;
                    {skip}
-                   return vector_deserializer<{elem_type}>(in);
+                   return {vector_deser};
                   }});
                 }}
             """).format(f=DESERIALIZER, **locals()))

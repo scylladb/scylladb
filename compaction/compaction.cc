@@ -382,6 +382,15 @@ struct compaction_writer {
 class compacted_fragments_writer {
     compaction& _c;
     std::optional<compaction_writer> _compaction_writer = {};
+    // Token range tombstones delete whole partitions, so every sstable this
+    // produces needs them, and they arrive before any partition, when no writer
+    // has been created yet. Kept here and written into each writer as it is
+    // created; a split produces several, and one which lost them would bring
+    // back everything they delete.
+    token_range_tombstone_list _token_range_tombstones;
+    // They all precede the first partition, so by the time any is written the
+    // list is complete and the purge below runs exactly once.
+    bool _token_range_tombstones_purged = false;
     using creator_func_t = std::function<compaction_writer(const dht::decorated_key&)>;
     using stop_func_t = std::function<void(compaction_writer*)>;
     creator_func_t _create_compaction_writer;
@@ -414,6 +423,8 @@ private:
     bool can_split_large_partition() const;
     void track_last_position(position_in_partition_view pos);
     void split_large_partition();
+    const token_range_tombstone_list& token_range_tombstones_to_write();
+    void maybe_create_compaction_writer(const dht::decorated_key& dk);
     void do_consume_new_partition(const dht::decorated_key& dk);
     stop_iteration do_consume_end_of_partition();
 public:
@@ -447,6 +458,7 @@ public:
         return consume(std::move(cr), row_tombstone{}, bool{});
     }
     stop_iteration consume(range_tombstone_change&& rtc);
+    stop_iteration consume(token_range_tombstone&& trt);
 
     stop_iteration consume_end_of_partition();
     void consume_end_of_stream();
@@ -625,8 +637,8 @@ private:
         auto non_owned_ranges = sstables
                 | std::views::transform([] (const sstables::shared_sstable& sst) {
             seastar::thread::maybe_yield();
-            return dht::partition_range::make({sst->get_first_decorated_key(), true},
-                                              {sst->get_last_decorated_key(), true});
+            return dht::partition_range::make({sst->get_first_ring_position(), true},
+                                              {sst->get_last_ring_position(), true});
         })      | std::ranges::to<utils::chunked_vector<dht::partition_range>>();
 
         return dht::subtract_ranges(*_schema, std::move(non_owned_ranges), std::move(owned_ranges)).get();
@@ -732,6 +744,80 @@ protected:
     // If it's not present, we cannot purge tombstones without the risk of resurrecting data.
     bool tombstone_expiration_enabled() const {
         return bool(_sstable_set) && _table_s.tombstone_gc_enabled();
+    }
+
+    // Drops from `tombstones` those which compaction may forget: a token range
+    // tombstone is purgeable under the same rules as any other tombstone. It
+    // has to have expired -- its deletion time is before the gc_before of every
+    // point in its range, as decided by the tombstone gc mode in force there --
+    // and it has to shadow nothing outside this compaction: no memtable and no
+    // sstable which is not an input may hold data in its range as old as it.
+    // What the inputs hold under it is being dropped right now.
+    void purge_expired_token_range_tombstones(token_range_tombstone_list& tombstones) {
+        if (tombstones.empty() || !tombstone_expiration_enabled()) {
+            return;
+        }
+        auto now = gc_clock::now();
+        auto min_memtable_timestamp = _table_s.skip_memtable_for_tombstone_gc() ? api::max_timestamp : _table_s.min_memtable_timestamp();
+        std::vector<sstables::shared_sstable> others;
+        for (const auto& sst : *_sstable_set->all()) {
+            if (!_compacting_for_max_purgeable_func.contains(sst)) {
+                others.push_back(sst);
+            }
+        }
+        const auto& undeleted = _table_s.compacted_undeleted_sstables();
+        others.insert(others.end(), undeleted.begin(), undeleted.end());
+
+        tombstones.erase_where([&] (const token_range_tombstone& trt) {
+            // (start_exclusive, end_inclusive], with an open end for the ring's.
+            auto range = dht::token_range(
+                    trt.start_exclusive().is_minimum() ? std::nullopt : std::optional(dht::token_range::bound(trt.start_exclusive(), false)),
+                    trt.end_inclusive().is_maximum() ? std::nullopt : std::optional(dht::token_range::bound(trt.end_inclusive(), true)));
+            auto gc_before = _tombstone_gc_state.get_gc_before_for_range(_schema, range, now);
+            if (!gc_before.knows_entire_range || trt.tomb().deletion_time >= gc_before.min_gc_before) {
+                return false;
+            }
+            if (min_memtable_timestamp <= trt.tomb().timestamp) {
+                return false;
+            }
+            auto may_shadow = [&] (const sstables::shared_sstable& sst) {
+                if (sst->get_stats_metadata().min_timestamp > trt.tomb().timestamp) {
+                    return false;
+                }
+                // Overlaps (start_exclusive, end_inclusive]?
+                return sst->get_last_ring_position().token() > trt.start_exclusive()
+                        && sst->get_first_ring_position().token() <= trt.end_inclusive();
+            };
+            if (std::ranges::any_of(others, may_shadow)) {
+                return false;
+            }
+            log_debug("Purging expired token range tombstone {}", trt);
+            return true;
+        });
+    }
+
+    // Whether the output rotates into several sstables by size, forming a run.
+    // The fragments of a run must not overlap, and each has to describe the
+    // exact extent of the partitions it holds so that a read opens only the
+    // fragments it needs. A token range tombstone written into every fragment
+    // would make each claim the tombstone's whole range, so when a run is being
+    // produced the tombstones go into an sstable of their own instead, with a
+    // run of its own.
+    bool tombstones_in_own_sstable() const noexcept {
+        return _max_sstable_size != std::numeric_limits<uint64_t>::max();
+    }
+
+    // The writer for the sstable holding only this compaction's token range
+    // tombstones. See tombstones_in_own_sstable().
+    compaction_writer create_token_range_tombstone_writer() {
+        auto sst = _sstable_creator(this_shard_id());
+        setup_new_sstable(sst);
+
+        auto monitor = std::make_unique<compaction_write_monitor>(sst, _table_s, maximum_timestamp(), _sstable_level);
+        sstables::sstable_writer_config cfg = make_sstable_writer_config(_type);
+        cfg.run_identifier = sstables::run_id::create_random_id();
+        cfg.monitor = monitor.get();
+        return compaction_writer{std::move(monitor), sst->get_writer(*_schema, 1, cfg, get_encoding_stats()), sst};
     }
 
     compaction_writer create_gc_compaction_writer(sstables::run_id gc_run) const {
@@ -859,9 +945,45 @@ private:
         return _tombstone_gc_state;
     }
 
+    // The inputs which a token range tombstone deletes in their entirety: every
+    // partition lies in the tombstone's range and nothing in them is newer than
+    // it. There is no point in reading such an sstable, it is dropped the way a
+    // fully expired one is. The tombstone itself stays -- in the output if it
+    // came from an input, and where it is otherwise -- so nothing this drops
+    // can come back.
+    //
+    // An input carrying tombstones of its own is not a candidate: those have to
+    // reach the output, and reading it is how they get there.
+    std::unordered_set<sstables::shared_sstable> sstables_deleted_by_token_range_tombstones() const {
+        std::unordered_set<sstables::shared_sstable> deleted;
+        if (!tombstone_expiration_enabled()) {
+            return deleted;
+        }
+        const auto& tombstones = _sstable_set->token_range_tombstones();
+        if (tombstones.empty()) {
+            return deleted;
+        }
+        for (auto& sst : _sstables) {
+            if (!sst->has_partitions() || !sst->token_range_tombstones().empty()) {
+                continue;
+            }
+            auto first = sst->get_first_ring_position().token();
+            auto last = sst->get_last_ring_position().token();
+            auto newest = sst->get_stats_metadata().max_timestamp;
+            auto deletes_all_of = [&] (const token_range_tombstone& trt) {
+                return trt.contains(first) && trt.contains(last) && newest <= trt.tomb().timestamp;
+            };
+            if (std::ranges::any_of(tombstones, deletes_all_of)) {
+                deleted.insert(sst);
+            }
+        }
+        return deleted;
+    }
+
     future<> setup() {
         auto ssts = make_lw_shared<sstables::sstable_set>(make_sstable_set_for_input());
         auto fully_expired = _table_s.fully_expired_sstables(_sstables, gc_clock::now());
+        auto deleted_by_token_range_tombstones = sstables_deleted_by_token_range_tombstones();
         min_max_tracker<api::timestamp_type> timestamp_tracker;
 
         double sum_of_estimated_droppable_tombstone_ratio = 0;
@@ -891,6 +1013,11 @@ private:
                 log_debug("Fully expired sstable {} will be dropped on compaction completion", sst->get_filename());
                 continue;
             }
+            if (deleted_by_token_range_tombstones.contains(sst)) {
+                log_debug("Sstable {} is deleted in its entirety by a token range tombstone and will be dropped on compaction completion",
+                        sst->get_filename());
+                continue;
+            }
             _stats_collector.update(sst->get_encoding_stats_for_compaction());
 
             compaction_size += sst->data_size();
@@ -914,11 +1041,12 @@ private:
         }
         log_debug("repaired_at_vec={} output_repaired_at={}", repaired_at_for_compacted_sstables, _output_repaired_at);
         if (ssts->size() < _sstables.size()) {
-            log_debug("{} out of {} input sstables are fully expired sstables that will not be actually compacted",
+            log_debug("{} out of {} input sstables are fully expired or deleted by a token range tombstone and will not be actually compacted",
                       _sstables.size() - ssts->size(), _sstables.size());
         }
         // _estimated_droppable_tombstone_ratio could exceed 1.0 in certain cases, so limit it to 1.0.
-        _estimated_droppable_tombstone_ratio = std::min(1.0, sum_of_estimated_droppable_tombstone_ratio / ssts->size());
+        // Every input may have been dropped above, leaving nothing to read.
+        _estimated_droppable_tombstone_ratio = ssts->size() ? std::min(1.0, sum_of_estimated_droppable_tombstone_ratio / ssts->size()) : 0.0;
 
         _compacting = std::move(ssts);
 
@@ -1205,11 +1333,27 @@ void compacted_fragments_writer::split_large_partition() {
     _current_partition.is_splitting_partition = false;
 }
 
-void compacted_fragments_writer::do_consume_new_partition(const dht::decorated_key& dk) {
-    maybe_abort_compaction();
+const token_range_tombstone_list& compacted_fragments_writer::token_range_tombstones_to_write() {
+    if (!std::exchange(_token_range_tombstones_purged, true)) {
+        _c.purge_expired_token_range_tombstones(_token_range_tombstones);
+    }
+    return _token_range_tombstones;
+}
+
+void compacted_fragments_writer::maybe_create_compaction_writer(const dht::decorated_key& dk) {
     if (!_compaction_writer) {
         _compaction_writer = _create_compaction_writer(dk);
+        if (!_c.tombstones_in_own_sstable()) {
+            for (const auto& trt : token_range_tombstones_to_write()) {
+                _compaction_writer->writer.consume(token_range_tombstone(trt));
+            }
+        }
     }
+}
+
+void compacted_fragments_writer::do_consume_new_partition(const dht::decorated_key& dk) {
+    maybe_abort_compaction();
+    maybe_create_compaction_writer(dk);
 
     _c.on_new_partition();
     _compaction_writer->writer.consume_new_partition(dk);
@@ -1251,6 +1395,14 @@ stop_iteration compacted_fragments_writer::consume(clustering_row&& cr, row_tomb
     return stop_iteration::no;
 }
 
+stop_iteration compacted_fragments_writer::consume(token_range_tombstone&& trt) {
+    maybe_abort_compaction();
+    // No writer exists yet: these precede every partition. Remembered and
+    // written into each writer as it is created.
+    _token_range_tombstones.apply(trt);
+    return stop_iteration::no;
+}
+
 stop_iteration compacted_fragments_writer::consume(range_tombstone_change&& rtc) {
     maybe_abort_compaction();
     _current_partition.current_emitted_tombstone = rtc.tombstone();
@@ -1267,6 +1419,36 @@ stop_iteration compacted_fragments_writer::consume_end_of_partition() {
 }
 
 void compacted_fragments_writer::consume_end_of_stream() {
+    if (_c.tombstones_in_own_sstable()) {
+        if (_compaction_writer) {
+            _stop_compaction_writer(&*_compaction_writer);
+            _compaction_writer = std::nullopt;
+        }
+        if (!token_range_tombstones_to_write().empty()) {
+            // The data went into a run of its own above; the tombstones get an
+            // sstable of their own so that no fragment of the run has to claim
+            // their range. See compaction::tombstones_in_own_sstable().
+            _compaction_writer = _c.create_token_range_tombstone_writer();
+            for (const auto& trt : token_range_tombstones_to_write()) {
+                _compaction_writer->writer.consume(token_range_tombstone(trt));
+            }
+            _stop_compaction_writer(&*_compaction_writer);
+            _compaction_writer = std::nullopt;
+        }
+        return;
+    }
+    if (!_compaction_writer && !token_range_tombstones_to_write().empty()) {
+        // A stream of nothing but token range tombstones still has to produce
+        // an sstable, or the deletion is lost. There is no partition to name
+        // the output after, so a key with no components, decorated with the
+        // first token the tombstones delete, stands in for one where the
+        // writer creator needs a position on the ring. It is never written.
+        const auto& first = *_token_range_tombstones.begin();
+        auto token = first.start_exclusive().is_minimum()
+                ? dht::first_token()
+                : dht::next_token(first.start_exclusive());
+        maybe_create_compaction_writer(dht::decorated_key(std::move(token), partition_key::make_empty()));
+    }
     if (_compaction_writer) {
         _stop_compaction_writer(&*_compaction_writer);
         _compaction_writer = std::nullopt;
@@ -1342,8 +1524,8 @@ private:
         }
         auto permit = seastar::get_units(_replacer_lock, 1).get();
         // Replace exhausted sstable(s), if any, by new one(s) in the column family.
-        auto not_exhausted = [s = _schema, &dk = sst->get_last_decorated_key()] (sstables::shared_sstable& sst) {
-            return sst->get_last_decorated_key().tri_compare(*s, dk) > 0;
+        auto not_exhausted = [s = _schema, last = sst->get_last_ring_position()] (sstables::shared_sstable& sst) {
+            return dht::ring_position_tri_compare(*s, sst->get_last_ring_position(), last) > 0;
         };
         auto exhausted = std::partition(_sstables.begin(), _sstables.end(), not_exhausted);
 
@@ -1381,12 +1563,12 @@ private:
         // all overlapping input sstables have been exhausted.
         auto gc_not_exhausted = [this] (const sstables::shared_sstable& gc_sst) {
             auto gc_range = ::wrapping_interval<dht::token>::make(
-                gc_sst->get_first_decorated_key()._token,
-                gc_sst->get_last_decorated_key()._token);
+                gc_sst->get_first_ring_position().token(),
+                gc_sst->get_last_ring_position().token());
             for (const auto& input_sst : _sstables) {
                 auto input_range = ::wrapping_interval<dht::token>::make(
-                    input_sst->get_first_decorated_key()._token,
-                    input_sst->get_last_decorated_key()._token);
+                    input_sst->get_first_ring_position().token(),
+                    input_sst->get_last_ring_position().token());
                 if (gc_range.overlaps(input_range, dht::token_comparator())) {
                     return true; // overlaps with a remaining input sstable, not exhausted yet
                 }

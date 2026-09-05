@@ -41,11 +41,12 @@ sstable_first_key_less_comparator::operator()(const shared_sstable& s1, const sh
 bool sstable_run::will_introduce_overlapping(const shared_sstable& sst) const {
     // checks if s1 is *all* before s2, meaning their bounds don't overlap.
     auto completely_ordered_before = [] (const shared_sstable& s1, const shared_sstable& s2) {
-        auto pkey_tri_cmp = [s = s1->get_schema()] (const dht::decorated_key& k1, const dht::decorated_key& k2) {
-            return k1.tri_compare(*s, k2);
-        };
-        auto r = pkey_tri_cmp(s1->get_last_decorated_key(), s2->get_first_decorated_key());
-        if (r == 0) {
+        auto schema = s1->get_schema();
+        dht::ring_position_comparator rp_cmp(*schema);
+        auto r = rp_cmp(s1->get_last_ring_position(), s2->get_first_ring_position());
+        // The refinement below reads positions within the bounding partitions,
+        // which an sstable storing no partitions does not have.
+        if (r == 0 && s1->has_partitions() && s2->has_partitions()) {
             position_in_partition::tri_compare ckey_tri_cmp(*s1->get_schema());
             const auto& s1_last_position = s1->last_partition_last_position();
             const auto& s2_first_position = s2->first_partition_first_position();
@@ -115,11 +116,11 @@ std::ostream& operator<<(std::ostream& os, const sstables::sstable_run& run) {
 
     auto frags = run.all() | std::ranges::to<std::vector<shared_sstable>>();
     std::ranges::sort(frags, std::ranges::less(), [] (const shared_sstable& x) {
-        return x->get_first_decorated_key().token();
+        return x->get_first_ring_position().token();
     });
     os << "  Fragments = {\n";
     for (auto& frag : frags) {
-        os << format("    {}={}:{}\n", frag->generation(), frag->get_first_decorated_key().token(), frag->get_last_decorated_key().token());
+        os << format("    {}={}:{}\n", frag->generation(), frag->get_first_ring_position().token(), frag->get_last_ring_position().token());
     }
     os << "  }\n}\n";
     return os;
@@ -132,6 +133,7 @@ sstable_set::sstable_set(std::unique_ptr<sstable_set_impl> impl)
 sstable_set::sstable_set(const sstable_set& x)
         : enable_lw_shared_from_this<sstable_set>()
         , _impl(x._impl->clone())
+        , _token_range_tombstones(x._token_range_tombstones)
 {}
 
 sstable_set::sstable_set(sstable_set&&) noexcept = default;
@@ -181,12 +183,25 @@ stop_iteration sstable_set::for_each_sstable_until(std::function<stop_iteration(
 
 bool
 sstable_set::insert(shared_sstable sst) {
+    _token_range_tombstones.reset();
     return _impl->insert(sst);
 }
 
 bool
 sstable_set::erase(shared_sstable sst) {
+    _token_range_tombstones.reset();
     return _impl->erase(sst);
+}
+
+const token_range_tombstone_list& sstable_set::token_range_tombstones() const {
+    if (!_token_range_tombstones) {
+        token_range_tombstone_list l;
+        for_each_sstable([&l] (const shared_sstable& sst) {
+            l.apply(sst->token_range_tombstones());
+        });
+        _token_range_tombstones = std::move(l);
+    }
+    return *_token_range_tombstones;
 }
 
 size_t
@@ -242,8 +257,8 @@ partitioned_sstable_set::interval_type partitioned_sstable_set::make_interval(co
 
 partitioned_sstable_set::interval_type partitioned_sstable_set::make_interval(const schema_ptr& s, const sstable& sst) {
     return interval_type::closed(
-            dht::compatible_ring_position_or_view(s, dht::ring_position(sst.get_first_decorated_key())),
-            dht::compatible_ring_position_or_view(s, dht::ring_position(sst.get_last_decorated_key())));
+            dht::compatible_ring_position_or_view(s, sst.get_first_ring_position()),
+            dht::compatible_ring_position_or_view(s, sst.get_last_ring_position()));
 }
 
 partitioned_sstable_set::interval_type partitioned_sstable_set::make_interval(const sstable& sst) {
@@ -278,7 +293,7 @@ bool partitioned_sstable_set::store_as_unleveled(const shared_sstable& sst) cons
     // vector, to avoid triggering quadratic space complexity in the interval map,
     // since many of such sstables would have presence on almost all intervals.
     static constexpr float unleveled_threshold = 0.85f;
-    auto sst_tr = dht::token_range(sst->get_first_decorated_key().token(), sst->get_last_decorated_key().token());
+    auto sst_tr = dht::token_range(sst->get_first_ring_position().token(), sst->get_last_ring_position().token());
     bool as_unleveled = dht::overlap_ratio(_token_range, sst_tr) >= unleveled_threshold;
 
     utils::get_local_injector().inject("sstable_set_insertion_verification", [&] () {
@@ -297,9 +312,13 @@ bool partitioned_sstable_set::store_as_unleveled(const shared_sstable& sst) cons
 }
 
 dht::ring_position partitioned_sstable_set::to_ring_position(const dht::compatible_ring_position_or_view& crp) {
-    // Ring position views, representing bounds of sstable intervals are
-    // guaranteed to have key() != nullptr;
     const auto& pos = crp.position();
+    // An sstable which stores no partitions has no key at either bound: its
+    // extent is the token ranges its tombstones delete. Every other sstable's
+    // bounds are its first and last key.
+    if (!pos.key()) {
+        return dht::ring_position(pos.token(), pos.get_token_bound());
+    }
     return dht::ring_position(pos.token(), *pos.key());
 }
 
@@ -805,6 +824,16 @@ class incremental_reader_selector : public reader_selector {
         return _selector_position.is_max() || dht::ring_position_tri_compare(*_s, _selector_position, pr_end()) > 0;
     }
 public:
+    // This selector creates readers lazily, as the scan crosses into the token
+    // range of each sstable, so the combining reader cannot wait for the
+    // readers to report their token range tombstones: by then it would already
+    // have emitted partitions the late ones delete. Declare them up front
+    // instead. This needs no I/O, the lists are held in memory with the rest of
+    // the sstable's Scylla metadata.
+    virtual token_range_tombstone_list token_range_tombstones() const override {
+        return _sstables->token_range_tombstones();
+    }
+
     explicit incremental_reader_selector(schema_ptr s,
             lw_shared_ptr<const sstable_set> sstables,
             const dht::partition_range& pr,
@@ -881,16 +910,19 @@ public:
 // The returned function uses the bloom filter to check whether the given sstable
 // may have a partition given by the ring position `pos`.
 //
-// Returning `false` means the sstable doesn't have such a partition.
-// Returning `true` means it may, i.e. we don't know whether or not it does.
+// Returning `false` means the sstable has nothing to say about such a partition.
+// Returning `true` means it may have it, i.e. we don't know whether or not it
+// does -- or that it deletes it: an sstable whose token range tombstones cover
+// the partition's token stores no key for it, so its bloom filter says no, but
+// it must be read all the same or the deletion is missed.
 //
 // Assumes the given `pos` and `schema` are alive during the function's lifetime.
 static std::predicate<const sstable&> auto
 make_pk_filter(const dht::ring_position& pos, const utils::hashed_key& hash, const schema& schema) {
     return [&pos, hash, cmp = dht::ring_position_comparator(schema)] (const sstable& sst) {
-        return cmp(pos, sst.get_first_decorated_key()) >= 0 &&
-               cmp(pos, sst.get_last_decorated_key()) <= 0 &&
-               sst.filter_has_key(hash);
+        return cmp(pos, sst.get_first_ring_position()) >= 0 &&
+               cmp(pos, sst.get_last_ring_position()) <= 0 &&
+               (sst.filter_has_key(hash) || sst.token_range_tombstones().search(pos.token()));
     };
 }
 
@@ -1040,7 +1072,8 @@ time_series_sstable_set::create_single_key_sstable_reader(
     //    into new sstables in the middle of the partition query. TWCS sstables will usually pass
     //    this condition.
     // 3. The sstables cannot have partition tombstones for the same reason as above.
-    //    TWCS sstables will usually pass this condition.
+    //    TWCS sstables will usually pass this condition. A token range tombstone
+    //    deletes whole partitions, so it counts as one.
     // 4. The optimized query path must be enabled.
     using sst_entry = std::pair<position_in_partition, shared_sstable>;
     if (!_enable_optimized_twcs_queries
@@ -1048,7 +1081,8 @@ time_series_sstable_set::create_single_key_sstable_reader(
             || std::any_of(_sstables->begin(), _sstables->end(),
                 [] (const sst_entry& e) {
                     return e.second->get_version() < sstable_version_types::md
-                        || e.second->may_have_partition_tombstones();
+                        || e.second->may_have_partition_tombstones()
+                        || !e.second->token_range_tombstones().empty();
     })) {
         // Some of the conditions were not satisfied so we use the standard query path.
         return sstable_set_impl::create_single_key_sstable_reader(
@@ -1337,7 +1371,8 @@ private:
         }
 
         auto pos = dht::ring_position_view::for_range_start(pr);
-        auto last_pos_in_reader = dht::ring_position_view(_sst->get_last_decorated_key());
+        auto last = _sst->get_last_ring_position();
+        auto last_pos_in_reader = dht::ring_position_view(last);
 
         // If we're fast forwarding past the underlying reader, let's close it
         // and replace it by an empty reader.
@@ -1473,10 +1508,10 @@ unsigned sstable_set_overlapping_count(const schema_ptr& schema, const std::vect
     unsigned overlapping_sstables = 0;
     auto prev_last = dht::ring_position::min();
     for (auto& sst : sstables) {
-        if (dht::ring_position(sst->get_first_decorated_key()).tri_compare(*schema, prev_last) <= 0) {
+        if (sst->get_first_ring_position().tri_compare(*schema, prev_last) <= 0) {
             overlapping_sstables++;
         }
-        prev_last = dht::ring_position(sst->get_last_decorated_key());
+        prev_last = sst->get_last_ring_position();
     }
     return overlapping_sstables;
 }

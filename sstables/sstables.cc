@@ -85,6 +85,7 @@
 #include "readers/mutation_source.hh"
 #include "readers/reversing.hh"
 #include "readers/forwardable.hh"
+#include "readers/token_range_tombstone_prepending.hh"
 #include "sstables/trie/bti_index.hh"
 #include "partition_slice_builder.hh"
 
@@ -1490,6 +1491,11 @@ sstable::find_first_position_in_partition(reader_permit permit, const dht::decor
             return stop_iteration::no;
         }
 
+        stop_iteration consume(token_range_tombstone&&) {
+            // Carries no position inside the partition.
+            return stop_iteration::no;
+        }
+
         stop_iteration consume(range_tombstone_change&& rt) {
             on_position_found(std::move(std::move(rt)).position(), _reversed);
             return stop_iteration::yes;
@@ -1549,6 +1555,10 @@ future<> sstable::load_first_and_last_position_in_partition() {
     if (!_schema->clustering_key_size()) {
         co_return;
     }
+    if (!_first || !_last) {
+        // No partitions, so no first or last position in one.
+        co_return;
+    }
 
     auto& sem = _manager.sstable_metadata_concurrency_sem();
     reader_permit permit = co_await sem.obtain_permit(_schema, "sstable::load_first_and_last_position_range", sstable_buffer_size, db::no_timeout, {});
@@ -1586,7 +1596,16 @@ future<> sstable::read_partitions_db_footer() {
     if (has_component(component_type::Partitions) && !_partitions_db_footer) {
         if (!_partitions_file) {
             _partitions_file = co_await open_file(component_type::Partitions, open_flags::ro);
+        }
+        if (!_partitions_file_size) {
+            // The file may have been handed to us already open, without its
+            // size (see load(foreign_sstable_open_info)).
             _partitions_file_size = co_await _partitions_file.size();
+        }
+        if (!_partitions_file_size) {
+            // An sstable which stores no partitions has an empty Partitions.db
+            // with no footer to read.
+            co_return;
         }
         _partitions_db_footer = co_await trie::read_bti_partitions_db_footer(*_schema, _version, _partitions_file, _partitions_file_size);
     }
@@ -1828,7 +1847,9 @@ future<> sstable::open_or_create_data(open_flags oflags, file_open_options optio
 future<> sstable::open_data(sstable_open_config cfg) noexcept {
     co_await open_or_create_data(open_flags::ro);
     co_await update_info_for_opened_data(cfg);
-    parse_assert(!_shards.empty(), get_filename());
+    // An sstable which covers no part of the ring (no partitions and no token
+    // range tombstones) is owned by no shard.
+    parse_assert(!_shards.empty() || !has_ring_extent(), get_filename());
     auto* sm = _components->scylla_metadata->data.get<scylla_metadata_type::Sharding, sharding_metadata>();
     if (sm && !cfg.keep_sharding_metadata) {
         // Sharding information uses a lot of memory and once we're doing with this computation we will no longer use it.
@@ -2370,28 +2391,63 @@ create_sharding_metadata(utils::chunked_vector<dht::partition_range> ranges) {
     return sm;
 }
 
+// An empty bound is infinity: the beginning of the ring for the start bound,
+// its end for the end bound. See disk_token_range_tombstone.
+static bytes token_to_disk_bound(const dht::token& t) {
+    return t.is_minimum() || t.is_maximum() ? bytes() : t.data();
+}
+
+static dht::token disk_bound_to_token(const disk_string<uint16_t>& b, dht::token infinity) {
+    return b.value.empty() ? infinity : dht::token(dht::token::kind::key, bytes_view(b.value));
+}
+
+static scylla_metadata::token_range_tombstones
+to_disk_token_range_tombstones(const token_range_tombstone_list& list) {
+    scylla_metadata::token_range_tombstones res;
+    res.elements.reserve(list.size());
+    for (const auto& rt : list) {
+        res.elements.push_back(disk_token_range_tombstone{
+                {token_to_disk_bound(rt.start_exclusive())},
+                {token_to_disk_bound(rt.end_inclusive())},
+                rt.tomb().timestamp,
+                rt.tomb().deletion_time.time_since_epoch().count()});
+    }
+    return res;
+}
+
+static token_range_tombstone_list
+from_disk_token_range_tombstones(const scylla_metadata::token_range_tombstones& disk) {
+    token_range_tombstone_list res;
+    for (const auto& e : disk.elements) {
+        res.apply(token_range_tombstone(
+                disk_bound_to_token(e.start_exclusive, dht::token::minimum()),
+                disk_bound_to_token(e.end_inclusive, dht::token::maximum()),
+                tombstone(e.timestamp, gc_clock::time_point(gc_clock::duration(e.deletion_time)))));
+    }
+    return res;
+}
+
 static
 sharding_metadata
-create_sharding_metadata(schema_ptr schema, const dht::static_sharder& sharder, const dht::decorated_key& first_key, const dht::decorated_key& last_key, shard_id shard) {
-    auto prange = dht::partition_range::make(dht::ring_position(first_key), dht::ring_position(last_key));
+create_sharding_metadata(schema_ptr schema, const dht::static_sharder& sharder, const dht::partition_range& prange, shard_id shard) {
     auto ranges = dht::split_range_to_single_shard(*schema, sharder, prange, shard).get();
     if (ranges.empty()) {
         auto split_ranges_all_shards = dht::split_range_to_shards(prange, *schema, sharder);
-        sstlog.warn("create_sharding_metadata: range={} has no intersection with shard={} first_key={} last_key={} ranges_single_shard={} ranges_all_shards={}",
-                    prange, shard, first_key, last_key, ranges, split_ranges_all_shards);
+        sstlog.warn("create_sharding_metadata: range={} has no intersection with shard={} ranges_single_shard={} ranges_all_shards={}",
+                    prange, shard, ranges, split_ranges_all_shards);
     }
     return create_sharding_metadata(std::move(ranges));
 }
 
 static
 sharding_metadata
-create_sharding_metadata(schema_ptr schema, const dht::decorated_key& first_key, const dht::decorated_key& last_key, shard_id shard) {
+create_sharding_metadata(schema_ptr schema, const dht::partition_range& prange, shard_id shard) {
     auto* sharder_opt = schema->try_get_static_sharder();
     if (sharder_opt) {
-        return create_sharding_metadata(std::move(schema), *sharder_opt, first_key, last_key, shard);
+        return create_sharding_metadata(std::move(schema), *sharder_opt, prange, shard);
     }
     utils::chunked_vector<dht::partition_range> r;
-    r.push_back(dht::partition_range::make(dht::ring_position(first_key), dht::ring_position(last_key)));
+    r.push_back(prange);
     return create_sharding_metadata(std::move(r));
 }
 
@@ -2399,7 +2455,6 @@ create_sharding_metadata(schema_ptr schema, const dht::decorated_key& first_key,
 // map each metadata type to its correspondent position in the file.
 void seal_statistics(sstable_version_types v, statistics& s, metadata_collector& collector,
         const sstring partitioner, double bloom_filter_fp_chance, schema_ptr schema,
-        const dht::decorated_key& first_key, const dht::decorated_key& last_key,
         const encoding_stats& enc_stats, const std::set<int>& compaction_ancestors) {
     validation_metadata validation;
     compaction_metadata compaction;
@@ -2454,6 +2509,17 @@ sstable::read_scylla_metadata() noexcept {
         }
         return read_simple<component_type::Scylla>(*_components->scylla_metadata).then([this] -> future<>  {
             _features = _components->scylla_metadata->get_features();
+            if (auto unknown = _features.unknown_mandatory_features()) {
+                // Reading the sstable while ignoring a mandatory feature would
+                // silently give wrong answers, so refuse it instead.
+                throw malformed_sstable_exception(
+                        format("SSTable requires features this version does not support: {:#x}", unknown),
+                        get_filename());
+            }
+            if (auto* trts = _components->scylla_metadata->data.get<scylla_metadata_type::TokenRangeTombstones,
+                        scylla_metadata::token_range_tombstones>()) {
+                _token_range_tombstones = from_disk_token_range_tombstones(*trts);
+            }
             _components->digest = get_component_digest(component_type::Data);
 
             validate_component_digest(component_type::TOC, _toc_digest);
@@ -2496,15 +2562,25 @@ static sstable_column_kind to_sstable_column_kind(column_kind k) {
 void
 sstable::write_scylla_metadata(shard_id shard, struct run_identifier identifier,
         std::optional<scylla_metadata::large_data_stats> ld_stats, std::optional<scylla_metadata::ext_timestamp_stats> ts_stats,
-        std::optional<scylla_metadata::large_data_records> ld_records) {
-    auto&& first_key = get_first_decorated_key();
-    auto&& last_key = get_last_decorated_key();
+        std::optional<scylla_metadata::large_data_records> ld_records,
+        token_range_tombstone_list token_range_tombstones) {
+    // Set before the sharding metadata is computed below: an sstable's extent
+    // is the union of the partitions it stores and the ranges its tombstones
+    // delete, so get_first_ring_position() needs them to be in place.
+    _token_range_tombstones = std::move(token_range_tombstones);
 
-    auto sm = create_sharding_metadata(_schema, first_key, last_key, shard);
+    // Not the decorated key accessors: an sstable which stores no partitions
+    // has no first or last key, and those throw.
+    auto sm = has_ring_extent()
+            ? create_sharding_metadata(_schema,
+                    dht::partition_range::make(get_first_ring_position(), get_last_ring_position()), shard)
+            : sharding_metadata();
 
     // sstable write may fail to generate empty metadata if mutation source has only data from other shard.
     // see https://github.com/scylladb/scylla/issues/2932 for details on how it can happen.
-    if (sm.token_ranges.elements.empty()) {
+    // An sstable which covers no part of the ring is a different case: empty
+    // sharding metadata is the right answer for it rather than a failure.
+    if (has_ring_extent() && sm.token_ranges.elements.empty()) {
         throw std::runtime_error(format("Failed to generate sharding metadata for {}", get_filename()));
     }
 
@@ -2513,6 +2589,14 @@ sstable::write_scylla_metadata(shard_id shard, struct run_identifier identifier,
     }
 
     _components->scylla_metadata->data.set<scylla_metadata_type::Sharding>(std::move(sm));
+    if (!_token_range_tombstones.empty()) {
+        // A reader which does not know about token range tombstones would
+        // return the partitions they delete, so mark the sstable unreadable
+        // without that knowledge.
+        _features.enable(sstable_mandatory_feature::TokenRangeTombstones);
+        _components->scylla_metadata->data.set<scylla_metadata_type::TokenRangeTombstones>(
+                to_disk_token_range_tombstones(_token_range_tombstones));
+    }
     // Note: data.set() wants an rvalue, so we have to make a copy. It's a uint64 anyway.
     _components->scylla_metadata->data.set<scylla_metadata_type::Features>(sstable_enabled_features(_features));
     _components->scylla_metadata->data.set<scylla_metadata_type::RunIdentifier>(std::move(identifier));
@@ -2895,11 +2979,15 @@ file_size_stats sstable::get_file_size_stats() const {
     if (!_metadata_size_on_disk) {
         on_internal_error(sstlog, "On-disk size of sstable metadata was not set");
     }
-    if (!_data_file_size) {
-        on_internal_error(sstlog, "On-disk size of sstable data was not set");
-    }
-    if (!_index_file_size && !_partitions_file_size) {
-        on_internal_error(sstlog, "On-disk size of sstable index was not set");
+    // An sstable which stores no partitions has an empty Data.db and an empty
+    // index, so a zero size is only suspicious when there are partitions.
+    if (_first) {
+        if (!_data_file_size) {
+            on_internal_error(sstlog, "On-disk size of sstable data was not set");
+        }
+        if (!_index_file_size && !_partitions_file_size) {
+            on_internal_error(sstlog, "On-disk size of sstable index was not set");
+        }
     }
     uint64_t size_without_data = _metadata_size_on_disk + _index_file_size + _partitions_file_size + _rows_file_size;
 
@@ -3066,11 +3154,18 @@ sstable::make_reader(
 ) {
     const auto reversed = slice.is_reversed();
 
+    // Token range tombstones delete whole partitions, so they precede all of
+    // them in the stream. They are not stored with the partitions, so the
+    // reader below never produces them; prepend them here.
+    auto prepend_token_range_tombstones = [this] (mutation_reader r) {
+        return make_token_range_tombstone_prepending_reader(std::move(r), _token_range_tombstones);
+    };
+
     auto index_caching = use_caching(global_cache_index_pages && !slice.options.contains(query::partition_slice::option::bypass_cache));
     auto index_reader = make_index_reader(permit, trace_state, index_caching, range.is_singular());
 
     if (_version >= version_types::mc && (!reversed || range.is_singular())) {
-        return mx::make_reader(
+        return prepend_token_range_tombstones(mx::make_reader(
             shared_from_this(),
             std::move(query_schema),
             std::move(permit),
@@ -3082,7 +3177,7 @@ sstable::make_reader(
             mon,
             integrity,
             std::move(index_reader),
-            single_partition_read_murmur_hash);
+            single_partition_read_murmur_hash));
     }
 
     // Multi-partition reversed queries are not yet supported natively in the mx reader.
@@ -3099,7 +3194,7 @@ sstable::make_reader(
         if (fwd) {
             rd = make_forwardable(std::move(rd));
         }
-        return rd;
+        return prepend_token_range_tombstones(std::move(rd));
     }
 
     if (reversed) {
@@ -3110,11 +3205,11 @@ sstable::make_reader(
         if (fwd) {
             rd = make_forwardable(std::move(rd));
         }
-        return rd;
+        return prepend_token_range_tombstones(std::move(rd));
     }
 
-    return kl::make_reader(shared_from_this(), query_schema, std::move(permit),
-                range, slice, std::move(trace_state), fwd, fwd_mr, mon);
+    return prepend_token_range_tombstones(kl::make_reader(shared_from_this(), query_schema, std::move(permit),
+                range, slice, std::move(trace_state), fwd, fwd_mr, mon));
 }
 
 mutation_reader
@@ -3599,6 +3694,11 @@ void sstable::set_first_and_last_keys() {
     } else if (_partitions_db_footer) {
         first = decorate_key("first", _partitions_db_footer->first_key.get_bytes());
         last = decorate_key("last", _partitions_db_footer->last_key.get_bytes());
+    } else if (get_estimated_key_count() == 0) {
+        // An sstable which stores no partitions has no first or last key. It
+        // may still cover part of the ring through its token range tombstones;
+        // see get_first_ring_position().
+        return;
     } else {
         throw_malformed_sstable_exception(format("{}: neither Summary.db nor Partitions.db component is present, can't determine first and last partition key", get_filename()));
     }
@@ -3631,8 +3731,65 @@ const dht::decorated_key& sstable::get_last_decorated_key() const {
     return *_last;
 }
 
+// The extent of an sstable is what it stores and what it deletes: the
+// partitions written to it, together with the ranges its token range
+// tombstones cover. The latter is not a fallback for the former, they are
+// unioned: a tombstone may well delete partitions on either side of the ones
+// this sstable happens to hold.
+dht::ring_position sstable::get_first_ring_position() const {
+    std::optional<dht::ring_position> pos;
+    if (_first) {
+        pos = dht::ring_position(*_first);
+    }
+    dht::ring_position_comparator cmp(*_schema);
+    for (const auto& trt : _token_range_tombstones) {
+        // The start bound is exclusive, so the tombstone starts at the first
+        // key of the next token. Naming the position after the last key of the
+        // start token instead would be equivalent, but it would straddle a
+        // shard boundary and make the sstable look owned by the shard which
+        // owns the excluded token.
+        auto trt_pos = trt.start_exclusive().is_minimum()
+                ? dht::ring_position::min()
+                : dht::ring_position::starting_at(dht::next_token(trt.start_exclusive()));
+        if (!pos || cmp(trt_pos, *pos) < 0) {
+            pos = std::move(trt_pos);
+        }
+    }
+    if (!pos) {
+        throw std::runtime_error(format("{} has neither partitions nor token range tombstones, so no first position", get_filename()));
+    }
+    return std::move(*pos);
+}
+
+dht::ring_position sstable::get_last_ring_position() const {
+    std::optional<dht::ring_position> pos;
+    if (_last) {
+        pos = dht::ring_position(*_last);
+    }
+    dht::ring_position_comparator cmp(*_schema);
+    for (const auto& trt : _token_range_tombstones) {
+        auto trt_pos = trt.end_inclusive().is_maximum()
+                ? dht::ring_position::max()
+                : dht::ring_position::ending_at(trt.end_inclusive());
+        if (!pos || cmp(trt_pos, *pos) > 0) {
+            pos = std::move(trt_pos);
+        }
+    }
+    if (!pos) {
+        throw std::runtime_error(format("{} has neither partitions nor token range tombstones, so no last position", get_filename()));
+    }
+    return std::move(*pos);
+}
+
+// True if this sstable covers any part of the ring at all, i.e. whether the
+// ring position accessors above have anything to return.
+bool sstable::has_ring_extent() const {
+    return _first.has_value() || !_token_range_tombstones.empty();
+}
+
 std::strong_ordering sstable::compare_by_first_key(const sstable& other) const {
-    return get_first_decorated_key().tri_compare(*_schema, other.get_first_decorated_key());
+    dht::ring_position_comparator cmp(*_schema);
+    return cmp(get_first_ring_position(), other.get_first_ring_position()) <=> 0;
 }
 
 double sstable::get_compression_ratio() const {
@@ -3827,7 +3984,7 @@ std::optional<std::pair<uint64_t, uint64_t>> sstable::get_index_pages_for_range(
         // There is no summary entry for the last key, so in order to determine
         // if pos overlaps with the sstable or not we have to compare with the
         // last key.
-        if (rp_cmp(pos, get_last_decorated_key()) > 0) {
+        if (rp_cmp(pos, get_last_ring_position()) > 0) {
             // left is past the end of the sampling.
             return std::nullopt;
         }
@@ -3879,7 +4036,7 @@ future<uint64_t> sstable::estimated_keys_for_range(const dht::token_range& range
     // due to the inexactness of BTI indexes for range queries.
     // Returning something non-zero in this case would be unfortunate,
     // so the extra conditional makes sure that we return 0.
-    auto local_tr = dht::token_range::make({get_first_decorated_key().token()}, {get_last_decorated_key().token()});
+    auto local_tr = dht::token_range::make({get_first_ring_position().token()}, {get_last_ring_position().token()});
     if (!local_tr.overlaps(range, dht::token_comparator())) {
         co_return 0;
     }
@@ -3915,6 +4072,10 @@ future<uint64_t> sstable::estimated_keys_for_range(const dht::token_range& range
     } else {
         co_return result;
     }
+  } else if (!_first) {
+    // An sstable which stores no partitions has none in any range, and no
+    // index to estimate from.
+    co_return 0;
   } else {
     co_return coroutine::exception(std::make_exception_ptr(malformed_sstable_exception(
         format("{}: neither Summary.db nor Partitions.db component is present, can't estimate number of partitions in range", get_filename()))));
@@ -3929,9 +4090,14 @@ sstable::compute_shards_for_this_sstable(const dht::sharder& sharder_) const {
             ? _components->scylla_metadata->data.get<scylla_metadata_type::Sharding, sharding_metadata>()
             : nullptr;
     if (!sm || sm->token_ranges.elements.empty()) {
+        if (!has_ring_extent()) {
+            // Covers no part of the ring (no partitions, no token range
+            // tombstones), so no shard owns it.
+            return {};
+        }
         token_ranges.push_back(dht::partition_range::make(
-                dht::ring_position::starting_at(get_first_decorated_key().token()),
-                dht::ring_position::ending_at(get_last_decorated_key().token())));
+                dht::ring_position::starting_at(get_first_ring_position().token()),
+                dht::ring_position::ending_at(get_last_ring_position().token())));
     } else {
         auto disk_token_range_to_ring_position_range = [] (const disk_token_range& dtr) {
             auto t1 = dht::token(dht::token::kind::key, bytes_view(dtr.left.token));
@@ -4255,8 +4421,8 @@ scylla_metadata::ext_timestamp_stats::map_type sstable::get_ext_timestamp_stats(
 // is fine that some of the partitions inside the sstable does not have a
 // record.
 gc_clock::time_point sstable::get_gc_before_for_drop_estimation(const gc_clock::time_point& compaction_time, const tombstone_gc_state& gc_state, const schema_ptr& s) const {
-    auto start = get_first_decorated_key().token();
-    auto end = get_last_decorated_key().token();
+    auto start = get_first_ring_position().token();
+    auto end = get_last_ring_position().token();
     auto range = dht::token_range(dht::token_range::bound(start, true), dht::token_range::bound(end, true));
     sstlog.trace("sstable={}, ks={}, cf={}, range={}, gc_state={}, estimate", get_filename(), s->ks_name(), s->cf_name(), range, gc_state.is_gc_enabled());
     return gc_state.get_gc_before_for_range(s, range, compaction_time).max_gc_before;
@@ -4278,8 +4444,8 @@ gc_clock::time_point sstable::get_gc_before_for_fully_expire(const gc_clock::tim
                 get_filename(), s->ks_name(), s->cf_name(), deletion_time, seastar::value_of([this] { return get_stats_metadata().min_timestamp; }), s->gc_grace_seconds().count());
         return gc_clock::time_point::min();
     }
-    auto start = get_first_decorated_key().token();
-    auto end = get_last_decorated_key().token();
+    auto start = get_first_ring_position().token();
+    auto end = get_last_ring_position().token();
     auto range = dht::token_range(dht::token_range::bound(start, true), dht::token_range::bound(end, true));
     sstlog.trace("sstable={}, ks={}, cf={}, range={}, get_max_local_deletion_time={}, min_timestamp={}, gc_grace_seconds={}, gc_state={}, query",
             get_filename(), s->ks_name(), s->cf_name(), range, deletion_time, get_stats_metadata().min_timestamp, s->gc_grace_seconds().count(), gc_state.is_gc_enabled());
@@ -4294,6 +4460,11 @@ std::unique_ptr<abstract_index_reader> sstable::make_index_reader(
     bool single_partition_read
 ) {
     if (!_index_file) {
+        if (!_partitions_db_footer && !_first) {
+            // An sstable which stores no partitions has an empty Partitions.db,
+            // hence no footer and nothing to index.
+            return std::make_unique<empty_index_reader>();
+        }
         if (!_partitions_db_footer) [[unlikely]] {
             on_internal_error(sstlog, fmt::format("_partitions_db_footer is empty for sstable {}", get_filename()));
         }

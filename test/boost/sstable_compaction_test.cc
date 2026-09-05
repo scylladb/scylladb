@@ -440,7 +440,7 @@ static future<compact_sstables_result> compact_sstables(test_env& env, std::vect
             }
             compaction::size_tiered_compaction_strategy_options stcs_options;
             compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, 1, stcs_options);
-            std::vector<std::optional<dht::decorated_key>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
+            std::vector<std::optional<dht::ring_position>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
             std::vector<int> compaction_counter(compaction::leveled_manifest::MAX_LEVELS);
             auto candidate = manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
             BOOST_REQUIRE(candidate.sstables.size() == sstables.size());
@@ -804,8 +804,8 @@ static bool key_range_overlaps(table_for_tests& cf, const dht::decorated_key& a,
 }
 
 static bool sstable_overlaps(const lw_shared_ptr<replica::column_family>& cf, sstables::shared_sstable candidate1, sstables::shared_sstable candidate2) {
-    auto range1 = wrapping_interval<dht::token>::make(candidate1->get_first_decorated_key()._token, candidate1->get_last_decorated_key()._token);
-    auto range2 = wrapping_interval<dht::token>::make(candidate2->get_first_decorated_key()._token, candidate2->get_last_decorated_key()._token);
+    auto range1 = wrapping_interval<dht::token>::make(candidate1->get_first_ring_position().token(), candidate1->get_last_ring_position().token());
+    auto range2 = wrapping_interval<dht::token>::make(candidate2->get_first_ring_position().token(), candidate2->get_last_ring_position().token());
     return range1.overlaps(range2, dht::token_comparator());
 }
 
@@ -835,7 +835,7 @@ void leveled_01_fn(test_env& env) {
     compaction::size_tiered_compaction_strategy_options stcs_options;
     compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, max_sstable_size_in_mb, stcs_options);
     BOOST_REQUIRE(manifest.get_level_size(0) == 2);
-    std::vector<std::optional<dht::decorated_key>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
+    std::vector<std::optional<dht::ring_position>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
     std::vector<int> compaction_counter(compaction::leveled_manifest::MAX_LEVELS);
     auto candidate = manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
     BOOST_REQUIRE(candidate.sstables.size() == 2);
@@ -897,7 +897,7 @@ void leveled_02_fn(test_env& env) {
     compaction::size_tiered_compaction_strategy_options stcs_options;
     compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, max_sstable_size_in_mb, stcs_options);
     BOOST_REQUIRE(manifest.get_level_size(0) == 3);
-    std::vector<std::optional<dht::decorated_key>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
+    std::vector<std::optional<dht::ring_position>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
     std::vector<int> compaction_counter(compaction::leveled_manifest::MAX_LEVELS);
     auto candidate = manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
     BOOST_REQUIRE(candidate.sstables.size() == 3);
@@ -961,7 +961,7 @@ void leveled_03_fn(test_env& env) {
     compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, max_sstable_size_in_mb, stcs_options);
     BOOST_REQUIRE(manifest.get_level_size(0) == 2);
     BOOST_REQUIRE(manifest.get_level_size(1) == 2);
-    std::vector<std::optional<dht::decorated_key>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
+    std::vector<std::optional<dht::ring_position>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
     std::vector<int> compaction_counter(compaction::leveled_manifest::MAX_LEVELS);
     auto candidate = manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
     BOOST_REQUIRE(candidate.sstables.size() == 3);
@@ -1035,7 +1035,7 @@ void leveled_04_fn(test_env& env) {
     auto level2_score = (double) manifest.get_total_bytes(manifest.get_level(2)) / (double) manifest.max_bytes_for_level(2);
     BOOST_REQUIRE(level2_score < 1.001);
 
-    std::vector<std::optional<dht::decorated_key>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
+    std::vector<std::optional<dht::ring_position>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
     std::vector<int> compaction_counter(compaction::leveled_manifest::MAX_LEVELS);
     auto candidate = manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
     BOOST_REQUIRE(candidate.sstables.size() == 2);
@@ -1107,7 +1107,7 @@ void leveled_06_fn(test_env& env) {
     BOOST_REQUIRE(manifest.get_level_size(1) == 1);
     BOOST_REQUIRE(manifest.get_level_size(2) == 0);
 
-    std::vector<std::optional<dht::decorated_key>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
+    std::vector<std::optional<dht::ring_position>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
     std::vector<int> compaction_counter(compaction::leveled_manifest::MAX_LEVELS);
     auto candidate = manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
     BOOST_REQUIRE(candidate.level == 2);
@@ -1141,7 +1141,7 @@ void leveled_07_fn(test_env& env) {
     auto candidates = get_candidates_for_leveled_strategy(*cf);
     compaction::size_tiered_compaction_strategy_options stcs_options;
     compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, 1, stcs_options);
-    std::vector<std::optional<dht::decorated_key>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
+    std::vector<std::optional<dht::ring_position>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
     std::vector<int> compaction_counter(compaction::leveled_manifest::MAX_LEVELS);
     auto desc = manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
     BOOST_REQUIRE(desc.level == 1);
@@ -1182,7 +1182,7 @@ SEASTAR_TEST_CASE(leveled_fan_out_cache) {
             auto candidates = get_candidates_for_leveled_strategy(*cf);
             compaction::size_tiered_compaction_strategy_options stcs_options;
             compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, max_sstable_size_in_mb, stcs_options);
-            std::vector<std::optional<dht::decorated_key>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
+            std::vector<std::optional<dht::ring_position>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
             std::vector<int> compaction_counter(compaction::leveled_manifest::MAX_LEVELS);
             return manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
         };
@@ -1224,7 +1224,7 @@ void leveled_invariant_fix_fn(test_env& env) {
     auto candidates = get_candidates_for_leveled_strategy(*cf);
     compaction::size_tiered_compaction_strategy_options stcs_options;
     compaction::leveled_manifest manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, 1, stcs_options);
-    std::vector<std::optional<dht::decorated_key>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
+    std::vector<std::optional<dht::ring_position>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
     std::vector<int> compaction_counter(compaction::leveled_manifest::MAX_LEVELS);
 
     auto candidate = manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
@@ -1273,7 +1273,7 @@ void leveled_stcs_on_L0_fn(test_env& env) {
     BOOST_REQUIRE(candidates.size() == size_t(l0_sstables_no+1));
     BOOST_REQUIRE(cf->get_sstables()->size() == size_t(l0_sstables_no+1));
 
-    std::vector<std::optional<dht::decorated_key>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
+    std::vector<std::optional<dht::ring_position>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
     std::vector<int> compaction_counter(compaction::leveled_manifest::MAX_LEVELS);
     compaction::size_tiered_compaction_strategy_options stcs_options;
 
@@ -1329,7 +1329,7 @@ void overlapping_starved_sstables_fn(test_env& env) {
     add_sstable_for_leveled_test(env, cf, max_sstable_size_in_bytes, /*level*/2, min_key.key(), keys[1].key());
     add_sstable_for_leveled_test(env, cf, max_sstable_size_in_bytes, /*level*/3, min_key.key(), keys[1].key());
 
-    std::vector<std::optional<dht::decorated_key>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
+    std::vector<std::optional<dht::ring_position>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
     std::vector<int> compaction_counter(compaction::leveled_manifest::MAX_LEVELS);
     // make strategy think that level 3 wasn't compacted for many rounds
     compaction_counter[3] = compaction::leveled_manifest::NO_COMPACTION_LIMIT+1;
@@ -3093,6 +3093,7 @@ void purged_tombstone_consumer_sstable_fn(test_env& env) {
         stop_iteration consume(static_row&& sr, tombstone, bool) { return _writer.consume(std::move(sr)); }
         stop_iteration consume(clustering_row&& cr, row_tombstone tomb, bool) { return _writer.consume(std::move(cr)); }
         stop_iteration consume(range_tombstone_change&& rtc) { return _writer.consume(std::move(rtc)); }
+        stop_iteration consume(token_range_tombstone&& trt) { return _writer.consume(std::move(trt)); }
 
         stop_iteration consume_end_of_partition() { return _writer.consume_end_of_partition(); }
         void consume_end_of_stream() { _writer.consume_end_of_stream(); _sst->open_data().get(); }
@@ -4637,7 +4638,7 @@ void twcs_single_key_reader_through_compound_set_fn(test_env& env) {
     // sstables with same key but belonging to different windows
     auto sst1 = make_sstable_containing(sst_gen, {make_row(std::chrono::hours(1))}).get();
     auto sst2 = make_sstable_containing(sst_gen, {make_row(std::chrono::hours(5))}).get();
-    BOOST_REQUIRE(sst1->get_first_decorated_key().token() == sst2->get_last_decorated_key().token());
+    BOOST_REQUIRE(sst1->get_first_ring_position().token() == sst2->get_last_ring_position().token());
     auto dkey = sst1->get_first_decorated_key();
 
     set1->insert(std::move(sst1));
@@ -5599,7 +5600,7 @@ static future<> run_incremental_compaction_test(sstables::offstrategy offstrateg
         }).get();
 
         for (unsigned i = 0; i < sstables_nr; i++) {
-            owned_token_ranges.push_back(dht::token_range::make_singular(ssts[i]->get_last_decorated_key().token()));
+            owned_token_ranges.push_back(dht::token_range::make_singular(ssts[i]->get_last_ring_position().token()));
             gens.insert(ssts[i]->generation());
         }
 
@@ -5753,7 +5754,7 @@ void cleanup_during_offstrategy_incremental_compaction_fn(test_env& env) {
     }).get();
 
     for (unsigned i = 0; i < sstables_nr; i++) {
-        owned_token_ranges.push_back(dht::token_range::make_singular(ssts[i]->get_last_decorated_key().token()));
+        owned_token_ranges.push_back(dht::token_range::make_singular(ssts[i]->get_last_ring_position().token()));
         gens.insert(ssts[i]->generation());
     }
 
@@ -6060,11 +6061,11 @@ void splitting_compaction_fn(test_env& env) {
     for (auto& sst : ret.new_sstables) {
         testlog.info("{}: token_groups: [{}, {}], windows: [{}, {}]",
                      sst->get_filename(),
-                     classify_fn(sst->get_first_decorated_key().token()),
-                     classify_fn(sst->get_last_decorated_key().token()),
+                     classify_fn(sst->get_first_ring_position().token()),
+                     classify_fn(sst->get_last_ring_position().token()),
                      window_for(sst->get_stats_metadata().min_timestamp),
                      window_for(sst->get_stats_metadata().max_timestamp));
-        BOOST_REQUIRE_EQUAL(classify_fn(sst->get_first_decorated_key().token()), classify_fn(sst->get_last_decorated_key().token()));
+        BOOST_REQUIRE_EQUAL(classify_fn(sst->get_first_ring_position().token()), classify_fn(sst->get_last_ring_position().token()));
         BOOST_REQUIRE_EQUAL(window_for(sst->get_stats_metadata().min_timestamp), window_for(sst->get_stats_metadata().max_timestamp));
     }
     const size_t expected_output_size = 4; // 2 token groups * 2 windows.
@@ -6083,7 +6084,7 @@ void splitting_compaction_fn(test_env& env) {
     // test exception propagation
     auto throwing_classifier = [&] (dht::token t) -> mutation_writer::token_group_id {
         // skip first and last token, to not trigger exception when checking if sstable needs split.
-        if (t != input->get_first_decorated_key().token() && t != input->get_last_decorated_key().token()) {
+        if (t != input->get_first_ring_position().token() && t != input->get_last_ring_position().token()) {
             throw std::runtime_error("exception");
         }
         return classify_fn(t);
@@ -6973,6 +6974,226 @@ SEASTAR_TEST_CASE(test_compaction_output_is_not_leaked_when_attach_fails) {
         auto expected = before;
         std::erase(expected, new_sstable_toc);
         BOOST_REQUIRE_EQUAL(after, expected);
+    });
+}
+
+// An input which a token range tombstone deletes in its entirety is dropped
+// without being read: the output holds the tombstone and no partition at all.
+// Without that, compaction reads every partition of the input and writes each
+// back as an empty partition carrying the tombstone it now has.
+SEASTAR_TEST_CASE(test_compaction_drops_sstable_deleted_by_token_range_tombstone) {
+    return test_env::do_with_async([] (test_env& env) {
+        simple_schema ss;
+        auto s = ss.schema();
+        auto cf = env.make_table_for_tests(s);
+        auto close_cf = deferred_stop(cf);
+        auto sst_gen = env.make_sst_factory(s);
+
+        utils::chunked_vector<mutation> muts;
+        for (auto i = 0; i < 10; i++) {
+            auto m = mutation(s, ss.make_pkey(i));
+            ss.add_row(m, ss.make_ckey(0), "v");
+            muts.push_back(std::move(m));
+        }
+        auto data = make_sstable_containing(sst_gen, std::move(muts)).get();
+        column_family_test(cf).add_sstable(data).get();
+
+        // Newer than everything in `data`, so it deletes all of it.
+        auto tomb = tombstone(ss.new_timestamp(), gc_clock::now());
+        auto mt = make_lw_shared<replica::memtable>(s);
+        mt->apply(token_range_tombstone::full_ring(tomb));
+        auto deletion = make_sstable_containing(sst_gen, mt).get();
+        column_family_test(cf).add_sstable(deletion).get();
+
+        std::vector<shared_sstable> outputs;
+        auto creator = [&] {
+            auto sst = env.make_sstable(s);
+            outputs.push_back(sst);
+            return sst;
+        };
+        auto desc = compaction::compaction_descriptor({data, deletion});
+        auto ret = compact_sstables(env, std::move(desc), cf, creator).get();
+
+        BOOST_REQUIRE_EQUAL(ret.new_sstables.size(), 1);
+        auto out = env.reusable_sst(s, ret.new_sstables.front()).get();
+        BOOST_REQUIRE_MESSAGE(!out->has_partitions(), "the deleted input was read and written back rather than dropped");
+        BOOST_REQUIRE_EQUAL(out->token_range_tombstones().search(ss.make_pkey(0).token()), tomb);
+
+        // Something newer than the tombstone survives, so its sstable is read.
+        auto m = mutation(s, ss.make_pkey(3));
+        ss.add_row(m, ss.make_ckey(0), "newer");
+        auto newer = make_sstable_containing(sst_gen, {std::move(m)}).get();
+        column_family_test(cf).add_sstable(newer).get();
+        outputs.clear();
+        ret = compact_sstables(env, compaction::compaction_descriptor({out, newer}), cf, creator).get();
+        BOOST_REQUIRE_EQUAL(ret.new_sstables.size(), 1);
+        out = env.reusable_sst(s, ret.new_sstables.front()).get();
+        BOOST_REQUIRE(out->has_partitions());
+        BOOST_REQUIRE_EQUAL(out->get_estimated_key_count(), 1);
+    });
+}
+
+// When the output is split into a run by size, the token range tombstones go
+// into an sstable of their own rather than into every fragment, so that each
+// fragment describes only the partitions it holds and a read opens only the
+// fragments it needs.
+SEASTAR_TEST_CASE(test_compaction_writes_token_range_tombstones_to_their_own_sstable) {
+    return test_env::do_with_async([] (test_env& env) {
+        simple_schema ss;
+        auto s = ss.schema();
+        auto cf = env.make_table_for_tests(s);
+        auto close_cf = deferred_stop(cf);
+        auto sst_gen = env.make_sst_factory(s);
+
+        // Older than the data below, so it deletes none of it and has to be
+        // carried through the compaction as is.
+        auto tomb = tombstone(ss.new_timestamp(), gc_clock::now());
+        auto mt = make_lw_shared<replica::memtable>(s);
+        mt->apply(token_range_tombstone::full_ring(tomb));
+        auto deletion = make_sstable_containing(sst_gen, mt).get();
+        column_family_test(cf).add_sstable(deletion).get();
+
+        utils::chunked_vector<mutation> muts;
+        for (auto i = 0; i < 100; i++) {
+            auto m = mutation(s, ss.make_pkey(i));
+            // Incompressible, so that the fragment size limit below bites.
+            ss.add_row(m, ss.make_ckey(0), tests::random::get_sstring(1024));
+            muts.push_back(std::move(m));
+        }
+        auto data = make_sstable_containing(sst_gen, std::move(muts)).get();
+        column_family_test(cf).add_sstable(data).get();
+
+        auto creator = [&] { return env.make_sstable(s); };
+        // Small enough that the data is written as several fragments.
+        auto desc = compaction::compaction_descriptor({deletion, data}, compaction::compaction_descriptor::default_level, 8 * 1024);
+        auto ret = compact_sstables(env, std::move(desc), cf, creator).get();
+
+        std::vector<shared_sstable> with_tombstones, without;
+        for (auto& sst : ret.new_sstables) {
+            auto reusable = env.reusable_sst(s, sst).get();
+            (reusable->token_range_tombstones().empty() ? without : with_tombstones).push_back(reusable);
+        }
+        BOOST_REQUIRE_MESSAGE(without.size() > 1, fmt::format("expected a run of several fragments, got {}", without.size()));
+        BOOST_REQUIRE_EQUAL(with_tombstones.size(), 1);
+        auto& tsst = with_tombstones.front();
+        BOOST_REQUIRE(!tsst->has_partitions());
+        BOOST_REQUIRE_EQUAL(tsst->token_range_tombstones().search(ss.make_pkey(0).token()), tomb);
+        // The tombstone's sstable is not part of the data run, whose fragments
+        // all share one run id.
+        for (auto& sst : without) {
+            BOOST_REQUIRE(sst->has_partitions());
+            BOOST_REQUIRE(sst->run_identifier() == without.front()->run_identifier());
+            BOOST_REQUIRE(sst->run_identifier() != tsst->run_identifier());
+            // Its extent is that of its partitions, not the tombstone's.
+            BOOST_REQUIRE(sst->get_first_ring_position().has_key());
+            BOOST_REQUIRE(sst->get_last_ring_position().has_key());
+        }
+    });
+}
+
+// A token range tombstone is purged under the same rules as any other
+// tombstone: once it has expired, and provided nothing it could shadow lives
+// outside the compaction.
+SEASTAR_TEST_CASE(test_compaction_purges_expired_token_range_tombstone) {
+    return test_env::do_with_async([] (test_env& env) {
+        simple_schema ss;
+        auto s = ss.schema();
+        // Well past gc_grace_seconds.
+        auto expired_at = gc_clock::now() - std::chrono::seconds(s->gc_grace_seconds().count()) - std::chrono::hours(24);
+        auto creator = [&] { return env.make_sstable(s); };
+        // The table has to see each compaction's outcome, or an input just
+        // replaced would still count as data outside the next compaction.
+        auto replacer_for = [] (table_for_tests& cf) {
+            return [&cf] (compaction::compaction_completion_desc desc) {
+                cf.as_compaction_group_view().on_compaction_completion(std::move(desc), sstables::offstrategy::no).get();
+            };
+        };
+
+        auto tombstone_only_sstable = [&] (const tombstone& tomb) {
+            auto mt = make_lw_shared<replica::memtable>(s);
+            mt->apply(token_range_tombstone::full_ring(tomb));
+            return make_sstable_containing(env.make_sst_factory(s), mt).get();
+        };
+
+        {
+            // Alone in its table: expired and shadowing nothing, so it goes.
+            auto cf = env.make_table_for_tests(s);
+            auto close_cf = deferred_stop(cf);
+            auto deletion = tombstone_only_sstable(tombstone(ss.new_timestamp(), expired_at));
+            column_family_test(cf).add_sstable(deletion).get();
+            auto ret = compact_sstables(env, compaction::compaction_descriptor({deletion}), cf, creator, replacer_for(cf)).get();
+            BOOST_REQUIRE_MESSAGE(ret.new_sstables.empty(), "an expired token range tombstone which shadows nothing was kept");
+        }
+
+        {
+            // Data older than the tombstone sits in an sstable outside the
+            // compaction; the tombstone deletes it and has to stay.
+            auto cf = env.make_table_for_tests(s);
+            auto close_cf = deferred_stop(cf);
+            auto m = mutation(s, ss.make_pkey(1));
+            ss.add_row(m, ss.make_ckey(0), "v");
+            auto data = make_sstable_containing(env.make_sst_factory(s), {std::move(m)}).get();
+            column_family_test(cf).add_sstable(data).get();
+            auto tomb = tombstone(ss.new_timestamp(), expired_at);
+            auto deletion = tombstone_only_sstable(tomb);
+            column_family_test(cf).add_sstable(deletion).get();
+            auto ret = compact_sstables(env, compaction::compaction_descriptor({deletion}), cf, creator, replacer_for(cf)).get();
+            BOOST_REQUIRE_EQUAL(ret.new_sstables.size(), 1);
+            auto out = ret.new_sstables.front();
+            BOOST_REQUIRE_EQUAL(env.reusable_sst(s, out).get()->token_range_tombstones().search(ss.make_pkey(1).token()), tomb);
+
+            // Compacted together with that data, nothing is left to shadow and
+            // the data itself is deleted: the tombstone goes, and so does the
+            // data, leaving no output at all.
+            ret = compact_sstables(env, compaction::compaction_descriptor({data, out}), cf, creator, replacer_for(cf)).get();
+            BOOST_REQUIRE_MESSAGE(ret.new_sstables.empty(), "the tombstone or the data it deletes survived their compaction together");
+        }
+    });
+}
+
+// A token range tombstone arriving in a table sets off a compaction of
+// everything it deletes right away, without waiting for the strategy: three
+// sstables are below size tiered's threshold, and yet the two which the
+// tombstone deletes are gone once the compaction the tombstone set off is done.
+SEASTAR_TEST_CASE(test_token_range_tombstone_triggers_compaction_of_what_it_deletes) {
+    return test_env::do_with_async([] (test_env& env) {
+        simple_schema ss;
+        auto s = ss.schema();
+        auto cf = env.make_table_for_tests(s);
+        auto close_cf = deferred_stop(cf);
+        auto& cm = cf->get_compaction_manager();
+        cf->set_compaction_strategy(compaction::compaction_strategy_type::size_tiered);
+        auto sst_gen = env.make_sst_factory(s);
+
+        for (auto i = 0; i < 2; i++) {
+            auto m = mutation(s, ss.make_pkey(i));
+            ss.add_row(m, ss.make_ckey(0), "v");
+            column_family_test(cf).add_sstable(make_sstable_containing(sst_gen, {std::move(m)}).get()).get();
+        }
+        BOOST_REQUIRE_EQUAL(cf->sstables_count(), 2);
+
+        // Newer than both, so it deletes all of them.
+        auto tomb = tombstone(ss.new_timestamp(), gc_clock::now());
+        auto mt = make_lw_shared<replica::memtable>(s);
+        mt->apply(token_range_tombstone::full_ring(tomb));
+        column_family_test(cf).add_sstable(make_sstable_containing(sst_gen, mt).get()).get();
+        BOOST_REQUIRE_EQUAL(cf->sstables_count(), 3);
+
+        cf->trigger_compaction();
+        do_until([&cm] {
+            return cm.get_stats().completed_tasks > 0 && cm.get_stats().pending_tasks == 0 && cm.get_stats().active_tasks == 0;
+        }, [] {
+            return sleep(std::chrono::milliseconds(50));
+        }).get();
+        BOOST_REQUIRE_EQUAL(cm.get_stats().errors, 0);
+
+        // The deleted sstables are gone; the tombstone remains, in one sstable.
+        BOOST_REQUIRE_EQUAL(cf->sstables_count(), 1);
+        auto remaining = *cf->get_sstables();
+        BOOST_REQUIRE_EQUAL(remaining.size(), 1);
+        auto sst = *remaining.begin();
+        BOOST_REQUIRE(!sst->has_partitions());
+        BOOST_REQUIRE_EQUAL(sst->token_range_tombstones().search(ss.make_pkey(0).token()), tomb);
     });
 }
 

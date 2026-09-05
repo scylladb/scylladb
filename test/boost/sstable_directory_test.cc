@@ -365,7 +365,7 @@ future<> verify_that_all_sstables_are_contained_in_ranges(sharded<sstable_direct
         auto all_ok = co_await sstdir.map_reduce0([owned_ranges] (sstable_directory& d) -> future<bool> {
             bool ret = true;
             co_await d.do_for_each_sstable([&ret, &owned_ranges] (sstables::shared_sstable sst) {
-                dht::token_range sst_range(sst->get_first_decorated_key().token(), sst->get_last_decorated_key().token());
+                dht::token_range sst_range(sst->get_first_ring_position().token(), sst->get_last_ring_position().token());
                 bool found = false;
                 for (const auto& r : *owned_ranges) {
                     if (r.contains(sst_range, dht::token_comparator{})) {

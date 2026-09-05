@@ -98,8 +98,19 @@ mutation_fragment_stream_validator::validate(mutation_fragment_v2::kind kind, st
 
     auto valid = true;
 
+    // A token range tombstone may only appear in the prologue of the stream,
+    // before the first partition_start.
+    if (kind == mutation_fragment_v2::kind::token_range_tombstone && !_in_prologue) {
+        return validation_result::invalid(format("invalid token range tombstone, it must precede all partitions{}",
+                    format_partition_key(_schema, _prev_partition_key, ", but a partition was already started: ")));
+    }
+
     // Check fragment kind order
     switch (_prev_kind) {
+        case mutation_fragment_v2::kind::token_range_tombstone:
+            valid = kind == mutation_fragment_v2::kind::token_range_tombstone ||
+                    kind == mutation_fragment_v2::kind::partition_start;
+            break;
         case mutation_fragment_v2::kind::partition_start:
             valid = kind != mutation_fragment_v2::kind::partition_start;
             break;
@@ -110,7 +121,8 @@ mutation_fragment_stream_validator::validate(mutation_fragment_v2::kind kind, st
                     kind != mutation_fragment_v2::kind::static_row;
             break;
         case mutation_fragment_v2::kind::partition_end:
-            valid = kind == mutation_fragment_v2::kind::partition_start;
+            valid = kind == mutation_fragment_v2::kind::partition_start ||
+                    kind == mutation_fragment_v2::kind::token_range_tombstone;
             break;
     }
     if (!valid) {
@@ -120,7 +132,11 @@ mutation_fragment_stream_validator::validate(mutation_fragment_v2::kind kind, st
                 _prev_kind));
     }
 
-    if (pos && _prev_kind != mutation_fragment_v2::kind::partition_end) {
+    // Positions are meaningless in the prologue: a token range tombstone lives
+    // outside of any partition and reports the same position as the
+    // partition_start which follows it.
+    if (pos && _prev_kind != mutation_fragment_v2::kind::partition_end
+            && _prev_kind != mutation_fragment_v2::kind::token_range_tombstone) {
         auto cmp = position_in_partition::tri_compare(_schema);
         auto res = cmp(_prev_pos, *pos);
         if (_prev_kind == mutation_fragment_v2::kind::range_tombstone_change) {
@@ -138,11 +154,16 @@ mutation_fragment_stream_validator::validate(mutation_fragment_v2::kind kind, st
         }
     }
 
+    if (kind == mutation_fragment_v2::kind::partition_start) {
+        _in_prologue = false;
+    }
+
     _prev_kind = kind;
     if (pos) {
         _prev_pos = *pos;
     } else {
         switch (kind) {
+            case mutation_fragment_v2::kind::token_range_tombstone: // fall-through
             case mutation_fragment_v2::kind::partition_start:
                 _prev_pos = position_in_partition::for_partition_start();
                 break;
@@ -199,6 +220,13 @@ mutation_fragment_stream_validator::operator()(mutation_fragment::kind kind) {
 mutation_fragment_stream_validator::validation_result
 mutation_fragment_stream_validator::on_end_of_stream() {
     if (_prev_kind == mutation_fragment_v2::kind::partition_end) {
+        return validation_result::valid();
+    }
+    // A stream may be nothing but the prologue: reading a truncated table
+    // yields its token range tombstones and no partitions at all, since they
+    // are all deleted. There is no partition open in that case, so there is
+    // nothing left to close.
+    if (_prev_kind == mutation_fragment_v2::kind::token_range_tombstone) {
         return validation_result::valid();
     }
     return validation_result::invalid(format("invalid end-of-stream, last partition{} was not closed, last fragment was {}",

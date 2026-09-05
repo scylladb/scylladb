@@ -180,7 +180,8 @@ incremental_compaction_strategy::create_run_and_length_pairs(const std::vector<s
 
     for(auto& r_ptr : runs) {
         auto& r = *r_ptr;
-        assert(r.data_size() != 0);
+        // A run can legitimately hold no data: an sstable which only deletes a
+        // token range stores no partitions. It sorts into the smallest bucket.
         run_length_pairs.emplace_back(r_ptr, r.data_size());
     }
 
@@ -469,7 +470,7 @@ void incremental_compaction_strategy::sort_run_bucket_by_first_key(size_bucket_t
     std::partial_sort(bucket.begin(), bucket.begin() + max_elements, bucket.end(), [&schema](const sstables::frozen_sstable_run& a, const sstables::frozen_sstable_run& b) {
         auto& a_first = *a->all().begin();
         auto& b_first = *b->all().begin();
-        return a_first->get_first_decorated_key().tri_compare(*schema, b_first->get_first_decorated_key()) <= 0;
+        return dht::ring_position_tri_compare(*schema, a_first->get_first_ring_position(), b_first->get_first_ring_position()) <= 0;
     });
 }
 
@@ -486,7 +487,7 @@ incremental_compaction_strategy::get_reshaping_job(std::vector<sstables::shared_
     auto run_count = std::ranges::size(input | std::views::transform(std::mem_fn(&sstables::sstable::run_identifier)) | std::ranges::to<std::unordered_set>());
     if (run_count >= offstrategy_threshold && mode == reshape_mode::strict) {
         std::sort(input.begin(), input.end(), [&schema] (const sstables::shared_sstable& a, const sstables::shared_sstable& b) {
-            return dht::ring_position(a->get_first_decorated_key()).less_compare(*schema, dht::ring_position(b->get_first_decorated_key()));
+            return a->get_first_ring_position().less_compare(*schema, b->get_first_ring_position());
         });
         // All sstables can be reshaped at once if the amount of overlapping will not cause memory usage to be high,
         // which is possible because partitioned set is able to incrementally open sstables during compaction

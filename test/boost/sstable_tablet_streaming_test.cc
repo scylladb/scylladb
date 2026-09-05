@@ -48,7 +48,7 @@ std::vector<dht::token_range> get_tablet_sstable_collection(auto&&... tablet_ran
     BOOST_TEST_CONTEXT("Testing with ranges: " << [&] {                                                                                                        \
         std::stringstream ss;                                                                                                                                  \
         for (const auto& sst : (sstables)) {                                                                                                                   \
-            ss << dht::token_range(sst->get_first_decorated_key().token(), sst->get_last_decorated_key().token()) << ", ";                                     \
+            ss << dht::token_range(sst->get_first_ring_position().token(), sst->get_last_ring_position().token()) << ", ";                                     \
         }                                                                                                                                                      \
         return ss.str();                                                                                                                                       \
     }())                                                                                                                                                       \

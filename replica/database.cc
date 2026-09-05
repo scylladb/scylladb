@@ -1419,7 +1419,8 @@ future<> database::cleanup_drop_table_on_all_shards(sharded<database>& sharded_d
     if (with_snapshot) {
         snapshot_name_opt = format("pre-drop-{}", db_clock::now().time_since_epoch().count());
     }
-    auto f = co_await coroutine::as_future(truncate_table_on_all_shards(sharded_db, sys_ks, table_shards, truncated_at, with_snapshot, std::move(snapshot_name_opt)));
+    auto f = co_await coroutine::as_future(truncate_table_on_all_shards(sharded_db, sys_ks, table_shards, truncated_at, with_snapshot,
+            std::move(snapshot_name_opt), dropping_table::yes));
     co_await smp::invoke_on_all([&] {
         return table_shards->stop();
     });
@@ -2204,6 +2205,21 @@ future<> database::apply_in_memory(const frozen_mutation& m, schema_ptr m_schema
     auto& cf = find_column_family(m.column_family_id());
 
     data_listeners().on_write(m_schema, m);
+
+    // Token range tombstones ride along with the partition but belong to no
+    // partition, so they are applied separately, to every compaction group
+    // their range covers. Usually there are none.
+    if (auto trts = m.token_range_tombstones(); !trts.empty()) [[unlikely]] {
+        for (const auto& trt : trts) {
+            cf.apply(trt);
+        }
+        if (m.is_token_range_tombstones_only()) {
+            // There is no partition to apply, and applying one would route by
+            // the placeholder key, which points at a tablet this node need not
+            // hold any storage for.
+            return make_ready_future<>();
+        }
+    }
 
     if (m.representation().size() > 128*1024) {
         // Big mutation: unfreeze_gently (yields), then check guardrails on
@@ -3102,8 +3118,58 @@ struct database::table_truncate_state {
     bool did_flush;
 };
 
+// Truncates by writing a tombstone covering the whole ring, rather than by
+// flushing and then discarding every sstable older than the truncation time.
+//
+// The data is gone from the moment the tombstone is written; the space it
+// occupied is reclaimed later, by compaction, the same way any other deletion
+// is. There is no flush and no stop the world discard, and a write racing with
+// the truncate is resolved by timestamp like any other pair of writes rather
+// than by being rejected.
+static future<> truncate_table_with_tombstone(sharded<database>& sharded_db, const global_table_ptr& table_shards,
+        api::timestamp_type timestamp) {
+    token_range_tombstone_list trts;
+    trts.apply(token_range_tombstone::full_ring(tombstone(timestamp, gc_clock::now())));
+
+    // This differs from an ordinary write in two ways, both because the
+    // tombstone belongs to no partition:
+    //
+    //  - a write is applied on the one shard which owns its key's token, and
+    //    reaches database::apply() through that routing. This is applied on
+    //    every shard, by calling database::apply() on each of them directly.
+    //    Each shard writes its own commitlog entry, the commitlog being per
+    //    shard, and each entry covers the whole ring;
+    //  - it goes through the write path at all rather than straight to the
+    //    memtable, so that it reaches the commitlog. Until the memtable is
+    //    flushed the commitlog is the only record that the table was
+    //    truncated, and without it a restart would bring all the data back.
+    //    force_sync, because a truncate should not be acknowledged before it
+    //    is durable.
+    co_await sharded_db.invoke_on_all([&] (database& db) -> future<> {
+        // Lets a test leave one node without the tombstone, so that repair has
+        // something to reconcile. Truncate itself cannot be made to miss a node:
+        // it refuses to run unless every one of them is up.
+        if (utils::get_local_injector().enter("skip_truncate_token_range_tombstone")) {
+            co_return;
+        }
+        auto apply_to = [&] (replica::table& t) -> future<> {
+            auto s = t.schema();
+            auto fm = freeze_token_range_tombstones(*s, trts);
+            co_await db.apply(s, fm, tracing::trace_state_ptr(), db::commitlog::force_sync::yes,
+                    db::no_timeout, db::per_partition_rate_limit::info{});
+        };
+        co_await apply_to(*table_shards);
+        // A view is truncated with its base: its rows are derived from rows
+        // which no longer exist.
+        for (auto& v : table_shards.views()) {
+            co_await apply_to(*v);
+        }
+    });
+}
+
 future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, sharded<db::system_keyspace>& sys_ks,
-        const global_table_ptr& table_shards, std::optional<db_clock::time_point> truncated_at_opt, bool with_snapshot, std::optional<sstring> snapshot_name_opt) {
+        const global_table_ptr& table_shards, std::optional<db_clock::time_point> truncated_at_opt, bool with_snapshot, std::optional<sstring> snapshot_name_opt,
+        dropping_table dropping) {
     auto& cf = *table_shards;
     auto s = cf.schema();
 
@@ -3123,6 +3189,37 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, s
     }
 
     dblog.info("Truncating {}.{} {}snapshot", s->ks_name(), s->cf_name(), with_snapshot ? "with auto-" : "without ");
+
+    if (sharded_db.local().features().token_range_tombstones && !dropping) {
+        if (with_snapshot) {
+            auto truncated_at = truncated_at_opt.value_or(db_clock::now());
+            auto name = snapshot_name_opt.value_or(
+                format("{:d}-{}", truncated_at.time_since_epoch().count(), s->cf_name()));
+            db::snapshot_options opts;
+            if (auto ttl = sharded_db.local().get_config().auto_snapshot_ttl()) {
+                opts.expires_at = opts.created_at + (ttl + 1) * 1s;
+            }
+            co_await snapshot_table_on_all_shards(sharded_db, table_shards, name, opts);
+        }
+        // TODO: have the truncate coordinator pick one timestamp and pass it
+        // in the truncate RPC, as a parameter gated on the same cluster
+        // feature, instead of each node picking its own here.
+        //
+        // The coordinator sends the truncate to every live token owner and each
+        // of them lands here, so every node ends up with a tombstone of its
+        // own, and the timestamps differ by the clock skew between them plus
+        // the spread of the RPC. A write which falls in that window survives on
+        // a node whose tombstone is older than it and is deleted on a node
+        // whose tombstone is newer, and repair then settles that in favour of
+        // the newest tombstone, so the write is lost even on the nodes which
+        // had accepted it after their own truncate.
+        //
+        // The window is small and a write racing a truncate is already
+        // unordered with respect to it, but with one timestamp for the whole
+        // operation the outcome is at least the same on every node.
+        co_await truncate_table_with_tombstone(sharded_db, table_shards, api::new_timestamp());
+        co_return;
+    }
 
     std::vector<foreign_ptr<std::unique_ptr<table_truncate_state>>> table_states;
     table_states.resize(this_smp_shard_count());

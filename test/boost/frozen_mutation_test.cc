@@ -127,6 +127,66 @@ SEASTAR_THREAD_TEST_CASE(test_frozen_mutation_fragment) {
     });
 }
 
+// A token range tombstone is not part of any partition, so it does not show up
+// in the stream of a mutation. Check the round trip through the v2 fragment
+// serialization directly, including the infinite bounds of a whole-ring
+// tombstone, which are the ones truncating a table produces.
+SEASTAR_THREAD_TEST_CASE(test_frozen_token_range_tombstone) {
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    schema_ptr sp = new_table()
+        .with_column("pk_col", bytes_type, column_kind::partition_key)
+        .with_column("reg", bytes_type)
+        .build();
+    auto& s = *sp;
+    auto permit = semaphore.make_permit();
+    auto tomb = tombstone(1234, gc_clock::time_point(gc_clock::duration(5678)));
+
+    for (auto&& trt : {
+            token_range_tombstone::full_ring(tomb),
+            token_range_tombstone(dht::token(-42), dht::token(4242), tomb),
+            token_range_tombstone(dht::token::minimum(), dht::token(7), tomb),
+            token_range_tombstone(dht::token(7), dht::token::maximum(), tomb)}) {
+        auto mf = mutation_fragment_v2(s, permit, token_range_tombstone(trt));
+        auto refrozen = freeze(s, mf).unfreeze(s, permit);
+        BOOST_REQUIRE(refrozen.is_token_range_tombstone());
+        BOOST_REQUIRE_MESSAGE(refrozen.as_token_range_tombstone() == trt,
+                fmt::format("Expected {} got {}", trt, refrozen.as_token_range_tombstone()));
+        BOOST_REQUIRE(mf.equal(s, refrozen));
+    }
+}
+
+// A frozen mutation can carry token range tombstones alongside its partition,
+// which is how a deletion of whole partitions reaches a replica and the
+// commitlog. Such a mutation has no partition of its own.
+SEASTAR_THREAD_TEST_CASE(test_frozen_mutation_token_range_tombstones) {
+    schema_ptr s = new_table()
+        .with_column("pk_col", bytes_type, column_kind::partition_key)
+        .with_column("reg", bytes_type)
+        .build();
+    auto tomb = tombstone(4321, gc_clock::time_point(gc_clock::duration(8765)));
+
+    token_range_tombstone_list trts;
+    trts.apply(token_range_tombstone(dht::token(-10), dht::token(10), tomb));
+    trts.apply(token_range_tombstone(dht::token(100), dht::token::maximum(), tomb));
+
+    auto fm = freeze_token_range_tombstones(*s, trts);
+    BOOST_REQUIRE_EQUAL(fm.column_family_id(), s->id());
+    BOOST_REQUIRE_EQUAL(fm.schema_version(), s->version());
+    BOOST_REQUIRE(fm.token_range_tombstones().equal(trts));
+
+    // Round trip through the wire representation, which is what the commitlog
+    // and the write path store.
+    auto fm2 = frozen_mutation(bytes_ostream(fm.representation()));
+    BOOST_REQUIRE(fm2.token_range_tombstones().equal(trts));
+
+    // An ordinary mutation carries none, and still decodes.
+    auto key = partition_key::from_single_value(*s, bytes_type->decompose(data_value(bytes("k"))));
+    mutation m(s, key);
+    m.set_clustered_cell(clustering_key::make_empty(), "reg",
+            data_value(bytes("v")), api::timestamp_type(1));
+    BOOST_REQUIRE(freeze(m).token_range_tombstones().empty());
+}
+
 SEASTAR_TEST_CASE(test_deserialization_using_wrong_schema_throws) {
     return seastar::async([] {
         schema_ptr s1 = new_table()

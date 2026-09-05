@@ -719,6 +719,13 @@ async def test_registry_cleanup_on_all_nodes(manager: ScyllaClusterManager, obje
     cfg = {
         'object_storage_endpoints': object_storage.create_endpoint_conf(),
     }
+    if operation == 'truncate':
+        # Truncating by writing a token range tombstone removes no sstable, so
+        # it leaves the registry alone and compaction cleans up later. The old
+        # path, which this is about, is still taken without the feature. DROP
+        # keeps taking it either way.
+        cfg = cfg | {'error_injections_at_startup': [
+                {'name': 'suppress_features', 'value': 'TOKEN_RANGE_TOMBSTONES'}]}
     servers = await manager.servers_add(2, config=cfg,
                                         property_file=[{"dc": "dc1", "rack": "r0"},
                                                        {"dc": "dc1", "rack": "r1"}])

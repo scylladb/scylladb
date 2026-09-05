@@ -2792,6 +2792,11 @@ mutation forwardable_reader_to_mutation(mutation_reader r, const std::vector<pos
             return _builder->consume(std::move(rt));
         }
 
+        stop_iteration consume(token_range_tombstone&& trt) {
+            SCYLLA_ASSERT(_builder);
+            return _builder->consume(std::move(trt));
+        }
+
         stop_iteration consume(static_row&& sr) {
             SCYLLA_ASSERT(_builder);
             return _builder->consume(std::move(sr));

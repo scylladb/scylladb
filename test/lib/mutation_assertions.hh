@@ -153,6 +153,11 @@ public:
         BOOST_REQUIRE(_validator(mutation_fragment_v2::kind::range_tombstone_change, rtc.position(), rtc.tombstone()));
         return stop_iteration::no;
     }
+    stop_iteration consume(token_range_tombstone&& trt) {
+        testlog.debug("consume token_range_tombstone: {}", trt);
+        BOOST_REQUIRE(_validator(mutation_fragment_v2::kind::token_range_tombstone, trt.position(), {}));
+        return stop_iteration::no;
+    }
     stop_iteration consume_end_of_partition() {
         testlog.debug("consume end of partition");
         BOOST_REQUIRE(_validator(mutation_fragment_v2::kind::partition_end, position_in_partition_view::for_partition_end(), {}));

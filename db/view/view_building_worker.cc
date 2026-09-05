@@ -103,12 +103,12 @@ static shard_id get_sstable_shard_id(const sstables::sstable& sst) {
 }
 
 static locator::tablet_id get_sstable_tablet_id(const locator::tablet_map& tablet_map, const sstables::sstable& sst) {
-    auto last_token = sst.get_last_decorated_key().token();
+    auto last_token = sst.get_last_ring_position().token();
     auto tablet_id = tablet_map.get_tablet_id(last_token);
 
 #ifdef SEASTAR_DEBUG
     // Single sstable from tablet-table should contain data for only one tablet
-    auto first_token = sst.get_first_decorated_key().token();
+    auto first_token = sst.get_first_ring_position().token();
     auto first_token_tablet_id = tablet_map.get_tablet_id(first_token);
     SCYLLA_ASSERT(tablet_id == first_token_tablet_id);
 #endif
@@ -847,7 +847,7 @@ future<> view_building_worker::do_process_staging(table_id table_id, dht::token 
 
         // Select sstables belonging to the tablet (identified by `last_token`)
         for (auto& sst: _staging_sstables[table_id]) {
-            auto sst_last_token = sst->get_last_decorated_key().token();
+            auto sst_last_token = sst->get_last_ring_position().token();
             if (tablet_range.contains(sst_last_token, dht::token_comparator())) {
                 sstables_to_process.push_back(sst);
             }
@@ -909,7 +909,7 @@ future<> view_building_worker::cleanup_staging_sstables(locator::effective_repli
     // Remove from local shard staging list.
     auto lock = co_await get_units(_staging_sstables_mutex, 1, _as);
     auto [first, last] = std::ranges::remove_if(_staging_sstables[table_id], [&] (auto& sst) {
-        auto sst_last_token = sst->get_last_decorated_key().token();
+        auto sst_last_token = sst->get_last_ring_position().token();
         return tablet_range.contains(sst_last_token, dht::token_comparator());
     });
     _staging_sstables[table_id].erase(first, last);

@@ -1783,6 +1783,33 @@ public:
         co_return co_await request_row_hashes(common_sync_boundary);
     }
 
+    // The token range tombstones this node holds for the range being repaired.
+    //
+    // Asked of the table rather than of the repair reader: this runs during the
+    // handshake, before any row has been read, and the reader is not created
+    // until the first read and does not know its tombstones until it has
+    // produced a fragment.
+    utils::chunked_vector<token_range_tombstone> local_token_range_tombstones() {
+        utils::chunked_vector<token_range_tombstone> res;
+        auto& table = _db.local().find_column_family(_schema->id());
+        for (const auto& trt : table.token_range_tombstones()) {
+            res.push_back(trt);
+        }
+        return res;
+    }
+
+    // Applies token range tombstones learned from a peer. apply() is
+    // idempotent, so being told the same one repeatedly costs nothing.
+    void apply_token_range_tombstones(const utils::chunked_vector<token_range_tombstone>& trts) {
+        if (trts.empty()) {
+            return;
+        }
+        auto& table = _db.local().find_column_family(_schema->id());
+        for (const auto& trt : trts) {
+            table.apply(trt);
+        }
+    }
+
     // RPC API
     future<>
     repair_row_level_start(locator::host_id remote_node, sstring ks_name, sstring cf_name, dht::token_range range, table_schema_version schema_version, streaming::stream_reason reason, gc_clock::time_point compaction_time, shard_id dst_cpu_id) {
@@ -1796,16 +1823,22 @@ public:
         // Murmur3 is appropriate because that's the only supported partitioner at
         // the time this change is introduced.
         sstring remote_partitioner_name = "org.apache.cassandra.dht.Murmur3Partitioner";
+        // A token range tombstone is not a row and cannot be reconciled by the
+        // row hash diff, so send ours here and take theirs from the reply.
+        auto local_trts = local_token_range_tombstones();
         rpc::optional<repair_row_level_start_response> resp =
             co_await ser::repair_rpc_verbs::send_repair_row_level_start(&_messaging, remote_node,
                 _repair_meta_id, ks_name, cf_name, std::move(range), _algo, _max_row_buf_size, _seed,
                 _master_node_shard_config.shard, _master_node_shard_config.shard_count, _master_node_shard_config.ignore_msb,
-                remote_partitioner_name, std::move(schema_version), reason, compaction_time, dst_cpu_id, _frozen_topology_guard, _repaired_at, _incremental_mode);
+                remote_partitioner_name, std::move(schema_version), reason, compaction_time, dst_cpu_id, _frozen_topology_guard, _repaired_at, _incremental_mode,
+                std::move(local_trts));
         if (resp && resp->status == repair_row_level_start_status::no_such_column_family) {
             throw replica::no_such_column_family(ks_name, cf_name);
-        } else {
-            co_return;
         }
+        if (resp) {
+            apply_token_range_tombstones(resp->token_range_tombstones);
+        }
+        co_return;
     }
 
     // RPC handler
@@ -1813,7 +1846,8 @@ public:
     repair_row_level_start_handler(repair_service& repair, locator::host_id from_id, uint32_t src_cpu_id, uint32_t repair_meta_id, sstring ks_name, sstring cf_name,
             dht::token_range range, row_level_diff_detect_algorithm algo, uint64_t max_row_buf_size,
             uint64_t seed, shard_config master_node_shard_config, table_schema_version schema_version, streaming::stream_reason reason,
-            gc_clock::time_point compaction_time, abort_source& as, service::frozen_topology_guard topo_guard, std::optional<int64_t> repaired_at, locator::tablet_repair_incremental_mode incremental_mode) {
+            gc_clock::time_point compaction_time, abort_source& as, service::frozen_topology_guard topo_guard, std::optional<int64_t> repaired_at, locator::tablet_repair_incremental_mode incremental_mode,
+            const utils::chunked_vector<token_range_tombstone>& token_range_tombstones) {
         rlogger.debug(">>> Started Row Level Repair (Follower): local={}, peers={}, repair_meta_id={}, keyspace={}, cf={}, schema_version={}, range={}, seed={}, max_row_buf_siz={}",
                 repair.my_host_id(), from_id, repair_meta_id, ks_name, cf_name, schema_version, range, seed, max_row_buf_size);
         try {
@@ -1821,7 +1855,9 @@ public:
             auto& mm = repair.get_migration_manager();
             co_await mm.get_group0_barrier().trigger(mm.get_abort_source());
             co_await repair.insert_repair_meta(from_id, src_cpu_id, repair_meta_id, std::move(range), algo, max_row_buf_size, seed, std::move(master_node_shard_config), std::move(schema_version), reason, compaction_time, as, topo_guard, repaired_at, incremental_mode);
-            co_return repair_row_level_start_response{repair_row_level_start_status::ok};
+            auto rm = repair.get_repair_meta(from_id, repair_meta_id);
+            rm->apply_token_range_tombstones(token_range_tombstones);
+            co_return repair_row_level_start_response{repair_row_level_start_status::ok, rm->local_token_range_tombstones()};
         } catch (replica::no_such_column_family&) {
             co_return repair_row_level_start_response{repair_row_level_start_status::no_such_column_family};
         }
@@ -2884,19 +2920,21 @@ future<> repair_service::init_ms_handlers() {
             unsigned remote_shard, unsigned remote_shard_count, unsigned remote_ignore_msb, sstring remote_partitioner_name, table_schema_version schema_version,
             rpc::optional<streaming::stream_reason> reason, rpc::optional<gc_clock::time_point> compaction_time, rpc::optional<shard_id> dst_cpu_id_opt,
             rpc::optional<service::frozen_topology_guard> topo_guard, rpc::optional<std::optional<int64_t>> repaired_at,
-            rpc::optional<locator::tablet_repair_incremental_mode> incremental_mode) {
+            rpc::optional<locator::tablet_repair_incremental_mode> incremental_mode,
+            rpc::optional<utils::chunked_vector<token_range_tombstone>> token_range_tombstones) {
         auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
         auto shard = get_dst_shard_id(src_cpu_id, dst_cpu_id_opt);
         auto from_id = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
         return container().invoke_on(shard, [from_id, src_cpu_id, repair_meta_id, ks_name, cf_name,
                 range, algo, max_row_buf_size, seed, remote_shard, remote_shard_count, remote_ignore_msb, schema_version, reason, compaction_time, this,
-                topo_guard = topo_guard.value_or(service::default_session_id), repaired_at = repaired_at.value_or(std::nullopt), incremental_mode = incremental_mode.value_or(locator::tablet_repair_incremental_mode::disabled)] (repair_service& local_repair) mutable {
+                topo_guard = topo_guard.value_or(service::default_session_id), repaired_at = repaired_at.value_or(std::nullopt), incremental_mode = incremental_mode.value_or(locator::tablet_repair_incremental_mode::disabled),
+                token_range_tombstones = token_range_tombstones.value_or(utils::chunked_vector<token_range_tombstone>())] (repair_service& local_repair) mutable {
             streaming::stream_reason r = reason ? *reason : streaming::stream_reason::repair;
             const gc_clock::time_point ct = compaction_time ? *compaction_time : gc_clock::now();
             return repair_meta::repair_row_level_start_handler(local_repair, from_id, src_cpu_id, repair_meta_id, std::move(ks_name),
                     std::move(cf_name), std::move(range), algo, max_row_buf_size, seed,
                     shard_config{remote_shard, remote_shard_count, remote_ignore_msb},
-                    schema_version, r, ct, _repair_module->abort_source(), topo_guard, repaired_at, incremental_mode);
+                    schema_version, r, ct, _repair_module->abort_source(), topo_guard, repaired_at, incremental_mode, token_range_tombstones);
         });
     });
     ser::repair_rpc_verbs::register_repair_row_level_stop(&ms, [this] (const rpc::client_info& cinfo, uint32_t repair_meta_id,

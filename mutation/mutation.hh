@@ -22,6 +22,9 @@
 #include <seastar/util/later.hh>
 #include <seastar/util/optimized_optional.hh>
 
+class token_range_tombstone;
+class token_range_tombstone_list;
+
 struct mutation_consume_cookie {
     using crs_iterator_type = mutation_partition::rows_type::iterator;
     using rts_iterator_type = range_tombstone_list::iterator;
@@ -169,6 +172,12 @@ public:
     void apply(const mutation&);
     void apply(const mutation_fragment&);
     future<> apply_gently(mutation&&);
+
+    // Applies a tombstone which deletes a range of tokens. Has no effect
+    // unless the tombstone covers this mutation's token, in which case it acts
+    // exactly like a partition tombstone with the same timestamp.
+    void apply(const token_range_tombstone&);
+    void apply(const token_range_tombstone_list&);
 
     mutation operator+(const mutation& other) const;
     mutation& operator+=(const mutation& other);

@@ -550,6 +550,9 @@ mutation_fragment_v2 frozen_mutation_fragment_v2::unfreeze(const schema& s, read
         [&] (partition_end) {
             return mutation_fragment_v2(s, permit, partition_end());
         },
+        [&] (token_range_tombstone trt) {
+            return mutation_fragment_v2(s, permit, std::move(trt));
+        },
         [] (ser::unknown_variant_type) -> mutation_fragment_v2 {
             throw std::runtime_error("Trying to deserialize unknown mutation fragment type");
         }

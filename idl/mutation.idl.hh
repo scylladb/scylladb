@@ -14,6 +14,7 @@
 #include "idl/uuid.idl.hh"
 #include "idl/keys.idl.hh"
 #include "idl/position_in_partition.idl.hh"
+#include "idl/token.idl.hh"
 
 class counter_id final {
     utils::UUID uuid();
@@ -41,6 +42,13 @@ class counter_cell stub [[writable]] {
 class tombstone [[writable]] {
     api::timestamp_type timestamp;
     gc_clock::time_point deletion_time;
+};
+
+// Deletes every partition whose token falls into (start_exclusive, end_inclusive].
+class token_range_tombstone {
+    dht::token start_exclusive();
+    dht::token end_inclusive();
+    tombstone tomb();
 };
 
 class live_cell stub [[writable]] {
@@ -136,6 +144,15 @@ class mutation stub [[writable]] {
     table_schema_version schema_version;
     partition_key key;
     mutation_partition partition;
+    // Token range tombstones delete whole partitions, so they belong to no
+    // partition and the key above says nothing about them. They ride here so
+    // that they reach a replica over the ordinary write path and survive a
+    // restart in the commitlog, both of which carry frozen mutations.
+    //
+    // An older node skips a field it does not know, so it would apply the
+    // mutation and drop the deletion without noticing. Generating these has to
+    // be gated on a cluster feature until every node understands them.
+    utils::chunked_vector<token_range_tombstone> token_range_tombstones [[version 2026.1]] = utils::chunked_vector<token_range_tombstone>();
 };
 
 class column_mapping_entry {
@@ -178,6 +195,10 @@ class mutation_fragment stub [[writable]] {
 };
 
 class mutation_fragment_v2 stub [[writable]] {
+    // Note: new alternatives go at the end. An older node deserializing one it
+    // does not know reports ser::unknown_variant_type rather than misreading
+    // the fragment, but it still cannot make sense of it, so sending one has
+    // to be gated on a cluster feature.
     std::variant<clustering_row, static_row, range_tombstone_change,
-                   partition_start, partition_end> fragment;
+                   partition_start, partition_end, token_range_tombstone> fragment;
 };

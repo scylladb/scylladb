@@ -571,6 +571,19 @@ void mutation_fragment_stream_json_writer::start_sstable(const sstables::sstable
     writer().StartArray();
 }
 
+void mutation_fragment_stream_json_writer::token_range_tombstone_element(const ::token_range_tombstone& trt) {
+    writer().StartObject();
+    writer().Key("type");
+    writer().String("token-range-tombstone");
+    writer().Key("start_exclusive");
+    writer().String(fmt::to_string(trt.start_exclusive()));
+    writer().Key("end_inclusive");
+    writer().String(fmt::to_string(trt.end_inclusive()));
+    writer().Key("tombstone");
+    _writer.write(trt.tomb());
+    writer().EndObject();
+}
+
 void mutation_fragment_stream_json_writer::start_partition(const partition_start& ps) {
     const auto& dk = ps.key();
     _clustering_array_created = false;
@@ -657,6 +670,10 @@ class dumping_consumer : public sstable_consumer {
             fmt::print("{}\n", rtc);
             return make_ready_future<stop_iteration>(stop_iteration::no);
         }
+        virtual future<stop_iteration> consume(token_range_tombstone&& trt) override {
+            fmt::print("{}\n", trt);
+            return make_ready_future<stop_iteration>(stop_iteration::no);
+        }
         virtual future<stop_iteration> consume(partition_end&& pe) override {
             fmt::print("{{partition_end}}\n");
             return make_ready_future<stop_iteration>(stop_iteration::no);
@@ -698,6 +715,10 @@ class dumping_consumer : public sstable_consumer {
             _writer.partition_element(rtc);
             return make_ready_future<stop_iteration>(stop_iteration::no);
         }
+        virtual future<stop_iteration> consume(token_range_tombstone&& trt) override {
+            _writer.token_range_tombstone_element(trt);
+            return make_ready_future<stop_iteration>(stop_iteration::no);
+        }
         virtual future<stop_iteration> consume(partition_end&& pe) override {
             _writer.end_partition();
             return make_ready_future<stop_iteration>(stop_iteration::no);
@@ -734,6 +755,7 @@ public:
     virtual future<stop_iteration> consume(static_row&& sr) override { return _consumer->consume(std::move(sr)); }
     virtual future<stop_iteration> consume(clustering_row&& cr) override { return _consumer->consume(std::move(cr)); }
     virtual future<stop_iteration> consume(range_tombstone_change&& rtc) override { return _consumer->consume(std::move(rtc)); }
+    virtual future<stop_iteration> consume(token_range_tombstone&& trt) override { return _consumer->consume(std::move(trt)); }
     virtual future<stop_iteration> consume(partition_end&& pe) override { return _consumer->consume(std::move(pe)); }
     virtual future<stop_iteration> consume_sstable_end() override { return _consumer->consume_sstable_end(); }
     virtual future<> consume_stream_end() override { return _consumer->consume_stream_end(); }
@@ -1423,6 +1445,7 @@ const char* to_string(sstables::scylla_metadata_type t) {
         case sstables::scylla_metadata_type::Schema: return "schema";
         case sstables::scylla_metadata_type::ComponentsDigests: return "components_digests";
         case sstables::scylla_metadata_type::LargeDataRecords: return "large_data_records";
+        case sstables::scylla_metadata_type::TokenRangeTombstones: return "token_range_tombstones";
     }
     std::abort();
 }
@@ -1551,6 +1574,23 @@ public:
         _writer.Uint64(val.range_tombstones);
         _writer.Key("dead_rows");
         _writer.Uint64(val.dead_rows);
+        _writer.EndObject();
+    }
+    void operator()(const sstables::disk_token_range_tombstone& val) const {
+        // An empty bound is infinity, see disk_token_range_tombstone.
+        auto bound_to_str = [] (const sstables::disk_string<uint16_t>& b) {
+            return b.value.empty() ? std::string("inf")
+                    : fmt::to_string(dht::token(dht::token::kind::key, bytes_view(b.value)));
+        };
+        _writer.StartObject();
+        _writer.Key("start_exclusive");
+        _writer.String(bound_to_str(val.start_exclusive));
+        _writer.Key("end_inclusive");
+        _writer.String(bound_to_str(val.end_inclusive));
+        _writer.Key("timestamp");
+        _writer.Int64(val.timestamp);
+        _writer.Key("deletion_time");
+        _writer.Int64(val.deletion_time);
         _writer.EndObject();
     }
     void operator()(const sstables::scylla_metadata::ext_timestamp_stats& val) const {
@@ -1682,6 +1722,10 @@ public:
     }
     future<stop_iteration> consume(range_tombstone_change&& rtc) override {
         _writer.partition_element(rtc);
+        return make_ready_future<stop_iteration>(stop_iteration::no);
+    }
+    future<stop_iteration> consume(token_range_tombstone&& trt) override {
+        _writer.token_range_tombstone_element(trt);
         return make_ready_future<stop_iteration>(stop_iteration::no);
     }
     future<stop_iteration> consume(partition_end&&) override {
@@ -2195,8 +2239,8 @@ void shard_of_with_tablets(const std::vector<sstables::shared_sstable>& sstables
 
         // token ranges are distributed across tablets, so we just check for
         // the token range of each sstable
-        auto first_token = sst->get_first_decorated_key().token();
-        auto last_token = sst->get_last_decorated_key().token();
+        auto first_token = sst->get_first_ring_position().token();
+        auto last_token = sst->get_last_ring_position().token();
         // each tablet holds a range of (last_token(i-1), last_token(i)], where
         // "last_token" is the value of the column with the same name in
         // the "system.tablets" table, and "i" is the index of current tablet.

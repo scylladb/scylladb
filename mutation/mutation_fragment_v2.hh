@@ -10,6 +10,7 @@
 
 #include "mutation_fragment.hh"
 #include "position_in_partition.hh"
+#include "mutation/token_range_tombstone.hh"
 
 #include <fmt/core.h>
 #include <optional>
@@ -87,11 +88,13 @@ concept MutationFragmentConsumerV2 =
             static_row sr,
             clustering_row cr,
             range_tombstone_change rt_chg,
+            token_range_tombstone trt,
             partition_start ph,
             partition_end pe) {
         { t.consume(std::move(sr)) } -> std::same_as<ReturnType>;
         { t.consume(std::move(cr)) } -> std::same_as<ReturnType>;
         { t.consume(std::move(rt_chg)) } -> std::same_as<ReturnType>;
+        { t.consume(std::move(trt)) } -> std::same_as<ReturnType>;
         { t.consume(std::move(ph)) } -> std::same_as<ReturnType>;
         { t.consume(std::move(pe)) } -> std::same_as<ReturnType>;
     };
@@ -102,11 +105,13 @@ concept MutationFragmentVisitorV2 =
             const static_row& sr,
             const clustering_row& cr,
             const range_tombstone_change& rt,
+            const token_range_tombstone& trt,
             const partition_start& ph,
             const partition_end& eop) {
         { t(sr) } -> std::same_as<ReturnType>;
         { t(cr) } -> std::same_as<ReturnType>;
         { t(rt) } -> std::same_as<ReturnType>;
+        { t(trt) } -> std::same_as<ReturnType>;
         { t(ph) } -> std::same_as<ReturnType>;
         { t(eop) } -> std::same_as<ReturnType>;
     };
@@ -114,6 +119,9 @@ concept MutationFragmentVisitorV2 =
 class mutation_fragment_v2 {
 public:
     enum class kind : std::uint8_t {
+        // Deletes whole partitions. Appears only at the head of the stream,
+        // before the first partition_start.
+        token_range_tombstone,
         static_row,
         clustering_row,
         range_tombstone_change,
@@ -128,6 +136,7 @@ private:
         reader_permit::resource_units _memory;
         kind _kind;
         union {
+            token_range_tombstone _token_range_tombstone;
             static_row _static_row;
             clustering_row _clustering_row;
             range_tombstone_change _range_tombstone_chg;
@@ -156,6 +165,7 @@ public:
         _data->_memory.reset_to(reader_resources::with_memory(calculate_memory_usage(s)));
     }
 
+    mutation_fragment_v2(const schema& s, reader_permit permit, token_range_tombstone&& r);
     mutation_fragment_v2(const schema& s, reader_permit permit, static_row&& r);
     mutation_fragment_v2(const schema& s, reader_permit permit, clustering_row&& r);
     mutation_fragment_v2(const schema& s, reader_permit permit, range_tombstone_change&& r);
@@ -165,6 +175,9 @@ public:
     mutation_fragment_v2(const schema& s, reader_permit permit, const mutation_fragment_v2& o)
         : _data(std::make_unique<data>(std::move(permit), o._data->_kind)) {
         switch (o._data->_kind) {
+            case kind::token_range_tombstone:
+                new (&_data->_token_range_tombstone) token_range_tombstone(o._data->_token_range_tombstone);
+                break;
             case kind::static_row:
                 new (&_data->_static_row) static_row(s, o._data->_static_row);
                 break;
@@ -210,6 +223,7 @@ public:
 
     kind mutation_fragment_kind() const { return _data->_kind; }
 
+    bool is_token_range_tombstone() const { return _data->_kind == kind::token_range_tombstone; }
     bool is_static_row() const { return _data->_kind == kind::static_row; }
     bool is_clustering_row() const { return _data->_kind == kind::clustering_row; }
     bool is_range_tombstone_change() const { return _data->_kind == kind::range_tombstone_change; }
@@ -233,12 +247,14 @@ public:
         _data->_memory.reset_to(reader_resources::with_memory(calculate_memory_usage(s)));
     }
 
+    token_range_tombstone&& as_token_range_tombstone() && { return std::move(_data->_token_range_tombstone); }
     static_row&& as_static_row() && { return std::move(_data->_static_row); }
     clustering_row&& as_clustering_row() && { return std::move(_data->_clustering_row); }
     range_tombstone_change&& as_range_tombstone_change() && { return std::move(_data->_range_tombstone_chg); }
     partition_start&& as_partition_start() && { return std::move(_data->_partition_start); }
     partition_end&& as_end_of_partition() && { return std::move(_data->_partition_end); }
 
+    const token_range_tombstone& as_token_range_tombstone() const & { return _data->_token_range_tombstone; }
     const static_row& as_static_row() const & { return _data->_static_row; }
     const clustering_row& as_clustering_row() const & { return _data->_clustering_row; }
     const range_tombstone_change& as_range_tombstone_change() const & { return _data->_range_tombstone_chg; }
@@ -253,6 +269,8 @@ public:
     decltype(auto) consume(Consumer& consumer) && {
         _data->_memory.reset_to_zero();
         switch (_data->_kind) {
+        case kind::token_range_tombstone:
+            return consumer.consume(std::move(_data->_token_range_tombstone));
         case kind::static_row:
             return consumer.consume(std::move(_data->_static_row));
         case kind::clustering_row:
@@ -271,6 +289,8 @@ public:
     requires MutationFragmentVisitorV2<Visitor, decltype(std::declval<Visitor>()(std::declval<static_row&>()))>
     decltype(auto) visit(Visitor&& visitor) const {
         switch (_data->_kind) {
+        case kind::token_range_tombstone:
+            return visitor(as_token_range_tombstone());
         case kind::static_row:
             return visitor(as_static_row());
         case kind::clustering_row:
@@ -298,6 +318,8 @@ public:
             return false;
         }
         switch (_data->_kind) {
+        case kind::token_range_tombstone:
+            return as_token_range_tombstone().equal(s, other.as_token_range_tombstone());
         case kind::static_row:
             return as_static_row().equal(s, other.as_static_row());
         case kind::clustering_row:
@@ -318,14 +340,21 @@ public:
     // Fragments which have the same position() but are not mergeable
     // and at least one of them is not a range_tombstone_change can be emitted one after the other in the stream.
     //
-    // Undefined for range_tombstone_change.
+    // Undefined for range_tombstone_change and token_range_tombstone.
     // Merging range tombstones requires a more complicated handling
     // because range_tombstone_change doesn't represent a write on its own, only
     // with a matching change for the end bound. It's not enough to chose one fragment over another,
     // the upper bound of the winning tombstone needs to be taken into account when merging
     // later range_tombstone_change fragments in the stream.
+    //
+    // Token range tombstones are excluded for a similar reason: two of them
+    // cover different token ranges, so merging them means merging two interval
+    // maps, which cannot be expressed as choosing one fragment over the other.
+    // Use token_range_tombstone_list::apply() for that.
     bool mergeable_with(const mutation_fragment_v2& mf) const {
-        return _data->_kind == mf._data->_kind && _data->_kind != kind::range_tombstone_change;
+        return _data->_kind == mf._data->_kind
+                && _data->_kind != kind::range_tombstone_change
+                && _data->_kind != kind::token_range_tombstone;
     }
 
     class printer {
@@ -357,6 +386,9 @@ template <> struct fmt::formatter<mutation_fragment_v2::kind> : fmt::formatter<s
     auto format(mutation_fragment_v2::kind k, FormatContext& ctx) const {
         string_view name = "UNEXPECTED";
         switch (k) {
+        case mutation_fragment_v2::kind::token_range_tombstone:
+            name = "token range tombstone";
+            break;
         case mutation_fragment_v2::kind::static_row:
             name = "static row";
             break;
