@@ -1405,6 +1405,10 @@ static void check_datacenter_coverage(const replica::table& t, const std::vector
 }
 
 future<tasks::task_id> sstables_loader::restore_tablets(table_id tid, sstring keyspace, sstring table, sstring snap_name, std::vector<tablet_restore_location> locations) {
+    if (!_db.local().find_column_family(tid).uses_tablets()) {
+        throw std::invalid_argument(fmt::format("Table {}.{} does not use tablets", keyspace, table));
+    }
+
     check_datacenter_coverage(_db.local().find_column_family(tid), locations);
 
     db::snapshot_table_helper sth(_sys_dist_ks.qp());

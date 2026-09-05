@@ -1566,8 +1566,8 @@ async def test_restore_tablets_into_incompatible_schema(manager: ScyllaClusterMa
 async def test_restore_tablets_into_vnodes_table(manager: ScyllaClusterManager, object_storage):
     '''Check that tablet-aware restore into a vnodes-based table is rejected.
 
-    The topology coordinator fails the request while setting up the per-tablet restore transitions
-    and discards its updates, so the destination stays empty.'''
+    The API rejects the request upfront, before any restore metadata is stored
+    or the table schema is touched, so the destination stays empty.'''
 
     topology = topo(rf = 1, nodes = 2, racks = 1, dcs = 1)
 
@@ -1586,11 +1586,8 @@ async def test_restore_tablets_into_vnodes_table(manager: ScyllaClusterManager, 
             await cql.run_async(f"CREATE TABLE {dst_ks}.cf2 ( pk text primary key, value int );")
 
             logger.info(f'Restore tablet-based {src_ks}.cf1 into vnodes-based {dst_ks}.cf2')
-            tid = await manager.api.restore_tablets(servers[1].ip_addr, dst_ks, 'cf2', snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests)
-            status = await manager.api.wait_task(servers[1].ip_addr, tid)
-
-            assert status is not None and status['state'] == 'failed', f'Restore into a vnodes-based {dst_ks}.cf2 did not fail: {status}'
-            assert 'no_such_tablet_map' in str(status.get('error')), f'Unexpected restore error: {status.get("error")}'
+            with pytest.raises(HTTPError, match="does not use tablets"):
+                await manager.api.restore_tablets(servers[1].ip_addr, dst_ks, 'cf2', snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests)
 
             res = await cql.run_async(f"SELECT * FROM {dst_ks}.cf2;")
             assert not res, f'{dst_ks}.cf2 returned {len(res)} rows after a restore that failed'
