@@ -240,7 +240,7 @@ future<> task_manager::task::impl::maybe_fold_into_parent() const noexcept {
         }
     } catch (...) {
         // If folding fails, leave the subtree unfolded.
-        tasks::tmlogger.warn("Folding of task with id={} failed due to {}. Ignored", _status.id, std::current_exception());
+        tasks::tmlogger.warn("Folding of task with id={} failed due to {:t}. Ignored", _status.id, std::current_exception());
     }
 }
 
@@ -268,7 +268,7 @@ future<> task_manager::task::impl::finish_failed(std::exception_ptr ex, std::str
 future<> task_manager::task::impl::finish_failed(std::exception_ptr ex) noexcept {
     std::string error;
     try {
-        error = fmt::format("{}", ex);
+        error = fmt::format("{:t}", ex);
     } catch (...) {
         error = "Failed to get error message";
     }

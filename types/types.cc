@@ -324,7 +324,7 @@ int64_t timestamp_from_string(std::string_view s) {
         throw marshal_exception(
             seastar::format("unable to parse date '{}': {}", s, me.what()));
     } catch (...) {
-        throw marshal_exception(seastar::format("unable to parse date '{}': {}", s, std::current_exception()));
+        throw marshal_exception(seastar::format("unable to parse date '{}': {:t}", s, std::current_exception()));
     }
 }
 

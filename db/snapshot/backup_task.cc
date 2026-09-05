@@ -90,7 +90,7 @@ future<> backup_task_impl::worker::upload_component(sstring name) {
         snap_log.info("Upload aborted per requested: {}", component_name.native());
         throw;
     } catch (...) {
-        snap_log.error("Error uploading {}: {}", component_name.native(), std::current_exception());
+        snap_log.error("Error uploading {}: {:t}", component_name.native(), std::current_exception());
         throw;
     }
 
@@ -107,7 +107,7 @@ future<> backup_task_impl::worker::upload_component(sstring name) {
         // If deletion of an uploaded file fails, the backup process will continue.
         // While this doesn't halt the backup, it may indicate filesystem permissions
         // issues or system constraints that should be investigated.
-        snap_log.warn("Failed to remove {}: {}", component_name, std::current_exception());
+        snap_log.warn("Failed to remove {}: {:t}", component_name, std::current_exception());
     }
 }
 
@@ -242,7 +242,7 @@ future<> backup_task_impl::worker::backup_file(sstring name, upload_permit permi
     try {
         co_await upload_component(name);
     } catch (...) {
-        snap_log.debug("backup_file {} failed: {}", name, std::current_exception());
+        snap_log.debug("backup_file {} failed: {:t}", name, std::current_exception());
         // keep the first exception
         if (!_ex) {
             _ex = std::current_exception();

@@ -2361,7 +2361,7 @@ future<uint64_t> validate(
             }
         }
     } catch (...) {
-        consumer.report_error(format("unexpected exception: {}", std::current_exception()));
+        consumer.report_error(format("unexpected exception: {:t}", std::current_exception()));
     }
 
     monitor.on_read_completed();

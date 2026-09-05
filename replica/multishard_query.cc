@@ -562,7 +562,7 @@ future<> read_context::save_reader(shard_id shard, full_position_view last_pos) 
         } catch (...) {
             // We don't want to fail a read just because of a failure to
             // save any of the readers.
-            mq_log.debug("Failed to save reader: {}", std::current_exception());
+            mq_log.debug("Failed to save reader: {:t}", std::current_exception());
             ++db.get_stats().multishard_query_failed_reader_saves;
             return make_ready_future<>();
         }

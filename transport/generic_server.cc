@@ -216,7 +216,7 @@ bool connection::shutdown_input() {
     try {
         _fd.shutdown_input();
     } catch (...) {
-        _server._logger.warn("Error shutting down input side of connection {}->{}, exception: {}", _fd.remote_address(), _fd.local_address(), std::current_exception());
+        _server._logger.warn("Error shutting down input side of connection {}->{}, exception: {:t}", _fd.remote_address(), _fd.local_address(), std::current_exception());
         return false;
     }
     return true;
@@ -226,7 +226,7 @@ bool connection::shutdown_output() {
     try {
         _fd.shutdown_output();
     } catch (...) {
-        _server._logger.warn("Error shutting down output side of connection {}->{}, exception: {}", _fd.remote_address(), _fd.local_address(), std::current_exception());
+        _server._logger.warn("Error shutting down output side of connection {}->{}, exception: {:t}", _fd.remote_address(), _fd.local_address(), std::current_exception());
         return false;
     }
     return true;
@@ -356,7 +356,7 @@ server::listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_bu
             ? is_tls = true, seastar::tls::listen(_credentials, addr, lo)
             : seastar::listen(addr, lo);
     } catch (...) {
-        throw std::runtime_error(format("{} error while listening on {} -> {}", _server_name, addr, std::current_exception()));
+        throw std::runtime_error(format("{} error while listening on {} -> {:t}", _server_name, addr, std::current_exception()));
     }
     _listeners.emplace_back(std::move(ss));
     // Each listener's do_accepts loop needs at least 1 unit to accept.
@@ -440,7 +440,7 @@ future<> server::do_accepts(int which, bool keepalive, socket_address server_add
                 });
             });
         } catch (...) {
-            _logger.debug("accept failed: {}", std::current_exception());
+            _logger.debug("accept failed: {:t}", std::current_exception());
         }
     }
 }

@@ -69,7 +69,7 @@ SEASTAR_TEST_CASE(test_abort_server_on_background_error) {
         };
 
         auto check_error = [](const raft::stopped_error& e) {
-            return e.what() == sstring("Raft instance is stopped, reason: \"background error, std::runtime_error (store_log_entries/test-failure)\"");
+            return e.what() == sstring("Raft instance is stopped, reason: \"background error, std::runtime_error: store_log_entries/test-failure\"");
         };
         BOOST_REQUIRE_EQUAL(get_status(), 1);
         BOOST_CHECK_EXCEPTION(co_await perform_schema_change(), raft::stopped_error, check_error);

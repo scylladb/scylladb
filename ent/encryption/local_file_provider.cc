@@ -217,7 +217,7 @@ future<> local_file_provider::read_key_file() {
             } catch (std::invalid_argument& e) {
                 std::throw_with_nested(configuration_error(fmt::format("read_key_file: {}", e.what())));
             } catch (...) {
-                std::throw_with_nested(service_error(fmt::format("read_key_file: {}", std::current_exception())));
+                std::throw_with_nested(service_error(fmt::format("read_key_file: {:t}", std::current_exception())));
             }
         });
     });

@@ -289,7 +289,7 @@ BOOST_AUTO_TEST_CASE(TestNestedException) {
     } catch (...) {
         auto error = aws::aws_error::from_exception_ptr(std::current_exception());
         BOOST_REQUIRE_EQUAL(aws::aws_error_type::UNKNOWN, error.get_error_type());
-        BOOST_REQUIRE_EQUAL("No error message was provided, exception content: char const*", error.get_error_message());
+        BOOST_REQUIRE_EQUAL("No error message was provided, exception content: unknown exception", error.get_error_message());
         BOOST_REQUIRE_EQUAL(error.is_retryable(), utils::http::retryable::no);
     }
 

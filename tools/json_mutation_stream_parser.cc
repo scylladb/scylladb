@@ -193,7 +193,7 @@ private:
             auto raw = from_hex(*_string);
             _pkey.emplace(partition_key::from_bytes(raw));
         } catch (...) {
-            return error("failed to parse partition key from raw string: {}", std::current_exception());
+            return error("failed to parse partition key from raw string: {:t}", std::current_exception());
         }
         return true;
     }
@@ -203,7 +203,7 @@ private:
             auto raw = from_hex(*_string);
             _ckey.emplace(clustering_key::from_bytes(raw));
         } catch (...) {
-            return error("failed to parse clustering key from raw string: {}", std::current_exception());
+            return error("failed to parse clustering key from raw string: {:t}", std::current_exception());
         }
         return true;
     }
@@ -234,7 +234,7 @@ private:
             }
             return true;
         } catch (...) {
-            return error("failed to parse deletion_time: {}", std::current_exception());
+            return error("failed to parse deletion_time: {:t}", std::current_exception());
         }
     }
 
@@ -257,7 +257,7 @@ private:
         try {
             _expiry = gc_clock::time_point(gc_clock::duration(timestamp_from_string(*_string) / 1000));
         } catch (...) {
-            return error("failed to parse expiry: {}", std::current_exception());
+            return error("failed to parse expiry: {:t}", std::current_exception());
         }
         return true;
     }
@@ -333,7 +333,7 @@ private:
         try {
             _column->value.emplace(to_bytes(_column->def->type->from_string(*_string)));
         } catch (...) {
-            return error("failed to parse cell value: {}", std::current_exception());
+            return error("failed to parse cell value: {:t}", std::current_exception());
         }
         return true;
     }
@@ -872,7 +872,7 @@ public:
         try {
             _thread.join().get();
         } catch (...) {
-            _logger.warn("json_mutation_stream_parser: parser thread exited with exception: {}", std::current_exception());
+            _logger.warn("json_mutation_stream_parser: parser thread exited with exception: {:t}", std::current_exception());
         }
     }
     future<mutation_fragment_v2_opt> operator()() {

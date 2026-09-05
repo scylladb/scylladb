@@ -1737,7 +1737,7 @@ private:
                 throw compaction_aborted_exception(
                         _schema->ks_name(),
                         _schema->cf_name(),
-                        format("scrub compaction failed due to unrecoverable error: {}", e));
+                        format("scrub compaction failed due to unrecoverable error: {:t}", e));
             }
             if (_drop_unfixable_sstables) {
                 _failed_to_fix_sstable = true;
@@ -1855,7 +1855,7 @@ private:
                     throw compaction_aborted_exception(
                             _schema->ks_name(),
                             _schema->cf_name(),
-                            format("scrub compaction failed due to unrecoverable error: {}", std::current_exception()));
+                            format("scrub compaction failed due to unrecoverable error: {:t}", std::current_exception()));
                 }
             });
         }
@@ -2219,7 +2219,7 @@ static future<compaction_result> scrub_sstables_validate_mode(compaction_descrip
             try {
                 co_await sst->change_state(sstables::sstable_state::quarantine);
             } catch (...) {
-                clogger.error("Moving {} to quarantine failed due to {}, continuing.", sst->get_filename(), std::current_exception());
+                clogger.error("Moving {} to quarantine failed due to {:t}, continuing.", sst->get_filename(), std::current_exception());
             }
         }
     }

@@ -105,7 +105,7 @@ void set_task_manager(http_context& ctx, routes& r, sharded<tasks::task_manager>
             try {
                 module = tm.find_module(req->get_path_param("module"));
             } catch (...) {
-                throw bad_param_exception(fmt::format("{}", std::current_exception()));
+                throw bad_param_exception(fmt::format("{:t}", std::current_exception()));
             }
 
             if (auto param = req->get_query_param("keyspace"); !param.empty()) {
@@ -220,7 +220,7 @@ void set_task_manager(http_context& ctx, routes& r, sharded<tasks::task_manager>
         try {
             co_await cfg.task_ttl_seconds.set_value_on_all_shards(req->get_query_param("ttl"), utils::config_file::config_source::API);
         } catch (...) {
-            throw bad_param_exception(fmt::format("{}", std::current_exception()));
+            throw bad_param_exception(fmt::format("{:t}", std::current_exception()));
         }
         co_return json::json_return_type(ttl);
     });
@@ -235,7 +235,7 @@ void set_task_manager(http_context& ctx, routes& r, sharded<tasks::task_manager>
         try {
             co_await cfg.user_task_ttl_seconds.set_value_on_all_shards(req->get_query_param("user_ttl"), utils::config_file::config_source::API);
         } catch (...) {
-            throw bad_param_exception(fmt::format("{}", std::current_exception()));
+            throw bad_param_exception(fmt::format("{:t}", std::current_exception()));
         }
         co_return json::json_return_type(user_ttl);
     });
@@ -251,7 +251,7 @@ void set_task_manager(http_context& ctx, routes& r, sharded<tasks::task_manager>
             try {
                 module = tm.find_module(req->get_path_param("module"));
             } catch (...) {
-                throw bad_param_exception(fmt::format("{}", std::current_exception()));
+                throw bad_param_exception(fmt::format("{:t}", std::current_exception()));
             }
 
             const auto& local_tasks = module->get_local_tasks();

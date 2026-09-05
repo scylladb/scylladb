@@ -233,7 +233,7 @@ future<qos::service_levels_info> get_service_levels(cql3::query_processor& qp, s
             };
             service_levels.emplace(service_level_name, slo);
         } catch (...) {
-            logger.warn("Failed to fetch data for service levels: {}", std::current_exception());
+            logger.warn("Failed to fetch data for service levels: {:t}", std::current_exception());
         }
     }
 
@@ -256,7 +256,7 @@ future<service_levels_info> get_service_level(cql3::query_processor& qp, std::st
             };
             service_levels.emplace(service_level_name, slo);
         } catch (...) {
-            logger.warn("Failed to fetch data for service level {}: {}", service_level_name, std::current_exception());
+            logger.warn("Failed to fetch data for service level {}: {:t}", service_level_name, std::current_exception());
         }
     }
     

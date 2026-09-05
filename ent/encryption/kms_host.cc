@@ -296,7 +296,7 @@ future<std::tuple<shared_ptr<encryption::symmetric_key>, encryption::kms_host::i
     } catch (rjson::malformed_value& e) {
         std::throw_with_nested(malformed_response_error(e.what()));
     } catch (...) {
-        std::throw_with_nested(service_error(fmt::format("get_key_by_id: {}", std::current_exception())));
+        std::throw_with_nested(service_error(fmt::format("get_key_by_id: {:t}", std::current_exception())));
     }
 }
 
@@ -322,7 +322,7 @@ future<shared_ptr<encryption::symmetric_key>> encryption::kms_host::impl::get_ke
     } catch (rjson::malformed_value& e) {
         std::throw_with_nested(malformed_response_error(e.what()));
     } catch (...) {
-        std::throw_with_nested(service_error(fmt::format("get_key_by_id: {}", std::current_exception())));
+        std::throw_with_nested(service_error(fmt::format("get_key_by_id: {:t}", std::current_exception())));
     }
 }
 
@@ -558,7 +558,7 @@ future<rjson::value> encryption::kms_host::impl::do_post(std::string_view target
                         , _options.aws_session_token.empty() ? "" : seastar::format(":{}[REDACTED]", _options.aws_session_token.substr(0, 2))
                     );
                 } catch (...) {
-                    kms_log.debug("Could not read credentials: {}", std::current_exception());
+                    kms_log.debug("Could not read credentials: {:t}", std::current_exception());
                 }
             }
         }

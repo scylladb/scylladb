@@ -72,7 +72,7 @@ void stream_plan::abort() noexcept {
         do_abort();
     } catch (...) {
         try {
-            sslog.error("Failed to abort stream plan: {}", std::current_exception());
+            sslog.error("Failed to abort stream plan: {:t}", std::current_exception());
         } catch (...) {
             // Nothing else we can do.
         }

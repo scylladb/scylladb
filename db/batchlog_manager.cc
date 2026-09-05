@@ -222,9 +222,9 @@ future<> db::batchlog_manager::batchlog_replay_loop() {
             if (_stop.abort_requested()) {
                 co_return;
             }
-            on_internal_error_noexcept(blogger, fmt::format("Unexcepted exception in batchlog reply: {}", std::current_exception()));
+            on_internal_error_noexcept(blogger, fmt::format("Unexcepted exception in batchlog reply: {:t}", std::current_exception()));
         } catch (...) {
-            blogger.error("Exception in batch replay: {}", std::current_exception());
+            blogger.error("Exception in batch replay: {:t}", std::current_exception());
         }
         delay = utils::get_local_injector().is_enabled("short_batchlog_manager_replay_interval") ?
                 std::chrono::seconds(1) : replay_interval;
@@ -311,7 +311,7 @@ future<> db::batchlog_manager::maybe_migrate_v1_to_v2() {
                     page_size,
                     std::move(batch));
         } catch (...) {
-            blogger.warn("Batchlog v1 to v2 migration failed: {}; will retry", std::current_exception());
+            blogger.warn("Batchlog v1 to v2 migration failed: {:t}; will retry", std::current_exception());
             co_return;
         }
 
@@ -434,7 +434,7 @@ static future<db::all_batches_replayed> process_batch(
     } catch (const data_dictionary::no_such_column_family&) {
         // As above -- we should drop the batch if the table doesn't exist anymore.
     } catch (...) {
-        blogger.warn("Replay failed (will retry): {}", std::current_exception());
+        blogger.warn("Replay failed (will retry): {:t}", std::current_exception());
         // timeout, overload etc.
         // Do _not_ remove the batch, assuning we got a node write error.
         // Since we don't have hints (which origin is satisfied with),

@@ -1277,7 +1277,7 @@ reader_concurrency_semaphore::inactive_read_handle reader_concurrency_semaphore:
         // due to lack of resources. Returning an empty
         // i_r_h here rather than throwing simplifies the caller's
         // error handling.
-        rcslog.warn("Registering inactive read failed: {}. Ignored as if it was evicted.", std::current_exception());
+        rcslog.warn("Registering inactive read failed: {:t}. Ignored as if it was evicted.", std::current_exception());
       }
     } else {
         permit->on_evicted();
@@ -1399,7 +1399,7 @@ void reader_concurrency_semaphore::do_detach_inactive_reader(reader_permit::impl
             ir.notify_handler(reason);
         }
     } catch (...) {
-        rcslog.error("[semaphore {}] evict(): notify handler failed for inactive read evicted due to {}: {}", _name, static_cast<int>(reason), std::current_exception());
+        rcslog.error("[semaphore {}] evict(): notify handler failed for inactive read evicted due to {}: {:t}", _name, static_cast<int>(reason), std::current_exception());
     }
     switch (reason) {
         case evict_reason::permit:

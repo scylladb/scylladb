@@ -259,14 +259,14 @@ future<std::tuple<key_ptr, opt_bytes>> replicated_key_provider::key(const key_in
                 } catch (exceptions::invalid_request_exception&) {
                 } catch (exceptions::read_failure_exception&) {
                 } catch (...) {
-                    std::throw_with_nested(service_error(fmt::format("key: {}", std::current_exception())));
+                    std::throw_with_nested(service_error(fmt::format("key: {:t}", std::current_exception())));
                 }
                 if (!id) {
                     try_local = true;
                 }
             }
             if (!try_local) {
-                std::throw_with_nested(service_error(fmt::format("key: {}", std::current_exception())));
+                std::throw_with_nested(service_error(fmt::format("key: {:t}", std::current_exception())));
             }
         }
     }

@@ -161,7 +161,7 @@ seastar::future<> dict_training_loop::start(
             } else if (_paused) {
                 dict_trainer_logger.debug("dict_training_loop: paused");
             } else  {
-                dict_trainer_logger.error("Failed to train a dictionary: {}.", std::current_exception());
+                dict_trainer_logger.error("Failed to train a dictionary: {:t}.", std::current_exception());
             }
         }
     }

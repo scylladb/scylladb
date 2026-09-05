@@ -130,7 +130,9 @@ _KNOWN_LIB_ASYMMETRIES = {
     "udev": "conf",
     "protobuf": "conf",
     "jsoncpp": "conf",
-    "fmt": "conf",
+    # NOTE: fmt is not listed here.  It is now built from the bundled submodule
+    # by both build systems (see configure_fmt() / add_subdirectory(fmt)), so
+    # it is auto-detected as an internal library and filtered symmetrically.
     # CMake resolves these transitively through Boost imported targets
     "boost_atomic": "cmake",
     # CMake links ssl explicitly for encryption targets
@@ -410,9 +412,15 @@ def normalize_linker_flag(tok):
 # ═══════════════════════════════════════════════════════════════════════════
 
 def _is_scylla_source(rel_path):
-    """True if this is a Scylla-owned source file (not seastar/abseil)."""
+    """True if this is a Scylla-owned source file (not seastar/abseil/fmt)."""
+    # fmt is a vendored submodule built by its own CMake project in both build
+    # systems: configure.py drives it as a separate sub-build (so its sources
+    # never appear in configure.py's build.ninja at all), while CMake pulls it
+    # in with add_subdirectory().  Its flags come from fmt's own CMakeLists in
+    # both cases, so there is nothing to compare here.
     return (not rel_path.startswith("seastar/")
             and not rel_path.startswith("abseil/")
+            and not rel_path.startswith("fmt/")
             and not rel_path.startswith("build")
             and not rel_path.startswith("..")
             and not os.path.isabs(rel_path)
@@ -1061,6 +1069,12 @@ def compare_link_settings(conf_targets, cmake_targets, internal_libs,
         target_base = target.rsplit("/", 1)[-1] if "/" in target else target
         if target_base in _CPP_APPS:
             only_cmake_flags.discard("-fno-lto")
+            # configure.py links fmt (and its rpath) into every target via
+            # $libs_<mode>; CMake adds fmt's rpath only to targets that
+            # actually link the shared fmt.  Standalone tools like patchelf
+            # don't link fmt in CMake, so the rpath shows up only on the
+            # configure.py side.
+            only_conf_flags.discard("-Wl,-rpath=<paths>")
 
         if only_conf_flags or only_cmake_flags:
             flag_diffs += 1

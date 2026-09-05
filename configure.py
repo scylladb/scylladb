@@ -2224,6 +2224,9 @@ def configure_seastar(build_dir, mode, mode_config, compiler_cache=None):
         '-DCMAKE_CXX_STANDARD=23',
         '-DCMAKE_CXX_EXTENSIONS=ON',
         '-DSeastar_CXX_FLAGS=SHELL:{}'.format(mode_config['lib_cflags'] + extra_file_prefix_map),
+        # Resolve fmt to the bundled submodule we build in configure_fmt()
+        # rather than whatever version happens to be installed on the host.
+        '-Dfmt_ROOT={}'.format(fmt_build_dir(build_dir, mode)),
         '-DSeastar_LD_FLAGS={}'.format(semicolon_separated(mode_config['lib_ldflags'], seastar_cxx_ld_flags)),
         '-DSeastar_API_LEVEL=9',
         '-DSeastar_DEPRECATED_OSTREAM_FORMATTERS=OFF',
@@ -2268,6 +2271,91 @@ def configure_seastar(build_dir, mode, mode_config, compiler_cache=None):
         print(" \\\n  ".join(seastar_cmd))
     os.makedirs(seastar_build_dir, exist_ok=True)
     subprocess.check_call(seastar_cmd, shell=False, cwd=cmake_dir)
+
+
+def fmt_build_dir(build_dir, mode):
+    # Where configure_fmt() sets up fmt's CMake build. fmt is not installed
+    # anywhere: both Scylla and Seastar consume it straight out of this build
+    # tree (fmt's own export() drops a build-tree fmt-config.cmake here, which
+    # is what Seastar's find_package(fmt) picks up via fmt_ROOT).
+    # Absolute, because it ends up in an rpath and in Seastar's fmt_ROOT.
+    return os.path.realpath(os.path.join(build_dir, mode, 'fmt'))
+
+
+def fmt_lib(mode, mode_config):
+    # The library that the fmt sub-build produces, as a ninja path. fmt is
+    # shared or static to match Seastar (build_seastar_shared_libs), so a mode
+    # doesn't end up with fmt symbols in both libseastar and a static libfmt.
+    ext = 'so' if mode_config['build_seastar_shared_libs'] else 'a'
+    return f'$builddir/{mode}/fmt/libfmt.{ext}'
+
+
+def fmt_link_flags(build_dir, mode, mode_config):
+    # Link flags for Scylla to use the fmt built by the fmt sub-build.
+    libdir = fmt_build_dir(build_dir, mode)
+    if mode_config['build_seastar_shared_libs']:
+        return f"-L{libdir} -Wl,-rpath,{libdir} -lfmt"
+    return os.path.join(libdir, 'libfmt.a')
+
+
+def configure_fmt(build_dir, mode, mode_config, compiler_cache=None):
+    # Set up the CMake build of the bundled fmt submodule (rather than relying
+    # on the host's fmt, whose version may differ from the headers we compile
+    # against). Only the configure step runs here; the library itself is built
+    # during the ninja build, like Seastar's and abseil's. Modeled on
+    # configure_abseil().
+    fmt_cflags = mode_config['lib_cflags']
+    cxx_flags = mode_config['cxxflags']
+    if '-DSANITIZE' in cxx_flags:
+        fmt_cflags += ' -fsanitize=address -fsanitize=undefined -fno-sanitize=vptr'
+
+    # We are not interested in the coverage of fmt itself.
+    if args.coverage:
+        for flag in COVERAGE_INST_FLAGS:
+            cxx_flags = cxx_flags.replace(f' {flag}', '')
+
+    cxx_flags += ' ' + fmt_cflags.strip()
+
+    cmake_mode = mode_config['cmake_build_type']
+    fmt_cmake_args = [
+        '-DCMAKE_BUILD_TYPE={}'.format(cmake_mode),
+        '-DCMAKE_C_COMPILER={}'.format(args.cc),
+        '-DCMAKE_CXX_COMPILER={}'.format(args.cxx),
+        '-DCMAKE_CXX_FLAGS_{}={}'.format(cmake_mode.upper(), cxx_flags),
+        '-DCMAKE_EXPORT_COMPILE_COMMANDS=ON',
+        '-DCMAKE_CXX_STANDARD=23',
+        # Static fmt gets linked into shared libseastar in some modes, so it
+        # must be position-independent.
+        '-DCMAKE_POSITION_INDEPENDENT_CODE=ON',
+        # Match Seastar's shared/static choice for the mode.
+        '-DBUILD_SHARED_LIBS={}'.format('ON' if mode_config['build_seastar_shared_libs'] else 'OFF'),
+        # We never run fmt's install target, but FMT_INSTALL also guards the
+        # generation of fmt-config.cmake / fmt-targets.cmake in the build tree
+        # (fmt calls export() there), which is how Seastar's find_package(fmt)
+        # finds the library we are about to build.
+        '-DFMT_INSTALL=ON',
+        # Keep the library named libfmt.{a,so} in every mode; otherwise fmt
+        # appends a 'd' in Debug builds and fmt_link_flags()'s -lfmt misses it.
+        '-DFMT_DEBUG_POSTFIX=',
+        '-DFMT_TEST=OFF',
+        '-DFMT_DOC=OFF',
+        '-DFMT_FUZZ=OFF',
+        # We don't consume fmt's C++20 module; building it drags in module
+        # dependency scanning, which Scylla otherwise disables.
+        '-DFMT_MODULE=OFF',
+    ]
+
+    if compiler_cache:
+        fmt_cmake_args += [f'-DCMAKE_CXX_COMPILER_LAUNCHER={compiler_cache}',
+                           f'-DCMAKE_C_COMPILER_LAUNCHER={compiler_cache}']
+
+    cmake_dir = fmt_build_dir(build_dir, mode)
+    fmt_cmd = ['cmake', '-G', 'Ninja', real_relpath('fmt', cmake_dir)] + fmt_cmake_args
+
+    if args.verbose:
+        print(' \\\n  '.join(fmt_cmd))
+    os.makedirs(cmake_dir, exist_ok=True)
+    subprocess.check_call(fmt_cmd, shell=False, cwd=cmake_dir)
 
 
 def configure_abseil(build_dir, mode, mode_config, compiler_cache=None):
@@ -2617,12 +2705,13 @@ def write_build_file(f,
         seastar_dep = f'$builddir/{mode}/seastar/libseastar.{seastar_lib_ext}'
         seastar_testing_dep = f'$builddir/{mode}/seastar/libseastar_testing.{seastar_lib_ext}'
         abseil_dep = ' '.join(f'$builddir/{mode}/abseil/{lib}' for lib in abseil_libs)
-        fmt_lib = 'fmt'
+        fmt_dep = fmt_lib(mode, modeval)
+        fmt_libs = fmt_link_flags(outdir, mode, modeval)
         f.write(textwrap.dedent('''\
             cxx_ld_flags_{mode} = {cxx_ld_flags}
             ld_flags_{mode} = $cxx_ld_flags_{mode} {lib_ldflags}
             cxxflags_{mode} = {lib_cflags} {cxxflags} -iquote. -iquote $builddir/{mode}/gen
-            libs_{mode} = -l{fmt_lib}
+            libs_{mode} = {fmt_libs}
             seastar_libs_{mode} = {seastar_libs}
             seastar_testing_libs_{mode} = {seastar_testing_libs}
             rule cxx.{mode}
@@ -2682,7 +2771,7 @@ def write_build_file(f,
               command = CARGO_BUILD_DEP_INFO_BASEDIR='.' CARGO_NET_RETRY=10 {rustc_wrapper}cargo build --locked --manifest-path=rust/Cargo.toml --target-dir=$builddir/{mode} --profile=rust-{mode} $
                         && touch $out
               description = RUST_LIB $out
-            ''').format(mode=mode, antlr3_exec=args.antlr3_exec, fmt_lib=fmt_lib, test_repeat=args.test_repeat, test_timeout=args.test_timeout, rustc_wrapper=rustc_wrapper, **modeval))
+            ''').format(mode=mode, antlr3_exec=args.antlr3_exec, fmt_libs=fmt_libs, test_repeat=args.test_repeat, test_timeout=args.test_timeout, rustc_wrapper=rustc_wrapper, **modeval))
         f.write(
             'build {mode}-build: phony {artifacts} {wasms}\n'.format(
                 mode=mode,
@@ -2741,7 +2830,9 @@ def write_build_file(f,
             if binary in cpp_apps:
                 # binary only needs the C++ standard library, no additional
                 # libraries.
-                f.write('build $builddir/{}/{}: {}.{} {}\n'.format(mode, binary, regular_link_rule, mode, str.join(' ', objs)))
+                # These only need the C++ standard library, but the link
+                # command still picks up $libs_<mode>, which links fmt.
+                f.write('build $builddir/{}/{}: {}.{} {} | {}\n'.format(mode, binary, regular_link_rule, mode, str.join(' ', objs), fmt_dep))
                 # In debug/sanitize modes, we compile with fsanitizers,
                 # so must use the same options during the link:
                 if '-DSANITIZE' in modes[mode]['cxxflags']:
@@ -2779,14 +2870,14 @@ def write_build_file(f,
                 # quickly re-link the test unstripped by adding a "_g"
                 # to the test name, e.g., "ninja build/release/testname_g"
                 link_rule = perf_tests_link_rule if binary.startswith('test/perf/') else tests_link_rule
-                f.write('build $builddir/{}/{}: {}.{} {} | {} {} {}\n'.format(mode, binary, link_rule, mode, str.join(' ', objs), seastar_dep, seastar_testing_dep, abseil_dep))
+                f.write('build $builddir/{}/{}: {}.{} {} | {} {} {} {}\n'.format(mode, binary, link_rule, mode, str.join(' ', objs), seastar_dep, seastar_testing_dep, abseil_dep, fmt_dep))
                 f.write('   libs = {}\n'.format(local_libs))
-                f.write('build $builddir/{}/{}_g: {}.{} {} | {} {} {}\n'.format(mode, binary, regular_link_rule, mode, str.join(' ', objs), seastar_dep, seastar_testing_dep, abseil_dep))
+                f.write('build $builddir/{}/{}_g: {}.{} {} | {} {} {} {}\n'.format(mode, binary, regular_link_rule, mode, str.join(' ', objs), seastar_dep, seastar_testing_dep, abseil_dep, fmt_dep))
                 f.write('   libs = {}\n'.format(local_libs))
             else:
                 if binary == 'scylla':
                     local_libs += f' {seastar_testing_libs}'
-                f.write('build $builddir/{}/{}: {}.{} {} | {} {} {}\n'.format(mode, binary, regular_link_rule, mode, str.join(' ', objs), seastar_dep, seastar_testing_dep, abseil_dep))
+                f.write('build $builddir/{}/{}: {}.{} {} | {} {} {} {}\n'.format(mode, binary, regular_link_rule, mode, str.join(' ', objs), seastar_dep, seastar_testing_dep, abseil_dep, fmt_dep))
                 f.write('   libs = {}\n'.format(local_libs))
                 f.write(f'build $builddir/{mode}/{binary}.stripped: strip $builddir/{mode}/{binary}\n')
                 f.write(f'build $builddir/{mode}/{binary}.debug: phony $builddir/{mode}/{binary}.stripped\n')
@@ -2918,14 +3009,20 @@ def write_build_file(f,
 
         seastar_dep = f'$builddir/{mode}/seastar/libseastar.{seastar_lib_ext}'
         seastar_testing_dep = f'$builddir/{mode}/seastar/libseastar_testing.{seastar_lib_ext}'
-        f.write(f'build {seastar_dep}: ninja $builddir/{mode}/seastar/build.ninja | always {profile_dep}\n')
+        f.write(f'build {seastar_dep}: ninja $builddir/{mode}/seastar/build.ninja | always {fmt_lib(mode, modeval)} {profile_dep}\n')
         f.write('  pool = submodule_pool\n')
         f.write(f'  subdir = $builddir/{mode}/seastar\n')
         f.write('  target = seastar\n')
-        f.write(f'build {seastar_testing_dep}: ninja $builddir/{mode}/seastar/build.ninja | always {profile_dep}\n')
+        f.write(f'build {seastar_testing_dep}: ninja $builddir/{mode}/seastar/build.ninja | always {fmt_lib(mode, modeval)} {profile_dep}\n')
         f.write('  pool = submodule_pool\n')
         f.write(f'  subdir = $builddir/{mode}/seastar\n')
         f.write('  target = seastar_testing\n')
+        f.write(f'  profile_dep = {profile_dep}\n')
+
+        f.write(f'build {fmt_lib(mode, modeval)}: ninja $builddir/{mode}/fmt/build.ninja | always {profile_dep}\n')
+        f.write(f'  pool = submodule_pool\n')
+        f.write(f'  subdir = $builddir/{mode}/fmt\n')
+        f.write(f'  target = fmt\n')
         f.write(f'  profile_dep = {profile_dep}\n')
 
         for lib in abseil_libs:
@@ -3097,6 +3194,7 @@ def write_build_file(f,
     for mode in build_modes:
         build_ninja_files += [f'{outdir}/{mode}/seastar/build.ninja']
         build_ninja_files += [f'{outdir}/{mode}/abseil/build.ninja']
+        build_ninja_files += [f'{outdir}/{mode}/fmt/build.ninja']
 
     f.write(textwrap.dedent('''\
         rule configure
@@ -3168,9 +3266,16 @@ def create_build_system(args):
         # {outdir}/{mode}/seastar/build.ninja, and
         # {outdir}/{mode}/seastar/seastar.pc is queried for building flags
         for mode, mode_config in build_modes.items():
+            # fmt must be configured before Seastar is, so that Seastar's
+            # find_package(fmt) resolves fmt's build tree (via fmt_ROOT).
+            configure_fmt(outdir, mode, mode_config, compiler_cache)
             configure_seastar(outdir, mode, mode_config, compiler_cache)
             configure_abseil(outdir, mode, mode_config, compiler_cache)
         user_cflags += ' -isystem abseil'
+        # Compile against the bundled fmt submodule headers rather than
+        # whatever version happens to be installed on the host. The matching
+        # library is built and linked per-mode (see fmt_link_flags()).
+        user_cflags += ' -isystem fmt/include'
 
     for mode, mode_config in build_modes.items():
         mode_config.update(query_seastar_flags(f'{outdir}/{mode}/seastar/seastar.pc',

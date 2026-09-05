@@ -23,7 +23,7 @@ seastar::future<s3::aws_credentials> aws_credentials_provider_chain::get_aws_cre
             }
             cpc_logger.debug("Retrieving AWS credentials by credentials provider {} failed.", provider->get_name());
         } catch (...) {
-            cpc_logger.debug("Retrieving AWS credentials by credentials provider {} failed. Reason: {}", provider->get_name(), std::current_exception());
+            cpc_logger.debug("Retrieving AWS credentials by credentials provider {} failed. Reason: {:t}", provider->get_name(), std::current_exception());
         }
     }
     cpc_logger.error("Failed to retrieve AWS credentials from any provider.");

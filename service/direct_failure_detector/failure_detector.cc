@@ -232,7 +232,7 @@ future<> failure_detector::impl::update_endpoint_fiber(seastar::scheduling_group
 
             continue;
         } catch (...) {
-            logger.error("update_endpoint_fiber: failed to add/remove endpoint {}: {}", ep, std::current_exception());
+            logger.error("update_endpoint_fiber: failed to add/remove endpoint {}: {:t}", ep, std::current_exception());
         }
 
         // There was an exception.
@@ -348,7 +348,7 @@ future<> failure_detector::impl::destroy_worker(workers_map_t::iterator it) noex
         // Expected, ignore.
     } catch (...) {
         // Unexpected exception, log and continue.
-        logger.error("unexpected exception from ping_fiber when destroying worker for endpoint {}: {}", it->first, std::current_exception());
+        logger.error("unexpected exception from ping_fiber when destroying worker for endpoint {}: {:t}", it->first, std::current_exception());
     }
 
     // Mark the endpoint dead for all listeners which still consider it alive.
@@ -363,7 +363,7 @@ future<> failure_detector::impl::destroy_worker(workers_map_t::iterator it) noex
         co_await std::exchange(worker._notify_fiber, make_ready_future<>());
     } catch (...) {
         // Unexpected exception, log and continue.
-        logger.error("unexpected exception from notify_fiber when destroying worker for endpoint {}: {}", it->first, std::current_exception());
+        logger.error("unexpected exception from notify_fiber when destroying worker for endpoint {}: {:t}", it->first, std::current_exception());
     }
 
     for (auto& [_, l]: _listeners_liveness) {
@@ -428,7 +428,7 @@ subscription::~subscription() {
                 fd._impl->remove_listener(l);
             });
         } catch (...) {
-            logger.error("unexpected exception when deregistering listener {}: {}", fmt::ptr(l), std::current_exception());
+            logger.error("unexpected exception when deregistering listener {}: {:t}", fmt::ptr(l), std::current_exception());
         }
     });
 }
@@ -518,7 +518,7 @@ static future<bool> ping_with_timeout(pinger::endpoint_id id, clock::timepoint_t
     } catch (...) {
         // There should be no other exceptions, but just in case... log it and discard,
         // we want to propagate exceptions from `f`, not from sleep.
-        logger.error("unexpected exception from sleep_and_abort when pinging endpoint{}: {}", id, std::current_exception());
+        logger.error("unexpected exception from sleep_and_abort when pinging endpoint{}: {:t}", id, std::current_exception());
     }
 
     if (ep) {
@@ -564,7 +564,7 @@ future<> endpoint_worker::ping_fiber() noexcept {
                 logger.debug("ping to endpoint {} timed out after {} clock ticks", _id, clock.now() - start);
             } catch (...) {
                 // Unexpected exception, probably from `pinger.ping(...)`. Log and continue.
-                logger.warn("unexpected exception when pinging {}: {}", _id, std::current_exception());
+                logger.warn("unexpected exception when pinging {}: {:t}", _id, std::current_exception());
             }
         } else {
             // We have a listener which already timed out.
@@ -678,7 +678,7 @@ future<> failure_detector::stop() {
         // Expected.
     } catch (...) {
         // Unexpected exception, log and continue.
-        logger.error("unexpected exception when stopping update_endpoint_fiber: {}", std::current_exception());
+        logger.error("unexpected exception when stopping update_endpoint_fiber: {:t}", std::current_exception());
     }
 
     co_await container().invoke_on_all([] (failure_detector& fd) -> future<> {

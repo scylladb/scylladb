@@ -432,8 +432,8 @@ bool manager::store_hint(endpoint_id host_id, schema_ptr s, lw_shared_ptr<const 
 
         return get_ep_manager(host_id).store_hint(std::move(s), std::move(fm), tr_state);
     } catch (...) {
-        manager_logger.trace("Failed to store a hint to {}: {}", host_id, std::current_exception());
-        tracing::trace(tr_state, "Failed to store a hint to {}: {}", host_id, std::current_exception());
+        manager_logger.trace("Failed to store a hint to {}: {:t}", host_id, std::current_exception());
+        tracing::trace(tr_state, "Failed to store a hint to {}: {:t}", host_id, std::current_exception());
 
         ++_stats.errors;
         return false;
@@ -557,8 +557,8 @@ future<> manager::change_host_filter(host_filter filter) {
         });
     } catch (...) {
         const sstring exception_message = eptr
-                ? seastar::format("{} + {}", eptr, std::current_exception())
-                : seastar::format("{}", std::current_exception());
+                ? seastar::format("{} + {:t}", eptr, std::current_exception())
+                : seastar::format("{:t}", std::current_exception());
 
         manager_logger.warn("Changing the host filter has failed: {}", exception_message);
 

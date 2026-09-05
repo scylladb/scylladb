@@ -59,7 +59,7 @@ future<> azure_cli_credentials::refresh(const resource_type& resource_uri) {
     } catch (auth_error&) {
         throw;
     } catch (...) {
-        std::throw_with_nested(auth_error(fmt::format("{}", std::current_exception())));
+        std::throw_with_nested(auth_error(fmt::format("{:t}", std::current_exception())));
     }
 }
 

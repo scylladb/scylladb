@@ -1409,7 +1409,7 @@ future<> segment_manager_impl::run_separator_fiber() {
             write_to_separator_failed.cancel();
         } catch (...) {
             ++_stats.separator_task_failures;
-            logstor_logger.debug("logstor separator task failure in separator fiber: {}", std::current_exception());
+            logstor_logger.debug("logstor separator task failure in separator fiber: {:t}", std::current_exception());
         }
     }
 }
@@ -1546,7 +1546,7 @@ void segment_manager_impl::on_free_record(log_location location) noexcept {
         try {
             desc.owner->update_segment(desc);
         } catch (...) {
-            logstor_logger.warn("Failed to update segments histogram: {}", std::current_exception());
+            logstor_logger.warn("Failed to update segments histogram: {:t}", std::current_exception());
         }
     }
     _stats.bytes_freed += location.size;
@@ -1606,7 +1606,7 @@ future<> segment_manager_impl::replenish_reserve() {
             break;
         } catch (...) {
             retry = true;
-            logstor_logger.warn("Exception in reserve replenisher: {}, will retry", std::current_exception());
+            logstor_logger.warn("Exception in reserve replenisher: {:t}, will retry", std::current_exception());
         }
 
         if (retry) {

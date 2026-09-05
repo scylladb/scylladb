@@ -263,7 +263,7 @@ future<> ldap_role_manager::start() {
             try {
                 co_await _cache.reload_all_permissions();
             } catch (...) {
-                mylog.warn("Cache reload all permissions failed: {}", std::current_exception());
+                mylog.warn("Cache reload all permissions failed: {:t}", std::current_exception());
             }
         }
     });
@@ -288,7 +288,7 @@ future<conn_ptr> ldap_role_manager::connect() {
             error = format("simple_bind error: {}", conn->get_error());
         }
     } catch (...) {
-        error = format("connect error: {}", std::current_exception());
+        error = format("connect error: {:t}", std::current_exception());
     }
     if (!error.empty()) {
         co_await conn->close();
@@ -309,7 +309,7 @@ future<conn_ptr> ldap_role_manager::reconnect() {
         try {
             co_return co_await connect();
         } catch (...) {
-            mylog.error("error in reconnect: {}", std::current_exception());
+            mylog.error("error in reconnect: {:t}", std::current_exception());
         }
         co_return std::nullopt;
     });
@@ -447,7 +447,7 @@ future<bool> ldap_role_manager::exists(std::string_view role_name) {
             co_await create_role(role_name);
             exists = true;
         } catch (...) {
-            mylog.error("Failed to auto-create role {}: {}", role_name, std::current_exception());
+            mylog.error("Failed to auto-create role {}: {:t}", role_name, std::current_exception());
             exists = false;
         }
         co_return exists;

@@ -86,10 +86,11 @@ private:
 
 public:
     struct iter {
-        fragmented_ostringstream& stream;
+        iter(fragmented_ostringstream& s) : stream(&s) {}
+        fragmented_ostringstream* stream;
 
         iter& operator=(char c) {
-            stream.write(c);
+            stream->write(c);
             return *this;
         }
 

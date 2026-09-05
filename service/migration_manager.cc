@@ -87,7 +87,7 @@ future<> migration_manager::stop() {
     try {
         co_await _schema_push.join();
     } catch (...) {
-        mlogger.error("schema_push failed: {}", std::current_exception());
+        mlogger.error("schema_push failed: {:t}", std::current_exception());
     }
 }
 

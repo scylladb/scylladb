@@ -495,7 +495,7 @@ future<std::optional<service::group0_guard>> service_level_controller::migrate_t
         } catch (service::group0_concurrent_modification&) {
             throw; // Let caller handle `group0_concurrent_modification`
         } catch (...) {
-            sl_logger.error("Failed to create service level for driver: {}. Removal of user service levels below the limit is necessary to allow sl:driver creation.", std::current_exception());
+            sl_logger.error("Failed to create service level for driver: {:t}. Removal of user service levels below the limit is necessary to allow sl:driver creation.", std::current_exception());
             _last_unsuccessful_driver_sl_creation_attemp = seastar::lowres_clock::now();
         }
         co_return std::nullopt;
@@ -526,7 +526,7 @@ future<>  service_level_controller::notify_service_level_added(sstring name, ser
             try {
                 subscriber->on_before_service_level_add(sl_data.slo, sl_info).get();
             } catch (...) {
-                sl_logger.error("notify_service_level_added: exception occurred in one of the observers callbacks {}", std::current_exception());
+                sl_logger.error("notify_service_level_added: exception occurred in one of the observers callbacks {:t}", std::current_exception());
             }
         });
         auto result= _service_levels_db.emplace(name, sl_data);
@@ -558,7 +558,7 @@ future<> service_level_controller::notify_service_level_updated(sstring name, se
                 try {
                     subscriber->on_before_service_level_change(slo_before, slo, sl_info).get();
                 } catch (...) {
-                    sl_logger.error("notify_service_level_updated: exception occurred in one of the observers callbacks {}", std::current_exception());
+                    sl_logger.error("notify_service_level_updated: exception occurred in one of the observers callbacks {:t}", std::current_exception());
                 }
             });
             if (sl_it->second.slo.shares != slo.shares) {
@@ -598,7 +598,7 @@ future<> service_level_controller::notify_service_level_removed(sstring name) {
                 try {
                     subscriber->on_after_service_level_remove(sl_info).get();
                 } catch (...) {
-                    sl_logger.error("notify_service_level_removed: exception occurred in one of the observers callbacks {}", std::current_exception());
+                    sl_logger.error("notify_service_level_removed: exception occurred in one of the observers callbacks {:t}", std::current_exception());
                 }
             });
         });

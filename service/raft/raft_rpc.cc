@@ -54,7 +54,7 @@ raft_rpc::one_way_rpc(sloc loc, raft::server_id id,
                 } catch (seastar::rpc::timeout_error&) {
                 } catch (seastar::rpc::closed_error&) {
                 } catch (...) {
-                    rlogger.error("Failed to send {} to {}: {}", loc.function_name(), id, std::current_exception());
+                    rlogger.error("Failed to send {} to {}: {:t}", loc.function_name(), id, std::current_exception());
                 }
         });
     });

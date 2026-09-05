@@ -1477,7 +1477,7 @@ future<> row_cache::do_update(row_cache::external_updater eu, row_cache::interna
         } catch (...) {
             // Any error from execute is considered fatal
             // to enforce exception safety.
-            on_fatal_internal_error(clogger, fmt::format("Fatal error during cache update: {}", std::current_exception()));
+            on_fatal_internal_error(clogger, fmt::format("Fatal error during cache update: {:t}", std::current_exception()));
         }
         [&] () noexcept {
             _prev_snapshot_pos = dht::ring_position::min();

@@ -145,7 +145,7 @@ future<> view_update_generator::start() {
                     }
                     input_size = result.second;
                 } catch (...) {
-                    vug_logger.warn("Processing {} failed for table {}:{}. Will retry...", s->ks_name(), s->cf_name(), std::current_exception());
+                    vug_logger.warn("Processing {} failed for table {}:{:t}. Will retry...", s->ks_name(), s->cf_name(), std::current_exception());
                     // Need to add sstables back to the set so we can retry later. By now it may
                     // have had other updates.
                     std::move(sstables.begin(), sstables.end(), std::back_inserter(_sstables_with_tables[t]));
@@ -161,7 +161,7 @@ future<> view_update_generator::start() {
                     std::move(sstables.begin(), sstables.end(), std::back_inserter(_sstables_to_move[t]));
                 } catch (...) {
                     // Move from staging will be retried upon restart.
-                    vug_logger.warn("Moving {} from staging failed: {}:{}. Ignoring...", s->ks_name(), s->cf_name(), std::current_exception());
+                    vug_logger.warn("Moving {} from staging failed: {}:{:t}. Ignoring...", s->ks_name(), s->cf_name(), std::current_exception());
                 }
                 _registration_sem.signal(num_sstables);
 
@@ -179,7 +179,7 @@ future<> view_update_generator::start() {
                     t->move_sstables_from_staging(sstables).get();
                 } catch (...) {
                     // Move from staging will be retried upon restart.
-                    vug_logger.warn("Moving some sstable from staging failed: {}. Ignoring...", std::current_exception());
+                    vug_logger.warn("Moving some sstable from staging failed: {:t}. Ignoring...", std::current_exception());
                 }
                 it = _sstables_to_move.erase(it);
             }

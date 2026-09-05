@@ -233,7 +233,7 @@ raft_server_for_group raft_group0::create_server_for_group0(raft::group_id gid, 
     auto config = raft::server::configuration {
         .on_background_error = [gid, this](std::exception_ptr e) {
             // The future will be waited indirectly in raft_group0::abort_and_drain.
-            (void)_raft_gr.abort_server(gid, fmt::format("background error, {}", e));
+            (void)_raft_gr.abort_server(gid, fmt::format("background error, {:t}", e));
             _status_for_monitoring = status_for_monitoring::aborted;
         }
     };
@@ -427,7 +427,7 @@ future<> raft_group0::do_abort_and_drain() {
 
         co_await std::move(_leadership_monitor);
     } catch (...) {
-        rslog.warn("Failed to abort raft group0: {}", std::current_exception());
+        rslog.warn("Failed to abort raft group0: {:t}", std::current_exception());
     }
 
     if (auto* group0_id = std::get_if<raft::group_id>(&_group0)) {
@@ -502,7 +502,7 @@ future<> raft_group0::leadership_monitor_fiber() {
             _leadership_observable.set(false);
         }
     } catch (...) {
-        group0_log.debug("leadership_monitor_fiber aborted with {}", std::current_exception());
+        group0_log.debug("leadership_monitor_fiber aborted with {:t}", std::current_exception());
     }
 }
 

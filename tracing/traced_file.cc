@@ -52,7 +52,7 @@ traced_file_impl::write_dma(uint64_t pos, const void* buf, size_t len, io_intent
             tracing::trace(_trace_state, "{} finished DMA write of {} bytes at position {}, successfully wrote {} bytes", _trace_prefix, len, pos, ret);
             return ret;
         } catch (...) {
-            tracing::trace(_trace_state, "{} failed DMA write of {} bytes at position {}: {}", _trace_prefix, len, pos, std::current_exception());
+            tracing::trace(_trace_state, "{} failed DMA write of {} bytes at position {}: {:t}", _trace_prefix, len, pos, std::current_exception());
             throw;
         }
     });
@@ -67,7 +67,7 @@ traced_file_impl::write_dma(uint64_t pos, std::vector<iovec> iov, io_intent* int
             tracing::trace(_trace_state, "{} finished DMA write at position {}, successfully wrote {} bytes", _trace_prefix, pos, ret);
             return ret;
         } catch (...) {
-            tracing::trace(_trace_state, "{} failed DMA write of at position {}: {}", _trace_prefix, pos, std::current_exception());
+            tracing::trace(_trace_state, "{} failed DMA write of at position {}: {:t}", _trace_prefix, pos, std::current_exception());
             throw;
         }
     });
@@ -82,7 +82,7 @@ traced_file_impl::read_dma(uint64_t pos, void* buf, size_t len, io_intent* inten
             tracing::trace(_trace_state, "{} finished DMA read of {} bytes at position {}, successfully read {} bytes", _trace_prefix, len, pos, ret);
             return ret;
         } catch (...) {
-            tracing::trace(_trace_state, "{} failed DMA read of {} bytes at position {}: {}", _trace_prefix, len, pos, std::current_exception());
+            tracing::trace(_trace_state, "{} failed DMA read of {} bytes at position {}: {:t}", _trace_prefix, len, pos, std::current_exception());
             throw;
         }
     });
@@ -97,7 +97,7 @@ traced_file_impl::read_dma(uint64_t pos, std::vector<iovec> iov, io_intent* inte
             tracing::trace(_trace_state, "{} finished DMA read at position {}, successfully read {} bytes", _trace_prefix, pos, ret);
             return ret;
         } catch (...) {
-            tracing::trace(_trace_state, "{} failed DMA read at position {}: {}", _trace_prefix, pos, std::current_exception());
+            tracing::trace(_trace_state, "{} failed DMA read at position {}: {:t}", _trace_prefix, pos, std::current_exception());
             throw;
         }
     });
@@ -111,7 +111,7 @@ traced_file_impl::flush(void) {
             f.get();
             tracing::trace(_trace_state, "{} finished flush", _trace_prefix);
         } catch (...) {
-            tracing::trace(_trace_state, "{} failed flush: {}", _trace_prefix, std::current_exception());
+            tracing::trace(_trace_state, "{} failed flush: {:t}", _trace_prefix, std::current_exception());
             throw;
         }
     });
@@ -126,7 +126,7 @@ traced_file_impl::stat(void) {
             tracing::trace(_trace_state, "{} finished file status retrieval", _trace_prefix);
             return s;
         } catch (...) {
-            tracing::trace(_trace_state, "{} failed to retrieve file status: {}", _trace_prefix, std::current_exception());
+            tracing::trace(_trace_state, "{} failed to retrieve file status: {:t}", _trace_prefix, std::current_exception());
             throw;
         }
     });
@@ -140,7 +140,7 @@ traced_file_impl::truncate(uint64_t length) {
             f.get();
             tracing::trace(_trace_state, "{} finished truncate to {} bytes", _trace_prefix, length);
         } catch (...) {
-            tracing::trace(_trace_state, "{} failed to truncate file to {} bytes: {}", _trace_prefix, length, std::current_exception());
+            tracing::trace(_trace_state, "{} failed to truncate file to {} bytes: {:t}", _trace_prefix, length, std::current_exception());
             throw;
         }
     });
@@ -154,7 +154,7 @@ traced_file_impl::discard(uint64_t offset, uint64_t length) {
             f.get();
             tracing::trace(_trace_state, "{} finished discard of {} bytes at offset {}", _trace_prefix, length, offset);
         } catch (...) {
-            tracing::trace(_trace_state, "{} failed to discard {} bytes at offset {}: {}", _trace_prefix, length, offset, std::current_exception());
+            tracing::trace(_trace_state, "{} failed to discard {} bytes at offset {}: {:t}", _trace_prefix, length, offset, std::current_exception());
             throw;
         }
     });
@@ -168,7 +168,7 @@ traced_file_impl::allocate(uint64_t position, uint64_t length) {
             f.get();
             tracing::trace(_trace_state, "{} finished allocation of {} bytes at position {}", _trace_prefix, length, position);
         } catch (...) {
-            tracing::trace(_trace_state, "{} failed to allocate {} bytes at position {}: {}", _trace_prefix, length, position, std::current_exception());
+            tracing::trace(_trace_state, "{} failed to allocate {} bytes at position {}: {:t}", _trace_prefix, length, position, std::current_exception());
             throw;
         }
     });
@@ -183,7 +183,7 @@ traced_file_impl::size(void) {
             tracing::trace(_trace_state, "{} retrieved size = {}", _trace_prefix, ret);
             return ret;
         } catch (...) {
-            tracing::trace(_trace_state, "{} failed to retrieve size: {}", _trace_prefix, std::current_exception());
+            tracing::trace(_trace_state, "{} failed to retrieve size: {:t}", _trace_prefix, std::current_exception());
             throw;
         }
     });
@@ -197,7 +197,7 @@ traced_file_impl::close() {
             f.get();
             tracing::trace(_trace_state, "{} closed file", _trace_prefix);
         } catch (...) {
-            tracing::trace(_trace_state, "{} failed to close: {}", _trace_prefix, std::current_exception());
+            tracing::trace(_trace_state, "{} failed to close: {:t}", _trace_prefix, std::current_exception());
             throw;
         }
     });

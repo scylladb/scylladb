@@ -238,7 +238,7 @@ void hint_sender::start() {
                 break;
             } catch (...) {
                 // log and keep on spinning
-                manager_logger.debug("hint_sender[{}]:start: Exception in the loop: {}", _ep_key, std::current_exception());
+                manager_logger.debug("hint_sender[{}]:start: Exception in the loop: {:t}", _ep_key, std::current_exception());
             }
         }
 
@@ -608,7 +608,7 @@ void hint_sender::send_hints_maybe() noexcept {
     // Ignore exceptions, we will retry sending this file from where we left off the next time.
     // Exceptions are not expected here during the regular operation, so just log them.
     } catch (...) {
-        manager_logger.debug("hint_sender[{}]:send_hints_maybe: Exception occurred while sending: {}", _ep_key, std::current_exception());
+        manager_logger.debug("hint_sender[{}]:send_hints_maybe: Exception occurred while sending: {:t}", _ep_key, std::current_exception());
     }
 
     if (have_segments()) {

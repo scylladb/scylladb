@@ -240,8 +240,14 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
                         level = seastar::log_level::debug;
                         status = -2;
                     }
+                    // formattable(), not a plain "{}": ex is routinely a
+                    // seastar::nested_exception (see the try_catch above), and only
+                    // formattable() descends into it. {fmt}'s own exception_ptr
+                    // formatter recurses through std::nested_exception, which
+                    // seastar::nested_exception is not, so it would print the bare
+                    // type name and drop the reason the stream failed.
                     sslog.log(level, "[Stream #{}] Failed to handle STREAM_MUTATION_FRAGMENTS (receive and distribute phase) for ks={}, cf={}, peer={}: {}",
-                        plan_id, s->ks_name(), s->cf_name(), from, aborted?"Streaming aborted":format("{}",ex));
+                        plan_id, s->ks_name(), s->cf_name(), from, aborted?"Streaming aborted":format("{}",seastar::formattable(ex)));
                 } else {
                     received_partitions = f.get();
                 }
@@ -255,7 +261,7 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
                             co_await fail_stream_plan(plan_id);
                         }
                     } catch (...) {
-                        sslog.warn("[Stream #{}] Failed to abort the stream plan: {}", plan_id, std::current_exception());
+                        sslog.warn("[Stream #{}] Failed to abort the stream plan: {:t}", plan_id, std::current_exception());
                     }
                 }
                 co_await sink(status).finally([sink] () mutable {
@@ -273,8 +279,9 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
                     if (try_catch<seastar::rpc::closed_error>(ep)) {
                         level = seastar::log_level::debug;
                     }
+                    // formattable() for the same reason as the receive phase above.
                     sslog.log(level, "[Stream #{}] Failed to handle STREAM_MUTATION_FRAGMENTS (respond phase) for ks={}, cf={}, peer={}: {}",
-                            plan_id, s->ks_name(), s->cf_name(), from, ep);
+                            plan_id, s->ks_name(), s->cf_name(), from, seastar::formattable(ep));
                     co_await sink.close();
                 });
             });
@@ -357,7 +364,7 @@ future<> stream_session::on_initialization_complete() {
                 _stream_result->handle_session_prepared(this->shared_from_this());
             }
         } catch (...) {
-            sslog.warn("[Stream #{}] Fail to send PREPARE_MESSAGE to {}, {}", this->plan_id(), id, std::current_exception());
+            sslog.warn("[Stream #{}] Fail to send PREPARE_MESSAGE to {}, {:t}", this->plan_id(), id, std::current_exception());
             throw;
         }
         return make_ready_future<>();
@@ -550,7 +557,7 @@ std::vector<replica::column_family*> stream_session::get_column_family_stores(co
                 auto& x = db.find_column_family(keyspace, cf_name);
                 stores.push_back(&x);
             } catch (replica::no_such_column_family&) {
-                sslog.warn("stream_session: {}.{} does not exist: {}\n", keyspace, cf_name, std::current_exception());
+                sslog.warn("stream_session: {}.{} does not exist: {:t}\n", keyspace, cf_name, std::current_exception());
                 continue;
             }
         }

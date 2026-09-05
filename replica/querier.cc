@@ -305,7 +305,7 @@ void querier_cache::insert_querier(
     // we're allowed to drop the reader upon registration
     // due to lack of resources - in which case we already
     // drop the querier.
-    qlogger.warn("Failed to insert querier into index: {}. Ignored as if it was evicted upon registration", std::current_exception());
+    qlogger.warn("Failed to insert querier into index: {:t}. Ignored as if it was evicted upon registration", std::current_exception());
   }
 }
 
