@@ -1128,6 +1128,19 @@ SEASTAR_TEST_CASE(test_token_range_tombstone_survives_flush) {
         auto trts = sst->token_range_tombstones();
         BOOST_REQUIRE_MESSAGE(!trts.empty(), "flushing lost the token range tombstone");
         BOOST_REQUIRE_EQUAL(trts.search(m.token()), tomb);
+
+        // The tombstone counts towards the sstable's statistics like a
+        // partition tombstone would: it is the newest thing written here.
+        BOOST_REQUIRE_EQUAL(sst->get_stats_metadata().max_timestamp, tomb.timestamp);
+
+        // An sstable holding nothing but the tombstone is entirely a deletion,
+        // and its statistics have to say so for compaction to see it expire.
+        auto tombstone_only = make_lw_shared<replica::memtable>(s);
+        tombstone_only->apply(token_range_tombstone::full_ring(tomb));
+        auto tsst = env.reusable_sst(make_sstable_containing(env.make_sstable(s), tombstone_only).get()).get();
+        BOOST_REQUIRE_EQUAL(tsst->get_stats_metadata().min_timestamp, tomb.timestamp);
+        BOOST_REQUIRE_EQUAL(tsst->get_stats_metadata().max_timestamp, tomb.timestamp);
+        BOOST_REQUIRE_EQUAL(tsst->get_max_local_deletion_time(), tomb.deletion_time);
     });
 }
 

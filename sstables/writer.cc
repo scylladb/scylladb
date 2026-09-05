@@ -63,6 +63,7 @@ stop_iteration sstable_writer::consume(range_tombstone_change&& rtc) {
 stop_iteration sstable_writer::consume(token_range_tombstone&& trt) {
     _impl->_validator(mutation_fragment_v2::kind::token_range_tombstone, position_in_partition_view::for_partition_start(), {});
     _impl->_token_range_tombstones.apply(trt);
+    _impl->_collector.update(trt.tomb());
     return stop_iteration::no;
 }
 
