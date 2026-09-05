@@ -7,6 +7,7 @@
 
 import time
 import urllib.request
+import uuid
 from contextlib import contextmanager, ExitStack
 from urllib.error import URLError
 
@@ -1019,6 +1020,13 @@ def compare_events(expected_events, output, mode, expected_region):
             # some libraries rely on this. This reproduces issue #7158:
             assert 'SequenceNumber' in record
             assert record['SequenceNumber'].isdecimal()
+            if event['eventSource'] == 'scylladb:alternator':
+                # The event ID and sequence number must identify the same CDC
+                # timestamp. This reproduces issue #31294.
+                sequence_number = int(record['SequenceNumber'])
+                event_uuid = uuid.UUID(event['eventID'].rsplit(':', 2)[1])
+                assert event_uuid.time == sequence_number >> 64
+                assert event_uuid.int & ((1 << 64) - 1) == sequence_number & ((1 << 64) - 1)
             # Alternator doesn't set the SizeBytes member. Issue #6931.
             #assert 'SizeBytes' in record
             if mode == 'KEYS_ONLY':
