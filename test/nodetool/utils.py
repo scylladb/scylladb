@@ -77,14 +77,14 @@ def check_nodetool_fails_with_error_contains(
 
 def format_size(v):
     units = {
-        1 << 40: 'TB',
-        1 << 30: 'GB',
-        1 << 20: 'MB',
-        1 << 10: 'KB',
+        1 << 40: 'TiB',
+        1 << 30: 'GiB',
+        1 << 20: 'MiB',
+        1 << 10: 'KiB',
     }
 
     for n, unit in units.items():
-        if v > n:
+        if v >= n or v <= -n:
             d = v / n
             return f'{d:.2f} {unit}'
     return f'{v} bytes'

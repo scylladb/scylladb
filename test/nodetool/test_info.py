@@ -43,7 +43,7 @@ class cache_metrics(NamedTuple):
     save_period: int
 
 
-def normalize_output(output):
+def normalize_output(output, is_scylla=True):
     # Scylla does not run a JVM, so it the memory usage exposed by MemoryMXBean
     # is meaningless to it.
     normalized = ''
@@ -52,10 +52,11 @@ def normalize_output(output):
             continue
         if line.startswith('Uptime'):
             continue
-        # cassandra nodetool use KiB and KB interchangeably, let's
-        # normalize these two prefixes
-        for iec, si in [('KiB', 'KB'), ('MiB', 'MB'), ('GiB', 'GB')]:
-            line = line.replace(iec, si)
+        if not is_scylla:
+            # cassandra nodetool divides by 1024 but labels the result with
+            # base-10 units, scylla nodetool always uses the base-2 units
+            for si, iec in [('KB', 'KiB'), ('MB', 'MiB'), ('GB', 'GiB')]:
+                line = line.replace(si, iec)
         normalized += f'{line}\n'
     return normalized
 
@@ -171,7 +172,7 @@ def test_info(request, nodetool, display_all_tokens):
 
     mem_used = 0.0
     mem_max = 0.0
-    off_heap_mem_used_in_mb = off_heap_mem_used / 1024 / 1024
+    off_heap_mem_used_in_mib = off_heap_mem_used / 1024 / 1024
     expected_output = f'''\
 {'ID':<23}: {host_id}
 {'Gossip active':<23}: true
@@ -180,8 +181,8 @@ def test_info(request, nodetool, display_all_tokens):
 {'Load':<23}: {format_size(load)}
 {'Generation No':<23}: {generation_number}
 {'Uptime (seconds)':<23}: {uptime}
-{'Heap Memory (MB)':<23}: {mem_used:.2f} / {mem_max:.2f}
-{'Off Heap Memory (MB)':<23}: {off_heap_mem_used_in_mb:.2f}
+{'Heap Memory (MiB)':<23}: {mem_used:.2f} / {mem_max:.2f}
+{'Off Heap Memory (MiB)':<23}: {off_heap_mem_used_in_mib:.2f}
 {'Data Center':<23}: {datacenter}
 {'Rack':<23}: {rack}
 {'Exceptions':<23}: {nr_exceptions}
@@ -213,4 +214,4 @@ def test_info(request, nodetool, display_all_tokens):
     if display_all_tokens:
         args.append('--tokens')
     res = nodetool("info", *args, expected_requests=expected_requests)
-    assert normalize_output(res.stdout) == normalize_output(expected_output)
+    assert normalize_output(res.stdout, is_scylla) == normalize_output(expected_output)
