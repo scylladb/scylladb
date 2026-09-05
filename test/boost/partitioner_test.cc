@@ -8,6 +8,7 @@
 
 #include <limits>
 
+#include <boost/lexical_cast.hpp>
 #include <boost/range/combine.hpp>
 #include <boost/test/tools/old/interface.hpp>
 #include <fmt/ranges.h>
@@ -56,6 +57,33 @@ SEASTAR_THREAD_TEST_CASE(test_maximum_token) {
     BOOST_REQUIRE(t.is_maximum());
     BOOST_REQUIRE_EQUAL(dht::token::to_int64(t), std::numeric_limits<int64_t>::min());
     BOOST_REQUIRE_EQUAL(t.raw(), std::numeric_limits<int64_t>::max());
+}
+
+SEASTAR_THREAD_TEST_CASE(test_token_from_sstring) {
+    BOOST_REQUIRE_EQUAL(dht::token::from_sstring("0"), dht::token(int64_t(0)));
+    BOOST_REQUIRE_EQUAL(dht::token::from_sstring("123456789"), dht::token(int64_t(123456789)));
+    BOOST_REQUIRE_EQUAL(dht::token::from_sstring("-123456789"), dht::token(int64_t(-123456789)));
+    BOOST_REQUIRE_EQUAL(dht::token::from_sstring("9223372036854775807"), dht::token::last());
+
+    // LONG_MIN is reserved and maps to the minimum token, not to a key token.
+    auto min = dht::token::from_sstring("-9223372036854775808");
+    BOOST_REQUIRE_EQUAL(min, dht::minimum_token());
+    BOOST_REQUIRE(min.is_minimum());
+
+    // Every token produced by to_sstring() must parse back to itself; this is
+    // the round trip system_keyspace::decode_tokens() relies on.
+    for (auto v : {int64_t(0), int64_t(1), int64_t(-1), int64_t(42),
+                   std::numeric_limits<int64_t>::max(), std::numeric_limits<int64_t>::min() + 1}) {
+        auto t = dht::token(v);
+        BOOST_REQUIRE_EQUAL(dht::token::from_sstring(t.to_sstring()), t);
+    }
+
+    // from_sstring() accepts a leading '+'.
+    BOOST_REQUIRE_EQUAL(dht::token::from_sstring("+123"), dht::token(int64_t(123)));
+
+    for (auto bad : {"", "abc", "12abc", " 12", "12 ", "99999999999999999999", "+", "++1", "+-123", "-+123"}) {
+        BOOST_REQUIRE_THROW(dht::token::from_sstring(bad), boost::bad_lexical_cast);
+    }
 }
 
 SEASTAR_THREAD_TEST_CASE(test_first_token) {
