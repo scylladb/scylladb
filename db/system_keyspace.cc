@@ -3100,6 +3100,59 @@ static bool must_have_tokens(service::node_state nst) {
     }
 }
 
+std::optional<service::topology_change_hint> get_topology_change_hint(const utils::chunked_vector<canonical_mutation>& mutations) {
+    auto s = system_keyspace::topology();
+    auto& version_cdef = *s->get_column_definition("version");
+    auto& fence_version_cdef = *s->get_column_definition("fence_version");
+
+    std::optional<service::topology_change_hint> hint;
+
+    for (const auto& cm : mutations) {
+        if (cm.column_family_id() != s->id()) {
+            continue;
+        }
+        auto m = cm.to_mutation(s);
+        auto& mp = m.partition();
+
+        if (mp.partition_tombstone() || !mp.row_tombstones().empty() || !mp.clustered_rows().empty()) {
+            return std::nullopt;
+        }
+
+        auto& static_row = mp.static_row().get();
+        if (static_row.empty()) {
+            continue;
+        }
+
+        if (!hint) {
+            hint.emplace();
+        }
+
+        size_t known_cells = 0;
+        auto set_if_live = [&] (const column_definition& cdef, std::optional<int64_t>& out) {
+            auto* cell = static_row.find_cell(cdef.id);
+            if (!cell) {
+                return true;
+            }
+            known_cells++;
+            auto ac = cell->as_atomic_cell(cdef);
+            if (!ac.is_live()) {
+                return false;
+            }
+            out = value_cast<int64_t>(long_type->deserialize_value(ac.value()));
+            return true;
+        };
+
+        if (!set_if_live(version_cdef, hint->version) || !set_if_live(fence_version_cdef, hint->fence_version)) {
+            return std::nullopt;
+        }
+        if (known_cells != static_row.size()) {
+            return std::nullopt;
+        }
+    }
+
+    return hint;
+}
+
 future<service::topology> system_keyspace::load_topology_state(const std::unordered_set<locator::host_id>& force_load_hosts) {
     auto rs = co_await execute_cql(
         format("SELECT * FROM system.{} WHERE key = '{}'", TOPOLOGY, TOPOLOGY));
