@@ -7031,4 +7031,64 @@ SEASTAR_TEST_CASE(test_compaction_writes_token_range_tombstones_to_their_own_sst
     });
 }
 
+// A token range tombstone is purged under the same rules as any other
+// tombstone: once it has expired, and provided nothing it could shadow lives
+// outside the compaction.
+SEASTAR_TEST_CASE(test_compaction_purges_expired_token_range_tombstone) {
+    return test_env::do_with_async([] (test_env& env) {
+        simple_schema ss;
+        auto s = ss.schema();
+        // Well past gc_grace_seconds.
+        auto expired_at = gc_clock::now() - std::chrono::seconds(s->gc_grace_seconds().count()) - std::chrono::hours(24);
+        auto creator = [&] { return env.make_sstable(s); };
+        // The table has to see each compaction's outcome, or an input just
+        // replaced would still count as data outside the next compaction.
+        auto replacer_for = [] (table_for_tests& cf) {
+            return [&cf] (compaction::compaction_completion_desc desc) {
+                cf.as_compaction_group_view().on_compaction_completion(std::move(desc), sstables::offstrategy::no).get();
+            };
+        };
+
+        auto tombstone_only_sstable = [&] (const tombstone& tomb) {
+            auto mt = make_lw_shared<replica::memtable>(s);
+            mt->apply(token_range_tombstone::full_ring(tomb));
+            return make_sstable_containing(env.make_sst_factory(s), mt).get();
+        };
+
+        {
+            // Alone in its table: expired and shadowing nothing, so it goes.
+            auto cf = env.make_table_for_tests(s);
+            auto close_cf = deferred_stop(cf);
+            auto deletion = tombstone_only_sstable(tombstone(ss.new_timestamp(), expired_at));
+            column_family_test(cf).add_sstable(deletion).get();
+            auto ret = compact_sstables(env, compaction::compaction_descriptor({deletion}), cf, creator, replacer_for(cf)).get();
+            BOOST_REQUIRE_MESSAGE(ret.new_sstables.empty(), "an expired token range tombstone which shadows nothing was kept");
+        }
+
+        {
+            // Data older than the tombstone sits in an sstable outside the
+            // compaction; the tombstone deletes it and has to stay.
+            auto cf = env.make_table_for_tests(s);
+            auto close_cf = deferred_stop(cf);
+            auto m = mutation(s, ss.make_pkey(1));
+            ss.add_row(m, ss.make_ckey(0), "v");
+            auto data = make_sstable_containing(env.make_sst_factory(s), {std::move(m)}).get();
+            column_family_test(cf).add_sstable(data).get();
+            auto tomb = tombstone(ss.new_timestamp(), expired_at);
+            auto deletion = tombstone_only_sstable(tomb);
+            column_family_test(cf).add_sstable(deletion).get();
+            auto ret = compact_sstables(env, compaction::compaction_descriptor({deletion}), cf, creator, replacer_for(cf)).get();
+            BOOST_REQUIRE_EQUAL(ret.new_sstables.size(), 1);
+            auto out = ret.new_sstables.front();
+            BOOST_REQUIRE_EQUAL(env.reusable_sst(s, out).get()->token_range_tombstones().search(ss.make_pkey(1).token()), tomb);
+
+            // Compacted together with that data, nothing is left to shadow and
+            // the data itself is deleted: the tombstone goes, and so does the
+            // data, leaving no output at all.
+            ret = compact_sstables(env, compaction::compaction_descriptor({data, out}), cf, creator, replacer_for(cf)).get();
+            BOOST_REQUIRE_MESSAGE(ret.new_sstables.empty(), "the tombstone or the data it deletes survived their compaction together");
+        }
+    });
+}
+
 BOOST_AUTO_TEST_SUITE_END()

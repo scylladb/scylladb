@@ -388,6 +388,9 @@ class compacted_fragments_writer {
     // created; a split produces several, and one which lost them would bring
     // back everything they delete.
     token_range_tombstone_list _token_range_tombstones;
+    // They all precede the first partition, so by the time any is written the
+    // list is complete and the purge below runs exactly once.
+    bool _token_range_tombstones_purged = false;
     using creator_func_t = std::function<compaction_writer(const dht::decorated_key&)>;
     using stop_func_t = std::function<void(compaction_writer*)>;
     creator_func_t _create_compaction_writer;
@@ -420,6 +423,7 @@ private:
     bool can_split_large_partition() const;
     void track_last_position(position_in_partition_view pos);
     void split_large_partition();
+    const token_range_tombstone_list& token_range_tombstones_to_write();
     void maybe_create_compaction_writer(const dht::decorated_key& dk);
     void do_consume_new_partition(const dht::decorated_key& dk);
     stop_iteration do_consume_end_of_partition();
@@ -740,6 +744,56 @@ protected:
     // If it's not present, we cannot purge tombstones without the risk of resurrecting data.
     bool tombstone_expiration_enabled() const {
         return bool(_sstable_set) && _table_s.tombstone_gc_enabled();
+    }
+
+    // Drops from `tombstones` those which compaction may forget: a token range
+    // tombstone is purgeable under the same rules as any other tombstone. It
+    // has to have expired -- its deletion time is before the gc_before of every
+    // point in its range, as decided by the tombstone gc mode in force there --
+    // and it has to shadow nothing outside this compaction: no memtable and no
+    // sstable which is not an input may hold data in its range as old as it.
+    // What the inputs hold under it is being dropped right now.
+    void purge_expired_token_range_tombstones(token_range_tombstone_list& tombstones) {
+        if (tombstones.empty() || !tombstone_expiration_enabled()) {
+            return;
+        }
+        auto now = gc_clock::now();
+        auto min_memtable_timestamp = _table_s.skip_memtable_for_tombstone_gc() ? api::max_timestamp : _table_s.min_memtable_timestamp();
+        std::vector<sstables::shared_sstable> others;
+        for (const auto& sst : *_sstable_set->all()) {
+            if (!_compacting_for_max_purgeable_func.contains(sst)) {
+                others.push_back(sst);
+            }
+        }
+        const auto& undeleted = _table_s.compacted_undeleted_sstables();
+        others.insert(others.end(), undeleted.begin(), undeleted.end());
+
+        tombstones.erase_where([&] (const token_range_tombstone& trt) {
+            // (start_exclusive, end_inclusive], with an open end for the ring's.
+            auto range = dht::token_range(
+                    trt.start_exclusive().is_minimum() ? std::nullopt : std::optional(dht::token_range::bound(trt.start_exclusive(), false)),
+                    trt.end_inclusive().is_maximum() ? std::nullopt : std::optional(dht::token_range::bound(trt.end_inclusive(), true)));
+            auto gc_before = _tombstone_gc_state.get_gc_before_for_range(_schema, range, now);
+            if (!gc_before.knows_entire_range || trt.tomb().deletion_time >= gc_before.min_gc_before) {
+                return false;
+            }
+            if (min_memtable_timestamp <= trt.tomb().timestamp) {
+                return false;
+            }
+            auto may_shadow = [&] (const sstables::shared_sstable& sst) {
+                if (sst->get_stats_metadata().min_timestamp > trt.tomb().timestamp) {
+                    return false;
+                }
+                // Overlaps (start_exclusive, end_inclusive]?
+                return sst->get_last_ring_position().token() > trt.start_exclusive()
+                        && sst->get_first_ring_position().token() <= trt.end_inclusive();
+            };
+            if (std::ranges::any_of(others, may_shadow)) {
+                return false;
+            }
+            log_debug("Purging expired token range tombstone {}", trt);
+            return true;
+        });
     }
 
     // Whether the output rotates into several sstables by size, forming a run.
@@ -1279,11 +1333,18 @@ void compacted_fragments_writer::split_large_partition() {
     _current_partition.is_splitting_partition = false;
 }
 
+const token_range_tombstone_list& compacted_fragments_writer::token_range_tombstones_to_write() {
+    if (!std::exchange(_token_range_tombstones_purged, true)) {
+        _c.purge_expired_token_range_tombstones(_token_range_tombstones);
+    }
+    return _token_range_tombstones;
+}
+
 void compacted_fragments_writer::maybe_create_compaction_writer(const dht::decorated_key& dk) {
     if (!_compaction_writer) {
         _compaction_writer = _create_compaction_writer(dk);
         if (!_c.tombstones_in_own_sstable()) {
-            for (const auto& trt : _token_range_tombstones) {
+            for (const auto& trt : token_range_tombstones_to_write()) {
                 _compaction_writer->writer.consume(token_range_tombstone(trt));
             }
         }
@@ -1363,12 +1424,12 @@ void compacted_fragments_writer::consume_end_of_stream() {
             _stop_compaction_writer(&*_compaction_writer);
             _compaction_writer = std::nullopt;
         }
-        if (!_token_range_tombstones.empty()) {
+        if (!token_range_tombstones_to_write().empty()) {
             // The data went into a run of its own above; the tombstones get an
             // sstable of their own so that no fragment of the run has to claim
             // their range. See compaction::tombstones_in_own_sstable().
             _compaction_writer = _c.create_token_range_tombstone_writer();
-            for (const auto& trt : _token_range_tombstones) {
+            for (const auto& trt : token_range_tombstones_to_write()) {
                 _compaction_writer->writer.consume(token_range_tombstone(trt));
             }
             _stop_compaction_writer(&*_compaction_writer);
@@ -1376,7 +1437,7 @@ void compacted_fragments_writer::consume_end_of_stream() {
         }
         return;
     }
-    if (!_compaction_writer && !_token_range_tombstones.empty()) {
+    if (!_compaction_writer && !token_range_tombstones_to_write().empty()) {
         // A stream of nothing but token range tombstones still has to produce
         // an sstable, or the deletion is lost. There is no partition to name
         // the output after, so a key with no components, decorated with the
