@@ -956,6 +956,7 @@ future<> object_storage_base::change_state(const sstable& sst, sstable_state sta
     co_await sst.manager().sstables_registry().update_entry_state(owner(), sst.manager().get_local_host_id(), sst.generation(), state);
 }
 
+<<<<<<< HEAD
 future<> object_storage_base::wipe(sstable& sst, const atomic_delete_context* ctx) noexcept {
     // Mark the sstable for deletion so that destroy() — called when the
     // last shared_sstable reference is dropped — will delete the cloud
@@ -964,7 +965,24 @@ future<> object_storage_base::wipe(sstable& sst, const atomic_delete_context* ct
     // Transition the registry entry to "removing" state to signal intent to
     // delete.  The entry must survive the crash window so that
     // garbage_collect() on restart can retry the S3 object deletion.
+||||||| parent of db77c0f546 (sstables: never fail object_storage_base::wipe)
+future<> object_storage_base::wipe(sstable& sst, const atomic_deletion* deletion) noexcept {
+    // Mark the sstable for deletion so that destroy() — called when the
+    // last shared_sstable reference is dropped — will delete the cloud
+    // objects.
+    sst.mark_for_deletion();
+    // Transition the registry entry to "removing" state to signal intent to
+    // delete.  The entry must survive the crash window so that
+    // garbage_collect() on restart can retry the S3 object deletion.
+=======
+future<> object_storage_base::wipe(sstable& sst, const atomic_deletion* deletion) noexcept {
+    // Record the intent to delete in the registry before any object is removed,
+    // so the sstable is never left with its entry pointing at objects that are
+    // gone. The entry survives the crash window: garbage_collect() on restart
+    // removes every entry that is not "sealed", together with its objects.
+>>>>>>> db77c0f546 (sstables: never fail object_storage_base::wipe)
     //
+<<<<<<< HEAD
     // Durability argument: if a crash loses the unfsynced commitlog, BOTH
     // the status update and the S3 objects survive — the state is consistent
     // and the sstable is loadable on restart.  If the update is committed,
@@ -978,7 +996,47 @@ future<> object_storage_base::wipe(sstable& sst, const atomic_delete_context* ct
     // exceptional future, breaking the contract documented on storage::wipe.
     if (!ctx) {
         co_await sst.manager().sstables_registry().update_entry_status(owner(), sst.manager().get_local_host_id(), sst.generation(), status_removing);
+||||||| parent of db77c0f546 (sstables: never fail object_storage_base::wipe)
+    // Durability argument: if a crash loses the unfsynced commitlog, BOTH
+    // the status update and the S3 objects survive — the state is consistent
+    // and the sstable is loadable on restart.  If the update is committed,
+    // the entry is in "removing" and destroy() will clean up the S3 objects
+    // and delete the registry entry.  Either way, the registry is never left
+    // pointing at deleted objects, and orphaned S3 objects are always covered
+    // by a "removing" registry entry that garbage_collect() can act on.
+    //
+    // FIXME: unlike filesystem_storage::wipe, this implementation does not
+    // catch exceptions from sstables_registry calls and may return an
+    // exceptional future, breaking the contract documented on storage::wipe.
+    if (!deletion) {
+        co_await sst.manager().sstables_registry().update_entry_status(owner(), sst.manager().get_local_host_id(), sst.generation(), status_removing);
+=======
+    // The atomic deletion path already recorded the intent for the whole batch
+    // in atomic_deletion::commit(), so here it only needs the mark.
+    if (!deletion) {
+        try {
+            co_await sst.manager().sstables_registry().update_entry_status(owner(), sst.manager().get_local_host_id(), sst.generation(), status_removing);
+        } catch (...) {
+            // storage::wipe must not return an exceptional future, so the error
+            // is not propagated. It cannot be ignored either: destroy() deletes
+            // the objects of every sstable marked for deletion, and with the
+            // intent unrecorded that would leave a sealed entry pointing at
+            // objects that are gone. garbage_collect() reaps only entries that
+            // are not "sealed", so startup would then fail to load it. Clear the
+            // mark instead, including one set by a caller before unlink(), so
+            // destroy() leaves the objects and the entry alone: a sealed sstable
+            // stays valid until a later compaction reclaims it, an unsealed one
+            // is reaped by garbage_collect() on the next startup.
+            sst.unmark_for_deletion();
+            sstlog.error("Failed to mark {} as {} in the sstables registry: {}. Not deleting it.", sst.toc_filename(), status_removing, std::current_exception());
+            co_return;
+        }
+>>>>>>> db77c0f546 (sstables: never fail object_storage_base::wipe)
     }
+
+    // destroy(), called when the last shared_sstable reference is dropped,
+    // deletes the objects only for sstables marked for deletion.
+    sst.mark_for_deletion();
 }
 
 future<> object_storage_base::destroy(const sstable& sst) {
