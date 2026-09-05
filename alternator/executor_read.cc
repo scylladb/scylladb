@@ -43,6 +43,7 @@
 #include "vector_search/vector_store_client.hh"
 #include <seastar/core/abort_on_expiry.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/as_future.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <boost/range/algorithm/find_end.hpp>
 #include <charconv>
@@ -2364,6 +2365,46 @@ future<executor::request_return_type> executor::get_item(client_state& client_st
     co_return rjson::print(std::move(res));
 }
 
+static constexpr std::string_view batch_get_item_launch_failure_injection = "alternator_batch_get_item_launch_failure";
+static constexpr std::string_view batch_get_item_pause_read_injection = "alternator_batch_get_item_pause_read";
+static constexpr std::string_view batch_get_item_response_failure_injection = "alternator_batch_get_item_response_failure";
+
+static void maybe_inject_batch_get_item_launch_failure(const schema& table_schema, bool previous_read_was_launched) {
+    if (!previous_read_was_launched) {
+        return;
+    }
+    const auto table_name = utils::get_local_injector().inject_parameter<std::string_view>(
+            batch_get_item_launch_failure_injection, "table_name");
+    if (table_name && *table_name == table_schema.cf_name()) {
+        utils::get_local_injector().inject(batch_get_item_launch_failure_injection, [] {
+            throw std::runtime_error("batch_get_item launch injection");
+        });
+    }
+}
+
+static bool should_pause_batch_get_item_read(const schema& table_schema, bool first_read) {
+    const auto table_name = utils::get_local_injector().inject_parameter<std::string_view>(
+            batch_get_item_pause_read_injection, "table_name");
+    const auto position = utils::get_local_injector().inject_parameter<std::string_view>(
+            batch_get_item_pause_read_injection, "position");
+    return table_name && *table_name == table_schema.cf_name()
+            && position && *position == (first_read ? "first" : "later");
+}
+
+template <typename T>
+static future<T> maybe_pause_batch_get_item_read(future<T> read, bool pause_read) {
+    if (!pause_read) {
+        return std::move(read);
+    }
+    return std::move(read).then([] (T result) {
+        return utils::get_local_injector().inject(
+                batch_get_item_pause_read_injection, utils::wait_for_message(5min)).then(
+                [result = std::move(result)] () mutable {
+            return std::move(result);
+        });
+    });
+}
+
 future<executor::request_return_type> executor::batch_get_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
     // FIXME: In this implementation, an unbounded batch size can cause
     // unbounded response JSON object to be buffered in memory, unbounded
@@ -2439,55 +2480,94 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
     // requests for the different partitions all in parallel.
     using batch_get_item_result = service::storage_proxy::result<std::vector<rjson::value>>;
     std::vector<future<batch_get_item_result>> response_futures;
+    response_futures.reserve(batch_size);
+    std::vector<std::exception_ptr> response_exceptions(batch_size);
     std::vector<uint64_t> consumed_rcu_half_units_per_table(requests.size());
+    std::vector<lw_shared_ptr<stats>> batch_get_stats;
+    batch_get_stats.reserve(requests.size());
+    // Finish potentially throwing per-table setup before launching reads.
+    for (const table_requests& rs : requests) {
+        auto per_table_stats = get_stats_from_schema(_proxy, *rs.schema);
+        per_table_stats->api_operations.batch_get_item_histogram.add(rs.requests.size());
+        batch_get_stats.push_back(std::move(per_table_stats));
+    }
     for (size_t i = 0; i < requests.size(); i++) {
         const table_requests& rs = requests[i];
         bool is_quorum = rs.cl == db::consistency_level::LOCAL_QUORUM;
-        lw_shared_ptr<stats> per_table_stats = get_stats_from_schema(_proxy, *rs.schema);
-        per_table_stats->api_operations.batch_get_item_histogram.add(rs.requests.size());
+        auto per_table_stats = batch_get_stats[i];
         for (const auto& [pk, cks] : rs.requests) {
-            dht::partition_range_vector partition_ranges{dht::partition_range(dht::decorate_key(*rs.schema, pk))};
-            std::vector<query::clustering_range> bounds;
-            if (rs.schema->clustering_key_size() == 0) {
-                bounds.push_back(query::clustering_range::make_open_ended_both_sides());
-            } else {
-                for (auto& ck : cks) {
-                    bounds.push_back(query::clustering_range::make_singular(ck.first));
+            try {
+                dht::partition_range_vector partition_ranges{dht::partition_range(dht::decorate_key(*rs.schema, pk))};
+                std::vector<query::clustering_range> bounds;
+                if (rs.schema->clustering_key_size() == 0) {
+                    bounds.push_back(query::clustering_range::make_open_ended_both_sides());
+                } else {
+                    for (auto& ck : cks) {
+                        bounds.push_back(query::clustering_range::make_singular(ck.first));
+                    }
                 }
+                auto regular_columns =
+                        rs.schema->regular_columns() | std::views::transform(&column_definition::id)
+                        | std::ranges::to<query::column_id_vector>();
+                auto selection = cql3::selection::selection::wildcard(rs.schema);
+                auto partition_slice = query::partition_slice(std::move(bounds), {}, std::move(regular_columns), selection->get_query_options());
+                auto command = ::make_lw_shared<query::read_command>(rs.schema->id(), rs.schema->version(), partition_slice, _proxy.get_max_result_size(partition_slice),
+                        query::tombstone_limit(_proxy.get_tombstone_limit()));
+                command->allow_limit = db::allow_per_partition_rate_limit::yes;
+                const auto item_callback = [is_quorum, per_table_stats, &rcus_per_table = consumed_rcu_half_units_per_table[i]](uint64_t size) {
+                    rcus_per_table += rcu_consumed_capacity_counter::get_half_units(size, is_quorum);
+                    // Update item size only if the item exists.
+                    if (size > 0) {
+                        per_table_stats->operation_sizes.batch_get_item_op_size_kb.add(bytes_to_kb_ceil(size));
+                    }
+                };
+                maybe_inject_batch_get_item_launch_failure(*rs.schema, !response_futures.empty());
+                auto process_query_result =
+                        [schema = rs.schema, partition_slice = std::move(partition_slice), selection = std::move(selection),
+                                attrs_to_get = rs.attrs_to_get, item_callback = std::move(item_callback)]
+                        (service::storage_proxy::result<service::storage_proxy::coordinator_query_result> rqr) mutable -> future<batch_get_item_result> {
+                    if (!rqr) {
+                        return make_ready_future<batch_get_item_result>(std::move(rqr).as_failure());
+                    }
+                    auto qr = std::move(rqr).assume_value();
+                    utils::get_local_injector().inject("alternator_batch_get_item", [] { throw std::runtime_error("batch_get_item injection"); });
+                    return describe_multi_item(std::move(schema), std::move(partition_slice), std::move(selection), std::move(qr.query_result), std::move(attrs_to_get), std::move(item_callback)).then([] (std::vector<rjson::value> result) {
+                        return make_ready_future<batch_get_item_result>(std::move(result));
+                    });
+                };
+                const bool pause_read = should_pause_batch_get_item_read(*rs.schema, response_futures.empty());
+                auto query_result_future = _proxy.query_result(rs.schema, std::move(command), std::move(partition_ranges), rs.cl,
+                        service::storage_proxy::coordinator_query_options(executor::default_timeout(), permit, client_state, trace_state));
+                auto f = maybe_pause_batch_get_item_read(std::move(query_result_future), pause_read).then(std::move(process_query_result));
+                response_futures.push_back(std::move(f));
+            } catch (...) {
+                response_futures.push_back(current_exception_as_future<batch_get_item_result>());
             }
-            auto regular_columns =
-                    rs.schema->regular_columns() | std::views::transform(&column_definition::id)
-                    | std::ranges::to<query::column_id_vector>();
-            auto selection = cql3::selection::selection::wildcard(rs.schema);
-            auto partition_slice = query::partition_slice(std::move(bounds), {}, std::move(regular_columns), selection->get_query_options());
-            auto command = ::make_lw_shared<query::read_command>(rs.schema->id(), rs.schema->version(), partition_slice, _proxy.get_max_result_size(partition_slice),
-                    query::tombstone_limit(_proxy.get_tombstone_limit()));
-            command->allow_limit = db::allow_per_partition_rate_limit::yes;
-            const auto item_callback = [is_quorum, per_table_stats, &rcus_per_table = consumed_rcu_half_units_per_table[i]](uint64_t size) {
-                rcus_per_table += rcu_consumed_capacity_counter::get_half_units(size, is_quorum);
-                // Update item size only if the item exists.
-                if (size > 0) {
-                    per_table_stats->operation_sizes.batch_get_item_op_size_kb.add(bytes_to_kb_ceil(size));
-                }
-            };
-            future<batch_get_item_result> f = 
-                    _proxy.query_result(rs.schema, std::move(command), std::move(partition_ranges), rs.cl,
-                        service::storage_proxy::coordinator_query_options(executor::default_timeout(), permit, client_state, trace_state)).then(
-                    [schema = rs.schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = rs.attrs_to_get, item_callback = std::move(item_callback)] (service::storage_proxy::result<service::storage_proxy::coordinator_query_result> rqr) mutable -> future<batch_get_item_result> {
-                if (!rqr) {
-                    return make_ready_future<batch_get_item_result>(std::move(rqr).as_failure());
-                }
-                auto qr = std::move(rqr).assume_value();
-                utils::get_local_injector().inject("alternator_batch_get_item", [] { throw std::runtime_error("batch_get_item injection"); });
-                return describe_multi_item(std::move(schema), std::move(partition_slice), std::move(selection), std::move(qr.query_result), std::move(attrs_to_get), std::move(item_callback)).then([] (std::vector<rjson::value> result) {
-                    return make_ready_future<batch_get_item_result>(std::move(result));
-                });
-            });
-            response_futures.push_back(std::move(f));
         }
     }
 
-    // Wait for all requests to complete, and then return the response.
+    // Keep referenced request state alive until every read has completed. Drain
+    // futures individually: a range-based when_all() can fail its allocation
+    // after reads have launched but before it starts draining them. Consume
+    // exceptions now as well, so later response-building failures cannot
+    // discard unobserved exceptional futures.
+    for (size_t i = 0; i < response_futures.size(); ++i) {
+        response_futures[i] = co_await coroutine::as_future(std::move(response_futures[i]));
+        if (response_futures[i].failed()) {
+            response_exceptions[i] = response_futures[i].get_exception();
+        }
+    }
+    if (const auto table_name = utils::get_local_injector().inject_parameter<std::string_view>(
+                batch_get_item_response_failure_injection, "table_name");
+            table_name && std::ranges::any_of(requests, [&] (const table_requests& rs) {
+                return *table_name == rs.schema->cf_name();
+            })) {
+        utils::get_local_injector().inject(batch_get_item_response_failure_injection, [] {
+            throw std::runtime_error("batch_get_item response injection");
+        });
+    }
+
+    // Process completed requests and build the response.
     // In case of full failure (no reads succeeded), an arbitrary error
     // from one of the operations will be returned.
     bool some_succeeded = false;
@@ -2500,6 +2580,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
     rjson::add(response, "Responses", rjson::empty_object());
     rjson::add(response, "UnprocessedKeys", rjson::empty_object());
     auto fut_it = response_futures.begin();
+    auto exception_it = response_exceptions.begin();
     rjson::value consumed_capacity = rjson::empty_array();
     auto add_unprocessed_keys = [&] (const std::string& table, const auto& cks) {
         // Read failed on item represented by `cks` key(s), we need to add it to UnprocessedKeys field in reply object.
@@ -2535,6 +2616,13 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
         for (const auto& [_, cks] : rs.requests) {
             auto& fut = *fut_it;
             ++fut_it;
+            auto read_exception = *exception_it;
+            ++exception_it;
+            if (read_exception) {
+                eptr = std::move(read_exception);
+                add_unprocessed_keys(table, cks);
+                continue;
+            }
             try {
                 // The future here (`storage_proxy::result`, which is a `bo::result`) might contain an error as value
                 // or it might contain an exception (which will be rethrown on `co_await` call).
