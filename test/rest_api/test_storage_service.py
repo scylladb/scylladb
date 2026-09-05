@@ -352,6 +352,18 @@ def test_storage_service_flush(cql, this_dc, rest_api):
                 resp = rest_api.send("POST", f"storage_service/keyspace_flush/{ks}", { "cf": f"{t0},no_such_table,{t1}"} )
                 assert resp.status_code == requests.codes.bad_request
 
+def eventually(check, timeout_s=30):
+    """Retries `check` until it stops raising AssertionError, or `timeout_s`
+    passes, in which case the last failure propagates."""
+    deadline = time.time() + timeout_s
+    while True:
+        try:
+            return check()
+        except AssertionError:
+            if time.time() > deadline:
+                raise
+            time.sleep(0.1)
+
 def verify_snapshot_details(rest_api, expected):
     resp = rest_api.send("GET", "storage_service/snapshots")
     found = False
@@ -390,15 +402,16 @@ def test_storage_service_snapshot(cql, this_dc, rest_api):
                     'value': [{'ks': ks0, 'cf': cf00, 'total': 1, 'live': 0}]
                 })
 
-                # Truncating writes a tombstone and leaves the sstables for
-                # compaction to reclaim, so the snapshot still shares its files
-                # with the table and none of them is live on the snapshot's own
-                # account.
+                # Truncating writes a tombstone. Once the tombstone is flushed,
+                # the compaction it sets off reclaims the sstables it deletes,
+                # leaving the snapshot's hard links the only copy of them. That
+                # compaction is asynchronous, hence the wait.
                 cql.execute(f"TRUNCATE {table00}")
-                verify_snapshot_details(rest_api, {
+                rest_api.send("POST", f"storage_service/keyspace_flush/{ks0}").raise_for_status()
+                eventually(lambda: verify_snapshot_details(rest_api, {
                     'key': snapshot0,
-                    'value': [{'ks': ks0, 'cf': cf00, 'total': 1, 'live': 0}]
-                })
+                    'value': [{'ks': ks0, 'cf': cf00, 'total': 1, 'live': 1}]
+                }))
 
             with new_test_table(cql, keyspace0, "p text PRIMARY KEY") as table01:
                 _, cf01 = table01.split('.')

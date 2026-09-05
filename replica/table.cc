@@ -2837,8 +2837,14 @@ void compaction_group::trigger_compaction() {
     // But not if we're locked out or stopping
     if (!_async_gate.is_closed()) {
       // FIXME: indentation
+      // A token range tombstone in the set means data waiting to be dropped;
+      // go after it right away rather than when the strategy gets to it.
+      auto has_token_range_tombstones = !main_sstables()->token_range_tombstones().empty();
       for (auto view : all_views()) {
         _t._compaction_manager.submit(*view);
+        if (has_token_range_tombstones) {
+            _t._compaction_manager.submit_token_range_tombstone_compaction(*view);
+        }
       }
     }
 }

@@ -7091,4 +7091,50 @@ SEASTAR_TEST_CASE(test_compaction_purges_expired_token_range_tombstone) {
     });
 }
 
+// A token range tombstone arriving in a table sets off a compaction of
+// everything it deletes right away, without waiting for the strategy: three
+// sstables are below size tiered's threshold, and yet the two which the
+// tombstone deletes are gone once the compaction the tombstone set off is done.
+SEASTAR_TEST_CASE(test_token_range_tombstone_triggers_compaction_of_what_it_deletes) {
+    return test_env::do_with_async([] (test_env& env) {
+        simple_schema ss;
+        auto s = ss.schema();
+        auto cf = env.make_table_for_tests(s);
+        auto close_cf = deferred_stop(cf);
+        auto& cm = cf->get_compaction_manager();
+        cf->set_compaction_strategy(compaction::compaction_strategy_type::size_tiered);
+        auto sst_gen = env.make_sst_factory(s);
+
+        for (auto i = 0; i < 2; i++) {
+            auto m = mutation(s, ss.make_pkey(i));
+            ss.add_row(m, ss.make_ckey(0), "v");
+            column_family_test(cf).add_sstable(make_sstable_containing(sst_gen, {std::move(m)}).get()).get();
+        }
+        BOOST_REQUIRE_EQUAL(cf->sstables_count(), 2);
+
+        // Newer than both, so it deletes all of them.
+        auto tomb = tombstone(ss.new_timestamp(), gc_clock::now());
+        auto mt = make_lw_shared<replica::memtable>(s);
+        mt->apply(token_range_tombstone::full_ring(tomb));
+        column_family_test(cf).add_sstable(make_sstable_containing(sst_gen, mt).get()).get();
+        BOOST_REQUIRE_EQUAL(cf->sstables_count(), 3);
+
+        cf->trigger_compaction();
+        do_until([&cm] {
+            return cm.get_stats().completed_tasks > 0 && cm.get_stats().pending_tasks == 0 && cm.get_stats().active_tasks == 0;
+        }, [] {
+            return sleep(std::chrono::milliseconds(50));
+        }).get();
+        BOOST_REQUIRE_EQUAL(cm.get_stats().errors, 0);
+
+        // The deleted sstables are gone; the tombstone remains, in one sstable.
+        BOOST_REQUIRE_EQUAL(cf->sstables_count(), 1);
+        auto remaining = *cf->get_sstables();
+        BOOST_REQUIRE_EQUAL(remaining.size(), 1);
+        auto sst = *remaining.begin();
+        BOOST_REQUIRE(!sst->has_partitions());
+        BOOST_REQUIRE_EQUAL(sst->token_range_tombstones().search(ss.make_pkey(0).token()), tomb);
+    });
+}
+
 BOOST_AUTO_TEST_SUITE_END()

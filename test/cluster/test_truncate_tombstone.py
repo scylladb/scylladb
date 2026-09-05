@@ -115,17 +115,26 @@ async def test_truncate_reconciled_by_repair(manager: ScyllaClusterManager):
             "repair did not carry the token range tombstone to the node which missed the truncate"
 
 
-@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_truncate_survives_tablet_split_and_merge(manager: ScyllaClusterManager):
     """
-    Splitting a tablet flushes the memtables of the group being split, so the
-    tombstone reaches an sstable, and the split compaction then has to carry it
-    into both halves. Merging brings the halves back together and has to keep
-    it. Either losing it resurrects everything the truncate deleted.
+    A tablet split compacts each sstable of the group into the two halves, and
+    a merge brings the halves back together; both have to carry the truncate's
+    tombstone along. Losing it would let anything written with a timestamp
+    older than the truncate show up again.
+
+    The data the truncate deleted cannot serve as the witness: the tombstone
+    sets off a compaction of everything it deletes as soon as it is flushed,
+    and the first compaction of any kind drops those sstables unread. So the
+    tablet is made large enough to split with data written after the truncate,
+    and the tombstone's presence in each half is checked by writing a row with
+    a timestamp older than the truncate and seeing that it stays deleted.
     """
+    # A tablet splits above twice the target and merges below half of it. 200
+    # rows of 2000 bytes are ~420KB: above 300KB, so the tablet splits once,
+    # and the halves, ~210KB, stay put.
     cmdline = [
         '--logger-log-level', 'table=debug',
-        '--target-tablet-size-in-bytes', '30000',
+        '--target-tablet-size-in-bytes', '150000',
     ]
     servers = [await manager.server_add(config={
         'tablet_load_stats_refresh_interval_in_seconds': 1
@@ -136,10 +145,9 @@ async def test_truncate_survives_tablet_split_and_merge(manager: ScyllaClusterMa
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} "
                                           "AND tablets = {'initial': 1}") as ks:
         table = f"{ks}.t"
-        # gc_grace_seconds=0 so that compaction is free to drop what the
-        # tombstone covers, which is the case where losing it would show.
-        await cql.run_async(f"CREATE TABLE {table} (pk int PRIMARY KEY, c blob) "
-                            f"WITH gc_grace_seconds=0 AND bloom_filter_fp_chance=1")
+        # The default gc_grace_seconds keeps the tombstone from being purged
+        # once the data it deleted is gone; the test relies on it being there.
+        await cql.run_async(f"CREATE TABLE {table} (pk int PRIMARY KEY, c blob) WITH bloom_filter_fp_chance=1")
 
         insert = cql.prepare(f"INSERT INTO {table} (pk, c) VALUES (?, ?)")
         for pk in range(200):
@@ -147,6 +155,15 @@ async def test_truncate_survives_tablet_split_and_merge(manager: ScyllaClusterMa
         await manager.api.flush_keyspace(servers[0].ip_addr, ks)
         assert await get_tablet_count(manager, servers[0], ks, 't') == 1
 
+        async def deletes_writes_older_than(truncated_at_us, keys):
+            """The tombstone from a truncate at `truncated_at_us` is still in
+            force for `keys`: a write from before it stays deleted."""
+            for pk in keys:
+                await cql.run_async(f"INSERT INTO {table} (pk, c) VALUES ({pk}, 0x00) USING TIMESTAMP {truncated_at_us - 1}")
+                rows = list(await cql.run_async(f"SELECT pk FROM {table} WHERE pk = {pk} BYPASS CACHE"))
+                assert len(rows) == 0, f"a write older than the truncate came back for pk={pk}: the tombstone was lost"
+
+        before_truncate = int(time.time() * 1_000_000)
         await cql.run_async(f"TRUNCATE {table}")
         assert len(list(await cql.run_async(f"SELECT * FROM {table} BYPASS CACHE"))) == 0
 
@@ -157,22 +174,33 @@ async def test_truncate_survives_tablet_split_and_merge(manager: ScyllaClusterMa
         assert len(rows) == 0, f"flush lost the truncate, {len(rows)} rows came back"
         rows = list(await cql.run_async(f"SELECT * FROM {table} WHERE pk = 7 BYPASS CACHE"))
         assert len(rows) == 0, f"a point read missed the flushed truncate, {len(rows)} rows came back"
+        await deletes_writes_older_than(before_truncate, range(0, 20))
+
+        # Data written after the truncate survives it, and makes the tablet
+        # worth splitting again.
+        for pk in range(1000, 1200):
+            cql.execute(insert, [pk, random.randbytes(2000)])
+        await manager.api.flush_keyspace(servers[0].ip_addr, ks)
 
         s1_log = await manager.server_open_log(servers[0].server_id)
         s1_mark = await s1_log.mark()
-
-        # The data written above is well over the target tablet size, so the
-        # balancer splits, which flushes and then splits the sstables.
         await manager.enable_tablet_balancing()
         await s1_log.wait_for('Detected tablet split for table', from_mark=s1_mark)
-        assert await get_tablet_count(manager, servers[0], ks, 't') > 1
-
-        rows = list(await cql.run_async(f"SELECT * FROM {table} BYPASS CACHE"))
-        assert len(rows) == 0, f"tablet split lost the truncate, {len(rows)} rows came back"
-
-        # Now shrink it back. Compacting away the data the tombstone covers is
-        # what makes the tablets small enough to merge.
+        assert await get_tablet_count(manager, servers[0], ks, 't') == 2
+        # Let the split finish moving sstables into the new groups before
+        # looking at what they hold.
         await manager.disable_tablet_balancing()
+        await manager.api.flush_keyspace(servers[0].ip_addr, ks)
+
+        # Both halves still hold the tombstone, and the data written after it.
+        await deletes_writes_older_than(before_truncate, range(0, 40))
+        rows = list(await cql.run_async(f"SELECT pk FROM {table} BYPASS CACHE"))
+        assert len(rows) == 200, f"the split lost data written after the truncate, {len(rows)} of 200 rows left"
+
+        # Now shrink it back: truncate again, which compacts away what the new
+        # tombstone deletes and leaves the tablets small enough to merge.
+        before_second_truncate = int(time.time() * 1_000_000)
+        await cql.run_async(f"TRUNCATE {table}")
         await manager.api.flush_keyspace(servers[0].ip_addr, ks)
         await manager.api.keyspace_compaction(servers[0].ip_addr, ks)
         s1_mark = await s1_log.mark()
@@ -181,3 +209,4 @@ async def test_truncate_survives_tablet_split_and_merge(manager: ScyllaClusterMa
 
         rows = list(await cql.run_async(f"SELECT * FROM {table} BYPASS CACHE"))
         assert len(rows) == 0, f"tablet merge lost the truncate, {len(rows)} rows came back"
+        await deletes_writes_older_than(before_second_truncate, range(1000, 1040))
