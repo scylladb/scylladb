@@ -1059,7 +1059,7 @@ private:
 ///
 /// Current implementation is suitable for tables which are relatively small as all
 /// data is materialized in memory and queried in one page.
-class group0_virtual_table : public memtable_filling_virtual_table {
+class group0_virtual_table : public streaming_virtual_table {
 private:
     sharded<service::raft_group_registry>& _raft_gr;
     sharded<netw::messaging_service>& _ms;
@@ -1067,7 +1067,7 @@ public:
     group0_virtual_table(schema_ptr s,
                          sharded<service::raft_group_registry>& raft_gr,
                          sharded<netw::messaging_service>& ms)
-        : memtable_filling_virtual_table(s)
+        : streaming_virtual_table(s)
         , _raft_gr(raft_gr)
         , _ms(ms) {
     }
@@ -1087,7 +1087,7 @@ public:
         co_return leader == _raft_gr.local().get_my_raft_id();
     }
 
-    future<> redirect_to_leader(std::function<void(mutation)> mutation_sink, reader_permit permit) {
+    future<> redirect_to_leader(result_collector& result, reader_permit permit) {
         auto leader = co_await get_leader(permit);
         auto cmd = query::read_command(_s->id(),
                                        _s->version(),
@@ -1097,7 +1097,7 @@ public:
                                        query::row_limit(query::max_rows),
                                        query::partition_limit(query::max_partitions));
         reader_permit::awaits_guard ag(permit);
-        auto&& [result, hit_rate, opt_exception] = co_await ser::storage_proxy_rpc_verbs::send_read_mutation_data(&_ms.local(),
+        auto&& [result_data, hit_rate, opt_exception] = co_await ser::storage_proxy_rpc_verbs::send_read_mutation_data(&_ms.local(),
               locator::host_id(leader.uuid()),
               permit.timeout(),
               cmd,
@@ -1106,9 +1106,13 @@ public:
         if (opt_exception.has_value() && *opt_exception) {
             co_await coroutine::return_exception_ptr((*opt_exception).into_exception_ptr());
         }
-        for (auto&& p : result.partitions()) {
-            mutation_sink(p.mut().unfreeze(_s));
-            co_await coroutine::maybe_yield();
+        for (auto&& p : result_data.partitions()) {
+            auto m = p.mut().unfreeze(_s);
+            co_await result.emit_partition_start(m.decorated_key());
+            for (const auto& re : m.partition().clustered_rows()) {
+                co_await result.emit_row(clustering_row(*_s, re));
+            }
+            co_await result.emit_partition_end();
         }
         co_return;
     }
@@ -1116,19 +1120,19 @@ public:
     // This function is executed on the node which was a group0 leader at some point since the query started.
     // The node may not be the leader anymore by the time it is executed.
     // Only executed on shard 0.
-    virtual future<> execute_on_leader(std::function<void(mutation)> mutation_sink, reader_permit) = 0;
+    virtual future<> execute_on_leader(result_collector& result, reader_permit) = 0;
 
-    future<> execute(std::function<void(mutation)> mutation_sink, reader_permit permit) override {
+    future<> execute(reader_permit permit, result_collector& result) override {
         if (this_shard_id() != 0) {
             co_return;
         }
 
         if (co_await is_leader(permit)) {
-            co_await execute_on_leader(std::move(mutation_sink), std::move(permit));
+            co_await execute_on_leader(result, std::move(permit));
             co_return;
         }
 
-        co_await redirect_to_leader(std::move(mutation_sink), std::move(permit));
+        co_await redirect_to_leader(result, std::move(permit));
     }
 };
 
@@ -1149,7 +1153,7 @@ public:
         , _gossiper(gossiper)
     { }
 
-    future<> execute_on_leader(std::function<void(mutation)> mutation_sink, reader_permit permit) override {
+    future<> execute_on_leader(result_collector& result, reader_permit permit) override {
         auto stats = _talloc.local().get_load_stats();
         while (!stats) {
             // Wait for stats to be refreshed by topology coordinator
@@ -1159,7 +1163,7 @@ public:
                 co_await seastar::sleep_abortable(std::chrono::milliseconds(200), aoe.abort_source());
             }
             if (!co_await is_leader(permit)) {
-                co_await redirect_to_leader(std::move(mutation_sink), std::move(permit));
+                co_await redirect_to_leader(result, std::move(permit));
                 co_return;
             }
             stats = _talloc.local().get_load_stats();
@@ -1172,42 +1176,54 @@ public:
         locator::load_sketch load(tm, stats, default_tablet_size);
         co_await load.populate();
 
-        tm->get_topology().for_each_node([&] (const auto& node) {
-            auto host = node.host_id();
-            mutation m(schema(), make_partition_key(host));
-            auto& r = m.partition().clustered_row(*schema(), clustering_key::make_empty());
+        struct node_key {
+            const locator::node* node;
+            dht::decorated_key dk;
+        };
+        std::vector<node_key> nodes;
+        for (const locator::node& node : tm->get_topology().get_nodes()) {
+            nodes.push_back(node_key{&node, make_partition_key(node.host_id())});
+        }
+        std::ranges::sort(nodes, dht::ring_position_less_comparator(*_s), std::mem_fn(&node_key::dk));
 
-            set_cell(r.cells(), "dc", node.dc());
-            set_cell(r.cells(), "rack", node.rack());
-            set_cell(r.cells(), "up", _gossiper.local().is_alive(host));
-            set_cell(r.cells(), "draining", node.is_draining());
-            set_cell(r.cells(), "excluded", node.is_excluded());
+        for (const auto& [node_ptr, dk] : nodes) {
+            const locator::node& node = *node_ptr;
+            auto host = node.host_id();
+            co_await result.emit_partition_start(dk);
+            clustering_row cr(clustering_key::make_empty());
+
+            set_cell(cr.cells(), "dc", node.dc());
+            set_cell(cr.cells(), "rack", node.rack());
+            set_cell(cr.cells(), "up", _gossiper.local().is_alive(host));
+            set_cell(cr.cells(), "draining", node.is_draining());
+            set_cell(cr.cells(), "excluded", node.is_excluded());
             if (auto ip = _gossiper.local().get_address_map().find(host)) {
-                set_cell(r.cells(), "ip", data_value(inet_address(*ip)));
+                set_cell(cr.cells(), "ip", data_value(inet_address(*ip)));
             }
-            set_cell(r.cells(), "tablets_allocated", int64_t(load.get_tablet_count(host)));
-            set_cell(r.cells(), "tablets_allocated_per_shard", data_value(double(load.get_real_avg_tablet_count(host))));
-            set_cell(r.cells(), "storage_allocated_load", data_value(int64_t(load.get_tablet_count(host) * default_tablet_size)));
+            set_cell(cr.cells(), "tablets_allocated", int64_t(load.get_tablet_count(host)));
+            set_cell(cr.cells(), "tablets_allocated_per_shard", data_value(double(load.get_real_avg_tablet_count(host))));
+            set_cell(cr.cells(), "storage_allocated_load", data_value(int64_t(load.get_tablet_count(host) * default_tablet_size)));
 
             if (stats && stats->capacity.contains(host)) {
                 auto capacity = stats->capacity.at(host);
-                set_cell(r.cells(), "storage_capacity", data_value(int64_t(capacity)));
+                set_cell(cr.cells(), "storage_capacity", data_value(int64_t(capacity)));
                 if (auto ts_iter = stats->tablet_stats.find(host); ts_iter != stats->tablet_stats.end()) {
-                    set_cell(r.cells(), "effective_capacity", data_value(int64_t(ts_iter->second.effective_capacity)));
+                    set_cell(cr.cells(), "effective_capacity", data_value(int64_t(ts_iter->second.effective_capacity)));
                 }
 
                 if (auto utilization = load.get_allocated_utilization(host)) {
-                    set_cell(r.cells(), "storage_allocated_utilization", data_value(double(*utilization)));
+                    set_cell(cr.cells(), "storage_allocated_utilization", data_value(double(*utilization)));
                 }
                 if (load.has_complete_data(host)) {
                     if (auto utilization = load.get_storage_utilization(host)) {
-                        set_cell(r.cells(), "storage_utilization", data_value(double(*utilization)));
+                        set_cell(cr.cells(), "storage_utilization", data_value(double(*utilization)));
                     }
-                    set_cell(r.cells(), "storage_load", data_value(int64_t(load.get_disk_used(host))));
+                    set_cell(cr.cells(), "storage_load", data_value(int64_t(load.get_disk_used(host))));
                 }
             }
-            mutation_sink(m);
-        });
+            co_await result.emit_row(std::move(cr));
+            co_await result.emit_partition_end();
+        }
     }
 
 private:
@@ -1254,7 +1270,7 @@ public:
         , _db(db)
     { }
 
-    future<> execute_on_leader(std::function<void(mutation)> mutation_sink, reader_permit permit) override {
+    future<> execute_on_leader(result_collector& result, reader_permit permit) override {
         auto stats = _talloc.local().get_load_stats();
         while (!stats) {
             // Wait for stats to be refreshed by topology coordinator
@@ -1264,7 +1280,7 @@ public:
                 co_await seastar::sleep_abortable(std::chrono::milliseconds(200), aoe.abort_source());
             }
             if (!co_await is_leader(permit)) {
-                co_await redirect_to_leader(std::move(mutation_sink), std::move(permit));
+                co_await redirect_to_leader(result, std::move(permit));
                 co_return;
             }
             stats = _talloc.local().get_load_stats();
@@ -1294,11 +1310,14 @@ public:
         auto map_type = map_type_impl::get_instance(uuid_type, long_type, false);
         auto set_type = set_type_impl::get_instance(uuid_type, false);
         for (auto&& [table, tmap] : tm->tablets().all_tables_ungrouped()) {
-            mutation m(schema(), make_partition_key(table));
+            co_await result.emit_partition_start(make_partition_key(table));
+            // for_each_tablet() visits tablet_id 0, 1, 2, ... in order, and
+            // last_tokens (hence last_token below) is strictly increasing by
+            // construction, so tablets come out in ascending clustering order.
             co_await tmap->for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& tinfo) -> future<> {
                 auto trange = tmap->get_token_range(tid);
                 int64_t last_token = trange.end()->value().raw();
-                auto& r = m.partition().clustered_row(*schema(), clustering_key::from_single_value(*schema(), data_value(last_token).serialize_nonnull()));
+                clustering_row cr(clustering_key::from_single_value(*schema(), data_value(last_token).serialize_nonnull()));
                 const range_based_tablet_id rb_tid {table, trange};
                 std::unordered_map<host_id, uint64_t> replica_sizes;
                 std::unordered_set<host_id> missing_replicas;
@@ -1310,12 +1329,11 @@ public:
                         missing_replicas.insert(replica.host);
                     }
                 }
-                set_cell(r.cells(), "replicas", make_map_value(map_type, prepare_replica_sizes(replica_sizes)));
-                set_cell(r.cells(), "missing_replicas", make_set_value(set_type, prepare_missing_replica(missing_replicas)));
-                return make_ready_future<>();
+                set_cell(cr.cells(), "replicas", make_map_value(map_type, prepare_replica_sizes(replica_sizes)));
+                set_cell(cr.cells(), "missing_replicas", make_set_value(set_type, prepare_missing_replica(missing_replicas)));
+                return result.emit_row(std::move(cr));
             });
-
-            mutation_sink(m);
+            co_await result.emit_partition_end();
         }
     }
 
