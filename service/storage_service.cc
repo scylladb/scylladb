@@ -670,11 +670,21 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
         prev_released = get_released_nodes(_topology_state_machine._topology, get_token_metadata());
     }
 
-    std::unordered_set<locator::host_id> tablet_hosts = co_await replica::read_required_hosts(_qp);
+    bool fast_path = hint.topology_hint && _topology_state_machine._topology.left_nodes_rs.empty();
+    if (fast_path) {
+        if (hint.topology_hint->version) {
+            _topology_state_machine._topology.version = *hint.topology_hint->version;
+        }
+        if (hint.topology_hint->fence_version) {
+            _topology_state_machine._topology.fence_version = *hint.topology_hint->fence_version;
+        }
+    } else {
+        std::unordered_set<locator::host_id> tablet_hosts = co_await replica::read_required_hosts(_qp);
 
-    // read topology state from disk and recreate token_metadata from it
-    rtlogger.debug("topology_state_load: loading topology state");
-    _topology_state_machine._topology = co_await _sys_ks.local().load_topology_state(tablet_hosts);
+        // read topology state from disk and recreate token_metadata from it
+        rtlogger.debug("topology_state_load: loading topology state");
+        _topology_state_machine._topology = co_await _sys_ks.local().load_topology_state(tablet_hosts);
+    }
     _topology_state_machine.reload_count++;
     auto& topology = _topology_state_machine._topology;
 
