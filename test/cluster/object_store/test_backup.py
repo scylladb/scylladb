@@ -204,7 +204,7 @@ async def do_test_backup_helper(manager: ScyllaClusterManager, object_storage,
         await manager.api.enable_injection(server.ip_addr, breakpoint_name, one_shot=True)
 
         print('Backup snapshot')
-        # use a unique path, because we're running more than one test using the same minio and ks/cf name.
+        # use a unique path, because we're running more than one test using the same S3 server and ks/cf name.
         # If we just use {cf}/backup, files like "schema.cql" and "manifest.json" will remain after previous test
         # case, and we will count these erroneously.
         prefix = unique_name('backup_')

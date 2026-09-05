@@ -27,16 +27,16 @@ class tmpdir;
     * KMS_KEY_ALIAS - set to key alias you have access to. If set, the fixture will assume we run real kms
     * KMS_AWS_REGION - default us-east-1 - set to whatever region your key is in.
 
-    NOTE: When run via test.py, the minio server used there will, unless already set,
+    NOTE: When run via test.py, the S3 mock server used there will, unless already set,
     put AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY into the inherited process env, with
     values purely fictional, and only usable by itself. This _will_ screw up credentials
     resolution in the KMS connector, and will lead to errors not intended.
 
-    In CI, we provide the vars from jenkins, with working values, and the minio
+    In CI, we provide the vars from jenkins, with working values, and the S3 mock
     respects this.
 
     As a workaround, try setting the vars yourself to something that actually works (i.e. 
-    values from your .awscredentials). Or complain until we find a way to make the minio
+    values from your .awscredentials). Or complain until we find a way to make the S3 mock
     server optional for tests.
 */
 

@@ -8,6 +8,7 @@
 
 #include <fmt/format.h>
 #include <exception>
+#include <algorithm>
 #include <cctype>
 #include <initializer_list>
 #include <memory>
@@ -710,6 +711,17 @@ future<bool> client::object_exists(sstring object_name, seastar::abort_source* a
 }
 
 static tag_set parse_tagging(sstring& body) {
+    tag_set tags;
+    // S3 always answers with a <Tagging> document, carrying an empty <TagSet>
+    // when the object has no tags, but Adobe S3Mock - which the tests run
+    // against - sends back an empty body instead, see
+    // https://github.com/adobe/S3Mock/issues/3149, so an untagged object would
+    // fail here rather than report no tags. An empty body says just what an
+    // empty <TagSet> does, so take it - but only an empty one, so that a reply
+    // mangled on its way here cannot pass for an untagged object.
+    if (std::ranges::all_of(body, [] (char c) { return std::isspace(static_cast<unsigned char>(c)); })) {
+        return tags;
+    }
     auto doc = std::make_unique<rapidxml::xml_document<>>();
     try {
         doc->parse<0>(body.data());
@@ -717,21 +729,13 @@ static tag_set parse_tagging(sstring& body) {
         s3l.warn("cannot parse tagging response: {}", e.what());
         throw std::runtime_error("cannot parse tagging response");
     }
-    tag_set tags;
-    // S3 always answers with a <Tagging> document, carrying an empty <TagSet>
-    // when the object has no tags, but Adobe S3Mock - which the tests run
-    // against - sends back an empty body instead, see
-    // https://github.com/adobe/S3Mock/issues/3149, so an untagged object would
-    // fail here rather than report no tags. Either way, "no tag set in the
-    // response" is not worth an error: the answer we would give for an empty
-    // one is the same.
     auto tagging_node = doc->first_node("Tagging");
     if (!tagging_node) {
-        return tags;
+        throw std::runtime_error("'Tagging' missing in tagging response");
     }
     auto tagset_node = tagging_node->first_node("TagSet");
     if (!tagset_node) {
-        return tags;
+        throw std::runtime_error("'TagSet' missing in 'Tagging'");
     }
     for (auto tag_node = tagset_node->first_node("Tag"); tag_node; tag_node = tag_node->next_sibling("Tag")) {
         // See https://docs.aws.amazon.com/AmazonS3/latest/API/API_Tag.html,

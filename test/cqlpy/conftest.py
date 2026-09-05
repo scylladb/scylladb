@@ -36,7 +36,7 @@ print(f"Driver name {DRIVER_NAME}, version {DRIVER_VERSION}")
 def pytest_addoption(parser):
     add_host_option(parser)
     add_cql_connection_options(parser)
-    parser.addoption('--no-minio', action="store_true", help="Signal to not run S3 related tests")
+    parser.addoption('--no-s3', action="store_true", help="Signal to not run S3 related tests")
     add_s3_options(parser)
 
 
@@ -277,11 +277,11 @@ def compact_storage(cql):
         # This is fine since compact storage is enabled there by default.
         yield
 
-# Skip tests that require a running Minio server if the --no-minio option is set, intended to be set from test/cqlpy/run
-# Otherwise, use the provided minio server to run all S3 related tests
+# Skip tests that require a running S3 server if the --no-s3 option is set, intended to be set from test/cqlpy/run
+# Otherwise, use the provided S3 server to run all S3 related tests
 @pytest.fixture
 def skip_s3_tests(request):
-    if request.config.getoption("--no-minio", default=None):
+    if request.config.getoption("--no-s3", default=None):
         skip_env("Skipping S3 related tests being run from test/cqlpy/run")
 
 
