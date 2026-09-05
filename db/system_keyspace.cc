@@ -3184,6 +3184,11 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
     }
 
     for (auto& row : *rs) {
+        // The result set is already materialized, so without this the whole
+        // per-node walk below runs as one task and holds the shard for as long
+        // as the cluster is big.
+        co_await coroutine::maybe_yield();
+
         if (!row.has("host_id")) {
             // There are no clustering rows, only the static row.
             // Skip the whole loop, the static row is handled later.
