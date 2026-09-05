@@ -1269,7 +1269,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                                 .set("ignore_msb", dummy_value)
                                 .set("request_id", dummy_value)
                                 .set("cleanup_status", cleanup_status::clean)
-                                .set("node_state", node_state::left);
+                                .mark_left();
                         reason.append(::format(" {}/{},", host_id, eps.get_ip()));
                         updates.push_back({builder.build()});
                     }
@@ -4379,7 +4379,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     topology_request_tracking_mutation_builder rtbuilder(node.rs->request_id);
                     builder.del_transition_state()
                            .with_node(node.id)
-                           .set("node_state", node_state::left);
+                           .mark_left();
                     rtbuilder.done("join is not accepted");
                     auto reason = ::format("bootstrap: failed to accept {}", node.id);
                     co_await update_topology_state(std::move(node.guard), {builder.build(), rtbuilder.build()}, reason);
@@ -4499,7 +4499,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                             topology_mutation_builder builder2(node.guard.write_timestamp());
                             cleanup_ignored_nodes_on_left(builder2, replaced_id);
                             builder2.with_node(replaced_id)
-                                    .set("node_state", node_state::left);
+                                    .mark_left();
                             rtbuilder.done();
                             co_await _voter_handler.on_node_added(node.id, _as);
                             utils::chunked_vector<canonical_mutation> updates{builder.build(), builder2.build(), rtbuilder.build()};
@@ -4874,10 +4874,14 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         co_await remove_view_build_statuses_on_left_node(muts, node.guard, node.id);
                         co_await db::view::view_builder::generate_mutations_on_node_left(_db, _sys_ks, node.guard.write_timestamp(), locator::host_id(node.id.uuid()), muts);
                     }
-                    builder.set_version(_topo_sm._topology.version + 1)
-                           .with_node(node.id)
-                           .del("tokens")
-                           .set("node_state", next_state);
+                    auto& node_builder = builder.set_version(_topo_sm._topology.version + 1)
+                                                .with_node(node.id);
+                    if (next_state == node_state::left) {
+                        node_builder.mark_left();
+                    } else {
+                        node_builder.del("tokens")
+                                    .set("node_state", next_state);
+                    }
                     auto str = ::format("{}: read fence completed", node.rs->state);
                     muts.push_back(builder.build());
                     co_await update_topology_state(take_guard(std::move(node)), std::move(muts), std::move(str));
@@ -4903,8 +4907,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         topology_mutation_builder builder2(n.guard.write_timestamp());
                         cleanup_ignored_nodes_on_left(builder2, replaced_node_id);
                         builder2.with_node(replaced_node_id)
-                                .del("tokens")
-                                .set("node_state", node_state::left);
+                                .mark_left();
                         muts.push_back(builder2.build());
 
                         topology_request_tracking_mutation_builder rtbuilder(n.rs->request_id);
@@ -4988,7 +4991,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         builder.del_transition_state();
                     }
                     builder.with_node(node.id)
-                            .set("node_state", node_state::left);
+                            .mark_left();
                     muts.push_back(builder.build());
                     co_await remove_view_build_statuses_on_left_node(muts, node.guard, node.id);
                     co_await db::view::view_builder::generate_mutations_on_node_left(_db, _sys_ks, node.guard.write_timestamp(), locator::host_id(node.id.uuid()), muts);
@@ -5230,7 +5233,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         topology_request_tracking_mutation_builder rtbuilder(node.rs->request_id);
                         builder.with_node(node.id)
                                .del("topology_request")
-                               .set("node_state", node_state::left);
+                               .mark_left();
                         rtbuilder.done("Join is rejected during validation");
                         auto reason = ::format("bootstrap: node rejected");
 
