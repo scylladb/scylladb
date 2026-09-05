@@ -998,6 +998,9 @@ server::server(executor& exec, service::storage_proxy& proxy, gms::gossiper& gos
         {"Query", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
             return e.query(client_state, std::move(trace_state), std::move(permit), std::move(json_request), audit_info);
         }},
+        {"SearchVectors", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+            return e.search_vectors(client_state, std::move(trace_state), std::move(permit), std::move(json_request), audit_info);
+        }},
         {"TagResource", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
             return e.tag_resource(client_state, std::move(permit), std::move(json_request), audit_info);
         }},

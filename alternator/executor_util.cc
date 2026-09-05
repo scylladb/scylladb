@@ -12,9 +12,11 @@
 #include "auth/resource.hh"
 #include "auth/service.hh"
 #include "cdc/log.hh"
+#include "cql3/statements/index_target.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "db/tags/utils.hh"
 #include "replica/database.hh"
+#include "schema/schema.hh"
 #include "cql3/selection/selection.hh"
 #include "cql3/result_set.hh"
 #include "serialization.hh"
@@ -200,6 +202,59 @@ void describe_key_schema(rjson::value& parent, const schema& schema, std::unorde
         }
     }
     rjson::add(parent, "KeySchema", std::move(key_schema));
+}
+
+search_schema_info get_search_schema_info(const index_metadata& index) {
+    search_schema_info info;
+    const index_options_map& opts = index.options();
+    // "alternator_attribute_types" is unset if the vector index doesn't have a
+    // SearchSchema, so we can return quickly, skipping the rest of the code.
+    auto types_it = opts.find("alternator_attribute_types");
+    if (types_it == opts.end()) {
+        return info;
+    }
+    if (std::optional<rjson::value> types_json = rjson::try_parse(types_it->second); types_json && types_json->IsObject()) {
+        for (const auto& m : types_json->GetObject()) {
+            info.attribute_types[rjson::to_string(m.name)] = rjson::to_string(m.value);
+        }
+    }
+    if (auto target_it = opts.find(cql3::statements::index_target::target_option_name); target_it != opts.end()) {
+        if (std::optional<rjson::value> json_value = rjson::try_parse(target_it->second); json_value && json_value->IsObject()) {
+            if (const rjson::value* pk = rjson::find(*json_value, "pk"); pk && pk->IsArray() && !pk->Empty()) {
+                info.hash_attribute = rjson::to_string((*pk)[0]);
+            }
+            if (const rjson::value* fc = rjson::find(*json_value, "fc"); fc && fc->IsArray()) {
+                for (const rjson::value& attr : fc->GetArray()) {
+                    std::string name = rjson::to_string(attr);
+                    // "fc" may also list plain projected attributes added by
+                    // compute_extra_fc_attributes()/build_vector_index_target()
+                    // for Projection's sake, alongside genuine SearchSchema
+                    // INLINE_FILTER attributes. Only the latter have a
+                    // declared type in "alternator_attribute_types" - that's what
+                    // tells the two apart here.
+                    if (info.attribute_types.contains(name)) {
+                        info.inline_filter_attributes.push_back(std::move(name));
+                    }
+                }
+            }
+        }
+    }
+    return info;
+}
+
+std::optional<std::vector<std::string>> get_vector_index_non_key_attributes(const index_metadata& index) {
+    const index_options_map& opts = index.options();
+    auto it = opts.find("alternator_non_key_attributes");
+    if (it == opts.end()) {
+        return std::nullopt;
+    }
+    std::vector<std::string> non_key_attributes;
+    if (std::optional<rjson::value> json_value = rjson::try_parse(it->second); json_value && json_value->IsArray()) {
+        for (const rjson::value& attr : json_value->GetArray()) {
+            non_key_attributes.emplace_back(rjson::to_string(attr));
+        }
+    }
+    return non_key_attributes;
 }
 
 // Check if the given string has valid characters for a table name, i.e. only

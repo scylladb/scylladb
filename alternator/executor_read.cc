@@ -13,9 +13,9 @@
 //   * executor::batch_get_item()
 //   * executor::scan()
 //   * executor::query()
+//   * executor::search_vectors()
 // Major internal functions:
-//   * do_query(): the common code for Query and Scan, except vector search.
-//   * query_vector(): the vector-search code path for Query with VectorSearch.
+//   * do_query(): the common code for Query and Scan
 // and a number of helper functions for parsing common parameters of read
 // requests such as TableName, IndexName, Select, FilterExpression,
 // ConsistentRead, ProjectionExpression, and more.
@@ -37,9 +37,12 @@
 #include "service/pager/query_pagers.hh"
 #include "service/storage_proxy.hh"
 #include "index/secondary_index.hh"
+#include "index/vector_index.hh"
+#include "cql3/statements/index_target.hh"
 #include "utils/assert.hh"
 #include "utils/overloaded_functor.hh"
 #include "utils/error_injection.hh"
+#include "utils/base64.hh"
 #include "vector_search/vector_store_client.hh"
 #include <seastar/core/abort_on_expiry.hh>
 #include <seastar/core/coroutine.hh>
@@ -169,7 +172,7 @@ static std::optional<attrs_to_get> calculate_attrs_to_get(const rjson::value& re
 // a table or a materialized view from which to read, based on the TableName
 // and optional IndexName in the request. Only requests like Query and Scan
 // which allow IndexName should use this function.
-enum class table_or_view_type { base, lsi, gsi, vector_index };
+enum class table_or_view_type { base, lsi, gsi };
 static std::pair<schema_ptr, table_or_view_type>
 get_table_or_view(service::storage_proxy& proxy, const rjson::value& request) {
     table_or_view_type type = table_or_view_type::base;
@@ -211,7 +214,7 @@ get_table_or_view(service::storage_proxy& proxy, const rjson::value& request) {
                 // give a more helpful message than just an index not found.
                 if (base_table->schema()->has_index(rjson::to_sstring(*index_name))) {
                     throw api_error::validation(
-                        fmt::format("IndexName '{}' is a vector index for table '{}, so VectorSearch is mandatory in Query.", rjson::to_string_view(*index_name), orig_table_name));
+                        fmt::format("IndexName '{}' is a vector index for table '{}. Use SearchVectors, not Query, on this index type.", rjson::to_string_view(*index_name), orig_table_name));
                 }
                 throw api_error::validation(
                     fmt::format("Requested resource not found: Index '{}' for table '{}'", rjson::to_string_view(*index_name), orig_table_name));
@@ -1409,102 +1412,124 @@ calculate_bounds_condition_expression(schema_ptr schema,
     return {std::move(partition_ranges), std::move(ck_bounds)};
 }
 
-// Parses a vector value (of type "FLOAT32VECTOR" or "L"-of-"N") into an
-// std::vector<float>. Throws api_error::validation if the value is invalid
-// or the vector's length doesn't match the required dimensions.
-static std::vector<float> parse_vector(const rjson::value& value, int dimensions, std::string_view source) {
+// Parses a JSON array of DynamoDB typed numbers (e.g., [{"N":"1"},{"N":"2"}])
+// into an std::vector<float>. Throws api_error::validation if the value
+// is invalid (e.g., contains non-numbers) or the vector's length doesn't
+// match the required dimensions.
+static std::vector<float> parse_vector_array_of_dynamodb_numbers(const rjson::value& value, int dimensions, std::string_view source) {
     std::vector<float> out;
-    if (!value.IsObject() || value.MemberCount() != 1) {
-        throw api_error::validation(format("{} must be a value with type 'FLOAT32VECTOR' or 'L'", source));
+    throwing_assert(value.IsArray());
+    const auto& arr = value.GetArray();
+    if ((int)arr.Size() != dimensions) {
+        throw api_error::validation(
+            format("{} length {} does not match index Dimensions {}",
+                source, arr.Size(), dimensions));
     }
-    const rjson::value* v = rjson::find(value, float32vector_type_name);
-    if (v) {
-        // "FLOAT32VECTOR" type: array of JSON floating-point numbers.
-        if (!v->IsArray()) {
+    out.reserve(arr.Size());
+    for (const rjson::value& elem : arr) {
+        if (!elem.IsObject()) {
             throw api_error::validation(
-                format("{} FLOAT32VECTOR must be a list of numbers", source));
+                format("{} must contain only numbers", source));
         }
-        const auto& arr = v->GetArray();
-        if ((int)arr.Size() != dimensions) {
+        const rjson::value* n_val = rjson::find(elem, "N");
+        if (!n_val || !n_val->IsString()) {
             throw api_error::validation(
-                format("{} length {} does not match index Dimensions {}",
-                    source, arr.Size(), dimensions));
+                format("{} must contain only numbers", source));
         }
-        out.reserve(arr.Size());
-        for (const rjson::value& elem : arr) {
-            if (!elem.IsNumber()) {
-                throw api_error::validation(
-                    format("{} must contain only numbers", source));
-            }
-            float f = static_cast<float>(elem.GetDouble());
-            if (!std::isfinite(f)) {
-                throw api_error::validation(
-                    format("{} element '{}' cannot be represented as a 32-bit float",
-                        source, elem.GetDouble()));
-            }
-            out.push_back(f);
-        }
-    } else {
-        // "L" type: list of "N" numbers.
-        const rjson::value* qv_list = rjson::find(value, "L");
-        if (!qv_list || !qv_list->IsArray()) {
+        std::string_view num_str = rjson::to_string_view(*n_val);
+        float f;
+        auto [ptr, ec] = std::from_chars(num_str.data(), num_str.data() + num_str.size(), f);
+        if (ec != std::errc{} || ptr != num_str.data() + num_str.size() || !std::isfinite(f)) {
             throw api_error::validation(
-                format("{} must be a list of numbers", source));
+                format("{} element '{}' is not a valid number", source, num_str));
         }
-        const auto& arr = qv_list->GetArray();
-        if ((int)arr.Size() != dimensions) {
-            throw api_error::validation(
-                format("{} length {} does not match index Dimensions {}",
-                    source, arr.Size(), dimensions));
-        }
-        out.reserve(arr.Size());
-        for (const rjson::value& elem : arr) {
-            if (!elem.IsObject()) {
-                throw api_error::validation(
-                    format("{} must contain only numbers", source));
-            }
-            const rjson::value* n_val = rjson::find(elem, "N");
-            if (!n_val || !n_val->IsString()) {
-                throw api_error::validation(
-                    format("{} must contain only numbers", source));
-            }
-            std::string_view num_str = rjson::to_string_view(*n_val);
-            float f;
-            auto [ptr, ec] = std::from_chars(num_str.data(), num_str.data() + num_str.size(), f);
-            if (ec != std::errc{} || ptr != num_str.data() + num_str.size() || !std::isfinite(f)) {
-                throw api_error::validation(
-                    format("{} element '{}' is not a valid number", source, num_str));
-            }
-            out.push_back(f);
-        }
+        out.push_back(f);
     }
     return out;
 }
 
+// Parses a JSON array of JSON numbers (e.g., [1, 2]) into an std::vector<float>.
+// Throws api_error::validation if the value is invalid (e.g., contains non-
+// numbers) or the vector's length doesn't match the required dimensions.
+static std::vector<float> parse_vector_array_of_json_numbers(const rjson::value& value, int dimensions, std::string_view source) {
+    std::vector<float> out;
+    throwing_assert(value.IsArray());
+    const auto& arr = value.GetArray();
+    if ((int)arr.Size() != dimensions) {
+        throw api_error::validation(
+            format("{} length {} does not match index Dimensions {}",
+                source, arr.Size(), dimensions));
+    }
+    out.reserve(arr.Size());
+    for (const rjson::value& elem : arr) {
+        if (!elem.IsNumber()) {
+            throw api_error::validation(
+                format("{} must contain only numbers", source));
+        }
+        float f = static_cast<float>(elem.GetDouble());
+        if (!std::isfinite(f)) {
+            throw api_error::validation(
+                format("{} element '{}' cannot be represented as a 32-bit float",
+                    source, elem.GetDouble()));
+        }
+        out.push_back(f);
+    }
+    return out;
+}
+
+// Parses a vector value (of type "FLOAT32VECTOR" or "L"-of-"N") into an
+// std::vector<float>. Throws api_error::validation if the value is invalid
+// or the vector's length doesn't match the required dimensions.
+static std::vector<float> parse_vector(const rjson::value& value, int dimensions, std::string_view source) {
+    if (value.IsArray()) {
+        // A direct JSON array of DynamoDB-encoded numbers, e.g., [{"N":"1"},
+        // {"N":"2"}]. We can get this when parsing the SearchVector parameter.
+        return parse_vector_array_of_dynamodb_numbers(value, dimensions, source);
+    }
+    // If value was not an array, it needs to be a typed value, with type either
+    // "FLOAT32VECTOR" or "L" (list of "N" numbers).
+    if (!value.IsObject() || value.MemberCount() != 1) {
+        throw api_error::validation(format("{} must be a value with type 'FLOAT32VECTOR' or 'L'", source));
+    }
+    const auto& member = *value.MemberBegin();
+    std::string_view type_name = rjson::to_string_view(member.name);
+    if (type_name == float32vector_type_name) {
+        // "FLOAT32VECTOR" type: array of JSON floating-point numbers.
+        if (!member.value.IsArray()) {
+            throw api_error::validation(
+                format("{} FLOAT32VECTOR must be a list of numbers", source));
+        }
+        return parse_vector_array_of_json_numbers(member.value, dimensions, source);
+    }
+    // Remaining legal option is "L" type (list of "N" numbers).
+    if (type_name != "L" || !member.value.IsArray()) {
+        throw api_error::validation(
+            format("{} must be a list of numbers", source));
+    }
+    return parse_vector_array_of_dynamodb_numbers(member.value, dimensions, source);
+}
+
 // Converts a DynamoDB typed value (e.g. {"S": "hello"} or {"N": "42"}) to a
 // JSON value in the format expected by the vector store pre-filter.
-// If cdef is non-null, the value's DynamoDB type tag must match the declared
-// type of the column; a mismatch triggers a ValidationException.  When cdef
-// is null (e.g. for projected non-key columns whose type is not declared),
-// the type check is skipped.  Only the types S (string) and N (number) are
-// supported; any other type (L, M, SS, NS, BS, BOOL, NULL, B, ...) triggers
-// a ValidationException.
-static rjson::value value_to_prefilter_json(const rjson::value& value, const column_definition* cdef) {
+// The value's DynamoDB type tag must match expected_type (the SearchSchema
+// attribute's declared AttributeType); a mismatch triggers a
+// ValidationException. Only the types S (string), N (number) and B (binary) -
+// the three types allowed by validate_search_schema() for a SearchSchema
+// HASH or INLINE_FILTER attribute - are supported; any other type (L, M, SS,
+// NS, BS, BOOL, NULL, ...) triggers a ValidationException.
+static rjson::value value_to_prefilter_json(const rjson::value& value, const std::string& attribute_name, const std::string& expected_type) {
     if (!value.IsObject() || value.MemberCount() != 1) {
         throw api_error::validation(
-            "value in VectorSearch KeyConditionExpression must be a typed DynamoDB value");
+            "value in SearchConditionExpression must be a typed DynamoDB value");
     }
     auto it = value.MemberBegin();
     std::string_view type_tag = rjson::to_string_view(it->name);
     const rjson::value& inner = it->value;
-    if (cdef) {
-        std::string expected_type = type_to_string(cdef->type);
-        if (type_tag != expected_type) {
-            throw api_error::validation(fmt::format(
-                "Type mismatch in VectorSearch KeyConditionExpression: "
-                "expected type {} for attribute {}, got type {}",
-                expected_type, cdef->name_as_text(), type_tag));
-        }
+    if (type_tag != expected_type) {
+        throw api_error::validation(fmt::format(
+            "Type mismatch in SearchConditionExpression: "
+            "expected type {} for attribute {}, got type {}",
+            expected_type, attribute_name, type_tag));
     }
     if (type_tag == "S") {
         if (!inner.IsString()) {
@@ -1519,46 +1544,60 @@ static rjson::value value_to_prefilter_json(const rjson::value& value, const col
         // precision and range, not 64-bit double. The vector store will
         // parse this string as BigDecimal.
         return rjson::copy(inner);
+    } else if (type_tag == "B") {
+        if (!inner.IsString()) {
+            throw api_error::validation("B type value must be a string");
+        }
+        // Decode the DynamoDB-style base64 value into raw bytes, then
+        // re-encode as the "0x"-prefixed hex string the vector store expects
+        // for a Blob filter value - the same convention already used (in
+        // reverse) by decode_fc_column_value() below to decode a B-typed
+        // filtering column coming back from the vector store.
+        bytes raw_bytes = *unwrap_bytes(inner, true);
+        return rjson::from_string(fmt::format("0x{}", to_hex(raw_bytes)));
     }
     throw api_error::validation(format(
-        "Type '{}' is not supported in VectorSearch KeyConditionExpression; "
-        "only S (string) and N (number) are supported", type_tag));
+        "Type '{}' is not supported in SearchConditionExpression; "
+        "only S (string), N (number) and B (binary) are supported", type_tag));
 }
 
-// Converts a single primitive condition from a parsed KeyConditionExpression
-// to vector store pre-filter JSON restriction(s), appended to restrictions_arr.
-// projected_cols maps projected attribute names to their column definitions;
-// any attribute not in this map triggers a ValidationException.
+// Converts a single primitive condition from a parsed SearchConditionExpression
+// to the vector store's pre-filter JSON format, appended to restrictions_arr.
+// attribute_types maps the vector index's SearchSchema attribute names to
+// their declared AttributeType (see search_schema_info::attribute_types);
+// any attribute not in this map at all (i.e. not declared in SearchSchema)
+// triggers a ValidationException.
 static void primitive_condition_to_prefilter(
         const parsed::primitive_condition& cond,
-        const std::unordered_map<std::string, const column_definition*>& projected_cols,
+        const std::unordered_map<std::string, std::string>& attribute_types,
         rjson::value& restrictions_arr)
 {
     using ctype = parsed::primitive_condition::type;
 
-    // Return the column_definition for a parsed::value that must be a top-level
-    // attribute path referencing a projected column.
-    auto require_projected_col = [&](const parsed::value& v) -> const column_definition& {
+    // Return the attribute name and declared AttributeType for a
+    // parsed::value that must be a top-level attribute path referencing a
+    // SearchSchema attribute of the vector index.
+    auto require_search_schema_col = [&](const parsed::value& v) -> std::pair<const std::string&, const std::string&> {
         const parsed::path& path = std::get<parsed::path>(v._value);
         if (path.has_operators()) {
             throw api_error::validation(
-                "VectorSearch KeyConditionExpression does not support nested attribute paths");
+                "SearchConditionExpression does not support nested attribute paths");
         }
-        auto it = projected_cols.find(path.root());
-        if (it == projected_cols.end()) {
+        auto it = attribute_types.find(path.root());
+        if (it == attribute_types.end()) {
             throw api_error::validation(format(
-                "VectorSearch KeyConditionExpression references attribute '{}' which is not a projected "
-                "attribute of the vector index; only projected attributes can "
-                "be used for pre-filtering", path.root()));
+                "SearchConditionExpression references attribute '{}' which is not declared in the "
+                "vector index's SearchSchema; only SearchSchema attributes can "
+                "be used for filtering", path.root()));
         }
-        return *it->second;
+        return {it->first, it->second};
     };
 
     // Extract the resolved DynamoDB JSON value from a parsed::constant literal.
     auto require_resolved_val = [](const parsed::value& v) -> const rjson::value& {
         if (!v.is_constant()) {
             throw api_error::validation(
-                "value in VectorSearch KeyConditionExpression must be a constant");
+                "value in SearchConditionExpression must be a constant");
         }
         const parsed::constant& c = std::get<parsed::constant>(v._value);
         // We're after resolve_condition_expression(), so only literals remain
@@ -1567,129 +1606,63 @@ static void primitive_condition_to_prefilter(
         return *std::get<parsed::constant::literal>(c._value);
     };
 
-    if (cond._op == ctype::EQ || cond._op == ctype::LT || cond._op == ctype::LE ||
-            cond._op == ctype::GT || cond._op == ctype::GE) {
-        // Binary comparison: one operand is a column path, the other a constant.
-        throwing_assert(cond._values.size() == 2);
-        bool col_left = cond._values[0].is_path();
-        bool col_right = cond._values[1].is_path();
-        if ((!col_left && !col_right) || (col_left && col_right)) {
-            throw api_error::validation(
-                "VectorSearch KeyConditionExpression comparison must compare an attribute to a constant");
-        }
-        const parsed::value& col_v   = col_left ? cond._values[0] : cond._values[1];
-        const parsed::value& const_v = col_left ? cond._values[1] : cond._values[0];
-        const column_definition& cdef = require_projected_col(col_v);
-
-        // The vector store only supports comparisons of the form
-        // "col OP const" where the column name is on the left, so we need to
-        // rewrite "const < col" to "col > const", flipping the comparison
-        // direction.
-        const char* op_str;
-        if (col_left) {
-            switch (cond._op) {
-            case ctype::EQ: op_str = "=="; break;
-            case ctype::LT: op_str = "<";  break;
-            case ctype::LE: op_str = "<="; break;
-            case ctype::GT: op_str = ">";  break;
-            case ctype::GE: op_str = ">="; break;
-            // The outer "if" guarantees cond._op is one of EQ/LT/LE/GT/GE;
-            // the default cases below are unreachable by construction.
-            default: on_internal_error(elogger, "can't happen");
-            }
-        } else {
-            switch (cond._op) {
-            case ctype::EQ: op_str = "=="; break;
-            case ctype::LT: op_str = ">";  break; // const < col -> col > const
-            case ctype::LE: op_str = ">="; break; // const <= col -> col >= const
-            case ctype::GT: op_str = "<";  break; // const > col -> col < const
-            case ctype::GE: op_str = "<="; break; // const >= col -> col <= const
-            default: on_internal_error(elogger, "can't happen");
-            }
-        }
-        auto rhs_json = value_to_prefilter_json(require_resolved_val(const_v), &cdef);
-        auto restriction = rjson::empty_object();
-        rjson::add(restriction, "type", rjson::from_string(op_str));
-        rjson::add(restriction, "lhs", rjson::from_string(cdef.name_as_text()));
-        rjson::add(restriction, "rhs", std::move(rhs_json));
-        rjson::push_back(restrictions_arr, std::move(restriction));
-
-    } else if (cond._op == ctype::IN) {
-        // IN operator: first value is the column, the remaining are constants.
-        if (cond._values.empty() || !cond._values[0].is_path()) {
-            throw api_error::validation(
-                "VectorSearch KeyConditionExpression IN must have an attribute name as its first operand");
-        }
-        const column_definition& cdef = require_projected_col(cond._values[0]);
-        auto rhs_arr = rjson::empty_array();
-        for (size_t i = 1; i < cond._values.size(); ++i) {
-            rjson::push_back(rhs_arr, value_to_prefilter_json(
-                    require_resolved_val(cond._values[i]), &cdef));
-        }
-        auto restriction = rjson::empty_object();
-        rjson::add(restriction, "type", rjson::from_string("IN"));
-        rjson::add(restriction, "lhs", rjson::from_string(cdef.name_as_text()));
-        rjson::add(restriction, "rhs", std::move(rhs_arr));
-        rjson::push_back(restrictions_arr, std::move(restriction));
-
-    } else if (cond._op == ctype::BETWEEN) {
-        // a BETWEEN b AND c is expanded to two restrictions: a >= b AND a <= c.
-        if (cond._values.size() != 3 || !cond._values[0].is_path() ||
-                !cond._values[1].is_constant() || !cond._values[2].is_constant()) {
-            throw api_error::validation(
-                "VectorSearch KeyConditionExpression BETWEEN must have an attribute and two constant bounds");
-        }
-        const column_definition& cdef = require_projected_col(cond._values[0]);
-        auto lower_json = value_to_prefilter_json(require_resolved_val(cond._values[1]), &cdef);
-        auto upper_json = value_to_prefilter_json(require_resolved_val(cond._values[2]), &cdef);
-        auto col_json = rjson::from_string(cdef.name_as_text());
-
-        auto restr_ge = rjson::empty_object();
-        rjson::add(restr_ge, "type", rjson::from_string(">="));
-        rjson::add(restr_ge, "lhs", rjson::copy(col_json));
-        rjson::add(restr_ge, "rhs", std::move(lower_json));
-        rjson::push_back(restrictions_arr, std::move(restr_ge));
-
-        auto restr_le = rjson::empty_object();
-        rjson::add(restr_le, "type", rjson::from_string("<="));
-        rjson::add(restr_le, "lhs", std::move(col_json));
-        rjson::add(restr_le, "rhs", std::move(upper_json));
-        rjson::push_back(restrictions_arr, std::move(restr_le));
-
-    } else {
+    // The DynamoDB Vector Search API only allows the "=" comparator in
+    // SearchConditionExpression - unlike KeyConditionExpression/
+    // FilterExpression, it has no support for <, <=, >, >=, IN or BETWEEN,
+    // even though the vector store could technically evaluate some of these
+    // for INLINE_FILTER attributes.
+    if (cond._op != ctype::EQ) {
         throw api_error::validation(
-            "VectorSearch KeyConditionExpression uses an unsupported operator for vector search "
-            "pre-filtering; supported operators are =, <, <=, >, >=, IN, BETWEEN");
+            "SearchConditionExpression only supports the \"=\" comparator");
     }
+    // Binary comparison: one operand is a column path, the other a constant.
+    throwing_assert(cond._values.size() == 2);
+    bool col_left = cond._values[0].is_path();
+    bool col_right = cond._values[1].is_path();
+    if ((!col_left && !col_right) || (col_left && col_right)) {
+        throw api_error::validation(
+            "SearchConditionExpression comparison must compare an attribute to a constant");
+    }
+    const parsed::value& col_v   = col_left ? cond._values[0] : cond._values[1];
+    const parsed::value& const_v = col_left ? cond._values[1] : cond._values[0];
+    auto [col_name, expected_type] = require_search_schema_col(col_v);
+
+    auto rhs_json = value_to_prefilter_json(require_resolved_val(const_v), col_name, expected_type);
+    auto restriction = rjson::empty_object();
+    rjson::add(restriction, "type", rjson::from_string("=="));
+    rjson::add(restriction, "lhs", rjson::from_string(col_name));
+    rjson::add(restriction, "rhs", std::move(rhs_json));
+    rjson::push_back(restrictions_arr, std::move(restriction));
 }
 
-// Parses a KeyConditionExpression from a vector search request and builds a
-// pre-filter JSON object for the vector store (same format as the CQL filter
-// in vector_search/filter.cc). The expression may only reference projected
-// attributes; currently those are the base table's key columns. Returns an
-// empty JSON object if no KeyConditionExpression is present.
+// Parses a SearchConditionExpression from a vector search request and builds
+// a pre-filter JSON object for the vector store (same format as the CQL
+// filter in vector_search/filter.cc). The expression may only reference
+// attributes declared in the vector index's SearchSchema (ss_info) - its
+// HASH and INLINE_FILTER attributes. Returns an empty JSON object if no
+// SearchConditionExpression is present.
 static rjson::value parse_vector_search_prefilter(
         parsed::expression_cache& parsed_expr_cache,
         const rjson::value& request,
-        const schema& schema,
+        const search_schema_info& ss_info,
         std::unordered_set<std::string>& used_attribute_names,
         std::unordered_set<std::string>& used_attribute_values)
 {
-    const rjson::value* key_cond_expr = rjson::find(request, "KeyConditionExpression");
-    if (!key_cond_expr) {
+    const rjson::value* search_cond_expr = rjson::find(request, "SearchConditionExpression");
+    if (!search_cond_expr) {
         return rjson::empty_object();
     }
-    if (!key_cond_expr->IsString()) {
-        throw api_error::validation("KeyConditionExpression must be a string");
+    if (!search_cond_expr->IsString()) {
+        throw api_error::validation("SearchConditionExpression must be a string");
     }
-    if (key_cond_expr->GetStringLength() == 0) {
-        throw api_error::validation("KeyConditionExpression must not be empty");
+    if (search_cond_expr->GetStringLength() == 0) {
+        throw api_error::validation("SearchConditionExpression must not be empty");
     }
 
     parsed::condition_expression parsed_expr;
     try {
         parsed_expr = parsed_expr_cache.parse_condition_expression(
-                rjson::to_string_view(*key_cond_expr), "KeyConditionExpression");
+                rjson::to_string_view(*search_cond_expr), "SearchConditionExpression");
     } catch (expressions_syntax_error& e) {
         throw api_error::validation(e.what());
     }
@@ -1699,16 +1672,6 @@ static rjson::value parse_vector_search_prefilter(
     resolve_condition_expression(parsed_expr, attr_names, attr_values,
             used_attribute_names, used_attribute_values);
 
-    // Build the map of projected attribute name -> column_definition.
-    // Currently only the base table's key columns are projected.
-    std::unordered_map<std::string, const column_definition*> projected_cols;
-    for (const column_definition& cdef : schema.partition_key_columns()) {
-        projected_cols[cdef.name_as_text()] = &cdef;
-    }
-    for (const column_definition& cdef : schema.clustering_key_columns()) {
-        projected_cols[cdef.name_as_text()] = &cdef;
-    }
-
     // Flatten the expression into AND-connected primitive conditions.
     // OR and NOT are rejected by condition_expression_and_list().
     std::vector<const parsed::primitive_condition*> conditions;
@@ -1716,7 +1679,7 @@ static rjson::value parse_vector_search_prefilter(
 
     auto restrictions_arr = rjson::empty_array();
     for (const parsed::primitive_condition* cond : conditions) {
-        primitive_condition_to_prefilter(*cond, projected_cols, restrictions_arr);
+        primitive_condition_to_prefilter(*cond, ss_info.attribute_types, restrictions_arr);
     }
 
     if (restrictions_arr.Empty()) {
@@ -1740,404 +1703,51 @@ static rjson::value similarity_to_json(float s) {
     return rjson::value(s);
 }
 
-static future<executor::request_return_type> query_vector(
-        service::storage_proxy& proxy,
-        vector_search::vector_store_client& vsc,
-        rjson::value request,
-        service::client_state& client_state,
-        tracing::trace_state_ptr trace_state,
-        service_permit permit,
-        bool enforce_authorization,
-        bool warn_authorization,
-        alternator::stats& stats,
-        parsed::expression_cache& parsed_expr_cache) {
-    schema_ptr base_schema = get_table(proxy, request);
-    lw_shared_ptr<alternator::stats> per_table_stats = get_stats_from_schema(proxy, *base_schema);
-    per_table_stats->api_operations.query++;
-    stats.vector_search.query++;
-    per_table_stats->vector_search.query++;
-    tracing::add_alternator_table_name(trace_state, base_schema->cf_name());
-    auto mark_latency = [&stats, &per_table_stats, start_time = std::chrono::steady_clock::now()]() {
-        auto duration = std::chrono::steady_clock::now() - start_time;
-        stats.api_operations.query_latency.mark(duration);
-        per_table_stats->api_operations.query_latency.mark(duration);
-    };
+// DynamoDB has the same three "distance functions" as ScyllaDB's vector store,
+// but the numeric values that we get back as "similarity" from the vector
+// store (see vector_search::primary_key::similarity) is different from the
+// "distance" that DynamoDB's SearchVectors defines. It's quite easy to convert
+// between the two, but there is a different conversion function for each
+// similarity function:
+static float score_from_similarity_cosine(float similarity) {
+    // score is the cosine distance 1-cos_sim, in [0, 2].
+    // similarity == (1+cos_sim)/2, so score == 2*(1-similarity).
+    return 2.0f * (1.0f - similarity);
+}
+static float score_from_similarity_euclidean(float similarity) {
+    // score is the raw (non-squared) L2 distance.
+    // similarity == 1/(1+score^2), so score == sqrt(1/similarity - 1).
+    // If for some reason similarity is slightly above 1.0 (can't happen
+    // realistically...) 1.0f / similarity - 1.0f will be slightly negative
+    // and sqrt() will return NaN - but this is a case of maximual similarity
+    // where we prefer to return minimal distance (0), not NaN. So just
+    // in case, we clamp the sqrt argument at 0.0f.
+    return std::sqrt(std::max(0.0f, 1.0f / similarity - 1.0f));
+}
+static float score_from_similarity_dot_product(float similarity) {
+    // Score is the raw dot product (higher = more similar, unlike
+    // the other two DistanceFunctions).
+    // similarity == (1+dot_product)/2, so dot_product == 2*similarity - 1.
+    return 2.0f * similarity - 1.0f;
+}
 
-    // If vector search is requested, IndexName must be given and must
-    // refer to a vector index - not to a GSI or LSI.
-    const rjson::value* index_name_v = rjson::find(request, "IndexName");
-    if (!index_name_v || !index_name_v->IsString()) {
-        co_return api_error::validation(
-            "VectorSearch requires IndexName referring to a vector index");
-    }
-    std::string_view index_name = rjson::to_string_view(*index_name_v);
-    int dimensions = 0;
-    bool is_vector = false;
-    for (const index_metadata& im : base_schema->indices()) {
-        if (im.name() == index_name) {
-            const auto& opts = im.options();
-            // The only secondary index we expect to see is a vector index.
-            // We also expect it to have a valid "dimensions".
-            auto it = opts.find(db::index::secondary_index::custom_class_option_name);
-            if (it == opts.end() || it->second != "vector_index") {
-                on_internal_error(elogger, fmt::format("IndexName '{}' is a secondary index but not a vector index.", index_name));
-            }
-            it = opts.find("dimensions");
-            if (it != opts.end()) {
-                try {
-                    dimensions = std::stoi(it->second);
-                } catch (std::logic_error&) {}
-            }
-            throwing_assert(dimensions > 0);
-            is_vector = true;
-            break;
-        }
-    }
-    if (!is_vector) {
-        co_return api_error::validation(
-            format("VectorSearch IndexName '{}' is not a vector index.", index_name));
-    }
-    // QueryVector is required inside VectorSearch.
-    const rjson::value* vector_search = rjson::find(request, "VectorSearch");
-    if (!vector_search || !vector_search->IsObject()) {
-        co_return api_error::validation(
-            "VectorSearch requires a VectorSearch parameter");
-    }
-    // QueryVector should be a DynamoDB value of type "L" (a list of "N"
-    // numbers) or the Alternator-specific "FLOAT32VECTOR" type (an array of
-    // JSON floats). The number of elements must be exactly the "dimensions"
-    // defined for this vector index. We'll now validate all these assumptions
-    // and parse all the numbers in the vector into an std::vector<float>
-    // query_vec - the type that ann() wants.
-    const rjson::value* query_vector = rjson::find(*vector_search, "QueryVector");
-    if (!query_vector) {
-        co_return api_error::validation(
-            "VectorSearch requires a QueryVector parameter");
-    }
-    std::vector<float> query_vec = parse_vector(*query_vector, dimensions, "VectorSearch QueryVector");
-
-    // Limit is mandatory for vector search: it defines k, the number of
-    // nearest neighbors to return.
-    const rjson::value* limit_json = rjson::find(request, "Limit");
-    if (!limit_json || !limit_json->IsUint()) {
-        co_return api_error::validation("VectorSearch requires a positive integer Limit parameter");
-    }
-    uint32_t limit = limit_json->GetUint();
-    if (limit == 0) {
-        co_return api_error::validation("Limit must be greater than 0");
-    }
-    // The maximum limit for vector search matches the CQL constant
-    // max_ann_query_limit in vector_indexed_table_select_statement.
-    static constexpr uint32_t max_vector_search_limit = 1000;
-    if (limit > max_vector_search_limit) {
-        co_return api_error::validation(
-            format("Limit must not be greater than {}", max_vector_search_limit));
-    }
-
-    // Consistent reads are not supported for vector search, just like GSI.
-    if (get_read_consistency(request) != db::consistency_level::LOCAL_ONE) {
-        co_return api_error::validation(
-            "Consistent reads are not allowed on vector indexes");
-    }
-
-    // Pagination (ExclusiveStartKey) is not supported for vector search.
-    if (rjson::find(request, "ExclusiveStartKey")) {
-        co_return api_error::validation(
-            "VectorSearch does not support pagination (ExclusiveStartKey)");
-    }
-
-    // ScanIndexForward is not supported for vector search: the ordering of
-    // results is determined by vector distance, not by the sort key.
-    if (rjson::find(request, "ScanIndexForward")) {
-        co_return api_error::validation(
-            "VectorSearch does not support ScanIndexForward");
-    }
-
-    // VectorSearch.ReturnScores: if set to SIMILARITY, the response will
-    // include a Scores[] array parallel to Items[], containing the
-    // similarity score for each returned item. Defaults to NONE.
-    bool return_scores = false;
-    if (const rjson::value* rsv = rjson::find(*vector_search, "ReturnScores")) {
-        if (!rsv->IsString()) {
-            co_return api_error::validation("VectorSearch ReturnScores must be a string");
-        }
-        std::string_view rsv_str = rjson::to_string_view(*rsv);
-        if (rsv_str == "SIMILARITY") {
-            return_scores = true;
-        } else if (rsv_str != "NONE") {
-            co_return api_error::validation(
-                "VectorSearch ReturnScores must be NONE or SIMILARITY");
-        }
-    }
-
-    std::unordered_set<std::string> used_attribute_names;
-    std::unordered_set<std::string> used_attribute_values;
-    // Parse the Select parameter and determine which attributes to return.
-    // For a vector index, the default Select is ALL_ATTRIBUTES (full items).
-    // ALL_PROJECTED_ATTRIBUTES is significantly more efficient because it
-    // returns what the vector store returned without looking up additional
-    // base-table data. Currently only the primary key attributes are projected
-    // but in the future we'll implement projecting additional attributes into
-    // the vector index - these additional attributes will also be usable for
-    // filtering). COUNT returns only the count without items.
-    select_type select = parse_select(request, table_or_view_type::vector_index);
-    if (return_scores && select == select_type::count) {
-        co_return api_error::validation(
-            "VectorSearch ReturnScores=SIMILARITY is not supported with Select=COUNT");
-    }
-    std::optional<alternator::attrs_to_get> attrs_to_get_opt;
-    if (select == select_type::projection) {
-        // ALL_PROJECTED_ATTRIBUTES for a vector index: return only key attributes.
-        alternator::attrs_to_get key_attrs;
-        for (const column_definition& cdef : base_schema->partition_key_columns()) {
-            attribute_path_map_add("Select", key_attrs, cdef.name_as_text());
-        }
-        for (const column_definition& cdef : base_schema->clustering_key_columns()) {
-            attribute_path_map_add("Select", key_attrs, cdef.name_as_text());
-        }
-        attrs_to_get_opt = std::move(key_attrs);
+// Picks, once per request, which of the above conversion functions to use
+// for a given index's DistanceFunction - so we don't need to compare the
+// DistanceFunction string again for every single result.
+using score_from_similarity_fn = float (*)(float);
+static score_from_similarity_fn pick_score_from_similarity(std::string_view distance_function) {
+    if (distance_function == "EUCLIDEAN") {
+        return score_from_similarity_euclidean;
+    } else if (distance_function == "DOT_PRODUCT") {
+        return score_from_similarity_dot_product;
     } else {
-        attrs_to_get_opt = calculate_attrs_to_get(request, parsed_expr_cache, used_attribute_names, select);
+        return score_from_similarity_cosine;
     }
-    // QueryFilter (the old-style API) is not supported for vector search Queries.
-    if (rjson::find(request, "QueryFilter")) {
-        co_return api_error::validation(
-            "VectorSearch does not support QueryFilter; use FilterExpression instead");
-    }
-    // KeyConditions (the old-style API) is not supported for vector search Queries.
-    if (rjson::find(request, "KeyConditions")) {
-        co_return api_error::validation(
-            "VectorSearch does not support KeyConditions; use KeyConditionExpression instead");
-    }
-    // FilterExpression: post-filter the vector search results by any attribute.
-    filter flt(parsed_expr_cache, request, filter::request_type::QUERY,
-               used_attribute_names, used_attribute_values);
-    // KeyConditionExpression: pre-filter sent to the vector store before ANN search.
-    // Only projected attributes (currently key columns) are allowed.
-    rjson::value pre_filter = parse_vector_search_prefilter(
-            parsed_expr_cache, request, *base_schema,
-            used_attribute_names, used_attribute_values);
-    const rjson::value* expression_attribute_names = rjson::find(request, "ExpressionAttributeNames");
-    verify_all_are_used(expression_attribute_names, used_attribute_names, "ExpressionAttributeNames", "Query");
-    const rjson::value* expression_attribute_values = rjson::find(request, "ExpressionAttributeValues");
-    verify_all_are_used(expression_attribute_values, used_attribute_values, "ExpressionAttributeValues", "Query");
-
-    // Verify the user has SELECT permission on the base table, as we
-    // do for every type of read operation after validating the input
-    // parameters.
-    co_await verify_permission(enforce_authorization, warn_authorization,
-            client_state, base_schema, auth::permission::SELECT, stats);
-
-    // Query the vector store for the approximate nearest neighbors.
-    auto timeout = executor::default_timeout();
-    abort_on_expiry aoe(timeout);
-    auto pkeys_result = co_await vsc.ann(
-            base_schema->ks_name(), std::string(index_name), base_schema,
-            std::move(query_vec), limit, pre_filter, aoe.abort_source());
-    if (!pkeys_result.has_value()) {
-        const sstring error_msg = std::visit(vector_search::error_visitor{}, pkeys_result.error());
-        co_return api_error::validation(error_msg);
-    }
-    const std::vector<vector_search::primary_key>& pkeys = pkeys_result.value();
-    stats.vector_search.query_items_from_vs += pkeys.size();
-    per_table_stats->vector_search.query_items_from_vs += pkeys.size();
-
-    // For SELECT=COUNT with no filter: skip fetching from the base table and
-    // just return the count of candidates returned by the vector store.
-    // If a filter is present, fall through to the base-table fetch to apply it.
-    if (select == select_type::count && !flt) {
-        rjson::value response = rjson::empty_object();
-        rjson::add(response, "Count", rjson::value(static_cast<int>(pkeys.size())));
-        rjson::add(response, "ScannedCount", rjson::value(static_cast<int>(pkeys.size())));
-        mark_latency();
-        co_return rjson::print(std::move(response));
-    }
-
-    // For SELECT=ALL_PROJECTED_ATTRIBUTES with no filter: skip fetching from
-    // the base table and build items directly from the key columns returned by
-    // the vector store. If a filter is present, fall through to the base-table
-    // fetch to apply it.
-    if (select == select_type::projection && !flt) {
-        rjson::value items_json = rjson::empty_array();
-        rjson::value scores_json = rjson::empty_array();
-        for (const auto& pkey : pkeys) {
-            rjson::value item = rjson::empty_object();
-            std::vector<bytes> exploded_pk = pkey.partition.key().explode();
-            auto exploded_pk_it = exploded_pk.begin();
-            for (const column_definition& cdef : base_schema->partition_key_columns()) {
-                rjson::value key_val = rjson::empty_object();
-                rjson::add_with_string_name(key_val, type_to_string(cdef.type), json_key_column_value(*exploded_pk_it, cdef));
-                rjson::add_with_string_name(item, std::string_view(cdef.name_as_text()), std::move(key_val));
-                ++exploded_pk_it;
-            }
-            if (base_schema->clustering_key_size() > 0) {
-                std::vector<bytes> exploded_ck = pkey.clustering.explode();
-                auto exploded_ck_it = exploded_ck.begin();
-                for (const column_definition& cdef : base_schema->clustering_key_columns()) {
-                    rjson::value key_val = rjson::empty_object();
-                    rjson::add_with_string_name(key_val, type_to_string(cdef.type), json_key_column_value(*exploded_ck_it, cdef));
-                    rjson::add_with_string_name(item, std::string_view(cdef.name_as_text()), std::move(key_val));
-                    ++exploded_ck_it;
-                }
-            }
-            rjson::push_back(items_json, std::move(item));
-            if (return_scores) {
-                rjson::push_back(scores_json, similarity_to_json(pkey.similarity));
-            }
-        }
-        rjson::value response = rjson::empty_object();
-        auto count = static_cast<int>(items_json.Size());
-        rjson::add(response, "Count", rjson::value(count));
-        stats.vector_search.query_returned_items += count;
-        per_table_stats->vector_search.query_returned_items += count;
-        stats.returned_items += count;
-        stats.returned_items_histogram.add(count);
-        per_table_stats->returned_items += count;
-        per_table_stats->returned_items_histogram.add(count);
-        rjson::add(response, "ScannedCount", rjson::value(static_cast<int>(pkeys.size())));
-        rjson::add(response, "Items", std::move(items_json));
-        if (return_scores) {
-            rjson::add(response, "Scores", std::move(scores_json));
-        }
-        mark_latency();
-        co_return rjson::print(std::move(response));
-    }
-
-    // TODO: For SELECT=SPECIFIC_ATTRIBUTES, if they are part of the projected
-    // attributes, we should use the above optimized code path - not fall through
-    // to the read from the base table as below as we need to do if the specific
-    // attributes contain non-projected columns.
-
-    // Fetch the matching items from the base table and build the response.
-    // When a filter is present, we always fetch the full item so that all
-    // attributes are available for filter evaluation, regardless of the
-    // projection required for the final response.
-    auto selection = cql3::selection::selection::wildcard(base_schema);
-    auto regular_columns = base_schema->regular_columns()
-            | std::views::transform(&column_definition::id)
-            | std::ranges::to<query::column_id_vector>();
-    auto attrs_to_get = ::make_shared<const std::optional<alternator::attrs_to_get>>(
-        flt ? std::nullopt : std::move(attrs_to_get_opt));
-
-    rjson::value items_json = rjson::empty_array();
-    rjson::value scores_json = rjson::empty_array();
-    int matched_count = 0;
-
-    // Query each primary key individually, in the order returned by the
-    // vector store, to preserve vector-distance ordering in the response.
-    // FIXME: do this more efficiently with a batched read that preserves ordering.
-    stats.vector_search.query_items_from_base_table += pkeys.size();
-    per_table_stats->vector_search.query_items_from_base_table += pkeys.size();
-    for (const auto& pkey : pkeys) {
-        std::vector<query::clustering_range> bounds{
-                base_schema->clustering_key_size() > 0
-                    ? query::clustering_range::make_singular(pkey.clustering)
-                    : query::clustering_range::make_open_ended_both_sides()};
-        auto partition_slice = query::partition_slice(std::move(bounds), {},
-                regular_columns, selection->get_query_options());
-        auto command = ::make_lw_shared<query::read_command>(
-                base_schema->id(), base_schema->version(), partition_slice,
-                proxy.get_max_result_size(partition_slice),
-                query::tombstone_limit(proxy.get_tombstone_limit()));
-        service::storage_proxy::result<service::storage_proxy::coordinator_query_result> rqr =
-                co_await proxy.query_result(base_schema, command,
-                        {dht::partition_range(pkey.partition)},
-                        db::consistency_level::LOCAL_ONE,
-                        service::storage_proxy::coordinator_query_options(
-                                timeout, permit, client_state, trace_state));
-        if (!rqr) {
-            co_return create_api_error_from_coordinators_exception(std::move(rqr).assume_error());
-        }
-        auto qr = std::move(rqr).assume_value();
-        auto opt_item = describe_single_item(base_schema, partition_slice,
-                *selection, *qr.query_result, *attrs_to_get);
-        if (opt_item && (!flt || flt.check(*opt_item))) {
-            ++matched_count;
-            if (return_scores) {
-                rjson::push_back(scores_json, similarity_to_json(pkey.similarity));
-            }
-            if (select != select_type::count) {
-                if (select == select_type::projection) {
-                    // A filter caused us to fall through here instead of
-                    // taking the projection early-exit above. Reconstruct
-                    // the key-only item from the full item we fetched.
-                    rjson::value key_item = rjson::empty_object();
-                    for (const column_definition& cdef : base_schema->partition_key_columns()) {
-                        if (const rjson::value* v = rjson::find(*opt_item, cdef.name_as_text())) {
-                            rjson::add_with_string_name(key_item, cdef.name_as_text(), rjson::copy(*v));
-                        }
-                    }
-                    for (const column_definition& cdef : base_schema->clustering_key_columns()) {
-                        if (const rjson::value* v = rjson::find(*opt_item, cdef.name_as_text())) {
-                            rjson::add_with_string_name(key_item, cdef.name_as_text(), rjson::copy(*v));
-                        }
-                    }
-                    rjson::push_back(items_json, std::move(key_item));
-                } else {
-                    // When a filter caused us to fetch the full item, apply the
-                    // requested projection (attrs_to_get_opt) before returning it.
-                    // This mirrors describe_items_visitor::end_row() which removes
-                    // extra filter attributes from the returned item.
-                    if (flt && attrs_to_get_opt) {
-                        for (const auto& [attr_name, subpath] : *attrs_to_get_opt) {
-                            if (!subpath.has_value()) {
-                                if (rjson::value* toplevel = rjson::find(*opt_item, attr_name)) {
-                                    if (!hierarchy_filter(*toplevel, subpath)) {
-                                        rjson::remove_member(*opt_item, attr_name);
-                                    }
-                                }
-                            }
-                        }
-                        std::vector<std::string> to_remove;
-                        for (auto it = opt_item->MemberBegin(); it != opt_item->MemberEnd(); ++it) {
-                            std::string key(it->name.GetString(), it->name.GetStringLength());
-                            if (!attrs_to_get_opt->contains(key)) {
-                                to_remove.push_back(std::move(key));
-                            }
-                        }
-                        for (const auto& key : to_remove) {
-                            rjson::remove_member(*opt_item, key);
-                        }
-                    }
-                    rjson::push_back(items_json, std::move(*opt_item));
-                }
-            }
-        }
-    }
-
-    rjson::value response = rjson::empty_object();
-    if (select == select_type::count) {
-        rjson::add(response, "Count", rjson::value(matched_count));
-    } else {
-        auto count = static_cast<int>(items_json.Size());
-        rjson::add(response, "Count", rjson::value(count));
-        stats.vector_search.query_returned_items += count;
-        per_table_stats->vector_search.query_returned_items += count;
-        stats.returned_items += count;
-        stats.returned_items_histogram.add(count);
-        per_table_stats->returned_items += count;
-        per_table_stats->returned_items_histogram.add(count);
-        rjson::add(response, "Items", std::move(items_json));
-        if (return_scores) {
-            rjson::add(response, "Scores", std::move(scores_json));
-        }
-    }
-    rjson::add(response, "ScannedCount", rjson::value(static_cast<int>(pkeys.size())));
-    mark_latency();
-    co_return rjson::print(std::move(response));
 }
 
 future<executor::request_return_type> executor::query(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
     _stats.api_operations.query++;
     elogger.trace("Querying {}", request);
-
-    if (rjson::find(request, "VectorSearch")) {
-        // If vector search is requested, we have a separate code path.
-        // IndexName must be given and must refer to a vector index - not
-        // to a GSI or LSI as the code below assumes.
-        return query_vector(_proxy, _vsc, std::move(request), client_state, trace_state, std::move(permit),
-                _enforce_authorization, _warn_authorization, _stats, *_parsed_expression_cache);
-    }
 
     auto [schema, table_type] = get_table_or_view(_proxy, request);
     db::consistency_level cl = get_read_consistency(request);
@@ -2251,6 +1861,643 @@ future<executor::request_return_type> executor::query(client_state& client_state
         per_table_stats->api_operations.query_latency.mark(duration);
         return result;
     });
+}
+
+// Decode a single "fc" column's value, as returned in
+// vector_search::primary_key::column_values (see ann()'s return_columns),
+// into Alternator's typed JSON attribute-value representation ({"S": ...},
+// {"N": ...}, etc.)
+//
+// Two kinds of "fc" column exist, requiring different decoding - see
+// compute_extra_fc_attributes() in executor.cc:
+//  * A SearchSchema HASH/INLINE_FILTER attribute has a declared type (S, N
+//    or B, recorded in ss_info.attribute_types). The vector store decodes
+//    its stored value into that CQL type (Text/Decimal/Blob respectively)
+//    and returns it as a plain JSON string - the text itself for S, the
+//    decimal digits for N, or "0x"-prefixed hex bytes for B (see the
+//    vector store's parse_alternator_scalar()). We just need to re-wrap
+//    that string into Alternator's typed JSON.
+//  * A Projection NonKeyAttribute with no declared type has no known CQL
+//    type, so the vector store just stores (and returns) the *original*
+//    self-describing serialized attribute value exactly as it appears in
+//    the base table's ":attrs" map, as a "0x"-prefixed hex Blob (see the
+//    vector store's db_index.rs comment on a filtering column added purely
+//    for an Alternator Projection's sake). deserialize_item() - the same
+//    function used to decode ":attrs" map entries elsewhere in this file -
+//    turns that back into Alternator's typed JSON directly.
+static rjson::value decode_fc_column_value(const std::string& attr_name, const rjson::value& raw, const search_schema_info& ss_info) {
+    if (!raw.IsString()) {
+        on_internal_error(elogger, format("Vector store returned a non-string value for filtering column '{}'", attr_name));
+    }
+    std::string_view hex_or_text = rjson::to_string_view(raw);
+    auto type_it = ss_info.attribute_types.find(attr_name);
+    if (type_it == ss_info.attribute_types.end()) {
+        if (!hex_or_text.starts_with("0x")) {
+            on_internal_error(elogger, format("Vector store returned a malformed hex value for filtering column '{}'", attr_name));
+        }
+        bytes raw_bytes = from_hex(hex_or_text.substr(2));
+        return deserialize_item(bytes_view(raw_bytes));
+    }
+    rjson::value wrapped = rjson::empty_object();
+    if (type_it->second == "B") {
+        if (!hex_or_text.starts_with("0x")) {
+            on_internal_error(elogger, format("Vector store returned a malformed hex value for filtering column '{}'", attr_name));
+        }
+        bytes raw_bytes = from_hex(hex_or_text.substr(2));
+        rjson::add_with_string_name(wrapped, "B", rjson::from_string(base64_encode(raw_bytes)));
+    } else {
+        // "S" and "N" both come back as a plain JSON string that Alternator
+        // already stores/expects verbatim (N is a decimal-digit string too).
+        rjson::add_with_string_name(wrapped, type_it->second, rjson::copy(raw));
+    }
+    return wrapped;
+}
+
+// The SearchVectors operation. This is a new API introduced by DynamoDB for
+// doing vector search, and is separate request from the classic Query
+// operation.
+future<executor::request_return_type> executor::search_vectors(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+    _stats.api_operations.search_vectors++;
+    schema_ptr base_schema = get_table(_proxy, request);
+    maybe_audit(audit_info, audit::statement_category::QUERY, base_schema->ks_name(), base_schema->cf_name(), "SearchVectors", request, db::consistency_level::LOCAL_ONE);
+    lw_shared_ptr<alternator::stats> per_table_stats = get_stats_from_schema(_proxy, *base_schema);
+    per_table_stats->api_operations.search_vectors++;
+    tracing::add_alternator_table_name(trace_state, base_schema->cf_name());
+    auto mark_latency = [this, &per_table_stats, start_time = std::chrono::steady_clock::now()]() {
+        auto duration = std::chrono::steady_clock::now() - start_time;
+        _stats.api_operations.search_vectors_latency.mark(duration);
+        per_table_stats->api_operations.search_vectors_latency.mark(duration);
+    };
+
+    // If vector search is requested, IndexName must be given and must
+    // refer to a vector index - not to a GSI or LSI.
+    const rjson::value* index_name_v = rjson::find(request, "IndexName");
+    if (!index_name_v || !index_name_v->IsString()) {
+        co_return api_error::validation(
+            "SearchVectors requires IndexName referring to a vector index");
+    }
+    std::string_view index_name = rjson::to_string_view(*index_name_v);
+    int dimensions = 0;
+    bool is_vector = false;
+    score_from_similarity_fn score_from_similarity = nullptr;
+    search_schema_info ss_info;
+    std::optional<std::vector<std::string>> projection;
+    std::string vector_attribute_name;
+    for (const index_metadata& im : base_schema->indices()) {
+        if (im.name() == index_name) {
+            const auto& opts = im.options();
+            // The only secondary index we expect to see is a vector index.
+            // We also expect it to have a valid "dimensions".
+            auto it = opts.find(db::index::secondary_index::custom_class_option_name);
+            if (it == opts.end() || it->second != "vector_index") {
+                on_internal_error(elogger, fmt::format("IndexName '{}' is a secondary index but not a vector index.", index_name));
+            }
+            it = opts.find("dimensions");
+            if (it != opts.end()) {
+                try {
+                    dimensions = std::stoi(it->second);
+                } catch (std::logic_error&) {}
+            }
+            throwing_assert(dimensions > 0);
+            it = opts.find("similarity_function");
+            if (it != opts.end()) {
+                score_from_similarity = pick_score_from_similarity(it->second);
+            }
+            throwing_assert(score_from_similarity);
+            ss_info = get_search_schema_info(im);
+            projection = get_vector_index_non_key_attributes(im);
+            if (auto target_it = opts.find(cql3::statements::index_target::target_option_name); target_it != opts.end()) {
+                vector_attribute_name = secondary_index::vector_index::get_target_column(target_it->second);
+            }
+            is_vector = true;
+            break;
+        }
+    }
+    if (!is_vector) {
+        co_return api_error::validation(
+            format("SearchVectors IndexName '{}' is not a vector index.", index_name));
+    }
+    // SearchVector is a required parameter of SearchVectors.
+    // SearchVector should be a DynamoDB value of type "L" (a list of "N"
+    // numbers) or the Alternator-specific "FLOAT32VECTOR" type (an array of
+    // JSON floats). The number of elements must be exactly the "dimensions"
+    // defined for this vector index. We'll now validate all these assumptions
+    // and parse all the numbers in the vector into an std::vector<float>
+    // search_vec - the type that ann() wants.
+    const rjson::value* search_vector = rjson::find(request, "SearchVector");
+    if (!search_vector) {
+        co_return api_error::validation(
+            "SearchVectors requires a SearchVector parameter");
+    }
+    std::vector<float> search_vec = parse_vector(*search_vector, dimensions, "SearchVector");
+
+    // TopK - the number of nearest neighbors to return - is mandatory for
+    // vector search:
+    const rjson::value* topk_json = rjson::find(request, "TopK");
+    if (!topk_json || !topk_json->IsUint()) {
+        co_return api_error::validation("SearchVectors requires a positive integer TopK parameter");
+    }
+    uint32_t topk = topk_json->GetUint();
+    // The maximum TopK for vector search matches the CQL constant
+    // max_ann_query_limit in vector_indexed_table_select_statement.
+    static constexpr uint32_t max_topk = 1000;
+    if (topk == 0 || topk > max_topk) {
+        co_return api_error::validation(
+            format("TopK must be between 1 and {}", max_topk));
+    }
+
+    // SearchVectors is not "Query", and doesn't support these options which
+    // Query supports: Limit (use TopK), ConsistentRead, ExclusiveStartKey,
+    // ScanIndexForward, Select (use BaseRead instead - see below) and
+    // AttributesToGet (use ProjectionExpression).
+    static constexpr std::string_view unsupported_query_params[] = {
+        "Limit", "ConsistentRead", "ExclusiveStartKey", "ScanIndexForward", "Select",
+        "AttributesToGet"};
+    for (std::string_view unsupported : unsupported_query_params) {
+        if (rjson::find(request, unsupported)) {
+            co_return api_error::validation(
+                format("SearchVectors does not support the {} parameter", unsupported));
+        }
+    }
+
+    std::unordered_set<std::string> used_attribute_names;
+    std::unordered_set<std::string> used_attribute_values;
+    // BaseRead is an Alternator-only extension (SearchVectors has no
+    // equivalent in real DynamoDB, which can only ever return
+    // ALL_PROJECTED_ATTRIBUTES - the columns projected into the vector
+    // index):
+    //   * BaseRead=false (the default) is the DynamoDB-compatible mode: the
+    //     response is built entirely out of what's projected into the
+    //     vector index - a ProjectionExpression naming anything else is
+    //     silently ignored, just like a ProjectionExpression naming an
+    //     attribute the item doesn't have.
+    //   * BaseRead=true unconditionally reads the matching items from the
+    //     base table (except when nothing beyond the base table's own key
+    //     columns could possibly be needed), giving up-to-date data instead
+    //     of whatever was last indexed, and allowing ProjectionExpression
+    //     to name any base table attribute, not just ones projected into
+    //     the index.
+    //   With no explicit ProjectionExpression, both modes
+    //   return the same thing conceptually - the entire item - just from
+    //   different copies of it: BaseRead=false's "entire item" is the
+    //   vector index's own copy (which only ever has the projected
+    //   attributes to begin with - not a restricted view, just what the
+    //   index actually has), while BaseRead=true's is the base table's row.
+    const rjson::value* base_read_v = rjson::find(request, "BaseRead");
+    bool base_read = false;
+    if (base_read_v && !base_read_v->IsNull()) {
+        if (!base_read_v->IsBool()) {
+            co_return api_error::validation("BaseRead parameter must be a boolean");
+        }
+        base_read = base_read_v->GetBool();
+    }
+    // What ends up in the response Item is decided below by attrs_to_get_opt
+    // - an attrs_to_get, the same "which attributes to keep" map type used
+    // by GetItem/Query/Scan (std::nullopt there means "no restriction,
+    // return the whole item"). The next few variables - base_key_attrs,
+    // vector_store_attrs and projection_type_all - are just schema/index
+    // facts reused by more than one branch below when computing
+    // attrs_to_get_opt and deciding whether a base-table read is needed;
+    // they don't decide anything by themselves.
+    //
+    // base_key_attrs: the smallest possible projection - just the base
+    // table's own primary key column names (partition + clustering). These
+    // are schema column names, not user input, so there's no risk of
+    // duplicates or overlapping paths to guard against here - a plain map
+    // insertion (not attribute_path_map_add(), which exists for that) is
+    // all that's needed.
+    // attrs_to_get_node holds a std::unique_ptr internally (for nested
+    // ProjectionExpression paths), so attrs_to_get as a whole is move-only -
+    // make_base_key_attrs() is called twice below (for base_key_attrs and to
+    // seed vector_store_attrs) rather than building it once and copying it.
+    auto make_base_key_attrs = [&] {
+        return base_schema->primary_key_columns()
+            | std::views::transform([] (const column_definition& cdef) {
+                return std::make_pair<std::string, alternator::attrs_to_get_node>(cdef.name_as_text(), {}); })
+            | std::ranges::to<alternator::attrs_to_get>();
+    };
+    alternator::attrs_to_get base_key_attrs = make_base_key_attrs();
+    // vector_store_attrs: every attribute name this specific vector index
+    // actually stores and can answer about an item, without ever reading
+    // the base table - base_key_attrs, plus the SearchSchema's
+    // HASH/INLINE_FILTER attributes, plus (for ProjectionType=INCLUDE) the
+    // Projection's NonKeyAttributes.
+    alternator::attrs_to_get vector_store_attrs = make_base_key_attrs();
+    if (ss_info.hash_attribute && !vector_store_attrs.contains(*ss_info.hash_attribute)) {
+        vector_store_attrs.emplace(*ss_info.hash_attribute, alternator::attrs_to_get_node{});
+    }
+    for (const std::string& attr : ss_info.inline_filter_attributes) {
+        if (!vector_store_attrs.contains(attr)) {
+            vector_store_attrs.emplace(attr, alternator::attrs_to_get_node{});
+        }
+    }
+    if (projection) {
+        for (const std::string& attr : *projection) {
+            if (!vector_store_attrs.contains(attr)) {
+                vector_store_attrs.emplace(attr, alternator::attrs_to_get_node{});
+            }
+        }
+    }
+    // projection_type_all: true for ProjectionType=ALL, i.e. the index's
+    // Projection setting (fixed when the index was created) declares every
+    // attribute of the item projected - see get_vector_index_non_key_attributes()
+    // in executor_util.cc for why an engaged-but-empty projection means ALL
+    // (as opposed to a disengaged projection, which means KEYS_ONLY).
+    // Because there's no finite list of "every attribute" to fetch from the
+    // vector store (see vector_store_attrs above), this is the one case
+    // where the default (no explicit ProjectionExpression) response needs a
+    // base-table read even under BaseRead=false - see the base-table
+    // fallback further down.
+    bool projection_type_all = projection.has_value() && projection->empty();
+
+    // set attrs_to_get_opt to the list of attributes that should be returned
+    // in the response (or unset if *all* attributes are request). The user
+    // can set this list *explicitly* via the ProjectionExpression parameter.
+    // If it wasn't given, the default list of attributes to return is
+    // vector_store_attrs.
+    std::optional<alternator::attrs_to_get> explicit_attrs =
+        calculate_attrs_to_get(request, *_parsed_expression_cache, used_attribute_names);
+    const bool has_explicit_attrs = explicit_attrs.has_value();
+    std::optional<alternator::attrs_to_get> attrs_to_get_opt;
+    if (has_explicit_attrs) {
+        attrs_to_get_opt = std::move(explicit_attrs);
+        if (!base_read && !projection_type_all) {
+            // In DynamoDB-compatible (BaseRead=false) mode, an explicit
+            // ProjectionExpression still can't reach outside what's
+            // actually projected into the vector index: real
+            // DynamoDB's vector index storage physically doesn't have
+            // anything else. The one exception is the vector attribute
+            // itself, which can always be requested explicitly (see
+            // test_searchvectors_projectionexpression_vs_projectiontype).
+            // An attribute outside this set is silently omitted, not an
+            // error - the same way a ProjectionExpression naming an
+            // attribute the item doesn't have is silently omitted.
+            // (ProjectionType=ALL is excluded from this restriction because
+            // vector_store_attrs there isn't the real projected set - see
+            // projection_type_all above - so nothing should be filtered out
+            // by it; the base-table fallback below handles ALL instead.)
+            std::erase_if(*attrs_to_get_opt, [&] (const auto& kv) {
+                return kv.first != vector_attribute_name && !vector_store_attrs.contains(kv.first);
+            });
+        }
+        // BaseRead=true: no restriction at all - that's the whole point.
+    } else {
+        // No explicit request: both BaseRead values mean the same thing
+        // conceptually - "the entire item" - just a different copy of it.
+        //   BaseRead=false: vector_store_attrs, the vector index's own copy
+        //   - which only ever has the projected attributes to begin with,
+        //   so that's its "entire item" (disengaged for ProjectionType=ALL,
+        //   which has no finite list - see projection_type_all above - so
+        //   this falls through to the base-table fallback below just like
+        //   an explicit request naming an unavailable attribute would).
+        //   BaseRead=true: the base table's row, in full (std::nullopt) -
+        //   the only way to ask for "everything" without knowing every
+        //   attribute name in advance, recovering the old Select=
+        //   ALL_ATTRIBUTES' role.
+        attrs_to_get_opt = (!base_read && !projection_type_all)
+            ? std::optional(std::move(vector_store_attrs)) : std::nullopt;
+    }
+
+    // SearchConditionExpression: pre-filter sent to the vector store before
+    // ANN search. Only attributes declared in the vector index's
+    // SearchSchema are allowed.
+    rjson::value pre_filter = parse_vector_search_prefilter(
+            *_parsed_expression_cache, request, ss_info,
+            used_attribute_names, used_attribute_values);
+
+    // FilterExpression: post-filter the vector search results. This is an
+    // Alternator-only extension that does not exist in DynamoDB, and was
+    // inspired by the same feature in Query on GSI/LSI.
+    filter flt(*_parsed_expression_cache, request, filter::request_type::QUERY,
+               used_attribute_names, used_attribute_values);
+    // QueryFilter (the old-style API) is not supported for vector searches.
+    // Use FilterExpression instead.
+    if (rjson::find(request, "QueryFilter")) {
+        co_return api_error::validation(
+            "SearchVectors does not support QueryFilter; use FilterExpression instead");
+    }
+
+    const rjson::value* expression_attribute_names = rjson::find(request, "ExpressionAttributeNames");
+    verify_all_are_used(expression_attribute_names, used_attribute_names, "ExpressionAttributeNames", "SearchVectors");
+    const rjson::value* expression_attribute_values = rjson::find(request, "ExpressionAttributeValues");
+    verify_all_are_used(expression_attribute_values, used_attribute_values, "ExpressionAttributeValues", "SearchVectors");
+
+    // Verify the user has SELECT permission on the base table, as we
+    // do for every type of read operation after validating the input
+    // parameters.
+    co_await verify_permission(_enforce_authorization, _warn_authorization,
+            client_state, base_schema, auth::permission::SELECT, _stats);
+
+    // The search implementation below has two distinct paths: the fast_path
+    // performs only *only* an ANN request on the vector store, while the
+    // !fast_path case asks the ANN to only return keys - and then goes back
+    // to the base-table to fetch the full items (or parts of them).
+    // Ideal, the "BaseRead" flag is exactly what should determine fast_path,
+    // i.e., we should just have fast_path = !base_read. However, there are
+    // a few additional cases:
+    // 1. If the requested attributes are JUST the key columns, we really
+    //    don't need to read anything beyond what the vector store's ANN
+    //    results already give us - keys can't differ between the vector
+    //    index and the base table. This holds regardless of BaseRead (so it
+    //    can turn a would-be-slow BaseRead=true request into a fast one)
+    //    and regardless of ProjectionType, including ALL, as long as
+    //    attrs_to_get_opt reduces to just the keys - in practice this only
+    //    ever happens for an explicit ProjectionExpression naming just the
+    //    keys: the *default* (no explicit request) either
+    //    already satisfies the main fast_path condition below on its own
+    //    (BaseRead=false, ProjectionType != ALL), or - under BaseRead=true -
+    //    is now the full item, not just the keys (see above), so it's never
+    //    eligible for this shortcut either. This condition is checked below
+    //    in a separate if() (after vs_return_columns is computed) that can
+    //    turn fast_path on but never off, leaving vs_return_columns empty in
+    //    that case - nothing beyond the keys is needed from the vector store
+    //    either.
+    // 2. If ProjectionType=ALL (projection_type_all), we currently CANNOT
+    //    use the fast path even if BaseRead=false. This is because currently
+    //    the vector store cannot store all attributes - just a list of named
+    //    attributes. In this case we call back to !fast_path even if
+    //    BaseRead=false, disobeying the BaseRead=false flag. Unfortunately
+    //    we have no choice - the only other option would be to not allow
+    //    BaseRead=false at all when ProjectionType=ALL.
+    // 3. Similarly, the vector store currently cannot retrieve the indexed
+    //    vector. If this vector is explicitly requested by
+    //    ProjectionExpression, we cannot use the fast path and emulate this
+    //    request inefficiently with the slow path.
+
+    bool fast_path = !base_read && !projection_type_all &&
+        !attrs_to_get_opt->contains(vector_attribute_name);
+
+    // vs_return_columns: the list of SearchSchema and Projection attributes
+    // to ask the vector store to return alongside the primary keys - i.e.
+    // the value passed as ann()'s own "return_columns" parameter. It is
+    // empty in the slow path (we then ask the vector store just for keys),
+    // and in the fast path it currently lists *all* attributes that the
+    // vector store is known to hold (the SearchSchema and Projection
+    // attributes).
+    // FIXME: when there's an explicit ProjectionExpression and/or a
+    // FilterExpression, vs_return_columns could be trimmed down to
+    // just the attributes either of them actually references, instead of
+    // always asking the vector store for everything it has. The current code
+    // is correct - the extra attributes just get discarded afterward by
+    // restrict_to_attrs (see below) - but wastes vector store work
+    // when the real request is narrow than the full projected set.
+    std::vector<std::string> vs_return_columns;
+    if (fast_path) {
+        // If one of the attributes we want the vector store to give us is
+        // both a base key and a SearchSchema attribute, we should not list it
+        // in vs_return_columns, as the vector store already includes the key
+        // columns in it's main response, and it's a waste to have it twice
+        // (and will also cause us to produce response JSONs with duplicate
+        // members).
+        auto is_base_key = [&](const std::string& attr) {
+            const column_definition* cdef = base_schema->get_column_definition(to_bytes(attr));
+            return cdef && cdef->is_primary_key();
+        };
+        if (ss_info.hash_attribute && !is_base_key(*ss_info.hash_attribute)) {
+            vs_return_columns.push_back(*ss_info.hash_attribute);
+        }
+        for (const std::string& attr : ss_info.inline_filter_attributes) {
+            if (!is_base_key(attr)) {
+                vs_return_columns.push_back(attr);
+            }
+        }
+        if (projection) {
+            for (const std::string& attr : *projection) {
+                if (std::ranges::contains(vs_return_columns, attr)) {
+                    continue;
+                }
+                if (!is_base_key(attr)) {
+                    vs_return_columns.push_back(attr);
+                }
+            }
+        }
+    }
+
+    // Set fast_path = true in "additional case 1" described above (the
+    // case where the request just needs keys), even if base_read=true.
+    // If we have a FilterExpression, we won't use this shortcut because
+    // the filter *may* reference attributes beyond the keys (FIXME: we
+    // can check if it actually does, rather than just disqualifying
+    // this optimization whenever a FilterExpression exists).
+    if (!flt) {
+        if (attrs_to_get_opt &&
+            std::ranges::all_of(*attrs_to_get_opt, [&] (const auto& kv) {
+                return base_key_attrs.contains(kv.first);
+            })) {
+            fast_path = true;
+        }
+    }
+
+    // Query the vector store for the approximate nearest neighbors.
+    // Each returned item includes a key, a score, and optionally additional
+    // attributes specified by vs_return_columns.
+    auto timeout = executor::default_timeout();
+    abort_on_expiry aoe(timeout);
+    // Note that we need routing=false so that the vector store will use
+    // the specific index_name chosen by the user, and not route the request
+    // to a different index on the same column just because it's newer
+    // (which is what CQL wants).
+    auto pkeys_result = co_await _vsc.ann(
+            base_schema->ks_name(), std::string(index_name), base_schema,
+            std::move(search_vec), topk, pre_filter, aoe.abort_source(), /*routing=*/false, vs_return_columns);
+    if (!pkeys_result.has_value()) {
+        const sstring error_msg = std::visit(vector_search::error_visitor{}, pkeys_result.error());
+        co_return api_error::validation(error_msg);
+    }
+    const std::vector<vector_search::primary_key>& pkeys = pkeys_result.value();
+    _stats.vector_search.items_from_vs += pkeys.size();
+    per_table_stats->vector_search.items_from_vs += pkeys.size();
+
+    // restrict_to_attrs() trims item (already fetched more broadly than may
+    // have been asked for - either the full base table row, or every
+    // attribute vector_store_attrs makes available) down to exactly what
+    // attrs asks for, honoring nested ProjectionExpression sub-paths (e.g.
+    // "a.b") via hierarchy_filter(). Shared by the fast path below and the
+    // base-table slow path further down.
+    auto restrict_to_attrs = [&] (rjson::value& item, const alternator::attrs_to_get& attrs) {
+        for (const auto& [attr_name, subpath] : attrs) {
+            if (!subpath.has_value()) {
+                if (rjson::value* toplevel = rjson::find(item, attr_name)) {
+                    if (!hierarchy_filter(*toplevel, subpath)) {
+                        rjson::remove_member(item, attr_name);
+                    }
+                }
+            }
+        }
+        std::vector<std::string> to_remove;
+        for (auto it = item.MemberBegin(); it != item.MemberEnd(); ++it) {
+            std::string key(it->name.GetString(), it->name.GetStringLength());
+            if (!attrs.contains(key)) {
+                to_remove.push_back(std::move(key));
+            }
+        }
+        for (const auto& key : to_remove) {
+            rjson::remove_member(item, key);
+        }
+    };
+
+    // fast_path: skip fetching from the base table entirely, and build items
+    // directly from the key columns returned by the vector store plus
+    // (when applicable) vs_return_columns's values, also returned by the
+    // vector store (see vs_return_columns above). See the fast_path
+    // computation above for exactly when this applies; any other case
+    // needs the base-table fallback below.
+    if (fast_path) {
+        rjson::value search_results = rjson::empty_array();
+        for (const auto& pkey : pkeys) {
+            rjson::value item = rjson::empty_object();
+            std::vector<bytes> exploded_pk = pkey.partition.key().explode();
+            auto exploded_pk_it = exploded_pk.begin();
+            for (const column_definition& cdef : base_schema->partition_key_columns()) {
+                rjson::value key_val = rjson::empty_object();
+                rjson::add_with_string_name(key_val, type_to_string(cdef.type), json_key_column_value(*exploded_pk_it, cdef));
+                rjson::add_with_string_name(item, std::string_view(cdef.name_as_text()), std::move(key_val));
+                ++exploded_pk_it;
+            }
+            if (base_schema->clustering_key_size() > 0) {
+                std::vector<bytes> exploded_ck = pkey.clustering.explode();
+                auto exploded_ck_it = exploded_ck.begin();
+                for (const column_definition& cdef : base_schema->clustering_key_columns()) {
+                    rjson::value key_val = rjson::empty_object();
+                    rjson::add_with_string_name(key_val, type_to_string(cdef.type), json_key_column_value(*exploded_ck_it, cdef));
+                    rjson::add_with_string_name(item, std::string_view(cdef.name_as_text()), std::move(key_val));
+                    ++exploded_ck_it;
+                }
+            }
+            for (const std::string& attr : vs_return_columns) {
+                auto it = pkey.column_values.find(attr);
+                if (it != pkey.column_values.end()) {
+                    rjson::add_with_string_name(item, attr, decode_fc_column_value(attr, it->second, ss_info));
+                }
+            }
+            if (flt && !flt.check(item)) {
+                continue;
+            }
+            // For the default (no explicit ProjectionExpression) case,
+            // item already matches
+            // attrs_to_get_opt precisely - vs_return_columns is exactly
+            // vector_store_attrs's non-key attributes - so this is a no-op.
+            // For an explicit request, vs_return_columns may be a superset of
+            // what was actually asked for (it always includes everything
+            // available, to give FilterExpression above the full picture),
+            // so trim it down now.
+            if (has_explicit_attrs) {
+                restrict_to_attrs(item, *attrs_to_get_opt);
+            }
+            rjson::value entry = rjson::empty_object();
+            rjson::add(entry, "Item", std::move(item));
+            rjson::add(entry, "Score", similarity_to_json(score_from_similarity(pkey.similarity)));
+            rjson::push_back(search_results, std::move(entry));
+        }
+        auto count = static_cast<int>(search_results.Size());
+        _stats.vector_search.returned_items += count;
+        per_table_stats->vector_search.returned_items += count;
+        _stats.returned_items += count;
+        _stats.returned_items_histogram.add(count);
+        per_table_stats->returned_items += count;
+        per_table_stats->returned_items_histogram.add(count);
+        rjson::value response = rjson::empty_object();
+        rjson::add(response, "SearchResults", std::move(search_results));
+        mark_latency();
+        co_return rjson::print(std::move(response));
+    }
+
+    // If we're here, we're in the slow path (!fast_path) case - basically the
+    // BaseRead=true case with a few footnotes already described above.
+    // We have received from the vector store only the keys for each of the
+    // matching item, and now we go back to the base table to fetch the items
+    // with those keys and build the full response.
+    // When a filter is present, we always fetch the full item so that all
+    // attributes are available for filter evaluation, regardless of the
+    // projection required for the final response.
+    auto selection = cql3::selection::selection::wildcard(base_schema);
+    auto regular_columns = base_schema->regular_columns()
+            | std::views::transform(&column_definition::id)
+            | std::ranges::to<query::column_id_vector>();
+    auto attrs_to_get = ::make_shared<const std::optional<alternator::attrs_to_get>>(
+        flt ? std::nullopt : std::move(attrs_to_get_opt));
+
+    rjson::value search_results = rjson::empty_array();
+
+    // Query each primary key individually, in the order returned by the
+    // vector store, to preserve vector-distance ordering in the response.
+    // FIXME: do this more efficiently with a batched read that preserves ordering.
+    _stats.vector_search.items_from_base_table += pkeys.size();
+    per_table_stats->vector_search.items_from_base_table += pkeys.size();
+    for (const auto& pkey : pkeys) {
+        std::vector<query::clustering_range> bounds{
+                base_schema->clustering_key_size() > 0
+                    ? query::clustering_range::make_singular(pkey.clustering)
+                    : query::clustering_range::make_open_ended_both_sides()};
+        auto partition_slice = query::partition_slice(std::move(bounds), {},
+                regular_columns, selection->get_query_options());
+        auto command = ::make_lw_shared<query::read_command>(
+                base_schema->id(), base_schema->version(), partition_slice,
+                _proxy.get_max_result_size(partition_slice),
+                query::tombstone_limit(_proxy.get_tombstone_limit()));
+        service::storage_proxy::result<service::storage_proxy::coordinator_query_result> rqr =
+                co_await _proxy.query_result(base_schema, command,
+                        {dht::partition_range(pkey.partition)},
+                        db::consistency_level::LOCAL_ONE,
+                        service::storage_proxy::coordinator_query_options(
+                                timeout, permit, client_state, trace_state));
+        if (!rqr) {
+            co_return create_api_error_from_coordinators_exception(std::move(rqr).assume_error());
+        }
+        auto qr = std::move(rqr).assume_value();
+        auto opt_item = describe_single_item(base_schema, partition_slice,
+                *selection, *qr.query_result, *attrs_to_get);
+        if (opt_item && (!flt || flt.check(*opt_item))) {
+            rjson::value item;
+            {
+                // If a filter caused us to fall through here instead of
+                // taking the fast-path early-exit above, attrs_to_get was
+                // overridden to fetch the full item (so the filter had every
+                // attribute available to check), and the projection this
+                // request actually asked for (attrs_to_get_opt) was never
+                // applied - apply it now, via the same restrict_to_attrs
+                // used by the fast path above. When there was no filter,
+                // attrs_to_get already equals attrs_to_get_opt, so opt_item
+                // is already correctly restricted and this is a no-op.
+                if (flt && attrs_to_get_opt) {
+                    restrict_to_attrs(*opt_item, *attrs_to_get_opt);
+                }
+                if (!has_explicit_attrs) {
+                    // Whenever there was no explicit ProjectionExpression,
+                    // the vector attribute itself is never included by
+                    // default - regardless of BaseRead -
+                    // matching DynamoDB's documented SearchVectors behavior
+                    // ("Vector data is large, and you typically don't need
+                    // it in the response... To include the vector
+                    // attribute, request it with a ProjectionExpression.").
+                    // It can still always be requested explicitly. When
+                    // attrs_to_get_opt is engaged (i.e. vector_store_attrs,
+                    // for ProjectionType=KEYS_ONLY/INCLUDE) it never includes
+                    // it anyway, so this is a no-op - it was never there to
+                    // begin with, or was already dropped by the
+                    // attrs_to_get_opt filtering above.
+                    rjson::remove_member(*opt_item, vector_attribute_name);
+                }
+                item = std::move(*opt_item);
+            }
+            rjson::value entry = rjson::empty_object();
+            rjson::add(entry, "Item", std::move(item));
+            rjson::add(entry, "Score", similarity_to_json(score_from_similarity(pkey.similarity)));
+            rjson::push_back(search_results, std::move(entry));
+        }
+    }
+
+    auto count = static_cast<int>(search_results.Size());
+    _stats.vector_search.returned_items += count;
+    per_table_stats->vector_search.returned_items += count;
+    _stats.returned_items += count;
+    _stats.returned_items_histogram.add(count);
+    per_table_stats->returned_items += count;
+    per_table_stats->returned_items_histogram.add(count);
+    rjson::value response = rjson::empty_object();
+    rjson::add(response, "SearchResults", std::move(search_results));
+    mark_latency();
+    co_return rjson::print(std::move(response));
 }
 
 // Converts a multi-row selection result to JSON compatible with DynamoDB.

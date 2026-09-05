@@ -15,73 +15,19 @@
 import pytest
 import boto3
 from botocore.exceptions import ClientError
+import botocore
 import time
 from contextlib import contextmanager
 from functools import cache
+from packaging.version import Version
 
 import re
 
 from test.pylib.skip_types import skip_env
-from .util import unique_table_name, random_string, new_test_table, get_cert
+from .util import new_role, new_dynamodb, unique_table_name, random_string, new_test_table, get_cert
 from .test_gsi_updatetable import wait_for_gsi, wait_for_gsi_gone
 from .test_gsi import assert_index_query
-from test.alternator.test_vector import vs, needs_vector_store, wait_for_vector_index_active, table_vs, add_vs_to_client, vector_store_configured, VECTOR_STORE_TIMEOUT
-
-# new_role() is a context manager for temporarily creating a new role with
-# a unique name and returning its name and the secret key needed to connect
-# to it with the DynamoDB API.
-# The "login" and "superuser" flags are passed to the CREATE ROLE statement.
-@contextmanager
-def new_role(cql, login=True, superuser=False):
-    # The role name is not a table's name but it doesn't matter. Because our
-    # unique_table_name() uses (deliberately) a non-lower-case character, the
-    # role name has to be quoted in double quotes when used in CQL below.
-    role = unique_table_name()
-    # The password set for the new role is identical to the user name (not
-    # very secure ;-)) - but we later need to retrieve the "salted hash" of
-    # this password, which serves in Alternator as the secret key of the role.
-    cql.execute(f"CREATE ROLE \"{role}\" WITH PASSWORD = '{role}' AND SUPERUSER = {superuser} AND LOGIN = {login}")
-    # Newer Scylla places the "roles" table in the "system" keyspace, but
-    # older versions used "system_auth_v2" or "system_auth"
-    key = None
-    for ks in ['system', 'system_auth_v2', 'system_auth']:
-        try:
-            e = list(cql.execute(f"SELECT salted_hash FROM {ks}.roles WHERE role = '{role}'"))
-            if e != []:
-                key = e[0].salted_hash
-                if key is not None:
-                    break
-        except:
-            pass
-    assert key is not None
-    try:
-        yield (role, key)
-    finally:
-        cql.execute(f'DROP ROLE "{role}"')
-
-# Create a new DynamoDB API resource (connection object) similar to the
-# existing "dynamodb" resource - but authenticating with the given role
-# and key.
-@contextmanager
-def new_dynamodb(dynamodb, role, key):
-    # Under mTLS, identity is determined solely by the client certificate
-    # presented on the connection (and SigV4 signatures, if any, are
-    # ignored) - so there is no way to authenticate as a different role
-    # using a role/key pair. Skip such tests instead of silently
-    # reconnecting as whatever identity the certificate maps to.
-    if get_cert(dynamodb):
-        skip_env("new_dynamodb() authenticates using SigV4 role/key pairs, which are not supported under mTLS")
-    url = dynamodb.meta.client._endpoint.host
-    config = dynamodb.meta.client._client_config
-    region_name = dynamodb.meta.client.meta.region_name
-    verify = not url.startswith('https')
-    ret = boto3.resource('dynamodb', endpoint_url=url, verify=verify,
-        aws_access_key_id=role, aws_secret_access_key=key,
-        region_name=region_name, config=config)
-    try:
-        yield ret
-    finally:
-        ret.meta.client.close()
+from test.alternator.test_vector import needs_vector_store, wait_for_vector_index_active, table_vs, vector_store_configured, VECTOR_STORE_TIMEOUT
 
 @contextmanager
 def new_dynamodb_streams(dynamodb, role, key):
@@ -1199,8 +1145,8 @@ def test_rbac_system_table_write(dynamodb, cql, test_table_s):
                 ExpressionAttributeValues={':val': old_val}))
 
 #############################################################################
-# Tests for RBAC on vector search operations - Query with VectorSearch,
-# CreateTable with VectorIndexes, and UpdateTable with VectorIndexUpdates.
+# Tests for RBAC on vector search operations - SearchVectors, CreateTable with
+# VectorIndexes, and UpdateTable with VectorIndexUpdates.
 # The tests verify that the permissions required for these operations
 # are as expected, but also that the external vector store is really able to
 # read the base-table data to perform its indexing.
@@ -1211,21 +1157,19 @@ def test_rbac_system_table_write(dynamodb, cql, test_table_s):
 # Query requires SELECT permissions on the *base* table. Having permissions
 # on the base table is also important to allow Select='ALL_ATTRIBUTES'.
 
-# new_vs_for_role() creates a boto3 resource supporting vector search API
-# extensions, authenticated with the given role and key instead of the default
-# credentials. Like new_dynamodb(), but with add_vs_to_client() applied
-# so that the connection can send/receive VectorSearch parameters.
-@contextmanager
-def new_vs_for_role(vs, role, key):
-    with new_dynamodb(vs, role, key) as d:
-        with add_vs_to_client(d.meta.client):
-            yield d
+# Support for the new DynamoDB vector search API was added in Botocore 1.43.64
+# Tests that need to use this API should use the following fixture, and will
+# be skipped if botocore is too old.
+@pytest.fixture(scope='function')
+def needs_vector_search_api():
+    if (Version(botocore.__version__) < Version('1.43.64')):
+        skip_env("Botocore version 1.43.64 or above required to run this test")
 
 # Like authorized(), but also accepts a "Vector Store is disabled" error:
 # permissions are checked before the vector store is accessed, so this
 # error still means the operation was authorized. Using this function instead
-# of authorized() will allow us to test permissions on Query even if the
-# vector store is not configured.
+# of authorized() will allow us to test permissions on SearchVectors even if
+# the vector store is not configured.
 def authorized_vs(fn):
     try:
         return authorized(fn)
@@ -1233,43 +1177,51 @@ def authorized_vs(fn):
         if 'Vector Store is disabled' not in e.response['Error']['Message']:
             raise
 
-# Test that a Query with VectorSearch requires SELECT permission on the table,
-# just like a regular Query without VectorSearch does (but unlike a Query on
-# a GSI or LSI, which checks permissions on the separate index table).
-def test_rbac_vector_query(vs, cql, table_vs):
+# Test that a SearchVectors request requires SELECT permission on the table,
+# just like an ordinary Query does (but unlike a Query on a GSI or LSI, which
+# checks permissions on the separate index table).
+def test_rbac_searchvectors(needs_vector_search_api, dynamodb, cql, table_vs):
     with new_role(cql) as (role, key):
-        with new_vs_for_role(vs, role, key) as d:
-            # Sanity check: the original superuser (vs) who created the shared
-            # table_vs can perform a vector search query on it. If the vector
-            # store is not configured, we get "Vector Store is disabled" which
-            # still means it was authorized (see authorized_vs() above).
-            authorized_vs(lambda: table_vs.query(IndexName='vind',
-                VectorSearch={'QueryVector': [1, 0, 0]}, Limit=1))
+        with new_dynamodb(dynamodb, role, key) as d:
+            # Sanity check: the original superuser (dynamodb) who created the
+            # shared table_vs can perform a vector search on it. If the
+            # vector store is not configured we get "Vector Store is disabled"
+            # which still means it was authorized (see authorized_vs() above).
+            authorized_vs(lambda: table_vs.meta.client.search_vectors(
+                TableName=table_vs.name, IndexName='vind',
+                SearchVector=[1, 0, 0], TopK=1))
             # But in the new role's connection d, without SELECT permissions,
-            # is not allowed to perform the query:
+            # is not allowed to perform the search:
             tab = d.Table(table_vs.name)
-            unauthorized(lambda: tab.query(IndexName='vind',
-                VectorSearch={'QueryVector': [1, 0, 0]}, Limit=1))
+            unauthorized(lambda: tab.meta.client.search_vectors(
+                TableName=tab.name, IndexName='vind',
+                SearchVector=[1, 0, 0], TopK=1))
             # Adding SELECT permission to the table, vector search must succeed:
             with temporary_grant(cql, 'SELECT', cql_table_name(tab), role):
-                authorized_vs(lambda: tab.query(IndexName='vind',
-                    VectorSearch={'QueryVector': [1, 0, 0]}, Limit=1))
+                authorized_vs(lambda: tab.meta.client.search_vectors(
+                    TableName=tab.name, IndexName='vind',
+                    SearchVector=[1, 0, 0], TopK=1))
                 # Select=ALL_ATTRIBUTES is also allowed
-                authorized_vs(lambda: tab.query(IndexName='vind',
-                    VectorSearch={'QueryVector': [1, 0, 0]}, Limit=1,
-                    Select='ALL_ATTRIBUTES'))
+                # ("SELECT" not yet implemented in this vector search API)
+                #authorized_vs(lambda: tab.meta.client.search_vectors(
+                #    TableName=tab.name, IndexName='vind',
+                #    SearchVector=[1, 0, 0], TopK=1,
+                #    Select='ALL_ATTRIBUTES'))
 
 # Test that creating a table with a VectorIndexes parameter requires the
 # same CREATE permission as creating a regular table without VectorIndexes.
-def test_rbac_createtable_vectorindexes(vs, cql):
+def test_rbac_createtable_vectorindexes(needs_vector_search_api, dynamodb, cql):
     schema = {
         'KeySchema': [{'AttributeName': 'p', 'KeyType': 'HASH'}],
         'AttributeDefinitions': [{'AttributeName': 'p', 'AttributeType': 'S'}],
         'VectorIndexes': [{'IndexName': 'vind',
-                           'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3}}],
+                           'VectorAttribute': {'AttributeName': 'v'},
+                           'Dimensions': 3,
+                           'DistanceFunction': 'COSINE',
+                           'Projection': {'ProjectionType': 'KEYS_ONLY'}}],
     }
     with new_role(cql) as (role, key):
-        with new_vs_for_role(vs, role, key) as d:
+        with new_dynamodb(dynamodb, role, key) as d:
             table_name = unique_table_name()
             # Without CREATE permissions, CreateTable with VectorIndexes fails:
             new_named_table_unauthorized(d, table_name, **schema)
@@ -1282,16 +1234,19 @@ def test_rbac_createtable_vectorindexes(vs, cql):
 # ALTER permission on the table, just as adding or deleting a GSI does.
 # The vector index is treated as a feature of the base table (like a GSI),
 # so modifying it requires ALTER rather than CREATE/DROP.
-def test_rbac_updatetable_vectorindex(vs, cql):
-    with new_test_table(vs,
+def test_rbac_updatetable_vectorindex(needs_vector_search_api, dynamodb, cql):
+    with new_test_table(dynamodb,
             KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
             AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
         with new_role(cql) as (role, key):
-            with new_vs_for_role(vs, role, key) as d:
+            with new_dynamodb(dynamodb, role, key) as d:
                 tab = d.Table(table.name)
                 create_vi = {'VectorIndexUpdates': [{'Create': {
                     'IndexName': 'vind',
-                    'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3},
+                    'VectorAttribute': {'AttributeName': 'v'},
+                    'Dimensions': 3,
+                    'DistanceFunction': 'COSINE',
+                    'Projection': {'ProjectionType': 'KEYS_ONLY'},
                 }}]}
                 delete_vi = {'VectorIndexUpdates': [{'Delete': {'IndexName': 'vind'}}]}
                 # Without ALTER permissions, adding a vector index is denied:
@@ -1302,8 +1257,8 @@ def test_rbac_updatetable_vectorindex(vs, cql):
                     authorized(lambda: tab.meta.client.update_table(
                         TableName=tab.name, **create_vi))
                 # Wait for the vector index to actually exist before we try
-                # to delete it. Use the admin vs connection (table) which has
-                # full permissions and a vs-patched client to parse the response.
+                # to delete it. Use the admin connection (table), which has
+                # full permissions, rather than the restricted role's tab.
                 if vector_store_configured(table):
                     wait_for_vector_index_active(table, 'vind')
                 # Without ALTER permissions, deleting the vector index is denied.
@@ -1324,17 +1279,17 @@ def test_rbac_updatetable_vectorindex(vs, cql):
 # the permissions to read the base table, and could successfully index the
 # data. For example, we can create a base table that the user has permissions
 # to ALTER and MODIFY but not SELECT, so the user can create a vector index,
-# write to the table, but not be able to Query on it - but the vector store
-# will still be able to index the data, and this index can be read by another
-# user who has permissions to SELECT the table.
+# write to the table, but not be able to SearchVectors on it - but the vector
+# store will still be able to index the data, and this index can be read by
+# another user who has permissions to SELECT the table.
 # This test is needs_vector_store, i.e., it will be skipped if the vector
 # store is not configured.
-def test_rbac_vectorstore_indexing(vs, needs_vector_store, cql):
-    with new_test_table(vs,
+def test_rbac_vectorstore_indexing(needs_vector_search_api, dynamodb, needs_vector_store, cql):
+    with new_test_table(dynamodb,
             KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
             AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
         with new_role(cql) as (role, key):
-            with new_vs_for_role(vs, role, key) as d:
+            with new_dynamodb(dynamodb, role, key) as d:
                 tab = d.Table(table.name)
                 # Grant ALTER and MODIFY to the role, but *not* SELECT.
                 with temporary_grant(cql, 'ALTER', cql_table_name(table), role):
@@ -1348,21 +1303,26 @@ def test_rbac_vectorstore_indexing(vs, needs_vector_store, cql):
                         authorized(lambda: tab.meta.client.update_table(
                             TableName=tab.name, VectorIndexUpdates=[{'Create': {
                                 'IndexName': 'vind',
-                                'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3}
+                                'VectorAttribute': {'AttributeName': 'v'},
+                                'Dimensions': 3,
+                                'DistanceFunction': 'COSINE',
+                                'Projection': {'ProjectionType': 'KEYS_ONLY'}
                             }}]))
-                        # Without SELECT permissions, the role cannot Query
+                        # Without SELECT permissions, the role cannot SearchVectors
                         # the vector index.
-                        unauthorized(lambda: tab.query(IndexName='vind',
-                            VectorSearch={'QueryVector': [1, 0, 0]}, Limit=1))
+                        unauthorized(lambda: tab.meta.client.search_vectors(
+                            TableName=tab.name, IndexName='vind',
+                            SearchVector=[1, 0, 0], TopK=1))
                         # Wait for the backfill to complete. We can call
                         # wait_for_vector_index_active() even on tab, without
                         # SELECT permissions, because it uses DescribeTable to
-                        # check, not a Query.
+                        # check, not a SearchVectors.
                         wait_for_vector_index_active(table, 'vind')
-                        # The superuser can query and find the prefilled item.
-                        result = table.query(IndexName='vind',
-                            VectorSearch={'QueryVector': [1, 0, 0]}, Limit=1)
-                        assert result.get('Items') and result['Items'][0]['p'] == p1
+                        # The superuser can search and find the prefilled item.
+                        result = table.meta.client.search_vectors(
+                            TableName=table.name, IndexName='vind',
+                            SearchVector=[1, 0, 0], TopK=1)
+                        assert result.get('SearchResults') and result['SearchResults'][0]['Item']['p'] == p1
                         # Also test the CDC path: the role writes a new item after
                         # the index is ACTIVE and the vector store should pick it up
                         # via the CDC log, even though the role lacks SELECT.
@@ -1371,16 +1331,18 @@ def test_rbac_vectorstore_indexing(vs, needs_vector_store, cql):
                         # The superuser ("table") can see the new data:
                         deadline = time.monotonic() + VECTOR_STORE_TIMEOUT
                         while True:
-                            result = table.query(IndexName='vind',
-                                VectorSearch={'QueryVector': [0, 1, 0]}, Limit=1)
-                            if result.get('Items') and result['Items'][0]['p'] == p2:
+                            result = table.meta.client.search_vectors(
+                                TableName=table.name, IndexName='vind',
+                                SearchVector=[0, 1, 0], TopK=1)
+                            if result.get('SearchResults') and result['SearchResults'][0]['Item']['p'] == p2:
                                 break
                             if time.monotonic() > deadline:
                                 pytest.fail('Timed out waiting for vector store to index the item via CDC')
                             time.sleep(0.1)
                         # If we now grant SELECT permissions to the role, it should
-                        # be able to query and find both items:
+                        # be able to search and find both items:
                         with temporary_grant(cql, 'SELECT', cql_table_name(table), role):
-                            result = authorized(lambda: tab.query(IndexName='vind',
-                                VectorSearch={'QueryVector': [1, 0, 0]}, Limit=2))
-                            assert {item['p'] for item in result['Items']} == {p1, p2}
+                            result = authorized(lambda: tab.meta.client.search_vectors(
+                                TableName=tab.name, IndexName='vind',
+                                SearchVector=[1, 0, 0], TopK=2))
+                            assert {item['Item']['p'] for item in result['SearchResults']} == {p1, p2}

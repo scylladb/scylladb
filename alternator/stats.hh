@@ -51,6 +51,7 @@ public:
         uint64_t list_tags_of_resource = 0;
         uint64_t put_item = 0;
         uint64_t query = 0;
+        uint64_t search_vectors = 0;
         uint64_t restore_table_from_backup = 0;
         uint64_t restore_table_to_point_in_time = 0;
         uint64_t scan = 0;
@@ -78,29 +79,30 @@ public:
         utils::timed_rate_moving_average_summary_and_histogram batch_get_item_latency;
         utils::timed_rate_moving_average_summary_and_histogram get_records_latency;
         utils::timed_rate_moving_average_summary_and_histogram query_latency;
+        utils::timed_rate_moving_average_summary_and_histogram search_vectors_latency;
         utils::timed_rate_moving_average_summary_and_histogram scan_latency;
 
         batch_histogram batch_get_item_histogram;
         batch_histogram batch_write_item_histogram;
     } api_operations;
-    // Metrics for vector search operations
+    // Metrics for vector search operations. Note that the count of vector
+    // search operations is already api_operations.search_vectors, so it is
+    // not duplicated here.
     struct {
-        // Number of Query requests with VectorSearch. Note that these
-        // requests are also counted in api_operations.query.
-        uint64_t query = 0;
-        // Total number of items actually returned by vector search queries.
-        // Similar to "Count" in the results, except that when SELECT="COUNT"
-        // no items are really returned, so this metric isn't incremented.
-        uint64_t query_returned_items = 0;
-        // Total number of nearest neighbors found by the vector store
-        // (some of them may be post-filtered or re-scored and not returned).
-        uint64_t query_items_from_vs = 0;
+        // Total number of items actually returned by vector search operations.
+        uint64_t returned_items = 0;
+        // Total number of nearest neighbors found by the vector store.
+        // If post-filtering or re-scoring is applied (an Alternator
+        // extension), this metric may be higher than returned_items as not
+        // nearest neighbors are returned to the client.
+        uint64_t items_from_vs = 0;
         // Total number of items read from the base table by vector search
-        // queries. Some vector search queries (e.g., those with
-        // SELECT="COUNT" or SELECT="ALL_PROJECTED_ATTRIBUTES") may not
-        // need to read items from the base table (what they get from the
-        // vector store is enough), so this metric isn't incremented.
-        uint64_t query_items_from_base_table = 0;
+        // operations.
+        // The DynamoDB API never needs to read the base table, but Alternator
+        // extensions may allow to read unprojected columns from the base
+        // table, resulting in a non-zero count for this metric (and
+        // significantly slower requests).
+        uint64_t items_from_base_table = 0;
     } vector_search;
 
 

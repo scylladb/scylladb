@@ -96,8 +96,13 @@ extensions over the AWS SDK:
   For example, the `User-Agent` header contains verbose SDK name and version
   information that serves no purpose in Alternator but adds bytes to every
   request. Removing such headers can reduce network costs.
-* **Vector search**: Support for this Alternator-only feature that does not
-  exist in DynamoDB.
+* **Vector search**: Support for [DynamoDB's Vector Search API](vector-search.md),
+  which Alternator implements, and specifically for ScyllaDB's
+  [`FLOAT32VECTOR`](vector-search.md#the-float32vector-type-scylladb-extension)
+  extension to it - a more compact way to store and send vectors than
+  DynamoDB's own encoding. A recent enough AWS SDK version already
+  understands the standard `SearchVectors` operation on its own; what an
+  Alternator client library adds on top is `FLOAT32VECTOR` support.
 
 The **Rack awareness** and **LWT awareness** features conflict: Rack awareness
 wants writes from different racks to reach different nodes (on each rack,
