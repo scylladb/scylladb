@@ -54,6 +54,7 @@ target_sources(utils
     s3/aws_error.cc
     s3/aws_error_definitions.cc
     s3/client.cc
+    s3/aws_throttling_controller.cc
     s3/default_aws_retry_strategy.cc
     s3/credentials_providers/aws_credentials_provider.cc
     s3/credentials_providers/environment_aws_credentials_provider.cc
