@@ -1127,7 +1127,7 @@ future<seastar::shared_ptr<encryption_context>> register_extensions(const db::co
 
     /**
      * This only really affects tests, but in the case where we
-     * have a bad config/env vars (hint minio), we could fail even
+     * have a bad config/env vars (hint: the S3 test mock), we could fail even
      * setting up the context. In a "normal" run, this is ok. We will
      * report the exception, and the do a exit(1).
      * In tests however, we don't and active context will instead be

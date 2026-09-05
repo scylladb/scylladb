@@ -63,7 +63,7 @@ class LRUCache:
                 del self.cache[key]
 
 
-# Simple proxy between s3 client and minio to randomly inject errors and simulate cases when the request succeeds but the wire got "broken"
+# Simple proxy between s3 client and the S3 server to randomly inject errors and simulate cases when the request succeeds but the wire got "broken"
 def true_or_false():
     return random.choice([True, False])
 
@@ -94,8 +94,8 @@ class InjectingHandler(BaseHTTPRequestHandler):
                         "ExpiredTokenException",
                         ))
 
-    def __init__(self, policies, logger, minio_uri, max_retries, *args, **kwargs):
-        self.minio_uri = minio_uri
+    def __init__(self, policies, logger, s3_uri, max_retries, *args, **kwargs):
+        self.s3_uri = s3_uri
         self.policies = policies
         self.logger = logger
         self.max_retries = max_retries
@@ -158,7 +158,7 @@ class InjectingHandler(BaseHTTPRequestHandler):
 
                                 <Error>
                                     <Code>{error_name}</Code>
-                                    <Message>Minio proxy injected error. {"The provided token has expired." if error_name == "ExpiredTokenException" else "Client should retry."}</Message>
+                                    <Message>S3 proxy injected error. {"The provided token has expired." if error_name == "ExpiredTokenException" else "Client should retry."}</Message>
                                     <RequestId>{req_uuid}</RequestId>
                                     <HostId>Uuag1LuByRx9e6j5Onimru9pO4ZVKnJ2Qz7/C1NPcfTWAtRPfTaOFg==</HostId>
                                 </Error>""".encode('utf-8')
@@ -183,13 +183,13 @@ class InjectingHandler(BaseHTTPRequestHandler):
                 body = self.rfile.read(int(content_length))
 
             if policy.should_forward:
-                target_url = self.minio_uri + self.path
+                target_url = self.s3_uri + self.path
                 headers = {key: value for key, value in self.headers.items()}
                 try:
                     response = requests.request(self.command, target_url, headers=headers, data=body)
                 except requests.exceptions.RequestException as e:
-                    # Forwarding to minio failed (e.g. connection reset while minio is under
-                    # load from concurrent requests). Nothing has been written to the client
+                    # Forwarding to the S3 server failed (e.g. connection reset while it is
+                    # under load from concurrent requests). Nothing has been written to the client
                     # yet, so respond with a well-formed retryable error instead of letting the
                     # client hang until it eventually observes a bare connection drop.
                     self.logger.warning("Failed to forward request to %s: %s", target_url, e)
@@ -235,14 +235,14 @@ class InjectingHandler(BaseHTTPRequestHandler):
 # Proxy server to setup `ThreadingHTTPServer` instance with custom request handler (see above), managing requests state
 # in the `self.req_states`, adding custom logger, etc. This server will be started automatically from `test.py`. In
 # addition, it is possible just to start this server using another script - `start_s3_proxy.py` to run it locally to
-# provide proxy between tests and minio
+# provide proxy between tests and the S3 server
 class S3ProxyServer:
-    def __init__(self, host: str, port: int, minio_uri: str, max_retries: int, seed: int, logger):
+    def __init__(self, host: str, port: int, s3_uri: str, max_retries: int, seed: int, logger):
         self.logger = logger
-        self.logger.info('Setting minio proxy random seed to %s', seed)
+        self.logger.info('Setting S3 proxy random seed to %s', seed)
         random.seed(seed)
         self.req_states = LRUCache(10000)
-        handler = partial(InjectingHandler, self.req_states, logger, minio_uri, max_retries)
+        handler = partial(InjectingHandler, self.req_states, logger, s3_uri, max_retries)
         self.server = ThreadingHTTPServer((host, port), handler)
         self.server_thread = None
         self.server.request_queue_size = 1000

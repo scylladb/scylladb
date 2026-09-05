@@ -129,7 +129,7 @@ extern boost::test_tools::assertion_result has_scylla_test_env(boost::unit_test:
     }
 
     testlog.info("Test environment is not configured. "
-        "Check test/pylib/minio_server.py for an example of how to configure the environment for it to run.");
+        "Check test/pylib/s3mock_server.py for an example of how to configure the environment for it to run.");
     return false;
 }
 

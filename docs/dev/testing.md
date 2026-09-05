@@ -72,7 +72,8 @@ Some tests utilize (nested) docker images to provide mock/test services against 
 run scylla features. In general, these images will be pulled on first usage by the test.
 Some images used:
     
-    * docker.io/fsouza/fake-gcs-server:1.52.3
+    * docker.io/fsouza/fake-gcs-server:1.54.0
+    * docker.io/adobe/s3mock:5.2.0
     * (add as needed)
 
 ## Usage

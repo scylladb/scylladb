@@ -19,7 +19,6 @@ from collections import defaultdict
 
 from cassandra.cluster import ConsistencyLevel
 from cassandra.query import SimpleStatement
-from test.pylib.minio_server import MinioServer
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.object_storage import format_tuples
 from test.cluster.object_store.test_backup import topo, take_snapshot, do_test_streaming_scopes
