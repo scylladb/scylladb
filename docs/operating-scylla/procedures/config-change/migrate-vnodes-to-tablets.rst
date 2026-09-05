@@ -152,14 +152,9 @@ Procedure
 
 #. Upgrade all nodes to tablets:
 
-   #. Pick a node.
+   #. Pick a node and open a shell on it to run the following commands.
 
    #. Mark the node for upgrade to tablets:
-
-      .. note::
-
-         This is a node-local operation. Use the IP address of the node that
-         you are upgrading.
 
       .. caution::
 
@@ -170,7 +165,7 @@ Procedure
 
       .. code-block:: console
 
-         nodetool -h <node-ip> migrate-to-tablets upgrade
+         nodetool migrate-to-tablets upgrade
 
    #. Verify that the node status changed from ``vnodes`` to ``migrating to tablets``:
 
@@ -196,7 +191,7 @@ Procedure
 
       .. code-block:: console
 
-         nodetool -h <node-ip> drain
+         nodetool drain
 
       .. include:: /rst_include/scylla-commands-stop-index.rst
 
@@ -224,7 +219,7 @@ Procedure
 
       .. code-block:: console
 
-         nodetool tasks list compaction -h <node-ip> --keyspace <keyspace> | grep -i reshard
+         nodetool tasks list compaction --keyspace <keyspace> | grep -i reshard
 
    #. Verify that the node status changed from ``migrating to tablets`` to ``uses tablets``:
 
@@ -341,11 +336,13 @@ following:
 #. For **each upgraded or upgrading node** in the cluster, perform a downgrade
    (one node at a time):
 
+   #. Open a shell on the node to run the following commands.
+
    #. Mark the node for downgrade:
 
       .. code-block:: console
 
-         nodetool -h <node-ip> migrate-to-tablets downgrade
+         nodetool migrate-to-tablets downgrade
 
    #. Check the node status. The status for a previously upgraded node should
       change from ``uses tablets`` to ``migrating to vnodes``. The status for a
@@ -380,7 +377,7 @@ following:
 
          .. code-block:: console
 
-            nodetool -h <node-ip> drain
+            nodetool drain
 
          .. include:: /rst_include/scylla-commands-stop-index.rst
 
@@ -408,7 +405,7 @@ following:
 
          .. code-block:: console
 
-            nodetool tasks list compaction -h <node-ip> --keyspace <keyspace> | grep -i reshard
+            nodetool tasks list compaction --keyspace <keyspace> | grep -i reshard
 
       #. Verify that the node status changed from ``migrating to vnodes`` to ``uses vnodes``:
 
