@@ -185,6 +185,7 @@ class compact_mutation_state {
     uint32_t _current_partition_limit;
     bool _empty_partition{};
     bool _empty_partition_in_gc_consumer{};
+    bool _partition_is_live{};
     std::optional<dht::decorated_key> _dk;
     bool _return_static_content_on_partition_with_no_rows{};
 
@@ -257,12 +258,18 @@ private:
     void partition_is_not_empty(Consumer& consumer) {
         if (_empty_partition) {
             _empty_partition = false;
-            ++_stats.live_partitions;
             consumer.consume_new_partition(*_dk);
             auto pt = _partition_tombstone;
             if (pt && !can_purge_tombstone(pt)) {
                 consumer.consume(pt);
             }
+        }
+    }
+
+    void partition_is_live() {
+        if (!_partition_is_live) {
+            _partition_is_live = true;
+            ++_stats.live_partitions;
         }
     }
 
@@ -405,6 +412,7 @@ public:
             !has_ck_selector(_slice.row_ranges(_schema, pk));
         _empty_partition = true;
         _empty_partition_in_gc_consumer = true;
+        _partition_is_live = false;
         _rows_in_current_partition = 0;
         _static_row_live = false;
         _partition_tombstone = {};
@@ -454,6 +462,9 @@ public:
                 _query_time, can_gc, gc_before, _collector.get());
         _stats.static_rows.add_row(res);
         const auto is_live = res.is_live();
+        if (is_live) {
+            partition_is_live();
+        }
         if constexpr (sstable_compaction()) {
             _collector->consume_static_row([this, &gc_consumer, current_tombstone] (static_row&& sr_garbage) {
                 partition_is_not_empty_for_gc_consumer(gc_consumer);
@@ -506,6 +517,10 @@ public:
                 _collector.get());
         _stats.clustering_rows.add_row(res, marker_is_live);
         const auto is_live = res.is_live() || marker_is_live;
+
+        if (is_live) {
+            partition_is_live();
+        }
 
         if constexpr (sstable_compaction()) {
             _collector->consume_clustering_row([this, &gc_consumer, t] (clustering_row&& cr_garbage) {
