@@ -640,7 +640,7 @@ static tag_set parse_tagging(sstring& body) {
     }
     tag_set tags;
     auto tagset_node = first_node_of(doc.get(), {"Tagging", "TagSet"});
-    for (auto tag_node = tagset_node->first_node("Tag"); tag_node; tag_node = tag_node->next_sibling()) {
+    for (auto tag_node = tagset_node->first_node("Tag"); tag_node; tag_node = tag_node->next_sibling("Tag")) {
         // See https://docs.aws.amazon.com/AmazonS3/latest/API/API_Tag.html,
         // both "Key" and "Value" are required, but we still need to check them.
         auto key = tag_node->first_node("Key");
@@ -2102,8 +2102,17 @@ static std::pair<std::vector<sstring>, sstring> parse_list_of_objects(sstring bo
 
     std::vector<sstring> names;
     auto root_node = doc->first_node("ListBucketResult");
-    for (auto contents = root_node->first_node("Contents"); contents; contents = contents->next_sibling()) {
+    if (!root_node) {
+        throw std::runtime_error("'ListBucketResult' node is missing in list-objects-v2 response");
+    }
+    // Walk the "Contents" siblings by name: the order of the elements below
+    // "ListBucketResult" is not specified, and servers do put other elements
+    // (e.g. "IsTruncated", "KeyCount", "Name") after the last "Contents".
+    for (auto contents = root_node->first_node("Contents"); contents; contents = contents->next_sibling("Contents")) {
         auto key = contents->first_node("Key");
+        if (!key) {
+            throw std::runtime_error("'Key' node is missing in 'Contents' of list-objects-v2 response");
+        }
         names.push_back(key->value());
     }
 
