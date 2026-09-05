@@ -2249,7 +2249,7 @@ public:
         // perform_component_rewrite which captures sstables while compaction
         // is disabled on the target view.
         auto rewritten_sstables = co_await table.perform_component_rewrite(
-                _range, tasks::task_info{}, filter,
+                _range, tasks::make_empty_task_info(), filter,
                 sstables::component_type::Statistics, modifier);
         // FIXME: indent.
             // remove the old sstables from incremental repair meta and add the new ones

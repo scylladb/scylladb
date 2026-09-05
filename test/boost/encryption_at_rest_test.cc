@@ -533,7 +533,7 @@ static future<> test_statistics_rewrite_encryption_mismatch(const tmpdir& tmp,
                     return candidate == sst;
                 };
                 auto rewritten = co_await cf.get_compaction_manager().perform_component_rewrite(
-                        cf.compaction_group_view_for_sstable(sst), tasks::task_info{},
+                        cf.compaction_group_view_for_sstable(sst), tasks::make_empty_task_info(),
                         filter, sstables::component_type::Statistics, modifier,
                         sstables::update_sstable_id::no);
                 BOOST_REQUIRE_EQUAL(rewritten.size(), 1);

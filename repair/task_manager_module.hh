@@ -33,125 +33,11 @@ protected:
     repair_uniq_id get_repair_uniq_id() const noexcept {
         return repair_uniq_id{
             .id = _status.sequence_number,
-            .task_info = tasks::task_info(_status.id, _status.shard)
+            .task_id = _status.id,
         };
     }
 
     virtual future<> run() override = 0;
-};
-
-class user_requested_repair_task_impl : public repair_task_impl {
-private:
-    lw_shared_ptr<locator::global_static_effective_replication_map> _germs;
-    std::vector<sstring> _cfs;
-    dht::token_range_vector _ranges;
-    std::vector<sstring> _hosts;
-    std::vector<sstring> _data_centers;
-    std::unordered_set<locator::host_id> _ignore_nodes;
-    bool _small_table_optimization;
-    std::optional<int> _ranges_parallelism;
-    gms::gossiper& _gossiper;
-public:
-    user_requested_repair_task_impl(tasks::task_manager::module_ptr module, repair_uniq_id id, std::string keyspace, std::string entity, lw_shared_ptr<locator::global_static_effective_replication_map> germs, std::vector<sstring> cfs, dht::token_range_vector ranges, std::vector<sstring> hosts, std::vector<sstring> data_centers, std::unordered_set<locator::host_id> ignore_nodes, bool small_table_optimization, std::optional<int> ranges_parallelism, gms::gossiper& gossiper) noexcept
-        : repair_task_impl(module, id.uuid(), id.id, "keyspace", std::move(keyspace), "", std::move(entity), tasks::task_id::create_null_id(), streaming::stream_reason::repair)
-        , _germs(germs)
-        , _cfs(std::move(cfs))
-        , _ranges(std::move(ranges))
-        , _hosts(std::move(hosts))
-        , _data_centers(std::move(data_centers))
-        , _ignore_nodes(std::move(ignore_nodes))
-        , _small_table_optimization(small_table_optimization)
-        , _ranges_parallelism(ranges_parallelism)
-        , _gossiper(gossiper)
-    {}
-
-    virtual tasks::is_abortable is_abortable() const noexcept override {
-        return tasks::is_abortable::yes;
-    }
-
-    tasks::is_user_task is_user_task() const noexcept override;
-protected:
-    future<> run() override;
-
-    virtual future<std::optional<double>> expected_total_workload() const override;
-};
-
-class data_sync_repair_task_impl : public repair_task_impl {
-private:
-    dht::token_range_vector _ranges;
-    std::unordered_map<dht::token_range, repair_neighbors> _neighbors;
-    optimized_optional<abort_source::subscription> _abort_subscription;
-    size_t _cfs_size = 0;
-    service::frozen_topology_guard _frozen_topology_guard;
-public:
-    data_sync_repair_task_impl(tasks::task_manager::module_ptr module, repair_uniq_id id, std::string keyspace, std::string entity, dht::token_range_vector ranges, std::unordered_map<dht::token_range, repair_neighbors> neighbors, streaming::stream_reason reason, shared_ptr<node_ops_info> ops_info, service::frozen_topology_guard frozen_topology_guard)
-        : repair_task_impl(module, id.uuid(), id.id, "keyspace", std::move(keyspace), "", std::move(entity), tasks::task_id::create_null_id(), reason)
-        , _ranges(std::move(ranges))
-        , _neighbors(std::move(neighbors))
-        , _frozen_topology_guard(std::move(frozen_topology_guard))
-    {
-        if (ops_info && ops_info->as) {
-            _abort_subscription = ops_info->as->subscribe([this] () noexcept {
-                abort();
-            });
-        }
-    }
-
-    virtual tasks::is_abortable is_abortable() const noexcept override {
-        return tasks::is_abortable(!_abort_subscription);
-    }
-protected:
-    future<> run() override;
-
-    virtual future<std::optional<double>> expected_total_workload() const override;
-};
-
-class tablet_repair_task_impl : public repair_task_impl {
-private:
-    sstring _keyspace;
-    std::vector<sstring> _tables;
-    std::vector<tablet_repair_task_meta> _metas;
-    optimized_optional<abort_source::subscription> _abort_subscription;
-    std::optional<int> _ranges_parallelism;
-    size_t _metas_size = 0;
-    gc_clock::time_point _flush_time = gc_clock::time_point();
-    bool _should_flush_and_flush_failed = false;
-    service::frozen_topology_guard _topo_guard;
-    bool _skip_flush;
-public:
-    tablet_repair_sched_info sched_info;
-public:
-    tablet_repair_task_impl(tasks::task_manager::module_ptr module, repair_uniq_id id, sstring keyspace, tasks::task_id parent_id, std::vector<sstring> tables, streaming::stream_reason reason, std::vector<tablet_repair_task_meta> metas, std::optional<int> ranges_parallelism, service::frozen_topology_guard topo_guard, tablet_repair_sched_info sched_info, bool skip_flush = false)
-        : repair_task_impl(module, id.uuid(), id.id, "keyspace", keyspace, "", "", parent_id, reason)
-        , _keyspace(std::move(keyspace))
-        , _tables(std::move(tables))
-        , _metas(std::move(metas))
-        , _ranges_parallelism(ranges_parallelism)
-        , _topo_guard(topo_guard)
-        , _skip_flush(skip_flush)
-        , sched_info(std::move(sched_info))
-    {
-    }
-
-    virtual tasks::is_abortable is_abortable() const noexcept override {
-        return tasks::is_abortable(!_abort_subscription);
-    }
-
-    gc_clock::time_point get_flush_time() const {
-        if (_should_flush_and_flush_failed) {
-            throw std::runtime_error(fmt::format("Flush is needed for repair {} with parent {}, but failed", id(), _parent_id));
-        }
-        return _flush_time;
-    }
-
-    tasks::is_user_task is_user_task() const noexcept override;
-    virtual future<> release_resources() noexcept override;
-private:
-    size_t get_metas_size() const noexcept;
-protected:
-    future<> run() override;
-
-    virtual future<std::optional<double>> expected_total_workload() const override;
 };
 
 class shard_repair_task_impl : public repair_task_impl {
@@ -289,9 +175,11 @@ public:
     repair_uniq_id new_repair_uniq_id() noexcept {
         return repair_uniq_id{
             .id = new_sequence_number(),
-            .task_info = tasks::task_info(tasks::task_id::create_random_id(), this_shard_id())
+            .task_id = tasks::task_id::create_random_id(),
         };
     }
+
+    repair_uniq_id get_repair_uniq_id(tasks::task_manager::task::impl& task) const noexcept;
 
     repair_status get(int id) const;
     void check_in_shutdown();

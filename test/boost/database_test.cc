@@ -1463,7 +1463,7 @@ SEASTAR_TEST_CASE(upgrade_sstables) {
                     auto& t = db.find_column_family(schema->id());
                     constexpr bool exclude_current_version = false;
                     co_await t.parallel_foreach_compaction_group_view([&] (compaction::compaction_group_view& ts) {
-                        return cm.perform_sstable_upgrade(owned_ranges_ptr, ts, exclude_current_version, tasks::task_info{});
+                        return cm.perform_sstable_upgrade(owned_ranges_ptr, ts, exclude_current_version, tasks::make_empty_task_info());
                     });
                 }
             }
