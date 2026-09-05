@@ -647,6 +647,18 @@ modification_statement::prepare(data_dictionary::database db, prepare_context& c
         if (prepared_stmt->is_timestamp_set()) {
             throw exceptions::invalid_request_exception("Strongly consistent queries don't support user-provided timestamps");
         }
+        // The raw IF clauses, not has_conditions(): INSERT JSON ... IF NOT
+        // EXISTS never sets the flags behind has_conditions() (issue #8682).
+        if (_if_not_exists || _if_exists || _conditions) {
+            throw exceptions::invalid_request_exception("Strongly consistent updates don't support conditions");
+        }
+        // logstor needs a row marker or partition tombstone on every mutation.
+        // Cell-only changes have neither and fail inside raft apply, which aborts the node.
+        if (schema->logstor_enabled() && !prepared_stmt->type.is_insert() && prepared_stmt->has_column_operations()) {
+            throw exceptions::invalid_request_exception(prepared_stmt->type.is_update()
+                    ? "UPDATE is not supported on logstor tables in strongly consistent keyspaces"
+                    : "Deleting individual columns is not supported on logstor tables in strongly consistent keyspaces");
+        }
     }
 
     // At this point the prepare context instance should have a list of

@@ -11,6 +11,7 @@
 #include "cql3/statements/cf_prop_defs.hh"
 #include "cql3/statements/property_definitions.hh"
 #include "cql3/statements/request_validations.hh"
+#include "cql3/statements/strong_consistency/statement_helpers.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "db/extensions.hh"
 #include "db/tags/extension.hh"
@@ -94,12 +95,6 @@ data_dictionary::keyspace cf_prop_defs::find_keyspace(const data_dictionary::dat
 }
 
 void cf_prop_defs::validate(const data_dictionary::database db, sstring ks_name, const schema::extensions_map& schema_extensions) const {
-    // Skip validation if the comapction strategy class is already set as it means we've already
-    // prepared (and redoing it would set strategyClass back to null, which we don't want)
-    if (_compaction_strategy_class) {
-        return;
-    }
-
     const auto& ks = find_keyspace(db, ks_name);
 
     static std::set<sstring> keywords({
@@ -130,7 +125,7 @@ void cf_prop_defs::validate(const data_dictionary::database db, sstring ks_name,
     }
 
     auto compaction_type_options = get_compaction_type_options();
-    if (!compaction_type_options.empty()) {
+    if (!_compaction_strategy_class && !compaction_type_options.empty()) {
         auto strategy = compaction_type_options.find(COMPACTION_STRATEGY_CLASS_KEY);
         if (strategy == compaction_type_options.end()) {
             throw exceptions::configuration_exception(sstring("Missing sub-option '") + COMPACTION_STRATEGY_CLASS_KEY + "' for the '" + KW_COMPACTION + "' option.");
@@ -156,6 +151,9 @@ void cf_prop_defs::validate(const data_dictionary::database db, sstring ks_name,
     auto per_partition_rate_limit_options = get_per_partition_rate_limit_options(schema_extensions);
     if (per_partition_rate_limit_options && !db.features().typed_errors_in_read_rpc) {
         throw exceptions::configuration_exception("Per-partition rate limit is not supported yet by the whole cluster");
+    }
+    if (per_partition_rate_limit_options && strong_consistency::is_strongly_consistent(db, ks_name)) {
+        throw exceptions::configuration_exception("Per-partition rate limit is not supported in strongly consistent keyspaces");
     }
 
     auto tombstone_gc_options = get_tombstone_gc_options(schema_extensions);

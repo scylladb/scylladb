@@ -11,13 +11,16 @@
 # these tests run against gets the strongly-consistent-tables feature.
 #############################################################################
 
+import re
+
 import pytest
+from cassandra.cluster import ConsistencyLevel
 from cassandra.protocol import ConfigurationException, InvalidRequest
-from cassandra.query import BatchStatement, BatchType
+from cassandra.query import BatchStatement, BatchType, SimpleStatement
 
 from test.pylib.skip_types import skip_env
 
-from ..util import new_test_table, unique_name
+from ..util import new_materialized_view, new_test_table, unique_name
 
 
 # A keyspace whose tables are strongly consistent. Cassandra and the --vnodes
@@ -55,17 +58,16 @@ def test_reject_user_provided_timestamps(cql, sc_keyspace):
             cql.execute(f"UPDATE {table} USING TIMESTAMP 23 SET v = 13 WHERE pk = 0")
         with pytest.raises(InvalidRequest, match=error_msg):
             cql.execute(f"DELETE FROM {table} USING TIMESTAMP 23 WHERE pk = 0")
-        # FIXME(SCYLLADB-977):
-        # Add test cases for batches with timestamps. Remember to
-        # handle both whole-batch timestamps, e.g.
-        #   BEGIN BATCH USING TIMESTAMP ts
-        #     ...
-        #   APPLY BATCH
-        # as well as timestamps for individual items, e.g.
-        #   BEGIN BATCH
-        #     INSERT INTO ... USING TIMESTAMP st;
-        #     ...
-        #   APPLY BATCH
+        # A timestamp on an individual batch item, rejected when the
+        # inner statements are prepared. Whole-batch timestamps are
+        # covered by test_batch_attributes_on_sc_table.
+        with pytest.raises(InvalidRequest, match=error_msg):
+            cql.execute(f"""
+                BEGIN BATCH
+                INSERT INTO {table} (pk, v) VALUES (0, 13) USING TIMESTAMP 23;
+                INSERT INTO {table} (pk, v) VALUES (0, 14);
+                APPLY BATCH
+            """)
 
 
 @pytest.mark.parametrize("batch_mode", ["text", "prepared"], ids=["text", "prepared"])
@@ -82,8 +84,7 @@ def test_batch(cql, sc_keyspace, batch_mode):
     Rejection cases:
     - batch touching multiple tables,
     - batch touching multiple partitions,
-    - statement touching multiple partition keys,
-    - counter batch.
+    - statement touching multiple partition keys.
     """
 
     def _prepared_batch_type(kind):
@@ -91,8 +92,6 @@ def test_batch(cql, sc_keyspace, batch_mode):
             return BatchType.LOGGED
         if kind == "unlogged":
             return BatchType.UNLOGGED
-        if kind == "counter":
-            return BatchType.COUNTER
         raise ValueError(f"Unexpected batch kind: {kind}")
 
     def _render_text_statement(table_name, op, args):
@@ -108,25 +107,17 @@ def test_batch(cql, sc_keyspace, batch_mode):
         if op == "delete_in":
             pk1, pk2, ck = args
             return f"DELETE FROM {table_name} WHERE pk IN ({pk1}, {pk2}) AND ck = {ck}"
-        if op == "counter_add":
-            delta, pk = args
-            return f"UPDATE {table_name} SET c = c + {delta} WHERE pk = {pk}"
         raise ValueError(f"Unexpected operation: {op}")
 
-    def _make_batch_runner(table_name, *, counter_table=False):
+    def _make_batch_runner(table_name):
         prepared_statements = {}
         if batch_mode == "prepared":
-            if counter_table:
-                prepared_statements = {
-                    "counter_add": cql.prepare(f"UPDATE {table_name} SET c = c + ? WHERE pk = ?"),
-                }
-            else:
-                prepared_statements = {
-                    "insert": cql.prepare(f"INSERT INTO {table_name} (pk, ck, v) VALUES (?, ?, ?)"),
-                    "update": cql.prepare(f"UPDATE {table_name} SET v = ? WHERE pk = ? AND ck = ?"),
-                    "delete": cql.prepare(f"DELETE FROM {table_name} WHERE pk = ? AND ck = ?"),
-                    "delete_in": cql.prepare(f"DELETE FROM {table_name} WHERE pk IN (?, ?) AND ck = ?"),
-                }
+            prepared_statements = {
+                "insert": cql.prepare(f"INSERT INTO {table_name} (pk, ck, v) VALUES (?, ?, ?)"),
+                "update": cql.prepare(f"UPDATE {table_name} SET v = ? WHERE pk = ? AND ck = ?"),
+                "delete": cql.prepare(f"DELETE FROM {table_name} WHERE pk = ? AND ck = ?"),
+                "delete_in": cql.prepare(f"DELETE FROM {table_name} WHERE pk IN (?, ?) AND ck = ?"),
+            }
 
         def _run(ops, *, kind):
             if batch_mode == "prepared":
@@ -135,9 +126,7 @@ def test_batch(cql, sc_keyspace, batch_mode):
                     batch.add(prepared_statements[op], args)
                 return cql.execute(batch)
 
-            if kind == "counter":
-                begin = "BEGIN COUNTER BATCH"
-            elif kind == "unlogged":
+            if kind == "unlogged":
                 begin = "BEGIN UNLOGGED BATCH"
             elif kind == "logged":
                 begin = "BEGIN BATCH"
@@ -200,14 +189,6 @@ def test_batch(cql, sc_keyspace, batch_mode):
                         APPLY BATCH
                     """)
 
-    with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, c counter") as table:
-        run_counter_batch = _make_batch_runner(table, counter_table=True)
-
-        with pytest.raises(InvalidRequest, match="Counter batches are not supported"):
-            run_counter_batch([
-                ("counter_add", (1, 1)),
-            ], kind="counter")
-
 
 # The single statement write path used to hand an empty JSON cache to the code
 # building the keys, so an INSERT ... JSON killed the coordinator on the
@@ -244,3 +225,279 @@ def test_insert_json_in_batch(cql, sc_keyspace):
             APPLY BATCH
         """)
         assert list(cql.execute(f"SELECT pk, v FROM {table} WHERE pk = 1")) == [(1, 2)]
+
+
+def test_counter_table_creation(cql, sc_keyspace):
+    """
+    Counter tables are rejected in strongly consistent keyspaces: a
+    counter update is a delta, and the write path would store it raw
+    instead of folding it into the counter value, aborting the node
+    when the counter is read back.
+    """
+    with pytest.raises(InvalidRequest, match="counters are not yet supported in strongly consistent keyspaces"):
+        cql.execute(f"CREATE TABLE {sc_keyspace}.{unique_name()} (pk int PRIMARY KEY, c counter)")
+
+
+def test_counter_batch_on_sc_table(cql, sc_keyspace):
+    """
+    Counter batches are rejected on strongly consistent keyspaces.
+    The batch type is checked before the statements in it, so the
+    batch here carries a regular INSERT. It could not carry a counter
+    update anyway: that needs a counter table, and counter tables
+    cannot be created in strongly consistent keyspaces (see
+    test_counter_table_creation).
+    """
+    with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, v int") as table:
+        error_msg = "Counter batches are not supported with strongly consistent tables"
+        with pytest.raises(InvalidRequest, match=error_msg):
+            cql.execute(f"""
+                BEGIN COUNTER BATCH
+                INSERT INTO {table} (pk, v) VALUES (1, 2);
+                APPLY BATCH
+            """)
+
+        batch = BatchStatement(batch_type=BatchType.COUNTER)
+        batch.add(cql.prepare(f"INSERT INTO {table} (pk, v) VALUES (?, ?)"), (1, 2))
+        with pytest.raises(InvalidRequest, match=error_msg):
+            cql.execute(batch)
+
+
+def test_cdc_on_sc_table(cql, sc_keyspace):
+    """
+    CDC is rejected on tables in strongly consistent keyspaces, at
+    CREATE TABLE and with ALTER TABLE. The CDC log would never be
+    populated: log rows are generated on the coordinator write path,
+    which strongly consistent writes bypass.
+    """
+    error_msg = "CDC is not supported in strongly consistent keyspaces"
+    with pytest.raises(InvalidRequest, match=error_msg):
+        cql.execute(f"CREATE TABLE {sc_keyspace}.{unique_name()} (pk int PRIMARY KEY, v int) WITH cdc = {{'enabled': true}}")
+
+    with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, v int") as table:
+        with pytest.raises(InvalidRequest, match=error_msg):
+            cql.execute(f"ALTER TABLE {table} WITH cdc = {{'enabled': true}}")
+
+
+def test_per_partition_rate_limit_on_sc_table(cql, sc_keyspace):
+    """
+    per_partition_rate_limit is rejected for tables in strongly
+    consistent keyspaces. Rate limits are enforced on the coordinator
+    read and write paths, which strongly consistent queries bypass.
+    """
+    rate_limit_msg = "Per-partition rate limit is not supported in strongly consistent keyspaces"
+    with pytest.raises(ConfigurationException, match=rate_limit_msg):
+        cql.execute(f"CREATE TABLE {sc_keyspace}.{unique_name()} (pk int PRIMARY KEY, v int)"
+                    " WITH per_partition_rate_limit = {'max_writes_per_second': 100}")
+
+    with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, v int") as table:
+        with pytest.raises(ConfigurationException, match=rate_limit_msg):
+            cql.execute(f"ALTER TABLE {table} WITH per_partition_rate_limit = {{'max_reads_per_second': 100}}")
+
+
+def test_views_and_indexes_on_sc_table(cql, sc_keyspace):
+    """
+    Materialized views and secondary indexes are rejected on tables in
+    strongly consistent keyspaces. They would never be updated: view
+    updates are generated on the coordinator write path, which strongly
+    consistent writes bypass.
+    """
+    with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, v int") as table:
+        error_msg = "not supported on tables in strongly consistent keyspaces"
+        with pytest.raises(InvalidRequest, match=error_msg):
+            cql.execute(f"CREATE MATERIALIZED VIEW {table}_mv AS"
+                        f" SELECT * FROM {table} WHERE v IS NOT NULL AND pk IS NOT NULL"
+                        f" PRIMARY KEY (v, pk)")
+        with pytest.raises(InvalidRequest, match=error_msg):
+            cql.execute(f"CREATE INDEX ON {table} (v)")
+
+
+def test_lwt_on_sc_table(cql, sc_keyspace):
+    """
+    Conditional statements (LWT) are rejected on strongly consistent
+    tables, standalone and inside a batch. The strongly consistent
+    execution path never evaluates conditions, so accepting them would
+    silently execute the write unconditionally. INSERT JSON is covered
+    separately: its IF NOT EXISTS is not tracked as a condition in the
+    prepared statement.
+    """
+    with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, v int") as table:
+        cql.execute(f"INSERT INTO {table} (pk, v) VALUES (1, 1)")
+
+        error_msg = "Strongly consistent updates don't support conditions"
+        with pytest.raises(InvalidRequest, match=error_msg):
+            cql.execute(f"INSERT INTO {table} (pk, v) VALUES (1, 999) IF NOT EXISTS")
+        with pytest.raises(InvalidRequest, match=error_msg):
+            cql.execute(f"UPDATE {table} SET v = 7 WHERE pk = 1 IF v = 12345")
+        with pytest.raises(InvalidRequest, match=error_msg):
+            cql.execute(f"UPDATE {table} SET v = 7 WHERE pk = 1 IF EXISTS")
+        with pytest.raises(InvalidRequest, match=error_msg):
+            cql.execute(f"DELETE FROM {table} WHERE pk = 1 IF EXISTS")
+        with pytest.raises(InvalidRequest, match=error_msg):
+            cql.execute(f"""INSERT INTO {table} JSON '{{"pk": 1, "v": 999}}' IF NOT EXISTS""")
+        with pytest.raises(InvalidRequest, match=error_msg):
+            cql.execute(f"""
+                BEGIN BATCH
+                UPDATE {table} SET v = 8 WHERE pk = 1 IF v = 12345;
+                APPLY BATCH
+            """)
+
+        assert cql.execute(f"SELECT v FROM {table} WHERE pk = 1").one().v == 1
+
+
+def test_batch_attributes_on_sc_table(cql, sc_keyspace):
+    """
+    Batch-level USING TTL and USING TIMESTAMP are rejected on strongly
+    consistent batches. The strongly consistent batch reads its USING
+    attributes only to compute the timeout, so both would be parsed
+    and then silently ignored.
+    """
+    with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, v int") as table:
+        with pytest.raises(InvalidRequest, match="Global TTL on the BATCH statement is not supported"):
+            cql.execute(f"""
+                BEGIN BATCH USING TTL 100
+                INSERT INTO {table} (pk, v) VALUES (1, 2);
+                INSERT INTO {table} (pk, v) VALUES (1, 3);
+                APPLY BATCH
+            """)
+
+        with pytest.raises(InvalidRequest, match="Strongly consistent queries don't support user-provided timestamps"):
+            cql.execute(f"""
+                BEGIN BATCH USING TIMESTAMP 42
+                INSERT INTO {table} (pk, v) VALUES (2, 2);
+                INSERT INTO {table} (pk, v) VALUES (2, 3);
+                APPLY BATCH
+            """)
+
+
+def test_batch_consistency_level_on_sc_table(cql, sc_keyspace):
+    """
+    A strongly consistent batch requires QUORUM or LOCAL_QUORUM, like
+    a standalone strongly consistent write.
+    """
+    with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, v int") as table:
+        cl_error = "Strongly consistent writes must use QUORUM/LOCAL_QUORUM"
+        with pytest.raises(InvalidRequest, match=cl_error):
+            cql.execute(SimpleStatement(
+                f"INSERT INTO {table} (pk, v) VALUES (1, 2)",
+                consistency_level=ConsistencyLevel.ONE))
+
+        with pytest.raises(InvalidRequest, match=cl_error):
+            cql.execute(SimpleStatement(
+                f"BEGIN BATCH INSERT INTO {table} (pk, v) VALUES (1, 2); APPLY BATCH",
+                consistency_level=ConsistencyLevel.ONE))
+
+        cql.execute(SimpleStatement(
+            f"BEGIN BATCH INSERT INTO {table} (pk, v) VALUES (1, 2); APPLY BATCH",
+            consistency_level=ConsistencyLevel.QUORUM))
+        assert cql.execute(f"SELECT v FROM {table} WHERE pk = 1").one().v == 2
+
+
+def test_mixed_keyspace_batch_on_sc_table(cql, sc_keyspace, test_keyspace):
+    """
+    A CQL text batch that mixes statements on strongly consistent and
+    eventually consistent keyspaces is rejected, in both statement
+    orders, like on the native protocol batch path. Such a batch
+    cannot be executed: strongly consistent writes go through the
+    tablet raft groups and eventually consistent writes do not.
+    """
+    with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, v int") as sc_table:
+        with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int") as ec_table:
+            error_msg = "Cannot mix strongly consistent and eventually consistent statements in a batch"
+            with pytest.raises(InvalidRequest, match=error_msg):
+                cql.execute(f"""
+                    BEGIN BATCH
+                    INSERT INTO {ec_table} (pk, v) VALUES (1, 1);
+                    INSERT INTO {sc_table} (pk, v) VALUES (1, 2);
+                    APPLY BATCH
+                """)
+
+            with pytest.raises(InvalidRequest, match=error_msg):
+                cql.execute(f"""
+                    BEGIN BATCH
+                    INSERT INTO {sc_table} (pk, v) VALUES (1, 2);
+                    INSERT INTO {ec_table} (pk, v) VALUES (1, 1);
+                    APPLY BATCH
+                """)
+
+
+def test_group_by_on_sc_table(cql, sc_keyspace):
+    """
+    GROUP BY is rejected on strongly consistent SELECTs. The strongly
+    consistent read path builds its result set without the grouping
+    indices, so an aggregate over GROUP BY would return one global row
+    instead of one row per group.
+    """
+    with new_test_table(cql, sc_keyspace, "pk int, ck int, v int, PRIMARY KEY (pk, ck)") as table:
+        for ck in (1, 2, 3):
+            cql.execute(f"INSERT INTO {table} (pk, ck, v) VALUES (1, {ck}, {ck})")
+
+        with pytest.raises(InvalidRequest, match="Strongly consistent queries don't support GROUP BY"):
+            cql.execute(f"SELECT ck, count(v) FROM {table} WHERE pk = 1 GROUP BY pk, ck")
+
+
+def test_debug_selects_on_sc_table(cql, sc_keyspace, test_keyspace):
+    """
+    SELECT FROM MUTATION_FRAGMENTS() and PRUNE MATERIALIZED VIEW are
+    rejected on strongly consistent tables. Both would otherwise be
+    dispatched as plain strongly consistent reads: an internal server
+    error for MUTATION_FRAGMENTS(), a silent no-op for PRUNE
+    MATERIALIZED VIEW. The eventually consistent behavior of both
+    statements serves as contrast: MUTATION_FRAGMENTS() returns the
+    partition's fragments, and PRUNE is rejected on a plain table and
+    returns no rows from a view.
+    """
+    with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, v int") as table:
+        cql.execute(f"INSERT INTO {table} (pk, v) VALUES (1, 2)")
+
+        with pytest.raises(InvalidRequest, match="MUTATION_FRAGMENTS.. is not supported on strongly consistent tables"):
+            cql.execute(f"SELECT * FROM MUTATION_FRAGMENTS({table}) WHERE pk = 1")
+
+        with pytest.raises(InvalidRequest, match="PRUNE MATERIALIZED VIEW is not supported on strongly consistent tables"):
+            cql.execute(f"PRUNE MATERIALIZED VIEW {table} WHERE pk = 1")
+
+    with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int") as ec_table:
+        cql.execute(f"INSERT INTO {ec_table} (pk, v) VALUES (1, 2)")
+        assert len(list(cql.execute(f"SELECT * FROM MUTATION_FRAGMENTS({ec_table}) WHERE pk = 1"))) > 0
+
+        with pytest.raises(InvalidRequest, match="Ghost rows can only be deleted from materialized views"):
+            cql.execute(f"PRUNE MATERIALIZED VIEW {ec_table} WHERE pk = 1")
+
+        with new_materialized_view(cql, ec_table, '*', 'v, pk', 'v is not null and pk is not null') as mv:
+            assert list(cql.execute(f"PRUNE MATERIALIZED VIEW {mv} WHERE v = 2")) == []
+
+
+def test_null_primary_key_on_sc_table(cql, sc_keyspace):
+    """
+    Null primary key values are rejected on strongly consistent writes,
+    as on eventually consistent ones. Without the check a null clustering
+    key value was accepted and the write changed nothing.
+    """
+    with new_test_table(cql, sc_keyspace, "pk int, ck int, v int, PRIMARY KEY (pk, ck)") as table:
+        insert = cql.prepare(f"INSERT INTO {table} (pk, ck, v) VALUES (?, ?, ?)")
+        with pytest.raises(InvalidRequest, match="Invalid null value in condition for column ck"):
+            cql.execute(insert, [1, None, 1])
+        with pytest.raises(InvalidRequest, match="Invalid null value in condition for column pk"):
+            cql.execute(insert, [None, 1, 1])
+
+        batch = BatchStatement(batch_type=BatchType.UNLOGGED)
+        batch.add(insert, [1, None, 1])
+        with pytest.raises(InvalidRequest, match="Invalid null value in condition for column ck"):
+            cql.execute(batch)
+
+        assert list(cql.execute(f"SELECT * FROM {table} WHERE pk = 1")) == []
+
+
+def test_oversized_write_on_sc_table(cql, sc_keyspace):
+    """
+    A write whose raft command exceeds the command size limit of the
+    group is rejected with a clear error, not the raft error surfacing as
+    a server error.
+    """
+    with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, v blob") as table:
+        insert = cql.prepare(f"INSERT INTO {table} (pk, v) VALUES (?, ?)")
+        cql.execute(insert, [1, b'x' * 1024])
+        with pytest.raises(InvalidRequest, match="Strongly consistent write of .* bytes exceeds the limit of .* bytes") as e:
+            cql.execute(insert, [2, b'x' * (200 * 1024)])
+        m = re.search(r"write of (\d+) bytes exceeds the limit of (\d+) bytes", str(e.value))
+        size, limit = int(m.group(1)), int(m.group(2))
+        assert size >= 200 * 1024 > limit

@@ -221,6 +221,7 @@ std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepa
     } catch (const data_dictionary::no_such_keyspace& e) {
         throw exceptions::invalid_request_exception("Cannot create a table in a non-existent keyspace: " + keyspace());
     }
+    const bool ks_strongly_consistent = strong_consistency::is_strongly_consistent(db, keyspace());
 
     std::optional<std::map<bytes, data_type>> defined_multi_cell_columns;
     for (auto&& entry : _definitions) {
@@ -229,6 +230,10 @@ std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepa
 
         if (has_default_ttl && pt.is_counter()) {
             throw exceptions::invalid_request_exception("Cannot set default_time_to_live on a table with counters");
+        }
+
+        if (ks_strongly_consistent && pt.is_counter()) {
+            throw exceptions::invalid_request_exception(format("Cannot use the 'counter' type for table {}.{}: counters are not yet supported in strongly consistent keyspaces", keyspace(), cf_name));
         }
 
         if (ks_uses_tablets && pt.is_counter() && !db.features().counters_with_tablets) {

@@ -52,6 +52,8 @@ future<shared_ptr<result_message>> batch_statement::execute_without_checking_exc
         co_return seastar::make_shared<result_message::void_message>();
     }
 
+    validate_write_consistency_level(options.get_consistency());
+
     auto timeout = db::timeout_clock::now() + (_attrs->is_timeout_set() ? _attrs->get_timeout(options) : qs.get_client_state().get_timeout_config().write_timeout);
 
     // Build partition keys for all statements and validate they all target the same partition
@@ -68,6 +70,7 @@ future<shared_ptr<result_message>> batch_statement::execute_without_checking_exc
     for (size_t i = 0; i < _statements.size(); ++i) {
         const auto& stmt = _statements[i].statement->inner_statement();
         const auto& statement_options = options.for_statement(i);
+        stmt.restrictions().validate_primary_key(statement_options);
         auto json_cache = stmt.maybe_prepare_json_cache(statement_options);
         auto keys = stmt.build_partition_keys(statement_options, json_cache);
 
@@ -137,6 +140,13 @@ bool batch_statement::depends_on(std::string_view ks_name, std::optional<std::st
 void batch_statement::validate() const {
     if (_type == type::COUNTER) {
         throw exceptions::invalid_request_exception("Counter batches are not supported with strongly consistent tables");
+    }
+
+    if (_attrs->is_time_to_live_set()) {
+        throw exceptions::invalid_request_exception("Global TTL on the BATCH statement is not supported.");
+    }
+    if (_attrs->is_timestamp_set()) {
+        throw exceptions::invalid_request_exception("Strongly consistent queries don't support user-provided timestamps");
     }
 
     schema_ptr batch_schema;
