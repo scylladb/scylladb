@@ -1214,8 +1214,8 @@ private:
 /// Implementations need to override execute_on_leader(), which will be executed
 /// on shard0 of current group0 leader.
 ///
-/// execute_on_leader() streams rows out as they are produced, but the redirect
-/// path still materializes the leader's whole result in one RPC response.
+/// Current implementation is suitable for tables which are relatively small as all
+/// data is materialized in memory and queried in one page.
 class group0_virtual_table : public streaming_virtual_table {
 private:
     sharded<service::raft_group_registry>& _raft_gr;
@@ -1483,19 +1483,24 @@ public:
 
         // all_tables_ungrouped() doesn't order tables by partition key, but
         // a streaming reader requires partitions in ring order.
-        std::vector<std::pair<table_id, dht::decorated_key>> tables;
+        struct table_entry {
+            table_id table;
+            dht::decorated_key dk;
+            locator::tablet_metadata::tablet_map_ptr tmap;
+        };
+        std::vector<table_entry> tables;
         tables.reserve(tm->tablets().all_tables_ungrouped().size());
         for (auto&& [table, tmap] : tm->tablets().all_tables_ungrouped()) {
-            tables.emplace_back(table, make_partition_key(table));
+            tables.push_back({table, make_partition_key(table), co_await tmap.copy()});
         }
-        std::sort(tables.begin(), tables.end(), [&] (const auto& a, const auto& b) {
-            return dht::ring_position_less_comparator(*_s)(a.second, b.second);
-        });
+        std::ranges::sort(tables, dht::ring_position_less_comparator(*_s), &table_entry::dk);
+        // Emitting can block on the consumer; holding tm meanwhile would stall topology barriers.
+        tm = nullptr;
 
-        for (auto&& [table, dk] : tables) {
-            auto& tmap = tm->tablets().get_tablet_map(table);
+        for (auto&& [table, dk, tmap_ptr] : tables) {
+            auto& tmap = *tmap_ptr;
             co_await result.emit_partition_start(dk);
-            std::vector<clustering_row> rows;
+            // Tablet ids ascend and so do their last tokens, giving clustering order.
             co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& tinfo) -> future<> {
                 auto trange = tmap.get_token_range(tid);
                 int64_t last_token = trange.end()->value().raw();
@@ -1513,13 +1518,8 @@ public:
                 }
                 set_cell(cr.cells(), "replicas", make_map_value(map_type, prepare_replica_sizes(replica_sizes)));
                 set_cell(cr.cells(), "missing_replicas", make_set_value(set_type, prepare_missing_replica(missing_replicas)));
-                rows.push_back(std::move(cr));
-                return make_ready_future<>();
+                return result.emit_row(std::move(cr));
             });
-
-            for (auto& cr : rows) {
-                co_await result.emit_row(std::move(cr));
-            }
             co_await result.emit_partition_end();
         }
     }
