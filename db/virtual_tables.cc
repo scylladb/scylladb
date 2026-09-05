@@ -1303,7 +1303,9 @@ public:
         auto set_type = set_type_impl::get_instance(uuid_type, false);
         for (auto&& [table, tmap] : tm->tablets().all_tables_ungrouped()) {
             co_await result.emit_partition_start(make_partition_key(table));
-            std::vector<clustering_row> rows;
+            // for_each_tablet() visits tablet_id 0, 1, 2, ... in order, and
+            // last_tokens (hence last_token below) is strictly increasing by
+            // construction, so tablets come out in ascending clustering order.
             co_await tmap->for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& tinfo) -> future<> {
                 auto trange = tmap->get_token_range(tid);
                 int64_t last_token = trange.end()->value().raw();
@@ -1321,13 +1323,8 @@ public:
                 }
                 set_cell(cr.cells(), "replicas", make_map_value(map_type, prepare_replica_sizes(replica_sizes)));
                 set_cell(cr.cells(), "missing_replicas", make_set_value(set_type, prepare_missing_replica(missing_replicas)));
-                rows.push_back(std::move(cr));
-                return make_ready_future<>();
+                return result.emit_row(std::move(cr));
             });
-
-            for (auto& cr : rows) {
-                co_await result.emit_row(std::move(cr));
-            }
             co_await result.emit_partition_end();
         }
     }
