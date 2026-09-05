@@ -1,0 +1,43 @@
+{
+   "apiVersion":"0.0.1",
+   "swaggerVersion":"1.2",
+   "basePath":"{{Protocol}}://{{Host}}",
+   "resourcePath":"/raft",
+   "produces":[
+      "application/json"
+   ],
+   "apis":[
+      {
+         "path":"/raft/trigger_snapshot/{group_id}",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Triggers snapshot creation and log truncation for the given Raft group",
+               "type":"string",
+               "nickname":"trigger_snapshot",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"group_id",
+                     "description":"The ID of the group which should get snapshotted",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  },
+                  {
+                     "name":"timeout",
+                     "description":"Timeout in seconds after which the endpoint returns a failure. If not provided, 60s is used.",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"long",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      }
+   ]
+}

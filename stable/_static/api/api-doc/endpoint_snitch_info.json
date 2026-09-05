@@ -1,0 +1,75 @@
+{
+   "apiVersion":"0.0.1",
+   "swaggerVersion":"1.2",
+   "basePath":"{{Protocol}}://{{Host}}",
+   "resourcePath":"/snitch",
+   "produces":[
+      "application/json"
+   ],
+   "apis":[
+      {
+         "path":"/snitch/datacenter",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Provides the Datacenter name depending on the respective snitch used, given the hostname/ip",
+               "type":"string",
+               "nickname":"get_datacenter",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"host",
+                     "description":"The host name. If absent, the local server broadcast/listen address is used",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/snitch/rack",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Provides the Rack name depending on the respective snitch used, given the host name/ip",
+               "type":"string",
+               "nickname":"get_rack",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"host",
+                     "description":"The host name. If absent, the local server broadcast/listen address is used",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/snitch/name",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Provides the snitch name of the cluster",
+               "type":"string",
+               "nickname":"get_snitch_name",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      }
+   ]
+}

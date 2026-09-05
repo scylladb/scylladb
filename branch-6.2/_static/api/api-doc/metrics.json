@@ -1,0 +1,66 @@
+    "/v2/metrics-config/":{
+        "get":{
+            "description":"Return the metrics layer configuration",
+            "operationId":"get_metrics_config",
+            "produces":[
+                "application/json"
+            ],
+            "tags":[
+                "metrics"
+            ],
+            "parameters":[
+            ],
+            "responses":{
+                "200":{
+                "schema": {
+                    "type":"array",
+                    "items":{
+                        "$ref":"#/definitions/metrics_config",
+                        "description":"metrics Config value"
+                    }
+                    }
+                },
+                "default":{
+                    "description":"unexpected error",
+                    "schema":{
+                        "$ref":"#/definitions/ErrorModel"
+                    }
+                }
+            }
+        },
+        "post": {
+             "description":"Set the metrics layer relabel configuration",
+            "operationId":"set_metrics_config",
+            "produces":[
+                "application/json"
+            ],
+            "tags":[
+                "metrics"
+            ],
+            "parameters":[
+               {
+                "in":"body",
+                "name":"conf",
+                "description":"An array of relabel_config objects",
+                "schema": {
+                    "type":"array",
+                    "items":{
+                        "$ref":"#/definitions/metrics_config",
+                        "description":"metrics Config value"
+                    }
+                }
+               }
+            ],
+            "responses":{
+                "200":{
+                    "description": "OK"
+                },
+                "default":{
+                    "description":"unexpected error",
+                    "schema":{
+                        "$ref":"#/definitions/ErrorModel"
+                    }
+                }
+            }
+        }
+    }

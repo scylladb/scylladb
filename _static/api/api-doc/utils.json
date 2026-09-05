@@ -1,0 +1,105 @@
+{
+   "apiVersion":"0.0.1",
+   "swaggerVersion":"1.2",
+   "basePath":"{{Protocol}}://{{Host}}",
+   "resourcePath":"/utils",
+   "produces":[
+      "application/json"
+   ],
+   "apis":[
+   ],
+   "models":{
+      "histogram":{
+         "id":"histogram",
+         "description":"A histogram values",
+         "properties":{
+            "count":{
+               "type":"long",
+               "description":"Total count so far"
+            },
+            "sum":{
+               "type":"long",
+               "description":"Total sum so far"
+            },
+            "min":{
+               "type":"long",
+               "description":"The min so far"
+            },
+            "max":{
+               "type":"long",
+               "description":"The max so far"
+            },
+            "variance":{
+               "type":"double",
+               "description":"The variance"
+            },
+            "mean":{
+               "type":"double",
+               "description":"The mean"
+            },
+            "sample":{
+               "type":"array",
+               "items":{
+                  "type":"long"
+               },
+               "description":"A sample containing the last n elements"
+            }
+         }
+      },
+      "estimated_histogram":{
+         "id":"estimated_histogram",
+         "description":"An estimated histogram values",
+         "properties":{
+            "buckets":{
+               "type":"array",
+               "items":{
+                  "type":"long"
+               },
+               "description":"The histogram buckets"
+            },
+            "bucket_offsets":{
+               "type":"array",
+               "items":{
+                  "type":"long"
+               },
+               "description":"The series of values to which the counts in `buckets` correspond"
+            }
+         }
+      },
+    "rate_moving_average": {
+         "id":"rate_moving_average",
+         "description":"A meter metric which measures mean throughput and one, five, and fifteen-minute exponentially-weighted moving average throughputs",
+         "properties":{
+             "rates": {
+               "type":"array",
+               "items":{
+                  "type":"double"
+               },
+               "description":"One, five and fifteen minutes rates"
+            },
+            "mean_rate": {
+               "type":"double",
+               "description":"The mean rate from startup"
+            },
+            "count": {
+               "type":"long",
+               "description":"Total number of events from startup"
+            }
+         }
+    },
+    "rate_moving_average_and_histogram": {
+         "id":"rate_moving_average_and_histogram",
+         "description":"A timer metric which aggregates timing durations and provides duration statistics, plus throughput statistics",
+         "properties":{
+            "meter": {
+               "type":"rate_moving_average",
+               "description":"The metric rate moving average"
+            },
+            "hist": {
+               "type":"histogram",
+               "description":"The metric histogram"
+            }
+         }
+    }
+  }
+}

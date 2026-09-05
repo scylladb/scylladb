@@ -1,0 +1,29 @@
+{
+  "apiVersion":"0.0.1",
+  "swaggerVersion":"1.2",
+  "basePath":"{{Protocol}}://{{Host}}",
+  "resourcePath":"/authorization_cache",
+  "produces":[
+    "application/json"
+  ],
+  "apis":[
+    {
+      "path":"/authorization_cache/reset",
+      "operations":[
+        {
+          "method":"POST",
+          "summary":"Reset cache",
+          "type":"void",
+          "nickname":"authorization_cache_reset",
+          "produces":[
+            "application/json"
+          ],
+          "parameters":[
+          ]
+        }
+      ]
+    }
+  ],
+  "models":{
+  }
+}

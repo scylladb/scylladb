@@ -1,0 +1,271 @@
+{
+   "apiVersion":"0.0.1",
+   "swaggerVersion":"1.2",
+   "basePath":"{{Protocol}}://{{Host}}",
+   "resourcePath":"/stream_manager",
+   "produces":[
+      "application/json"
+   ],
+   "apis":[
+      {
+         "path":"/stream_manager/",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Returns the current state of all ongoing streams.",
+               "type":"array",
+               "items":{
+                  "type":"stream_state"
+               },
+               "nickname":"get_current_streams",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/stream_manager/metrics/outbound",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get number of active outbound streams",
+               "type": "long",
+               "nickname":"get_all_active_streams_outbound",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/stream_manager/metrics/incoming/{peer}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get total incoming bytes",
+               "type": "long",
+               "nickname":"get_total_incoming_bytes",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"peer",
+                     "description":"The stream peer",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/stream_manager/metrics/incoming",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get all total incoming bytes",
+               "type": "long",
+               "nickname":"get_all_total_incoming_bytes",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/stream_manager/metrics/outgoing/{peer}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get total outgoing bytes",
+               "type": "long",
+               "nickname":"get_total_outgoing_bytes",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"peer",
+                     "description":"The stream peer",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/stream_manager/metrics/outgoing",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get all total outgoing bytes",
+               "type": "long",
+               "nickname":"get_all_total_outgoing_bytes",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      }
+   ],
+   "models":{
+      "stream_state":{
+         "id":"stream_state",
+         "description":"Current snapshot of streaming progress",
+         "properties":{
+            "plan_id":{
+               "type":"string",
+               "description":"Plan UUID"
+            },
+            "description":{
+               "type":"string",
+               "description":"The stream description"
+            },
+            "sessions":{
+               "type":"array",
+               "description":"The sessions info",
+               "items":{
+                  "type":"stream_info"
+               }
+            }
+         }
+      },
+      "stream_info":{
+         "id":"stream_info",
+         "description":"Stream session info",
+         "properties":{
+            "peer":{
+               "type":"string",
+               "description":"The peer"
+            },
+            "session_index":{
+               "type": "long",
+               "description":"The session index"
+            },
+            "connecting":{
+               "type":"string"
+            },
+            "receiving_summaries":{
+               "type":"array",
+               "items":{
+                  "type":"stream_summary"
+               },
+               "description":"Receiving summaries"
+            },
+            "sending_summaries":{
+               "type":"array",
+               "items":{
+                  "type":"stream_summary"
+               },
+               "description":"Sending summaries"
+            },
+            "state":{
+               "type":"string",
+               "description":"Current session state",
+               "enum":[
+                  "INITIALIZED",
+                  "PREPARING",
+                  "STREAMING",
+                  "WAIT_COMPLETE",
+                  "COMPLETE",
+                  "FAILED"
+               ]
+            },
+            "receiving_files":{
+               "type":"array",
+               "items":{
+                  "type":"progress_info_mapper"
+               },
+               "description":"Receiving files"
+            },
+            "sending_files":{
+               "type":"array",
+               "items":{
+                  "type":"progress_info_mapper"
+               },
+               "description":"Sending files"
+            }
+         }
+      },
+      "stream_summary":{
+         "id":"stream_summary",
+         "description":"Stream summary info",
+         "properties":{
+            "cf_id":{
+               "type":"string",
+               "description":"The ID"
+            },
+            "files":{
+               "type": "long",
+               "description":"Number of files to transfer. Can be 0 if nothing to transfer for some streaming request."
+            },
+            "total_size":{
+               "type":"long"
+            }
+         }
+      },
+      "progress_info_mapper":{
+         "id":"progress_info_mapper",
+         "description":"A mapping between file and its progress info",
+         "properties":{
+            "key":{
+               "type":"string",
+               "description":"The key"
+            },
+            "value":{
+               "type":"progress_info",
+               "description":"The progress info"
+            }
+         }
+      },
+      "progress_info":{
+         "id":"progress_info",
+         "description":"File transfer progress",
+         "properties":{
+            "peer":{
+               "type":"string",
+               "description":"The peer address"
+            },
+            "session_index":{
+               "type": "long",
+               "description":"The session index"
+            },
+            "file_name":{
+               "type":"string",
+               "description":"The file name"
+            },
+            "direction":{
+               "type":"string",
+               "description":"The file name",
+               "enum":[
+                  "OUT",
+                  "IN"
+               ]
+            },
+            "current_bytes":{
+               "type":"long",
+               "description":"The current bytes"
+            },
+            "total_bytes":{
+               "type":"long",
+               "description":"The total bytes"
+            }
+         }
+      }
+   }
+}
