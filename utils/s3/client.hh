@@ -17,6 +17,7 @@
 #include <seastar/core/units.hh>
 #include <seastar/http/client.hh>
 #include <filesystem>
+#include <unordered_map>
 #include "utils/lister.hh"
 #include "utils/s3/creds.hh"
 #include "credentials_providers/aws_credentials_provider_chain.hh"
@@ -83,6 +84,16 @@ public:
 private:
     uint64_t _offset;
     uint64_t _length{maximum_object_size};
+};
+
+using object_metadata = std::unordered_map<sstring, sstring>;
+
+// Only the user-defined attributes for now: unlike the GCS object resource,
+// which carries the name, size, generation and modification time alongside
+// them, S3 reports those through get_object_stats(), which leaves this with a
+// single member.
+struct object_info {
+    object_metadata metadata;
 };
 static constexpr range full_range{0};
 
@@ -184,22 +195,23 @@ public:
 
     future<uint64_t> get_object_size(sstring object_name, seastar::abort_source* = nullptr);
     future<stats> get_object_stats(sstring object_name, seastar::abort_source* = nullptr);
+    future<object_info> get_object_info(sstring object_name, seastar::abort_source* = nullptr);
     future<bool> object_exists(sstring object_name, seastar::abort_source* = nullptr);
     future<tag_set> get_object_tagging(sstring object_name, seastar::abort_source* = nullptr);
     future<> put_object_tagging(sstring object_name, tag_set tagging, seastar::abort_source* = nullptr);
     future<> delete_object_tagging(sstring object_name, seastar::abort_source* = nullptr);
     future<temporary_buffer<char>> get_object_contiguous(sstring object_name, range download_range = s3::full_range, seastar::abort_source* = nullptr);
-    future<> put_object(sstring object_name, temporary_buffer<char> buf, seastar::abort_source* = nullptr);
-    future<> put_object(sstring object_name, ::memory_data_sink_buffers bufs, seastar::abort_source* = nullptr);
-    future<> copy_object(sstring source_object, sstring target_object, std::optional<size_t> part_size = {}, std::optional<tag> tag = {}, seastar::abort_source* = nullptr);
+    future<> put_object(sstring object_name, temporary_buffer<char> buf, object_metadata = {}, seastar::abort_source* = nullptr);
+    future<> put_object(sstring object_name, ::memory_data_sink_buffers bufs, object_metadata = {}, seastar::abort_source* = nullptr);
+    future<> copy_object(sstring source_object, sstring target_object, object_metadata = {}, std::optional<size_t> part_size = {}, std::optional<tag> tag = {}, seastar::abort_source* = nullptr);
     future<> delete_object(sstring object_name, seastar::abort_source* = nullptr);
     future<> create_bucket(sstring bucket_name, seastar::abort_source* = nullptr);
     future<> delete_bucket(sstring bucket_name, seastar::abort_source* = nullptr);
     future<> delete_bucket_with_objects(sstring bucket_name, seastar::abort_source* = nullptr);
 
     file make_readable_file(sstring object_name, seastar::abort_source* = nullptr);
-    data_sink make_upload_sink(sstring object_name, seastar::abort_source* = nullptr);
-    data_sink make_upload_jumbo_sink(sstring object_name, std::optional<unsigned> max_parts_per_piece = {}, seastar::abort_source* = nullptr);
+    data_sink make_upload_sink(sstring object_name, object_metadata = {}, seastar::abort_source* = nullptr);
+    data_sink make_upload_jumbo_sink(sstring object_name, object_metadata = {}, std::optional<unsigned> max_parts_per_piece = {}, seastar::abort_source* = nullptr);
     data_source make_download_source(sstring object_name, range download_range = s3::full_range, seastar::abort_source* = nullptr);
     data_source make_chunked_download_source(sstring object_name, range range = s3::full_range, seastar::abort_source* = nullptr);
     /// upload a file with specified path to s3

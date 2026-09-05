@@ -350,7 +350,12 @@ Each SSTable lives under:
 sstables/{sstable_id}/
 ```
 
-SSTable component object names are the component suffixes used by the local SSTable format, for example `Data.db`, `Index.db`, `Summary.db`, `Scylla.db`, and `TOC.txt`.
+SSTable component object names are the component suffixes used by the local SSTable format, for example `Data.db`, `Index.db`, `Summary.db`, `Scylla.db`, and `TOC.txt`. Since these object names do not include the SSTable version or format, Scylla stores them as object attributes on the `TOC.txt` object:
+
+- `version` - the SSTable version, for example `me` or `mt`.
+- `format` - the SSTable format, for example `big`.
+
+These attributes are written when the TOC is uploaded and preserved when the TOC is copied as part of SSTable clone/component-rewrite flows. Tools that read live object-storage SSTables directly, such as `scylla sstable`, use these attributes to identify the SSTable descriptor before opening the component set.
 
 Reference objects under `refs/nodes/` record which nodes still own a reference to the SSTable data:
 

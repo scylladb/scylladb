@@ -18,11 +18,15 @@
 #include "db/config.hh"
 #include "sstables/object_storage_client.hh"
 #include "sstables/storage.hh"
+#include "sstables/sstable_version.hh"
 #include "utils/upload_progress.hh"
 
 #include "test/lib/test_utils.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/sstable_test_env.hh"
+#include "test/lib/sstable_utils.hh"
+#include "test/lib/simple_schema.hh"
+#include "test/lib/key_utils.hh"
 #include "test/lib/gcs_fixture.hh"
 
 namespace fs = std::filesystem;
@@ -94,12 +98,44 @@ future<> test_file_upload(test_env_config cfg, size_t size) {
     }, std::move(cfg));
 }
 
+future<> test_sstable_attributes(test_env_config cfg) {
+    auto cfg_map = cfg.storage.to_map();
+    auto bucket = cfg_map["bucket"];
+    auto prefix = cfg_map.contains("prefix") ? cfg_map["prefix"] : "sstables";
+
+    return test_env::do_with_async([bucket, prefix] (test_env& env) {
+        auto ep = env.db_config().object_storage_endpoints().front().key();
+        auto client = env.manager().get_endpoint_client(ep);
+        simple_schema ss;
+        auto schema = ss.schema();
+        auto pk = tests::generate_partition_key(schema).key();
+        auto mut = mutation(schema, pk);
+        mut.partition().apply_insert(*schema, ss.make_ckey(0), ss.new_timestamp());
+
+        auto sst = make_sstable_containing(env.make_sstable(schema), {std::move(mut)}).get();
+        auto sid = sst->sstable_identifier();
+        BOOST_REQUIRE(sid);
+        auto object = sstables::object_name(bucket, prefix, *sid, sstable_version_constants::TOC_SUFFIX);
+        auto attributes = client->get_object_metadata(object).get();
+        BOOST_REQUIRE_EQUAL(attributes.at(sstring(object_storage_sstable_version_attribute)), fmt::format("{}", sst->get_version()));
+        BOOST_REQUIRE_EQUAL(attributes.at(sstring(object_storage_sstable_format_attribute)), fmt::format("{}", sst->get_format()));
+    }, std::move(cfg));
+}
+
 constexpr auto large_size = 256 * 1024 * 1024 + 351;
 
 SEASTAR_TEST_CASE(test_large_file_upload_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
     return test_file_upload(test_env_config{ .storage = make_test_object_storage_options("S3") }, large_size);
 }
 
+SEASTAR_TEST_CASE(test_sstable_object_attributes_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+    return test_sstable_attributes(test_env_config{ .storage = make_test_object_storage_options("S3") });
+}
+
 SEASTAR_FIXTURE_TEST_CASE(test_large_file_upload_gs, gcs_fixture, *check_run_test_decorator("ENABLE_GCP_STORAGE_TEST", true)) {
     return test_file_upload(test_env_config{ .storage = make_test_object_storage_options("GS") }, large_size);
+}
+
+SEASTAR_FIXTURE_TEST_CASE(test_sstable_object_attributes_gs, gcs_fixture, *check_run_test_decorator("ENABLE_GCP_STORAGE_TEST", true)) {
+    return test_sstable_attributes(test_env_config{ .storage = make_test_object_storage_options("GS") });
 }
