@@ -1023,6 +1023,7 @@ class clients_table : public streaming_virtual_table {
         }
 
         // Emit
+        static thread_local const auto map_type = map_type_impl::get_instance(utf8_type, utf8_type, false);
         for (const auto& dip : ips) {
             co_await result.emit_partition_start(dip.key);
             auto& clients = cd_map[dip.ip];
@@ -1063,12 +1064,6 @@ class clients_table : public streaming_virtual_table {
                 if (cd->scheduling_group_name) {
                     set_cell(cr.cells(), "scheduling_group", *cd->scheduling_group_name);
                 }
-
-                auto map_type = map_type_impl::get_instance(
-                    utf8_type,
-                    utf8_type,
-                    false
-                );
 
                 auto prepare_client_options = [] (const auto& client_options) {
                     map_type_impl::native_type tmp;
