@@ -62,6 +62,10 @@ sstable_version_constants::get_component_map(sstable_version_types version) {
         case sstable_version_types::ms:
         case sstable_version_types::mt:
             return sstable_version_constants_m_bti::_component_map;
+        // pq changes only how the Data component is encoded, so it uses the
+        // same component set as the m family.
+        case sstable_version_types::pq:
+            return sstable_version_constants_m::_component_map;
     }
     // Should never reach this.
     // Compiler should complain if the switch above does no cover all sstable_version_types values.

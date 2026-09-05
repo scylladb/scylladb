@@ -284,6 +284,7 @@ struct compaction_metadata : public metadata_base<compaction_metadata> {
     template <typename Describer>
     auto describe_type(sstable_version_types v, Describer f) {
         switch (v) {
+        case sstable_version_types::pq:   // same on-disk layout as the m family
         case sstable_version_types::mc:
         case sstable_version_types::md:
         case sstable_version_types::me:
@@ -338,6 +339,7 @@ struct stats_metadata : public metadata_base<stats_metadata> {
     template <typename Describer>
     auto describe_type(sstable_version_types v, Describer f) {
         switch (v) {
+        case sstable_version_types::pq:   // same on-disk layout as the m family
         case sstable_version_types::mt:
         case sstable_version_types::ms:
         case sstable_version_types::me:
@@ -435,6 +437,7 @@ struct serialization_header : public metadata_base<serialization_header> {
     template <typename Describer>
     auto describe_type(sstable_version_types v, Describer f) {
         switch (v) {
+        case sstable_version_types::pq:   // same on-disk layout as the m family
         case sstable_version_types::mc:
         case sstable_version_types::md:
         case sstable_version_types::me:
