@@ -3178,6 +3178,14 @@
                      "allowMultiple":false,
                      "type":"boolean",
                      "paramType":"query"
+                  },
+                  {
+                     "name":"grace_period_in_seconds",
+                     "description":"When disabling balancing, how long in-flight tablet transitions are given to finish before the ones which can still be rolled back are cancelled, so that the call completes in bounded time. Cancelling a transition which was adding a tablet replica - a rebuild started by an RF increase, or by re-replication after a node left - leaves that tablet below its replication factor until tablet balancing is enabled again. Transitions which cannot be rolled back, and every transition while a node is being drained, are never cancelled; if such transitions are still in flight when the grace period elapses, the call fails. 0 waits for the transitions indefinitely and cancels nothing. Omitting the parameter uses the tablet_transition_abort_grace_period_in_seconds configuration option instead, which itself defaults to 0 - so an omitted parameter cancels nothing unless that option has been set.",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"long",
+                     "paramType":"query"
                   }
                ]
             }

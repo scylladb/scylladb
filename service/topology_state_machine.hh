@@ -29,10 +29,16 @@ namespace db {
     class system_keyspace;
 }
 
+namespace locator {
+struct global_tablet_id;
+class tablet_metadata;
+}
+
 namespace service {
 
 class raft_group0;
 class group0_guard;
+class group0_update_collector;
 
 enum class node_state: uint16_t {
     none,                // the new node joined group0 but has not bootstrapped yet (has no tokens and data to serve)
@@ -293,7 +299,16 @@ struct topology_state_machine {
     std::function<void()> on_tablet_split_ready;
 
     future<> await_not_busy();
-    future<sstring> wait_for_request_completion(db::system_keyspace& sys_ks, utils::UUID id, bool require_entry);
+    // Thrown by wait_for_request_completion() when its deadline passes, so that a
+    // timed_out_error raised by anything else inside the wait cannot be mistaken for it.
+    struct request_wait_timeout : public std::runtime_error {
+        request_wait_timeout() : std::runtime_error("timed out waiting for a topology request") {}
+    };
+
+    // Waits until the request is done and returns its error, empty on success.
+    // If a deadline is given, throws request_wait_timeout when it passes.
+    future<sstring> wait_for_request_completion(db::system_keyspace& sys_ks, utils::UUID id, bool require_entry,
+                                                std::optional<lowres_clock::time_point> deadline = std::nullopt);
 
     // Generates mutations that cancel a topology request which is active on the given node.
     // If no request is found, or it cannot be canceled at this stage, no mutations are generated.
@@ -309,6 +324,24 @@ struct topology_state_machine {
     // Doesn't wait until request is done. Use wait_for_request_completion() for that.
     future<> abort_request(raft_group0&, abort_source&, gms::feature_service&, utils::UUID request_id);
 };
+
+// Generates mutations which cancel the transitions of the given tablets: marks each one as
+// cancelled and clears its session, which aborts whatever the replicas started for the current
+// stage. The topology coordinator then rolls the transition back.
+//
+// Tablets which are not transitioning, or whose stage cannot be rolled back (see
+// locator::can_cancel_tablet_transition()), are skipped - their session must not be cleared, as
+// that would abort work which is going to be completed. Mutations for tablets of the same table
+// are coalesced, since system.tablets is partitioned by table id, and the collector splits the
+// result again if it is too large for a single canonical mutation.
+//
+// Returns the number of transitions actually cancelled. Throws if the cluster does not support
+// cancellation: silently cancelling nothing would leave the caller waiting forever.
+future<size_t> generate_cancel_tablet_transition_updates(group0_update_collector& updates,
+                                                         const gms::feature_service& features,
+                                                         const group0_guard& guard,
+                                                         const locator::tablet_metadata& tmeta,
+                                                         const utils::chunked_vector<locator::global_tablet_id>& tablets);
 
 // Raft leader uses this command to drive bootstrap process on other nodes
 struct raft_topology_cmd {

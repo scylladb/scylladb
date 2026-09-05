@@ -305,7 +305,7 @@ async def test_tablet_migration_task(manager: ScyllaClusterManager):
 
         assert len(migration_tasks) == 1
         status = await tm.get_task_status(servers[0].ip_addr, migration_tasks[0].task_id)
-        check_task_status(status, ["created", "running"], type, "tablet", False, keyspace=ks)
+        check_task_status(status, ["created", "running"], type, "tablet", True, keyspace=ks)
 
         await manager.api.disable_injection(servers[0].ip_addr, injection)
 
@@ -381,7 +381,7 @@ async def test_tablet_migration_task_failed(manager: ScyllaClusterManager):
 
     async def wait_for_task(task_id, type):
         status = await tm.wait_for_task(servers[0].ip_addr, task_id)
-        check_task_status(status, ["failed"], type, "tablet", False, keyspace=ks)
+        check_task_status(status, ["failed"], type, "tablet", True, keyspace=ks)
 
     async def resume_migration(log, mark):
         await log.wait_for('tablet_virtual_task: wait until tablet operation is finished', from_mark=mark)

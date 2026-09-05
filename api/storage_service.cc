@@ -1751,7 +1751,28 @@ static
 future<json::json_return_type>
 rest_tablet_balancing_enable(sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
         auto enabled = validate_bool(req->get_query_param("enabled"));
-        co_await ss.local().set_tablet_balancing_enabled(enabled);
+        // How long in-flight tablet transitions are given to finish before they are cancelled,
+        // so that disabling balancing completes in bounded time. It belongs to the call rather
+        // than to node configuration: the caller knows its own deadline, and an operator in a
+        // hurry wants zero. Defaults to tablet_transition_abort_grace_period_in_seconds.
+        std::optional<std::chrono::seconds> grace_period;
+        // An absent (or empty) parameter means "not given", so the parse only runs when there
+        // is something to parse - req_param has no way to tell the two apart.
+        if (auto param = req->get_query_param("grace_period_in_seconds"); !param.empty()) {
+            // Parsed as signed on purpose: lexical_cast to an unsigned type accepts a leading
+            // minus and wraps it, turning "-5" into "wait roughly forever".
+            int64_t seconds = req_param<int64_t>(*req, "grace_period_in_seconds", 0);
+            // Capped so that lowres_clock::now() + grace_period, and the sum of the periods
+            // waited, cannot overflow. A week is far past any useful value.
+            constexpr int64_t max_grace_period = 7 * 24 * 60 * 60;
+            if (seconds < 0 || seconds > max_grace_period) {
+                throw bad_param_exception(fmt::format(
+                        "grace_period_in_seconds: must be between 0 and {}, got '{}'",
+                        max_grace_period, param));
+            }
+            grace_period = std::chrono::seconds(seconds);
+        }
+        co_await ss.local().set_tablet_balancing_enabled(enabled, grace_period);
         co_return json_void();
 }
 
