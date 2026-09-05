@@ -15,6 +15,8 @@
 #include "utils/scoped_item_list.hh"
 
 #include <cstdint>
+#include <memory>
+#include <optional>
 
 #include <seastar/core/file-types.hh>
 #include <seastar/core/future.hh>
@@ -61,9 +63,13 @@ protected:
     seastar::named_gate _pending_requests_gate;
     seastar::gate::holder _hold_server;
 
-    bool _ssl_enabled = false;
-    std::optional<sstring> _ssl_cipher_suite = std::nullopt;
-    std::optional<sstring> _ssl_protocol = std::nullopt;
+    // TLS metadata, allocated lazily only for TLS connections (non-null means
+    // TLS-enabled). The fields are filled in asynchronously after the handshake.
+    struct ssl_info {
+        std::optional<sstring> cipher_suite;
+        std::optional<sstring> protocol;
+    };
+    std::unique_ptr<ssl_info> _ssl_info;
 
 private:
     future<> process_until_tenant_switch();
