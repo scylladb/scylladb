@@ -867,9 +867,45 @@ private:
         return _tombstone_gc_state;
     }
 
+    // The inputs which a token range tombstone deletes in their entirety: every
+    // partition lies in the tombstone's range and nothing in them is newer than
+    // it. There is no point in reading such an sstable, it is dropped the way a
+    // fully expired one is. The tombstone itself stays -- in the output if it
+    // came from an input, and where it is otherwise -- so nothing this drops
+    // can come back.
+    //
+    // An input carrying tombstones of its own is not a candidate: those have to
+    // reach the output, and reading it is how they get there.
+    std::unordered_set<sstables::shared_sstable> sstables_deleted_by_token_range_tombstones() const {
+        std::unordered_set<sstables::shared_sstable> deleted;
+        if (!tombstone_expiration_enabled()) {
+            return deleted;
+        }
+        const auto& tombstones = _sstable_set->token_range_tombstones();
+        if (tombstones.empty()) {
+            return deleted;
+        }
+        for (auto& sst : _sstables) {
+            if (!sst->has_partitions() || !sst->token_range_tombstones().empty()) {
+                continue;
+            }
+            auto first = sst->get_first_ring_position().token();
+            auto last = sst->get_last_ring_position().token();
+            auto newest = sst->get_stats_metadata().max_timestamp;
+            auto deletes_all_of = [&] (const token_range_tombstone& trt) {
+                return trt.contains(first) && trt.contains(last) && newest <= trt.tomb().timestamp;
+            };
+            if (std::ranges::any_of(tombstones, deletes_all_of)) {
+                deleted.insert(sst);
+            }
+        }
+        return deleted;
+    }
+
     future<> setup() {
         auto ssts = make_lw_shared<sstables::sstable_set>(make_sstable_set_for_input());
         auto fully_expired = _table_s.fully_expired_sstables(_sstables, gc_clock::now());
+        auto deleted_by_token_range_tombstones = sstables_deleted_by_token_range_tombstones();
         min_max_tracker<api::timestamp_type> timestamp_tracker;
 
         double sum_of_estimated_droppable_tombstone_ratio = 0;
@@ -899,6 +935,11 @@ private:
                 log_debug("Fully expired sstable {} will be dropped on compaction completion", sst->get_filename());
                 continue;
             }
+            if (deleted_by_token_range_tombstones.contains(sst)) {
+                log_debug("Sstable {} is deleted in its entirety by a token range tombstone and will be dropped on compaction completion",
+                        sst->get_filename());
+                continue;
+            }
             _stats_collector.update(sst->get_encoding_stats_for_compaction());
 
             compaction_size += sst->data_size();
@@ -922,11 +963,12 @@ private:
         }
         log_debug("repaired_at_vec={} output_repaired_at={}", repaired_at_for_compacted_sstables, _output_repaired_at);
         if (ssts->size() < _sstables.size()) {
-            log_debug("{} out of {} input sstables are fully expired sstables that will not be actually compacted",
+            log_debug("{} out of {} input sstables are fully expired or deleted by a token range tombstone and will not be actually compacted",
                       _sstables.size() - ssts->size(), _sstables.size());
         }
         // _estimated_droppable_tombstone_ratio could exceed 1.0 in certain cases, so limit it to 1.0.
-        _estimated_droppable_tombstone_ratio = std::min(1.0, sum_of_estimated_droppable_tombstone_ratio / ssts->size());
+        // Every input may have been dropped above, leaving nothing to read.
+        _estimated_droppable_tombstone_ratio = ssts->size() ? std::min(1.0, sum_of_estimated_droppable_tombstone_ratio / ssts->size()) : 0.0;
 
         _compacting = std::move(ssts);
 

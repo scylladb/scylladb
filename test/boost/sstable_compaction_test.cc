@@ -6917,4 +6917,60 @@ SEASTAR_TEST_CASE(test_compaction_output_is_not_leaked_when_attach_fails) {
     });
 }
 
+// An input which a token range tombstone deletes in its entirety is dropped
+// without being read: the output holds the tombstone and no partition at all.
+// Without that, compaction reads every partition of the input and writes each
+// back as an empty partition carrying the tombstone it now has.
+SEASTAR_TEST_CASE(test_compaction_drops_sstable_deleted_by_token_range_tombstone) {
+    return test_env::do_with_async([] (test_env& env) {
+        simple_schema ss;
+        auto s = ss.schema();
+        auto cf = env.make_table_for_tests(s);
+        auto close_cf = deferred_stop(cf);
+        auto sst_gen = env.make_sst_factory(s);
+
+        utils::chunked_vector<mutation> muts;
+        for (auto i = 0; i < 10; i++) {
+            auto m = mutation(s, ss.make_pkey(i));
+            ss.add_row(m, ss.make_ckey(0), "v");
+            muts.push_back(std::move(m));
+        }
+        auto data = make_sstable_containing(sst_gen, std::move(muts)).get();
+        column_family_test(cf).add_sstable(data).get();
+
+        // Newer than everything in `data`, so it deletes all of it.
+        auto tomb = tombstone(ss.new_timestamp(), gc_clock::now());
+        auto mt = make_lw_shared<replica::memtable>(s);
+        mt->apply(token_range_tombstone::full_ring(tomb));
+        auto deletion = make_sstable_containing(sst_gen, mt).get();
+        column_family_test(cf).add_sstable(deletion).get();
+
+        std::vector<shared_sstable> outputs;
+        auto creator = [&] {
+            auto sst = env.make_sstable(s);
+            outputs.push_back(sst);
+            return sst;
+        };
+        auto desc = compaction::compaction_descriptor({data, deletion});
+        auto ret = compact_sstables(env, std::move(desc), cf, creator).get();
+
+        BOOST_REQUIRE_EQUAL(ret.new_sstables.size(), 1);
+        auto out = env.reusable_sst(s, ret.new_sstables.front()).get();
+        BOOST_REQUIRE_MESSAGE(!out->has_partitions(), "the deleted input was read and written back rather than dropped");
+        BOOST_REQUIRE_EQUAL(out->token_range_tombstones().search(ss.make_pkey(0).token()), tomb);
+
+        // Something newer than the tombstone survives, so its sstable is read.
+        auto m = mutation(s, ss.make_pkey(3));
+        ss.add_row(m, ss.make_ckey(0), "newer");
+        auto newer = make_sstable_containing(sst_gen, {std::move(m)}).get();
+        column_family_test(cf).add_sstable(newer).get();
+        outputs.clear();
+        ret = compact_sstables(env, compaction::compaction_descriptor({out, newer}), cf, creator).get();
+        BOOST_REQUIRE_EQUAL(ret.new_sstables.size(), 1);
+        out = env.reusable_sst(s, ret.new_sstables.front()).get();
+        BOOST_REQUIRE(out->has_partitions());
+        BOOST_REQUIRE_EQUAL(out->get_estimated_key_count(), 1);
+    });
+}
+
 BOOST_AUTO_TEST_SUITE_END()
