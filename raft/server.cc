@@ -364,6 +364,10 @@ private:
     template <LeaderAction AsyncAction>
     future<> do_on_leader_with_retries(seastar::abort_source* as, AsyncAction&& action);
 
+    // Makes the order in which callers enter add_entry() the order in which their
+    // entries are appended to the log. Taken only on the non-forwarding path.
+    seastar::semaphore _add_entry_admission{1};
+
     future<> override_snapshot_thresholds();
 
     friend std::ostream& operator<<(std::ostream& os, const server_impl& s);
@@ -793,7 +797,15 @@ future<> server_impl::add_entry(command command, wait_type type, seastar::abort_
         if (const auto leader = _fsm->current_leader(); leader != _id) {
             throw not_a_leader{leader};
         }
-        auto eid = co_await add_entry_on_leader(std::move(command), as);
+        entry_id eid;
+        {
+            // Taken before the first await which can reorder callers, released before
+            // waiting for the entry. See _add_entry_admission.
+            auto admission = as
+                    ? co_await get_units(_add_entry_admission, 1, *as)
+                    : co_await get_units(_add_entry_admission, 1);
+            eid = co_await add_entry_on_leader(std::move(command), as);
+        }
         co_await utils::get_local_injector().inject("block_raft_add_entry_before_wait_for_entry",
                 utils::wait_for_message(std::chrono::minutes(5)));
         co_return co_await wait_for_entry(eid, type, as);
@@ -1704,6 +1716,8 @@ future<> server_impl::abort(sstring reason) {
     _fsm->stop();
     _events.broken();
     _snapshot_desc_idx_changed.broken();
+    // Fail the callers waiting for admission like every other waiter below.
+    _add_entry_admission.broken(stopped_error(*_aborted));
 
     // IO and applier fibers may update waiters and start new snapshot
     // transfers, so abort them first
