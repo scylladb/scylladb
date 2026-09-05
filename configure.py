@@ -592,6 +592,7 @@ scylla_tests = set([
     'test/boost/incremental_compaction_test',
     'test/boost/index_reader_test',
     'test/boost/input_stream_test',
+    'test/boost/interval_index_test',
     'test/boost/intrusive_array_test',
     'test/boost/json_test',
     'test/boost/keys_test',
@@ -1626,6 +1627,7 @@ pure_boost_tests = set([
     'test/boost/enum_option_test',
     'test/boost/enum_set_test',
     'test/boost/idl_test',
+    'test/boost/interval_index_test',
     'test/boost/json_test',
     'test/boost/keys_test',
     'test/boost/like_matcher_test',
@@ -1803,6 +1805,7 @@ deps['test/boost/bytes_ostream_test'] = [
     "test/lib/log.cc",
 ]
 deps['test/boost/input_stream_test'] = ['test/boost/input_stream_test.cc']
+deps['test/boost/interval_index_test'] = ['test/boost/interval_index_test.cc']
 deps['test/boost/UUID_test'] = ['clocks-impl.cc', 'utils/UUID_gen.cc', 'test/boost/UUID_test.cc', 'utils/uuid.cc', 'utils/dynamic_bitset.cc', 'utils/hashers.cc', 'utils/on_internal_error.cc']
 deps['test/boost/url_parse_test'] = ['utils/http.cc', 'test/boost/url_parse_test.cc', ]
 deps['test/boost/hwlb_test'] = ['db/heat_load_balance.cc', 'test/boost/hwlb_test.cc']

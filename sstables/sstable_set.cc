@@ -11,8 +11,6 @@
 #include "utils/assert.hh"
 #include <seastar/util/defer.hh>
 
-#include <boost/icl/interval_map.hpp>
-
 #include "sstables.hh"
 
 #include "dht/ring_position.hh"
@@ -230,86 +228,53 @@ sstable_set::make_incremental_selector() const {
     return incremental_selector(std::get<0>(std::move(selector)), std::get<1>(selector));
 }
 
-partitioned_sstable_set::interval_type partitioned_sstable_set::make_interval(const schema& s, const dht::partition_range& range) {
-    return interval_type::closed(
-            dht::compatible_ring_position_or_view(s, dht::ring_position_view(range.start()->value())),
-            dht::compatible_ring_position_or_view(s, dht::ring_position_view(range.end()->value())));
-}
+// Tokens are stored in the interval index in their "biased" form, i.e. mapped
+// monotonically into the uint64_t domain. dht::token::minimum() maps to
+// min_biased_token, and the tokens a key can have map to
+// [dht::token::first().unbias(), max_biased_token].
+//
+// dht::token::maximum() maps to max_biased_token, the same value as
+// dht::token::last(). That's harmless: bounds stored in the index always come
+// from sstable keys, so they are never maximum(), and a query bound of
+// maximum() being treated as last() only makes the query interval include the
+// largest token a key can have, which such a bound includes anyway.
+static constexpr uint64_t min_biased_token = 0;
+static constexpr uint64_t max_biased_token = std::numeric_limits<uint64_t>::max();
 
-partitioned_sstable_set::interval_type partitioned_sstable_set::make_interval(const dht::partition_range& range) const {
-    return make_interval(*_schema, range);
-}
-
-partitioned_sstable_set::interval_type partitioned_sstable_set::make_interval(const schema_ptr& s, const sstable& sst) {
-    return interval_type::closed(
-            dht::compatible_ring_position_or_view(s, dht::ring_position(sst.get_first_decorated_key())),
-            dht::compatible_ring_position_or_view(s, dht::ring_position(sst.get_last_decorated_key())));
-}
-
-partitioned_sstable_set::interval_type partitioned_sstable_set::make_interval(const sstable& sst) {
-    return make_interval(_schema, sst);
-}
-
-partitioned_sstable_set::interval_type partitioned_sstable_set::singular(const dht::ring_position& rp) const {
-    // We should use the view here, since this is used for queries.
-    auto rpv = dht::ring_position_view(rp);
-    auto crp = dht::compatible_ring_position_or_view(*_schema, std::move(rpv));
-    return interval_type::closed(crp, crp);
-}
-
-std::pair<partitioned_sstable_set::map_iterator, partitioned_sstable_set::map_iterator>
-partitioned_sstable_set::query(const dht::partition_range& range) const {
-    if (range.start() && range.end()) {
-        return _leveled_sstables.equal_range(make_interval(range));
+static uint64_t to_biased_token(const dht::token& t) noexcept {
+    if (t.is_minimum()) {
+        return min_biased_token;
     }
-    else if (range.start() && !range.end()) {
-        auto start = singular(range.start()->value());
-        return { _leveled_sstables.lower_bound(start), _leveled_sstables.end() };
-    } else if (!range.start() && range.end()) {
-        auto end = singular(range.end()->value());
-        return { _leveled_sstables.begin(), _leveled_sstables.upper_bound(end) };
-    } else {
-        return { _leveled_sstables.begin(), _leveled_sstables.end() };
+    if (t.is_maximum()) {
+        return max_biased_token;
     }
+    return t.unbias();
 }
 
-bool partitioned_sstable_set::store_as_unleveled(const shared_sstable& sst) const {
-    // When a sstable spans most of the entire token range, we'll store it in a
-    // vector, to avoid triggering quadratic space complexity in the interval map,
-    // since many of such sstables would have presence on almost all intervals.
-    static constexpr float unleveled_threshold = 0.85f;
-    auto sst_tr = dht::token_range(sst->get_first_decorated_key().token(), sst->get_last_decorated_key().token());
-    bool as_unleveled = dht::overlap_ratio(_token_range, sst_tr) >= unleveled_threshold;
-
-    utils::get_local_injector().inject("sstable_set_insertion_verification", [&] () {
-        auto& i = utils::get_local_injector();
-        auto table_name = i.inject_parameter<std::string_view>("sstable_set_insertion_verification", "table").value();
-        bool expect_unleveled = i.inject_parameter<int>("sstable_set_insertion_verification", "expect_unleveled").value();
-        if (_schema->cf_name() != table_name) {
-            return;
-        }
-        sstlog.info("SSTable {}, as_unleveled={}, expect_unleveled={}, sst_tr={}, overlap_ratio={}",
-            sst->generation(), as_unleveled, expect_unleveled, sst_tr, dht::overlap_ratio(_token_range, sst_tr));
-        SCYLLA_ASSERT(as_unleveled == expect_unleveled);
-    });
-
-    return as_unleveled;
+static dht::token to_token(uint64_t t) noexcept {
+    if (t == min_biased_token) {
+        return dht::minimum_token();
+    }
+    return dht::token::bias(t);
 }
 
-dht::ring_position partitioned_sstable_set::to_ring_position(const dht::compatible_ring_position_or_view& crp) {
-    // Ring position views, representing bounds of sstable intervals are
-    // guaranteed to have key() != nullptr;
-    const auto& pos = crp.position();
-    return dht::ring_position(pos.token(), *pos.key());
+partitioned_sstable_set::token_interval partitioned_sstable_set::make_interval(const dht::partition_range& range) {
+    // The key and weight components of the bounds are ignored. That can only
+    // widen the interval, and selection is allowed to return a superset.
+    return {
+        range.start() ? to_biased_token(range.start()->value().token()) : min_biased_token,
+        range.end() ? to_biased_token(range.end()->value().token()) : max_biased_token,
+    };
 }
 
-dht::partition_range partitioned_sstable_set::to_partition_range(const interval_type& i) {
-    return dht::partition_range::make(
-            {to_ring_position(i.lower()), boost::icl::is_left_closed(i.bounds())},
-            {to_ring_position(i.upper()), boost::icl::is_right_closed(i.bounds())});
+partitioned_sstable_set::token_interval partitioned_sstable_set::make_interval(const sstable& sst) {
+    return {
+        to_biased_token(sst.get_first_decorated_key().token()),
+        to_biased_token(sst.get_last_decorated_key().token()),
+    };
 }
 
-dht::partition_range partitioned_sstable_set::to_partition_range(const dht::ring_position_view& pos, const interval_type& i) {
+dht::partition_range partitioned_sstable_set::to_partition_range(const dht::ring_position_view& pos, std::optional<biased_token> change) {
     auto lower_bound = [&] {
         if (pos.key()) {
             return dht::partition_range::bound(dht::ring_position(pos.token(), *pos.key()),
@@ -318,14 +283,23 @@ dht::partition_range partitioned_sstable_set::to_partition_range(const dht::ring
             return dht::partition_range::bound(dht::ring_position(pos.token(), pos.get_token_bound()), true);
         }
     }();
-    auto upper_bound = dht::partition_range::bound(to_ring_position(i.lower()), !boost::icl::is_left_closed(i.bounds()));
+    if (!change) {
+        // The selection holds through the end of the ring.
+        return dht::partition_range::make_starting_with(std::move(lower_bound));
+    }
+    // Ends right before the token at which the selection changes, so that the
+    // range doesn't cover any key of that token.
+    auto upper_bound = dht::partition_range::bound(dht::ring_position::starting_at(to_token(*change)), false);
     return dht::partition_range::make(std::move(lower_bound), std::move(upper_bound));
 }
 
-partitioned_sstable_set::partitioned_sstable_set(schema_ptr schema, dht::token_range token_range)
+dht::ring_position_ext partitioned_sstable_set::to_next_position(std::optional<biased_token> change) {
+    return change ? dht::ring_position_ext::starting_at(to_token(*change)) : dht::ring_position_ext::max();
+}
+
+partitioned_sstable_set::partitioned_sstable_set(schema_ptr schema)
         : _schema(std::move(schema))
-        , _all(make_lw_shared<sstable_list>())
-        , _token_range(std::move(token_range)) {
+        , _all(make_lw_shared<sstable_list>()) {
 }
 
 static std::unordered_map<run_id, shared_sstable_run> clone_runs(const std::unordered_map<run_id, shared_sstable_run>& runs) {
@@ -334,28 +308,26 @@ static std::unordered_map<run_id, shared_sstable_run> clone_runs(const std::unor
     }) | std::ranges::to<std::unordered_map<run_id, shared_sstable_run>>();
 }
 
-partitioned_sstable_set::partitioned_sstable_set(schema_ptr schema, const std::vector<shared_sstable>& unleveled_sstables, const interval_map_type& leveled_sstables,
-        const lw_shared_ptr<sstable_list>& all, const std::unordered_map<run_id, shared_sstable_run>& all_runs, dht::token_range token_range, file_size_stats bytes_on_disk)
+partitioned_sstable_set::partitioned_sstable_set(schema_ptr schema, const interval_index_type& sstables,
+        const lw_shared_ptr<sstable_list>& all, const std::unordered_map<run_id, shared_sstable_run>& all_runs, file_size_stats bytes_on_disk)
         : sstable_set_impl(bytes_on_disk)
         , _schema(schema)
-        , _unleveled_sstables(unleveled_sstables)
-        , _leveled_sstables(leveled_sstables)
+        , _sstables(sstables)
         , _all(make_lw_shared<sstable_list>(*all))
-        , _all_runs(clone_runs(all_runs))
-        , _token_range(std::move(token_range)) {
+        , _all_runs(clone_runs(all_runs)) {
 }
 
 std::unique_ptr<sstable_set_impl> partitioned_sstable_set::clone() const {
-    return std::make_unique<partitioned_sstable_set>(_schema, _unleveled_sstables, _leveled_sstables, _all, _all_runs, _token_range, _file_size_stats);
+    return std::make_unique<partitioned_sstable_set>(_schema, _sstables, _all, _all_runs, _file_size_stats);
 }
 
 std::vector<shared_sstable> partitioned_sstable_set::select(const dht::partition_range& range) const {
-    value_set result;
-    for (auto [b, e] = query(range); b != e; ++b) {
-        std::ranges::copy(b->second, std::inserter(result, result.end()));
-    }
-    auto r = _unleveled_sstables;
-    r.insert(r.end(), result.begin(), result.end());
+    std::vector<shared_sstable> r;
+    auto interval = make_interval(range);
+    // An sstable is held by a single entry of the index, so no deduplication
+    // of the result is needed.
+    _sstables.for_each_overlapping(interval.start, interval.end,
+            [&r] (biased_token, biased_token, const shared_sstable& sst) { r.push_back(sst); });
     return r;
 }
 
@@ -412,12 +384,9 @@ bool partitioned_sstable_set::insert(shared_sstable sst) {
     }
     auto undo_all_runs_insert = defer([&] noexcept { _all_runs[sst->run_identifier()]->erase(sst); });
 
-    if (store_as_unleveled(sst)) {
-        _unleveled_sstables.push_back(sst);
-    } else {
-        _leveled_sstables_change_cnt++;
-        _leveled_sstables.add({make_interval(*sst), value_set({sst})});
-    }
+    _change_cnt++;
+    auto interval = make_interval(*sst);
+    _sstables.insert(interval.start, interval.end, sst);
     undo_all_insert.cancel();
     undo_all_runs_insert.cancel();
     return true;
@@ -434,12 +403,9 @@ bool partitioned_sstable_set::erase(shared_sstable sst) {
     if (ret) {
         sub_file_size_stats(sst->get_file_size_stats());
     }
-    if (store_as_unleveled(sst)) {
-        _unleveled_sstables.erase(std::remove(_unleveled_sstables.begin(), _unleveled_sstables.end(), sst), _unleveled_sstables.end());
-    } else {
-        _leveled_sstables_change_cnt++;
-        _leveled_sstables.subtract({make_interval(*sst), value_set({sst})});
-    }
+    _change_cnt++;
+    auto interval = make_interval(*sst);
+    _sstables.erase(interval.start, interval.end, sst);
     return ret;
 }
 
@@ -449,64 +415,41 @@ partitioned_sstable_set::size() const noexcept {
 }
 
 class partitioned_sstable_set::incremental_selector : public incremental_selector_impl {
-    schema_ptr _schema;
-    const std::vector<shared_sstable>& _unleveled_sstables;
-    const interval_map_type& _leveled_sstables;
-    const uint64_t& _leveled_sstables_change_cnt;
-    uint64_t _last_known_leveled_sstables_change_cnt;
-    map_iterator _it;
+    const uint64_t& _change_cnt;
+    uint64_t _last_known_change_cnt;
+    interval_index_type::cursor _cursor;
+    // The position the cursor is at, if it was ever positioned.
+    std::optional<biased_token> _pos;
 private:
-    dht::ring_position_ext next_position(map_iterator it) {
-        if (it == _leveled_sstables.end()) {
-            return dht::ring_position_view::max();
+    // The cursor can only be advanced forward, and is invalidated by a change
+    // to the index, so in either case it has to be positioned afresh.
+    void position_cursor(biased_token tok) {
+        if (_pos && tok >= *_pos && _last_known_change_cnt == _change_cnt) {
+            _cursor.advance_to(tok);
         } else {
-            auto&& next_position = partitioned_sstable_set::to_ring_position(it->first.lower());
-            return dht::ring_position_ext(next_position, dht::ring_position_ext::after_key(!boost::icl::is_left_closed(it->first.bounds())));
+            _cursor.seek(tok);
+            _last_known_change_cnt = _change_cnt;
         }
-    }
-    static bool is_before_interval(const dht::compatible_ring_position_or_view& crp, const interval_type& interval) {
-        if (boost::icl::is_left_closed(interval.bounds())) {
-            return crp < interval.lower();
-        } else {
-            return crp <= interval.lower();
-        }
-    }
-    void maybe_invalidate_iterator(const dht::compatible_ring_position_or_view& crp) {
-        if (_last_known_leveled_sstables_change_cnt != _leveled_sstables_change_cnt) {
-            _it = _leveled_sstables.lower_bound(interval_type::closed(crp, crp));
-            _last_known_leveled_sstables_change_cnt = _leveled_sstables_change_cnt;
-        }
+        _pos = tok;
     }
 public:
-    incremental_selector(schema_ptr schema, const std::vector<shared_sstable>& unleveled_sstables, const interval_map_type& leveled_sstables,
-                         const uint64_t& leveled_sstables_change_cnt)
-        : _schema(std::move(schema))
-        , _unleveled_sstables(unleveled_sstables)
-        , _leveled_sstables(leveled_sstables)
-        , _leveled_sstables_change_cnt(leveled_sstables_change_cnt)
-        , _last_known_leveled_sstables_change_cnt(leveled_sstables_change_cnt)
-        , _it(leveled_sstables.begin()) {
+    incremental_selector(const interval_index_type& sstables, const uint64_t& change_cnt)
+        : _change_cnt(change_cnt)
+        , _last_known_change_cnt(change_cnt)
+        , _cursor(sstables.make_cursor()) {
     }
     virtual std::tuple<dht::partition_range, std::vector<shared_sstable>, dht::ring_position_ext> select(const selector_pos& s) override {
         const dht::ring_position_view& pos = s.pos;
-        auto crp = dht::compatible_ring_position_or_view(*_schema, pos);
-        auto ssts = _unleveled_sstables;
-        using namespace dht;
+        position_cursor(to_biased_token(pos.token()));
 
-        maybe_invalidate_iterator(crp);
+        std::vector<shared_sstable> ssts;
+        std::ranges::copy(_cursor.covering(), std::back_inserter(ssts));
 
-        while (_it != _leveled_sstables.end()) {
-            if (boost::icl::contains(_it->first, crp)) {
-                ssts.insert(ssts.end(), _it->second.begin(), _it->second.end());
-                return std::make_tuple(partitioned_sstable_set::to_partition_range(_it->first), std::move(ssts), next_position(std::next(_it)));
-            }
-            // We don't want to skip current interval if pos lies before it.
-            if (is_before_interval(crp, _it->first)) {
-                return std::make_tuple(partitioned_sstable_set::to_partition_range(pos, _it->first), std::move(ssts), next_position(_it));
-            }
-            _it++;
-        }
-        return std::make_tuple(partition_range::make_open_ended_both_sides(), std::move(ssts), ring_position_view::max());
+        // The sstables covering pos also cover every position up to the one at
+        // which the covering set changes.
+        auto change = _cursor.change_at();
+        return std::make_tuple(partitioned_sstable_set::to_partition_range(pos, change), std::move(ssts),
+                partitioned_sstable_set::to_next_position(change));
     }
 };
 
@@ -770,11 +713,11 @@ std::unique_ptr<position_reader_queue> time_series_sstable_set::make_position_re
 }
 
 sstable_set_impl::selector_and_schema_t partitioned_sstable_set::make_incremental_selector() const {
-    return std::make_tuple(std::make_unique<incremental_selector>(_schema, _unleveled_sstables, _leveled_sstables, _leveled_sstables_change_cnt), std::cref(*_schema));
+    return std::make_tuple(std::make_unique<incremental_selector>(_sstables, _change_cnt), std::cref(*_schema));
 }
 
-sstable_set make_partitioned_sstable_set(schema_ptr schema, dht::token_range token_range) {
-    return sstable_set(std::make_unique<partitioned_sstable_set>(schema, std::move(token_range)));
+sstable_set make_partitioned_sstable_set(schema_ptr schema) {
+    return sstable_set(std::make_unique<partitioned_sstable_set>(schema));
 }
 
 using sstable_reader_factory_type = std::function<mutation_reader(shared_sstable&, const dht::partition_range& pr)>;
