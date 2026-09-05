@@ -91,7 +91,7 @@ static shared_ptr<s3::client> make_proxy_client() {
     return s3::client::make(tests::getenv_safe("PROXY_S3_SERVER_HOST"), make_lw_shared<s3::endpoint_config>(std::move(cfg)), make_test_retry_strategy());
 }
 
-static shared_ptr<s3::client> make_minio_client() {
+static shared_ptr<s3::client> make_s3_client() {
     s3::endpoint_config cfg = {
         .port = std::stoul(tests::getenv_safe("S3_SERVER_PORT_FOR_TEST")),
         .use_https = ::getenv("AWS_DEFAULT_REGION") != nullptr,
@@ -176,7 +176,7 @@ static future<uint32_t> create_file(const std::string& path, size_t file_size) {
 }
 
 /*
- * Tests below expect minio server to be running on localhost
+ * Tests below expect an S3 server to be running on localhost
  * with s3_test_fixture creating per-test buckets for isolation
  */
 
@@ -196,7 +196,7 @@ void client_put_get_object(const client_maker_function& client_maker) {
     testlog.info("Get object stats\n");
     s3::stats st = cln->get_object_stats(name).get();
     BOOST_REQUIRE_EQUAL(st.size, 10);
-    // forgive timezone difference as minio server is GMT by default
+    // forgive timezone difference as the S3 server is GMT by default
     BOOST_REQUIRE(std::difftime(st.last_modified, gc_clock::to_time_t(gc_clock::now())) < 24*3600);
 
     testlog.info("Get object content\n");
@@ -216,8 +216,8 @@ void client_put_get_object(const client_maker_function& client_maker) {
     });
 }
 
-SEASTAR_THREAD_TEST_CASE(test_client_put_get_object_minio) {
-    client_put_get_object(make_minio_client);
+SEASTAR_THREAD_TEST_CASE(test_client_put_get_object_s3) {
+    client_put_get_object(make_s3_client);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_client_put_get_object_proxy) {
@@ -272,16 +272,16 @@ void do_test_client_multipart_upload(const client_maker_function& client_maker, 
     }
 }
 
-SEASTAR_THREAD_TEST_CASE(test_client_multipart_upload_minio) {
-    do_test_client_multipart_upload(make_minio_client, false);
+SEASTAR_THREAD_TEST_CASE(test_client_multipart_upload_s3) {
+    do_test_client_multipart_upload(make_s3_client, false);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_client_multipart_upload_proxy) {
     do_test_client_multipart_upload(make_proxy_client, false);
 }
 
-SEASTAR_THREAD_TEST_CASE(test_client_multipart_copy_upload_minio) {
-    do_test_client_multipart_upload(make_minio_client, true);
+SEASTAR_THREAD_TEST_CASE(test_client_multipart_copy_upload_s3) {
+    do_test_client_multipart_upload(make_s3_client, true);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_client_multipart_copy_upload_proxy) {
@@ -344,24 +344,24 @@ void do_test_download_empty_object(const client_maker_function& client_maker, bo
     BOOST_REQUIRE(in.read().get().empty());
 }
 
-SEASTAR_THREAD_TEST_CASE(test_client_put_empty_object_minio) {
-    do_test_client_put_empty_object(make_minio_client);
+SEASTAR_THREAD_TEST_CASE(test_client_put_empty_object_s3) {
+    do_test_client_put_empty_object(make_s3_client);
 }
 
-SEASTAR_THREAD_TEST_CASE(test_download_empty_object_minio) {
-    do_test_download_empty_object(make_minio_client, false);
+SEASTAR_THREAD_TEST_CASE(test_download_empty_object_s3) {
+    do_test_download_empty_object(make_s3_client, false);
 }
 
-SEASTAR_THREAD_TEST_CASE(test_chunked_download_empty_object_minio) {
-    do_test_download_empty_object(make_minio_client, true);
+SEASTAR_THREAD_TEST_CASE(test_chunked_download_empty_object_s3) {
+    do_test_download_empty_object(make_s3_client, true);
 }
 
-SEASTAR_THREAD_TEST_CASE(test_client_upload_empty_object_minio) {
-    do_test_client_upload_empty_object(make_minio_client, false);
+SEASTAR_THREAD_TEST_CASE(test_client_upload_empty_object_s3) {
+    do_test_client_upload_empty_object(make_s3_client, false);
 }
 
-SEASTAR_THREAD_TEST_CASE(test_client_copy_upload_empty_object_minio) {
-    do_test_client_upload_empty_object(make_minio_client, true);
+SEASTAR_THREAD_TEST_CASE(test_client_copy_upload_empty_object_s3) {
+    do_test_client_upload_empty_object(make_s3_client, true);
 }
 
 using with_remainder_t = bool_class<class with_remainder_tag>;
@@ -404,10 +404,10 @@ void test_client_upload_file(const client_maker_function& client_maker, size_t t
     input.close().get();
 }
 
-SEASTAR_THREAD_TEST_CASE(test_client_upload_file_multi_part_without_remainder_minio) {
+SEASTAR_THREAD_TEST_CASE(test_client_upload_file_multi_part_without_remainder_s3) {
     const size_t part_size = 5_MiB;
     const size_t total_size = 4 * part_size;
-    test_client_upload_file(make_minio_client, total_size);
+    test_client_upload_file(make_s3_client, total_size);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_client_upload_file_multi_part_without_remainder_proxy) {
@@ -416,11 +416,11 @@ SEASTAR_THREAD_TEST_CASE(test_client_upload_file_multi_part_without_remainder_pr
     test_client_upload_file(make_proxy_client, total_size);
 }
 
-SEASTAR_THREAD_TEST_CASE(test_client_upload_file_multi_part_with_remainder_minio) {
+SEASTAR_THREAD_TEST_CASE(test_client_upload_file_multi_part_with_remainder_s3) {
     const size_t part_size = 5_MiB;
     const size_t remainder_size = part_size / 2;
     const size_t total_size = 4 * part_size + remainder_size;
-    test_client_upload_file(make_minio_client, total_size);
+    test_client_upload_file(make_s3_client, total_size);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_client_upload_file_multi_part_with_remainder_proxy) {
@@ -430,10 +430,10 @@ SEASTAR_THREAD_TEST_CASE(test_client_upload_file_multi_part_with_remainder_proxy
     test_client_upload_file(make_proxy_client, total_size);
 }
 
-SEASTAR_THREAD_TEST_CASE(test_client_upload_file_single_part_minio) {
+SEASTAR_THREAD_TEST_CASE(test_client_upload_file_single_part_s3) {
     const size_t part_size = 5_MiB;
     const size_t total_size = part_size / 2;
-    test_client_upload_file(make_minio_client, total_size);
+    test_client_upload_file(make_s3_client, total_size);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_client_upload_file_single_part_proxy) {
@@ -480,8 +480,8 @@ void client_readable_file(const client_maker_function& client_maker) {
     BOOST_REQUIRE_EQUAL(to_sstring(std::move(buf)), sstring("67890ABC"));
 }
 
-SEASTAR_THREAD_TEST_CASE(test_client_readable_file_minio) {
-    client_readable_file(make_minio_client);
+SEASTAR_THREAD_TEST_CASE(test_client_readable_file_s3) {
+    client_readable_file(make_s3_client);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_client_readable_file_proxy) {
@@ -508,8 +508,8 @@ void client_readable_file_stream(const client_maker_function& client_maker) {
     BOOST_REQUIRE_EQUAL(res, sample);
 }
 
-SEASTAR_THREAD_TEST_CASE(test_client_readable_file_stream_minio) {
-    client_readable_file_stream(make_minio_client);
+SEASTAR_THREAD_TEST_CASE(test_client_readable_file_stream_s3) {
+    client_readable_file_stream(make_s3_client);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_client_readable_file_stream_proxy) {
@@ -543,8 +543,8 @@ void client_put_get_tagging(const client_maker_function& client_maker) {
     }
 }
 
-SEASTAR_THREAD_TEST_CASE(test_client_put_get_tagging_minio) {
-    client_put_get_tagging(make_minio_client);
+SEASTAR_THREAD_TEST_CASE(test_client_put_get_tagging_s3) {
+    client_put_get_tagging(make_s3_client);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_client_put_get_tagging_proxy) {
@@ -587,8 +587,8 @@ void client_list_objects(const client_maker_function& client_maker) {
     BOOST_REQUIRE(names.empty());
 }
 
-SEASTAR_THREAD_TEST_CASE(test_client_list_objects_minio) {
-    client_list_objects(make_minio_client);
+SEASTAR_THREAD_TEST_CASE(test_client_list_objects_s3) {
+    client_list_objects(make_s3_client);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_client_list_objects_proxy) {
@@ -611,8 +611,8 @@ void client_list_objects_incomplete(const client_maker_function& client_maker) {
     close_lister.close_now();
 }
 
-SEASTAR_THREAD_TEST_CASE(test_client_list_objects_incomplete_minio) {
-    client_list_objects_incomplete(make_minio_client);
+SEASTAR_THREAD_TEST_CASE(test_client_list_objects_incomplete_s3) {
+    client_list_objects_incomplete(make_s3_client);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_client_list_objects_incomplete_proxy) {
@@ -628,12 +628,12 @@ void client_broken_bucket(const client_maker_function& client_maker) {
     auto close_client = deferred_close(*client);
     auto data = sstring("1234567890ABCDEF").release();
     BOOST_REQUIRE_EXCEPTION(client->put_object(name, std::move(data)).get(), storage_io_error, [](const storage_io_error& e) {
-        return e.code().value() == EIO && std::string(e.what()).contains("Reason: The specified bucket is not valid.");
+        return e.code().value() == ENOENT && std::string(e.what()).contains("Reason: The specified bucket does not exist.");
     });
 }
 
-SEASTAR_THREAD_TEST_CASE(test_client_broken_bucket_minio) {
-    client_broken_bucket(make_minio_client);
+SEASTAR_THREAD_TEST_CASE(test_client_broken_bucket_s3) {
+    client_broken_bucket(make_s3_client);
 }
 
 void client_missing_prefix(const client_maker_function& client_maker) {
@@ -646,8 +646,8 @@ void client_missing_prefix(const client_maker_function& client_maker) {
     });
 }
 
-SEASTAR_THREAD_TEST_CASE(test_client_missing_prefix_minio) {
-    client_missing_prefix(make_minio_client);
+SEASTAR_THREAD_TEST_CASE(test_client_missing_prefix_s3) {
+    client_missing_prefix(make_s3_client);
 }
 
 void client_access_missing_object(const client_maker_function& client_maker) {
@@ -660,13 +660,13 @@ void client_access_missing_object(const client_maker_function& client_maker) {
     });
 }
 
-SEASTAR_THREAD_TEST_CASE(test_client_access_missing_object_minio) {
-    client_access_missing_object(make_minio_client);
+SEASTAR_THREAD_TEST_CASE(test_client_access_missing_object_s3) {
+    client_access_missing_object(make_s3_client);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_object_reupload) {
     // Pay attention, we are reuploading the same file during the test
-    s3_test_fixture guard(make_minio_client);
+    s3_test_fixture guard(make_s3_client);
     auto cln = guard.client();
     const auto name = guard.object_path("testobject");
     constexpr std::string_view content{"1234567890"};
@@ -738,16 +738,16 @@ void test_download_data_source(const client_maker_function& client_maker, bool i
     }
 }
 
-SEASTAR_THREAD_TEST_CASE(test_download_data_source_minio) {
-    test_download_data_source(make_minio_client, false, 128 * 1024);
+SEASTAR_THREAD_TEST_CASE(test_download_data_source_s3) {
+    test_download_data_source(make_s3_client, false, 128 * 1024);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_download_data_source_proxy) {
     test_download_data_source(make_proxy_client, false, 3 * 1024);
 }
 
-SEASTAR_THREAD_TEST_CASE(test_chunked_download_data_source_minio) {
-    test_download_data_source(make_minio_client, true, 128 * 1024);
+SEASTAR_THREAD_TEST_CASE(test_chunked_download_data_source_s3) {
+    test_download_data_source(make_s3_client, true, 128 * 1024);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_chunked_download_data_source_proxy) {
@@ -814,8 +814,8 @@ void test_chunked_download_data_source(const client_maker_function& client_maker
 #endif
 }
 
-SEASTAR_THREAD_TEST_CASE(test_chunked_download_data_source_with_delays_minio) {
-    test_chunked_download_data_source(make_minio_client, 20_MiB);
+SEASTAR_THREAD_TEST_CASE(test_chunked_download_data_source_with_delays_s3) {
+    test_chunked_download_data_source(make_s3_client, 20_MiB);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_chunked_download_data_source_with_delays_proxy) {
@@ -853,11 +853,11 @@ void test_object_copy(const client_maker_function& client_maker, size_t chunk_si
 }
 
 SEASTAR_THREAD_TEST_CASE(test_small_object_copy) {
-    test_object_copy(make_minio_client, 1000, 2);
+    test_object_copy(make_s3_client, 1000, 2);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_large_object_copy) {
-    test_object_copy(make_minio_client, 1_MiB, 6);
+    test_object_copy(make_s3_client, 1_MiB, 6);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_small_object_copy_proxy) {

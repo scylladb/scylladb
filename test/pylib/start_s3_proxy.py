@@ -15,12 +15,12 @@ async def run():
     parser.add_argument('--log-level', default=logging.WARNING,
                         choices=logging.getLevelNamesMapping().keys(),
                         help="Set log level")
-    parser.add_argument('--minio-uri', default="http://127.0.0.1:9000")
+    parser.add_argument('--s3-uri', default="http://127.0.0.1:9090")
     parser.add_argument('--max-retries', type=int, default=5)
     parser.add_argument('--rnd-seed', type=int, default=int(time.time()))
     args = parser.parse_args()
     logging.basicConfig(level=args.log_level)
-    server = S3ProxyServer(args.host, args.port, args.minio_uri, args.max_retries, args.rnd_seed,
+    server = S3ProxyServer(args.host, args.port, args.s3_uri, args.max_retries, args.rnd_seed,
                            logging.getLogger('s3-proxy'))
 
     print('Starting S3 proxy server')

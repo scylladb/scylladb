@@ -34,7 +34,7 @@ from _pytest.junitxml import xml_key
 from test import ALL_MODES, DEBUG_MODES, TOP_SRC_DIR, HOST_ID, path_to
 from test.pylib.artifact_registry import ArtifactRegistry as artifacts
 from test.pylib.ldap_server import start_ldap
-from test.pylib.minio_server import MinioServer
+from test.pylib.s3mock_server import S3MockServer
 from test.pylib.resource_gather import setup_cgroup, setup_worker_cgroup, get_resource_gather, SystemResourceMonitor, \
     SCYLLA_TEST_CGROUP_BASE_ENV, gather_host_info
 from test.pylib.db.writer import SQLiteWriter, DEFAULT_DB_NAME, HOST_INFO_TABLE
@@ -869,16 +869,15 @@ async def start_3rd_party_services(tempdir_base: pathlib.Path, toxiproxy_byte_li
         finalize()
 
     artifacts.add_exit_artifact(make_async_finalize)
-    ms = MinioServer(
-        tempdir_base=str(tempdir_base),
-        address=await hosts.lease_host(),
+    s3_server = S3MockServer(
+        log_dir=str(tempdir_base),
         logger=LogPrefixAdapter(
-            logger=_make_service_logger("minio", tempdir_base / "minio.log"),
-            extra={"prefix": "minio"},
+            logger=_make_service_logger("s3mock", tempdir_base / "s3mock.log"),
+            extra={"prefix": "s3mock"},
         ),
     )
-    await ms.start()
-    artifacts.add_exit_artifact(ms.stop)
+    await s3_server.start()
+    artifacts.add_exit_artifact(s3_server.stop)
 
     mock_s3_server = MockS3Server(
         host=await hosts.lease_host(),
@@ -891,11 +890,10 @@ async def start_3rd_party_services(tempdir_base: pathlib.Path, toxiproxy_byte_li
     await mock_s3_server.start()
     artifacts.add_exit_artifact(mock_s3_server.stop)
 
-    minio_uri = f"http://{os.environ[ms.ENV_ADDRESS]}:{os.environ[ms.ENV_PORT]}"
     proxy_s3_server = S3ProxyServer(
         host=await hosts.lease_host(),
         port=9002,
-        minio_uri=minio_uri,
+        s3_uri=s3_server.uri,
         max_retries=3,
         seed=int(time.time()),
         logger=LogPrefixAdapter(

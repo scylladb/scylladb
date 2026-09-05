@@ -15,9 +15,8 @@ import logging
 import re
 import uuid
 
-from test.pylib.minio_server import MinioServer
+from test.pylib.s3mock_server import S3MockServer, create_conf
 from test.pylib.dockerized_service import DockerizedServer
-from test.pylib.host_registry import HostRegistry
 from operator import attrgetter
 
 import pytest
@@ -74,7 +73,7 @@ class S3Server:
         return 'S3'
 
     def create_endpoint_conf(self):
-        return MinioServer.create_conf(self.address, self.region)
+        return create_conf(self.address, self.region)
 
     def get_resource(self):
         """Creates boto3.resource object that can be used to communicate to the given server"""
@@ -125,49 +124,31 @@ class S3Server:
 S3_Server = S3Server
 
 
-class MinioWrapper(S3Server):
+class S3MockWrapper(S3Server):
     def __init__(self, tempdir, log_dir=None):
-        self.host_registry = HostRegistry()
-        self.leased_host = None
         self.server = None
         self.log_dir = log_dir
         # Fields are fully initialized by start(); base-class values are
         # placeholders until then.
-        super().__init__(tempdir, '', 0, '', '', MinioServer.DEFAULT_REGION, '')
-
-    def create_endpoint_conf(self):
-        return MinioServer.create_conf(self.address, self.region)
+        super().__init__(tempdir, '', 0, '', '', S3MockServer.DEFAULT_REGION, '')
 
     async def start(self):
-        self.leased_host = await self.host_registry.lease_host()
-        self.server = MinioServer(self.tempdir,
-                                  self.leased_host,
-                                  logging.getLogger('minio'),
-                                  log_dir=self.log_dir)
-        try:
-            await self.server.start()
-        except Exception:
-            await self.host_registry.release_host(self.leased_host)
-            self.leased_host = None
-            raise
-        self.ip = self.server.address
-        self.port = self.server.port
-        self.address = f'http://{self.ip}:{self.port}'
-        self.acc_key = self.server.access_key
-        self.secret_key = self.server.secret_key
-        self.bucket_name = self.server.bucket_name
+        server = S3MockServer(self.log_dir, logging.getLogger('s3mock'))
+        await server.start()
+        self.server = server
+        self.ip = server.address
+        self.port = server.port
+        self.address = server.uri
+        self.acc_key = server.access_key
+        self.secret_key = server.secret_key
+        self.bucket_name = server.bucket_name
 
     async def stop(self):
-        try:
-            if self.server is not None:
-                # Dropped only on success, so that a retry still has a
-                # server to stop.
-                await self.server.stop()
-                self.server = None
-        finally:
-            if self.leased_host is not None:
-                await self.host_registry.release_host(self.leased_host)
-                self.leased_host = None
+        if self.server is not None:
+            # Dropped only on success, so that a retry still has a
+            # server to stop.
+            await self.server.stop()
+            self.server = None
 
 
 class GSFront:
@@ -338,12 +319,12 @@ def create_s3_server(pytestconfig, tmpdir, log_dir=None):
     aws_region = pytestconfig.getoption('--aws-region')
     s3_server_bucket = pytestconfig.getoption('--s3-server-bucket')
 
-    default_address = os.environ.get(MinioServer.ENV_ADDRESS)
-    default_port = os.environ.get(MinioServer.ENV_PORT)
-    default_acc_key = os.environ.get(MinioServer.ENV_ACCESS_KEY)
-    default_secret_key = os.environ.get(MinioServer.ENV_SECRET_KEY)
-    default_region = MinioServer.DEFAULT_REGION
-    default_bucket = os.environ.get(MinioServer.ENV_BUCKET)
+    default_address = os.environ.get(S3MockServer.ENV_ADDRESS)
+    default_port = os.environ.get(S3MockServer.ENV_PORT)
+    default_acc_key = os.environ.get(S3MockServer.ENV_ACCESS_KEY)
+    default_secret_key = os.environ.get(S3MockServer.ENV_SECRET_KEY)
+    default_region = S3MockServer.DEFAULT_REGION
+    default_bucket = os.environ.get(S3MockServer.ENV_BUCKET)
 
     # Note: bucket_name passed here is overwritten by create_test_bucket() when
     # using the s3_server fixture. The --s3-server-bucket option currently only
@@ -366,7 +347,7 @@ def create_s3_server(pytestconfig, tmpdir, log_dir=None):
                           default_region,
                           default_bucket)
     else:
-        server = MinioWrapper(tempdir, log_dir)
+        server = S3MockWrapper(tempdir, log_dir)
     return server
 
 

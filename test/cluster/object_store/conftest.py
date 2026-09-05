@@ -20,7 +20,7 @@ from test.pylib.object_storage import (
     GSServer,
     S3Server,
     S3_Server,
-    MinioWrapper,
+    S3MockWrapper,
 )
 
 

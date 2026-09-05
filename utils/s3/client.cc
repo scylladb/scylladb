@@ -617,19 +617,6 @@ future<bool> client::object_exists(sstring object_name, seastar::abort_source* a
     co_return true;
 }
 
-static rapidxml::xml_node<>* first_node_of(rapidxml::xml_node<>* root,
-                                           std::initializer_list<std::string_view> names) {
-    SCYLLA_ASSERT(root);
-    auto* node = root;
-    for (auto name : names) {
-        node = node->first_node(name.data(), name.size());
-        if (!node) {
-            throw std::runtime_error(fmt::format("'{}' is not found", name));
-        }
-    }
-    return node;
-}
-
 static tag_set parse_tagging(sstring& body) {
     auto doc = std::make_unique<rapidxml::xml_document<>>();
     try {
@@ -639,8 +626,22 @@ static tag_set parse_tagging(sstring& body) {
         throw std::runtime_error("cannot parse tagging response");
     }
     tag_set tags;
-    auto tagset_node = first_node_of(doc.get(), {"Tagging", "TagSet"});
-    for (auto tag_node = tagset_node->first_node("Tag"); tag_node; tag_node = tag_node->next_sibling()) {
+    // S3 always answers with a <Tagging> document, carrying an empty <TagSet>
+    // when the object has no tags, but Adobe S3Mock - which the tests run
+    // against - sends back an empty body instead, see
+    // https://github.com/adobe/S3Mock/issues/3149, so an untagged object would
+    // fail here rather than report no tags. Either way, "no tag set in the
+    // response" is not worth an error: the answer we would give for an empty
+    // one is the same.
+    auto tagging_node = doc->first_node("Tagging");
+    if (!tagging_node) {
+        return tags;
+    }
+    auto tagset_node = tagging_node->first_node("TagSet");
+    if (!tagset_node) {
+        return tags;
+    }
+    for (auto tag_node = tagset_node->first_node("Tag"); tag_node; tag_node = tag_node->next_sibling("Tag")) {
         // See https://docs.aws.amazon.com/AmazonS3/latest/API/API_Tag.html,
         // both "Key" and "Value" are required, but we still need to check them.
         auto key = tag_node->first_node("Key");
@@ -2102,8 +2103,17 @@ static std::pair<std::vector<sstring>, sstring> parse_list_of_objects(sstring bo
 
     std::vector<sstring> names;
     auto root_node = doc->first_node("ListBucketResult");
-    for (auto contents = root_node->first_node("Contents"); contents; contents = contents->next_sibling()) {
+    if (!root_node) {
+        throw std::runtime_error("'ListBucketResult' node is missing in list-objects-v2 response");
+    }
+    // Walk the "Contents" siblings by name: the order of the elements below
+    // "ListBucketResult" is not specified, and servers do put other elements
+    // (e.g. "IsTruncated", "KeyCount", "Name") after the last "Contents".
+    for (auto contents = root_node->first_node("Contents"); contents; contents = contents->next_sibling("Contents")) {
         auto key = contents->first_node("Key");
+        if (!key) {
+            throw std::runtime_error("'Key' node is missing in 'Contents' of list-objects-v2 response");
+        }
         names.push_back(key->value());
     }
 
