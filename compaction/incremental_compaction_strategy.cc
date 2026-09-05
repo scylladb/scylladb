@@ -172,16 +172,38 @@ bool incremental_compaction_strategy::is_any_bucket_interesting(const std::vecto
     });
 }
 
+// The run-level counterpart of the unit problem documented in size_tiered_compaction_strategy.cc:
+// `data_size()` means uncompressed bytes for a compressed native sstable and file bytes for a `pq`
+// one, so in a set holding both, a Parquet run reports a length 5-10x below its true peer and
+// buckets several tiers too low -- which schedules repeated rewrites of the format that is most
+// expensive to rewrite. All-native sets keep using `data_size()`, so no existing table's bucketing
+// moves; mixed sets compare what is on disk, which is one unit for both.
+static bool mixed_formats(const std::vector<sstables::frozen_sstable_run>& runs) {
+    bool any_pq = false, any_other = false;
+    for (auto& r_ptr : runs) {
+        for (auto& sst : r_ptr->all()) {
+            (sst->get_version() == sstables::sstable_version_types::pq ? any_pq : any_other) = true;
+        }
+    }
+    return any_pq && any_other;
+}
+
+static uint64_t bucketing_size(const sstables::sstable_run& r, bool use_ondisk) {
+    return use_ondisk ? r.ondisk_data_size() : r.data_size();
+}
+
 std::vector<sstable_run_and_length>
 incremental_compaction_strategy::create_run_and_length_pairs(const std::vector<sstables::frozen_sstable_run>& runs) {
 
     std::vector<sstable_run_and_length> run_length_pairs;
     run_length_pairs.reserve(runs.size());
 
+    const bool use_ondisk = mixed_formats(runs);
     for(auto& r_ptr : runs) {
         auto& r = *r_ptr;
-        assert(r.data_size() != 0);
-        run_length_pairs.emplace_back(r_ptr, r.data_size());
+        auto size = bucketing_size(r, use_ondisk);
+        assert(size != 0);
+        run_length_pairs.emplace_back(r_ptr, size);
     }
 
     return run_length_pairs;
@@ -190,6 +212,8 @@ incremental_compaction_strategy::create_run_and_length_pairs(const std::vector<s
 std::vector<std::vector<sstables::frozen_sstable_run>>
 incremental_compaction_strategy::get_buckets(const std::vector<sstables::frozen_sstable_run>& runs, const incremental_compaction_strategy_options& options) {
     auto sorted_runs = create_run_and_length_pairs(runs);
+    // The re-read below has to be in the same unit the pairs above were built in.
+    const bool use_ondisk = mixed_formats(runs);
 
     std::sort(sorted_runs.begin(), sorted_runs.end(), [] (sstable_run_and_length& i, sstable_run_and_length& j) {
         return i.second < j.second;
@@ -219,7 +243,7 @@ incremental_compaction_strategy::get_buckets(const std::vector<sstables::frozen_
                 auto& bucket = bucket_list.back();
                 auto total_size = bucket.size() * bucket_average_size;
                 auto new_average_size = (total_size + size) / (bucket.size() + 1);
-                auto smallest_run_in_bucket = bucket[0]->data_size();
+                auto smallest_run_in_bucket = bucketing_size(*bucket[0], use_ondisk);
 
                 // SSTables are added in increasing size order so the bucket's
                 // average might drift upwards.
@@ -356,12 +380,16 @@ incremental_compaction_strategy::get_sstables_for_compaction(compaction_group_vi
 
     if (is_any_bucket_interesting(buckets, min_threshold)) {
         std::vector<sstables::frozen_sstable_run> most_interesting = most_interesting_bucket(std::move(buckets), min_threshold, max_threshold);
-        co_return compaction_descriptor(runs_to_sstables(std::move(most_interesting)), 0, _fragment_size);
+        auto desc = compaction_descriptor(runs_to_sstables(std::move(most_interesting)), 0, _fragment_size);
+        desc.parquet_ctx.bottom_tier = inputs_are_bottom_tier(desc.sstables, runs_to_sstables(candidates));
+        co_return desc;
     }
     // If we are not enforcing min_threshold explicitly, try any pair of sstable runs in the same tier.
     if (!t.compaction_enforce_min_threshold() && is_any_bucket_interesting(buckets, 2)) {
         std::vector<sstables::frozen_sstable_run> most_interesting = most_interesting_bucket(std::move(buckets), 2, max_threshold);
-        co_return compaction_descriptor(runs_to_sstables(std::move(most_interesting)), 0, _fragment_size);
+        auto desc = compaction_descriptor(runs_to_sstables(std::move(most_interesting)), 0, _fragment_size);
+        desc.parquet_ctx.bottom_tier = inputs_are_bottom_tier(desc.sstables, runs_to_sstables(candidates));
+        co_return desc;
     }
 
     // The cross-tier behavior is only triggered once we're done with all the pending same-tier compaction to

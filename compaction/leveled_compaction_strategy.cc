@@ -35,6 +35,17 @@ future<compaction_descriptor> leveled_compaction_strategy::get_sstables_for_comp
     if (!candidate.sstables.empty()) {
         auto main_set = co_await table_s.main_sstable_set();
         leveled_manifest::logger.debug("leveled: Compacting {} out of {} sstables", candidate.sstables.size(), main_set->size());
+        // C1: under LCS the bottom tier is simply the deepest level that currently
+        // holds data. An output landing there will not be pushed down again until
+        // the table grows enough to open a new level.
+        int deepest = 0;
+        for (int level = int(manifest.get_level_count()); level >= 0; --level) {
+            if (!manifest.get_level(level).empty()) {
+                deepest = level;
+                break;
+            }
+        }
+        candidate.parquet_ctx.bottom_tier = candidate.level >= deepest;
         co_return candidate;
     }
 

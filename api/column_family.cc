@@ -1069,6 +1069,52 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
         });
     });
 
+    // How much of this table is already Parquet. A conversion is gradual -- flushes stay native
+    // and only compaction converts -- so "is this table converted yet?" is a question an operator
+    // will ask repeatedly, and until now the only way to answer it was to list sstable filenames
+    // and read their version prefixes.
+    cf::get_storage_format_breakdown.set(r, [&db](std::unique_ptr<http::request> req) {
+        // [native_bytes, parquet_bytes, native_sstables, parquet_sstables]
+        using tally = std::array<uint64_t, 4>;
+        return map_reduce_cf_raw(db, req->get_path_param("name"), tally{},
+                [] (replica::column_family& cf) {
+            tally a{};
+            for (auto&& sst : *cf.get_sstables()) {
+                const bool pq = sst->get_version() == sstables::sstable_version_types::pq;
+                // ondisk_data_size(), not data_size(): the latter reports the *uncompressed*
+                // length for a compressed native sstable and the file size for a `pq` one, so
+                // summing it would compare two different units in exactly the table where both
+                // formats coexist.
+                a[pq ? 1 : 0] += sst->ondisk_data_size();
+                a[pq ? 3 : 2] += 1;
+            }
+            return a;
+        }, [] (tally a, const tally& b) {
+            for (size_t i = 0; i < a.size(); ++i) { a[i] += b[i]; }
+            return a;
+        }).then([] (tally a) {
+            const uint64_t bytes = a[0] + a[1];
+            std::vector<cf::mapper> out;
+            auto put = [&out] (sstring k, sstring v) {
+                cf::mapper m;
+                m.key = std::move(k);
+                m.value = std::move(v);
+                out.push_back(std::move(m));
+            };
+            put("native_bytes", fmt::to_string(a[0]));
+            put("parquet_bytes", fmt::to_string(a[1]));
+            put("native_sstables", fmt::to_string(a[2]));
+            put("parquet_sstables", fmt::to_string(a[3]));
+            // Reported rather than left to the caller, because the obvious way to compute it --
+            // dividing the byte columns -- is only meaningful because both are on-disk sizes.
+            put("parquet_fraction",
+                bytes ? fmt::format("{:.4f}", double(a[1]) / double(bytes)) : "0");
+            put("converged", (a[2] == 0 && a[3] > 0) ? "parquet"
+                             : (a[3] == 0 ? "native" : "mixed"));
+            return make_ready_future<json::json_return_type>(std::move(out));
+        });
+    });
+
     cf::get_sstables_for_key.set(r, [&db](std::unique_ptr<http::request> req) {
         auto key = req->get_query_param("key");
         auto uuid = parse_table_info(req->get_path_param("name"), db.local()).id;

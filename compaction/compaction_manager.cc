@@ -31,6 +31,8 @@
 #include "tombstone_gc-internals.hh"
 #include <cmath>
 #include "utils/labels.hh"
+#include "sstables/parquet/tiering_context.hh"
+#include "sstables/parquet/gain_estimator.hh"
 
 static logging::logger cmlog("compaction_manager");
 using namespace std::chrono_literals;
@@ -411,9 +413,93 @@ future<compaction_result> compaction_task_executor::compact_sstables(compaction_
     if (can_purge) {
         descriptor.enable_garbage_collection(co_await sstable_set_for_tombstone_gc(t));
     }
-    descriptor.creator = [&t] (shard_id) {
+    // Output format (design doc sections 6.3 and 6.4). Decided here rather than
+    // inside the creator because the creator is synchronous and C6 -- the only
+    // criterion that is measured rather than derived -- needs to read data.
+    bool write_parquet = false;
+    switch (t.schema()->storage_format()) {
+    case storage_format_type::sstable:
+        break;
+    case storage_format_type::parquet:
+        // An explicit opt-in is taken at face value. The criteria exist to make the
+        // automatic choice; overruling an operator who named the format would make
+        // the property mean nothing. Converting back is symmetric: set the property
+        // to 'sstable' and the next compaction falls through to the branch above.
+        write_parquet = true;
+        break;
+    case storage_format_type::hybrid: {
+        // TWCS makes the hybrid decision unnecessary rather than merely easy. The criteria exist to
+        // keep Parquet out of the levels that get rewritten -- re-encoding and recompressing a
+        // Parquet run is the expensive thing this format does -- and TWCS has no such levels: a
+        // window is compacted and then closed. So under TWCS, hybrid means the same thing as
+        // 'parquet', and the whole table is Parquet (design doc 6.4).
+        //
+        // Skipping the policy also skips C6's data sample, which is by far the most expensive part
+        // of the decision. It also skips the check that catches a schema Parquet stores *worse*
+        // than the row format; `storage_format = 'sstable'` is the escape hatch for that.
+        if (sstables::parquet::writes_parquet_unconditionally(*t.schema())) {
+            write_parquet = true;
+            cmlog.debug("{}.{}: hybrid storage_format resolves to parquet unconditionally under {}",
+                        t.schema()->ks_name(), t.schema()->cf_name(),
+                        compaction::compaction_strategy::name(t.schema()->compaction_strategy()));
+            break;
+        }
+        auto ctx = descriptor.parquet_ctx;
+        // Two evaluations of the same policy. The first supplies a fake passing gain
+        // so that only C1-C5 are exercised: there is no point sampling data for a
+        // candidate that is in the wrong tier or too small, and the sample is by far
+        // the most expensive part of this decision.
+        auto probe = ctx;
+        probe.predicted_gain = 1.0;
+        if (sstables::parquet::decide_output_format(descriptor.sstables, *t.schema(), probe).parquet()) {
+            ctx.predicted_gain = co_await sstables::parquet::estimate_parquet_gain(
+                    t.schema(), t.make_compaction_reader_permit(), descriptor.sstables,
+                    sstables::parquet::parquet_parameters(t.schema()->parquet_options()).config());
+        }
+        const auto decision = sstables::parquet::decide_output_format(
+                descriptor.sstables, *t.schema(), ctx);
+        write_parquet = decision.parquet();
+        // Always logged, both ways. An operator who set 'hybrid' and sees nothing
+        // convert has no other way to find out which criterion said no.
+        cmlog.info("{}.{}: hybrid storage_format chose {} for this compaction: {}",
+                   t.schema()->ks_name(), t.schema()->cf_name(),
+                   write_parquet ? "parquet" : "native", decision.reason);
+        break;
+    }
+    }
+
+    // Only ICS and TWCS are in scope for the Parquet format (design doc section 6.4): ICS because
+    // run fragmentation bounds the rewrite unit that Parquet makes expensive, TWCS because a closed
+    // window answers C1 exactly and never needs rewriting at all. STCS and LCS will produce correct
+    // Parquet -- nothing here is format-specific -- but neither is measured or validated, and STCS
+    // in particular rewrites a whole size tier, which is the access pattern this format handles
+    // worst. Say so once rather than either refusing (the output would be correct) or staying quiet
+    // (the operator would have no way to learn they are outside what was tested).
+    if (write_parquet) {
+        switch (t.schema()->compaction_strategy()) {
+        case compaction::compaction_strategy_type::incremental:
+        case compaction::compaction_strategy_type::time_window:
+            break;
+        default:
+            static thread_local seastar::logger::rate_limit unsupported_strategy_rl{std::chrono::minutes(10)};
+            cmlog.log(log_level::warn, unsupported_strategy_rl,
+                      "{}.{}: writing Parquet under {} compaction. Only IncrementalCompactionStrategy "
+                      "and TimeWindowCompactionStrategy are supported for the parquet storage format; "
+                      "TWCS is recommended when the clustering key is a timestamp. The output is "
+                      "valid, but this combination is not validated.",
+                      t.schema()->ks_name(), t.schema()->cf_name(),
+                      compaction::compaction_strategy::name(t.schema()->compaction_strategy()));
+            break;
+        }
+    }
+
+    descriptor.creator = [&t, write_parquet] (shard_id) {
         // All compaction types going through this path will work on normal input sstables only.
         // Off-strategy, for example, waits until the sstables move out of staging state.
+        if (write_parquet) {
+            return t.make_sstable(sstables::sstable_state::normal,
+                                  sstables::sstable_version_types::pq);
+        }
         return t.make_sstable(sstables::sstable_state::normal);
     };
     descriptor.replacer = [this, &t, &on_replace, offstrategy] (compaction_completion_desc desc) {
@@ -2528,6 +2614,18 @@ compaction_manager::maybe_split_new_sstable(sstables::shared_sstable sst, compac
         // NOTE: preserves the sstable state, since we want the output to be on the same state as the original.
         // For example, if base table has views, it's important that sstable produced by repair will be
         // in the staging state.
+        //
+        // The format is preserved for the same reason the state is: a split rewrites data that is
+        // already in place, so producing native output from a `pq` input would be a silent
+        // downgrade of a table that asked for Parquet.
+        // Three ways the output must be pq: the table declared 'parquet'; the *input* is already
+        // pq (a hybrid table's converted bottom tier -- rewriting it native would silently undo
+        // the conversion); or the table is hybrid-on-TWCS, which writes Parquet unconditionally.
+        if (t.schema()->storage_format() == storage_format_type::parquet
+                || sst->get_version() == sstables::sstable_version_types::pq
+                || sstables::parquet::writes_parquet_unconditionally(*t.schema())) {
+            return t.make_sstable(sst->state(), sstables::sstable_version_types::pq);
+        }
         return t.make_sstable(sst->state());
     };
     desc.replacer = [&] (compaction_completion_desc d) {

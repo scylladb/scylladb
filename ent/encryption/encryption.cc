@@ -45,6 +45,7 @@
 #include "gcp_host.hh"
 #include "azure_key_provider.hh"
 #include "azure_host.hh"
+#include "parquet_key_source.hh"
 #include "bytes.hh"
 #include "utils/class_registrator.hh"
 #include "cql3/query_processor.hh"
@@ -1028,6 +1029,12 @@ future<seastar::shared_ptr<encryption_context>> register_extensions(const db::co
         return encryption_schema_extension::parse(*ctxt, std::move(v));
     });
     exts.add_sstable_file_io_extension(encryption_attribute, std::make_unique<encryption_file_io_extension>(ctxt));
+    // Parquet Modular Encryption takes its keys from the same providers, but deliberately not
+    // from the same schema property: `scylla_encryption_options` triggers the file-io extension
+    // just registered, which encrypts the entire Data component and hands out a file no external
+    // reader can open. The `parquet` property selects encryption *inside* the format instead, and
+    // reaches the providers through here. Installed before anything can open or write an sstable.
+    register_parquet_key_source(ctxt);
     std::exception_ptr p;
     try {
         auto maybe_get_options = [&](const utils::config_file::string_map& map, const sstring& what) -> std::optional<options> {

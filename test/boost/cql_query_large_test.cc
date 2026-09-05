@@ -16,6 +16,7 @@
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include "test/lib/cql_test_env.hh"
+#include "sstables/parquet/footer_cache.hh"
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/test_utils.hh"
 
@@ -147,6 +148,66 @@ SEASTAR_THREAD_TEST_CASE(test_large_data) {
     }, cfg).get();
 }
 
+// The same end-to-end check as test_large_data, for a `storage_format =
+// 'parquet'` table.
+//
+// This exists because the unit-level assertion is much weaker than it looks. The
+// pq writer used to pass std::nullopt for all three large-data arguments of
+// write_scylla_metadata(), so system.large_partitions / large_rows / large_cells
+// were silently empty for every pq table -- and the failure mode was that the
+// table looked healthy, not that anything errored. Asserting that the metadata
+// component exists does not catch a regression in which the records are written
+// but the virtual tables cannot read them, so this asserts on rows coming back
+// from a query.
+//
+// The expected values are deliberately identical to the mx case even though the
+// sizes are measured differently (pq reports a logical size, mx an on-disk one --
+// see the note in sstables/parquet/writer_impl.hh). A 1 MB blob dominates both.
+SEASTAR_THREAD_TEST_CASE(test_large_data_parquet) {
+    auto cfg = make_shared<db::config>();
+    cfg->compaction_large_row_warning_threshold_mb(1);
+    cfg->compaction_large_cell_warning_threshold_mb(1);
+    cfg->compaction_large_partition_warning_threshold_mb(1);
+    do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("create table tbl (a int, b text, primary key (a)) "
+                      "with storage_format = 'parquet'").get();
+        sstring blob(1024*1024, 'x');
+        e.execute_cql("insert into tbl (a, b) values (42, 'foo');").get();
+        e.execute_cql("insert into tbl (a, b) values (44, '" + blob + "');").get();
+        flush(e);
+
+        // Only the large row, and it is the one keyed 44.
+        shared_ptr<cql_transport::messages::result_message> msg = e.execute_cql(
+                "select partition_key, row_size from system.large_rows "
+                "where table_name = 'tbl' allow filtering;").get();
+        auto res = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
+        auto rows = res->rs().result_set().rows();
+        BOOST_REQUIRE_EQUAL(rows.size(), 1);
+        auto row0 = rows[0];
+        BOOST_REQUIRE_EQUAL(row0.size(), 3);
+        BOOST_REQUIRE_EQUAL(to_bytes(*row0[0]), "44");
+        BOOST_REQUIRE_EQUAL(to_bytes(*row0[2]), "tbl");
+        auto row_size_bytes = *row0[1];
+        BOOST_REQUIRE_EQUAL(row_size_bytes.size(), 8);
+        long row_size = read_be<long>(reinterpret_cast<const char*>(&row_size_bytes[0]));
+        BOOST_REQUIRE(row_size > 1024*1024 && row_size < 1025*1024);
+
+        assert_that(e.execute_cql("select partition_key, column_name from system.large_cells where table_name = 'tbl' allow filtering;").get())
+            .is_rows()
+            .with_size(1)
+            .with_row({"44", "b", "tbl"});
+
+        assert_that(e.execute_cql("select partition_key, rows from system.large_partitions where table_name = 'tbl' allow filtering;").get())
+            .is_rows()
+            .with_size(1)
+            .with_row({ { utf8_type->decompose("44") },
+                        { long_type->decompose(1L) },
+                        { utf8_type->decompose("tbl") } });
+
+        return make_ready_future<>();
+    }, cfg).get();
+}
+
 SEASTAR_THREAD_TEST_CASE(test_large_row_count_warning) {
     auto cfg = make_shared<db::config>();
     cfg->compaction_rows_count_warning_threshold(10);
@@ -267,3 +328,152 @@ SEASTAR_TEST_CASE(test_insert_large_collection_values) {
 }
 
 BOOST_AUTO_TEST_SUITE_END()
+
+// `SELECT ... BYPASS CACHE` on a parquet table returns the same answers with projection pushdown as
+// without it.
+//
+// This is the end-to-end guard for design doc 10.47. The unit tests for projection set
+// may_project_columns on the slice directly, which proves the *reader* honours it and proves nothing
+// about the wiring: the permission is derived replica-side in table::query(), deliberately, because
+// putting it in the read command would make enum_set::from_mask() throw on an older replica during a
+// rolling upgrade. Nothing below sets the option, so if that derivation is wrong -- or if it fires
+// somewhere it should not -- this is what notices.
+//
+// Compares against the same table declared with the row format, because the interesting failure is
+// not "an error" but "a plausible wrong answer": a dropped static, a missing row, or a null where a
+// value should be.
+SEASTAR_THREAD_TEST_CASE(test_parquet_bypass_cache_projection_matches_row_format) {
+    do_with_cql_env_thread([](cql_test_env& e) {
+        for (const char* fmt : {"sstable", "parquet"}) {
+            const sstring t = sstring("t_") + fmt;
+            e.execute_cql(seastar::format(
+                    "create table {} (pk int, ck int, st int static, a int, b text, c double,"
+                    " primary key (pk, ck)) with storage_format = '{}'", t, fmt)).get();
+            e.execute_cql(seastar::format(
+                    "insert into {} (pk, st) values (1, 7)", t)).get();
+            for (int i = 0; i < 5; ++i) {
+                e.execute_cql(seastar::format(
+                        "insert into {} (pk, ck, a, b, c) values (1, {}, {}, 'v{}', {}.5)",
+                        t, i, i * 10, i, i)).get();
+            }
+            // A row created by UPDATE: no row marker, and only `b` set. Reading `a` must still
+            // return this row, with a null -- which is the case that would break if projecting
+            // away `b` lost the row's existence.
+            e.execute_cql(seastar::format("update {} set b = 'only-b' where pk = 1 and ck = 99",
+                                          t)).get();
+            // A deleted cell must keep shadowing rather than reappearing.
+            e.execute_cql(seastar::format("delete c from {} where pk = 1 and ck = 2", t)).get();
+            // Flushed inline rather than through this file's flush() helper, which the compiler
+            // resolves to ::fflush from here.
+            e.db().invoke_on_all([] (replica::database& dbi) {
+                return dbi.flush_all_memtables();
+            }).get();
+        }
+
+        auto rows_of = [&] (const sstring& cql) {
+            auto msg = e.execute_cql(cql).get();
+            auto res = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
+            BOOST_REQUIRE(res);
+            std::vector<std::vector<std::optional<bytes>>> out;
+            for (const auto& r : res->rs().result_set().rows()) {
+                std::vector<std::optional<bytes>> row;
+                for (const auto& cell : r) {
+                    row.push_back(cell ? std::optional<bytes>(to_bytes(*cell)) : std::nullopt);
+                }
+                out.push_back(std::move(row));
+            }
+            return out;
+        };
+
+        // Each of these is a different projection shape: one regular column, a static plus a
+        // regular, everything, and the column whose row has no marker.
+        for (const char* cols : {"ck, a", "ck, st, a", "*", "ck, b", "ck, c"}) {
+            const auto want = rows_of(seastar::format(
+                    "select {} from t_sstable where pk = 1 bypass cache", cols));
+            const auto got = rows_of(seastar::format(
+                    "select {} from t_parquet where pk = 1 bypass cache", cols));
+            BOOST_TEST_CONTEXT("columns: " << cols) {
+                BOOST_REQUIRE_EQUAL(got.size(), want.size());
+                for (size_t i = 0; i < got.size(); ++i) {
+                    BOOST_REQUIRE_EQUAL(got[i].size(), want[i].size());
+                    for (size_t j = 0; j < got[i].size(); ++j) {
+                        BOOST_REQUIRE_EQUAL(got[i][j].has_value(), want[i][j].has_value());
+                        if (got[i][j] && want[i][j]) {
+                            BOOST_REQUIRE_EQUAL(*got[i][j], *want[i][j]);
+                        }
+                    }
+                }
+            }
+        }
+
+        // And without BYPASS CACHE, where no projection is permitted at all.
+        for (const char* cols : {"ck, a", "*"}) {
+            const auto want = rows_of(seastar::format("select {} from t_sstable where pk = 1", cols));
+            const auto got = rows_of(seastar::format("select {} from t_parquet where pk = 1", cols));
+            BOOST_TEST_CONTEXT("cached, columns: " << cols) {
+                BOOST_REQUIRE_EQUAL(got.size(), want.size());
+                for (size_t i = 0; i < got.size(); ++i) {
+                    BOOST_REQUIRE(got[i] == want[i]);
+                }
+            }
+        }
+    }).get();
+}
+
+// Projection is applied where row existence is carried by the marker, and declined where it is not.
+//
+// The companion to test_parquet_bypass_cache_projection_matches_row_format, which pins that the
+// answers never change. This one pins that the optimisation actually *happens* for the shape it is
+// meant for -- an INSERT-only table, where every row has a marker -- and that it backs off for a
+// table containing a row written by UPDATE, whose existence rests on a cell a projection would drop.
+//
+// Without the second half this would pass just as well if projection had been switched off
+// altogether, which is how the previous version of this feature looked correct while returning 5
+// rows instead of 6.
+SEASTAR_THREAD_TEST_CASE(test_parquet_projection_applies_only_where_markers_carry_existence) {
+    do_with_cql_env_thread([](cql_test_env& e) {
+        auto& st = sstables::parquet::projection_stats_local();
+
+        // INSERT only: every row carries a marker.
+        e.execute_cql("create table ins (pk int, ck int, a int, b text, c double,"
+                      " primary key (pk, ck)) with storage_format = 'parquet'").get();
+        for (int i = 0; i < 40; ++i) {
+            e.execute_cql(seastar::format(
+                    "insert into ins (pk, ck, a, b, c) values (1, {}, {}, 'v{}', {}.5)",
+                    i, i * 10, i, i)).get();
+        }
+        // A row whose existence rests on one cell, with no marker.
+        e.execute_cql("create table upd (pk int, ck int, a int, b text, c double,"
+                      " primary key (pk, ck)) with storage_format = 'parquet'").get();
+        for (int i = 0; i < 40; ++i) {
+            e.execute_cql(seastar::format(
+                    "insert into upd (pk, ck, a, b, c) values (1, {}, {}, 'v{}', {}.5)",
+                    i, i * 10, i, i)).get();
+        }
+        e.execute_cql("update upd set b = 'only-b' where pk = 1 and ck = 99").get();
+        e.db().invoke_on_all([] (replica::database& dbi) {
+            return dbi.flush_all_memtables();
+        }).get();
+
+        auto count_rows = [&] (const sstring& cql) {
+            auto msg = e.execute_cql(cql).get();
+            auto res = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
+            BOOST_REQUIRE(res);
+            return res->rs().result_set().rows().size();
+        };
+
+        // The INSERT-only table must project.
+        const auto before_ins = st;
+        const size_t n_ins = count_rows("select ck, a from ins where pk = 1 bypass cache");
+        BOOST_REQUIRE_EQUAL(n_ins, 40u);
+        BOOST_REQUIRE_GT(st.groups_projected, before_ins.groups_projected);
+
+        // The table with the marker-less row must not, and must still return every row -- 41,
+        // including ck=99 with a null `a`.
+        const auto before_upd = st;
+        const size_t n_upd = count_rows("select ck, a from upd where pk = 1 bypass cache");
+        BOOST_REQUIRE_EQUAL(n_upd, 41u);
+        BOOST_REQUIRE_GT(st.groups_declined, before_upd.groups_declined);
+        BOOST_REQUIRE_EQUAL(st.groups_projected, before_upd.groups_projected);
+    }).get();
+}

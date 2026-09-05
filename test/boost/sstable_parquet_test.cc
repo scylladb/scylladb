@@ -4508,6 +4508,110 @@ SEASTAR_THREAD_TEST_CASE(test_pq_declares_the_counter_convention) {
     }).get();
 }
 
+// Size-tiered bucketing has to compare like with like across formats.
+//
+// `data_size()` is two different quantities: for a compressed native sstable it is the data
+// component's *uncompressed* length, and for a `pq` sstable -- which has no CompressionInfo,
+// because Parquet compresses internally -- it is the file size. Bucketing is built on ratios, so
+// inside an all-native set that inconsistency cancels out and is invisible. In a hybrid table it
+// does not: the converted file reports several times smaller than the native sstable holding the
+// same rows, buckets several tiers below its true peer, and compaction settles into repeatedly
+// rewriting the one format that is most expensive to rewrite.
+//
+// Nothing about that failure is loud -- no error, no log line, just compaction declining to group
+// the converted files -- so it needs a test. Both supported strategies are affected: ICS buckets
+// this way directly and TWCS falls back to it within a window.
+SEASTAR_THREAD_TEST_CASE(test_size_tiered_buckets_compare_one_unit_across_formats) {
+    sstables::test_env::do_with_async([] (sstables::test_env& env) {
+        // Compression has to be on for the two units to differ at all, and the data has to be
+        // genuinely compressible for them to differ by enough to matter.
+        //
+        // make_muts() will not do for this: its mixed ints, doubles and short strings are
+        // incompressible at a 4 KiB chunk length -- measured at 59 440 uncompressed against 67 172
+        // on disk, i.e. LZ4 *expanded* it by 13 %. So a payload built to compress instead, which is
+        // also the realistic case: the tables Parquet is aimed at are ones whose values repeat.
+        auto s = schema_builder(1, "ks", "hybrid_buckets")
+            .with_column("pk", utf8_type, column_kind::partition_key)
+            .with_column("ck", int32_type, column_kind::clustering_key)
+            .with_column("v_txt", utf8_type)
+            .set_compressor_params(compression_parameters(compression_parameters::algorithm::lz4))
+            .build();
+
+        const sstring filler(400, 'a');
+        auto make = [&] (sstable_version_types v, int n_part, int n_rows) {
+            utils::chunked_vector<mutation> muts;
+            for (int part = 0; part < n_part; ++part) {
+                auto pk = partition_key::from_single_value(
+                        *s, utf8_type->decompose(sstring(format("key{:05d}", part))));
+                mutation m(s, pk);
+                for (int r = 0; r < n_rows; ++r) {
+                    auto ck = clustering_key::from_single_value(*s, int32_type->decompose(r));
+                    auto& cdef = *s->get_column_definition(to_bytes("v_txt"));
+                    m.set_clustered_cell(ck, cdef, atomic_cell::make_live(
+                            *cdef.type, 1000 + part, utf8_type->decompose(filler)));
+                }
+                muts.push_back(std::move(m));
+            }
+            std::sort(muts.begin(), muts.end(), [] (const mutation& a, const mutation& b) {
+                return a.decorated_key().less_compare(*a.schema(), b.decorated_key());
+            });
+            return make_sstable_containing(env.make_sstable(s, v), std::move(muts)).get();
+        };
+
+        constexpr int n_part = 20;
+        constexpr int native_rows = 50;
+        std::vector<shared_sstable> native;
+        for (int i = 0; i < 3; ++i) {
+            native.push_back(make(sstable_version_types::me, n_part, native_rows));
+        }
+        const auto native_ondisk = native[0]->ondisk_data_size();
+
+        // The point of the fixture is a `pq` sstable that occupies *the same disk space* as the
+        // native ones. Two sstables of equal on-disk size belong in one bucket whatever wrote them,
+        // so if they split, the only possible cause is the unit -- which is precisely the defect.
+        //
+        // The row count has to be derived rather than hardcoded, because the two formats are not
+        // remotely comparable per row here: LZ4 gets ~39x on this payload and Parquet, which
+        // dictionary-encodes a column of one repeated value, gets over 400x. So probe for Parquet's
+        // bytes-per-row and scale up to match. Deriving it also means the fixture survives a change
+        // in either codec's effectiveness, which a hardcoded multiplier would not.
+        auto probe = make(sstable_version_types::pq, n_part, native_rows);
+        const double pq_bytes_per_row = double(probe->ondisk_data_size()) / (n_part * native_rows);
+        const int pq_rows = std::max(1, int(double(native_ondisk) / pq_bytes_per_row / n_part));
+        auto pq = make(sstable_version_types::pq, n_part, pq_rows);
+
+        // Fixture preconditions. Both must hold for the assertions below to mean anything, so they
+        // are checked rather than assumed: the units must genuinely diverge on the native side, must
+        // coincide on the pq side, and the two files must land within a bucket-width of each other
+        // on disk.
+        BOOST_REQUIRE_GT(native[0]->data_size(), native_ondisk * 2);
+        BOOST_REQUIRE_EQUAL(pq->data_size(), pq->ondisk_data_size());
+        const double ondisk_ratio = double(pq->ondisk_data_size()) / double(native_ondisk);
+        BOOST_REQUIRE_MESSAGE(ondisk_ratio > 0.6 && ondisk_ratio < 1.4,
+                seastar::format("fixture failed to match on-disk sizes: pq {} vs native {} ({:.2f}x)",
+                                pq->ondisk_data_size(), native_ondisk, ondisk_ratio));
+        // ... and on `data_size()` they must be far enough apart that the old behaviour splits
+        // them, or this would pass either way.
+        const double data_ratio = double(pq->data_size()) / double(native[0]->data_size());
+        BOOST_REQUIRE_MESSAGE(data_ratio < 0.5,
+                seastar::format("fixture would not discriminate: data_size ratio {:.3f}", data_ratio));
+
+        compaction::size_tiered_compaction_strategy_options opts;
+
+        // All-native: one bucket, and this path must keep using `data_size()` -- every existing
+        // cluster's bucketing depends on it and none of them has a `pq` sstable to trip over.
+        auto native_buckets = compaction::size_tiered_compaction_strategy::get_buckets(native, opts);
+        BOOST_REQUIRE_EQUAL(native_buckets.size(), 1u);
+
+        // Mixed: equal on disk, so one bucket.
+        auto mixed = native;
+        mixed.push_back(pq);
+        auto mixed_buckets = compaction::size_tiered_compaction_strategy::get_buckets(mixed, opts);
+        BOOST_REQUIRE_EQUAL(mixed_buckets.size(), 1u);
+        BOOST_REQUIRE_EQUAL(mixed_buckets[0].size(), mixed.size());
+    }).get();
+}
+
 // Under TWCS, 'hybrid' means the same thing as 'parquet': the whole table.
 //
 // Hybrid tiering exists to keep Parquet out of the levels that get rewritten, since re-encoding and
