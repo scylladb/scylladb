@@ -135,6 +135,15 @@ struct topology_features {
     std::set<sstring> calculate_not_yet_enabled_features() const;
 };
 
+// A hint that the mutations behind a group0 command touched only the
+// `version`/`fence_version` static cells of system.topology's static row,
+// so the in-memory topology state can be patched in place instead of
+// re-read and reparsed from system.topology in full.
+struct topology_change_hint {
+    std::optional<int64_t> version;
+    std::optional<int64_t> fence_version;
+};
+
 struct topology {
     enum class transition_state: uint16_t {
         join_group0,
