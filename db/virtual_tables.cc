@@ -786,10 +786,59 @@ class clients_table : public streaming_virtual_table {
     // callers there with sequential_producer, so at most one fan-out is in flight node-wide
     // at a time, not one per calling shard; a short TTL additionally lets calls that arrive
     // just after a fan-out completed reuse it instead of starting a new one.
+    // One partitioned row: an ip's partition key plus every client_data sharing that ip
+    // (possibly gathered from several origin shards), aggregated once per collection window
+    // so execute() never has to re-scan other shards' data to find its own rows.
+    struct partition_row {
+        dht::decorated_key key;
+        std::vector<const client_data*> clients;
+    };
+
     struct client_data_cache {
         std::vector<foreign_ptr<std::unique_ptr<shard_client_data>>> cd_vec;
+        // buckets[i]: rows owned by shard i (dht::static_shard_of(key.token()) == i), sorted by key.
+        std::vector<utils::chunked_vector<partition_row>> buckets;
         lowres_clock::time_point expiry;
     };
+
+    static dht::decorated_key make_partition_key(const class schema& s, net::inet_address ip) {
+        return dht::decorate_key(s, partition_key::from_single_value(s, data_value(ip).serialize_nonnull()));
+    }
+
+    // Buckets client_data by owning shard once per collection window, instead of every
+    // shard's execute() re-scanning the full cd_vec on every call (the O(N*C) hot path
+    // behind SCYLLADB-4230): each execute() then only reads its own O(C/N) bucket.
+    static future<> partition_client_data(client_data_cache& cache) {
+        schema_ptr s = build_schema();
+        cache.buckets.clear();
+        cache.buckets.resize(this_smp_shard_count());
+
+        // chunked_vector::push_back only guarantees index stability, not reference/pointer
+        // stability: below half its chunk capacity it reallocates+migrates the first chunk on
+        // growth, so a raw partition_row* taken early would dangle - key on (shard, index) instead.
+        std::unordered_map<net::inet_address, std::pair<unsigned, size_t>> ip_location;
+        for (unsigned i = 0; i < cache.cd_vec.size(); i++) {
+            for (const auto& ps_cdc : *cache.cd_vec[i]) {
+                for (const auto& cd : ps_cdc) {
+                    auto it = ip_location.find(cd.ip);
+                    if (it != ip_location.end()) {
+                        cache.buckets[it->second.first][it->second.second].clients.push_back(&cd);
+                    } else {
+                        dht::decorated_key key = make_partition_key(*s, cd.ip);
+                        unsigned shard = dht::static_shard_of(*s, key.token());
+                        ip_location.emplace(cd.ip, std::make_pair(shard, cache.buckets[shard].size()));
+                        cache.buckets[shard].push_back(partition_row{std::move(key), {&cd}});
+                    }
+                    co_await coroutine::maybe_yield();
+                }
+            }
+        }
+
+        dht::ring_position_less_comparator less(*s);
+        for (auto& bucket : cache.buckets) {
+            std::ranges::sort(bucket, less, std::mem_fn(&partition_row::key));
+        }
+    }
 
     static future<lw_shared_ptr<client_data_cache>> collect_client_data(service::storage_service& ss) {
         auto cache = make_lw_shared<client_data_cache>();
@@ -809,6 +858,8 @@ class clients_table : public streaming_virtual_table {
             }
             cd_vec[this_shard_id()] = make_foreign(std::move(scd));
         });
+
+        co_await partition_client_data(*cache);
 
         cache->expiry = lowres_clock::now() + client_data_cache_ttl;
         co_return cache;
@@ -854,10 +905,6 @@ class clients_table : public streaming_virtual_table {
             .build();
     }
 
-    dht::decorated_key make_partition_key(net::inet_address ip) {
-        return dht::decorate_key(*_s, partition_key::from_single_value(*_s, data_value(ip).serialize_nonnull()));
-    }
-
     clustering_key make_clustering_key(int32_t port, sstring clt) {
         return clustering_key::from_exploded(*_s, {
             data_value(port).serialize_nonnull(),
@@ -873,47 +920,19 @@ class clients_table : public streaming_virtual_table {
                 [] (service::storage_service& ss) -> future<foreign_ptr<lw_shared_ptr<client_data_cache>>> {
             co_return make_foreign(co_await get_client_data_on_shard0(ss));
         });
-        const std::vector<foreign_ptr<std::unique_ptr<shard_client_data>>>& cd_vec = cache->cd_vec;
-
-        // Partition
-        struct decorated_ip {
-            dht::decorated_key key;
-            net::inet_address ip;
-
-            struct compare {
-                dht::ring_position_less_comparator less;
-                explicit compare(const class schema& s) : less(s) {}
-                bool operator()(const decorated_ip& a, const decorated_ip& b) const {
-                    return less(a.key, b.key);
-                }
-            };
-        };
-
-        decorated_ip::compare cmp(*_s);
-        std::set<decorated_ip, decorated_ip::compare> ips(cmp);
-        std::unordered_map<net::inet_address, std::vector<const client_data*>> cd_map;
-        for (unsigned i = 0; i < this_smp_shard_count(); i++) {
-            for (const auto& ps_cdc : *cd_vec[i]) {
-                for (const auto& cd : ps_cdc) {
-                    if (cd_map.contains(cd.ip)) {
-                        cd_map[cd.ip].push_back(&cd);
-                    } else {
-                        dht::decorated_key key = make_partition_key(cd.ip);
-                        if (this_shard_owns(key) && contains_key(qr.partition_range(), key)) {
-                            ips.insert(decorated_ip{std::move(key), cd.ip});
-                            cd_map[cd.ip].push_back(&cd);
-                        }
-                    }
-                    co_await coroutine::maybe_yield();
-                }
-            }
-        }
+        // Partitioning already happened once for the whole collection window (see
+        // partition_client_data()); just read this shard's own precomputed bucket and apply
+        // the query's range restriction, which is per-call and can't be cached.
+        const auto& bucket = cache->buckets[this_shard_id()];
 
         // Emit
         auto map_type = map_type_impl::get_instance(utf8_type, utf8_type, false);
-        for (const auto& dip : ips) {
-            co_await result.emit_partition_start(dip.key);
-            auto& clients = cd_map[dip.ip];
+        for (const auto& row : bucket) {
+            if (!contains_key(qr.partition_range(), row.key)) {
+                continue;
+            }
+            co_await result.emit_partition_start(row.key);
+            auto clients = row.clients;
 
             std::ranges::sort(clients, [] (const client_data* a, const client_data* b) {
                 if (a->port != b->port) {
