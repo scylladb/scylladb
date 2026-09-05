@@ -46,7 +46,7 @@ public:
     authentication_option_set alterable_options() const override;
 
     future<authenticated_user> authenticate(const credentials_map& credentials) const override;
-    future<std::optional<authenticated_user>> authenticate(session_dn_func) const override;
+    future<std::optional<sstring>> authenticate(session_dn_func) const override;
 
     future<> create(std::string_view role_name, const authentication_options& options, ::service::group0_batch& mc) override;
     future<> alter(std::string_view role_name, const authentication_options& options, ::service::group0_batch&) override;

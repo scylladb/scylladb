@@ -76,10 +76,10 @@ public:
 
     // If a client certificate is present, extract the role from its subject
     // and/or ALTNAME (SAN) fields (as configured via auth_certificate_role_queries)
-    // and return the user without issuing a SASL challenge. If no client
+    // and return the role name without issuing a SASL challenge. If no client
     // certificate is present, return std::nullopt so process_startup falls
     // back to SASL (password path).
-    future<std::optional<authenticated_user>> authenticate(session_dn_func) const override;
+    future<std::optional<sstring>> authenticate(session_dn_func) const override;
 
     // Password path (SASL AUTH_RESPONSE): delegate to password_authenticator.
     future<authenticated_user> authenticate(const credentials_map&) const override;

@@ -229,6 +229,13 @@ alternation ``@(a|b)``, and quantifiers ``+(…)``, ``*(…)``, ``?(…)``. For
 example, ``"prod_ks.*"`` or ``"!(system).*"`` for tables and ``"admin_*"`` for
 roles.
 
+.. note::
+
+   A login attempt that establishes no role name, such as one whose client
+   certificate was rejected, is audited with an empty user name. ``roles: ["*"]``
+   and ``roles: [""]`` match it; a rule listing only specific patterns, such as
+   ``["admin_*"]``, does not record such attempts.
+
 ``audit_rules`` is a live-updatable parameter. To apply changes at runtime, edit
 ``scylla.yaml`` and send ``SIGHUP`` to the ScyllaDB process. See
 :doc:`/reference/configuration-parameters` for details on live updates and
