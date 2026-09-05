@@ -102,6 +102,8 @@ trace_state_ptr tracing::create_session(trace_type type, trace_state_props_set p
         // Ignore events if they are disabled and this is not a full tracing request (probability tracing or user request)
         props.set_if<trace_state_props::ignore_events>(!props.contains<trace_state_props::full_tracing>() && ignore_trace_events_enabled());
 
+        props.set_if<trace_state_props::write_on_close>(write_on_close_enabled());
+
         ++_active_sessions;
         return make_lw_shared<trace_state>(type, props);
     } catch (...) {
