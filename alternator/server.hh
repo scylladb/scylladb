@@ -10,8 +10,9 @@
 
 #include "alternator/executor.hh"
 #include "utils/scoped_item_list.hh"
-#include <seastar/core/future.hh>
 #include <seastar/core/condition-variable.hh>
+#include <seastar/core/future.hh>
+#include <seastar/core/scheduling.hh>
 #include <seastar/http/httpd.hh>
 #include <seastar/net/tls.hh>
 #include <optional>
@@ -28,6 +29,36 @@ struct client_data;
 namespace alternator {
 
 using chunked_content = rjson::chunked_content;
+
+namespace internal {
+
+inline constexpr size_t yieldable_parsing_threshold = 16*KB;
+
+bool should_parse_json_yieldably(const chunked_content& content);
+
+class json_parser {
+    // In production the parser is constructed with the server in
+    // statement_scheduling_group, which the service-level controller reuses
+    // as sl:default.
+    scheduling_group _worker_scheduling_group;
+    chunked_content _raw_document;
+    rjson::value _parsed_document;
+    std::exception_ptr _current_exception;
+    semaphore _parsing_sem{1};
+    condition_variable _document_waiting;
+    condition_variable _document_parsed;
+    abort_source _as;
+    future<> _run_parse_json_thread;
+public:
+    json_parser();
+    // Moving a chunked_content into parse() allows parse() to free each
+    // chunk as soon as it is parsed, so when chunks are relatively small,
+    // we don't need to store the sum of unparsed and parsed sizes.
+    future<rjson::value> parse(chunked_content&& content);
+    future<> stop();
+};
+
+}
 
 class server : public peering_sharded_service<server> {
     // The maximum size of a request body that Alternator will accept,
@@ -77,25 +108,7 @@ class server : public peering_sharded_service<server> {
 
     ::shared_ptr<seastar::tls::server_credentials> _credentials;
 
-    class json_parser {
-        static constexpr size_t yieldable_parsing_threshold = 16*KB;
-        chunked_content _raw_document;
-        rjson::value _parsed_document;
-        std::exception_ptr _current_exception;
-        semaphore _parsing_sem{1};
-        condition_variable _document_waiting;
-        condition_variable _document_parsed;
-        abort_source _as;
-        future<> _run_parse_json_thread;
-    public:
-        json_parser();
-        // Moving a chunked_content into parse() allows parse() to free each
-        // chunk as soon as it is parsed, so when chunks are relatively small,
-        // we don't need to store the sum of unparsed and parsed sizes.
-        future<rjson::value> parse(chunked_content&& content);
-        future<> stop();
-    };
-    json_parser _json_parser;
+    internal::json_parser _json_parser;
 
     // The server maintains a list of ongoing requests, that are being handled
     // by handle_api_request(). It uses this list in get_client_data(), which
@@ -146,4 +159,3 @@ private:
 };
 
 }
-

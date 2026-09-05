@@ -8,8 +8,12 @@
 
 #include "test/lib/scylla_test_case.hh"
 
-#include <seastar/util/defer.hh>
+#include <optional>
+
+#include <seastar/core/deleter.hh>
 #include <seastar/core/memory.hh>
+#include <seastar/core/temporary_buffer.hh>
+#include <seastar/util/defer.hh>
 #include "utils/base64.hh"
 #include "utils/rjson.hh"
 #include "alternator/serialization.hh"
@@ -18,6 +22,7 @@
 #include "cdc/generation.hh"
 #include "alternator/executor.hh"
 #include "alternator/executor_util.hh"
+#include "alternator/server.hh"
 #include "dht/token-sharding.hh"
 #include "alternator/expressions.hh"
 #include "alternator/streams.hh"
@@ -26,11 +31,108 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/core/sleep.hh>
+#include <seastar/core/with_scheduling_group.hh>
 
 namespace alternator {
     const cdc::stream_id& find_parent_shard_in_previous_generation(db_clock::time_point prev_timestamp, const utils::chunked_vector<cdc::stream_id>& prev_streams, const cdc::stream_id& child);
     extern const sstring SPURIOUS_RANGE_KEY_ADDED_TO_GSI_AND_USER_DIDNT_SPECIFY_RANGE_KEY_TAG_KEY;
     extern const sstring NUMBER_OF_USER_SPECIFIED_GSI_RANGE_KEYS_TAG_KEY;
+}
+
+BOOST_AUTO_TEST_CASE(test_yieldable_json_parsing_uses_content_size) {
+    // Regression test for #31298, part of #5943: the threshold applies to the
+    // sum of chunk bytes, not to the number of chunks.
+    constexpr auto threshold = alternator::internal::yieldable_parsing_threshold;
+    alternator::chunked_content content;
+    BOOST_REQUIRE(!alternator::internal::should_parse_json_yieldably(content));
+
+    content.emplace_back(threshold - 1);
+    BOOST_REQUIRE(!alternator::internal::should_parse_json_yieldably(content));
+    content.clear();
+
+    content.emplace_back(threshold);
+    BOOST_REQUIRE(alternator::internal::should_parse_json_yieldably(content));
+    content.clear();
+
+    content.emplace_back(threshold / 2);
+    content.emplace_back(threshold / 2 - 1);
+    BOOST_REQUIRE(!alternator::internal::should_parse_json_yieldably(content));
+
+    content.emplace_back(1);
+    BOOST_REQUIRE(alternator::internal::should_parse_json_yieldably(content));
+}
+
+SEASTAR_THREAD_TEST_CASE(test_yieldable_json_parsing_preserves_scheduling_group) {
+    // #31298 makes the threaded path normal for large requests; it must keep
+    // charging parsing CPU to the authenticated user's service level.
+    auto sg1 = create_scheduling_group("alternator_json_parser_test_1", 100).get();
+    auto destroy_sg1 = defer([&] noexcept { destroy_scheduling_group(sg1).get(); });
+    auto sg2 = create_scheduling_group("alternator_json_parser_test_2", 100).get();
+    auto destroy_sg2 = defer([&] noexcept { destroy_scheduling_group(sg2).get(); });
+
+    alternator::internal::json_parser parser;
+    auto stop_parser = defer([&] noexcept { parser.stop().get(); });
+    auto make_content = [] (std::optional<scheduling_group>& parsed_in) {
+        std::string document = R"({"value":")";
+        document.append(alternator::internal::yieldable_parsing_threshold, 'x');
+        document += R"("})";
+        temporary_buffer<char> buffer(document.data(), document.size());
+        auto* data = buffer.get_write();
+        auto size = buffer.size();
+        // chunked_content_stream releases this buffer while parsing it, so
+        // the deleter observes the parser thread's actual scheduling group.
+        auto deleter = make_deleter(buffer.release(), [&parsed_in] () noexcept {
+            parsed_in = current_scheduling_group();
+        });
+        alternator::chunked_content content;
+        content.emplace_back(data, size, std::move(deleter));
+        return content;
+    };
+
+    auto parse_in_group = [&parser, &make_content] (scheduling_group sg) {
+        std::optional<scheduling_group> parsed_in;
+        auto value = with_scheduling_group(sg, [&parser, content = make_content(parsed_in)] () mutable {
+            return parser.parse(std::move(content));
+        }).get();
+        BOOST_REQUIRE(parsed_in);
+        BOOST_REQUIRE(*parsed_in == sg);
+        return value;
+    };
+
+    BOOST_REQUIRE(parse_in_group(current_scheduling_group()).IsObject());
+    BOOST_REQUIRE(parse_in_group(sg1).IsObject());
+    BOOST_REQUIRE(parse_in_group(sg2).IsObject());
+}
+
+SEASTAR_THREAD_TEST_CASE(test_yieldable_json_parsing_rejects_deep_nesting) {
+    // Regression test for the debug CI failure on #31304. A large, deeply
+    // nested request must propagate rjson::error from either threaded path
+    // instead of aborting the process.
+    constexpr size_t nested_levels = 4000;
+    std::string document;
+    document.reserve(nested_levels * 5 + 2);
+    for (size_t i = 0; i < nested_levels; ++i) {
+        document += R"({"":)";
+    }
+    document += "{}";
+    document.append(nested_levels, '}');
+
+    alternator::internal::json_parser parser;
+    auto stop_parser = defer([&] noexcept { parser.stop().get(); });
+    auto make_content = [&document] {
+        alternator::chunked_content content;
+        content.emplace_back(document.data(), document.size());
+        return content;
+    };
+
+    BOOST_REQUIRE(alternator::internal::should_parse_json_yieldably(make_content()));
+    BOOST_REQUIRE_THROW(parser.parse(make_content()).get(), rjson::error);
+
+    auto sg = create_scheduling_group("alternator_json_nested_test", 100).get();
+    auto destroy_sg = defer([&] noexcept { destroy_scheduling_group(sg).get(); });
+    BOOST_REQUIRE_THROW(with_scheduling_group(sg, [&parser, content = make_content()] () mutable {
+        return parser.parse(std::move(content));
+    }).get(), rjson::error);
 }
 
 // Builds a schema_ptr simulating a GSI with an irrelevant to the user
