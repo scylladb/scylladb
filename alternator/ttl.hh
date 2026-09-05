@@ -43,6 +43,9 @@ public:
         uint64_t scan_table = 0;
         uint64_t items_deleted = 0;
         uint64_t secondary_ranges_scanned = 0;
+        uint64_t tablets_probed = 0;
+        uint64_t tablets_scanned = 0;
+        uint64_t secondary_tablets_scanned = 0;
     private:
         // The metric_groups object holds this stat object's metrics registered
         // as long as the stats object is alive.
