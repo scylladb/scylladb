@@ -3144,10 +3144,10 @@ future<> system_keyspace::set_must_synchronize_topology(bool value) {
     return set_scylla_local_param_as<bool>(MUST_SYNCHRONIZE_TOPOLOGY_KEY, value, false);
 }
 
-static std::set<sstring> decode_features(const set_type_impl::native_type& features) {
+static std::set<sstring> decode_features(set_type_impl::native_type features) {
     std::set<sstring> fset;
     for (auto& f : features) {
-        fset.insert(value_cast<sstring>(std::move(f)));
+        fset.insert(fset.end(), value_cast<sstring>(std::move(f)));
     }
     return fset;
 }
