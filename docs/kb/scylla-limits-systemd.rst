@@ -16,44 +16,9 @@ Updates to ``/etc/security/limits.d/scylla.conf`` do not have any effect. After 
 Root Cause
 ----------
 
-When running under systemd, ScyllaDB enforces the **LimitNOFILE** and **LimitNPROC** values under ``/lib/systemd/system/scylla-server.service``, where:
-
-**LimitNOFILE** - Maximum number of file descriptors allowed to be opened simultaneously (defaults to 800000)
-
-**LimitNPROC** - Maximum number of processes allowed to run in parallel (defaults to 8096)
+When running under systemd, ScyllaDB uses the resource limits set in ``/lib/systemd/system/scylla-server.service``, such as **LimitNPROC** — the maximum number of processes allowed to run in parallel (defaults to 8096). Limits configured through ``/etc/security/limits.d`` do not apply to systemd services.
 
 Even though ScyllaDB's provided defaults are suitable for most workloads, there may be situations on which these values may need to be overridden.
-
-Before you start
-----------------
-
-The Linux kernel imposes an upper limit on the maximum number of file-handles that a process may allocate, which takes precedence over systemd. Such limit may be persistently increased by tuning the ``fs.nr_open`` parameter in the ``/etc/sysctl.conf`` file.
-
-The ``fs.nr_open`` parameter default value is 1048576 (1024*1024) and it must be increased whenever it is required to overcome such limit.
-
-As a rule of thumb, always ensure that the value of ``fs.nr_open`` is **equal or greater than** the maximum number of file-handles that ScyllaDB may be able to consume.
-
-1. To check the value of ``fs.nr_open`` run:
-
-.. code-block:: shell
-
-   sysctl fs.nr_open
-   fs.nr_open = 1048576
-
-2. Edit the file ``/etc/sysctl.conf`` as root, and increase the value of ``fs.nr_open``:
-
-.. code-block:: shell
-
-   sudo vi /etc/sysctl.conf
-   fs.nr_open=5000000
-
-3. Save the changes and apply the new setting to the running configuration:
-
-.. code-block:: shell
-
-   sudo sysctl -p
-
-
 
 Solution
 --------
@@ -66,12 +31,10 @@ Solution
 
 2. Within the opened text editor, add the following lines and adjust the parameters as needed, e.g.:
 
-**Warning**: Avoid setting the value of such fields to `Infinity` as this can lead to unpredictable behaviors. When adjusting the value of **LimitNOFILE** always set it to a value which is **equal or lower than** the value of ``fs.nr_open``
-
 .. code-block:: shell
 
     [Service]
-    LimitNOFILE=5000000
+    LimitNPROC=16384
 
 3. Restart ScyllaDB:
 

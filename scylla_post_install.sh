@@ -44,6 +44,16 @@ MemoryMax=1400M
 EOS
 fi
 
+# Old installs sized LimitNOFILE via this drop-in, which would keep overriding
+# the LimitNOFILE=infinity default. Rewrite it instead of removing it, so a
+# downgrade ends up with more file descriptors, not fewer.
+if [ -f /etc/systemd/system/scylla-server.service.d/limitnofile.conf ]; then
+    cat << EOS > /etc/systemd/system/scylla-server.service.d/limitnofile.conf
+[Service]
+LimitNOFILE=infinity
+EOS
+fi
+
 if [ -e /etc/systemd/system/systemd-coredump@.service.d/timeout.conf ]; then
     COREDUMP_RUNTIME_MAX=$(grep RuntimeMaxSec /etc/systemd/system/systemd-coredump@.service.d/timeout.conf)
     if [ -z $COREDUMP_RUNTIME_MAX ]; then
