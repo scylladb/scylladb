@@ -20,6 +20,7 @@
 #include <absl/container/btree_set.h>
 #include <seastar/util/defer.hh>
 
+#include <algorithm>
 #include <optional>
 #include <vector>
 
@@ -38,6 +39,22 @@ struct disk_usage {
         return load_type(used) / capacity;
     }
 };
+
+// Gives shard 0 group0_leader_shard_ratio% of the uniform per-shard capacity;
+// the rest is spread evenly across the other shards. ratio=100 / 1 shard: no-op.
+inline uint64_t apply_group0_leader_shard_ratio(uint64_t uniform_shard_capacity, seastar::shard_id shard,
+        size_t shard_count, unsigned group0_leader_shard_ratio) {
+    if (shard_count <= 1 || group0_leader_shard_ratio >= 100 || uniform_shard_capacity == 0) {
+        return uniform_shard_capacity;
+    }
+    // Clamp to 1, never 0: disk_usage::get_load() treats capacity==0 as "no data" (load 0),
+    // which would make shard 0 look least-loaded forever instead of shedding tablets.
+    uint64_t shard0_capacity = std::max<uint64_t>(1, uniform_shard_capacity * group0_leader_shard_ratio / 100);
+    if (shard == 0) {
+        return shard0_capacity;
+    }
+    return uniform_shard_capacity + (uniform_shard_capacity - shard0_capacity) / (shard_count - 1);
+}
 
 /// A data structure which keeps track of load associated with data ownership
 /// on shards of the whole cluster.
@@ -75,13 +92,13 @@ class load_sketch {
         bool _has_valid_disk_capacity = true;
         bool _has_all_tablet_sizes = true;
 
-        node_load(size_t shard_count, uint64_t capacity)
+        node_load(size_t shard_count, uint64_t capacity, unsigned group0_leader_shard_ratio = 100)
                 : _shards(shard_count) {
             _du.capacity = capacity;
             uint64_t shard_capacity = capacity / shard_count;
             for (shard_id i = 0; i < shard_count; ++i) {
                 _shards[i].id = i;
-                _shards[i].du.capacity = shard_capacity;
+                _shards[i].du.capacity = apply_group0_leader_shard_ratio(shard_capacity, i, shard_count, group0_leader_shard_ratio);
             }
         }
 
@@ -121,6 +138,9 @@ class load_sketch {
     // When set to true, it will use gross disk capacity instead of effective_capacity and
     // treat all tablet as having the same size: _default_tablet_size
     bool _force_capacity_based_load = false;
+
+    // See apply_group0_leader_shard_ratio(). Applied only to the local node (topology::my_host_id()).
+    unsigned _group0_leader_shard_ratio = 100;
 
 private:
     tablet_replica_set get_replicas_for_tablet_load(const tablet_info& ti, const tablet_transition_info* trinfo) const {
@@ -166,7 +186,8 @@ private:
                         continue;
                     }
                     auto disk_capacity_opt = get_disk_capacity_for_node(replica.host);
-                    auto [i, _] = _nodes.emplace(replica.host, node_load{node->get_shard_count(), disk_capacity_opt.value_or(_default_tablet_size)});
+                    auto group0_leader_shard_ratio = replica.host == topo.my_host_id() ? _group0_leader_shard_ratio : 100u;
+                    auto [i, _] = _nodes.emplace(replica.host, node_load{node->get_shard_count(), disk_capacity_opt.value_or(_default_tablet_size), group0_leader_shard_ratio});
                     if (!disk_capacity_opt && _load_stats) {
                         i->second._has_valid_disk_capacity = false;
                     }
@@ -285,6 +306,10 @@ public:
         _force_capacity_based_load = force_capacity_based_load;
     }
 
+    void set_group0_leader_shard_ratio(unsigned group0_leader_shard_ratio) {
+        _group0_leader_shard_ratio = group0_leader_shard_ratio;
+    }
+
     node_load& ensure_node(host_id node) {
         if (!_nodes.contains(node)) {
             const topology& topo = _tm->get_topology();
@@ -293,7 +318,8 @@ public:
                 throw std::runtime_error(format("Shard count not known for node {}", node));
             }
             auto disk_capacity_opt = get_disk_capacity_for_node(node);
-            auto [i, _] = _nodes.emplace(node, node_load{shard_count, disk_capacity_opt.value_or(_default_tablet_size)});
+            auto group0_leader_shard_ratio = node == topo.my_host_id() ? _group0_leader_shard_ratio : 100u;
+            auto [i, _] = _nodes.emplace(node, node_load{shard_count, disk_capacity_opt.value_or(_default_tablet_size), group0_leader_shard_ratio});
             i->second.populate_shards_by_load();
             if (!disk_capacity_opt && _load_stats) {
                 i->second._has_valid_disk_capacity = false;

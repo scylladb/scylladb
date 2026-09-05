@@ -1749,6 +1749,9 @@ db::config::config(std::shared_ptr<db::extensions> exts)
          "Minimum average number of tablet replicas per shard per table. Suppressed by tablet options in table's schema: min_per_shard_tablet_count and min_tablet_count")
     , tablets_per_shard_goal(this, "tablets_per_shard_goal", liveness::LiveUpdate, value_status::Used, 100,
          "The goal for the maximum number of tablet replicas per shard. Tablet allocator tries to keep this goal.")
+    , tablets_group0_leader_shard_ratio(this, "tablets_group0_leader_shard_ratio", liveness::LiveUpdate, value_status::Used, 100,
+         "Percentage (0-100) of the normal per-shard tablet capacity given to shard 0 on the group0-leader node, "
+         "freeing it up for raft/topology work. 100 (default) is no skew; 0 gives shard 0 no tablets.")
     , target_tablet_size_in_bytes(this, "target_tablet_size_in_bytes", liveness::LiveUpdate, value_status::Used, service::default_target_tablet_size,
          "Allows target tablet size to be configured. Defaults to 5G (in bytes). Maintaining tablets at reasonable sizes is important to be able to " \
          "redistribute load. A higher value means tablet migration throughput can be reduced. A lower value may cause number of tablets to increase significantly, " \
