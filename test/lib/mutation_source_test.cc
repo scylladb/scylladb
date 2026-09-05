@@ -1776,9 +1776,21 @@ void run_mutation_source_tests_reverse_read_back(populate_fn_ex populate, bool w
     });
 }
 
+struct unequal_mutation_pair {
+    mutation a;
+    mutation b;
+    sstring label;
+
+    unequal_mutation_pair(mutation a, mutation b, std::string_view label)
+        : a(std::move(a))
+        , b(std::move(b))
+        , label(label)
+    { }
+};
+
 struct mutation_sets {
     std::vector<utils::chunked_vector<mutation>> equal;
-    std::vector<utils::chunked_vector<mutation>> unequal;
+    std::vector<unequal_mutation_pair> unequal;
     mutation_sets(){}
 };
 
@@ -1813,10 +1825,11 @@ static mutation_sets generate_mutation_sets() {
         auto& key2 = local_keys[1];
 
         // Differing keys
-        result.unequal.emplace_back(mutations{
+        result.unequal.emplace_back(
             mutation(s1, key1),
-            mutation(s2, key2)
-        });
+            mutation(s2, key2),
+            "differing keys"
+        );
 
         auto m1 = mutation(s1, key1);
         auto m2 = mutation(s2, key1);
@@ -1829,7 +1842,7 @@ static mutation_sets generate_mutation_sets() {
         {
             auto tomb = new_tombstone();
             m1.partition().apply(tomb);
-            result.unequal.emplace_back(mutations{m1, m2});
+            result.unequal.emplace_back(m1, m2, "partition tombstone");
             m2.partition().apply(tomb);
             result.equal.emplace_back(mutations{m1, m2});
         }
@@ -1838,7 +1851,7 @@ static mutation_sets generate_mutation_sets() {
             auto tomb = new_tombstone();
             auto key = clustering_key_prefix::from_deeply_exploded(*s1, {data_value(bytes("ck2_0"))});
             m1.partition().apply_row_tombstone(*s1, key, tomb);
-            result.unequal.emplace_back(mutations{m1, m2});
+            result.unequal.emplace_back(m1, m2, "range tombstone");
             m2.partition().apply_row_tombstone(*s2, key, tomb);
             result.equal.emplace_back(mutations{m1, m2});
         }
@@ -1846,7 +1859,7 @@ static mutation_sets generate_mutation_sets() {
         {
             auto tomb = new_tombstone();
             m1.partition().apply_delete(*s1, ck2, tomb);
-            result.unequal.emplace_back(mutations{m1, m2});
+            result.unequal.emplace_back(m1, m2, "row tombstone");
             m2.partition().apply_delete(*s2, ck2, tomb);
             result.equal.emplace_back(mutations{m1, m2});
         }
@@ -1856,15 +1869,43 @@ static mutation_sets generate_mutation_sets() {
             auto ts = new_timestamp();
             auto key_full = clustering_key_prefix::from_deeply_exploded(*s1, {data_value(bytes("ck2_0")), data_value(bytes("ck1_1")), });
             m1.set_clustered_cell(key_full, "regular_col_2", data_value(bytes("regular_col_value")), ts, ttl);
-            result.unequal.emplace_back(mutations{m1, m2});
+            result.unequal.emplace_back(m1, m2, "update regular_col_2 for key covered by range tombstone");
             m2.set_clustered_cell(key_full, "regular_col_2", data_value(bytes("regular_col_value")), ts, ttl);
+            result.equal.emplace_back(mutations{m1, m2});
+        }
+
+        {
+            // Add two identical live rows, with different effective tombstones
+            clustering_key live_ck = clustering_key::from_deeply_exploded(*s1, {data_value(bytes("ck_live_0")), data_value(bytes("ck_live_1"))});
+            clustering_key live_ck_prefix = clustering_key::from_deeply_exploded(*s1, {data_value(bytes("ck_live_0"))});
+            auto tomb1 = new_tombstone();
+            auto tomb2 = new_tombstone();
+            auto tomb3 = new_tombstone();
+            auto ts = new_timestamp();
+
+            m1.set_clustered_cell(live_ck, "regular_col_1", data_value(bytes("live_value1")), ts);
+            m2.set_clustered_cell(live_ck, "regular_col_1", data_value(bytes("live_value1")), ts);
+
+            m1.partition().apply_delete(*s1, live_ck, tomb1);
+            result.unequal.emplace_back(m1, m2, "identical rows, one has row tombstone");
+
+            m2.partition().apply_delete(*s2, live_ck, tomb2);
+            result.unequal.emplace_back(m1, m2, "identical rows with different row tombstone");
+
+            m1.partition().apply_delete(*s1, live_ck, tomb2);
+            result.equal.emplace_back(mutations{m1, m2});
+
+            m1.partition().apply_delete(*s1, live_ck_prefix, tomb3);
+            result.unequal.emplace_back(m1, m2, "identical rows with different effective tombstone");
+
+            m2.partition().apply_delete(*s2, live_ck_prefix, tomb3);
             result.equal.emplace_back(mutations{m1, m2});
         }
 
         {
             auto ts = new_timestamp();
             m1.set_clustered_cell(ck1, "regular_col_1", data_value(bytes("regular_col_value")), ts, ttl);
-            result.unequal.emplace_back(mutations{m1, m2});
+            result.unequal.emplace_back(m1, m2, "update regular_col_1 for ck1");
             m2.set_clustered_cell(ck1, "regular_col_1", data_value(bytes("regular_col_value")), ts, ttl);
             result.equal.emplace_back(mutations{m1, m2});
         }
@@ -1872,7 +1913,7 @@ static mutation_sets generate_mutation_sets() {
         {
             auto ts = new_timestamp();
             m1.set_clustered_cell(ck1, "regular_col_2", data_value(bytes("regular_col_value")), ts, ttl);
-            result.unequal.emplace_back(mutations{m1, m2});
+            result.unequal.emplace_back(m1, m2, "update regular_col_2 for ck1");
             m2.set_clustered_cell(ck1, "regular_col_2", data_value(bytes("regular_col_value")), ts, ttl);
             result.equal.emplace_back(mutations{m1, m2});
         }
@@ -1880,7 +1921,7 @@ static mutation_sets generate_mutation_sets() {
         {
             auto ts = new_timestamp();
             m1.partition().apply_insert(*s1, ck2, ts);
-            result.unequal.emplace_back(mutations{m1, m2});
+            result.unequal.emplace_back(m1, m2, "empty row");
             m2.partition().apply_insert(*s2, ck2, ts);
             result.equal.emplace_back(mutations{m1, m2});
         }
@@ -1888,7 +1929,7 @@ static mutation_sets generate_mutation_sets() {
         {
             auto ts = new_timestamp();
             m1.set_clustered_cell(ck2, "regular_col_1", data_value(bytes("ck2_regular_col_1_value")), ts);
-            result.unequal.emplace_back(mutations{m1, m2});
+            result.unequal.emplace_back(m1, m2, "update regular_col_1 for ck2");
             m2.set_clustered_cell(ck2, "regular_col_1", data_value(bytes("ck2_regular_col_1_value")), ts);
             result.equal.emplace_back(mutations{m1, m2});
         }
@@ -1896,7 +1937,7 @@ static mutation_sets generate_mutation_sets() {
         {
             auto ts = new_timestamp();
             m1.set_static_cell("static_col_1", data_value(bytes("static_col_value")), ts, ttl);
-            result.unequal.emplace_back(mutations{m1, m2});
+            result.unequal.emplace_back(m1, m2, "update static_col_1");
             m2.set_static_cell("static_col_1", data_value(bytes("static_col_value")), ts, ttl);
             result.equal.emplace_back(mutations{m1, m2});
         }
@@ -1904,7 +1945,7 @@ static mutation_sets generate_mutation_sets() {
         {
             auto ts = new_timestamp();
             m1.set_static_cell("static_col_2", data_value(bytes("static_col_value")), ts);
-            result.unequal.emplace_back(mutations{m1, m2});
+            result.unequal.emplace_back(m1, m2, "update static_col_2");
             m2.set_static_cell("static_col_2", data_value(bytes("static_col_value")), ts);
             result.equal.emplace_back(mutations{m1, m2});
         }
@@ -1920,9 +1961,9 @@ static mutation_sets generate_mutation_sets() {
         {
             auto ts = new_timestamp();
             m1.set_clustered_cell(ck2, "regular_col_1_s1", data_value(bytes("x")), ts);
-            result.unequal.emplace_back(mutations{m1, m2});
+            result.unequal.emplace_back(m1, m2, "update regular_col_1_s1 for ck2");
             m2.set_clustered_cell(ck2, "regular_col_1_s2", data_value(bytes("x")), ts);
-            result.unequal.emplace_back(mutations{m1, m2});
+            result.unequal.emplace_back(m1, m2, "update regular_col_1_s2 for ck2");
         }
     }
 
@@ -1933,7 +1974,7 @@ static mutation_sets generate_mutation_sets() {
                 random_mutation_generator::generate_uncompactable::yes);
         for (int i = 0; i < rmg_iterations; ++i) {
             auto m = gen();
-            result.unequal.emplace_back(mutations{m, gen()}); // collision unlikely
+            result.unequal.emplace_back(m, gen(), "random mutation (no counters)"); // collision unlikely
             result.equal.emplace_back(mutations{m, m});
         }
     }
@@ -1943,7 +1984,7 @@ static mutation_sets generate_mutation_sets() {
                 random_mutation_generator::generate_uncompactable::yes);
         for (int i = 0; i < rmg_iterations; ++i) {
             auto m = gen();
-            result.unequal.emplace_back(mutations{m, gen()}); // collision unlikely
+            result.unequal.emplace_back(m, gen(), "random mutation (with counters)"); // collision unlikely
             result.equal.emplace_back(mutations{m, m});
         }
     }
@@ -1956,26 +1997,26 @@ static const mutation_sets& get_mutation_sets() {
     return ms;
 }
 
-void for_each_mutation_pair(std::function<void(const mutation&, const mutation&, are_equal)> callback) {
+void for_each_mutation_pair(std::function<void(const mutation&, const mutation&, are_equal, std::string_view)> callback) {
     auto&& ms = get_mutation_sets();
     for (auto&& mutations : ms.equal) {
         auto i = mutations.begin();
         SCYLLA_ASSERT(i != mutations.end());
         const mutation& first = *i++;
         while (i != mutations.end()) {
-            callback(first, *i, are_equal::yes);
+            callback(first, *i, are_equal::yes, {});
             ++i;
         }
     }
-    for (auto&& mutations : ms.unequal) {
-        auto i = mutations.begin();
-        SCYLLA_ASSERT(i != mutations.end());
-        const mutation& first = *i++;
-        while (i != mutations.end()) {
-            callback(first, *i, are_equal::no);
-            ++i;
-        }
+    for (auto&& pair : ms.unequal) {
+        callback(pair.a, pair.b, are_equal::no, pair.label);
     }
+}
+
+void for_each_mutation_pair(std::function<void(const mutation&, const mutation&, are_equal)> callback) {
+    for_each_mutation_pair([callback = std::move(callback)] (const mutation& m1, const mutation& m2, are_equal eq, std::string_view) {
+        callback(m1, m2, eq);
+    });
 }
 
 void for_each_mutation(std::function<void(const mutation&)> callback) {
@@ -1985,10 +2026,9 @@ void for_each_mutation(std::function<void(const mutation&)> callback) {
             callback(m);
         }
     }
-    for (auto&& mutations : ms.unequal) {
-        for (auto&& m : mutations) {
-            callback(m);
-        }
+    for (auto&& pair : ms.unequal) {
+        callback(pair.a);
+        callback(pair.b);
     }
 }
 
