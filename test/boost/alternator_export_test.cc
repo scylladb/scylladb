@@ -10,6 +10,7 @@
 
 #include <seastar/core/coroutine.hh>
 #include "alternator/export.hh"
+#include "utils/rjson.hh"
 #include <string>
 #include <vector>
 #include <span>
