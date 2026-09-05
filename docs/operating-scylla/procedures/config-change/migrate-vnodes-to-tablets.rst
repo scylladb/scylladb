@@ -126,19 +126,19 @@ Procedure
 
       .. code-block:: console
 
-         scylla nodetool migrate-to-tablets start <keyspace>
+         nodetool migrate-to-tablets start <keyspace>
 
    #. Verify that the keyspace is in ``migrating_to_tablets`` state and all nodes are still using vnodes:
 
       .. code-block:: console
 
-         scylla nodetool migrate-to-tablets status <keyspace>
+         nodetool migrate-to-tablets status <keyspace>
 
       **Example:**
 
       .. code-block:: console
 
-         $ scylla nodetool migrate-to-tablets status ks
+         $ nodetool migrate-to-tablets status ks
          Keyspace: ks
          Status: migrating_to_tablets
 
@@ -170,19 +170,19 @@ Procedure
 
       .. code-block:: console
 
-         scylla nodetool -h <node-ip> migrate-to-tablets upgrade
+         nodetool -h <node-ip> migrate-to-tablets upgrade
 
    #. Verify that the node status changed from ``vnodes`` to ``migrating to tablets``:
 
       .. code-block:: console
 
-         scylla nodetool migrate-to-tablets status <keyspace>
+         nodetool migrate-to-tablets status <keyspace>
 
       **Example:**
 
       .. code-block:: console
 
-         $ scylla nodetool migrate-to-tablets status ks
+         $ nodetool migrate-to-tablets status ks
          Keyspace: ks
          Status: migrating_to_tablets
 
@@ -196,7 +196,7 @@ Procedure
 
       .. code-block:: console
 
-         scylla nodetool -h <node-ip> drain
+         nodetool -h <node-ip> drain
 
       .. include:: /rst_include/scylla-commands-stop-index.rst
 
@@ -224,19 +224,19 @@ Procedure
 
       .. code-block:: console
 
-         scylla nodetool tasks list compaction -h <node-ip> --keyspace <keyspace> | grep -i reshard
+         nodetool tasks list compaction -h <node-ip> --keyspace <keyspace> | grep -i reshard
 
    #. Verify that the node status changed from ``migrating to tablets`` to ``uses tablets``:
 
       .. code-block:: console
 
-         scylla nodetool migrate-to-tablets status <keyspace>
+         nodetool migrate-to-tablets status <keyspace>
 
       **Example:**
 
       .. code-block:: console
 
-         $ scylla nodetool migrate-to-tablets status ks
+         $ nodetool migrate-to-tablets status ks
          Keyspace: ks
          Status: migrating_to_tablets
 
@@ -259,19 +259,19 @@ Procedure
 
       .. code-block:: console
 
-         scylla nodetool migrate-to-tablets finalize <keyspace>
+         nodetool migrate-to-tablets finalize <keyspace>
 
    #. Verify that the keyspace status changed to ``tablets``:
 
       .. code-block:: console
 
-         scylla nodetool migrate-to-tablets status <keyspace>
+         nodetool migrate-to-tablets status <keyspace>
 
       **Example:**
 
       .. code-block:: console
 
-         $ scylla nodetool migrate-to-tablets finalize ks
+         $ nodetool migrate-to-tablets finalize ks
          Keyspace: ks
          Status: tablets
 
@@ -286,13 +286,13 @@ Procedure
 
       .. code-block:: console
 
-         scylla nodetool migrate-to-tablets status <keyspace> --with-tablet-status
+         nodetool migrate-to-tablets status <keyspace> --with-tablet-status
 
       **Example:**
 
       .. code-block:: console
 
-         $ scylla nodetool migrate-to-tablets status ks --with-tablet-status
+         $ nodetool migrate-to-tablets status ks --with-tablet-status
          Keyspace: ks
          Status: tablets
 
@@ -322,13 +322,13 @@ following:
 
    .. code-block:: console
 
-      scylla nodetool migrate-to-tablets status <keyspace>
+      nodetool migrate-to-tablets status <keyspace>
 
    **Example:**
 
    .. code-block:: console
 
-      $ scylla nodetool migrate-to-tablets status ks
+      $ nodetool migrate-to-tablets status ks
       Keyspace: ks
       Status: migrating_to_tablets
 
@@ -345,7 +345,7 @@ following:
 
       .. code-block:: console
 
-         scylla nodetool -h <node-ip> migrate-to-tablets downgrade
+         nodetool -h <node-ip> migrate-to-tablets downgrade
 
    #. Check the node status. The status for a previously upgraded node should
       change from ``uses tablets`` to ``migrating to vnodes``. The status for a
@@ -354,13 +354,13 @@ following:
 
       .. code-block:: console
 
-         scylla nodetool migrate-to-tablets status <keyspace>
+         nodetool migrate-to-tablets status <keyspace>
 
       **Example:**
 
       .. code-block:: console
 
-         $ scylla nodetool migrate-to-tablets status ks
+         $ nodetool migrate-to-tablets status ks
          Keyspace: ks
          Status: migrating_to_tablets
 
@@ -380,7 +380,7 @@ following:
 
          .. code-block:: console
 
-            scylla nodetool -h <node-ip> drain
+            nodetool -h <node-ip> drain
 
          .. include:: /rst_include/scylla-commands-stop-index.rst
 
@@ -408,19 +408,19 @@ following:
 
          .. code-block:: console
 
-            scylla nodetool tasks list compaction -h <node-ip> --keyspace <keyspace> | grep -i reshard
+            nodetool tasks list compaction -h <node-ip> --keyspace <keyspace> | grep -i reshard
 
       #. Verify that the node status changed from ``migrating to vnodes`` to ``uses vnodes``:
 
          .. code-block:: console
 
-            scylla nodetool migrate-to-tablets status <keyspace>
+            nodetool migrate-to-tablets status <keyspace>
 
          **Example:**
 
          .. code-block:: console
 
-            $ scylla nodetool migrate-to-tablets status ks
+            $ nodetool migrate-to-tablets status ks
             Keyspace: ks
             Status: migrating_to_tablets
 
@@ -437,7 +437,7 @@ following:
 
    .. code-block:: console
 
-      scylla nodetool migrate-to-tablets finalize <keyspace>
+      nodetool migrate-to-tablets finalize <keyspace>
 
 Migrating multiple keyspaces
 ----------------------------
@@ -454,8 +454,8 @@ To migrate multiple keyspaces simultaneously, follow these steps:
 
    .. code-block:: console
 
-      scylla nodetool migrate-to-tablets start <keyspace1>
-      scylla nodetool migrate-to-tablets start <keyspace2>
+      nodetool migrate-to-tablets start <keyspace1>
+      nodetool migrate-to-tablets start <keyspace2>
       ...
 
    Verify that all keyspaces are in ``migrating_to_tablets`` state before
@@ -463,8 +463,8 @@ To migrate multiple keyspaces simultaneously, follow these steps:
 
    .. code-block:: console
 
-      scylla nodetool migrate-to-tablets status <keyspace1>
-      scylla nodetool migrate-to-tablets status <keyspace2>
+      nodetool migrate-to-tablets status <keyspace1>
+      nodetool migrate-to-tablets status <keyspace2>
       ...
 
 #. Upgrade all nodes in the cluster following the same :ref:`procedure <upgrade-nodes>`
@@ -475,6 +475,6 @@ To migrate multiple keyspaces simultaneously, follow these steps:
 
    .. code-block:: console
 
-      scylla nodetool migrate-to-tablets finalize <keyspace1>
-      scylla nodetool migrate-to-tablets finalize <keyspace2>
+      nodetool migrate-to-tablets finalize <keyspace1>
+      nodetool migrate-to-tablets finalize <keyspace2>
       ...
