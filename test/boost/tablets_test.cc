@@ -832,6 +832,38 @@ SEASTAR_TEST_CASE(test_paused_rf_change_requests_persistence) {
     }, tablet_cql_test_config());
 }
 
+SEASTAR_TEST_CASE(test_topology_paused_requests_updated_with_tablet_drain) {
+    auto h_draining = host_id(utils::UUID_gen::get_time_UUID());
+    auto h_leaving = raft::server_id(h_draining.uuid());
+
+    service::topology topo;
+    topo.requests.emplace(h_leaving, topology_request::leave);
+
+    // Node still has a tablet replica: pausing keeps it out of the scheduler.
+    {
+        tablet_metadata tm;
+        tablet_map tmap(1);
+        tmap.set_tablet(tmap.first_tablet(), tablet_info {
+            tablet_replica_set { tablet_replica { h_draining, 0 } }
+        });
+        tm.set_tablet_map(table_id(utils::UUID_gen::get_time_UUID()), std::move(tmap));
+
+        topo.recompute_paused_requests(tm);
+        BOOST_REQUIRE(topo.paused_requests.contains(h_leaving));
+    }
+
+    // Tablets have since drained off the node: the stale pause must be evicted,
+    // this is the fix for the bug where topology_state_load's fast path (and
+    // even the full-reload path before it) never removed entries once added.
+    {
+        tablet_metadata tm; // no replicas anywhere
+        topo.recompute_paused_requests(tm);
+        BOOST_REQUIRE(!topo.paused_requests.contains(h_leaving));
+    }
+
+    return make_ready_future<>();
+}
+
 SEASTAR_TEST_CASE(test_tablet_metadata_persistence_with_colocated_tables) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         auto h1 = host_id(utils::UUID_gen::get_time_UUID());

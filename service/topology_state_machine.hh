@@ -29,6 +29,10 @@ namespace db {
     class system_keyspace;
 }
 
+namespace locator {
+    class tablet_metadata;
+}
+
 namespace service {
 
 class raft_group0;
@@ -265,6 +269,11 @@ struct topology {
     size_t size() const;
     // Are there any non-left nodes?
     bool is_empty() const;
+
+    // Keep paused_requests in sync with tablets: pause leave/remove requests for
+    // nodes still holding tablet replicas, and unpause ones that have since drained.
+    // Must run after every topology_state_load, regardless of which path built topology.
+    void recompute_paused_requests(const locator::tablet_metadata& tablets);
 
     // Returns false iff we can safely start a new topology change.
     bool is_busy() const;
