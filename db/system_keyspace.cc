@@ -3269,12 +3269,7 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
         }
     };
 
-    for (auto& row : *rs) {
-        // The result set is already materialized, so without this the whole
-        // per-node walk below runs as one task and holds the shard for as long
-        // as the cluster is big.
-        co_await coroutine::maybe_yield();
-
+    auto process_row = [&] (const cql3::untyped_result_set_row& row) -> stop_iteration {
         if (!std::exchange(statics_read, true)) {
             read_statics(row);
         }
@@ -3282,7 +3277,7 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
         if (!row.has("host_id")) {
             // There are no clustering rows, only the static row, whose
             // columns read_statics() has just taken.
-            break;
+            return stop_iteration::yes;
         }
 
         raft::server_id host_id{row.get_as<utils::UUID>("host_id")};
@@ -3294,7 +3289,7 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
             // one of these rows for every node it has ever lost, so decoding the
             // rest of the row would be pure waste.
             ret.left_nodes.emplace(host_id);
-            continue;
+            return stop_iteration::no;
         }
 
         auto datacenter = row.get_as<sstring>("datacenter");
@@ -3436,6 +3431,19 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
                 ring_slice, shard_count, ignore_msb, std::move(supported_features),
                 service::cleanup_status_from_string(cleanup_status), request_id,
                 intended_storage_mode, current_storage_mode});
+        }
+
+        return stop_iteration::no;
+    };
+
+    for (auto& row : *rs) {
+        // The result set is already materialized, so without this the whole
+        // per-node walk below runs as one task and holds the shard for as long
+        // as the cluster is big.
+        co_await coroutine::maybe_yield();
+
+        if (process_row(row) == stop_iteration::yes) {
+            break;
         }
     }
 
