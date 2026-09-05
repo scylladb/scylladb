@@ -49,6 +49,10 @@
 #include "service/topology_coordinator.hh"
 #include "service/topology_state_machine.hh"
 #include "service/migration_manager.hh"
+#include "cql3/query_options.hh"
+#include "service/pager/paging_state.hh"
+#include "transport/messages/result_message.hh"
+#include "dht/i_partitioner.hh"
 
 #include <boost/regex.hpp>
 #include <atomic>
@@ -3716,6 +3720,119 @@ SEASTAR_THREAD_TEST_CASE(test_load_sketch_minimal_tablet_size) {
             load.populate().get();
             BOOST_REQUIRE_EQUAL(load.get_load(host), tablet_count);
         }
+    }, cfg).get();
+}
+
+// Reproduces streaming of system.tablet_sizes across many CQL pages: verifies that
+// converting tablet_sizes::execute_on_leader() to emit rows one at a time (instead of
+// building one mutation per table) still returns every tablet, in ascending last_token order.
+SEASTAR_THREAD_TEST_CASE(test_tablet_sizes_paged_query) {
+    auto cfg = tablet_cql_test_config();
+
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+
+        auto& stm = e.shared_token_metadata().local();
+        const uint64_t tablet_count = 128;
+        [[maybe_unused]] auto host = topo.add_node(node_state::normal, 1, topo.rack());
+
+        auto ks = add_keyspace(e, {{topo.dc(), 1}}, tablet_count);
+        auto table = add_table(e, ks).get();
+
+        auto& shared_stats = topo.get_shared_load_stats();
+        shared_stats.set_default_tablet_sizes(stm.get());
+        e.get_tablet_allocator().local().set_load_stats(shared_stats.get());
+
+        auto& tmap = stm.get()->tablets().get_tablet_map(table);
+        BOOST_REQUIRE_EQUAL(tmap.tablet_count(), tablet_count);
+
+        std::vector<int64_t> last_tokens;
+        bool has_more_pages = true;
+        lw_shared_ptr<const service::pager::paging_state> paging_state = nullptr;
+        while (has_more_pages) {
+            auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, std::vector<cql3::raw_value>{},
+                        cql3::query_options::specific_options{5, paging_state, {}, api::new_timestamp()});
+            auto result = e.execute_cql(
+                    format("SELECT last_token FROM system.tablet_sizes WHERE table_id = {};", table), std::move(qo)).get();
+            auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(result);
+            BOOST_REQUIRE(rows);
+            for (auto& row : rows->rs().result_set().rows()) {
+                last_tokens.push_back(value_cast<int64_t>(long_type->deserialize(*row[0])));
+            }
+            has_more_pages = rows->rs().get_metadata().flags().contains(cql3::metadata::flag::HAS_MORE_PAGES);
+            paging_state = rows->rs().get_metadata().paging_state();
+            BOOST_REQUIRE(!has_more_pages || paging_state);
+        }
+
+        BOOST_REQUIRE_EQUAL(last_tokens.size(), tablet_count);
+        // strictly increasing implies sorted, complete, and no duplicates
+        BOOST_REQUIRE(std::ranges::adjacent_find(last_tokens, std::greater_equal<int64_t>()) == last_tokens.end());
+    }, cfg).get();
+}
+
+// Scans system.tablet_sizes across multiple tables without a table_id filter, paging
+// through in small pages, and verifies that table partitions are emitted in ring
+// (decorated-key) order, and that no tablet is skipped or duplicated across pages.
+SEASTAR_THREAD_TEST_CASE(test_tablet_sizes_paged_query_multiple_tables) {
+    auto cfg = tablet_cql_test_config();
+
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+
+        auto& stm = e.shared_token_metadata().local();
+        const uint64_t tablet_count = 4;
+        [[maybe_unused]] auto host = topo.add_node(node_state::normal, 1, topo.rack());
+
+        auto ks = add_keyspace(e, {{topo.dc(), 1}}, tablet_count);
+        std::vector<table_id> tables;
+        for (int i = 0; i < 6; i++) {
+            tables.push_back(add_table(e, ks).get());
+        }
+
+        auto& shared_stats = topo.get_shared_load_stats();
+        shared_stats.set_default_tablet_sizes(stm.get());
+        e.get_tablet_allocator().local().set_load_stats(shared_stats.get());
+
+        for (auto& t : tables) {
+            BOOST_REQUIRE_EQUAL(stm.get()->tablets().get_tablet_map(t).tablet_count(), tablet_count);
+        }
+
+        // Expected partition order: same decoration tablet_sizes::make_partition_key() uses.
+        auto s = e.local_db().find_schema(db::system_keyspace::NAME, "tablet_sizes");
+        auto expected = tables;
+        std::ranges::sort(expected, dht::ring_position_less_comparator(*s), [&] (const table_id& t) {
+            return dht::decorate_key(*s, partition_key::from_single_value(*s, data_value(t.uuid()).serialize_nonnull()));
+        });
+
+        std::vector<utils::UUID> seen_order; // first-seen table_id per partition
+        std::set<std::pair<utils::UUID, int64_t>> seen_rows;
+        bool has_more_pages = true;
+        lw_shared_ptr<const service::pager::paging_state> paging_state = nullptr;
+        while (has_more_pages) {
+            auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, std::vector<cql3::raw_value>{},
+                        cql3::query_options::specific_options{3, paging_state, {}, api::new_timestamp()});
+            auto result = e.execute_cql("SELECT table_id, last_token FROM system.tablet_sizes;", std::move(qo)).get();
+            auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(result);
+            BOOST_REQUIRE(rows);
+            for (auto& row : rows->rs().result_set().rows()) {
+                auto table_id = value_cast<utils::UUID>(uuid_type->deserialize(*row[0]));
+                auto last_token = value_cast<int64_t>(long_type->deserialize(*row[1]));
+                BOOST_REQUIRE(seen_rows.emplace(table_id, last_token).second);
+                if (seen_order.empty() || seen_order.back() != table_id) {
+                    seen_order.push_back(table_id);
+                }
+            }
+            has_more_pages = rows->rs().get_metadata().flags().contains(cql3::metadata::flag::HAS_MORE_PAGES);
+            paging_state = rows->rs().get_metadata().paging_state();
+            BOOST_REQUIRE(!has_more_pages || paging_state);
+        }
+
+        BOOST_REQUIRE_EQUAL(seen_rows.size(), tables.size() * tablet_count);
+        std::vector<utils::UUID> expected_order;
+        for (auto& t : expected) {
+            expected_order.push_back(t.uuid());
+        }
+        BOOST_REQUIRE_EQUAL(seen_order, expected_order);
     }, cfg).get();
 }
 
