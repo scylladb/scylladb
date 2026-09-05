@@ -32,7 +32,6 @@ async def test_add_server_reports_why_the_server_was_not_built(tmp_path: pathlib
     cluster = ScyllaCluster(
         logger=logging.getLogger(__name__),
         vardir=tmp_path,
-        replicas=0,
         mode="dev",
         cmdline_options=[],
         cmdline_options_override=[],

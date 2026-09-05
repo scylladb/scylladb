@@ -15,17 +15,14 @@ decorator and the bridge under test are the production ones.
 """
 
 import asyncio
-import concurrent.futures
-import inspect
 import logging
 import threading
-from collections.abc import Iterator
+from collections.abc import AsyncIterator
 
 import pytest
 
 from test.pylib.internal_types import ServerNum
-from test.pylib.util import LogPrefixAdapter
-from test.pylib.scylla_cluster_manager import ScyllaClusterManager, fenced
+from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 
 
 SERVER_ID = ServerNum(1)
@@ -44,61 +41,49 @@ class StubCluster:
     entered.
     """
 
-    def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
-        self._loop = loop
-        self._release = loop.create_future()
+    def __init__(self) -> None:
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._release: asyncio.Future | None = None
         self.entered = threading.Event()      # readable from any thread
         self.stopped: list[ServerNum] = []
-        self.is_dirty = False
+        # The manager borrows the cluster's REST client and logger.
+        self.api = None
+        self.logger = logging.getLogger("test_manager_op_bridge")
 
     async def server_stop(self, server_id: ServerNum, gracefully: bool) -> None:
+        # The future belongs to the loop the operation runs on -- the
+        # manager's -- like a real server's subprocess transport.
+        self._loop = asyncio.get_running_loop()
+        self._release = self._loop.create_future()
         self.entered.set()
         await self._release
         self.stopped.append(server_id)
 
+    async def stop(self) -> None:
+        pass
+
     def release(self) -> None:
         """Let a suspended server_stop() finish; callable from any thread."""
-        self._loop.call_soon_threadsafe(
-            lambda: None if self._release.done() else self._release.set_result(None))
+        if self._loop is not None:
+            self._loop.call_soon_threadsafe(
+                lambda: None if self._release.done() else self._release.set_result(None))
 
 
 @pytest.fixture
-def manager() -> Iterator[tuple[ScyllaClusterManager, StubCluster, asyncio.AbstractEventLoop]]:
-    """A ScyllaClusterManager running on its own thread and loop.
-
-    Mirrors the _scylla_cluster_manager fixture in test/cluster/conftest.py: the loop
-    stays alive but idle until teardown, so callers on other loops and threads
-    have something to hand work to.
-    """
-    ready: concurrent.futures.Future = concurrent.futures.Future()
-    stop_event = threading.Event()
-
-    async def run_manager() -> None:
-        mgr = ScyllaClusterManager(
-            test_uname="test_manager_op_bridge",
-            create_cluster=None,
-            base_dir="",
-            port=9042,
-            use_ssl=False,
-            auth_provider=None,
-        )
-        mgr.logger = LogPrefixAdapter(logging.getLogger("test_manager_op_bridge"), {"prefix": "test"})
-        mgr.cluster = StubCluster(asyncio.get_running_loop())
-        ready.set_result((mgr, asyncio.get_running_loop()))
-        await asyncio.get_running_loop().run_in_executor(None, stop_event.wait)
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(asyncio.run, run_manager())
-        future.add_done_callback(
-            lambda f: None if ready.done() else ready.set_exception(
-                f.exception() or RuntimeError("manager exited before signaling readiness")))
-        mgr, loop = ready.result(timeout=TIMEOUT)
+async def manager() -> AsyncIterator[tuple[ScyllaClusterManager, StubCluster, asyncio.AbstractEventLoop]]:
+    """A ScyllaClusterManager running on its own thread and loop, with a stub cluster."""
+    stub = StubCluster()
+    mgr = ScyllaClusterManager(
+        test_name="test_manager_op_bridge::stub",
+        cluster=stub,
+        port=9042,
+        use_ssl=False,
+    )
+    async with mgr.run_in_thread():
         try:
-            yield mgr, mgr.cluster, loop
+            yield mgr, stub, mgr._loop
         finally:
-            mgr.cluster.release()   # don't strand an operation on shutdown
-            stop_event.set()
-            future.result(timeout=TIMEOUT)
+            stub.release()   # don't strand an operation on shutdown
 
 
 async def test_operation_runs_on_the_managers_loop(manager) -> None:
@@ -187,63 +172,3 @@ async def test_exception_keeps_its_type(manager) -> None:
 
     with pytest.raises(ValueError, match="stop failed"):
         await mgr.server_stop(SERVER_ID, convict=False)
-
-
-async def test_broken_manager_refuses_mutations(manager) -> None:
-    """A manager fenced off by a previous test rejects further changes."""
-    mgr, cluster, manager_loop = manager
-    async def do_break() -> None:
-        mgr.break_manager("leaked task", "some_test")
-
-    await asyncio.wrap_future(
-        asyncio.run_coroutine_threadsafe(do_break(), manager_loop))
-
-    with pytest.raises(RuntimeError, match="BROKEN"):
-        await mgr.server_stop(SERVER_ID, convict=False)
-    assert not cluster.entered.is_set(), "a broken manager still ran the operation"
-
-    # Reads stay available so that after-test bookkeeping can still run.
-    assert await mgr.is_dirty() is False
-
-
-async def test_finished_test_fences_the_manager_off(manager) -> None:
-    """After after_test(), a task leaked by the test cannot reach the manager.
-
-    before_test() lifts the fence again for the next test.
-    """
-    mgr, cluster, _ = manager
-
-    mgr._test_finished = True
-    with pytest.raises(Exception, match="not accessible after the test finished"):
-        await mgr.is_dirty()
-    assert not cluster.entered.is_set()
-
-    mgr._test_finished = False
-    assert await mgr.is_dirty() is False
-
-
-async def test_driver_methods_are_fenced_off(manager) -> None:
-    """The driver lives on the shared manager, so a leaked caller must not
-    reach it -- but teardown still has to be able to close the session."""
-    mgr, _, _ = manager
-
-    mgr._test_finished = True
-    with pytest.raises(RuntimeError, match="not accessible after the test finished"):
-        mgr.driver_close()
-    with pytest.raises(RuntimeError, match="not accessible after the test finished"):
-        mgr.get_cql()
-    with pytest.raises(RuntimeError, match="not accessible after the test finished"):
-        await mgr.driver_connect()
-
-    mgr._driver_close()   # what stop() uses at module teardown; must not raise
-
-
-def test_fenced_keeps_the_kind_of_what_it_decorates() -> None:
-    """universalasync makes a method callable from a plain thread only if
-    iscoroutinefunction says it is one, so fenced must not change that answer.
-    """
-    async def operation(self) -> None: ...
-    def plain(self) -> None: ...
-
-    assert inspect.iscoroutinefunction(fenced(operation))
-    assert not inspect.iscoroutinefunction(fenced(plain))

@@ -12,7 +12,7 @@ import pytest
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import inject_error_one_shot, inject_error
 from test.cluster.util import reconnect_driver, new_test_keyspace
-from test.cluster.object_store.conftest import keyspace_options
+from test.pylib.object_storage import keyspace_options
 
 logger = logging.getLogger(__name__)
 

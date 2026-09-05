@@ -1077,20 +1077,16 @@ class ScyllaServer:
         except FileNotFoundError:
             pass
         self.log_filename.unlink(missing_ok=True)
-        self.log_file = None
+        if self.log_file:
+            self.log_file.close()
+            self.log_file = None
+        self.maintenance_socket_dir.cleanup()
 
     def write_log_marker(self, msg) -> None:
         """Write a message to the server's log file (e.g. separator/marker)"""
         self.log_file.seek(0, 2)  # seek to file end
         self.log_file.write(msg.encode())
         self.log_file.flush()
-
-    def setLogger(self, logger: logging.LoggerAdapter):
-        """Change the logger used by the server.
-           Called when a cluster is reused between tests so that logs during the new test
-           are prefixed appropriately with the corresponding test's name.
-        """
-        self.logger = logger
 
     def __str__(self):
         host_id = getattr(self, '_host_id', 'undefined id')

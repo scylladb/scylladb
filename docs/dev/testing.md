@@ -331,13 +331,8 @@ manager, an in-process Python object running on its own event
 loop; calls are bridged to that loop. This guarantees that the
 test framework is fully aware of all topology operations and can
 clean up resources, including added servers, when tests end.
-`test.py` automatically detects if a cluster can not be shared with a
-subsequent test because it was manipulated with. Today the check
-is quite simple: any cluster that has nodes added or removed,
-started or stopped, even if it ended up in the same state
-as it was at the beginning of the test, is considered "dirty".
-Such clusters are not reused by the next test case: they are destroyed
-and a new cluster is created instead.
+Every test gets its own cluster, created when the test starts and
+destroyed when it ends, so tests never share or reuse a cluster.
 
 ## Test metrics
 
