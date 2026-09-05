@@ -444,12 +444,40 @@ future<> sstable_directory::sstables_registry_components_lister::process(sstable
     });
 }
 
+void validate_restore_toc_names(const std::vector<sstring>& toc_filenames) {
+    for (const auto& toc_filename : toc_filenames) {
+        if (auto result = sstables::parse_path(std::filesystem::path{toc_filename}, "", ""); !result) {
+            throw std::invalid_argument(seastar::format(
+                    "restore: '{}' is not a valid sstable TOC object name: {}",
+                    toc_filename, result.error()));
+        }
+    }
+}
+
 future<> sstable_directory::restore_components_lister::process(sstable_directory& directory, process_flags flags) {
+    // These TOC names come from the restore REQUEST -- they are operator input, not a listing of
+    // files Scylla wrote. That distinction decides how a bad one must be reported.
+    //
+    // throw_malformed_sstable_exception() honours abort_on_malformed_sstable_error, which defaults
+    // to true, so it ABORTS THE PROCESS. That is the right policy for corrupt bytes found on disk:
+    // carrying on with data known to be wrong is worse than stopping. It is the wrong policy for a
+    // typo in a request. A blank trailing line in a --sstables-file-list parsed as an sstable named
+    // "", and the node died with "invalid version for file ." -- taking the cluster member down at
+    // exactly the moment an operator is restoring from backup, and reporting it to them as
+    // "Connection reset by peer".
+    //
+    // Validated up front, before any restoring starts, so a bad entry fails the whole operation
+    // cleanly instead of half way through a partially-restored table.
+    validate_restore_toc_names(_toc_filenames);
     co_await coroutine::parallel_for_each(_toc_filenames, [flags, &directory] (sstring toc_filename) -> future<> {
         std::filesystem::path sst_path{toc_filename};
         auto result = sstables::parse_path(sst_path, "", "");
         if (!result) {
-            throw_malformed_sstable_exception(result.error());
+            // Unreachable: every name was parsed above. Kept so this cannot silently become an
+            // abort again if the pre-pass is ever dropped.
+            throw std::invalid_argument(seastar::format(
+                    "restore: '{}' is not a valid sstable TOC object name: {}",
+                    toc_filename, result.error()));
         }
         entry_descriptor desc = std::move(*result);
         if (!sstable_generation_generator::maybe_owned_by_this_shard(desc.generation)) {

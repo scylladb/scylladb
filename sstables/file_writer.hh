@@ -60,6 +60,14 @@ public:
     // Must be called in a seastar thread.
     void close();
 
+protected:
+    // For derived classes that must close the stream from their own destructor, before their
+    // members die. close() asserts on a double close, so they need to be able to ask first.
+    bool is_closed() const noexcept {
+        return _closed;
+    }
+public:
+
     uint64_t offset() const {
         return _offset.offset;
     }
