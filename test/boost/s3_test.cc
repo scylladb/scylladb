@@ -922,6 +922,158 @@ SEASTAR_THREAD_TEST_CASE(test_creds) {
     BOOST_REQUIRE_EQUAL(creds.session_token, "");
 }
 
+namespace {
+
+// Always fails, and counts how many times it was invoked and how many
+// invocations were ever in flight at once.
+class always_failing_provider final : public aws::aws_credentials_provider {
+    unsigned& _calls;
+    unsigned& _concurrent;
+    unsigned& _max_concurrent;
+
+public:
+    always_failing_provider(unsigned& calls, unsigned& concurrent, unsigned& max_concurrent)
+        : _calls(calls), _concurrent(concurrent), _max_concurrent(max_concurrent) {}
+    const char* get_name() const override { return "always_failing_provider"; }
+
+protected:
+    future<> reload() override {
+        ++_calls;
+        ++_concurrent;
+        _max_concurrent = std::max(_max_concurrent, _concurrent);
+        co_await seastar::sleep(5ms); // window for a concurrent, unsynchronized caller to overlap
+        --_concurrent;
+        throw std::runtime_error("simulated total credential-provider failure");
+    }
+};
+
+} // anonymous namespace
+
+// aws_credentials_provider_chain::get_aws_credentials() (aws_credentials_provider_chain.cc)
+// swallows every provider failure and, on total failure, returns a default (falsy)
+// s3::aws_credentials instead of throwing. This is deliberate and unchanged by the
+// client-side fix below: throwing here would break the legitimate "no credentials
+// configured" case (see test_creds), so the negative cache/backoff lives in client,
+// which is the only layer that knows the difference between "never tried" and
+// "tried and failed". This test documents the chain's own (correct) behavior: no
+// caching at this layer, calls grow 1:1 with the number of attempts.
+SEASTAR_THREAD_TEST_CASE(test_creds_chain_has_no_negative_cache_of_its_own) {
+    unsigned calls = 0, concurrent = 0, max_concurrent = 0;
+    aws::aws_credentials_provider_chain provider_chain;
+    provider_chain.add_credentials_provider(std::make_unique<always_failing_provider>(calls, concurrent, max_concurrent));
+
+    constexpr unsigned attempts = 5;
+    for (unsigned i = 0; i < attempts; i++) {
+        auto creds = provider_chain.get_aws_credentials().get();
+        BOOST_REQUIRE(!creds); // total failure -> falsy creds, not an exception
+    }
+    BOOST_REQUIRE_EQUAL(calls, attempts);
+}
+
+// client::authorize() and client::update_credentials_and_rearm() (utils/s3/client.cc)
+// are private and client's provider chain is hardcoded to real AWS/IMDS hosts, so
+// they can't be driven directly from a fast, hermetic test. This mirrors their
+// fixed control flow verbatim against the real aws_credentials_provider_chain and a
+// real single-count seastar::semaphore standing in for client's _creds_sem:
+//
+//   future<> update_credentials_and_rearm() {
+//       auto new_creds = co_await chain.get_aws_credentials();
+//       if (new_creds) {
+//           credentials = std::move(new_creds);           // never clobbered by a falsy result
+//           retry_at = time_point::min();
+//       } else {
+//           retry_at = now() + backoff;                    // self-heals in the background
+//       }
+//   }
+//   future<> authorize() {
+//       if (!credentials && now() >= retry_at) {
+//           auto units = co_await get_units(creds_sem, 1);
+//           if (!credentials && now() >= retry_at) {
+//               co_await update_credentials_and_rearm();
+//           }
+//       }
+//   }
+//
+// With credentials permanently unobtainable, concurrent callers must coalesce onto
+// a single chain attempt (the rest see retry_at pushed into the future and skip
+// it), and a later caller past the backoff window must retry.
+SEASTAR_THREAD_TEST_CASE(test_client_authorize_pattern_backs_off_after_total_failure) {
+    unsigned calls = 0, concurrent = 0, max_concurrent = 0;
+    aws::aws_credentials_provider_chain chain;
+    chain.add_credentials_provider(std::make_unique<always_failing_provider>(calls, concurrent, max_concurrent));
+
+    seastar::semaphore creds_sem{1};
+    s3::aws_credentials credentials;
+    auto retry_at = seastar::lowres_clock::time_point::min();
+    constexpr auto backoff = 50ms;
+
+    auto update_credentials_and_rearm = [&]() -> future<> {
+        auto new_creds = co_await chain.get_aws_credentials();
+        if (new_creds) {
+            credentials = std::move(new_creds);
+            retry_at = seastar::lowres_clock::time_point::min();
+        } else {
+            retry_at = seastar::lowres_clock::now() + backoff;
+        }
+    };
+    auto authorize = [&]() -> future<> {
+        if (!credentials && seastar::lowres_clock::now() >= retry_at) {
+            auto units = co_await get_units(creds_sem, 1);
+            if (!credentials && seastar::lowres_clock::now() >= retry_at) {
+                co_await update_credentials_and_rearm();
+            }
+        }
+    };
+
+    constexpr unsigned concurrent_requests = 5;
+    std::vector<future<>> futs;
+    futs.reserve(concurrent_requests);
+    for (unsigned i = 0; i < concurrent_requests; i++) {
+        futs.push_back(authorize());
+    }
+    for (auto& f : futs) {
+        f.get();
+    }
+
+    BOOST_REQUIRE(!credentials);
+    // Only the first caller ran the chain; the rest coalesced onto its result
+    // instead of each re-running it - attempt count no longer scales with request count.
+    BOOST_REQUIRE_EQUAL(calls, 1u);
+    BOOST_REQUIRE_EQUAL(max_concurrent, 1u);
+
+    // Immediately retrying within the backoff window must not re-run the chain.
+    authorize().get();
+    BOOST_REQUIRE_EQUAL(calls, 1u);
+
+    // Past the backoff window, the client self-heals by retrying.
+    seastar::sleep(backoff + 10ms).get();
+    authorize().get();
+    BOOST_REQUIRE_EQUAL(calls, 2u);
+}
+
+// Mirrors update_credentials_and_rearm()'s "only overwrite when truthy" rule: a
+// transient refresh failure (DNS hiccup, IMDS blip) must not discard credentials
+// that are still valid for another hour.
+SEASTAR_THREAD_TEST_CASE(test_client_update_credentials_preserves_valid_on_refresh_failure) {
+    unsigned calls = 0, concurrent = 0, max_concurrent = 0;
+    aws::aws_credentials_provider_chain chain;
+    chain.add_credentials_provider(std::make_unique<always_failing_provider>(calls, concurrent, max_concurrent));
+
+    s3::aws_credentials credentials{
+        .access_key_id = "STILL_VALID_ACCESS_KEY",
+        .secret_access_key = "STILL_VALID_SECRET_KEY",
+    };
+
+    auto new_creds = chain.get_aws_credentials().get();
+    BOOST_REQUIRE(!new_creds);
+    if (new_creds) {
+        credentials = std::move(new_creds);
+    }
+
+    BOOST_REQUIRE_EQUAL(credentials.access_key_id, "STILL_VALID_ACCESS_KEY");
+    BOOST_REQUIRE_EQUAL(credentials.secret_access_key, "STILL_VALID_SECRET_KEY");
+}
+
 BOOST_AUTO_TEST_CASE(s3_fqn_manipulation) {
     std::string bucket_name, object_name;
     // Empty input
