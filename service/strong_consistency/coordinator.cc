@@ -355,6 +355,17 @@ future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
         auto disposition_result = get<raft_server::timestamp_with_term>(disposition);
         std::tie(ts, term) = {disposition_result.timestamp, disposition_result.term};
 
+        // Nothing between begin_mutate() above and add_entry() below may
+        // suspend this coroutine, not even a co_await on a ready future
+        // (Seastar suspends on those too when the task quota is exhausted).
+        // begin_mutate() hands out timestamps in call order and raft appends
+        // entries in add_entry() call order. If another write could slip in
+        // between, the raft log order and the timestamp order would diverge:
+        // a reader could observe the first log entry alone, and then, after
+        // the second entry with the lower timestamp is applied, a state in
+        // which cells from the second entry are visible while the first entry
+        // still wins on the cells they share. Such a history is not
+        // linearizable.
         const raft_command command {
             .mutation{mutation_gen(ts)}
         };
@@ -363,9 +374,6 @@ future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
 
         logger.debug("mutate(): add_entry({}), term {}",
             command.mutation.pretty_printer(schema), term);
-
-        co_await utils::get_local_injector().inject("sc_coordinator_wait_before_add_entry",
-            utils::wait_for_message(5min));
 
         future<> add_entry_result = co_await coroutine::as_future(
             op.raft_server.server().add_entry(std::move(raft_cmd),
