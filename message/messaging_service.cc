@@ -794,6 +794,7 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::WAIT_FOR_RAFT_GROUPS_TO_START:
     case messaging_verb::BACKUP_SNAPSHOT_SSTABLES:
     case messaging_verb::WAIT_FOR_SNAPSHOT_TRANSFER:
+    case messaging_verb::SYNC_RAFT_GROUP_CONFIG:
         return 1;
     case messaging_verb::CLIENT_ID:
     case messaging_verb::MUTATION:
