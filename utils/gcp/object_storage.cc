@@ -787,6 +787,13 @@ future<> utils::gcp::storage::client::object_data_sink::do_single_upload(std::de
     // Enforce our concurrency constraints
     auto sem_units = co_await seastar::get_units(_semaphore, 1);
 
+    if (_exception) {
+        // An earlier chunk failed while this one waited its turn, so the session is not
+        // where this chunk expects it to be.
+        gcp_storage.debug("{}:{} skipping the chunk at {} after an earlier failure", _bucket, _object_name, offset);
+        co_return;
+    }
+
     // our file range. if the sink was closed, we can set the
     // final size, otherwise, leave it open (*)
     auto last = offset + std::max(len, size_t(1)) - 1; // inclusive.
