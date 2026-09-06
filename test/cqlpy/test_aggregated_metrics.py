@@ -9,7 +9,7 @@
 
 import pytest
 
-from .util import new_test_table, ScyllaMetrics
+from .util import new_test_table, new_secondary_index, new_materialized_view, ScyllaMetrics
 
 # Scylla-only: this property doesn't exist in Cassandra.
 @pytest.fixture(scope="function", autouse=True)
@@ -77,3 +77,59 @@ def test_alter_table_aggregated_metrics_takes_effect(cql, test_keyspace):
         assert not _has_aggregated_metric(cql, table)
         cql.execute(f"ALTER TABLE {table} WITH aggregated_metrics = true")
         assert _has_aggregated_metric(cql, table)
+
+# A secondary index's backing view must inherit aggregated_metrics from the
+# base table, both at creation time and when the base is altered afterwards.
+def test_secondary_index_inherits_aggregated_metrics_at_creation(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p int primary key, v int",
+                         extra=" WITH aggregated_metrics = false") as table:
+        with new_secondary_index(cql, table, "v") as idx:
+            ks, idx_name = idx.split(".")
+            idx_table = f"{ks}.{idx_name}_index"
+            assert not _has_aggregated_metric(cql, idx_table)
+
+def test_secondary_index_aggregated_metrics_alter_propagates(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p int primary key, v int") as table:
+        with new_secondary_index(cql, table, "v") as idx:
+            ks, idx_name = idx.split(".")
+            idx_table = f"{ks}.{idx_name}_index"
+            assert _has_aggregated_metric(cql, idx_table)
+            cql.execute(f"ALTER TABLE {table} WITH aggregated_metrics = false")
+            assert not _has_aggregated_metric(cql, idx_table)
+            cql.execute(f"ALTER TABLE {table} WITH aggregated_metrics = true")
+            assert _has_aggregated_metric(cql, idx_table)
+
+# A materialized view must inherit aggregated_metrics from its base table too,
+# both at creation time and on a later ALTER of the base.
+def test_materialized_view_inherits_aggregated_metrics_at_creation(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p int primary key, v int",
+                         extra=" WITH aggregated_metrics = false") as table:
+        with new_materialized_view(cql, table, "*", "v, p", "v is not null and p is not null") as mv:
+            assert not _has_aggregated_metric(cql, mv)
+
+def test_materialized_view_aggregated_metrics_alter_propagates(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p int primary key, v int") as table:
+        with new_materialized_view(cql, table, "*", "v, p", "v is not null and p is not null") as mv:
+            assert _has_aggregated_metric(cql, mv)
+            cql.execute(f"ALTER TABLE {table} WITH aggregated_metrics = false")
+            assert not _has_aggregated_metric(cql, mv)
+            cql.execute(f"ALTER TABLE {table} WITH aggregated_metrics = true")
+            assert _has_aggregated_metric(cql, mv)
+
+# The CDC log table must inherit aggregated_metrics from its base table too,
+# both at CDC-enable time and on a later ALTER of the base's setting.
+def test_cdc_log_inherits_aggregated_metrics_at_creation(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p int primary key, v int",
+                         extra=" WITH aggregated_metrics = false AND cdc = {'enabled': true}") as table:
+        log_table = f"{table}_scylla_cdc_log"
+        assert not _has_aggregated_metric(cql, log_table)
+
+def test_cdc_log_aggregated_metrics_alter_propagates(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p int primary key, v int",
+                         extra=" WITH cdc = {'enabled': true}") as table:
+        log_table = f"{table}_scylla_cdc_log"
+        assert _has_aggregated_metric(cql, log_table)
+        cql.execute(f"ALTER TABLE {table} WITH aggregated_metrics = false")
+        assert not _has_aggregated_metric(cql, log_table)
+        cql.execute(f"ALTER TABLE {table} WITH aggregated_metrics = true")
+        assert _has_aggregated_metric(cql, log_table)
