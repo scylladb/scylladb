@@ -572,6 +572,37 @@ BOOST_AUTO_TEST_CASE(test_per_table_guardrails_disabled_by_default) {
     BOOST_REQUIRE(!s->large_data_guardrails_enabled());
 }
 
+// Per-table aggregated_metrics override (SCYLLADB-4254): unset falls back to
+// the enable_node_aggregated_table_metrics config default; true/false pins it.
+BOOST_AUTO_TEST_CASE(test_aggregated_metrics_override_unset_by_default) {
+    auto s = schema_builder(1, "ks", "tbl_aggregated_metrics_default")
+        .with_column("pk", utf8_type, column_kind::partition_key)
+        .with_column("ck", utf8_type, column_kind::clustering_key)
+        .with_column("v", bytes_type)
+        .build();
+    BOOST_REQUIRE(!s->aggregated_metrics_override().has_value());
+}
+
+BOOST_AUTO_TEST_CASE(test_aggregated_metrics_override_true) {
+    auto s = schema_builder(1, "ks", "tbl_aggregated_metrics_true")
+        .with_column("pk", utf8_type, column_kind::partition_key)
+        .with_column("ck", utf8_type, column_kind::clustering_key)
+        .with_column("v", bytes_type)
+        .set_aggregated_metrics_override(true)
+        .build();
+    BOOST_REQUIRE(s->aggregated_metrics_override() == std::make_optional(true));
+}
+
+BOOST_AUTO_TEST_CASE(test_aggregated_metrics_override_false) {
+    auto s = schema_builder(1, "ks", "tbl_aggregated_metrics_false")
+        .with_column("pk", utf8_type, column_kind::partition_key)
+        .with_column("ck", utf8_type, column_kind::clustering_key)
+        .with_column("v", bytes_type)
+        .set_aggregated_metrics_override(false)
+        .build();
+    BOOST_REQUIRE(s->aggregated_metrics_override() == std::make_optional(false));
+}
+
 // ---------------------------------------------------------------------------
 // CQL warning (soft limit) tests
 // ---------------------------------------------------------------------------
