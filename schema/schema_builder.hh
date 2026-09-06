@@ -262,6 +262,11 @@ public:
         return *this;
     }
 
+    schema_builder& set_aggregated_metrics_override(std::optional<bool> value) {
+        _raw._aggregated_metrics = value;
+        return *this;
+    }
+
     schema_builder& set_tablet_options(std::map<sstring, sstring>&& hints);
 
     // Setters for static properties.

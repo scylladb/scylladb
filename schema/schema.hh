@@ -585,6 +585,8 @@ private:
         std::reference_wrapper<const dht::static_sharder> _sharder;
         bool _in_memory = false;
         bool _large_data_guardrails_enabled = false;
+        // nullopt means "use the enable_node_aggregated_table_metrics config default"
+        std::optional<bool> _aggregated_metrics;
         std::optional<raw_view_info> _view_info;
 
         user_properties _props;
@@ -789,6 +791,12 @@ public:
 
     bool large_data_guardrails_enabled() const {
         return _raw._large_data_guardrails_enabled;
+    }
+
+    // Per-table override for enable_node_aggregated_table_metrics.
+    // nullopt falls back to the global config default.
+    std::optional<bool> aggregated_metrics_override() const {
+        return _raw._aggregated_metrics;
     }
 
     const ::speculative_retry& speculative_retry() const {
