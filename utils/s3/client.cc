@@ -727,8 +727,15 @@ future<temporary_buffer<char>> client::get_object_contiguous(sstring object_name
 
     size_t off = 0;
     std::optional<temporary_buffer<char>> ret;
-    co_await make_request(std::move(req), [&off, &ret, &object_name] (group_client& gc, const http::reply& rep, input_stream<char>&& in_) mutable -> future<> {
+    co_await make_request(std::move(req), [&off, &ret, &object_name, &download_range] (group_client& gc, const http::reply& rep, input_stream<char>&& in_) mutable -> future<> {
         auto in = std::move(in_);
+        // Reject a Content-Length bigger than what was actually asked for
+        // (download_range.length() is s3::maximum_object_size for a full-object
+        // request) instead of allocating off an untrusted server-declared size.
+        if (rep.content_length > download_range.length()) {
+            throw std::overflow_error(fmt::format("Content-Length {} for '{}' exceeds requested range length {}",
+                                                   rep.content_length, object_name, download_range.length()));
+        }
         ret = temporary_buffer<char>(rep.content_length);
         off = 0;
         s3l.trace("Consume {} bytes for {}", ret->size(), object_name);
