@@ -80,13 +80,44 @@ future<raft::index_t> raft_groups_storage::load_commit_idx() {
 }
 
 future<raft::index_t> raft_groups_storage::load_commit_idx(cql3::query_processor& qp, raft::group_id gid, shard_id shard) {
+    co_return (co_await load_commit_idx_if_persisted(qp, gid, shard)).value_or(raft::index_t(0));
+}
+
+future<std::optional<raft::index_t>> raft_groups_storage::load_commit_idx_if_persisted(cql3::query_processor& qp,
+        raft::group_id gid, shard_id shard) {
+    // An empty result means the partition isn't there at all. A partition that exists but
+    // has no commit_idx yet still comes back as one row, with the column unset, which is
+    // what separates "nothing persisted" from "persisted, nothing committed yet".
     static const auto load_cql = format("SELECT commit_idx FROM system.{} WHERE shard = ? AND group_id = ? LIMIT 1", db::system_keyspace::RAFT_GROUPS);
     ::shared_ptr<cql3::untyped_result_set> rs = co_await qp.execute_internal(load_cql, {int16_t(shard), gid.id}, cql3::query_processor::cache_internal::yes);
     if (rs->empty()) {
-        co_return raft::index_t(0);
+        co_return std::nullopt;
     }
     const auto& static_row = rs->one();
     co_return raft::index_t(static_row.get_or<int64_t>("commit_idx", raft::index_t{}.value()));
+}
+
+future<> raft_groups_storage::erase_persisted_state(cql3::query_processor& qp, raft::group_id gid, shard_id shard) {
+    // The order is what makes a crash in the middle harmless. load_snapshot_descriptor()
+    // reads snapshot_id from raft_groups and only then expects exactly one row in
+    // raft_groups_snapshots, so the state with the first present and the second gone would
+    // throw. Deleting raft_groups first makes every prefix of this sequence read as "never
+    // bootstrapped" instead, which is exactly what start_raft_group() needs in order to
+    // bootstrap the group afresh if this shard ever hosts it again. The rows left behind by
+    // a partial erase are overwritten by that bootstrap.
+    static const auto delete_group_cql = format("DELETE FROM system.{} WHERE shard = ? AND group_id = ?",
+        db::system_keyspace::RAFT_GROUPS);
+    co_await qp.execute_internal(delete_group_cql, {int16_t(shard), gid.id}, cql3::query_processor::cache_internal::yes);
+
+    static const auto delete_snapshots_cql = format("DELETE FROM system.{} WHERE shard = ? AND group_id = ?",
+        db::system_keyspace::RAFT_GROUPS_SNAPSHOTS);
+    co_await qp.execute_internal(delete_snapshots_cql, {int16_t(shard), gid.id}, cql3::query_processor::cache_internal::yes);
+
+    static const auto delete_snapshot_config_cql = format("DELETE FROM system.{} WHERE shard = ? AND group_id = ?",
+        db::system_keyspace::RAFT_GROUPS_SNAPSHOT_CONFIG);
+    co_await qp.execute_internal(delete_snapshot_config_cql, {int16_t(shard), gid.id}, cql3::query_processor::cache_internal::yes);
+
+    rgslog.info("erase_persisted_state: erased the persisted raft state of group {} on shard {}", gid, shard);
 }
 
 future<raft::log_entries> raft_groups_storage::load_log() {
