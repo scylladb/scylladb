@@ -9,6 +9,7 @@
 
 #include "raft/raft.hh"
 
+#include <optional>
 #include <vector>
 #include <functional>
 
@@ -75,6 +76,27 @@ public:
     // Static version that doesn't require constructing a full raft_groups_storage object.
     // Useful during commitlog replay when only read access to metadata is needed.
     static future<raft::index_t> load_commit_idx(cql3::query_processor& qp, raft::group_id gid, shard_id shard);
+
+    // The persisted commit index, or nullopt when this shard persists nothing about the
+    // group at all. load_commit_idx() reports both as 0, but the two mean very different
+    // things: a group that was bootstrapped and hasn't committed anything yet, versus one
+    // whose state was never written or has been erased because the replica left. Commitlog
+    // replay and group startup both have to reject entries in the second case.
+    static future<std::optional<raft::index_t>> load_commit_idx_if_persisted(cql3::query_processor& qp,
+        raft::group_id gid, shard_id shard);
+
+    // Deletes everything this shard persists about the group: term and vote, commit index,
+    // snapshot descriptor and its configuration.
+    //
+    // Called when a replica leaves the group, so that a tablet migrated back to this shard
+    // later rejoins with no history of its previous membership. Without it the replica
+    // rejoins claiming a commit index it no longer has data for, and the leader never
+    // resends the entries below it.
+    //
+    // The group's entries in the shared commitlog cannot be deleted; what makes them inert
+    // is the absence of the state this erases - see raft_commitlog_replay_buffer and
+    // groups_manager::start_raft_group().
+    static future<> erase_persisted_state(cql3::query_processor& qp, raft::group_id gid, shard_id shard);
     // Store snapshot idx and term without updating the configuration.
     // Used to advance the persisted snapshot index so that raft does not
     // re-apply already applied entries on restart. Only writes if the new

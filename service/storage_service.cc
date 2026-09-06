@@ -5728,24 +5728,37 @@ future<> storage_service::cleanup_tablet(locator::global_tablet_id tablet) {
             }
         }
         if (group_id) {
-            // The raft group of a strongly consistent tablet must be gone before its
-            // storage is cleaned up: nothing may apply raft entries to a tablet whose
-            // compaction groups have been stopped, and a late apply would kill the raft
-            // server's applier fiber, which is a fatal background error.
-            //
-            // groups_manager::update() tears the group down as soon as the stage that
-            // ended this node's membership is published, and the barrier that precedes
-            // this cleanup waits for the teardown to complete. Failing here means that
-            // ordering broke, so fail the cleanup rather than corrupt the tablet - the
-            // coordinator retries it.
-            const auto running = co_await _groups_manager.container().invoke_on(shard,
-                    [group_id = *group_id] (strong_consistency::groups_manager& gm) {
-                return gm.is_group_running(group_id);
+            co_await _groups_manager.container().invoke_on(shard,
+                    [tablet, group_id = *group_id, shard] (strong_consistency::groups_manager& gm) -> future<> {
+                // The raft group of a strongly consistent tablet must be gone before its
+                // storage is cleaned up: nothing may apply raft entries to a tablet whose
+                // compaction groups have been stopped, and a late apply would kill the raft
+                // server's applier fiber, which is a fatal background error.
+                //
+                // groups_manager::update() tears the group down as soon as the stage that
+                // ended this node's membership is published, and the barrier that precedes
+                // this cleanup waits for the teardown to complete. Failing here means that
+                // ordering broke, so fail the cleanup rather than corrupt the tablet - the
+                // coordinator retries it.
+                if (gm.is_group_running(group_id)) {
+                    throw std::runtime_error(fmt::format("Tablet {} still has a running raft group {} on shard {}",
+                            tablet, group_id, shard));
+                }
+
+                // This replica has left the group for good - this is the cleanup of either
+                // the leaving replica or, on the rollback path, the pending one - so its
+                // persisted raft state has to go with the tablet's storage. Left behind, it
+                // would let the node rejoin the group later claiming a commit index whose
+                // entries it no longer holds, and the leader never resends those.
+                //
+                // Before the storage below rather than after, so that no ordering of a
+                // crash in between leaves raft state describing a tablet whose storage is
+                // already gone. It is not a guarantee: system.raft_groups goes through the
+                // ordinary commitlog with periodic sync, so a crash can lose this delete
+                // while the storage removal below survives. What covers that is commitlog
+                // replay refusing a group whose tablet has no replica on the shard.
+                co_await gm.erase_raft_group_state(group_id);
             });
-            if (running) {
-                throw std::runtime_error(fmt::format("Tablet {} still has a running raft group {} on shard {}",
-                        tablet, *group_id, shard));
-            }
         }
         co_await _db.invoke_on(shard, [tablet, &sys_ks = _sys_ks, &vbw = _view_building_worker] (replica::database& db) -> future<> {
             auto& table = db.find_column_family(tablet.table);

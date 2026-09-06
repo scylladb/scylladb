@@ -254,6 +254,15 @@ public:
     // deleted counts as running until its raft server is destroyed.
     bool is_group_running(raft::group_id group_id) const;
 
+    // Deletes everything this shard persists about the group, so that a tablet migrated
+    // back here later rejoins the group with no history of its previous membership.
+    //
+    // Called by tablet cleanup, which is the point at which a replica has definitively
+    // left: the raft server is already gone by then, and the tablet's storage is about
+    // to be. Refuses while a raft server for the group is still running, because that
+    // would pull the state out from under a live group.
+    future<> erase_raft_group_state(raft::group_id group_id);
+
     // Drives the raft group of one tablet in transition to the configuration its
     // current migration stage implies, and doesn't return until it got there.
     //

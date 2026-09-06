@@ -232,8 +232,24 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
 
     auto* commitlog = _db.commitlog();
     SCYLLA_ASSERT(commitlog);
+
+    // A group this shard persists nothing about has no history here, so any commitlog
+    // entries replay left for it belong to an earlier membership: the tablet was migrated
+    // away, its raft state erased by the cleanup, and migrated back before the old segments
+    // were recycled. Handing those to the group would give it a log from an incarnation it
+    // knows nothing about, indices and terms included. Taken out of the buffer either way,
+    // so that its bookkeeping stays right.
+    const auto persisted = co_await raft_groups_storage::load_commit_idx_if_persisted(_qp, group_id, this_shard_id());
+    auto replayed_data = _raft_replay_buffer.take_replayed_group_entries(group_id);
+    if (!persisted && !replayed_data.entries.empty()) {
+        logger.warn("start_raft_group(): tablet {}, group id {}: no persisted raft state, discarding {} "
+                "replayed commitlog entries left over from an earlier membership",
+                tablet, group_id, replayed_data.entries.size());
+        replayed_data = replayed_data_per_group{};
+    }
+
     auto storage = std::make_unique<raft_groups_storage>(_qp, group_id, my_id, this_shard_id(),
-        *commitlog, tablet.table, _raft_replay_buffer.take_replayed_group_entries(group_id));
+        *commitlog, tablet.table, std::move(replayed_data));
 
     auto state_machine = make_state_machine(tablet, group_id, _db, _mm, _sys_ks, *storage);
 
@@ -422,6 +438,16 @@ future<> groups_manager::wait_for_snapshot_transfer(locator::global_tablet_id ta
 
 bool groups_manager::is_group_running(raft::group_id group_id) const {
     return _raft_groups.contains(group_id);
+}
+
+future<> groups_manager::erase_raft_group_state(raft::group_id group_id) {
+    if (is_group_running(group_id)) {
+        // The caller is expected to have checked this already; failing here rather than
+        // erasing is what keeps a mistake from silently taking a live group's state away.
+        throw std::runtime_error(fmt::format(
+                "erase_raft_group_state({}): the raft group is still running on this shard", group_id));
+    }
+    co_await raft_groups_storage::erase_persisted_state(_qp, group_id, this_shard_id());
 }
 
 void groups_manager::init_messaging_service() {

@@ -2414,3 +2414,97 @@ async def test_late_raft_apply_after_tablet_cleanup(manager: ScyllaClusterManage
                 rows = await cql.run_async(f"SELECT * FROM {table} WHERE pk = {i}")
                 assert len(rows) == 1, f"Expected 1 row for pk={i}, got {len(rows)}"
                 assert rows[0].c == expected, f"Expected c={expected} for pk={i}, got {rows[0].c}"
+
+
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+async def test_no_raft_replay_into_a_tablet_that_moved_away(manager: ScyllaClusterManager):
+    """Commitlog replay must not feed a raft group's entries back into a tablet this
+    shard no longer holds a replica of.
+
+    The group is still in tablet metadata - it lives on its other replicas - so its
+    presence there says nothing about whether this node should replay it. Restarting
+    the former replica without a clean shutdown leaves the group's entries in segments
+    that are replayed on the next boot.
+    """
+    logger.info("Bootstrapping cluster")
+    cmdline = DEFAULT_CMDLINE + [
+        '--logger-log-level', 'raft_topology=debug',
+        '--logger-log-level', 'raft_commitlog_replay=debug',
+    ]
+    servers = await manager.servers_add(4, config=DEFAULT_CONFIG, cmdline=cmdline, property_file=[
+        {'dc': 'dc1', 'rack': 'rack1'},
+        {'dc': 'dc1', 'rack': 'rack2'},
+        {'dc': 'dc1', 'rack': 'rack3'},
+        {'dc': 'dc1', 'rack': 'rack3'},
+    ])
+    cql, hosts = await manager.get_ready_cql(servers)
+    host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
+
+    def server_by_host_id(host_id):
+        for server, hid in zip(servers, host_ids):
+            if hid == host_id:
+                return server
+        raise RuntimeError(f"Can't find server for host_id {host_id}")
+
+    await manager.disable_tablet_balancing()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} "
+                                         "AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, c int") as table:
+            table_name = table.split('.')[-1]
+            group_id = await get_table_raft_group_id(manager, ks, table_name)
+
+            tablets = await get_all_tablet_replicas(manager, servers[0], ks, table_name)
+            assert len(tablets) == 1
+            tablet_token = tablets[0].last_token
+            original_replicas = tablets[0].replicas
+
+            for i in range(10):
+                await cql.run_async(f"INSERT INTO {table} (pk, c) VALUES ({i}, {i + 1})")
+
+            rack3 = [host_ids[2], host_ids[3]]
+            src_host_id, src_shard = next((h, s) for h, s in original_replicas if h in rack3)
+            dst_host_id = next(h for h in rack3 if h != src_host_id)
+            src_server = server_by_host_id(src_host_id)
+
+            logger.info(f"Migrating replica from {src_host_id}:{src_shard} to {dst_host_id}:0")
+            await manager.api.move_tablet(servers[0].ip_addr, ks, table_name,
+                                          src_host_id, src_shard, dst_host_id, 0, tablet_token)
+            await manager.api.quiesce_topology(servers[0].ip_addr)
+
+            replicas = (await get_all_tablet_replicas(manager, servers[0], ks, table_name))[0].replicas
+            assert not any(h == src_host_id for h, _ in replicas), \
+                f"Expected {src_host_id} to be gone from replicas, got {replicas}"
+
+            # Hard stop, so the group's entries stay in commitlog segments that the next
+            # boot replays instead of being dropped by a clean shutdown.
+            logger.info(f"Restarting the former replica {src_host_id} without a clean shutdown")
+            await manager.server_stop(src_server.server_id, convict=False)
+            log = await manager.server_open_log(src_server.server_id)
+            mark = await log.mark()
+            await manager.server_start(src_server.server_id)
+            await manager.servers_see_each_other(servers)
+
+            # Replay must have refused the group, on either of the two counts: the
+            # tablet has no replica here anymore, or the cleanup erased its raft state.
+            discarded = await log.grep(
+                rf"raft_commitlog_replay - group {group_id} has no (tablet replica|persisted raft state) on this shard, discarding",
+                from_mark=mark)
+            entries_replayed = await log.grep(
+                rf"raft_commitlog_replay - group {group_id}: \d+ entries", from_mark=mark)
+            assert not entries_replayed, \
+                f"Replay processed entries of group {group_id} on a node that left it: {entries_replayed}"
+            assert discarded, f"Expected replay to discard the entries of group {group_id}"
+            logger.info(f"Replay discard messages for group {group_id}: {discarded}")
+
+            # Deliberately no assertion that the cleanup's erase survived the restart.
+            # system.raft_groups is written through the ordinary commitlog with periodic
+            # sync, so a kill within the sync window loses the delete, and the tablet no
+            # longer migrates to a stage that would retry the cleanup. That is what the
+            # ownership test above is for: it refuses the group whether or not the state
+            # is still there.
+            cql, hosts = await manager.get_ready_cql(servers)
+            for i in range(10):
+                rows = await cql.run_async(f"SELECT * FROM {table} WHERE pk = {i}")
+                assert len(rows) == 1, f"Expected 1 row for pk={i}, got {len(rows)}"
+                assert rows[0].c == i + 1, f"Expected c={i + 1} for pk={i}, got {rows[0].c}"
