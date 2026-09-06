@@ -574,6 +574,118 @@ SEASTAR_TEST_CASE(test_groups_store_snapshot_index) {
     });
 }
 
+// Test load_commit_idx_if_persisted: separates "this shard persists nothing about the
+// group" from "persisted, but nothing committed yet". Both read as commit index 0
+// through load_commit_idx(), and replay has to tell them apart.
+SEASTAR_TEST_CASE(test_groups_load_commit_idx_if_persisted) {
+    return do_with_cql_env_strongly_consistent([] (cql_test_env& env) -> future<> {
+        cql3::query_processor& qp = env.local_qp();
+        auto& cl = *env.local_db().commitlog();
+        auto dummy_table = table_id(utils::UUID_gen::get_time_UUID());
+        raft::group_id gid{utils::UUID_gen::get_time_UUID()};
+
+        // Nothing was ever written for this group.
+        BOOST_CHECK(!(co_await raft_groups_storage::load_commit_idx_if_persisted(qp, gid, test_shard)));
+        BOOST_CHECK_EQUAL(co_await raft_groups_storage::load_commit_idx(qp, gid, test_shard), raft::index_t(0));
+
+        raft_groups_storage storage(qp, gid, raft::server_id::create_random_id(), test_shard, cl, dummy_table, {});
+
+        // Bootstrapped, nothing committed yet: state exists, commit index is still 0.
+        co_await storage.bootstrap(raft::configuration{}, false);
+        auto persisted = co_await raft_groups_storage::load_commit_idx_if_persisted(qp, gid, test_shard);
+        BOOST_REQUIRE(persisted.has_value());
+        BOOST_CHECK_EQUAL(*persisted, raft::index_t(0));
+
+        co_await storage.store_commit_idx(raft::index_t(7));
+        persisted = co_await raft_groups_storage::load_commit_idx_if_persisted(qp, gid, test_shard);
+        BOOST_REQUIRE(persisted.has_value());
+        BOOST_CHECK_EQUAL(*persisted, raft::index_t(7));
+    });
+}
+
+// Test erase_persisted_state: everything this shard persists about the group is gone
+// afterwards, and the group reads as one that was never bootstrapped - which is what
+// makes start_raft_group() bootstrap it afresh if the tablet is migrated back here.
+SEASTAR_TEST_CASE(test_groups_erase_persisted_state) {
+    return do_with_cql_env_strongly_consistent([] (cql_test_env& env) -> future<> {
+        cql3::query_processor& qp = env.local_qp();
+        auto& cl = *env.local_db().commitlog();
+        auto dummy_table = table_id(utils::UUID_gen::get_time_UUID());
+        raft::group_id gid{utils::UUID_gen::get_time_UUID()};
+
+        raft_groups_storage storage(qp, gid, raft::server_id::create_random_id(), test_shard, cl, dummy_table, {});
+
+        raft::configuration cfg;
+        cfg.current.insert(raft::config_member{
+                raft::server_address{raft::server_id::create_random_id(), {}}, raft::is_voter::yes});
+        co_await storage.bootstrap(cfg, false);
+        co_await storage.store_term_and_vote(raft::term_t(11), raft::server_id::create_random_id());
+        co_await storage.store_commit_idx(raft::index_t(42));
+
+        // Everything is there before the erase.
+        BOOST_CHECK_EQUAL((co_await storage.load_term_and_vote()).first, raft::term_t(11));
+        BOOST_CHECK_EQUAL(co_await storage.load_commit_idx(), raft::index_t(42));
+        BOOST_CHECK((co_await storage.load_snapshot_descriptor()).id);
+        BOOST_CHECK((co_await storage.load_snapshot_descriptor()).config == cfg);
+
+        co_await raft_groups_storage::erase_persisted_state(qp, gid, test_shard);
+
+        BOOST_CHECK(!(co_await raft_groups_storage::load_commit_idx_if_persisted(qp, gid, test_shard)));
+        BOOST_CHECK_EQUAL((co_await storage.load_term_and_vote()).first, raft::term_t{});
+        BOOST_CHECK_EQUAL(co_await storage.load_commit_idx(), raft::index_t(0));
+        // No snapshot id is what start_raft_group() reads as "never bootstrapped".
+        BOOST_CHECK(!(co_await storage.load_snapshot_descriptor()).id);
+
+        // Erasing again, or erasing a group that never existed, is a no-op. Tablet
+        // cleanup is retried by the coordinator, so this has to be idempotent.
+        co_await raft_groups_storage::erase_persisted_state(qp, gid, test_shard);
+        co_await raft_groups_storage::erase_persisted_state(qp, raft::group_id{utils::UUID_gen::get_time_UUID()}, test_shard);
+
+        // The group can be bootstrapped again afterwards, and comes back with no
+        // history of what was erased.
+        co_await storage.bootstrap(raft::configuration{}, false);
+        auto snp = co_await storage.load_snapshot_descriptor();
+        BOOST_CHECK(snp.id);
+        BOOST_CHECK_EQUAL(snp.idx, raft::index_t(0));
+        BOOST_CHECK(snp.config.current.empty());
+        BOOST_CHECK_EQUAL(co_await storage.load_commit_idx(), raft::index_t(0));
+    });
+}
+
+// Test that erase_persisted_state only touches the group and shard it was given.
+SEASTAR_TEST_CASE(test_groups_erase_persisted_state_isolation) {
+    return do_with_cql_env_strongly_consistent([] (cql_test_env& env) -> future<> {
+        cql3::query_processor& qp = env.local_qp();
+        auto& cl = *env.local_db().commitlog();
+        auto dummy_table = table_id(utils::UUID_gen::get_time_UUID());
+        raft::group_id gid0{utils::UUID_gen::get_time_UUID()};
+        raft::group_id gid1{utils::UUID_gen::get_time_UUID()};
+
+        // The same group on two shards, plus another group on the erased shard. Only
+        // the first must be affected: an intra-node migration leaves the group running
+        // on the other shard of the same host.
+        raft_groups_storage storage_g0_s0(qp, gid0, raft::server_id::create_random_id(), 0, cl, dummy_table, {});
+        raft_groups_storage storage_g0_s1(qp, gid0, raft::server_id::create_random_id(), 1, cl, dummy_table, {});
+        raft_groups_storage storage_g1_s0(qp, gid1, raft::server_id::create_random_id(), 0, cl, dummy_table, {});
+
+        for (auto* storage : {&storage_g0_s0, &storage_g0_s1, &storage_g1_s0}) {
+            co_await storage->bootstrap(raft::configuration{}, false);
+            co_await storage->store_commit_idx(raft::index_t(5));
+        }
+
+        co_await raft_groups_storage::erase_persisted_state(qp, gid0, 0);
+
+        BOOST_CHECK(!(co_await raft_groups_storage::load_commit_idx_if_persisted(qp, gid0, 0)));
+        BOOST_CHECK(!(co_await storage_g0_s0.load_snapshot_descriptor()).id);
+
+        BOOST_CHECK_EQUAL(co_await storage_g0_s1.load_commit_idx(), raft::index_t(5));
+        BOOST_CHECK((co_await storage_g0_s1.load_snapshot_descriptor()).id);
+
+        BOOST_CHECK_EQUAL(co_await storage_g1_s0.load_commit_idx(), raft::index_t(5));
+        BOOST_CHECK((co_await storage_g1_s0.load_snapshot_descriptor()).id);
+    });
+}
+
 // Test store_log_entries -> acquire_replay_position_handles_for roundtrip:
 // entries written to the commitlog produce valid replay position handles.
 SEASTAR_TEST_CASE(test_groups_store_and_get_replay_positions) {
