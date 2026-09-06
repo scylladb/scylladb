@@ -1647,9 +1647,19 @@ async def test_alternator_mtls(manager: ScyllaClusterManager, tmp_path):
     # Test 2: Requests without a client certificate should be rejected.
     # With require_client_auth=true the TLS handshake fails if the client
     # doesn't present a certificate signed by the trusted CA.
+    # The server always rejects with a certificate_required TLS alert, but in
+    # TLS 1.3 the client only learns of it after it considers the handshake
+    # complete and has started writing the request, so it can hit a broken pipe
+    # before it reads the alert. Whether botocore then reports SSLError or
+    # ConnectionClosedError is a property of the client, not of the server:
+    # probing one and the same server with Python 3.14/OpenSSL 3.5 gives
+    # SSLError while Python 3.15/OpenSSL 4.0 gives ConnectionClosedError. As in
+    # tests 3 and 4 below, what matters is that the request is *rejected*.
     alternator_no_cert = get_alternator_mtls()
-    with pytest.raises(SSLError, match='certificate required'):
+    with pytest.raises((SSLError, ConnectionClosedError)) as excinfo:
         alternator_no_cert.meta.client.list_tables()
+    if isinstance(excinfo.value, SSLError):
+        assert 'certificate required' in str(excinfo.value)
 
     # Test 3: Requests with a client certificate signed by an untrusted CA
     # should also be rejected.
