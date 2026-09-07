@@ -7,10 +7,12 @@
  */
 #pragma once
 
+#include <algorithm>
 #include <concepts>
 #include <optional>
 #include <type_traits>
 #include <boost/container/deque.hpp>
+#include <seastar/util/defer.hh>
 
 #include "utils/assert.hh"
 #include "raft/raft.hh"
@@ -62,6 +64,20 @@ class log_indexed_container {
         while (!_slots.empty() && !_slots.front()) {
             _slots.pop_front();
             _base_idx = _base_idx + index_t{1};
+        }
+    }
+
+    // The body shared by erase_if_in_range() and erase_leading_above():
+    // iterates the occupied slots in [first, to) -- `to` an offset, so the
+    // callers can each clamp it their own way -- and empties those for
+    // which f returns false.
+    template<typename F>
+    void do_erase_if(index_t first, size_t to, F& f) {
+        auto trim = seastar::defer([this] () noexcept { trim_front(); });
+        for (size_t i = first < _base_idx ? 0 : offset_of(first); i < to; ++i) {
+            if (_slots[i] && !f(_base_idx + index_t{i}, *_slots[i])) {
+                _slots[i].reset();
+            }
         }
     }
 
@@ -172,6 +188,46 @@ public:
             if (_slots[i]) {
                 f(_base_idx + index_t{i}, *_slots[i]);
             }
+        }
+    }
+
+    // Iterates over the occupied slots with indexes in [first, last], in
+    // increasing index order, calling f(index_t, T&) for each. When f
+    // returns false the slot is emptied and its value dropped; f may move
+    // the value out through the reference first. Leading empty slots are
+    // trimmed afterwards, so invariant (1) is preserved and freed memory
+    // is reclaimed, even if f throws. The callback may freely mutate the
+    // value through the T& reference, but must not mutate the container's
+    // structure: it must not call emplace(), extract() or clear(), as any
+    // of those would invalidate the ongoing iteration.
+    template<typename F>
+    requires std::predicate<F&, index_t, T&>
+    void erase_if_in_range(index_t first, index_t last, F&& f) {
+        if (_slots.empty() || last < _base_idx) {
+            return;
+        }
+        do_erase_if(first, std::min(offset_of(last) + 1, _slots.size()), f);
+    }
+
+    // As above for the occupied slots from `first` upward, except that it
+    // stops at the first slot f keeps: that one and everything above it are
+    // left alone, so the cost is the number of slots erased rather than the
+    // number above `first`.
+    template<typename F>
+    requires std::predicate<F&, index_t, T&>
+    void erase_leading_above(index_t first, F&& f) {
+        if (_slots.empty()) {
+            return;
+        }
+        auto trim = seastar::defer([this] () noexcept { trim_front(); });
+        for (size_t i = first < _base_idx ? 0 : offset_of(first); i < _slots.size(); ++i) {
+            if (!_slots[i]) {
+                continue;
+            }
+            if (f(_base_idx + index_t{i}, *_slots[i])) {
+                return;
+            }
+            _slots[i].reset();
         }
     }
 
