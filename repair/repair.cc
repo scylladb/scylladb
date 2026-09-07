@@ -617,17 +617,6 @@ void repair::task_manager_module::remove_shard_task_id(int id) {
     _repairs.erase(id);
 }
 
-tasks::task_manager::task_ptr repair::task_manager_module::get_shard_task_ptr(int id) {
-    auto it = _repairs.find(id);
-    if (it != _repairs.end()) {
-        auto task_it = get_local_tasks().find(it->second);
-        if (task_it != get_local_tasks().end()) {
-            return task_it->second;
-        }
-    }
-    return {};
-}
-
 std::vector<int> repair::task_manager_module::get_active() const {
     return _status | std::views::filter([] (auto& x) {
         return x.second == repair_status::RUNNING;
