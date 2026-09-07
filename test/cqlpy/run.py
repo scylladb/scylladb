@@ -226,6 +226,7 @@ import ssl
 source_path = os.path.realpath(os.path.join(__file__, '../../..'))
 if source_path not in sys.path:
     sys.path.append(source_path)
+from test import asan_options, ubsan_options
 from test.pylib.driver_utils import safe_driver_shutdown
 
 scylla = None
@@ -267,8 +268,8 @@ def run_scylla_cmd(pid, dir):
     # When running a Scylla build with sanitizers enabled, we should
     # configure them to fail on real errors, and ignore spurious errors.
     env = {
-        'UBSAN_OPTIONS': f'halt_on_error=1:abort_on_error=1:suppressions={source_path}/ubsan-suppressions.supp',
-        'ASAN_OPTIONS': 'disable_coredump=0:abort_on_error=1:detect_stack_use_after_returns=1'
+        'UBSAN_OPTIONS': ubsan_options(),
+        'ASAN_OPTIONS': asan_options(),
     }
     return ([scylla_link,
         '--options-file',  source_path + '/conf/scylla.yaml',

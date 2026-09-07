@@ -42,7 +42,7 @@ from cassandra.connection import UnixSocketEndPoint
 from cassandra.policies import ExponentialReconnectionPolicy  # type: ignore
 from cassandra.policies import WhiteListRoundRobinPolicy  # type: ignore
 
-from test import TOP_SRC_DIR, TEST_DIR
+from test import TOP_SRC_DIR, TEST_DIR, asan_options, ubsan_options
 from test.pylib.driver_utils import safe_driver_shutdown, safe_shutting_down
 from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo, ServerUpState
 from test.pylib.rest_client import ScyllaRESTAPIClient, HTTPError
@@ -849,8 +849,8 @@ class ScyllaServer:
         # remove from env to make sure user's SCYLLA_HOME has no impact
         env.pop('SCYLLA_HOME', None)
         env.update(self.append_env if append_env_override is None else append_env_override)
-        env['UBSAN_OPTIONS'] = f'halt_on_error=1:abort_on_error=1:suppressions={TOP_SRC_DIR / "ubsan-suppressions.supp"}'
-        env['ASAN_OPTIONS'] = f'disable_coredump=0:abort_on_error=1:detect_stack_use_after_return=1'
+        env['UBSAN_OPTIONS'] = ubsan_options()
+        env['ASAN_OPTIONS'] = asan_options()
 
         # Set up socket for receiving sd_notify messages from Scylla
         self._setup_notify_socket()
