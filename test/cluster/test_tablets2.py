@@ -2092,6 +2092,85 @@ async def test_update_load_stats_after_migration(manager: ScyllaClusterManager):
         assert leaving_replica[0] not in replica_hosts, "Leaving replica tablet size is not in load_stats any more"
         assert pending_replica[0] in replica_hosts, "Pending replica tablet size is in load_stats"
 
+# Reproducer for SCYLLADB-4285.
+#
+# Tablet sizes in load stats are keyed by token range, so a resize invalidates them and the
+# topology coordinator re-keys them with reconcile_tablets_resize(). That reconciliation can
+# fail, and when it does the coordinator has to refresh load stats by itself: otherwise the
+# load balancer sees incomplete stats for every node, produces an empty plan and sleeps until
+# the periodic refresher ticks, stalling tablet migration for a whole refresh interval.
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
+async def test_load_stats_refresh_after_failed_resize_reconciliation(manager: ScyllaClusterManager):
+    logger.info("Bootstrapping cluster")
+    cmdline = [
+        '--logger-log-level', 'raft_topology=debug',
+        '--logger-log-level', 'load_balancer=debug',
+    ]
+    # An interval this long means the periodic refresher never runs during the test, so the
+    # only refreshes are the ones the code under test asks for. Were it left at its default,
+    # a tick could refresh the stale stats by itself and hide the stall.
+    config = { 'tablet_load_stats_refresh_interval_in_seconds': 3600 }
+    server = await manager.server_add(cmdline=cmdline, config=config)
+
+    cql = manager.get_cql()
+
+    await manager.disable_tablet_balancing()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH tablets = {{'min_tablet_count': 2}};")
+
+        table_id = await manager.get_table_or_view_id(ks, 'test')
+
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k})") for k in range(256)])
+        await manager.api.flush_keyspace(server.ip_addr, ks)
+
+        # Wait until every tablet replica has a recorded size, which is what reconciliation
+        # needs to succeed, so that the forced failure below is the only reason for it not to.
+        # The sizes come from the refresh that creating the table triggers, and are therefore
+        # still zero here; only their presence matters, not their value.
+        await wait_for_valid_load_stats(cql, table_id)
+
+        # Make sure the resize below really is a split, so that the tablets the load balancer
+        # ends up without sizes for are ones the split created.
+        assert await get_tablet_count(manager, server, ks, 'test') == 2
+
+        # Hold resize finalization before it rewrites the tablet map, so that the refresh
+        # triggered by becoming split-ready (on_tablet_split_ready) completes while the
+        # pre-resize token ranges are still current - the order it happens in on a real
+        # cluster. Were it to land after the new tablet map instead, it would pick up the new
+        # ranges and record sizes for them, hiding the stall this test is about.
+        await manager.api.enable_injection(server.ip_addr, "tablet_resize_finalization_post_barrier", one_shot=True)
+        await manager.api.enable_injection(server.ip_addr, "tablet_resize_load_stats_reconcile_failure", one_shot=True)
+
+        log = await manager.server_open_log(server.server_id)
+        log_mark = await log.mark()
+
+        expected_tablet_count = 4
+        await cql.run_async(f"ALTER TABLE {ks}.test WITH tablets = {{'min_tablet_count': {expected_tablet_count}}}")
+        await manager.enable_tablet_balancing()
+
+        await manager.api.wait_for_injection_enter(server.ip_addr, "tablet_resize_finalization_post_barrier")
+
+        # Entering the injection only says that finalization is parked. Wait for the
+        # split-ready refresh to actually finish before releasing it, rather than counting on
+        # it having won the race.
+        await log.wait_for('Refreshed table load stats for all DC', from_mark=log_mark)
+
+        await manager.api.message_injection(server.ip_addr, "tablet_resize_finalization_post_barrier")
+
+        logger.info("Waiting for the split to be finalized")
+        started = time.time()
+        while True:
+            actual_tablet_count = await get_tablet_count(manager, server, ks, 'test')
+            if actual_tablet_count == expected_tablet_count:
+                break
+            assert time.time() - started < 120, 'Timeout while waiting for tablet split'
+            await asyncio.sleep(.1)
+
+        # Reconciliation failed, so none of the tablets created by the split has a recorded
+        # size. The coordinator must refresh load stats on its own.
+        await wait_for_valid_load_stats(cql, table_id, timeout=60)
+
 @pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_crash_on_missing_table_from_load_stats(manager: ScyllaClusterManager):
     logger.info('Bootstrapping cluster')
