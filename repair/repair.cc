@@ -814,23 +814,23 @@ repair_info::repair_info(repair_service& repair,
             _user_ranges_parallelism ? std::to_string(_user_ranges_parallelism->available_units()) : "unlimited");
 }
 
-void repair::shard_repair_task_impl::check_failed_ranges() {
+void repair_info::check_failed_ranges(const std::optional<sstring>& failed_because) {
     rlogger.info("repair[{}]: stats: repair_reason={}, keyspace={}, tables={}, ranges_nr={}, {}",
-        info.global_repair_id.uuid(), _reason, _status.keyspace, info.table_names(), info.ranges.size(), info.stats.get_stats());
-    if (info.nr_failed_ranges || info._aborted || _failed_because) {
-        sstring failed_because = "N/A";
-        if (!info._aborted) {
-            failed_because = _failed_because ? *_failed_because : "unknown";
+        global_repair_id.uuid(), _reason, _keyspace, table_names(), ranges.size(), stats.get_stats());
+    if (nr_failed_ranges || _aborted || failed_because) {
+        sstring failure = "N/A";
+        if (!_aborted) {
+            failure = failed_because ? *failed_because : "unknown";
         }
         auto msg = seastar::format("repair[{}]: {} out of {} ranges failed, keyspace={}, tables={}, repair_reason={}, nodes_down_during_repair={}, aborted_by_user={}, failed_because={}",
-                info.global_repair_id.uuid(), info.nr_failed_ranges, info.ranges_size(), _status.keyspace, info.table_names(), _reason, info.nodes_down, info._aborted, failed_because);
+                global_repair_id.uuid(), nr_failed_ranges, ranges_size(), _keyspace, table_names(), _reason, nodes_down, _aborted, failure);
         rlogger.warn("{}", msg);
         throw std::runtime_error(msg);
     } else {
-        if (info.dropped_tables.size()) {
-            rlogger.warn("repair[{}]: completed successfully, keyspace={}, ignoring dropped tables={}", info.global_repair_id.uuid(), _status.keyspace, info.dropped_tables);
+        if (dropped_tables.size()) {
+            rlogger.warn("repair[{}]: completed successfully, keyspace={}, ignoring dropped tables={}", global_repair_id.uuid(), _keyspace, dropped_tables);
         } else {
-            rlogger.info("repair[{}]: completed successfully, keyspace={}", info.global_repair_id.uuid(), _status.keyspace);
+            rlogger.info("repair[{}]: completed successfully, keyspace={}", global_repair_id.uuid(), _keyspace);
         }
     }
 }
@@ -1299,7 +1299,7 @@ future<> repair::shard_repair_task_impl::run() {
         rlogger.debug("repair[{}]: got error in do_repair_ranges: {}",
             info.global_repair_id.uuid(), seastar::formattable(std::current_exception()));
     }
-    check_failed_ranges();
+    info.check_failed_ranges(_failed_because);
     co_return;
 }
 
