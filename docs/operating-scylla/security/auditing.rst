@@ -14,11 +14,12 @@ Enable ScyllaDB :doc:`Authentication </operating-scylla/security/authentication>
 Enabling Audit
 ---------------
 
-By default, auditing is **enabled**. Enabling auditing is controlled by the ``audit:`` parameter in the ``scylla.yaml`` file.
+By default, auditing is **enabled** with the ``table`` backend: the ``scylla.yaml`` shipped with ScyllaDB sets ``audit: "table"``.
+If the ``audit`` parameter is removed from ``scylla.yaml``, auditing is disabled. Enabling auditing is controlled by the ``audit:`` parameter in the ``scylla.yaml`` file.
 You can set the following options:
 
-* ``none`` - Audit is disabled (default).
-* ``table`` - Audit is enabled, and messages are stored in a Scylla table.
+* ``none`` - Audit is disabled. This is also the behavior when the ``audit`` parameter is not set.
+* ``table`` - Audit is enabled, and messages are stored in a Scylla table (default in the shipped ``scylla.yaml``).
 * ``syslog`` - Audit is enabled, and messages are sent to Syslog.
 * ``syslog,table`` - Audit is enabled, and messages are stored in a Scylla table and sent to Syslog.
 
