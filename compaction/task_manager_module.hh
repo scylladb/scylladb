@@ -44,10 +44,6 @@ public:
     virtual tasks::is_abortable is_abortable() const noexcept override;
 protected:
     virtual future<> run() override = 0;
-    future<uint64_t> get_table_task_workload(replica::database& db, const table_info& ti) const;
-    future<uint64_t> get_shard_task_workload(replica::database& db, const std::vector<table_info>& tables) const;
-    future<uint64_t> get_keyspace_task_workload(sharded<replica::database>& db, const std::vector<table_info>& tables) const;
-
     future<tasks::task_manager::task::progress> get_progress(const compaction_data& cdata, const compaction_progress_monitor& progress_monitor) const;
 };
 
