@@ -132,6 +132,15 @@ Here we can see the "scylla_column_family_pending_compactions" metric
 measured in shard 0 of this node, for the table "IndexInfo" in keyspace
 "system".
 
+The raft groups behind strongly consistent tablets export their metrics per
+table as well, under the `scylla_strong_consistency_raft_` prefix with the
+same "ks" and "cf" labels, and they follow the flags of the other per-table
+metrics: they are reported per shard with
+`enable_keyspace_column_family_metrics`, otherwise summed over the shards of
+the node as long as `enable_node_aggregated_table_metrics` is on (the
+default), and not at all when both flags are off. See
+[strong_consistency.md](strong_consistency.md).
+
 ## Types of metrics
 Scylla metrics fall under three types: "counter", "gauge" and "histogram".
 

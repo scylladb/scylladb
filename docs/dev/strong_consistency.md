@@ -238,3 +238,15 @@ survive on disk, so uncommitted entries are still available for replay on the ne
 
 This is important: if we decremented the dirty count on shutdown, the commitlog might
 delete segments containing uncommitted Raft entries that we still need.
+
+# Metrics
+
+The raft servers and RPC modules of a table's tablets on a shard share one set of
+counters, exported under the `scylla_strong_consistency_raft_` prefix with the `ks` and
+`cf` labels. They follow the flags of the other per-table metrics: summed over the shards
+of the node by default (`enable_node_aggregated_table_metrics`), per shard with
+`enable_keyspace_column_family_metrics`, and not exported when both are off. The
+counters belong to the table rather than to a group: they keep their values
+when a tablet migrates away, stay on a shard after its last tablet has left it, and are
+dropped with the table. Gauges such as `leaders`, `uncommitted_entries` or
+`blocked_followers` are summed over the running servers of the table instead.
