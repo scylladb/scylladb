@@ -1617,6 +1617,7 @@ CREATE TABLE system.topology (
     key text,
     host_id uuid,
     cleanup_status text,
+    current_storage_mode text,
     datacenter text,
     ignore_msb int,
     intended_storage_mode text,
@@ -1673,6 +1674,7 @@ CREATE TABLE system.topology (
 - `shard_count`: Number of shards on the node
 - `ignore_msb`: MSB bits to ignore for token calculation
 - `intended_storage_mode`: Intended storage mode for tables under vnodes-to-tablets migration. The node switches to this mode on next restart.
+- `current_storage_mode`: Storage mode the node is currently running in, for tables under vnodes-to-tablets migration. Seeded as `vnodes` for every node when a migration is prepared, then overwritten by the node itself once it has restarted and resharded, while `intended_storage_mode` is set. Cleared for all nodes when the migration is finalized. Null means the migration was started before the cluster had this column, in which case each node's mode is inferred from `system.tablet_sizes` instead. Gated by the `TOPOLOGY_CURRENT_STORAGE_MODE` cluster feature.
 - `cleanup_status`: Status of cleanup operations
 - `supported_features`: Features supported by this node
 - `request_id`: ID of the current topology request for this node
