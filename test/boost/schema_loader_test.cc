@@ -172,6 +172,127 @@ SEASTAR_THREAD_TEST_CASE(test_dropped_columns) {
     ).get(), std::exception);
 }
 
+// A described schema - a snapshot's schema.cql, or the output of DESC SCHEMA WITH INTERNALS -
+// can contain ALTER TABLE statements, which the loader has to apply to the schema it
+// reconstructs. There are two kinds: a dropped column is recorded as "ALTER TABLE ... DROP ...
+// USING TIMESTAMP", followed by "ALTER TABLE ... ADD" when the column was re-added, and a CDC log
+// table is described as "ALTER TABLE ... WITH <properties>". The drop timestamp is what masks the
+// values written before the drop, which are still in the sstables.
+constexpr api::timestamp_type drop_timestamp = 1631011979170675;
+
+/// Load a schema string expected to describe exactly one table, and return that table's schema.
+schema_ptr load_one_schema(const db::config& dbcfg, std::string_view schema_str) {
+    auto schemas = tools::load_schemas(dbcfg, schema_str).get();
+    BOOST_REQUIRE_EQUAL(schemas.size(), 1);
+    return schemas.front();
+}
+
+/// Look up the record of the column `name` dropped from `s`, which has to be present with type
+/// `type`. The timestamp is left to the caller, which may not know its exact value.
+const schema::dropped_column& get_dropped_column(const schema& s, const sstring& name, data_type type) {
+    testlog.info("Checking dropped column {} of {}.{}", name, s.ks_name(), s.cf_name());
+    auto it = s.dropped_columns().find(name);
+    BOOST_REQUIRE(it != s.dropped_columns().end());
+    BOOST_REQUIRE(it->second.type == type);
+    return it->second;
+}
+
+SEASTAR_THREAD_TEST_CASE(test_alter_table_drop_column) {
+    db::config dbcfg;
+    dbcfg.rf_rack_valid_keyspaces(true);
+
+    auto schema = load_one_schema(dbcfg,
+            format("CREATE TABLE ks.cf (pk int PRIMARY KEY, v1 int, v2 text); "
+                   "ALTER TABLE ks.cf DROP v2 USING TIMESTAMP {}; ", drop_timestamp)
+    );
+
+    BOOST_REQUIRE(schema->get_column_definition(to_bytes("v1")));
+    BOOST_REQUIRE(!schema->get_column_definition(to_bytes("v2")));
+    BOOST_REQUIRE_EQUAL(schema->dropped_columns().size(), 1);
+    BOOST_REQUIRE_EQUAL(get_dropped_column(*schema, "v2", utf8_type).timestamp, drop_timestamp);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_alter_table_drop_column_without_timestamp) {
+    db::config dbcfg;
+    dbcfg.rf_rack_valid_keyspaces(true);
+
+    // The drop is timestamped with the current time, so it can only be checked against the
+    // interval the load happened in.
+    const auto before_load = api::new_timestamp();
+    auto schema = load_one_schema(dbcfg,
+            "CREATE TABLE ks.cf (pk int PRIMARY KEY, v1 int, v2 int); "
+            "ALTER TABLE ks.cf DROP v2; "
+    );
+    const auto after_load = api::new_timestamp();
+
+    BOOST_REQUIRE(!schema->get_column_definition(to_bytes("v2")));
+    BOOST_REQUIRE_EQUAL(schema->dropped_columns().size(), 1);
+    const auto timestamp = get_dropped_column(*schema, "v2", int32_type).timestamp;
+    BOOST_REQUIRE_GE(timestamp, before_load);
+    BOOST_REQUIRE_LE(timestamp, after_load);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_alter_table_drop_and_readd_column) {
+    db::config dbcfg;
+    dbcfg.rf_rack_valid_keyspaces(true);
+
+    // The re-added column is live again, but the drop has to stay recorded.
+    auto schema = load_one_schema(dbcfg,
+            format("CREATE TABLE ks.cf (pk int PRIMARY KEY, v1 int, v2 int); "
+                   "ALTER TABLE ks.cf DROP v2 USING TIMESTAMP {}; "
+                   "ALTER TABLE ks.cf ADD v2 int; ", drop_timestamp)
+    );
+
+    BOOST_REQUIRE(schema->get_column_definition(to_bytes("v2")));
+    BOOST_REQUIRE_EQUAL(schema->dropped_columns().size(), 1);
+    BOOST_REQUIRE_EQUAL(get_dropped_column(*schema, "v2", int32_type).timestamp, drop_timestamp);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_alter_table_with_properties) {
+    db::config dbcfg;
+    dbcfg.rf_rack_valid_keyspaces(true);
+
+    // A CDC log table is created implicitly with its base, so it is not described with a CREATE;
+    // DESC SCHEMA WITH INTERNALS describes it as a properties-only ALTER instead.
+    auto schema = load_one_schema(dbcfg,
+            "CREATE TABLE ks.cf (pk int PRIMARY KEY, v int) WITH comment = 'created'; "
+            "ALTER TABLE ks.cf WITH comment = 'altered' AND gc_grace_seconds = 1234; "
+    );
+
+    BOOST_REQUIRE_EQUAL(schema->comment(), "altered");
+    BOOST_REQUIRE_EQUAL(schema->gc_grace_seconds().count(), 1234);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_alter_table_rejected) {
+    db::config dbcfg;
+    dbcfg.rf_rack_valid_keyspaces(true);
+
+    // An ALTER of a table the schema string doesn't define.
+    BOOST_REQUIRE_THROW(tools::load_schemas(
+                dbcfg,
+                format("CREATE TABLE ks.cf (pk int PRIMARY KEY, v1 int, v2 int); "
+                       "ALTER TABLE ks.unknown_cf DROP v2 USING TIMESTAMP {}; ", drop_timestamp)
+    ).get(), std::exception);
+    // An ALTER preceding the CREATE it applies to.
+    BOOST_REQUIRE_THROW(tools::load_schemas(
+                dbcfg,
+                format("ALTER TABLE ks.cf DROP v2 USING TIMESTAMP {}; "
+                       "CREATE TABLE ks.cf (pk int PRIMARY KEY, v1 int, v2 int); ", drop_timestamp)
+    ).get(), std::exception);
+    // An ALTER dropping a column the table doesn't have.
+    BOOST_REQUIRE_THROW(tools::load_schemas(
+                dbcfg,
+                format("CREATE TABLE ks.cf (pk int PRIMARY KEY, v1 int); "
+                       "ALTER TABLE ks.cf DROP v2 USING TIMESTAMP {}; ", drop_timestamp)
+    ).get(), std::exception);
+    // An ALTER dropping a primary key column.
+    BOOST_REQUIRE_THROW(tools::load_schemas(
+                dbcfg,
+                format("CREATE TABLE ks.cf (pk int PRIMARY KEY, v1 int); "
+                       "ALTER TABLE ks.cf DROP pk USING TIMESTAMP {}; ", drop_timestamp)
+    ).get(), std::exception);
+}
+
 /// Check that:
 /// * schemas[0] is a base schema (it is not a view)
 /// * schemas[1]..schemas.back() are views
