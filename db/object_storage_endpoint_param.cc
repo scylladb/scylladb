@@ -139,7 +139,14 @@ db::object_storage_endpoint_param db::object_storage_endpoint_param::decode(cons
         }
 
         auto aws_region = node["aws_region"];
-        ep.region = aws_region ? aws_region.as<std::string>() : std::getenv("AWS_DEFAULT_REGION");
+        if (aws_region) {
+            ep.region = aws_region.as<std::string>();
+        } else if (const char* env_region = std::getenv("AWS_DEFAULT_REGION")) {
+            ep.region = env_region;
+        }
+        if (ep.region.empty()) {
+            throw std::invalid_argument(fmt::format("Endpoint {} has no region, set aws_region or AWS_DEFAULT_REGION", ep.endpoint));
+        }
         ep.iam_role_arn = get_opt(node, "iam_role_arn", ""s);
 
         return object_storage_endpoint_param{std::move(ep)};
