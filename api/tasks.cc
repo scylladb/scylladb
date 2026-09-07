@@ -38,7 +38,7 @@ static auto wrap_ks_cf(http_context &ctx, ks_cf_func f) {
     };
 }
 
-static future<shared_ptr<compaction::major_keyspace_compaction_task_impl>> force_keyspace_compaction(http_context& ctx, sharded<replica::database>& db, std::unique_ptr<http::request> req) {
+static future<tasks::task_manager::task_ptr> force_keyspace_compaction(http_context& ctx, sharded<replica::database>& db, std::unique_ptr<http::request> req) {
     auto [ keyspace, table_infos ] = parse_table_infos(ctx, *req, "cf");
     auto flush = validate_bool_x(req->get_query_param("flush_memtables"), true);
     auto consider_only_existing_data = validate_bool_x(req->get_query_param("consider_only_existing_data"), false);
@@ -52,7 +52,7 @@ static future<shared_ptr<compaction::major_keyspace_compaction_task_impl>> force
     return compaction_module.make_and_start_task<compaction::major_keyspace_compaction_task_impl>(tasks::make_empty_task_info(), std::move(keyspace), tasks::task_id::create_null_id(), db, table_infos, fmopt, consider_only_existing_data);
 }
 
-static future<shared_ptr<compaction::upgrade_sstables_compaction_task_impl>> upgrade_sstables(sharded<replica::database>& db, std::unique_ptr<http::request> req, sstring keyspace, std::vector<table_info> table_infos) {
+static future<tasks::task_manager::task_ptr> upgrade_sstables(sharded<replica::database>& db, std::unique_ptr<http::request> req, sstring keyspace, std::vector<table_info> table_infos) {
     bool exclude_current_version = req_param<bool>(*req, "exclude_current_version", false);
 
     apilog.info("upgrade_sstables: keyspace={} tables={} exclude_current_version={}", keyspace, table_infos, exclude_current_version);

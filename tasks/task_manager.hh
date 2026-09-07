@@ -476,11 +476,11 @@ public:
         requires (module_ptr module, Args&&... args) {
             {TaskImpl(module, std::forward<Args>(args)...)} -> std::same_as<TaskImpl>;
         }
-        future<shared_ptr<TaskImpl>> make_and_start_task(tasks::task_info parent_info, Args&&... args) {
+        future<task_ptr> make_and_start_task(tasks::task_info parent_info, Args&&... args) {
             auto task_impl_ptr = seastar::make_shared<TaskImpl>(shared_from_this(), std::forward<Args>(args)...);
-            auto task = co_await make_task(task_impl_ptr, parent_info);
+            auto task = co_await make_task(std::move(task_impl_ptr), parent_info);
             task->start();
-            co_return task_impl_ptr;
+            co_return task;
         }
 
         // Must be called on target shard.
