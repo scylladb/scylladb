@@ -766,9 +766,11 @@ repair::shard_repair_task_impl::shard_repair_task_impl(tasks::task_manager::modu
     : repair_task_impl(module, id, 0, "shard", keyspace, "", "", parent_id_.uuid(), reason_)
     , info(repair, std::move(keyspace), std::move(erm_), std::move(ranges_), std::move(table_ids_), parent_id_, std::move(data_centers_), std::move(hosts_),
             std::move(ignore_nodes_), std::move(neighbors_), reason_, hints_batchlog_flushed, small_table_optimization,
-            ranges_parallelism, topo_guard, _as, std::move(sched_info), small_table_optimization_ranges_reduced_factor_)
+            ranges_parallelism, topo_guard, std::move(sched_info), small_table_optimization_ranges_reduced_factor_)
     , _flush_time(flush_time)
-{}
+{
+    info.plug_abort_source(_as);
+}
 
 shard_repair_state::shard_repair_state(repair_service& repair,
         sstring keyspace,
@@ -785,7 +787,6 @@ shard_repair_state::shard_repair_state(repair_service& repair,
         bool small_table_optimization,
         std::optional<int> ranges_parallelism,
         service::frozen_topology_guard topo_guard,
-        seastar::abort_source& as,
         tablet_repair_sched_info sched_info_,
         size_t small_table_optimization_ranges_reduced_factor_)
     : rs(repair)
@@ -795,7 +796,6 @@ shard_repair_state::shard_repair_state(repair_service& repair,
     , _erm(std::move(erm_))
     , _keyspace(std::move(keyspace))
     , _reason(reason_)
-    , _as(as)
     , ranges(std::move(ranges_))
     , table_ids(std::move(table_ids_))
     , cfs(get_table_names(db.local(), table_ids))
@@ -837,8 +837,11 @@ void shard_repair_state::check_failed_ranges(const std::optional<sstring>& faile
 }
 
 void shard_repair_state::check_in_abort_or_shutdown() {
+    if (!_as) {
+        on_internal_error(rlogger, "shard_repair_state::check_in_abort_or_shutdown(): the abort source is not plugged in");
+    }
     try {
-        _as.check();
+        _as->check();
         _topology_guard.check();
     } catch (...) {
         if (!_aborted) {
@@ -848,6 +851,14 @@ void shard_repair_state::check_in_abort_or_shutdown() {
         }
         throw;
     }
+}
+
+void shard_repair_state::abort() noexcept {
+    if (!_as) {
+        on_internal_error_noexcept(rlogger, "shard_repair_state::abort(): the abort source is not plugged in");
+        return;
+    }
+    _as->request_abort();
 }
 
 repair_neighbors shard_repair_state::get_repair_neighbors(const dht::token_range& range) {
