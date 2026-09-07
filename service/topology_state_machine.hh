@@ -121,7 +121,14 @@ struct replica_state {
     std::set<sstring> supported_features;
     cleanup_status cleanup;
     utils::UUID request_id; // id of the current request for the node or the last one if no current one exists
+    // The storage mode the node is meant to run in. Set while a vnodes-to-tablets
+    // migration is in progress; the node switches to it on the next restart.
     std::optional<storage_mode> intended_storage_mode;
+    // The storage mode the node is actually running in: the intended_storage_mode
+    // value it applied when it built its tables at boot, published only after the
+    // local resharding for that direction completed. Absent means the node has not
+    // restarted since the migration began, i.e. it still runs in vnodes mode.
+    std::optional<storage_mode> current_storage_mode;
 };
 
 struct topology_features {
