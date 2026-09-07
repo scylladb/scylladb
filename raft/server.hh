@@ -321,6 +321,19 @@ public:
     // of two servers iff their IDs are different.
     virtual void register_metrics() = 0;
 
+    // Log positions and memory usage, read in one call so that they can
+    // be summed over several servers.
+    struct log_state {
+        // Number of entries in the in-memory part of the log.
+        size_t in_memory_log_size;
+        // Bytes used by the in-memory part of the log.
+        size_t log_memory_usage;
+        index_t last_idx;
+        index_t commit_idx;
+        index_t applied_idx;
+    };
+    virtual log_state get_log_state() const = 0;
+
     // Returns true if this servers thinks that it is the leader.
     // The information is only relevant for the current_term() only
     virtual bool is_leader() = 0;

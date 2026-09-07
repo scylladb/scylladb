@@ -124,6 +124,7 @@ public:
     future<> modify_config(std::vector<config_member> add, std::vector<server_id> del, seastar::abort_source* as) override;
     future<entry_id> add_entry_on_leader(command command, seastar::abort_source* as);
     void register_metrics() override;
+    log_state get_log_state() const override;
     size_t max_command_size() const override;
 private:
     seastar::condition_variable _events;
@@ -1840,6 +1841,16 @@ future<> server_impl::set_configuration(config_member_set c_new, seastar::abort_
 raft::configuration
 server_impl::get_configuration() const {
     return _fsm->get_configuration();
+}
+
+server::log_state server_impl::get_log_state() const {
+    return log_state{
+        .in_memory_log_size = _fsm->in_memory_log_size(),
+        .log_memory_usage = _fsm->log_memory_usage(),
+        .last_idx = _fsm->log_last_idx(),
+        .commit_idx = _fsm->commit_idx(),
+        .applied_idx = _applied_idx,
+    };
 }
 
 void server::register_stats_metrics(seastar::metrics::metric_groups& metrics, const stats& s, const metrics_options& options) {
