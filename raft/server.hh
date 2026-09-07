@@ -57,6 +57,10 @@ public:
         uint64_t read_quorum_received = 0;
         uint64_t read_quorum_reply_sent = 0;
         uint64_t read_quorum_reply_received = 0;
+        // Number of times adding an entry had to wait for log memory.
+        uint64_t log_limiter_waits = 0;
+        // Number of entries waiting for it right now.
+        int64_t log_limiter_waiters = 0;
     };
 
     // Exports the counters of a stats object as metrics, see

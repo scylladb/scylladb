@@ -673,11 +673,22 @@ future<> server_impl::wait_for_entry(entry_id eid, wait_type type, seastar::abor
 
 future<entry_id> server_impl::add_entry_on_leader(command cmd, seastar::abort_source* as) {
     // Wait for sufficient memory to become available
+    const size_t size = log::memory_usage_of(cmd, _config.max_command_size);
     semaphore_units<> memory_permit;
     while (true) {
         term_t t = _fsm->get_current_term();
+        const bool waits = !_fsm->memory_permit_available(size);
+        if (waits) {
+            _stats.log_limiter_waits++;
+            _stats.log_limiter_waiters++;
+        }
+        auto waiting_done = seastar::defer([this, waits] noexcept {
+            if (waits) {
+                _stats.log_limiter_waiters--;
+            }
+        });
         try {
-            memory_permit = co_await _fsm->wait_for_memory_permit(as, log::memory_usage_of(cmd, _config.max_command_size));
+            memory_permit = co_await _fsm->wait_for_memory_permit(as, size);
         } catch (semaphore_aborted&) {
             throw request_aborted(
                 format("Semaphore aborted while waiting for memory availability for adding entry on leader in term: {}, on server: {}, current term: {}",
@@ -1926,6 +1937,11 @@ void server::register_stats_metrics(seastar::metrics::metric_groups& metrics, co
              sm::description("Number of log entries applied"), labels()).aggregate(aggregate).set_skip_when_empty(skip),
         sm::make_total_operations("snapshots_taken", s.snapshots_taken,
              sm::description("Number of times user's state machine snapshotted"), labels()).aggregate(aggregate).set_skip_when_empty(skip),
+
+        sm::make_total_operations("log_limiter_waits", s.log_limiter_waits,
+             sm::description("Number of times adding an entry had to wait for the in-memory log to shrink below max_log_size"), labels()).aggregate(aggregate).set_skip_when_empty(skip),
+        sm::make_gauge("log_limiter_waiters", s.log_limiter_waiters,
+             sm::description("Number of entries currently waiting for the in-memory log to shrink below max_log_size"), labels()).aggregate(aggregate),
     });
 }
 

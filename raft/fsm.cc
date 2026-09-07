@@ -91,6 +91,13 @@ future<semaphore_units<>> fsm::wait_for_memory_permit(seastar::abort_source* as,
     return as ? get_units(sm, size, *as) : get_units(sm, size);
 }
 
+bool fsm::memory_permit_available(size_t size) const {
+    check_is_leader();
+
+    const auto& sm = *leader_state().log_limiter_semaphore;
+    return sm.waiters() == 0 && sm.available_units() >= ssize_t(size);
+}
+
 const configuration& fsm::get_configuration() const {
     return _log.get_configuration();
 }

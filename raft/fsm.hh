@@ -546,6 +546,9 @@ public:
     // Can only be called on a leader.
     // On abort throws `semaphore_aborted`.
     future<semaphore_units<>> wait_for_memory_permit(seastar::abort_source* as, size_t size);
+    // Whether wait_for_memory_permit() for this size would not block.
+    // Can only be called on a leader.
+    bool memory_permit_available(size_t size) const;
 
     // Return current configuration.
     const configuration& get_configuration() const;
