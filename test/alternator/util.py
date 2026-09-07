@@ -376,6 +376,19 @@ def scylla_config_temporary(dynamodb, name, value, nop = False):
     finally:
         scylla_config_write(dynamodb, name, original_value)
 
+# get_cert() returns the (cert_file, key_file) tuple that should be passed
+# as the "cert" parameter of requests.get()/post() to authenticate to the
+# given dynamodb connection's endpoint, or None if that connection does not
+# use a client certificate. Tests which send raw HTTP requests (i.e., not
+# through boto3) to the same endpoint as "dynamodb" - instead of through
+# get_signed_request()/manual_request() below - need to pass this "cert" too,
+# because under mTLS (--mtls) the TLS handshake itself will fail without it,
+# regardless of the request's content.
+def get_cert(dynamodb):
+    session = dynamodb.meta.client._endpoint.http_session
+    cert_file = getattr(session, '_cert_file', None)
+    return (cert_file, session._key_file) if cert_file else None
+
 # manual_request() can be used to send a DynamoDB API request without any
 # boto3 involvement in preparing the request - the operation name and
 # operation payload (a JSON string) are created by the caller. Use this
