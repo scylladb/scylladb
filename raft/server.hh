@@ -9,9 +9,12 @@
 #include <seastar/core/abort_source.hh>
 #include "raft.hh"
 #include <functional>
+#include <seastar/core/metrics_registration.hh>
 #include <seastar/core/shared_ptr.hh>
 
 namespace raft {
+
+struct metrics_options;
 
 enum class wait_type {
     committed,
@@ -55,6 +58,10 @@ public:
         uint64_t read_quorum_reply_sent = 0;
         uint64_t read_quorum_reply_received = 0;
     };
+
+    // Exports the counters of a stats object as metrics, see
+    // metrics_options.hh. The object must outlive the metric group.
+    static void register_stats_metrics(seastar::metrics::metric_groups& metrics, const stats& s, const metrics_options& options);
 
     struct configuration {
         // automatically snapshot state machine after applying
