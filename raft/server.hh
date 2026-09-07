@@ -338,6 +338,9 @@ public:
     };
     virtual log_state get_log_state() const = 0;
 
+    // All zeros when this server is not the leader.
+    virtual blocked_followers get_blocked_followers() const = 0;
+
     // Returns true if this servers thinks that it is the leader.
     // The information is only relevant for the current_term() only
     virtual bool is_leader() = 0;

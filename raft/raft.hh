@@ -833,6 +833,16 @@ public:
     virtual bool is_alive(server_id server) = 0;
 };
 
+// Number of followers the leader cannot send entries to, by reason.
+struct blocked_followers {
+    // Waiting for the reply to a probe of the follower's log.
+    size_t probe = 0;
+    // The maximal number of append requests is in flight.
+    size_t pipeline_full = 0;
+    // Waiting for a snapshot transfer to complete.
+    size_t snapshot = 0;
+};
+
 } // namespace raft
 
 template <>

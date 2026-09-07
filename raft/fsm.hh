@@ -497,6 +497,8 @@ public:
     size_t state_to_metric() const {
         return _state.index();
     }
+    // All zeros when this server is not the leader.
+    blocked_followers count_blocked_followers() const;
     index_t log_last_idx() const {
         return _log.last_idx();
     }
