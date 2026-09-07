@@ -51,6 +51,12 @@ protected:
 
 using current_task_type = tasks::task_manager::task_ptr;
 
+// The state through which a task waits for its turn among its siblings.
+struct compaction_turn {
+    seastar::condition_variable& cv;
+    current_task_type& current_task;
+};
+
 enum class flush_mode {
     skip,               // Skip flushing.  Useful when application explicitly flushes all tables prior to compaction
     compacted_tables,   // Flush only the compacted keyspace/tables
@@ -85,40 +91,6 @@ protected:
     bool _consider_only_existing_data;
 
     virtual future<> run() override = 0;
-};
-
-class major_keyspace_compaction_task_impl : public major_compaction_task_impl {
-private:
-    sharded<replica::database>& _db;
-    std::vector<table_info> _table_infos;
-    // _cvp and _current_task are engaged when the task is invoked from
-    // the global major compaction task
-    seastar::condition_variable* _cv;
-    current_task_type* _current_task;
-public:
-    major_keyspace_compaction_task_impl(tasks::task_manager::module_ptr module,
-            std::string keyspace,
-            tasks::task_id parent_id,
-            sharded<replica::database>& db,
-            std::vector<table_info> table_infos,
-            std::optional<flush_mode> fm = std::nullopt,
-            bool consider_only_existing_data = false,
-            seastar::condition_variable* cv = nullptr,
-            current_task_type* current_task = nullptr) noexcept
-        : major_compaction_task_impl(module, tasks::task_id::create_random_id(),
-                parent_id ? 0 : module->new_sequence_number(),
-                "keyspace", std::move(keyspace), "", "", parent_id,
-                fm.value_or(flush_mode::all_tables), consider_only_existing_data)
-        , _db(db)
-        , _table_infos(std::move(table_infos))
-        , _cv(cv)
-        , _current_task(current_task)
-    {}
-
-    tasks::is_user_task is_user_task() const noexcept override;
-protected:
-    virtual future<> run() override;
-    virtual future<std::optional<double>> expected_total_workload() const override;
 };
 
 class shard_major_keyspace_compaction_task_impl : public major_compaction_task_impl {
@@ -727,6 +699,9 @@ public:
 
     // Starts a major compaction of all the tables on the node.
     future<tasks::task_manager::task_ptr> start_global_major_compaction(sharded<replica::database>& db, std::optional<flush_mode> fm, bool consider_only_existing_data);
+
+    // Starts a major compaction of the given tables of a keyspace on all the shards.
+    future<tasks::task_manager::task_ptr> start_major_keyspace_compaction(sharded<replica::database>& db, std::string keyspace, std::vector<table_info> table_infos, std::optional<flush_mode> fm, bool consider_only_existing_data, compaction_turn* turn = nullptr, tasks::task_info parent_info = tasks::make_empty_task_info());
 };
 
 class regular_compaction_task_impl : public compaction_task_impl {
