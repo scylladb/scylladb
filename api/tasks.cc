@@ -125,7 +125,7 @@ void set_tasks_compaction_module(http_context& ctx, routes& r, sharded<replica::
         if (!flush && !consider_only_existing_data) {
             fmopt = compaction::flush_mode::skip;
         }
-        auto task = co_await compaction_module.make_and_start_task<compaction::global_major_compaction_task_impl>(tasks::make_empty_task_info(), db, fmopt, consider_only_existing_data);
+        auto task = co_await compaction_module.start_global_major_compaction(db, fmopt, consider_only_existing_data);
         co_await task->done();
         co_return json_void();
     });

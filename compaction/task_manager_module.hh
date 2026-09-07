@@ -57,6 +57,8 @@ enum class flush_mode {
     all_tables          // Flush all tables in the database prior to compaction
 };
 
+inline constexpr auto major_compaction_task_type = "major compaction";
+
 class major_compaction_task_impl : public compaction_task_impl {
 public:
     major_compaction_task_impl(tasks::task_manager::module_ptr module,
@@ -75,7 +77,7 @@ public:
     {}
 
     virtual std::string type() const override {
-        return "major compaction";
+        return major_compaction_task_type;
     }
 
 protected:
@@ -85,31 +87,12 @@ protected:
     virtual future<> run() override = 0;
 };
 
-class global_major_compaction_task_impl : public major_compaction_task_impl {
-private:
-    sharded<replica::database>& _db;
-public:
-    global_major_compaction_task_impl(tasks::task_manager::module_ptr module,
-            sharded<replica::database>& db,
-            std::optional<flush_mode> fm = std::nullopt,
-            bool consider_only_existing_data = false) noexcept
-        : major_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), "global", "", "", "", tasks::task_id::create_null_id(),
-                fm.value_or(flush_mode::all_tables), consider_only_existing_data)
-        , _db(db)
-    {}
-
-    tasks::is_user_task is_user_task() const noexcept override;
-protected:
-    virtual future<> run() override;
-    virtual future<std::optional<double>> expected_total_workload() const override;
-};
-
 class major_keyspace_compaction_task_impl : public major_compaction_task_impl {
 private:
     sharded<replica::database>& _db;
     std::vector<table_info> _table_infos;
     // _cvp and _current_task are engaged when the task is invoked from
-    // global_major_compaction_task_impl
+    // the global major compaction task
     seastar::condition_variable* _cv;
     current_task_type* _current_task;
 public:
@@ -741,6 +724,9 @@ protected:
 class task_manager_module : public tasks::task_manager::module {
 public:
     task_manager_module(tasks::task_manager& tm) noexcept : tasks::task_manager::module(tm, "compaction") {}
+
+    // Starts a major compaction of all the tables on the node.
+    future<tasks::task_manager::task_ptr> start_global_major_compaction(sharded<replica::database>& db, std::optional<flush_mode> fm, bool consider_only_existing_data);
 };
 
 class regular_compaction_task_impl : public compaction_task_impl {
