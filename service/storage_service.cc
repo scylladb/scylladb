@@ -1432,7 +1432,9 @@ future<> storage_service::update_topology_with_local_metadata(raft::server& raft
     // Only report the mode once every node knows the column; older nodes silently drop
     // a cell for a column their schema lacks. The flag gates the comparison below too,
     // or the loop would keep retrying a write it is not allowed to make.
-    const bool report_storage_mode = bool(_feature_service.topology_current_storage_mode);
+    // The one-shot injection lets a test reproduce a boot before the feature landed.
+    const bool report_storage_mode = bool(_feature_service.topology_current_storage_mode)
+            && !utils::get_local_injector().enter("skip_current_storage_mode_publish");
     std::optional<storage_mode> local_storage_mode;
     if (report_storage_mode) {
         local_storage_mode = _db.local().get_boot_storage_mode();

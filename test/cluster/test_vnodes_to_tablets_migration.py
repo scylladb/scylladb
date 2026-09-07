@@ -224,6 +224,126 @@ async def verify_migration_status(manager: ScyllaClusterManager, server: ServerI
         assert len(ks_tasks) == 0, f"Expected no virtual tasks for keyspace '{ks}' when status is '{expected_status}', got {len(ks_tasks)}"
 
 
+async def wait_for_node_storage_modes(manager: ScyllaClusterManager, server: ServerInfo,
+                                      ks: str, expected: tuple[str, str], timeout: float = 60):
+    """Wait until the status API reports `expected` (current, intended) for `server`.
+
+    Polls, unlike verify_migration_status(): a mode published by the feature listener
+    lands in a background fiber that startup does not wait for.
+    """
+    host_id = await manager.get_host_id(server.server_id)
+    deadline = time.time() + timeout
+    last = None
+    while time.time() < deadline:
+        status = await manager.api.get_vnode_tablet_migration_status(server.ip_addr, ks)
+        modes = {n['host_id']: (n['current_mode'], n['intended_mode']) for n in status['nodes']}
+        last = modes.get(host_id)
+        if last == expected:
+            return
+        await asyncio.sleep(0.5)
+    assert False, f"Node {host_id} reported {last}, expected {expected} within {timeout}s"
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_storage_mode_published_after_feature_enabled(manager: ScyllaClusterManager):
+    """Verify a node publishes its storage mode when TOPOLOGY_CURRENT_STORAGE_MODE is
+    enabled after it booted, without waiting for another restart.
+
+    The skip_current_storage_mode_publish one-shot injection stands in for the upgrade
+    that introduces the feature, where no node can see it enabled on that boot: it
+    suppresses the publish on the boot pass, leaving the listener to reconcile.
+    """
+    cfg = {'tablet_load_stats_refresh_interval_in_seconds': 1, 'num_tokens': 16}
+    servers = await manager.servers_add(1, cmdline=['--smp', '2'], config=cfg)
+    server = servers[0]
+    host_id = await manager.get_host_id(server.server_id)
+    cql, _ = await manager.get_ready_cql(servers)
+
+    ks_opts = "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}"
+    async with new_test_keyspace(manager, ks_opts) as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+        stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, c) VALUES (?, ?)")
+        await asyncio.gather(*(cql.run_async(stmt, [k, k]) for k in range(100)))
+
+        logger.info(f"Migrating {ks} and marking the node")
+        await manager.api.create_vnode_tablet_migration(server.ip_addr, ks)
+        await manager.api.upgrade_node_to_tablets(server.ip_addr)
+
+        await verify_migration_status(manager, server, ks,
+            expected_status='migrating_to_tablets',
+            expected_node_statuses={host_id: ('vnodes', 'tablets')})
+
+        logger.info("Restarting the node with the boot-time publish suppressed")
+        await manager.server_stop_gracefully(server.server_id)
+        await manager.server_update_config(server.server_id, 'error_injections_at_startup',
+            [{'name': 'skip_current_storage_mode_publish', 'one_shot': True}])
+        await manager.server_start(server.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        # The boot pass skipped the column, so this only passes because the feature
+        # listener reconciled it afterwards.
+        logger.info("Verifying the listener published the mode the boot pass skipped")
+        await wait_for_node_storage_modes(manager, server, ks, ('tablets', 'tablets'))
+
+        logger.info(f"Finalizing the migration of {ks}")
+        await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks)
+        await read_barrier(manager.api, server.ip_addr)
+
+        await verify_migration_status(manager, server, ks,
+            expected_status='tablets', expected_node_statuses={})
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_migration_refused_before_feature_enabled(manager: ScyllaClusterManager):
+    """Verify a migration cannot start until TOPOLOGY_CURRENT_STORAGE_MODE is enabled.
+
+    suppress_features stands in for a node that still runs older code.
+    """
+    cfg = {
+        'tablet_load_stats_refresh_interval_in_seconds': 1,
+        'num_tokens': 16,
+        'error_injections_at_startup': [
+            {'name': 'suppress_features', 'value': 'TOPOLOGY_CURRENT_STORAGE_MODE'}],
+    }
+    servers = await manager.servers_add(1, cmdline=['--smp', '2'], config=cfg)
+    server = servers[0]
+    cql, _ = await manager.get_ready_cql(servers)
+
+    ks_opts = "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}"
+    async with new_test_keyspace(manager, ks_opts) as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+
+        with pytest.raises(HTTPError, match="TOPOLOGY_CURRENT_STORAGE_MODE cluster feature is not enabled"):
+            await manager.api.create_vnode_tablet_migration(server.ip_addr, ks)
+
+        logger.info("Restarting the node without the suppression so the feature is enabled")
+        await manager.server_stop_gracefully(server.server_id)
+        await manager.server_remove_config_option(server.server_id, 'error_injections_at_startup')
+        await manager.server_start(server.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        # The coordinator enables the feature once every node supports it. Retry only
+        # that refusal; anything else is a real error and must not be swallowed.
+        not_enabled = "TOPOLOGY_CURRENT_STORAGE_MODE cluster feature is not enabled"
+        deadline = time.time() + 60
+        while True:
+            try:
+                await manager.api.create_vnode_tablet_migration(server.ip_addr, ks)
+                break
+            except HTTPError as e:
+                if not_enabled not in e.message:
+                    raise
+                assert time.time() < deadline, f"Migration still refused after the feature should be enabled: {e}"
+                await asyncio.sleep(0.5)
+
+        host_id = await manager.get_host_id(server.server_id)
+        await verify_migration_status(manager, server, ks,
+            expected_status='migrating_to_tablets',
+            expected_node_statuses={host_id: ('vnodes', 'vnodes')})
+
+
 async def test_migration(manager: ScyllaClusterManager):
     """Verify vnodes-to-tablets migration for a single table on a single-node cluster.
 
