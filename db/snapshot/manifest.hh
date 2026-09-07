@@ -93,6 +93,8 @@ struct manifest_json : public json::json_base {
         json::json_element<int64_t> repaired_at;
         json::json_element<sstring> node;
 
+        json::json_chunked_list<sstring> additional_nodes;
+
         sstable_info();
         sstable_info(const sstables::sstable_snapshot_metadata& e);
         sstable_info(const sstable_info& e);
