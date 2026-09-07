@@ -43,7 +43,6 @@ protected:
 class shard_repair_task_impl : public repair_task_impl {
 public:
     repair_info info;
-    service::migration_manager& mm;
 private:
     std::optional<sstring> _failed_because;
     gc_clock::time_point _flush_time;
@@ -74,8 +73,6 @@ public:
     size_t get_total_rf() {
         return info.get_erm()->get_replication_factor();
     }
-
-    future<> repair_range(const dht::token_range& range, table_info table);
 
     virtual future<> release_resources() noexcept override;
 protected:

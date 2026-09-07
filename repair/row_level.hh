@@ -222,6 +222,10 @@ public:
     future<> cleanup_history(tasks::task_id repair_id);
     future<> load_history();
 
+    // Repair a single local range, multiple column families.
+    // Comparable to RepairSession in Origin
+    future<> repair_range(repair_info& ri, const dht::token_range& range, table_info table, gc_clock::time_point flush_time);
+
     future<int> do_repair_start(gms::gossip_address_map& addr_map, sstring keyspace, std::unordered_map<sstring, sstring> options_map);
 
     // The tokens are the tokens assigned to the bootstrap node.
