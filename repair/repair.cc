@@ -2784,8 +2784,7 @@ future<repair_service::tablet_repair_result> repair_service::run_tablet_repair(
                         error = std::move(ep);
                     }
                 }
-                auto time = task->get_flush_time();
-                shard_flush_time = shard_flush_time == gc_clock::time_point() ? time : std::min(shard_flush_time, time);
+                shard_flush_time = shard_flush_time == gc_clock::time_point() ? flush_time : std::min(shard_flush_time, flush_time);
                 flush_failed = flush_failed || (needs_flush_before_repair && !hints_batchlog_flushed);
             }
             if (error) {
