@@ -373,6 +373,9 @@ public:
     std::optional<locator::token_metadata::version_t> pinned_token_metadata_version() const noexcept {
         return _erm ? std::optional(_erm->get_token_metadata().get_version()) : std::nullopt;
     }
+    void abort() noexcept {
+        _as.request_abort();
+    }
     void update_statistics(const repair_stats& o) {
         stats.add(o);
     }
@@ -387,6 +390,7 @@ public:
     }
     locator::effective_replication_map_ptr get_erm();
 
+    friend class repair_service;
     friend class repair::shard_repair_task_impl;
 };
 
