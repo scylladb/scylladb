@@ -12,8 +12,10 @@
 #include "locator/tablets.hh"
 #include "message/messaging_service.hh"
 #include "service/raft/raft_group_registry.hh"
+#include "service/strong_consistency/table_metrics.hh"
 #include "cql3/query_processor.hh"
 #include "db/commitlog/raft_commitlog_replay_buffer.hh"
+#include "utils/hash.hh"
 
 #include <seastar/util/noncopyable_function.hh>
 
@@ -133,6 +135,8 @@ class groups_manager : public peering_sharded_service<groups_manager> {
         bool has_tablet = false;
         lw_shared_ptr<gate> gate = nullptr;
         raft::server* server = nullptr;
+        // Shared with the other tablets of the same table on this shard.
+        lw_shared_ptr<table_metrics> metrics = nullptr;
         shared_future<> server_control_op = make_ready_future<>();
 
         // Populated only when this node thinks it's a tablet raft group leader.
@@ -151,6 +155,9 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     gms::gossiper& _gossiper;
     db::raft_commitlog_replay_buffer& _raft_replay_buffer;
     std::unordered_map<raft::group_id, raft_group_state> _raft_groups = {};
+    // Keyed by keyspace and table name, see get_table_metrics().
+    using table_metrics_map = std::unordered_map<std::pair<sstring, sstring>, lw_shared_ptr<table_metrics>, utils::tuple_hash>;
+    table_metrics_map _table_metrics;
     boost::intrusive::list<raft_group_state, boost::intrusive::constant_time_size<false>> _starting_groups;
     locator::token_metadata_ptr _pending_tm = nullptr;
     bool _started = false;
@@ -158,9 +165,21 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     tablet_group_leader_cache _leader_cache;
 
     // Should be called on the shard that hosts the Raft group
-    future<> start_raft_group(locator::global_tablet_id tablet,
+    // Returns the metrics of the table, null if it is already dropped.
+    future<lw_shared_ptr<table_metrics>> start_raft_group(locator::global_tablet_id tablet,
         raft::group_id group_id,
         locator::token_metadata_ptr tm);
+
+    // Creates them if needed; returns null if the table is already dropped.
+    lw_shared_ptr<table_metrics> get_table_metrics(table_id table);
+
+    // Detaches the group from the metrics of its table.
+    void release_table_metrics(raft_group_state& state);
+
+    // Unregisters the metrics of the tables that no longer exist. They are
+    // kept while the table exists even after its last tablet left this
+    // shard, or the sum over the shards would go backwards.
+    void unregister_dropped_tables_metrics();
 
     void schedule_raft_group_deletion(raft::group_id group_id, raft_group_state& group_state);
 
