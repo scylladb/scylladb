@@ -403,24 +403,27 @@ std::unordered_map<sstring, std::vector<table_info>> get_tables_by_keyspace(repl
     return tables_by_keyspace;
 }
 
-future<> global_major_compaction_task_impl::run() {
+static future<> run_global_major_compaction(tasks::task_manager::module_ptr module, sharded<replica::database>& db, flush_mode fm, bool consider_only_existing_data, tasks::task_info task_info) {
     bool flushed_all_tables = false;
-    if (_flush_mode == flush_mode::all_tables) {
-        flushed_all_tables = co_await maybe_flush_commitlog(_db, _consider_only_existing_data);
+    if (fm == flush_mode::all_tables) {
+        flushed_all_tables = co_await maybe_flush_commitlog(db, consider_only_existing_data);
     }
 
-    auto tables_by_keyspace = get_tables_by_keyspace(_db.local());
+    auto tables_by_keyspace = get_tables_by_keyspace(db.local());
     seastar::condition_variable cv;
     current_task_type current_task;
-    auto parent_info = info();
     std::vector<keyspace_tasks_info> keyspace_tasks;
-    flush_mode fm = flushed_all_tables ? flush_mode::skip : _flush_mode;
+    flush_mode keyspace_fm = flushed_all_tables ? flush_mode::skip : fm;
     for (auto& [ks, table_infos] : tables_by_keyspace) {
-        auto task = co_await _module->make_and_start_task<major_keyspace_compaction_task_impl>(parent_info, ks, parent_info.get_id(), _db, table_infos, fm,
-                _consider_only_existing_data, &cv, &current_task);
+        auto task = co_await module->make_and_start_task<major_keyspace_compaction_task_impl>(task_info, ks, task_info.get_id(), db, table_infos, keyspace_fm,
+                consider_only_existing_data, &cv, &current_task);
         keyspace_tasks.emplace_back(std::move(task), ks, std::move(table_infos));
     }
-    co_await run_keyspace_tasks(_db.local(), keyspace_tasks, cv, current_task, false);
+    co_await run_keyspace_tasks(db.local(), keyspace_tasks, cv, current_task, false);
+}
+
+future<> global_major_compaction_task_impl::run() {
+    return run_global_major_compaction(_module, _db, _flush_mode, _consider_only_existing_data, info());
 }
 
 future<std::optional<double>> global_major_compaction_task_impl::expected_total_workload() const {
