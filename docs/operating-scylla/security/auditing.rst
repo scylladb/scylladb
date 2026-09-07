@@ -14,11 +14,12 @@ Enable ScyllaDB :doc:`Authentication </operating-scylla/security/authentication>
 Enabling Audit
 ---------------
 
-By default, auditing is **enabled**. Enabling auditing is controlled by the ``audit:`` parameter in the ``scylla.yaml`` file.
+By default, auditing is **enabled** with the ``table`` backend: the ``scylla.yaml`` shipped with ScyllaDB sets ``audit: "table"``.
+If the ``audit`` parameter is removed from ``scylla.yaml``, auditing is disabled. Enabling auditing is controlled by the ``audit:`` parameter in the ``scylla.yaml`` file.
 You can set the following options:
 
-* ``none`` - Audit is disabled (default).
-* ``table`` - Audit is enabled, and messages are stored in a Scylla table.
+* ``none`` - Audit is disabled. This is also the behavior when the ``audit`` parameter is not set.
+* ``table`` - Audit is enabled, and messages are stored in a Scylla table (default in the shipped ``scylla.yaml``).
 * ``syslog`` - Audit is enabled, and messages are sent to Syslog.
 * ``syslog,table`` - Audit is enabled, and messages are stored in a Scylla table and sent to Syslog.
 
@@ -29,16 +30,22 @@ Configuring Audit
 
 The audit can be tuned using the following flags or ``scylla.yaml`` entries:
 
-==================  ==================================  ========================================================================================================================
-Flag                Default Value                       Description
-==================  ==================================  ========================================================================================================================
-audit_categories    "DCL,DDL,AUTH,ADMIN"                                  Comma-separated list of statement categories that should be audited
-------------------  ----------------------------------  ------------------------------------------------------------------------------------------------------------------------
-audit_tables        “”                                  Comma-separated list of table names that should be audited, in the format of <keyspacename>.<tablename>
-------------------  ----------------------------------  ------------------------------------------------------------------------------------------------------------------------
-audit_keyspaces     “”                                  Comma-separated list of keyspaces that should be audited. You must specify at least one keyspace.
-                                                        If you leave this option empty, no keyspace will be audited.
-==================  ==================================  ========================================================================================================================
+==================  ========================================================================================================================
+Flag                Description
+==================  ========================================================================================================================
+audit_categories    Comma-separated list of statement categories that should be audited
+------------------  ------------------------------------------------------------------------------------------------------------------------
+audit_tables        Comma-separated list of table names that should be audited, in the format of <keyspacename>.<tablename>
+------------------  ------------------------------------------------------------------------------------------------------------------------
+audit_keyspaces     Comma-separated list of keyspaces that should be audited. You must specify at least one keyspace.
+                    If you leave this option empty, no keyspace will be audited.
+==================  ========================================================================================================================
+
+The default value and liveness of each option are listed in
+:doc:`/reference/configuration-parameters`: see
+:ref:`audit_categories <confprop_audit_categories>`,
+:ref:`audit_tables <confprop_audit_tables>` and
+:ref:`audit_keyspaces <confprop_audit_keyspaces>`.
 
 To audit all the tables in a keyspace, set the ``audit_keyspaces`` with the keyspace you want to audit and leave ``audit_tables`` empty.
 
