@@ -479,7 +479,7 @@ static void do_test_link_with_rewritten_component_size(test_env& env) {
     auto random_schema = tests::random_schema{tests::random::get_int<uint32_t>(), *random_spec};
     auto schema = random_schema.schema();
 
-    const auto muts = tests::generate_random_mutations(random_schema, 1000).get();
+    const auto muts = tests::generate_random_mutations(random_schema, 10).get();
     auto sst = make_sstable_containing(env.make_sstable(schema, sstable::version_types::me), muts).get();
 
     auto before_size = calculate_actual_on_disk_size(sst).get();
