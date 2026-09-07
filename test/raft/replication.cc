@@ -19,6 +19,13 @@ raft::snapshot_id delay_apply_snapshot{utils::UUID(0, 0xdeadbeaf)};
 // sending of a snapshot with that id will be delayed until snapshot_sync is signaled
 raft::snapshot_id delay_send_snapshot{utils::UUID(0xdeadbeaf, 0)};
 
+std::optional<raft::server_id> delay_apply;
+seastar::semaphore apply_entered(0);
+seastar::semaphore apply_release(0);
+
+std::optional<raft::server_id> notify_snapshot_received;
+seastar::semaphore snapshot_received(0);
+
 std::vector<raft::server_id> to_raft_id_vec(std::vector<node_id> nodes) noexcept {
     std::vector<raft::server_id> ret;
     for (auto node: nodes) {
