@@ -302,7 +302,7 @@ struct tablet_repair_sched_info {
 };
 
 namespace repair {
-class shard_repair_task_impl;
+class task_manager_module;
 }
 
 // The state of a single shard repair that the row level repair machinery
@@ -396,7 +396,7 @@ public:
     locator::effective_replication_map_ptr get_erm();
 
     friend class repair_service;
-    friend class repair::shard_repair_task_impl;
+    friend class repair::task_manager_module;
 };
 
 namespace std {
