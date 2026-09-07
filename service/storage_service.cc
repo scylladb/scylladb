@@ -1430,6 +1430,28 @@ future<> storage_service::update_topology_with_local_metadata(raft::server& raft
     auto local_release_version = version::release();
     auto local_supported_features = _feature_service.supported_feature_set() | std::ranges::to<std::set<sstring>>();
 
+    // Only report the mode once every node knows the column; older nodes silently drop
+    // a cell for a column their schema lacks. The flag gates the comparison below too,
+    // or the loop would keep retrying a write it is not allowed to make.
+    const bool report_storage_mode = bool(_feature_service.topology_current_storage_mode);
+    // The mode this node built its tables with. It reads the intent before it has caught
+    // up with group0, and a node can die between committing an intent and applying it, so
+    // the row may already carry one this boot never saw - the tables are vnode-flavored
+    // either way, and that is what the node has to report.
+    storage_mode local_storage_mode = storage_mode::vnodes;
+    if (report_storage_mode) {
+        local_storage_mode = _db.local().get_boot_storage_mode().value_or(storage_mode::vnodes);
+    }
+
+    // Reconcile only while the row still records an intent, or a node booting after
+    // finalization would write back a mode the coordinator has just cleared.
+    auto storage_mode_synchronized = [&] (const replica_state& rs) {
+        if (!report_storage_mode || !rs.intended_storage_mode) {
+            return true;
+        }
+        return rs.current_storage_mode == local_storage_mode;
+    };
+
     auto synchronized = [&] () {
         auto it = _topology_state_machine._topology.find(raft_server.id());
         if (!it) {
@@ -1441,7 +1463,8 @@ future<> storage_service::update_topology_with_local_metadata(raft::server& raft
         return replica_state.shard_count == local_shard_count
             && replica_state.ignore_msb == local_ignore_msb
             && replica_state.release_version == local_release_version
-            && replica_state.supported_features == local_supported_features;
+            && replica_state.supported_features == local_supported_features
+            && storage_mode_synchronized(replica_state);
     };
 
     // We avoid performing a read barrier if we're sure that our metadata stored in topology
@@ -1488,11 +1511,17 @@ future<> storage_service::update_topology_with_local_metadata(raft::server& raft
         co_await _sys_ks.local().set_must_synchronize_topology(true);
 
         topology_mutation_builder builder(guard.write_timestamp());
-        builder.with_node(raft_server.id())
+        auto& node_builder = builder.with_node(raft_server.id())
                .set("shard_count", local_shard_count)
                .set("ignore_msb", local_ignore_msb)
                .set("release_version", local_release_version)
                .set("supported_features", local_supported_features);
+        // Mirrors storage_mode_synchronized(); synchronized() above already established
+        // that the node is in the topology.
+        const auto& rs = _topology_state_machine._topology.find(raft_server.id())->second;
+        if (report_storage_mode && rs.intended_storage_mode) {
+            node_builder.set("current_storage_mode", local_storage_mode);
+        }
 
         topology_change change{{builder.build()}};
         group0_command g0_cmd = _group0->client().prepare_command(
@@ -4297,6 +4326,16 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
     // Called via run_with_no_api_lock (forwards to shard 0).
     SCYLLA_ASSERT(this_shard_id() == 0);
 
+    // Without the column a node cannot report whether it switched, leaving the
+    // migration with no per-node progress.
+    if (!_feature_service.topology_current_storage_mode) {
+        throw std::runtime_error(
+                "Cannot start tablets migration: the TOPOLOGY_CURRENT_STORAGE_MODE cluster feature is not enabled yet,"
+                " so nodes cannot report the storage mode they are running in."
+                " The feature is enabled once every node in the cluster supports it,"
+                " so finish the rolling upgrade and retry.");
+    }
+
     while (true) {
         auto guard = co_await _group0->client().start_operation(_group0_as);
 
@@ -4318,6 +4357,14 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
                 throw std::runtime_error(fmt::format("Another migration is in progress (node '{}' has intended storage mode '{}') - cannot start tablets migration."
                         " Please wait for the current migration to finish and retry.",
                         server_id, *replica_state.intended_storage_mode));
+            }
+            // A seeded vnodes is expected before anything is marked. A tablets is not:
+            // finalization clears both modes together and a node only publishes while
+            // its row records an intent, so a switch with nothing to switch for means
+            // one of those invariants broke.
+            if (replica_state.current_storage_mode == storage_mode::tablets) {
+                on_internal_error(slogger, fmt::format("Node '{}' has no intended storage mode but still records current storage mode '{}'",
+                        server_id, *replica_state.current_storage_mode));
             }
         }
 
@@ -4447,6 +4494,18 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
                     co_await append_tablet_map_mutations(tid, cf_name, shared_tmap, 0);
                 }
             }
+        }
+
+        // Seed every node, so that an absent mode means one thing only: a migration
+        // started before the cluster knew the column, which is the single case the
+        // status API answers from tablet sizes. Each node overwrites its own cell with
+        // what it booted with as it restarts.
+        {
+            topology_mutation_builder builder(guard.write_timestamp());
+            for (const auto& [node_id, _] : topology.normal_nodes) {
+                builder.with_node(node_id).set("current_storage_mode", storage_mode::vnodes);
+            }
+            updates.emplace_back(builder.build());
         }
 
         topology_change change{co_await updates.collect()};

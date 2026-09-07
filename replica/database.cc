@@ -848,6 +848,7 @@ bool database::is_in_critical_disk_utilization_mode() const {
 
 future<> database::parse_system_tables(sharded<service::storage_proxy>& proxy, sharded<db::system_keyspace>& sys_ks, std::optional<service::storage_mode> storage_mode) {
     using namespace db::schema_tables;
+    _boot_storage_mode = storage_mode;
     co_await do_parse_schema_tables(proxy, db::schema_tables::KEYSPACES, coroutine::lambda([&] (schema_result_value_type &v) -> future<> {
         auto scylla_specific_rs = co_await extract_scylla_specific_keyspace_info(proxy, v);
         auto ksm = co_await create_keyspace_metadata(v, scylla_specific_rs);
