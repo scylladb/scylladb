@@ -64,8 +64,9 @@ class groups_manager::rpc_impl: public service::raft_rpc {
 public:
     rpc_impl(raft_state_machine& sm, netw::messaging_service& ms,
              shared_ptr<raft::failure_detector> failure_detector,
-             raft::group_id gid, raft::server_id my_id)
-        : service::raft_rpc(sm, ms, std::move(failure_detector), gid, my_id)
+             raft::group_id gid, raft::server_id my_id,
+             lw_shared_ptr<raft_rpc::stats> shared_stats)
+        : service::raft_rpc(sm, ms, std::move(failure_detector), gid, my_id, std::move(shared_stats))
     {
     }
 
@@ -154,12 +155,12 @@ groups_manager::groups_manager(netw::messaging_service& ms,
     init_messaging_service();
 }
 
-future<> groups_manager::start_raft_group(global_tablet_id tablet,
+future<lw_shared_ptr<table_metrics>> groups_manager::start_raft_group(global_tablet_id tablet,
         raft::group_id group_id,
         token_metadata_ptr tm)
 {
     const auto my_id = to_server_id(tm->get_my_id());
-
+    auto metrics = get_table_metrics(tablet.table);
 
     auto* commitlog = _db.commitlog();
     SCYLLA_ASSERT(commitlog);
@@ -169,7 +170,8 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
     auto state_machine = make_state_machine(tablet, group_id, _db, _mm, _sys_ks, *storage);
 
     auto& state_machine_ref = *state_machine;
-    auto rpc = std::make_unique<rpc_impl>(state_machine_ref, _ms, _raft_gr.failure_detector(), group_id, my_id);
+    auto rpc = std::make_unique<rpc_impl>(state_machine_ref, _ms, _raft_gr.failure_detector(), group_id, my_id,
+        metrics ? metrics->rpc_stats() : nullptr);
     // Keep a reference to a specific RPC class.
     auto& rpc_ref = *rpc;
 
@@ -209,7 +211,8 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
         // groups pick different replicas instead of all electing the
         // smallest-id node (which would concentrate load on one node when a
         // table starts with many tablets).
-        .fast_bootstrap_seed = std::hash<raft::group_id>()(group_id)
+        .fast_bootstrap_seed = std::hash<raft::group_id>()(group_id),
+        .shared_stats = metrics ? metrics->server_stats() : nullptr
     };
     auto server = raft::create_server(my_id, std::move(rpc), std::move(state_machine),
             std::move(storage), _raft_gr.failure_detector(), config);
@@ -225,6 +228,7 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
         .persistence = persistence_ref,
         .state_machine = state_machine_ref
     }, get_tick_interval());
+    co_return metrics;
 }
 
 void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_state& state) {
@@ -259,6 +263,7 @@ void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_
 
         co_await std::move(state.leader_info_updater);
 
+        release_table_metrics(state);
         _raft_gr.destroy_server(id);
         logger.info("schedule_raft_group_deletion(): raft server for group id {} is destroyed", id);
 
@@ -269,6 +274,52 @@ void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_
             on_internal_error(logger, format("raft group {} is already deleted", id));
         }
     });
+}
+
+lw_shared_ptr<table_metrics> groups_manager::get_table_metrics(table_id table) {
+    schema_ptr schema;
+    try {
+        schema = _db.find_schema(table);
+    } catch (const replica::no_such_column_family&) {
+        // The table was dropped after the token metadata was published.
+        // The group is deleted by the next update(), no metrics needed.
+        return nullptr;
+    }
+    const auto key = std::make_pair(schema->ks_name(), schema->cf_name());
+    if (const auto it = _table_metrics.find(key); it != _table_metrics.end()) {
+        if (it->second->table() == table) {
+            return it->second;
+        }
+        // A dropped table of the same name whose groups are still shutting
+        // down. Its series have to go before they are registered again.
+        it->second->unregister();
+        _table_metrics.erase(it);
+    }
+    auto metrics = make_lw_shared<table_metrics>(table, schema->ks_name(), schema->cf_name(),
+        _db.get_config().enable_strong_consistency_per_shard_metrics());
+    _table_metrics.emplace(key, metrics);
+    return metrics;
+}
+
+void groups_manager::release_table_metrics(raft_group_state& state) {
+    if (!state.metrics) {
+        return;
+    }
+    if (state.server) {
+        state.metrics->remove_server(*state.server);
+    }
+    state.metrics = nullptr;
+}
+
+void groups_manager::unregister_dropped_tables_metrics() {
+    for (auto it = _table_metrics.begin(); it != _table_metrics.end(); ) {
+        if (_db.column_family_exists(it->second->table())) {
+            ++it;
+            continue;
+        }
+        it->second->unregister();
+        it = _table_metrics.erase(it);
+    }
 }
 
 void groups_manager::schedule_raft_groups_deletion(bool all) {
@@ -453,8 +504,11 @@ void groups_manager::update(token_metadata_ptr new_tm) {
             _starting_groups.push_back(state);
             state.server_control_op = futurize_invoke([&state, this, tablet, id, new_tm](this auto) -> future<> {
                 co_await state.server_control_op.get_future();
-                co_await start_raft_group(tablet, id, std::move(new_tm));
+                state.metrics = co_await start_raft_group(tablet, id, std::move(new_tm));
                 state.server = &_raft_gr.get_server(id);
+                if (state.metrics) {
+                    state.metrics->add_server(*state.server);
+                }
                 state.leader_info_updater = leader_info_updater(state, tablet, id);
 
                 // We want to make sure the server is ready to serve requests before
@@ -491,6 +545,7 @@ void groups_manager::update(token_metadata_ptr new_tm) {
     }
 
     schedule_raft_groups_deletion(false);
+    unregister_dropped_tables_metrics();
     _leader_cache.end_sweep();
 }
 
