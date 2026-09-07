@@ -2882,8 +2882,23 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             guard = co_await start_operation();
             auto new_tm = get_token_metadata_ptr();
             auto reconciled_stats = old_load_stats->reconcile_tablets_resize(plan.resize_plan().finalize_resize, *tm, *new_tm);
+            // Simulates reconciliation failing the way it does in production, when a
+            // pre-resize replica has no recorded tablet size yet.
+            if (utils::get_local_injector().enter("tablet_resize_load_stats_reconcile_failure")) {
+                reconciled_stats = {};
+            }
             if (reconciled_stats) {
                 _tablet_allocator.set_load_stats(reconciled_stats);
+            } else {
+                // Load stats are keyed by tablet token range, which the resize just rewrote, so
+                // without reconciled stats there is no size for any of the newly allocated
+                // tablets. The load balancer would then see incomplete stats for every node,
+                // produce an empty plan and go back to sleep, making no progress until the
+                // periodic refresher ticks (tablet_load_stats_refresh_interval_in_seconds, 60s
+                // by default). Refresh now, like on_create_column_family() does for freshly
+                // allocated tablets. The refresh also wakes up the load balancer once it
+                // completes.
+                trigger_load_stats_refresh();
             }
         }
 
