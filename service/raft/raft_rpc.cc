@@ -7,7 +7,10 @@
  */
 #include "service/raft/raft_rpc.hh"
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/metrics.hh>
 #include <seastar/core/units.hh>
+#include <seastar/util/defer.hh>
+#include "raft/metrics_options.hh"
 #include "gms/inet_address.hh"
 #include "serializer_impl.hh"
 #include "message/msg_addr.hh"
@@ -30,12 +33,27 @@ raft_ticker_type::time_point timeout() {
 }
 
 raft_rpc::raft_rpc(raft_state_machine& sm, netw::messaging_service& ms,
-          shared_ptr<raft::failure_detector> failure_detector, raft::group_id gid, raft::server_id my_id)
+          shared_ptr<raft::failure_detector> failure_detector, raft::group_id gid, raft::server_id my_id,
+          lw_shared_ptr<stats> shared_stats)
     : _sm(sm), _group_id(std::move(gid)), _my_id(my_id), _messaging(ms)
     , _failure_detector(std::move(failure_detector))
     , _shutdown_gate("raft_rpc::shutdown")
     , _append_entries_semaphore(append_entries_semaphore_limit_bytes)
+    , _shared_stats(std::move(shared_stats))
+    , _stats(_shared_stats ? *_shared_stats : _own_stats)
 {}
+
+void raft_rpc::register_stats_metrics(seastar::metrics::metric_groups& metrics, const stats& s, const raft::metrics_options& options) {
+    namespace sm = seastar::metrics;
+    metrics.add_group(options.group_name, {
+        sm::make_total_operations("append_entries_memory_waits", s.append_entries_memory_waits,
+            sm::description("Number of append requests that had to wait for the memory of other in-flight append requests to be released"), options.labels).aggregate(options.aggregate_labels).set_skip_when_empty(options.skip_when_empty),
+        sm::make_gauge("append_entries_memory_waiters", s.append_entries_memory_waiters,
+            sm::description("Number of append requests currently waiting for the memory of other in-flight append requests to be released"), options.labels).aggregate(options.aggregate_labels),
+        sm::make_gauge("append_entries_in_flight_bytes", s.append_entries_in_flight_bytes,
+            sm::description("Bytes of append requests currently being sent, as charged against the in-flight memory limit"), options.labels).aggregate(options.aggregate_labels),
+    });
+}
 
 
 template <raft_rpc::one_way_kind rpc_kind, typename Verb, typename Msg> void
@@ -96,7 +114,25 @@ future<> raft_rpc::send_append_entries(raft::server_id id, const raft::append_re
     for (const auto& e: append_request.entries) {
         req_size += e->get_size();
     }
-    const auto guard = co_await get_units(_append_entries_semaphore, std::min(req_size, append_entries_semaphore_limit_bytes));
+    const auto units = std::min(req_size, append_entries_semaphore_limit_bytes);
+    semaphore_units<> guard;
+    {
+        const bool waits = _append_entries_semaphore.waiters() > 0 || _append_entries_semaphore.available_units() < ssize_t(units);
+        if (waits) {
+            _stats.append_entries_memory_waits++;
+            _stats.append_entries_memory_waiters++;
+        }
+        auto waiting_done = seastar::defer([this, waits] noexcept {
+            if (waits) {
+                _stats.append_entries_memory_waiters--;
+            }
+        });
+        guard = co_await get_units(_append_entries_semaphore, units);
+    }
+    _stats.append_entries_in_flight_bytes += units;
+    auto sending_done = seastar::defer([this, units] noexcept {
+        _stats.append_entries_in_flight_bytes -= units;
+    });
 
     co_return co_await ser::raft_rpc_verbs::send_raft_append_entries(&_messaging, locator::host_id{id.uuid()},
             db::no_timeout, _group_id, _my_id, id, append_request);
