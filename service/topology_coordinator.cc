@@ -1362,7 +1362,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
 
                     // Verify that the actual storage mode matches the intended mode for all normal nodes.
                     // A node that has migrated a table's storage to tablets will report it in its load_stats.
-                    for (const auto& [node_id, _] : _topo_sm._topology.normal_nodes) {
+                    for (const auto& [node_id, node_rs] : _topo_sm._topology.normal_nodes) {
                         auto host_id = to_host_id(node_id);
                         auto it = _load_stats_per_node.find(host_id);
                         if (!rollback) { // forward path (vnodes to tablets)
@@ -1388,6 +1388,20 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                                             host_id, ks_name, schema->cf_name()));
                                     }
                                 }
+                            }
+                        }
+
+                        // The load stats are the physical evidence; the status API answers
+                        // from current_storage_mode. Require the two to agree, or
+                        // finalization succeeds behind a status reporting no progress.
+                        if (_feature_service.topology_current_storage_mode) {
+                            auto reported = node_rs.current_storage_mode.value_or(storage_mode::vnodes);
+                            auto expected = rollback ? storage_mode::vnodes : storage_mode::tablets;
+                            if (reported != expected) {
+                                throw std::runtime_error(fmt::format(
+                                    "Node {} reports storage mode {} while its tablets for keyspace '{}'"
+                                    " say {}. Restart the node so that it publishes the mode it runs in.",
+                                    host_id, reported, ks_name, expected));
                             }
                         }
                     }
