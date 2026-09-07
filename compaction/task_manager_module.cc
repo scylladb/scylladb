@@ -388,10 +388,6 @@ static future<bool> maybe_flush_commitlog(sharded<replica::database>& db, bool f
     co_return true;
 }
 
-tasks::is_user_task global_major_compaction_task_impl::is_user_task() const noexcept {
-    return tasks::is_user_task::yes;
-}
-
 std::unordered_map<sstring, std::vector<table_info>> get_tables_by_keyspace(replica::database& db) {
     std::unordered_map<sstring, std::vector<table_info>> tables_by_keyspace;
     auto tables_meta = db.get_tables_metadata().get_column_families_copy();
@@ -422,20 +418,35 @@ static future<> run_global_major_compaction(tasks::task_manager::module_ptr modu
     co_await run_keyspace_tasks(db.local(), keyspace_tasks, cv, current_task, false);
 }
 
-future<> global_major_compaction_task_impl::run() {
-    return run_global_major_compaction(_module, _db, _flush_mode, _consider_only_existing_data, info());
-}
-
-future<std::optional<double>> global_major_compaction_task_impl::expected_total_workload() const {
-    if (_expected_workload) {
-        co_return _expected_workload;
+// Computing the workload scans the compaction candidates of every table, so it
+// is calculated once and cached in the callback's closure.
+static future<std::optional<double>> get_global_major_compaction_workload(sharded<replica::database>& db, lw_shared_ptr<uint64_t> workload) {
+    if (*workload) {
+        co_return *workload;
     }
     uint64_t bytes = 0;
-    auto tables_by_keyspace = get_tables_by_keyspace(_db.local());
-    for (const auto& [_, table_infos] : tables_by_keyspace) {
-        bytes += co_await get_keyspace_task_workload(_db, _status.keyspace, table_infos);
+    auto tables_by_keyspace = get_tables_by_keyspace(db.local());
+    for (const auto& [ks, table_infos] : tables_by_keyspace) {
+        bytes += co_await get_keyspace_task_workload(db, ks, table_infos);
     }
-    co_return _expected_workload = bytes;
+    co_return *workload = bytes;
+}
+
+future<tasks::task_manager::task_ptr> task_manager_module::start_global_major_compaction(sharded<replica::database>& db, std::optional<flush_mode> fm, bool consider_only_existing_data) {
+    auto flush = fm.value_or(flush_mode::all_tables);
+    tasks::task_manager::task_builder task_builder{shared_from_this(), major_compaction_task_type};
+    task_builder.set_sequence_number(new_sequence_number())
+                .set_scope("global")
+                .set_progress_units("bytes")
+                .set_is_abortable(tasks::is_abortable::yes)
+                .set_is_internal(tasks::is_internal::no)
+                .set_is_user_task(tasks::is_user_task::yes)
+                .set_workload_fn([&db, workload = make_lw_shared<uint64_t>(0)] () {
+                    return get_global_major_compaction_workload(db, workload);
+                });
+    return std::move(task_builder).build([module = shared_from_this(), &db, flush, consider_only_existing_data] (tasks::task_manager::task::impl& self) {
+        return run_global_major_compaction(module, db, flush, consider_only_existing_data, self.info());
+    });
 }
 
 tasks::is_user_task major_keyspace_compaction_task_impl::is_user_task() const noexcept {
