@@ -16,6 +16,9 @@
 "raft/server.cc":
   params:
     options.group_name: "raft"
+"service/raft/raft_rpc.cc":
+  params:
+    options.group_name: "raft_group0"
 "replica/table.cc":
   params:
     stat_name: ["exclusive_row", "shared_row", "exclusive_partition", "shared_partition"]
