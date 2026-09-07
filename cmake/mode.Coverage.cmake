@@ -10,10 +10,10 @@ update_build_flags(Coverage
 set(scylla_build_mode_Coverage "coverage")
 
 # Coverage mode sets cmake_build_type='Debug' for Seastar
-# (configure.py:515), so Seastar's pkg-config --cflags output
-# (configure.py:2252-2267, queried at configure.py:3039) includes debug
-# defines, sanitizer compile flags, and -fstack-clash-protection.
-# Seastar's CMake generator expressions only activate these for
+# (configure.py:515) with Seastar_SANITIZE=OFF, so Seastar's pkg-config
+# --cflags output (configure.py:2252-2267, queried at configure.py:3039)
+# includes debug defines and -fstack-clash-protection, but no sanitizer
+# flags.  Seastar's CMake generator expressions only activate these for
 # Debug/Sanitize configs, so we add them explicitly for Coverage.
 set(Seastar_DEFINITIONS_COVERAGE
   SCYLLA_BUILD_MODE=${scylla_build_mode_Coverage}
@@ -22,16 +22,14 @@ set(Seastar_DEFINITIONS_COVERAGE
   SEASTAR_SHUFFLE_TASK_QUEUE
   SEASTAR_DEBUG_SHARED_PTR
   SEASTAR_DEBUG_PROMISE
-  SEASTAR_TYPE_ERASE_MORE)
+  SEASTAR_TYPE_ERASE_MORE
+  SCYLLA_ENABLE_ERROR_INJECTION)
 foreach(definition ${Seastar_DEFINITIONS_COVERAGE})
   add_compile_definitions(
     $<$<CONFIG:Coverage>:${definition}>)
 endforeach()
 
 add_compile_options(
-  $<$<CONFIG:Coverage>:-fsanitize=address>
-  $<$<CONFIG:Coverage>:-fsanitize=undefined>
-  $<$<CONFIG:Coverage>:-fsanitize=vptr>
   $<$<CONFIG:Coverage>:-fstack-clash-protection>)
 
 set(CMAKE_EXE_LINKER_FLAGS_COVERAGE

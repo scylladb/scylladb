@@ -36,7 +36,7 @@ def test_read_last_line():
         ("sanitize", 10, 30),
         ("release", 10, 10),
         ("dev", 10, 20),
-        ("coverage", 10, 10),
+        ("coverage", 10, 30),
         ("custom_exe", 10, 10),
     ],
 )

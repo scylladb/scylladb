@@ -33,6 +33,7 @@ from _pytest.junitxml import xml_key
 
 from test import ALL_MODES, DEBUG_MODES, TOP_SRC_DIR, HOST_ID, path_to
 from test.pylib.artifact_registry import ArtifactRegistry as artifacts
+from test.pylib.coverage_utils import coverage_dir
 from test.pylib.ldap_server import start_ldap
 from test.pylib.minio_server import MinioServer
 from test.pylib.resource_gather import setup_cgroup, setup_worker_cgroup, get_resource_gather, SystemResourceMonitor, \
@@ -323,7 +324,7 @@ def testpy_cluster_factory(request: pytest.FixtureRequest,
         # this way is that the storage will not be bloated with coverage files (each can weigh 10s of MBs so for several
         # thousands of tests it can easily reach 10 of GBs)
         # ref: https://clang.llvm.org/docs/SourceBasedCodeCoverage.html#running-the-instrumented-program
-        base_env["LLVM_PROFILE_FILE"] = str(suite_log_dir / "coverage" / suite_config.name / "%m.profraw")
+        base_env["LLVM_PROFILE_FILE"] = str(coverage_dir(suite_log_dir) / suite_config.name / "%m.profraw")
 
     cluster_size = suite_config.cfg.get("cluster", {}).get("initial_size", 1)
 

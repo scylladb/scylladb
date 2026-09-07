@@ -401,7 +401,7 @@ def get_modes_to_run(config) -> list[str]:
 
 def scale_timeout_by_mode(mode: str, timeout: int | float) -> int | float:
     """Scale timeout according to test.py mode semantics.
-    Each mode has a different scale: debug and sanitize modes are multiplied by 3, dev by 2.
+    Each mode has a different scale: debug, coverage, and sanitize modes are multiplied by 3, dev by 2.
     Unknown modes are left unchanged.
     """
     return MODES_TIMEOUT_FACTOR.get(mode, 1) * timeout
