@@ -769,7 +769,13 @@ database_path=:memory:
                 "-v", "DEBUG",
             },
             { // env
-                fmt::format("TMPDIR={}", tmp.path().string())
+                fmt::format("TMPDIR={}", tmp.path().string()),
+                // kmip_wrapper.py's dependencies (pykmip, sqlalchemy, ...) may not live
+                // in the interpreter's default site-packages, so PATH and PYTHONPATH
+                // must be forwarded from the parent process for it to find them and
+                // for the "python" interpreter itself to be locatable.
+                fmt::format("PATH={}", tests::getenv_or_default("PATH")),
+                fmt::format("PYTHONPATH={}", tests::getenv_or_default("PYTHONPATH")),
             },
             // stdout handler
             [port_promise = std::move(port_promise), b = false](std::string_view line) mutable -> future<consumption_result<char>> {
