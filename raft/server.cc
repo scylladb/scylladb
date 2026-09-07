@@ -673,18 +673,28 @@ future<> server_impl::wait_for_entry(entry_id eid, wait_type type, seastar::abor
 
 future<entry_id> server_impl::add_entry_on_leader(command cmd, seastar::abort_source* as) {
     // Wait for sufficient memory to become available
+    const size_t size = log::memory_usage_of(cmd, _config.max_command_size);
     semaphore_units<> memory_permit;
     while (true) {
         term_t t = _fsm->get_current_term();
-        try {
-            memory_permit = co_await _fsm->wait_for_memory_permit(as, log::memory_usage_of(cmd, _config.max_command_size));
-        } catch (semaphore_aborted&) {
-            throw request_aborted(
-                format("Semaphore aborted while waiting for memory availability for adding entry on leader in term: {}, on server: {}, current term: {}",
-                       t,
-                       _id,
-                       _fsm->get_current_term()));
+        auto permit = _fsm->try_get_memory_permit(size);
+        if (!permit) {
+            // A leadership transfer takes all the log memory to stop admitting
+            // entries, so waiting through one is not a shortage of log memory.
+            if (!_fsm->is_stepping_down()) {
+                _stats.log_limiter_waits++;
+            }
+            try {
+                permit = co_await _fsm->wait_for_memory_permit(as, size);
+            } catch (semaphore_aborted&) {
+                throw request_aborted(
+                    format("Semaphore aborted while waiting for memory availability for adding entry on leader in term: {}, on server: {}, current term: {}",
+                           t,
+                           _id,
+                           _fsm->get_current_term()));
+            }
         }
+        memory_permit = std::move(*permit);
         if (t == _fsm->get_current_term()) {
             break;
         }
@@ -1850,6 +1860,7 @@ server::log_state server_impl::get_log_state() const {
         .last_idx = _fsm->log_last_idx(),
         .commit_idx = _fsm->commit_idx(),
         .applied_idx = _applied_idx,
+        .log_limiter_waiters = _fsm->count_memory_permit_waiters(),
     };
 }
 
@@ -1926,6 +1937,9 @@ void server::register_stats_metrics(seastar::metrics::metric_groups& metrics, co
              sm::description("Number of log entries applied"), labels()).aggregate(aggregate).set_skip_when_empty(skip),
         sm::make_total_operations("snapshots_taken", s.snapshots_taken,
              sm::description("Number of times user's state machine snapshotted"), labels()).aggregate(aggregate).set_skip_when_empty(skip),
+
+        sm::make_total_operations("log_limiter_waits", s.log_limiter_waits,
+             sm::description("Number of times adding an entry had to wait for the in-memory log to shrink below max_log_size"), labels()).aggregate(aggregate).set_skip_when_empty(skip),
     });
 }
 
@@ -1951,6 +1965,8 @@ void server_impl::register_metrics() {
                        sm::description("commit index"), {server_id_label(_id)}),
         sm::make_gauge("apply_index", [this] { return _applied_idx.value(); },
                        sm::description("applied index"), {server_id_label(_id)}),
+        sm::make_gauge("log_limiter_waiters", [this] { return _fsm->count_memory_permit_waiters(); },
+                       sm::description("Number of entries currently waiting for the in-memory log to shrink below max_log_size"), {server_id_label(_id)}),
     });
 }
 

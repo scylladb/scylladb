@@ -57,6 +57,8 @@ public:
         uint64_t read_quorum_received = 0;
         uint64_t read_quorum_reply_sent = 0;
         uint64_t read_quorum_reply_received = 0;
+        // Number of times adding an entry had to wait for log memory.
+        uint64_t log_limiter_waits = 0;
     };
 
     // Exports the counters of a stats object as metrics, see
@@ -331,6 +333,8 @@ public:
         index_t last_idx;
         index_t commit_idx;
         index_t applied_idx;
+        // Number of entries waiting for the log to shrink below max_log_size.
+        size_t log_limiter_waiters;
     };
     virtual log_state get_log_state() const = 0;
 

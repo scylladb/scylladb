@@ -482,6 +482,9 @@ public:
     bool is_candidate() const {
         return std::holds_alternative<candidate>(_state);
     }
+    bool is_stepping_down() const {
+        return is_leader() && bool(leader_state().stepdown);
+    }
     std::string_view current_state() const {
         static constexpr std::string_view leader_state = "Leader";
         static constexpr std::string_view follower_state = "Follower";
@@ -546,6 +549,10 @@ public:
     // Can only be called on a leader.
     // On abort throws `semaphore_aborted`.
     future<semaphore_units<>> wait_for_memory_permit(seastar::abort_source* as, size_t size);
+    // The same permit if it is available right away, otherwise nothing.
+    std::optional<semaphore_units<>> try_get_memory_permit(size_t size);
+    // Number of entries waiting for such a permit right now.
+    size_t count_memory_permit_waiters() const;
 
     // Return current configuration.
     const configuration& get_configuration() const;
