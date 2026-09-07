@@ -317,8 +317,9 @@ private:
     locator::effective_replication_map_ptr _erm;
     std::string _keyspace;
     streaming::stream_reason _reason;
-    // The abort source of the task owning this repair.
-    seastar::abort_source& _as;
+    // The abort source of the task owning this repair. Bound with
+    // bind_abort_source() when the task starts.
+    seastar::abort_source* _as = nullptr;
 public:
     dht::token_range_vector ranges;
     std::vector<table_id> table_ids;
@@ -361,9 +362,12 @@ public:
             bool small_table_optimization,
             std::optional<int> ranges_parallelism,
             service::frozen_topology_guard topo_guard,
-            seastar::abort_source& as,
             tablet_repair_sched_info sched_info_ = tablet_repair_sched_info(),
             size_t small_table_optimization_ranges_reduced_factor_ = 1);
+
+    void bind_abort_source(seastar::abort_source& as) noexcept {
+        _as = &as;
+    }
 
     void check_in_abort_or_shutdown();
     // Logs the repair outcome and throws if the repair failed. failed_because
@@ -376,9 +380,7 @@ public:
     std::optional<locator::token_metadata::version_t> pinned_token_metadata_version() const noexcept {
         return _erm ? std::optional(_erm->get_token_metadata().get_version()) : std::nullopt;
     }
-    void abort() noexcept {
-        _as.request_abort();
-    }
+    void abort() noexcept;
     void update_statistics(const repair_stats& o) {
         stats.add(o);
     }
