@@ -73,7 +73,7 @@ void follower_progress::become_snapshot(index_t snp_idx) {
     next_idx = snp_idx + index_t{1};
 }
 
-bool follower_progress::can_send_to() {
+bool follower_progress::can_send_to() const {
     switch (state) {
     case state::PROBE:
         return !probe_sent;

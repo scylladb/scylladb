@@ -58,6 +58,7 @@ struct awaited_conf_change {
 static const seastar::metrics::label server_id_label("id");
 static const seastar::metrics::label log_entry_type("log_entry_type");
 static const seastar::metrics::label message_type("message_type");
+static const seastar::metrics::label blocked_reason_label("reason");
 
 // Result types for do_on_leader_with_retries action lambda.
 // retry_with_leader: retry on the specified leader. If the leader is the
@@ -125,6 +126,7 @@ public:
     future<entry_id> add_entry_on_leader(command command, seastar::abort_source* as);
     void register_metrics() override;
     log_state get_log_state() const override;
+    blocked_followers get_blocked_followers() const override;
     size_t max_command_size() const override;
 private:
     seastar::condition_variable _events;
@@ -1864,6 +1866,10 @@ server::log_state server_impl::get_log_state() const {
     };
 }
 
+blocked_followers server_impl::get_blocked_followers() const {
+    return _fsm->count_blocked_followers();
+}
+
 void server::register_stats_metrics(seastar::metrics::metric_groups& metrics, const stats& s, const metrics_options& options) {
     namespace sm = seastar::metrics;
     const auto& aggregate = options.aggregate_labels;
@@ -1967,6 +1973,12 @@ void server_impl::register_metrics() {
                        sm::description("applied index"), {server_id_label(_id)}),
         sm::make_gauge("log_limiter_waiters", [this] { return _fsm->count_memory_permit_waiters(); },
                        sm::description("Number of entries currently waiting for the in-memory log to shrink below max_log_size"), {server_id_label(_id)}),
+        sm::make_gauge("blocked_followers", [this] { return _fsm->count_blocked_followers().probe; },
+                       sm::description("Number of followers the leader cannot send entries to, the reason label can be probe (waiting for the reply to a probe of the follower's log), pipeline_full (the maximal number of append requests is in flight) or snapshot (waiting for a snapshot transfer); followers the failure detector reports down are not counted"), {server_id_label(_id), blocked_reason_label("probe")}),
+        sm::make_gauge("blocked_followers", [this] { return _fsm->count_blocked_followers().pipeline_full; },
+                       sm::description("Number of followers the leader cannot send entries to, the reason label can be probe (waiting for the reply to a probe of the follower's log), pipeline_full (the maximal number of append requests is in flight) or snapshot (waiting for a snapshot transfer); followers the failure detector reports down are not counted"), {server_id_label(_id), blocked_reason_label("pipeline_full")}),
+        sm::make_gauge("blocked_followers", [this] { return _fsm->count_blocked_followers().snapshot; },
+                       sm::description("Number of followers the leader cannot send entries to, the reason label can be probe (waiting for the reply to a probe of the follower's log), pipeline_full (the maximal number of append requests is in flight) or snapshot (waiting for a snapshot transfer); followers the failure detector reports down are not counted"), {server_id_label(_id), blocked_reason_label("snapshot")}),
     });
 }
 
