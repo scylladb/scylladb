@@ -322,7 +322,7 @@ public:
 
     migration_status get_tablets_migration_status(const sstring& ks_name);
     future<keyspace_migration_status> get_tablets_migration_status_with_node_details(const sstring& ks_name);
-    future<> set_node_intended_storage_mode(intended_storage_mode mode);
+    future<> set_node_intended_storage_mode(storage_mode mode);
     future<> finalize_tablets_migration(const sstring& ks_name);
 
     struct table_pow2_convergence_info {

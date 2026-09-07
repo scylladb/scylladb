@@ -123,7 +123,7 @@ Builder& topology_mutation_builder_base<Builder>::set(const char* cell, cleanup_
 }
 
 template<typename Builder>
-Builder& topology_mutation_builder_base<Builder>::set(const char* cell, intended_storage_mode value) {
+Builder& topology_mutation_builder_base<Builder>::set(const char* cell, storage_mode value) {
     return apply_atomic(cell, sstring{::format("{}", value)});
 }
 

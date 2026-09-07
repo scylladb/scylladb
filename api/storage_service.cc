@@ -1828,7 +1828,7 @@ rest_set_vnode_tablet_migration_node_storage_mode(http_context& ctx, sharded<ser
         throw std::runtime_error("vnodes-to-tablets migration requires all nodes to support the VNODES_TO_TABLETS_MIGRATIONS cluster feature");
     }
     auto mode_str = req->get_query_param("intended_mode");
-    auto mode = service::intended_storage_mode_from_string(mode_str);
+    auto mode = service::storage_mode_from_string(mode_str);
     co_await ss.local().run_with_no_api_lock([mode] (service::storage_service& ss) {
         return ss.set_node_intended_storage_mode(mode);
     });

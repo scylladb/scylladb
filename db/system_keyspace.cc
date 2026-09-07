@@ -3228,9 +3228,9 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
             }
         }
 
-        std::optional<service::intended_storage_mode> storage_mode;
+        std::optional<service::storage_mode> storage_mode;
         if (row.has("intended_storage_mode")) {
-            storage_mode = service::intended_storage_mode_from_string(row.get_as<sstring>("intended_storage_mode"));
+            storage_mode = service::storage_mode_from_string(row.get_as<sstring>("intended_storage_mode"));
         }
 
         std::unordered_map<raft::server_id, service::replica_state>* map = nullptr;

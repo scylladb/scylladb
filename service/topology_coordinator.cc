@@ -1338,9 +1338,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
 
                     // Find the migration direction (tablets or rollback to vnodes).
                     // Nodes that haven't set their intended mode are treated as vnodes (the default).
-                    std::optional<intended_storage_mode> global_intended_mode;
+                    std::optional<storage_mode> global_intended_mode;
                     for (const auto& [server_id, replica_state] : _topo_sm._topology.normal_nodes) {
-                        auto replica_intended_mode = replica_state.storage_mode ? *replica_state.storage_mode : intended_storage_mode::vnodes;
+                        auto replica_intended_mode = replica_state.intended_storage_mode ? *replica_state.intended_storage_mode : storage_mode::vnodes;
                         if (!global_intended_mode) {
                             global_intended_mode = replica_intended_mode;
                         } else if (replica_intended_mode != *global_intended_mode) {
@@ -1353,7 +1353,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         on_internal_error(rtlogger, fmt::format(
                             "finalize_migration: no normal nodes found while finalizing migration for keyspace '{}'", ks_name));
                     }
-                    bool rollback = *global_intended_mode == intended_storage_mode::vnodes;
+                    bool rollback = *global_intended_mode == storage_mode::vnodes;
 
                     rtlogger.info("Finalizing migration for keyspace '{}': direction={}",
                         ks_name, rollback ? "rollback to vnodes" : "forward to tablets");

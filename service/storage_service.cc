@@ -4271,10 +4271,10 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
 
         auto topology = co_await get_system_keyspace().load_topology_state({});
         for (const auto& [server_id, replica_state]: topology.normal_nodes) {
-            if (replica_state.storage_mode) {
+            if (replica_state.intended_storage_mode) {
                 throw std::runtime_error(fmt::format("Another migration is in progress (node '{}' has intended storage mode '{}') - cannot start tablets migration."
                         " Please wait for the current migration to finish and retry.",
-                        server_id, *replica_state.storage_mode));
+                        server_id, *replica_state.intended_storage_mode));
             }
         }
 
@@ -4427,7 +4427,7 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
     }
 }
 
-future<> storage_service::set_node_intended_storage_mode(intended_storage_mode mode) {
+future<> storage_service::set_node_intended_storage_mode(storage_mode mode) {
     // Called via run_with_no_api_lock (forwards to shard 0).
     SCYLLA_ASSERT(this_shard_id() == 0);
 
@@ -4474,7 +4474,7 @@ future<> storage_service::set_node_intended_storage_mode(intended_storage_mode m
             throw std::runtime_error(::format("Node {} is not in the normal state (current state: {})", raft_server.id(), rs.state));
         }
 
-        if (rs.storage_mode == mode) {
+        if (rs.intended_storage_mode == mode) {
             slogger.info("Node {} already has intended storage mode set to {}, skipping", raft_server.id(), mode);
             co_return;
         }
@@ -4572,9 +4572,9 @@ future<storage_service::keyspace_migration_status> storage_service::get_tablets_
         bool reports_tablets = nodes_reporting_tablets.contains(host_id);
 
         auto current_mode = reports_tablets
-            ? intended_storage_mode::tablets
-            : intended_storage_mode::vnodes;
-        auto intended_mode = rs.storage_mode.value_or(intended_storage_mode::vnodes);
+            ? storage_mode::tablets
+            : storage_mode::vnodes;
+        auto intended_mode = rs.intended_storage_mode.value_or(storage_mode::vnodes);
 
         result.nodes.push_back(node_migration_status{
             .host_id = host_id,

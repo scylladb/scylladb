@@ -1904,7 +1904,7 @@ public:
 
     // Load the schema definitions kept in schema tables from disk and initialize in-memory schema data structures
     // (keyspace/table definitions, column mappings etc.)
-    future<> parse_system_tables(sharded<service::storage_proxy>&, sharded<db::system_keyspace>&, std::optional<service::intended_storage_mode> storage_mode = std::nullopt);
+    future<> parse_system_tables(sharded<service::storage_proxy>&, sharded<db::system_keyspace>&, std::optional<service::storage_mode> storage_mode = std::nullopt);
 
     database(const db::config&, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, locator::shared_token_metadata& stm,
             compaction::compaction_manager& cm, sstables::storage_manager& sstm, lang::manager& langm, sstables::directory_semaphore& sst_dir_sem, sstable_compressor_factory&,
@@ -1962,9 +1962,9 @@ public:
     void init_schema_commitlog();
 
     using is_new_cf = bool_class<struct is_new_cf_tag>;
-    void add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg, is_new_cf is_new, locator::token_metadata_ptr not_commited_new_metadata = nullptr, std::optional<service::intended_storage_mode> storage_mode = std::nullopt);
+    void add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg, is_new_cf is_new, locator::token_metadata_ptr not_commited_new_metadata = nullptr, std::optional<service::storage_mode> storage_mode = std::nullopt);
     future<> make_column_family_directory(schema_ptr schema);
-    future<> add_column_family_and_make_directory(schema_ptr schema, is_new_cf is_new, std::optional<service::intended_storage_mode> storage_mode = std::nullopt);
+    future<> add_column_family_and_make_directory(schema_ptr schema, is_new_cf is_new, std::optional<service::storage_mode> storage_mode = std::nullopt);
 
 
     /* throws no_such_column_family if missing */
