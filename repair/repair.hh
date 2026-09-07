@@ -366,6 +366,9 @@ public:
             size_t small_table_optimization_ranges_reduced_factor_ = 1);
 
     void check_in_abort_or_shutdown();
+    // Logs the repair outcome and throws if the repair failed. failed_because
+    // carries the error that interrupted the repair loop, if any.
+    void check_failed_ranges(const std::optional<sstring>& failed_because);
     repair_neighbors get_repair_neighbors(const dht::token_range& range);
     size_t ranges_size() const noexcept;
     // Returns the token metadata version pinned by this repair's

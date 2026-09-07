@@ -67,7 +67,6 @@ public:
             service::frozen_topology_guard topo_guard,
             tablet_repair_sched_info sched_info = tablet_repair_sched_info(),
             size_t small_table_optimization_ranges_reduced_factor_ = 1);
-    void check_failed_ranges();
     gc_clock::time_point get_flush_time() const { return _flush_time; }
 
     virtual future<> release_resources() noexcept override;
