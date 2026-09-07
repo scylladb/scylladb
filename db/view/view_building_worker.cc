@@ -834,29 +834,11 @@ future<> view_building_worker::do_build_range(table_id base_id, std::vector<tabl
 
 future<> view_building_worker::do_process_staging(table_id table_id, dht::token last_token) {
     auto table = _db.get_tables_metadata().get_table(table_id).shared_from_this();
-    std::vector<sstables::shared_sstable> sstables_to_process;
+    auto tablet_range = get_tablet_token_range(table_id, last_token);
 
-    try {
-        // Acquire `_staging_sstables_mutex` to prevent `create_staging_sstable_tasks()` from
-        // concurrently modifying `_staging_sstables` (moving entries from `_sstables_to_register`)
-        // while we read them.
-        auto lock = co_await get_units(_staging_sstables_mutex, 1, _as);
-        auto& tablet_map = table->get_effective_replication_map()->get_token_metadata().tablets().get_tablet_map(table_id);
-        auto tid = tablet_map.get_tablet_id(last_token);
-        auto tablet_range = tablet_map.get_token_range(tid);
-
-        // Select sstables belonging to the tablet (identified by `last_token`)
-        for (auto& sst: _staging_sstables[table_id]) {
-            auto sst_last_token = sst->get_last_decorated_key().token();
-            if (tablet_range.contains(sst_last_token, dht::token_comparator())) {
-                sstables_to_process.push_back(sst);
-            }
-        }
-        lock.return_all();
-    } catch (semaphore_aborted&) {
-        vbw_logger.warn("Semaphore was aborted while waiting to removed processed sstables for table {}", table_id);
-        co_return;
-    }
+    auto sstables_to_process = *table->get_sstables() | std::views::filter([&] (const sstables::shared_sstable& sst) {
+        return sst->requires_view_building() && tablet_range.contains(sst->get_last_decorated_key().token(), dht::token_comparator());
+    }) | std::ranges::to<std::vector>();
 
     if (sstables_to_process.empty()) {
         co_return;
