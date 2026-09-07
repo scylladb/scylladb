@@ -1799,6 +1799,9 @@ private:
 
     service::migration_notifier& _mnotifier;
     gms::feature_service& _feat;
+    // The mode this node applied when it built its tables at boot, i.e. the one it is
+    // actually running in. A change of intent only takes effect on the next restart.
+    std::optional<service::storage_mode> _boot_storage_mode;
     std::vector<std::any> _listeners;
     locator::shared_token_metadata& _shared_token_metadata;
     lang::manager& _lang_manager;
@@ -1904,7 +1907,7 @@ public:
 
     // Load the schema definitions kept in schema tables from disk and initialize in-memory schema data structures
     // (keyspace/table definitions, column mappings etc.)
-    future<> parse_system_tables(sharded<service::storage_proxy>&, sharded<db::system_keyspace>&, std::optional<service::storage_mode> storage_mode = std::nullopt);
+    future<> parse_system_tables(sharded<service::storage_proxy>&, sharded<db::system_keyspace>&, std::optional<service::storage_mode> storage_mode);
 
     database(const db::config&, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, locator::shared_token_metadata& stm,
             compaction::compaction_manager& cm, sstables::storage_manager& sstm, lang::manager& langm, sstables::directory_semaphore& sst_dir_sem, sstable_compressor_factory&,
@@ -1938,6 +1941,8 @@ public:
     const compaction::compaction_manager& get_compaction_manager() const {
         return _compaction_manager;
     }
+
+    std::optional<service::storage_mode> get_boot_storage_mode() const noexcept { return _boot_storage_mode; }
 
     locator::shared_token_metadata& get_shared_token_metadata() const { return _shared_token_metadata; }
     locator::token_metadata_ptr get_token_metadata_ptr() const { return _shared_token_metadata.get(); }
