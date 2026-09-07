@@ -1429,7 +1429,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     .drop_first_global_topology_request_id(_topo_sm._topology.global_requests_queue, req_id);
 
             if (error.empty()) {
-                // Only clear intended_storage_mode if no other keyspace is still under migration.
+                // Only clear the storage mode columns if no other keyspace is still under
+                // migration.
                 auto tmptr = get_token_metadata_ptr();
                 const auto& tmd = tmptr->tablets();
                 bool has_other_migrating_ks = false;
@@ -1451,7 +1452,13 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 }
                 if (!has_other_migrating_ks) {
                     for (const auto& [node_id, _] : _topo_sm._topology.normal_nodes) {
-                        tbuilder.with_node(node_id).del("intended_storage_mode");
+                        // current_storage_mode goes with it: the mode is meaningful only
+                        // while a migration is in progress, and a value left behind would
+                        // make every node look already switched in the next migration,
+                        // before any of them restarted.
+                        tbuilder.with_node(node_id)
+                                .del("intended_storage_mode")
+                                .del("current_storage_mode");
                     }
                 }
             }
