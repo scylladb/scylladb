@@ -873,3 +873,106 @@ SEASTAR_THREAD_TEST_CASE(test_conf_change_completed_by_a_snapshot) {
     }
 #endif
 }
+
+// A committed entry that a snapshot replaces in the raft log before the
+// applier fiber gets to apply it still has its effect in the state machine
+// once that snapshot is loaded, so a waiter for it must be resolved
+// successfully rather than dropped.
+//
+// The applier fiber of node 0 is held inside apply(), so its io_fiber goes on
+// committing entries it cannot apply. A new leader is then elected, which
+// makes everything committed afterwards carry a higher term than the held
+// entries, and node 0 is disconnected while the new leader commits, applies
+// and snapshots past them. The snapshot's term therefore differs from the
+// held entries' term, so the snapshot term rule of drop_waiters() cannot
+// resolve their waiters; what does is op_status::committed, which io_fiber
+// recorded when it reported the entry committed and its term was still known.
+SEASTAR_THREAD_TEST_CASE(test_apply_waiter_resolved_when_snapshot_subsumes_committed_entry) {
+    // The default snapshot thresholds are high enough that the only snapshot
+    // in this test is the one triggered explicitly below, which is taken with
+    // no trailing entries and so drops the whole log.
+    // apply_entries must be greater than the number of entries added during
+    // the test, otherwise the state machine's done promise fires prematurely.
+    auto cluster = raft_cluster<std::chrono::steady_clock>{
+        test_case {
+            .nodes = 3,
+            // Forwarding off, so that add_entry() takes _add_entry_admission.
+            // That semaphore is what makes the order of the calls below the
+            // order of their entries in the log, and it is only taken on the
+            // non-forwarding path: with forwarding on, the two adds race and
+            // can land either way round, whereupon the committed-wait proves
+            // nothing about the entry under test.
+            .config = std::vector<raft::server::configuration>(3,
+                    raft::server::configuration { .enable_forwarding = false })
+        },
+        ::apply_changes,
+        100,  // apply_entries
+        0,
+        0, false, tick_delay, rpc_config{}
+    };
+    cluster.start_all().get();
+    auto stop = defer([&cluster] noexcept { cluster.stop_all().get(); });
+
+    auto& server = cluster.get_server(0);
+
+    // Entries are added on node 0, the initial leader, so that they get their
+    // indexes here and, forwarding being off, in the order of the calls.
+    delay_apply = to_raft_id(0);
+    auto release_apply = defer([] noexcept {
+        // A failed check below may leave the applier fiber waiting here, and
+        // stop_all() would then wait for it forever.
+        delay_apply.reset();
+        if (apply_release.waiters()) {
+            apply_release.signal();
+        }
+    });
+    cluster.add_entries(1, 0).get();
+    apply_entered.wait().get();
+
+    // The waiter under test: committed while the applier fiber is held, so it
+    // is marked committed and left for that fiber to resolve.
+    auto fut = server.add_entry(create_command(42), raft::wait_type::applied, nullptr);
+    // Commit waiters are notified in index order, so this one returning means
+    // node 0 saw the entry above committed as well.
+    server.add_entry(create_command(43), raft::wait_type::committed, nullptr).get();
+
+    // From here on entries are committed with a higher term, so the snapshot
+    // taken below has a different term than the two entries above.
+    cluster.elect_new_leader(1).get();
+    auto& leader = cluster.get_server(1);
+
+    // Cut node 0 off, so the entries the new leader commits, applies and then
+    // snapshots away never reach it as log entries.
+    cluster.disconnect(0);
+    leader.add_entry(create_command(44), raft::wait_type::applied, nullptr).get();
+    BOOST_REQUIRE(leader.trigger_snapshot(nullptr).get());
+
+    // Reconnect node 0. Its log tail is below the leader's first log index by
+    // now, so the leader transfers the snapshot instead of appending entries.
+    notify_snapshot_received = to_raft_id(0);
+    auto clear_notify = defer([] noexcept { notify_snapshot_received.reset(); });
+    cluster.connect_all();
+
+    // Once node 0 has replied, its fsm has dropped the entries the waiter is
+    // for and its io_fiber has handed the snapshot to its applier fiber -- all
+    // while that fiber is still held inside apply(). Waiting for that is what
+    // makes the test deterministic: released any earlier, the snapshot would
+    // not be in play at all.
+    snapshot_received.wait().get();
+
+    apply_release.signal();
+
+    // The waiter is resolved successfully, whichever side of the applier
+    // fiber does it. While that fiber still takes the entries from a queue
+    // that owns them, it applies them and resolves the waiter itself, even
+    // though the fsm log no longer holds them; once it reads them from the
+    // log instead, they are gone with it and loading the snapshot is what
+    // resolves the waiter. The contract is the same either way and is what
+    // this pins down.
+    try {
+        fut.get();
+    } catch (...) {
+        BOOST_FAIL(fmt::format("the apply waiter was not resolved successfully: {}",
+                std::current_exception()));
+    }
+}
