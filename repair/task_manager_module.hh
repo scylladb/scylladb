@@ -70,10 +70,6 @@ public:
     void check_failed_ranges();
     gc_clock::time_point get_flush_time() const { return _flush_time; }
 
-    size_t get_total_rf() {
-        return info.get_erm()->get_replication_factor();
-    }
-
     virtual future<> release_resources() noexcept override;
 protected:
     virtual future<tasks::task_manager::task::progress> get_progress() const override;
@@ -123,7 +119,6 @@ public:
     void check_in_shutdown();
     void add_shard_task_id(int id, tasks::task_id ri);
     void remove_shard_task_id(int id);
-    tasks::task_manager::task_ptr get_shard_task_ptr(int id);
     std::vector<int> get_active() const;
     size_t nr_running_repair_jobs();
     void abort_all_repairs();
