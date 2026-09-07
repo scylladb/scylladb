@@ -226,6 +226,10 @@ public:
     // Comparable to RepairSession in Origin
     future<> repair_range(shard_repair_state& rstate, const dht::token_range& range, table_info table, gc_clock::time_point flush_time);
 
+    // Repair the given shard_repair_state's ranges for all its tables, in limited
+    // parallelism.
+    future<> do_repair_ranges(shard_repair_state& rstate, gc_clock::time_point flush_time);
+
     future<int> do_repair_start(gms::gossip_address_map& addr_map, sstring keyspace, std::unordered_map<sstring, sstring> options_map);
 
     // The tokens are the tokens assigned to the bootstrap node.

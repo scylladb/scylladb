@@ -1242,18 +1242,18 @@ future<> repair::shard_repair_task_impl::release_resources() noexcept {
     return make_ready_future();
 }
 
-future<> repair::shard_repair_task_impl::do_repair_ranges() {
+future<> repair_service::do_repair_ranges(shard_repair_state& rstate, gc_clock::time_point flush_time) {
     // Repair tables in the keyspace one after another
-    SCYLLA_ASSERT(info.table_names().size() == info.table_ids.size());
-    for (size_t idx = 0; idx < info.table_ids.size(); idx++) {
+    SCYLLA_ASSERT(rstate.table_names().size() == rstate.table_ids.size());
+    for (size_t idx = 0; idx < rstate.table_ids.size(); idx++) {
         table_info table_info{
-            .name = info.table_names()[idx],
-            .id = info.table_ids[idx],
+            .name = rstate.table_names()[idx],
+            .id = rstate.table_ids[idx],
         };
         // repair all the ranges in limited parallelism
         rlogger.info("repair[{}]: Started to repair {} out of {} tables in keyspace={}, table={}, table_id={}, repair_reason={}",
-                info.global_repair_id.uuid(), idx + 1, info.table_ids.size(), _status.keyspace, table_info.name, table_info.id, _reason);
-        co_await coroutine::parallel_for_each(info.ranges, [this, table_info] (auto&& range) -> future<> {
+                rstate.global_repair_id.uuid(), idx + 1, rstate.table_ids.size(), rstate.get_keyspace(), table_info.name, table_info.id, rstate.reason());
+        co_await coroutine::parallel_for_each(rstate.ranges, [this, &rstate, table_info, flush_time] (auto&& range) -> future<> {
             // It is possible that most of the ranges are skipped. In this case
             // this lambda will just log a message and exit. With a lot of
             // ranges, this can result in stalls, as there are no opportunities
@@ -1261,13 +1261,13 @@ future<> repair::shard_repair_task_impl::do_repair_ranges() {
             // prevent this.
             co_await coroutine::maybe_yield();
 
-            info._topology_guard.check();
+            rstate._topology_guard.check();
             // Get the system range parallelism
-            auto permit = co_await seastar::get_units(info.rs.get_repair_module().range_parallelism_semaphore(), 1);
+            auto permit = co_await seastar::get_units(get_repair_module().range_parallelism_semaphore(), 1);
             // Get the range parallelism specified by user
-            auto user_permit = info._user_ranges_parallelism ? co_await seastar::get_units(*info._user_ranges_parallelism, 1) : semaphore_units<>();
-            co_await info.rs.repair_range(info, range, table_info, _flush_time);
-            if (2 * (info._ranges_complete + 1) > info.ranges_size()) {
+            auto user_permit = rstate._user_ranges_parallelism ? co_await seastar::get_units(*rstate._user_ranges_parallelism, 1) : semaphore_units<>();
+            co_await repair_range(rstate, range, table_info, flush_time);
+            if (2 * (rstate._ranges_complete + 1) > rstate.ranges_size()) {
                 // The test that arms this injection releases it only after a
                 // concurrent tablet migration (move_tablet, a raft topology
                 // operation) completes. Under CI load that can take much longer
@@ -1277,36 +1277,36 @@ future<> repair::shard_repair_task_impl::do_repair_ranges() {
                 // injection sync points.
                 co_await utils::get_local_injector().inject("repair_shard_repair_task_impl_do_repair_ranges", utils::wait_for_message(5min));
             }
-            ++info._ranges_complete;
-            if (_reason == streaming::stream_reason::bootstrap) {
-                info.rs.get_metrics().bootstrap_finished_ranges += info.small_table_optimization_ranges_reduced_factor;
-            } else if (_reason == streaming::stream_reason::replace) {
-                info.rs.get_metrics().replace_finished_ranges += info.small_table_optimization_ranges_reduced_factor;
-            } else if (_reason == streaming::stream_reason::rebuild) {
-                info.rs.get_metrics().rebuild_finished_ranges += info.small_table_optimization_ranges_reduced_factor;
-            } else if (_reason == streaming::stream_reason::decommission) {
-                info.rs.get_metrics().decommission_finished_ranges += info.small_table_optimization_ranges_reduced_factor;
-            } else if (_reason == streaming::stream_reason::removenode) {
-                info.rs.get_metrics().removenode_finished_ranges += info.small_table_optimization_ranges_reduced_factor;
-            } else if (_reason == streaming::stream_reason::repair) {
-                info.rs.get_metrics().repair_finished_ranges_sum += info.small_table_optimization_ranges_reduced_factor;
-                info.nr_ranges_finished++;
+            ++rstate._ranges_complete;
+            if (rstate.reason() == streaming::stream_reason::bootstrap) {
+                get_metrics().bootstrap_finished_ranges += rstate.small_table_optimization_ranges_reduced_factor;
+            } else if (rstate.reason() == streaming::stream_reason::replace) {
+                get_metrics().replace_finished_ranges += rstate.small_table_optimization_ranges_reduced_factor;
+            } else if (rstate.reason() == streaming::stream_reason::rebuild) {
+                get_metrics().rebuild_finished_ranges += rstate.small_table_optimization_ranges_reduced_factor;
+            } else if (rstate.reason() == streaming::stream_reason::decommission) {
+                get_metrics().decommission_finished_ranges += rstate.small_table_optimization_ranges_reduced_factor;
+            } else if (rstate.reason() == streaming::stream_reason::removenode) {
+                get_metrics().removenode_finished_ranges += rstate.small_table_optimization_ranges_reduced_factor;
+            } else if (rstate.reason() == streaming::stream_reason::repair) {
+                get_metrics().repair_finished_ranges_sum += rstate.small_table_optimization_ranges_reduced_factor;
+                rstate.nr_ranges_finished++;
             }
             rlogger.debug("repair[{}]: node ops progress bootstrap={}, replace={}, rebuild={}, decommission={}, removenode={}, repair={}",
-                info.global_repair_id.uuid(),
-                info.rs.get_metrics().bootstrap_finished_percentage(),
-                info.rs.get_metrics().replace_finished_percentage(),
-                info.rs.get_metrics().rebuild_finished_percentage(),
-                info.rs.get_metrics().decommission_finished_percentage(),
-                info.rs.get_metrics().removenode_finished_percentage(),
-                info.rs.get_metrics().repair_finished_percentage());
+                rstate.global_repair_id.uuid(),
+                get_metrics().bootstrap_finished_percentage(),
+                get_metrics().replace_finished_percentage(),
+                get_metrics().rebuild_finished_percentage(),
+                get_metrics().decommission_finished_percentage(),
+                get_metrics().removenode_finished_percentage(),
+                get_metrics().repair_finished_percentage());
         });
 
-        if (_reason != streaming::stream_reason::repair) {
+        if (rstate.reason() != streaming::stream_reason::repair) {
             try {
-                auto& table = info.db.local().find_column_family(table_info.id);
+                auto& table = rstate.db.local().find_column_family(table_info.id);
                 rlogger.debug("repair[{}]: Trigger off-strategy compaction for keyspace={}, table={}",
-                    info.global_repair_id.uuid(), table.schema()->ks_name(), table.schema()->cf_name());
+                    rstate.global_repair_id.uuid(), table.schema()->ks_name(), table.schema()->cf_name());
                 table.trigger_offstrategy_compaction();
             } catch (replica::no_such_column_family&) {
                 // Ignore dropped table
@@ -1334,7 +1334,7 @@ future<> repair::shard_repair_task_impl::run() {
         info.rs.get_repair_module().remove_shard_task_id(info.global_repair_id.id);
     });
     try {
-        co_await do_repair_ranges();
+        co_await info.rs.do_repair_ranges(info, _flush_time);
     } catch (...) {
         // formattable(), not a plain "{}": do_repair_ranges() reports a rejected
         // write as a seastar::nested_exception, and only formattable() descends

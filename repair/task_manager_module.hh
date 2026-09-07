@@ -76,7 +76,6 @@ public:
 
     virtual future<> release_resources() noexcept override;
 protected:
-    future<> do_repair_ranges();
     virtual future<tasks::task_manager::task::progress> get_progress() const override;
     future<> run() override;
 };
