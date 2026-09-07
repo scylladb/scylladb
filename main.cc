@@ -331,6 +331,7 @@ private:
                         _pending = false;
                         try {
                             startlog.info("re-reading configuration file");
+                            auto lock = _cfg.lock_for_config_update().get();
                             read_config(_opts, _cfg).get();
                             _cfg.broadcast_to_all_shards().get();
                             startlog.info("completed re-reading configuration file");

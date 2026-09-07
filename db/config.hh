@@ -12,6 +12,7 @@
 #include <unordered_map>
 
 #include <seastar/core/sstring.hh>
+#include <seastar/core/rwlock.hh>
 #include <seastar/util/program-options.hh>
 #include <seastar/util/log.hh>
 
@@ -172,6 +173,16 @@ public:
      */
     static fs::path get_conf_dir();
     static fs::path get_conf_sub(fs::path);
+
+    future<rwlock::holder> lock_for_config_update() {
+        return _config_update_lock.hold_write_lock();
+    };
+
+    // Look up a config entry by name and return its JSON representation as a string.
+    // Runs on shard 0 under a read lock so the result is consistent with
+    // any in-progress SIGHUP reload + broadcast_to_all_shards() sequence.
+    // Returns std::nullopt if no config entry with the given name exists.
+    future<std::optional<sstring>> value_as_json_string_for_name(sstring name) const;
 
     using string_map = std::unordered_map<sstring, sstring>;
                     //program_options::string_map;
@@ -644,6 +655,13 @@ private:
     void maybe_in_workdir(named_value<string_list>&, const char*);
 
     std::shared_ptr<db::extensions> _extensions;
+
+    // Read-write lock used to synchronize config updates (SIGHUP reload +
+    // broadcast to all shards) with config value readers.
+    // The SIGHUP handler holds the write lock across read_config() +
+    // broadcast_to_all_shards().  Readers acquire the read lock on shard 0
+    // via value_as_json_string_for_name() so they always see a consistent snapshot.
+    mutable rwlock _config_update_lock;
 };
 
 }

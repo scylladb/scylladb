@@ -17,7 +17,7 @@ async def wait_for_config(manager, server, config_name, value):
     async def config_value_equal():
         await read_barrier(manager.api, server.ip_addr)
         resp = await manager.api.get_config(server.ip_addr, config_name)
-        logging.info(f"Obtained config via REST api - config_name={config_name} value={value}")
+        logging.info(f"Obtained config via REST api - config_name={config_name} response={resp}  expected value={value}")
         if resp == value:
             return True
         return None
