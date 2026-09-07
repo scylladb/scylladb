@@ -14,6 +14,7 @@
 #include <seastar/core/future.hh>
 
 #include "protocol_server.hh"
+#include "db/listener_config.hh"
 #include "service/maintenance_mode.hh"
 
 using namespace seastar;
@@ -35,8 +36,10 @@ class updateable_timeout_config;
 namespace cql_transport {
 
 class cql_server;
+struct cql_listener_config;
 struct connection_service_level_params;
 class controller : public protocol_server {
+    db::listener_configs _listeners;
     std::vector<socket_address> _listen_addresses;
     std::unique_ptr<sharded<cql_server>> _server;
     semaphore _ops_sem; /* protects start/stop operations on _server */
@@ -63,6 +66,7 @@ class controller : public protocol_server {
     future<> subscribe_server(sharded<cql_server>& server);
     future<> unsubscribe_server(sharded<cql_server>& server);
 
+    cql_listener_config shard_aware_sibling(const sstring& name, const db::listener_config&) const;
     future<> start_listening_on_tcp_sockets(sharded<cql_server>& cserver);
     future<> start_listening_on_maintenance_socket(sharded<cql_server>& cserver);
 
@@ -73,7 +77,7 @@ public:
             sharded<cql3::query_processor>&, sharded<service::memory_limiter>&,
             sharded<qos::service_level_controller>&, sharded<service::endpoint_lifecycle_notifier>&,
             sharded<netw::messaging_service>&, sharded<updateable_timeout_config>& timeout_config,
-            const db::config& cfg, scheduling_group_key cql_opcode_stats_key, maintenance_socket_enabled used_by_maintenance_socket,
+            const db::config& cfg, db::listener_configs listeners, scheduling_group_key cql_opcode_stats_key, maintenance_socket_enabled used_by_maintenance_socket,
             seastar::scheduling_group sg);
     virtual sstring name() const override;
     virtual sstring protocol() const override;

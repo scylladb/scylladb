@@ -113,6 +113,52 @@ listen_address: localhost
 #
 # listen_on_broadcast_address: false
 
+# The client-facing sockets to listen on, as a map of listener name to listener
+# configuration. If set, it is the sole source of truth, and the per-protocol
+# options below (native_transport_port, native_shard_aware_transport_port,
+# alternator_port, alternator_https_port, and their variants) are ignored.
+#
+# The name of a listener is what other listeners refer to it by. Every listener
+# takes the following keys:
+#   protocol:       mandatory, the protocol to serve - one of 'cql' and 'alternator'.
+#   port:           mandatory, the TCP port to listen on.
+#   address:        the address to listen on. Defaults to rpc_address for cql, and
+#                   to alternator_address for alternator.
+#   shard_aware:    serve the shard-aware variant of the protocol (cql only).
+#                   Defaults to false.
+#   shard_aware_listener:
+#                   the name of the shard-aware listener to hand this listener's
+#                   clients over to, advertised in the CQL SUPPORTED message (cql
+#                   only). Defaults to none, that is, the clients of this listener
+#                   are not offered a shard-aware port.
+#   proxy_protocol: expect a PROXY protocol header on incoming connections.
+#                   Defaults to false.
+#   tls:            encrypt the connections with TLS. Either a boolean, selecting the
+#                   protocol's default encryption options (client_encryption_options
+#                   for cql, alternator_encryption_options for alternator), or a map
+#                   spelling the encryption options out. Defaults to false.
+#   keepalive:      enable TCP keepalive. Defaults to rpc_keepalive.
+#
+#listeners:
+#    cql:
+#        protocol: cql
+#        port: 9042
+#        shard_aware_listener: cql_shard_aware
+#    cql_shard_aware:
+#        protocol: cql
+#        port: 19042
+#        shard_aware: true
+#    cql_ssl:
+#        protocol: cql
+#        port: 9142
+#        tls:
+#            certificate: /etc/scylla/db.crt
+#            keyfile: /etc/scylla/db.key
+#    alternator:
+#        protocol: alternator
+#        port: 8000
+#        proxy_protocol: true
+
 # port for the CQL native transport to listen for clients on
 # For security reasons, you should not expose this port to the internet. Firewall it if needed.
 # To disable the CQL native transport, remove this option and configure native_transport_port_ssl.

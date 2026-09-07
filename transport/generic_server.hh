@@ -15,6 +15,7 @@
 #include "utils/scoped_item_list.hh"
 
 #include <cstdint>
+#include <unordered_map>
 
 #include <seastar/core/file-types.hh>
 #include <seastar/core/future.hh>
@@ -120,7 +121,9 @@ protected:
     future<> _listeners_stopped = make_ready_future<>();
     utils::scoped_item_list<std::reference_wrapper<connection>> _connections_list;
     std::vector<server_socket> _listeners;
-    shared_ptr<seastar::tls::server_credentials> _credentials;
+    // Server credentials, one per credentials_builder listen() was given.
+    // Listeners sharing a builder share the credentials built out of it.
+    std::unordered_map<const seastar::tls::credentials_builder*, shared_ptr<seastar::tls::server_credentials>> _credentials;
     seastar::abort_source _abort_source;
 private:
     utils::updateable_value<uint32_t> _conns_cpu_concurrency;

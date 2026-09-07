@@ -122,8 +122,6 @@ struct cql_server_config {
     size_t max_request_size;
     sstring partitioner_name;
     unsigned sharding_ignore_msb;
-    std::optional<uint16_t> shard_aware_transport_port;
-    std::optional<uint16_t> shard_aware_transport_port_ssl;
     bool allow_shard_aware_drivers = true;
     smp_service_group bounce_request_smp_service_group = default_smp_service_group();
     utils::updateable_value<uint32_t> max_concurrent_requests;
@@ -132,6 +130,16 @@ struct cql_server_config {
     utils::updateable_value<bool> cql_in_bind_variable_name_uses_uppercase_operator;
     utils::updateable_value<uint32_t> uninitialized_connections_semaphore_cpu_concurrency;
     utils::updateable_value<uint32_t> request_timeout_on_shutdown_in_seconds;
+};
+
+// The properties of a single listening socket that the connections accepted on
+// it need to know about.
+struct cql_listener_config {
+    // The shard-aware listener that clients of this listener are to be handed
+    // over to, and whether it is encrypted. Advertised in the SUPPORTED
+    // message. Disengaged when this listener offers no shard-aware port.
+    std::optional<uint16_t> shard_aware_port;
+    bool shard_aware_port_tls = false;
 };
 
 /**
@@ -249,6 +257,9 @@ private:
     gms::gossiper& _gossiper;
     scheduling_group_key _stats_key;
     maintenance_socket_enabled _used_by_maintenance_socket;
+    // The configuration of every listening socket, keyed by the address it
+    // listens on - which is what the accepted connections know it by.
+    std::unordered_map<socket_address, cql_listener_config> _listener_configs;
 public:
     cql_server(sharded<cql3::query_processor>& qp, auth::service&,
             service::memory_limiter& ml,
@@ -276,6 +287,15 @@ public:
     cql_sg_stats::request_kind_stats& get_cql_opcode_stats(cql_binary_opcode op) {
         return get_cql_sg_stats().get_cql_opcode_stats(op);
     }
+
+    // Listen on one more socket, serving the connections accepted on it
+    // according to \c listener_config.
+    future<> listen(socket_address addr, cql_listener_config listener_config,
+            std::shared_ptr<seastar::tls::credentials_builder> creds,
+            bool is_shard_aware, bool keepalive,
+            std::optional<file_permissions> unix_domain_socket_permissions,
+            bool proxy_protocol,
+            std::function<generic_server::server&()> get_shard_instance);
 
     future<utils::chunked_vector<foreign_ptr<std::unique_ptr<client_data>>>> get_client_data();
     future<> update_connections_scheduling_group();

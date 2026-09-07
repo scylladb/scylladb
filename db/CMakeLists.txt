@@ -47,6 +47,7 @@ target_sources(db
     per_partition_rate_limit_options.cc
     row_cache.cc
     tablet_options.cc
+    listener_config.cc
     object_storage_endpoint_param.cc
     )
 target_include_directories(db
