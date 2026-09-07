@@ -76,10 +76,16 @@ private:
     stats _stats;
 
     struct operation_ctx;
+    // `needs_leader` says whether the request has to be executed by the raft group's
+    // leader, which is true for writes and linearizable reads and false for a read that
+    // is served from local storage. It decides both where the request may run and, when
+    // it may not run here, which replica it is redirected to: a request needing the
+    // leader can go to any replica that could be the leader, a local read only to one
+    // that holds the tablet's data.
     future<value_or_redirect<operation_ctx>> create_operation_ctx(const schema& schema,
         const dht::token& token,
         abort_source& as,
-        bool use_leader_cache);
+        bool needs_leader);
 public:
     coordinator(groups_manager& groups_manager, replica::database& db, gms::gossiper& gossiper);
 

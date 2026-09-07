@@ -13,6 +13,7 @@
 #include "service/migration_manager.hh"
 #include "service/strong_consistency/state_machine.hh"
 #include "service/strong_consistency/raft_groups_storage.hh"
+#include "service/strong_consistency/tablet_replica_sets.hh"
 #include "gms/feature_service.hh"
 #include "gms/gossiper.hh"
 #include "service/raft/raft_rpc.hh"
@@ -77,37 +78,6 @@ static std::optional<locator::tablet_replica_set> prepare_replicas_for_sc_tablet
     return std::make_optional(std::move(replicas));
 }
 
-static locator::tablet_replica_set get_replicas_for_sc_tablet_version(
-        const locator::tablet_info& tablet_info,
-        const locator::tablet_transition_info* trinfo) {
-    if (!trinfo) {
-        return tablet_info.replicas;
-    }
-
-    switch (trinfo->stage) {
-        case tablet_transition_stage::start_migration:
-        case tablet_transition_stage::sc_add_nonvoter:
-        case tablet_transition_stage::sc_snapshot_transfer:
-            return tablet_info.replicas;
-        case tablet_transition_stage::sc_become_voter:
-        case tablet_transition_stage::use_new:
-        case tablet_transition_stage::cleanup:
-        case tablet_transition_stage::end_migration:
-            return trinfo->next;
-        case tablet_transition_stage::sc_rollback:
-        case tablet_transition_stage::cleanup_target:
-        case tablet_transition_stage::revert_migration:
-            return tablet_info.replicas;
-        case tablet_transition_stage::write_both_read_old_fallback_cleanup:
-        case tablet_transition_stage::rebuild_repair:
-        case tablet_transition_stage::repair:
-        case tablet_transition_stage::end_repair:
-        case tablet_transition_stage::restore:
-            return tablet_info.replicas;
-    }
-    on_internal_error(logger, format("get_replicas_for_sc_tablet_version: unknown tablet transition stage {}",
-            static_cast<int>(trinfo->stage)));
-}
 
 class groups_manager::rpc_impl: public service::raft_rpc {
 public:
@@ -1341,8 +1311,10 @@ std::optional<locator::tablet_routing_info_v2> groups_manager::check_tablet_vers
 
     const auto& tablet_info = tablet_map.get_tablet_info(tablet_id);
     const auto* trinfo = tablet_map.get_tablet_transition_info(tablet_id);
+    // The same set a request is willing to be served from locally, so that where a
+    // driver is told to go and where it will actually be answered agree.
     auto maybe_replicas = prepare_replicas_for_sc_tablet_version(
-            get_replicas_for_sc_tablet_version(tablet_info, trinfo), group_leader);
+            get_readable_tablet_replicas(tablet_info, trinfo), group_leader);
 
     if (!maybe_replicas) [[unlikely]] {
         // The leader is not present in the replica set.

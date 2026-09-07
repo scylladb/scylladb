@@ -16,6 +16,7 @@
 #include "locator/tablet_replication_strategy.hh"
 #include "service/strong_consistency/state_machine.hh"
 #include "service/strong_consistency/groups_manager.hh"
+#include "service/strong_consistency/tablet_replica_sets.hh"
 #include "utils/error_injection.hh"
 #include "idl/strong_consistency/state_machine.dist.hh"
 #include "idl/strong_consistency/state_machine.dist.impl.hh"
@@ -134,61 +135,6 @@ static const locator::tablet_replica* find_replica(const locator::tablet_replica
     return it == replicas.end() ? nullptr : &*it;
 }
 
-// Tablet replicas for leader redirection.
-// This set must contain all tablet replicas that can potentially be the leader.
-static locator::tablet_replica_set get_redirectable_tablet_replicas(const locator::tablet_info& tinfo, const locator::tablet_transition_info* trinfo) {
-    using namespace locator;
-
-    if (!trinfo) {
-        return tinfo.replicas;
-    }
-
-    switch (trinfo->stage) {
-        case tablet_transition_stage::start_migration:
-        case tablet_transition_stage::sc_add_nonvoter:
-            // The pending replica can't be a leader, because it can become a leader only in
-            // sc_become_voter, and the transition from sc_snapshot_transfer to sc_become_voter
-            // executes a barrier.
-            return tinfo.replicas;
-        case tablet_transition_stage::sc_snapshot_transfer:
-            // in sc_snapshot_transfer the topology coordinator may have advanced to sc_become_voter,
-            // so the pending replica can become a voter and a leader.
-        case tablet_transition_stage::sc_become_voter: {
-            auto replicas = tinfo.replicas;
-            if (trinfo->pending_replica) {
-                replicas.push_back(*trinfo->pending_replica);
-            }
-            return replicas;
-        }
-        case tablet_transition_stage::use_new:
-            // the precondition of use_new guarantees that the leaving replica is not a member of the raft group.
-        case tablet_transition_stage::cleanup:
-        case tablet_transition_stage::end_migration:
-            return trinfo->next;
-        case tablet_transition_stage::sc_rollback: {
-            // rollback may enter sc_rollback from sc_become_voter, thus the pending replica may be a leader.
-            auto replicas = tinfo.replicas;
-            if (trinfo->pending_replica) {
-                replicas.push_back(*trinfo->pending_replica);
-            }
-            return replicas;
-        }
-        case tablet_transition_stage::cleanup_target:
-            // the precondition of cleanup_target guarantees that the pending replica is not a member of the raft group.
-        case tablet_transition_stage::revert_migration:
-            return tinfo.replicas;
-        case tablet_transition_stage::write_both_read_old_fallback_cleanup:
-        case tablet_transition_stage::rebuild_repair:
-            return tinfo.replicas;
-        case tablet_transition_stage::repair:
-        case tablet_transition_stage::end_repair:
-        case tablet_transition_stage::restore:
-            return tinfo.replicas;
-    }
-    on_internal_error(logger, format("get_redirectable_tablet_replicas: unknown tablet transition stage {}",
-            static_cast<int>(trinfo->stage)));
-}
-
 // How long to wait for the locally reported leader to change before giving up on it
 // being the stale side and rebuilding the request's view of the replica set instead.
 static constexpr auto stale_leader_grace = std::chrono::seconds(1);
@@ -288,7 +234,7 @@ static need_redirect redirect_to_replica(locator::tablet_replica target) {
     return { .target = target };
 }
 
-auto coordinator::create_operation_ctx(const schema& schema, const dht::token& token, abort_source& as, bool use_leader_cache)
+auto coordinator::create_operation_ctx(const schema& schema, const dht::token& token, abort_source& as, bool needs_leader)
     -> future<value_or_redirect<operation_ctx>>
 {
     auto erm = schema.table().get_effective_replication_map();
@@ -313,12 +259,24 @@ auto coordinator::create_operation_ctx(const schema& schema, const dht::token& t
     const auto& tablet_info = tablet_map.get_tablet_info(tablet_id);
     const auto& raft_info = tablet_map.get_tablet_raft_info(tablet_id);
     const auto* trinfo = tablet_map.get_tablet_transition_info(tablet_id);
-    auto replicas = get_redirectable_tablet_replicas(tablet_info, trinfo);
+    // Every replica a redirect may name. Kept in the context, because a leader reported
+    // by begin_mutate()/begin_read() has to be looked up in it.
+    auto replicas = get_leader_capable_tablet_replicas(tablet_info, trinfo);
 
-    if (!contains(replicas, this_replica)) {
+    // Where this request may run. A request that has to reach the leader may run on any
+    // replica that could be the leader: one that isn't answers not_a_leader, and the
+    // redirect fixes it. A read that is served from local storage has no such second
+    // chance, so it may only run on a replica that holds the data - during a migration
+    // that is a strictly smaller set, and the pending replica is outside it until the
+    // snapshot transfer has completed.
+    const auto& serve_here = needs_leader
+            ? replicas
+            : get_readable_tablet_replicas(tablet_info, trinfo);
+
+    if (!contains(serve_here, this_replica)) {
         // For writes, check the leader cache to avoid an extra roundtrip.
-        // For now, reads skip the cache because any replica can serve them.
-        if (use_leader_cache) {
+        // For now, reads skip the cache because any replica holding the data can serve them.
+        if (needs_leader) {
             if (const auto cached = _groups_manager.leader_cache().get(raft_info.group_id)) {
                 if (const auto* target = find_replica(replicas, *cached); target && _gossiper.is_alive(target->host)) {
                     return make_ready_future<value_or_redirect<operation_ctx>>(
@@ -327,13 +285,15 @@ auto coordinator::create_operation_ctx(const schema& schema, const dht::token& t
                 // Cached leader is no longer a replica/alive, evict it.
                 _groups_manager.leader_cache().erase(raft_info.group_id);
             }
-        }
-        auto target = select_closest_replica(_gossiper, replicas, token,
-                erm->get_token_metadata().get_topology());
-        if (use_leader_cache) {
+            auto target = select_closest_replica(_gossiper, replicas, token,
+                    erm->get_token_metadata().get_topology());
             return make_ready_future<value_or_redirect<operation_ctx>>(
                 redirect_to_leader(target, _groups_manager, raft_info.group_id));
         }
+        // Bounced to a replica that holds the data, never merely to one that could be
+        // the leader - the target serves the read itself, so it has to be able to.
+        auto target = select_closest_replica(_gossiper, serve_here, token,
+                erm->get_token_metadata().get_topology());
         return make_ready_future<value_or_redirect<operation_ctx>>(redirect_to_replica(target));
     }
 
