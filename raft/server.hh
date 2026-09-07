@@ -9,6 +9,7 @@
 #include <seastar/core/abort_source.hh>
 #include "raft.hh"
 #include <functional>
+#include <seastar/core/shared_ptr.hh>
 
 namespace raft {
 
@@ -20,6 +21,41 @@ enum class wait_type {
 // A single uniquely identified participant of a Raft group.
 class server {
 public:
+    // Servers sharing one instance (see configuration::shared_stats)
+    // accumulate into it, so a set of groups is exported as one series.
+    struct stats {
+        uint64_t add_command = 0;
+        uint64_t add_dummy = 0;
+        uint64_t add_config = 0;
+        uint64_t append_entries_received = 0;
+        uint64_t append_entries_reply_received = 0;
+        uint64_t request_vote_received = 0;
+        uint64_t request_vote_reply_received = 0;
+        uint64_t waiters_awoken = 0;
+        uint64_t waiters_dropped = 0;
+        uint64_t append_entries_reply_sent = 0;
+        uint64_t append_entries_sent = 0;
+        uint64_t vote_request_sent = 0;
+        uint64_t vote_request_reply_sent = 0;
+        uint64_t install_snapshot_sent = 0;
+        uint64_t snapshot_reply_sent = 0;
+        uint64_t polls = 0;
+        uint64_t store_term_and_vote = 0;
+        uint64_t store_snapshot = 0;
+        uint64_t sm_load_snapshot = 0;
+        uint64_t truncate_persisted_log = 0;
+        uint64_t persisted_log_entries = 0;
+        uint64_t queue_entries_for_apply = 0;
+        uint64_t applied_entries = 0;
+        uint64_t snapshots_taken = 0;
+        uint64_t timeout_now_sent = 0;
+        uint64_t timeout_now_received = 0;
+        uint64_t read_quorum_sent = 0;
+        uint64_t read_quorum_received = 0;
+        uint64_t read_quorum_reply_sent = 0;
+        uint64_t read_quorum_reply_received = 0;
+    };
+
     struct configuration {
         // automatically snapshot state machine after applying
         // this number of entries
@@ -94,6 +130,9 @@ public:
             std::reference_wrapper<bounded_clock> clock;
         };
         std::optional<leaseguard_configuration> leaseguard;
+
+        // When unset the server keeps private counters, see struct stats.
+        seastar::lw_shared_ptr<stats> shared_stats;
     };
 
     virtual ~server() {}
