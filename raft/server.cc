@@ -174,38 +174,9 @@ private:
         trigger_snapshot_msg>;
     queue<applier_fiber_message> _apply_entries = queue<applier_fiber_message>(10);
 
-    struct stats {
-        uint64_t add_command = 0;
-        uint64_t add_dummy = 0;
-        uint64_t add_config = 0;
-        uint64_t append_entries_received = 0;
-        uint64_t append_entries_reply_received = 0;
-        uint64_t request_vote_received = 0;
-        uint64_t request_vote_reply_received = 0;
-        uint64_t waiters_awoken = 0;
-        uint64_t waiters_dropped = 0;
-        uint64_t append_entries_reply_sent = 0;
-        uint64_t append_entries_sent = 0;
-        uint64_t vote_request_sent = 0;
-        uint64_t vote_request_reply_sent = 0;
-        uint64_t install_snapshot_sent = 0;
-        uint64_t snapshot_reply_sent = 0;
-        uint64_t polls = 0;
-        uint64_t store_term_and_vote = 0;
-        uint64_t store_snapshot = 0;
-        uint64_t sm_load_snapshot = 0;
-        uint64_t truncate_persisted_log = 0;
-        uint64_t persisted_log_entries = 0;
-        uint64_t queue_entries_for_apply = 0;
-        uint64_t applied_entries = 0;
-        uint64_t snapshots_taken = 0;
-        uint64_t timeout_now_sent = 0;
-        uint64_t timeout_now_received = 0;
-        uint64_t read_quorum_sent = 0;
-        uint64_t read_quorum_received = 0;
-        uint64_t read_quorum_reply_sent = 0;
-        uint64_t read_quorum_reply_received = 0;
-    } _stats;
+    // Counters, either private or shared through configuration::shared_stats.
+    stats _own_stats;
+    stats& _stats;
 
     struct op_status {
         term_t term; // term the entry was added with
@@ -379,7 +350,8 @@ server_impl::server_impl(server_id uuid, std::unique_ptr<rpc> rpc,
                     _rpc(std::move(rpc)), _state_machine(std::move(state_machine)),
                     _persistence(std::move(persistence)), _failure_detector(failure_detector),
                     _id(uuid), _tag(config.tag.empty() ? format("{}", uuid) : std::move(config.tag)),
-                    _config(config), _do_on_leader_gate("raft::server_impl::do_on_leader_gate")
+                    _config(config), _stats(_config.shared_stats ? *_config.shared_stats : _own_stats),
+                    _do_on_leader_gate("raft::server_impl::do_on_leader_gate")
 {
     set_rpc_server(_rpc.get());
     if (_config.snapshot_threshold_log_size > _config.max_log_size) {
