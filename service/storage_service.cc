@@ -4623,48 +4623,72 @@ future<storage_service::keyspace_migration_status> storage_service::get_tablets_
     result.keyspace = ks_name;
     result.status = get_tablets_migration_status(ks_name);
 
+    // Only finalization sets this, and nothing unsets it, so a local reading of it needs
+    // no confirmation. Answering here keeps an already-migrated keyspace off group0.
+    if (result.status == migration_status::tablets) {
+        co_return result;
+    }
+
+    // The other two answers can be stale, and so can the per-node modes, so they have to
+    // come from one snapshot: a barrier taken after the status was computed would let a
+    // concurrent finalization clear the modes under a status still saying migrating.
+    if (!_group0 || !_group0->joined_group0()) {
+        throw std::runtime_error(::format("Cannot fetch migration status for keyspace '{}': group0 is not yet initialized on this node", ks_name));
+    }
+
+    // A node publishes its current mode before it finishes starting up, so a caller
+    // that just restarted a node expects the next status to show it. Take a read
+    // barrier to make that write visible here instead of waiting for this node to
+    // apply it on its own. Hold the group0 gate meanwhile, to prevent
+    // abort_and_drain() from destroying the raft server under it (SCYLLADB-2071).
+    {
+        auto group0_holder = _group0->hold_group0_gate();
+        co_await _group0->group0_server_with_timeouts().read_barrier(&_group0_as, raft_timeout{});
+    }
+
+    result.status = get_tablets_migration_status(ks_name);
+
     if (result.status != migration_status::migrating_to_tablets) {
         co_return result;
     }
 
-    // system.tablet_sizes is a group0_virtual_table, so it requires group0 to
-    // be initialized. If this function is called via the task manager API,
-    // group0 may not be initialized yet.
-    if (!_group0 || !_group0->joined_group0()) {
-        throw std::runtime_error(::format("Cannot fetch node statuses for migrating keyspace '{}': group0 is not yet initialized on this node", ks_name));
-    }
+    const auto& topo = _topology_state_machine._topology;
 
-    // Pick one table and query system.tablet_sizes to find which nodes
-    // report tablet sizes (i.e. have loaded tablet-based ERMs).
-    auto& ks = _db.local().find_keyspace(ks_name);
-    auto tables = ks.metadata()->tables();
-    auto sample_table_id = tables.front()->id();
-
-    // FIXME: system.tablet_sizes might return stale data (load stats in the topology coordinator are cached).
-    auto rs = co_await _qp.execute_internal(
-            "SELECT replicas FROM system.tablet_sizes WHERE table_id = ?",
-            {sample_table_id.uuid()},
-            cql3::query_processor::cache_internal::no);
-
-    // Collect all host_ids that appear in the replicas map across all tablets.
+    // Prepare seeds every node, so a node without a mode can only come from a migration
+    // started before the column existed, carried across the upgrade that introduced it.
+    // Answer those the way that release did. The source is keyed by replica and blind to
+    // a node holding none, but those releases support neither zero-token nodes nor RF=0
+    // datacenters.
     std::unordered_set<locator::host_id> nodes_reporting_tablets;
-    for (const auto& row : *rs) {
-        if (row.has("replicas")) {
-            auto replicas_map = row.get_map<utils::UUID, int64_t>("replicas");
-            for (const auto& [host_uuid, size] : replicas_map) {
-                nodes_reporting_tablets.insert(locator::host_id(host_uuid));
+    if (std::ranges::any_of(topo.normal_nodes, [] (const auto& e) { return !e.second.current_storage_mode; })) {
+        auto& ks = _db.local().find_keyspace(ks_name);
+        auto tables = ks.metadata()->tables();
+        auto sample_table_id = tables.front()->id();
+
+        auto rows = co_await _qp.execute_internal(
+                "SELECT replicas FROM system.tablet_sizes WHERE table_id = ?",
+                {sample_table_id.uuid()},
+                cql3::query_processor::cache_internal::no);
+
+        for (const auto& row : *rows) {
+            if (row.has("replicas")) {
+                auto replicas_map = row.get_map<utils::UUID, int64_t>("replicas");
+                for (const auto& [host_uuid, size] : replicas_map) {
+                    nodes_reporting_tablets.insert(locator::host_id(host_uuid));
+                }
             }
         }
     }
 
-    const auto& topo = _topology_state_machine._topology;
     for (const auto& [server_id, rs] : topo.normal_nodes) {
         auto host_id = locator::host_id{server_id.uuid()};
-        bool reports_tablets = nodes_reporting_tablets.contains(host_id);
 
-        auto current_mode = reports_tablets
-            ? storage_mode::tablets
-            : storage_mode::vnodes;
+        // A recorded mode is authoritative: the node publishes it once its switch is
+        // complete, resharding included. Rollback is unambiguous too - a node that has
+        // not restarted still holds the tablets it published on the forward pass.
+        auto current_mode = rs.current_storage_mode
+                ? *rs.current_storage_mode
+                : (nodes_reporting_tablets.contains(host_id) ? storage_mode::tablets : storage_mode::vnodes);
         auto intended_mode = rs.intended_storage_mode.value_or(storage_mode::vnodes);
 
         auto ip = _address_map.find(host_id);
