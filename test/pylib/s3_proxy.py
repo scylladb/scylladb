@@ -220,7 +220,11 @@ class InjectingHandler(BaseHTTPRequestHandler):
                         self.send_header(key, value)
 
                 if self.command == 'HEAD':
-                    self.send_header("Content-Length", response.headers['Content-Length'])
+                    # `requests` hands us no body for a HEAD reply, so the length has to
+                    # come from the S3 server. It may not have sent one - S3Mock omits it
+                    # on error replies - and a HEAD body is empty either way, so fall back
+                    # to zero rather than throwing the response away.
+                    self.send_header("Content-Length", response.headers.get('Content-Length', '0'))
                 else:
                     self.send_header("Content-Length", str(len(response.content)))
                 self.end_headers()
