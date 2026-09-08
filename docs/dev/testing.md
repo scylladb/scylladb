@@ -161,6 +161,13 @@ processes determined by available CPU cores, system memory, and build mode
 (see `ThreadsCalculator` in `test.py`). `test.py`
 continues until all tests are run even if any one of them fails.
 
+How the tests are spread over the machine is chosen by a *scheduler*, selected
+with `--scheduler=<name>` (`--scheduler=list` shows what is available). The
+default, `passthrough`, makes no decisions and hands the run to xdist exactly
+as described above. Every run prints which scheduler ran it, and records the
+full configuration in the metrics database under `--gather-metrics`. See
+[test-scheduler.md](test-scheduler.md) for how to write one.
+
 ## CQL tests
 
 The main idea of CQL tests is that test writer specifies CQL
@@ -351,6 +358,8 @@ The database is created in the `testlog` directory and contains the following ta
 - `test_metrics` - contains the metrics for each test, such as memory peak usage, CPU usage, and duration
 - `system_resource_metrics` - contains system CPU and memory utilization in percents during the whole run
 - `cgroup_memory_metrics` - contains cgroup memory usage during the test run
+- `scheduler_runs` - contains which scheduler ran the tests, and the whole run
+  configuration it produced as JSON in the `config` column
 
 ## Automation, CI, and Jenkins
 
@@ -403,4 +412,6 @@ For more information please refer to `allure -h` or [official documentation](htt
 For command line help and available options, please see also:
 
         $ ./test.py --help
+
+For writing a test scheduler, see [test-scheduler.md](test-scheduler.md).
 

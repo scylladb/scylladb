@@ -41,6 +41,22 @@ class Metric:
 
 
 @define
+class SchedulerRun:
+    """Which scheduler ran a session, and the run configuration it produced.
+
+    ``config`` is that configuration as JSON — concurrency, distribution mode
+    and the whole test.py command line — so a past run can be read back
+    without the schema having to grow a column per option.
+    """
+    host_id: str
+    name: str
+    version: str
+    plugin: str | None
+    config: str
+    timestamp: datetime
+
+
+@define
 class SystemResourceMetric:
     host_id: str
     cpu: float
