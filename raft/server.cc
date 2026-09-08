@@ -351,6 +351,10 @@ private:
     future<> wait_for_apply(index_t idx, abort_source*);
 
     void check_not_aborted();
+    // Throws `stop_apply_fiber` if the server is being aborted. Called right
+    // before every state machine call, since the state machine must not be
+    // used after `state_machine::abort()`.
+    void check_state_machine_usable() const;
     void handle_background_error(const char* fiber_name);
 
     // Triggered on the next tick, used to delay retries in add_entry, modify_config, read_barrier.
@@ -1203,8 +1207,12 @@ future<> server_impl::process_fsm_output(index_t& last_stable, fsm_output&& batc
         }
     }
 
-    for (const auto& snp_id: batch.snps_to_drop) {
-        _state_machine->drop_snapshot(snp_id);
+    // Skipped when aborting: dropping snapshots is just cleanup and the state
+    // machine must not be used after `state_machine::abort()`.
+    if (!_aborted) {
+        for (const auto& snp_id: batch.snps_to_drop) {
+            _state_machine->drop_snapshot(snp_id);
+        }
     }
 
     if (batch.log_entries.size()) {
@@ -1471,6 +1479,7 @@ future<> server_impl::applier_fiber() {
 
                 const auto size = commands.size();
                 if (size) {
+                    check_state_machine_usable();
                     try {
                         co_await _state_machine->apply(std::move(commands));
                     } catch (abort_requested_exception& e) {
@@ -1507,6 +1516,7 @@ future<> server_impl::applier_fiber() {
                     snp.idx = _applied_idx;
                     snp.config = _fsm->log_last_conf_for(_applied_idx);
                     logger.trace("[{}] applier fiber: taking snapshot term={}, idx={}", _tag, snp.term, snp.idx);
+                    check_state_machine_usable();
                     snp.id = co_await _state_machine->take_snapshot();
                     // Note that at this point (after the `co_await`), _fsm may already have applied a later snapshot.
                     // That's fine, `_fsm->apply_snapshot` will simply ignore our current attempt; we will soon receive
@@ -1529,6 +1539,7 @@ future<> server_impl::applier_fiber() {
                         utils::wait_for_message(std::chrono::minutes(5)));
                 // Apply snapshot it to the state machine
                 logger.trace("[{}] apply_fiber applying snapshot {}", _tag, snp.id);
+                check_state_machine_usable();
                 co_await _state_machine->load_snapshot(snp.id);
                 // Drop apply waiters covered by the snapshot only now, after
                 // load_snapshot(): a resolved "applied" waiter promises that the
@@ -1560,6 +1571,7 @@ future<> server_impl::applier_fiber() {
                 snp.idx = _applied_idx;
                 snp.config = _fsm->log_last_conf_for(_applied_idx);
                 logger.trace("[{}] taking snapshot at term={}, idx={} due to request", _tag, snp.term, snp.idx);
+                check_state_machine_usable();
                 snp.id = co_await _state_machine->take_snapshot();
                 if (!_fsm->apply_snapshot(snp, 0, 0, true)) {
                     logger.trace("[{}] while taking snapshot term={} idx={} id={} due to request,"
@@ -1704,6 +1716,14 @@ void server_impl::abort_snapshot_transfers() {
 void server_impl::check_not_aborted() {
     if (_aborted) {
         throw stopped_error(*_aborted);
+    }
+}
+
+void server_impl::check_state_machine_usable() const {
+    // `abort()` sets `_aborted` before it aborts the state machine, so a fiber
+    // which sees it here hasn't started its state machine call yet.
+    if (_aborted) {
+        throw stop_apply_fiber{};
     }
 }
 
