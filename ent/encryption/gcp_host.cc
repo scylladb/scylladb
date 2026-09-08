@@ -458,6 +458,16 @@ future<encryption::gcp_host::impl::key_and_id_type> encryption::gcp_host::impl::
 
     gcp_log.trace("Created key id {}", sid);
 
+    id_cache_key key2 {
+        .src = k.src,
+        .id = id,
+    };
+    co_await _id_cache.insert(key2, [&](const id_cache_key& kin) -> future<bytes>{
+        assert(kin.id == key2.id);
+        assert(kin.src == key2.src);
+        co_return key->key();
+    });
+
     co_return key_and_id_type{ key, id };
 }
 
