@@ -825,6 +825,7 @@ private:
         auto src_shard = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
 
         if (cmd1.trace_info) {
+            co_await utils::get_local_injector().inject("storage_proxy_pause_traced_read", utils::wait_for_message(5min));
             trace_state_ptr = tracing::tracing::get_local_tracing_instance().create_session(*cmd1.trace_info);
             tracing::begin(trace_state_ptr);
             tracing::trace(trace_state_ptr, "{}: message received from /{}", verb, src_addr);
