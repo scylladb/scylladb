@@ -93,6 +93,13 @@ struct test_config {
     unsigned collection = 0;
     db::consistency_level consistency_level;
     bool shard_aware;
+    // Store the table with logstor rather than with sstables. Implies tablets, which is the only
+    // topology logstor is used with.
+    bool logstor;
+    // Compaction is off during the measurement by default, so that the hot path is measured on its
+    // own. A logstor run leaves it on, since compaction is what gives free segments back and
+    // without it a write test stalls once the segment pool is full of dead records.
+    bool auto_compaction;
 };
 
 // Partition sequence numbers grouped by the shard that services reads for them,
@@ -119,12 +126,28 @@ std::ostream& operator<<(std::ostream& os, const test_config& cfg) {
            << ", counters=" << (cfg.counters ? "yes" : "no")
            << ", collection=" << cfg.collection
            << ", shard_aware=" << (cfg.shard_aware ? "yes" : "no")
+           << ", logstor=" << (cfg.logstor ? "yes" : "no")
+           << ", auto_compaction=" << (cfg.auto_compaction ? "yes" : "no")
            << "}";
 }
 
-// The statements the test measures, with the key left to be bound. Shared by the loader and by the
-// tests, so that the partitions the loader writes are the ones the write test overwrites.
+// The statements the test measures, with the key left to be bound. Logstor holds a whole row per
+// partition and takes the timestamp of its record from a row marker or a partition tombstone, so a
+// logstor run writes the row with an INSERT and deletes the whole partition, while an sstable run
+// keeps writing the cells with the UPDATE and the cell delete it has always measured.
 static sstring make_write_query(const test_config& cfg, std::string_view usings = "") {
+    if (cfg.logstor) {
+        std::string collection_column;
+        std::string collection_value;
+        if (cfg.collection > 0) {
+            collection_column = ", \"CC\"";
+            collection_value = fmt::format(", {}", make_collection_literal(cfg.collection));
+        }
+        return format("INSERT INTO cf (\"KEY\", \"C0\", \"C1\", \"C2\", \"C3\", \"C4\"{}) "
+                "VALUES (?, {}, {}, {}, {}, {}{}) {}",
+                collection_column, cell_values[0], cell_values[1], cell_values[2], cell_values[3], cell_values[4],
+                collection_value, usings);
+    }
     std::string collection_assignment;
     if (cfg.collection > 0) {
         collection_assignment = fmt::format(", \"CC\" = {}", make_collection_literal(cfg.collection));
@@ -142,6 +165,9 @@ static sstring make_counter_update_query(std::string_view usings = "") {
 }
 
 static sstring make_delete_query(const test_config& cfg, std::string_view usings = "") {
+    if (cfg.logstor) {
+        return format("DELETE FROM cf {}WHERE \"KEY\" = ?", usings);
+    }
     std::string collection_column;
     if (cfg.collection > 0) {
         collection_column = ", \"CC\"";
@@ -228,6 +254,19 @@ static std::optional<bytes> next_key(test_config& cfg, const std::vector<uint64_
     return make_key(tests::random::get_int<uint64_t>(cfg.partitions - 1));
 }
 
+// The load of an sstable run ends with a flush, which leaves the rows in the row cache, but a logstor
+// write does not put its partition in the logstor cache: only a read that misses it does. Read every
+// key once, so that a logstor read test measures the reads a warm cache serves, as the sstable one
+// does, rather than a mix of them and the first reads of the keys.
+static void warm_logstor_cache(cql_test_env& env, const test_config& cfg, cql3::prepared_cache_key_type id) {
+    std::cout << "Warming the logstor cache..." << std::endl;
+    auto read = [&env, &cfg, id] (unsigned sequence) {
+        return env.execute_prepared(id, {{cql3::raw_value::make_value(make_key(sequence))}}, cfg.consistency_level).discard_result();
+    };
+    auto sequences = std::views::iota(0u, cfg.partitions);
+    max_concurrent_for_each(sequences.begin(), sequences.end(), populate_concurrency, std::move(read)).get();
+}
+
 static std::vector<perf_result> test_read(cql_test_env& env, test_config& cfg, sharded<std::vector<uint64_t>>& shard_seqs) {
     create_partitions(env, cfg);
     sstring query = "select \"C0\", \"C1\", \"C2\", \"C3\", \"C4\"";
@@ -242,6 +281,9 @@ static std::vector<perf_result> test_read(cql_test_env& env, test_config& cfg, s
         query += " using timeout " + cfg.timeout;
     }
     auto id = env.prepare(query).get();
+    if (cfg.logstor && !cfg.bypass_cache) {
+        warm_logstor_cache(env, cfg, id);
+    }
     return time_parallel([&env, &cfg, &shard_seqs, id] {
             auto key = next_key(cfg, shard_seqs.local());
             if (!key) {
@@ -320,14 +362,19 @@ static std::vector<perf_result> do_cql_test(cql_test_env& env, test_config& cfg)
         if (cfg.collection > 0) {
             sb.with_column("CC", map_type_impl::get_instance(bytes_type, bytes_type, true));
         }
+        if (cfg.logstor) {
+            sb.set_logstor();
+        }
         return *sb.build();
     }).get();
 
-    std::cout << "Disabling auto compaction" << std::endl;
-    env.db().invoke_on_all([] (auto& db) {
-        auto& cf = db.find_column_family("ks", "cf");
-        return cf.disable_auto_compaction();
-    }).get();
+    if (!cfg.auto_compaction) {
+        std::cout << "Disabling auto compaction" << std::endl;
+        env.db().invoke_on_all([] (auto& db) {
+            auto& cf = db.find_column_family("ks", "cf");
+            return cf.disable_auto_compaction();
+        }).get();
+    }
 
     // Build the shard->sequences table once, then hand each shard its own slice
     // so the hot path reads only NUMA-local memory.
@@ -369,6 +416,8 @@ void write_json_result(std::string result_file, const test_config& cfg, const ag
     if (cfg.collection > 0) {
         params["collection"] = cfg.collection;
     }
+    params["logstor"] = cfg.logstor;
+    params["auto_compaction"] = cfg.auto_compaction;
 
     std::string test_type;
     switch (cfg.mode) {
@@ -378,6 +427,9 @@ void write_json_result(std::string result_file, const test_config& cfg, const ag
     }
     if (cfg.counters) {
         test_type += "_counters";
+    }
+    if (cfg.logstor) {
+        test_type += "_logstor";
     }
 
     perf::write_json_result(result_file, agg, params, test_type);
@@ -409,6 +461,12 @@ int scylla_simple_query_main(int argc, char** argv) {
         ("counters", "test counters")
         ("collection", bpo::value<unsigned>()->default_value(0), "add map<text,text> collection column with N cells per row (excludes --counters)")
         ("tablets", "use tablets")
+        ("logstor", "store the table with the logstor storage engine instead of sstables (implies --tablets)")
+        ("logstor-disk-size-in-mb", bpo::value<unsigned>()->default_value(1024), "size of the logstor segment pool")
+        ("logstor-file-size-in-mb", bpo::value<unsigned>()->default_value(32), "size of a logstor data file")
+        ("logstor-format-on-startup", bpo::value<bool>()->default_value(true), "format the logstor files upfront, so that no write pays for formatting")
+        ("logstor-sparse-files", bpo::value<bool>()->default_value(false), "create the logstor data files sparse instead of preallocating them")
+        ("auto-compaction", bpo::value<bool>(), "run compaction during the measurement (defaults to on for --logstor, off otherwise)")
         ("strongly-consistent-tables", "use strongly consistent tables")
         ("consistency-level", bpo::value<std::string>()->default_value("QUORUM"), "consistency level used for read and write operations")
         ("initial-tablets", bpo::value<unsigned>()->default_value(128), "initial number of tablets")
@@ -459,14 +517,28 @@ int scylla_simple_query_main(int argc, char** argv) {
             }
             std::cout << "sstable-format=" << db_cfg->sstable_format() << '\n';
             cql_test_config cfg(db_cfg);
-            if (app.configuration().contains("tablets")) {
+            const auto logstor = app.configuration().contains("logstor");
+            // Logstor is only used with tablets, and its compaction groups are the tablets of the
+            // table, so a logstor run is a tablets run.
+            if (app.configuration().contains("tablets") || logstor) {
                 cfg.db_config->tablets_mode_for_new_keyspaces.set(db::tablets_mode_t::mode::enabled);
                 cfg.initial_tablets = app.configuration()["initial-tablets"].as<unsigned>();
             }
+            std::vector<enum_option<db::experimental_features_t>> experimental_features;
             if (app.configuration().contains("strongly-consistent-tables")) {
-                cfg.db_config->experimental_features({db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES},
-                                                     db::config::config_source::CommandLine);
+                experimental_features.push_back(db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES);
                 cfg.strongly_consistent_tables = true;
+            }
+            if (logstor) {
+                experimental_features.push_back(db::experimental_features_t::feature::LOGSTOR);
+                cfg.db_config->logstor_disk_size_in_mb(app.configuration()["logstor-disk-size-in-mb"].as<unsigned>());
+                cfg.db_config->logstor_file_size_in_mb(app.configuration()["logstor-file-size-in-mb"].as<unsigned>());
+                cfg.db_config->logstor_format_on_startup(app.configuration()["logstor-format-on-startup"].as<bool>());
+                cfg.db_config->logstor_sparse_files(app.configuration()["logstor-sparse-files"].as<bool>());
+                std::cout << "logstor-disk-size-in-mb=" << cfg.db_config->logstor_disk_size_in_mb() << '\n';
+            }
+            if (!experimental_features.empty()) {
+                cfg.db_config->experimental_features(std::move(experimental_features), db::config::config_source::CommandLine);
             }
             set_from_cli("audit", app, cfg.db_config->audit);
             set_from_cli("audit-keyspaces", app, cfg.db_config->audit_keyspaces);
@@ -485,10 +557,14 @@ int scylla_simple_query_main(int argc, char** argv) {
             cfg.counters = app.configuration().contains("counters");
             cfg.flush_memtables = app.configuration().contains("flush");
             cfg.collection = app.configuration()["collection"].as<unsigned>();
+            cfg.logstor = app.configuration().contains("logstor");
             if (cfg.counters && cfg.collection > 0) {
                 throw std::invalid_argument("--collection and --counters are mutually exclusive");
             }
-            if (app.configuration().contains("tablets")) {
+            if (cfg.counters && cfg.logstor) {
+                throw std::invalid_argument("--counters and --logstor are mutually exclusive: logstor does not store counters");
+            }
+            if (app.configuration().contains("tablets") || cfg.logstor) {
                 cfg.initial_tablets = app.configuration()["initial-tablets"].as<unsigned>();
             }
             if (app.configuration().contains("write")) {
@@ -508,6 +584,9 @@ int scylla_simple_query_main(int argc, char** argv) {
             cfg.timeout = app.configuration()["timeout"].as<std::string>();
             cfg.bypass_cache = app.configuration().contains("bypass-cache");
             cfg.shard_aware = app.configuration()["shard-aware"].as<bool>();
+            cfg.auto_compaction = app.configuration().contains("auto-compaction")
+                    ? app.configuration()["auto-compaction"].as<bool>()
+                    : cfg.logstor;
             cfg.consistency_level = db::consistency_level_from_string(app.configuration()["consistency-level"].as<std::string>());
             audit::audit::start_audit(env.local_db().get_config(), env.shared_token_metadata(), env.qp(), env.migration_manager()).handle_exception([&] (auto&& e) {
                 fmt::print("audit start failed: {}", e);
