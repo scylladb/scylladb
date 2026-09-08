@@ -21,6 +21,7 @@
 #include "gms/gossiper.hh"
 #include "utils/chain_abort_source.hh"
 #include "utils/histogram_metrics_helper.hh"
+#include "utils/abstract_formatter.hh"
 
 namespace service::strong_consistency {
 
@@ -270,8 +271,23 @@ future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
     lc.start();
     auto mark_write_latency = defer([this, &lc] noexcept { _stats.write.mark(lc.stop().latency()); });
 
-    locator::tablet_id tid{-1};
-    raft::term_t term;
+    // State of the request as it advances through its stages. Each pointer
+    // is null until the corresponding stage has been reached, so log messages
+    // never print stale or uninitialized values.
+    operation_ctx* op = nullptr;
+    const raft_server::timestamp_with_term* ts_with_term = nullptr;
+
+    // Rendered only when a log line is actually emitted.
+    const auto state_fmt = lambda_formatter([&] (fmt::format_context& ctx) {
+        if (!op) {
+            fmt::format_to(ctx.out(), "no operation context yet");
+        } else if (!ts_with_term) {
+            fmt::format_to(ctx.out(), "tablet {}, no timestamp yet", op->tablet_id);
+        } else {
+            fmt::format_to(ctx.out(), "tablet {}, term {}, timestamp {}",
+                    op->tablet_id, ts_with_term->term, ts_with_term->timestamp);
+        }
+    });
 
     auto filter_error = [&] (std::exception_ptr ex) -> std::exception_ptr {
         // Unfortunately, timeouts can materialize in different forms depending
@@ -291,13 +307,13 @@ future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
             if (!_db.column_family_exists(schema->id())) {
                 return std::make_exception_ptr(replica::no_such_column_family(schema->ks_name(), schema->cf_name()));
             }
-            logger.trace("mutate(): request timed out with error {}, table {}.{}, token {}",
-                ex, schema->ks_name(), schema->cf_name(), token);
+            logger.trace("mutate(): request timed out with error {}, table {}.{}, token {}, {}",
+                ex, schema->ks_name(), schema->cf_name(), token, state_fmt);
             ++_stats.write_errors_timeout;
             return std::make_exception_ptr(write_timeout(schema->ks_name(), schema->cf_name()));
         } else if (try_catch<raft::commit_status_unknown>(ex)) {
-            logger.debug("mutate(): add_entry, got commit_status_unknown {}, table {}.{}, tablet {}, term {}",
-                ex, schema->ks_name(), schema->cf_name(), tid, term);
+            logger.debug("mutate(): add_entry, got commit_status_unknown {}, table {}.{}, {}",
+                ex, schema->ks_name(), schema->cf_name(), state_fmt);
 
             ++_stats.write_errors_status_unknown;
             // FIXME: use a dedicated ERROR_CODE instead of SERVER_ERROR
@@ -306,8 +322,8 @@ future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
                 "Retrying the statement may be necessary."));
         } else {
             ++_stats.write_errors_other;
-            logger.trace("mutate(): unknown exception {}, table {}.{}, token {}",
-                ex, schema->ks_name(), schema->cf_name(), token);
+            logger.trace("mutate(): unknown exception {}, table {}.{}, token {}, {}",
+                ex, schema->ks_name(), schema->cf_name(), token, state_fmt);
             // We know nothing about other errors. Let the CQL server convert them to SERVER_ERROR.
             return ex;
         }
@@ -325,23 +341,27 @@ future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
     if (auto* redirect = get_if<need_redirect>(&op_result)) {
         co_return std::move(*redirect);
     }
-    auto& op = get<operation_ctx>(op_result);
+    op = &get<operation_ctx>(op_result);
 
     while (true) {
+        // `disposition` below is local to one iteration, so the pointer into
+        // it must not survive into the next one.
+        ts_with_term = nullptr;
+
         co_await utils::get_local_injector().inject("sc_coordinator_wait_before_begin_mutate",
             utils::wait_for_message(5min));
 
-        auto disposition = op.raft_server.begin_mutate(aoe.abort_source());
+        auto disposition = op->raft_server.begin_mutate(aoe.abort_source());
         if (const auto* not_a_leader = get_if<raft::not_a_leader>(&disposition)) {
             const auto leader_host_id = locator::host_id{not_a_leader->leader.uuid()};
-            const auto* target = find_replica(op.tablet_info, leader_host_id);
+            const auto* target = find_replica(op->tablet_info, leader_host_id);
             if (!target) {
                 on_internal_error(logger,
                     ::format("table {}.{}, tablet {}, current leader {} is not a replica, replicas {}",
-                        schema->ks_name(), schema->cf_name(), op.tablet_id,
-                        leader_host_id, op.tablet_info.replicas));
+                        schema->ks_name(), schema->cf_name(), op->tablet_id,
+                        leader_host_id, op->tablet_info.replicas));
             }
-            co_return redirect_to_leader(*target, _groups_manager, op.raft_info.group_id);
+            co_return redirect_to_leader(*target, _groups_manager, op->raft_info.group_id);
         }
         if (auto* wait_for_leader = get_if<raft_server::need_wait_for_leader>(&disposition)) {
             auto f = co_await coroutine::as_future(std::move(wait_for_leader->future));
@@ -351,9 +371,7 @@ future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
             continue;
         }
 
-        api::timestamp_type ts;
-        auto disposition_result = get<raft_server::timestamp_with_term>(disposition);
-        std::tie(ts, term) = {disposition_result.timestamp, disposition_result.term};
+        ts_with_term = &get<raft_server::timestamp_with_term>(disposition);
 
         // Nothing between begin_mutate() above and add_entry() below may
         // suspend this coroutine, not even a co_await on a ready future
@@ -367,16 +385,16 @@ future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
         // still wins on the cells they share. Such a history is not
         // linearizable.
         const raft_command command {
-            .mutation{mutation_gen(ts)}
+            .mutation{mutation_gen(ts_with_term->timestamp)}
         };
         raft::command raft_cmd;
         ser::serialize(raft_cmd, command);
 
-        logger.debug("mutate(): add_entry({}), term {}",
-            command.mutation.pretty_printer(schema), term);
+        logger.debug("mutate(): add_entry({}), {}",
+            command.mutation.pretty_printer(schema), state_fmt);
 
         future<> add_entry_result = co_await coroutine::as_future(
-            op.raft_server.server().add_entry(std::move(raft_cmd),
+            op->raft_server.server().add_entry(std::move(raft_cmd),
                 raft::wait_type::committed,
                 &aoe.abort_source()));
 
@@ -386,8 +404,8 @@ future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
 
         auto ex = std::move(add_entry_result).get_exception();
         if (try_catch<raft::not_a_leader>(ex) || try_catch<raft::dropped_entry>(ex)) {
-            logger.debug("mutate(): add_entry, got retriable error {}, table {}.{}, tablet {}, term {}",
-                ex, schema->ks_name(), schema->cf_name(), op.tablet_id, term);
+            logger.debug("mutate(): add_entry, got retriable error {}, table {}.{}, {}",
+                ex, schema->ks_name(), schema->cf_name(), state_fmt);
 
             continue;
         }
