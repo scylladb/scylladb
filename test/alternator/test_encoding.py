@@ -2,19 +2,19 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
-# Tests for the on-disk encoding of Alternator data. Specifically, these
-# tests verify that the internal format used to store DynamoDB attribute
-# values in the underlying Scylla table hasn't accidentally changed. If
-# Alternator's encoding were to change, sstables written by an older version
-# would become unreadable by a newer version - an unacceptable compatibility
-# breakage. So if any of these tests fail, the reason should be carefully
-# analyzed, and the test should only be updated if the encoding change was
-# intentional and backward compatibility was handled.
+# Tests for the way Alternator stores its data in Scylla: the encoding of the
+# attribute values, and the keyspace and CQL schema holding them. These tests verify that
+# this internal representation hasn't accidentally changed - if it did, data
+# written by an older version would become unreadable or inaccessible to a
+# newer version, an unacceptable compatibility breakage. So if any of these
+# tests fail, the reason should be carefully analyzed, and the test should
+# only be updated if the change was intentional and backward compatibility
+# was handled.
 #
 # Background on the encoding (see also issue #19770):
 # Alternator stores each DynamoDB table in keyspace "alternator_{table_name}",
 # table "{table_name}". The key attributes (hash key and optional range key)
-# are stored as regular CQL columns with their native CQL types (text for S,
+# are stored as separate CQL columns with their native CQL types (text for S,
 # blob for B, decimal for N). All other (non-key) attributes are stored
 # together in a single CQL column named ":attrs" of type map<text, blob>.
 # The map key is the attribute name; the map value encodes the type and value
@@ -42,7 +42,9 @@ from decimal import Decimal
 
 import pytest
 
-from .util import new_test_table, random_string
+from .util import new_test_table, precreated_keyspace, random_string, scylla_config_read, tablets_option, unique_table_name, wait_for_gsi
+from test.cqlpy.util import keyspace_has_tablets
+from test.pylib.skip_types import skip_env
 
 # All tests in this file are scylla-only (they access CQL internals)
 @pytest.fixture(scope="function", autouse=True)
@@ -309,3 +311,84 @@ def test_index_key_not_schema_column(dynamodb, cql, table_with_indexes):
     # (type byte 0x00 followed by raw UTF-8 bytes).
     assert attrs['x'] == b'\x00' + b'hello'
     assert attrs['y'] == b'\x00' + b'world'
+
+# The enforced tablets mode refuses to create a keyspace with vnodes, so a test
+# that needs one cannot run.
+def skip_if_tablets_enforced(dynamodb):
+    if scylla_config_read(dynamodb, 'tablets_mode_for_new_keyspaces') == '"enforced"':
+        skip_env('Cannot pre-create a keyspace with vnodes when tablets are enforced')
+
+# The keyspace which a user pre-created with CQL is used as it is: Alternator
+# creates the table in it without touching its configuration. Check this with
+# an option Alternator never sets itself, so that the pre-creation technique
+# stays tested once tablets are the only option left.
+def test_precreated_keyspace(dynamodb, cql):
+    name = unique_table_name()
+    with precreated_keyspace(cql, name, 'AND DURABLE_WRITES = false'):
+        with new_test_table(dynamodb, name=name,
+                KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+                AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
+            assert not cql.execute("SELECT durable_writes FROM system_schema.keyspaces "
+                f"WHERE keyspace_name = 'alternator_{name}'").one().durable_writes
+            # Sanity check that the table in this keyspace is usable.
+            p = random_string()
+            table.put_item(Item={'p': p, 'x': 'hello'})
+            assert table.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'x': 'hello'}
+
+# A table lands in the pre-created keyspace, so it is that keyspace - and not
+# the "system:initial_tablets" tag, which only configures a keyspace Alternator
+# creates itself - that decides whether the table uses tablets or vnodes.
+@pytest.mark.parametrize('tablets', [False, True])
+def test_precreated_keyspace_tablets(dynamodb, cql, tablets):
+    if not tablets:
+        skip_if_tablets_enforced(dynamodb)
+    name = unique_table_name()
+    with precreated_keyspace(cql, name, tablets_option(tablets)):
+        # Ask, via the tag, for the opposite of what the keyspace was pre-created with.
+        with new_test_table(dynamodb, name=name,
+                Tags=[{'Key': 'system:initial_tablets', 'Value': 'none' if tablets else '0'}],
+                KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+                AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]):
+            assert keyspace_has_tablets(cql, 'alternator_' + name) == tablets
+
+# CreateTable pre-marks the views implementing a table's GSIs as built when the
+# table uses tablets. Here the pre-created keyspace uses tablets while the tag
+# asks for vnodes - if the views are left unmarked, the GSI remains in
+# IndexStatus CREATING forever. Reproduces SCYLLADB-3976.
+def test_precreated_keyspace_gsi(dynamodb, cql):
+    name = unique_table_name()
+    with precreated_keyspace(cql, name, tablets_option(True)):
+        with new_test_table(dynamodb, name=name,
+                Tags=[{'Key': 'system:initial_tablets', 'Value': 'none'}],
+                KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+                AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'},
+                                      {'AttributeName': 'x', 'AttributeType': 'S'}],
+                GlobalSecondaryIndexes=[{'IndexName': 'gsi',
+                    'KeySchema': [{'AttributeName': 'x', 'KeyType': 'HASH'}],
+                    'Projection': {'ProjectionType': 'ALL'}}]) as table:
+            # Without this the test would pass vacuously: a GSI on a keyspace
+            # using vnodes becomes ACTIVE anyway.
+            assert keyspace_has_tablets(cql, 'alternator_' + name)
+            wait_for_gsi(table, 'gsi')
+
+# Alternator Streams block tablet merges, which would otherwise produce shards
+# incompatible with the Streams API - but only on a table that uses tablets, so
+# here too the pre-created keyspace, and not the tag, has to decide.
+# The assertion below is on that mechanism, not on a guarantee: once Streams can
+# cope with merged tablets and the blocking goes away, this test starts failing,
+# and should be dropped along with the mechanism rather than repaired.
+@pytest.mark.parametrize('tablets', [False, True])
+def test_precreated_keyspace_streams(dynamodb, cql, tablets):
+    if not tablets:
+        skip_if_tablets_enforced(dynamodb)
+    name = unique_table_name()
+    with precreated_keyspace(cql, name, tablets_option(tablets)):
+        # Ask, via the tag, for the opposite of what the keyspace was pre-created with.
+        with new_test_table(dynamodb, name=name,
+                Tags=[{'Key': 'system:initial_tablets', 'Value': 'none' if tablets else '0'}],
+                KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+                AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}],
+                StreamSpecification={'StreamEnabled': True, 'StreamViewType': 'KEYS_ONLY'}):
+            desc = [row.create_statement for row in
+                    cql.execute(f'DESC TABLE "alternator_{name}"."{name}"')]
+            assert any("'tablet_merge_blocked': 'true'" in s for s in desc) == tablets

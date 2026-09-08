@@ -2084,4 +2084,42 @@ async def test_alternator_mtls_and_plain_http(manager: ManagerClient, tmp_path):
         alternator_bad.meta.client.list_tables()
 
 
-
+# The rule: a GSI is a materialized view, and a keyspace holding views must be
+# RF-rack-valid while it uses tablets - the replication factor of a datacenter
+# has to match its rack count. CreateTable rejects a GSI that would break this.
+#
+# The interesting case: when the CreateTable request asks for vnodes through
+# the "system:initial_tablets" tag, the RF-rack validity check is skipped,
+# because the rule covers tablets only. That is wrong when the keyspace was
+# pre-created with tablets, because the table lands in that keyspace anyway:
+# the GSI gets created whatever the racks look like.
+#
+# What the test pins down: it pre-creates a tablets keyspace whose RF does not
+# match the rack count, and then creates a table with a GSI asking for vnodes.
+# The RF-rack-invalid error is the proof that the table went into the
+# pre-created keyspace and was checked against it - had the tag been believed,
+# the GSI would just have been created.
+async def test_gsi_in_precreated_rf_rack_invalid_keyspace(manager: ManagerClient):
+    # Two nodes in one rack, and rf_rack_valid_keyspaces off so that an
+    # RF-rack-invalid keyspace with RF=2 can be created at all.
+    servers = await manager.servers_add(2,
+        config=alternator_config | {'rf_rack_valid_keyspaces': False},
+        property_file={'dc': 'dc1', 'rack': 'rack1'})
+    cql = manager.get_cql()
+    alternator = get_alternator(servers[0].ip_addr)
+    name = unique_table_name()
+    cql.execute(f'CREATE KEYSPACE "alternator_{name}" WITH REPLICATION = '
+        "{'class': 'NetworkTopologyStrategy', 'dc1': 2} AND TABLETS = {'enabled': true}")
+    try:
+        with pytest.raises(ClientError, match='ValidationException.*racks'):
+            alternator.create_table(TableName=name,
+                Tags=[{'Key': 'system:initial_tablets', 'Value': 'none'}],
+                BillingMode='PAY_PER_REQUEST',
+                KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+                AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'},
+                                      {'AttributeName': 'x', 'AttributeType': 'S'}],
+                GlobalSecondaryIndexes=[{'IndexName': 'gsi',
+                    'KeySchema': [{'AttributeName': 'x', 'KeyType': 'HASH'}],
+                    'Projection': {'ProjectionType': 'ALL'}}])
+    finally:
+        cql.execute(f'DROP KEYSPACE IF EXISTS "alternator_{name}"')
