@@ -26,7 +26,6 @@
 #include "locator/abstract_replication_strategy.hh"
 #include "utils/log.hh"
 #include "schema/schema_builder.hh"
-#include "exceptions/exceptions.hh"
 #include "service/client_state.hh"
 #include "mutation/timestamp.hh"
 #include "types/map.hh"
@@ -1721,7 +1720,8 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
     co_await verify_create_permission(enforce_authorization, warn_authorization, client_state, _stats);
 
     if (stream_enabled) {
-        const bool uses_tablets = get_initial_tablet_count(tags_map, _proxy.features(), tablets_mode).has_value();
+        auto existing_ks = _proxy.data_dictionary().try_find_keyspace(keyspace_name);
+        const bool uses_tablets = existing_ks ? existing_ks->uses_tablets() : get_initial_tablet_count(tags_map, _proxy.features(), tablets_mode).has_value();
         if (uses_tablets) {
             if (!_proxy.features().cdc_block_tablet_merges_for_alternator_streams) {
                 co_return api_error::validation(
@@ -1751,7 +1751,8 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
         auto group0_guard = co_await _mm.start_group0_operation();
         auto ts = group0_guard.write_timestamp();
         utils::chunked_vector<mutation> schema_mutations;
-        auto ksm = create_keyspace_metadata(keyspace_name, _proxy, _gossiper, ts, tags_map, _proxy.features(), tablets_mode);
+        auto existing_ks = _proxy.data_dictionary().try_find_keyspace(keyspace_name);
+        auto ksm = existing_ks ? existing_ks->metadata() : create_keyspace_metadata(keyspace_name, _proxy, _gossiper, ts, tags_map, _proxy.features(), tablets_mode);
         locator::replication_strategy_params params(ksm->strategy_options(), ksm->initial_tablets(), ksm->consistency_option());
         const auto& topo = _proxy.local_db().get_token_metadata().get_topology();
         auto rs = locator::abstract_replication_strategy::create_replication_strategy(ksm->strategy_name(), params, topo);
@@ -1780,12 +1781,10 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
             }
         }
         bool table_already_exists = false;
-        try {
+        if (existing_ks) {
+            table_already_exists = _proxy.data_dictionary().has_schema(keyspace_name, table_name);
+        } else {
             schema_mutations = service::prepare_new_keyspace_announcement(_proxy.local_db(), ksm, ts);
-        } catch (exceptions::already_exists_exception&) {
-            if (_proxy.data_dictionary().has_schema(keyspace_name, table_name)) {
-                table_already_exists = true;
-            }
         }
         if (table_already_exists) {
             // The user may have retried a CreateTable operation after it timed
