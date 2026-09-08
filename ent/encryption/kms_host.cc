@@ -970,6 +970,16 @@ future<encryption::kms_host::impl::key_and_id_type> encryption::kms_host::impl::
         *i++ = ':';
         std::copy(enc.begin(), enc.end(), i);
 
+        id_cache_key key2 {
+            .id = id,
+            .aws_assume_role_arn = k.aws_assume_role_arn
+        };
+        co_await _id_cache.insert(key2, [&](const id_cache_key& kin) -> future<bytes>{
+            assert(kin.id == key2.id);
+            assert(kin.aws_assume_role_arn == key2.aws_assume_role_arn);
+            co_return key->key();
+        });
+
         co_return key_and_id_type{ key, id };
     } catch (std::invalid_argument& e) {
         std::throw_with_nested(configuration_error(e.what()));

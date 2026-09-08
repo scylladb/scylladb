@@ -446,6 +446,15 @@ future<azure_host::key_and_id_type> azure_host::impl::create_key(const attr_cach
     bytes id(sid.begin(), sid.end());
 
     azlog.trace("[{}] Created key id {}", _log_prefix, sid);
+
+    id_cache_key key2 {
+        .id = id,
+    };
+    co_await _id_cache.insert(key2, [&](const id_cache_key& kin) -> future<bytes>{
+        assert(kin.id == key2.id);
+        co_return key->key();
+    });
+
     co_return key_and_id_type{ key, id };
 }
 
