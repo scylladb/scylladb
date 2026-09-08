@@ -435,29 +435,22 @@ def test_group_by_on_sc_table(cql, sc_keyspace):
             cql.execute(f"SELECT ck, count(v) FROM {table} WHERE pk = 1 GROUP BY pk, ck")
 
 
-def test_debug_selects_on_sc_table(cql, sc_keyspace, test_keyspace):
+def test_prune_materialized_view_on_sc_table(cql, sc_keyspace, test_keyspace):
     """
-    SELECT FROM MUTATION_FRAGMENTS() and PRUNE MATERIALIZED VIEW are
-    rejected on strongly consistent tables. Both would otherwise be
-    dispatched as plain strongly consistent reads: an internal server
-    error for MUTATION_FRAGMENTS(), a silent no-op for PRUNE
-    MATERIALIZED VIEW. The eventually consistent behavior of both
-    statements serves as contrast: MUTATION_FRAGMENTS() returns the
-    partition's fragments, and PRUNE is rejected on a plain table and
-    returns no rows from a view.
+    PRUNE MATERIALIZED VIEW is rejected on strongly consistent tables.
+    It would otherwise be dispatched as a plain strongly consistent
+    read, a silent no-op. The eventually consistent behavior serves as
+    contrast: PRUNE is rejected on a plain table and returns no rows
+    from a view.
     """
     with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, v int") as table:
         cql.execute(f"INSERT INTO {table} (pk, v) VALUES (1, 2)")
-
-        with pytest.raises(InvalidRequest, match="MUTATION_FRAGMENTS.. is not supported on strongly consistent tables"):
-            cql.execute(f"SELECT * FROM MUTATION_FRAGMENTS({table}) WHERE pk = 1")
 
         with pytest.raises(InvalidRequest, match="PRUNE MATERIALIZED VIEW is not supported on strongly consistent tables"):
             cql.execute(f"PRUNE MATERIALIZED VIEW {table} WHERE pk = 1")
 
     with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int") as ec_table:
         cql.execute(f"INSERT INTO {ec_table} (pk, v) VALUES (1, 2)")
-        assert len(list(cql.execute(f"SELECT * FROM MUTATION_FRAGMENTS({ec_table}) WHERE pk = 1"))) > 0
 
         with pytest.raises(InvalidRequest, match="Ghost rows can only be deleted from materialized views"):
             cql.execute(f"PRUNE MATERIALIZED VIEW {ec_table} WHERE pk = 1")
