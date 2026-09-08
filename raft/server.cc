@@ -1483,8 +1483,15 @@ future<> server_impl::applier_fiber() {
                     try {
                         co_await _state_machine->apply(std::move(commands));
                     } catch (abort_requested_exception& e) {
-                        logger.info("[{}] applier fiber stopped because state machine was aborted: {}", _tag, e);
-                        throw stop_apply_fiber{};
+                        if (_aborted) {
+                            logger.debug("[{}] applier fiber stopped because state machine was aborted: {}", _tag, e);
+                            throw stop_apply_fiber{};
+                        } else {
+                            // Not our abort: the state machine failed.
+                            logger.debug("[{}] applier fiber interrupted at apply() despite "
+                                    "not having been aborted: {}", _tag, e);
+                            std::throw_with_nested(raft::state_machine_error{});
+                        }
                     } catch (...) {
                         std::throw_with_nested(raft::state_machine_error{});
                     }
@@ -1585,6 +1592,15 @@ future<> server_impl::applier_fiber() {
         }
     } catch(stop_apply_fiber& ex) {
         // the fiber is aborted
+    } catch (const abort_requested_exception& ex) {
+        // The state machine was aborted while we were inside take_snapshot()
+        // or load_snapshot(); apply() is handled above. Expected only while the
+        // server is being aborted, otherwise the state machine failed.
+        if (!_aborted) {
+            handle_background_error("applier");
+        } else {
+            logger.debug("[{}] applier fiber stopped because state machine was aborted: {}", _tag, ex);
+        }
     } catch (...) {
         handle_background_error("applier");
     }
