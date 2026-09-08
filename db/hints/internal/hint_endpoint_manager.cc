@@ -215,9 +215,13 @@ future<db::commitlog> hint_endpoint_manager::add_store() noexcept {
         return io_check([name = _hints_dir.c_str()] { return recursive_touch_directory(name); }).then([this] () {
             commitlog::config cfg;
 
+            const auto segment_size_in_mb = utils::get_local_injector().enter("decrease_hint_segment_size")
+                    ? 1
+                    : resource_manager::hint_segment_size_in_mb;
+
             cfg.sched_group = _shard_manager.local_db().commitlog()->active_config().sched_group;
             cfg.commit_log_location = _hints_dir.c_str();
-            cfg.commitlog_segment_size_in_mb = resource_manager::hint_segment_size_in_mb;
+            cfg.commitlog_segment_size_in_mb = segment_size_in_mb;
             cfg.commitlog_total_space_in_mb = resource_manager::max_hints_per_ep_size_mb;
             cfg.fname_prefix = manager::FILENAME_PREFIX;
             cfg.extensions = &_shard_manager.local_db().extensions();
