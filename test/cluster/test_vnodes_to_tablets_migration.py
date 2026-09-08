@@ -1579,3 +1579,105 @@ async def test_migration_status_api_with_rf_zero_dc(manager: ScyllaClusterManage
 
         logger.info("Verifying data integrity after finalization")
         await verify_data_integrity(cql, ks, "test", num_keys, cl=ConsistencyLevel.ONE)
+
+
+async def test_migration_status_reset_between_migrations(manager: ScyllaClusterManager):
+    """Verify that a node's recorded storage mode does not leak into the next migration.
+
+    The mode a node runs in is recorded per node, not per keyspace, and it is cleared
+    when a migration is finalized. Without that clearing, a node that migrated one
+    keyspace would look as if it had already switched for the next keyspace as well -
+    before it restarted, and therefore before its tables for that keyspace got their
+    tablet flavor.
+
+    Steps:
+    1. Start a single node and create two vnode keyspaces.
+    2. Migrate and finalize the first keyspace, so the node ends up running in tablets mode.
+    3. Start a migration for the second keyspace and verify the node reports vnodes.
+    4. Mark and restart it, verify it reports tablets, then finalize.
+    """
+    num_keys = 100
+
+    logger.info("Starting a single node")
+    cfg = {'tablet_load_stats_refresh_interval_in_seconds': 1, 'num_tokens': 16}
+    servers = await manager.servers_add(1, cmdline=['--smp', '2'], config=cfg)
+    server = servers[0]
+    host_id = await manager.get_host_id(server.server_id)
+
+    cql, _ = await manager.get_ready_cql(servers)
+
+    ks_opts = "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}"
+    async with new_test_keyspace(manager, ks_opts) as ks1:
+        async with new_test_keyspace(manager, ks_opts) as ks2:
+            for ks in (ks1, ks2):
+                await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+                stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, c) VALUES (?, ?)")
+                await asyncio.gather(*(cql.run_async(stmt, [k, k]) for k in range(num_keys)))
+
+            logger.info(f"Migrating {ks1}")
+            await manager.api.create_vnode_tablet_migration(server.ip_addr, ks1)
+            await manager.api.upgrade_node_to_tablets(server.ip_addr)
+            await manager.server_restart(server.server_id)
+            await reconnect_driver(manager)
+            cql, _ = await manager.get_ready_cql(servers)
+
+            await verify_migration_status(manager, server, ks1,
+                expected_status='migrating_to_tablets',
+                expected_node_statuses={host_id: ('tablets', 'tablets')})
+
+            logger.info(f"Finalizing the migration of {ks1}")
+            await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks1)
+            await read_barrier(manager.api, server.ip_addr)
+
+            # Let the post-finalization tablet merge settle, so the restarts below do
+            # not land mid-merge.
+            logger.info(f"Waiting for pow2 convergence of {ks1}")
+            await wait_for_pow2_convergence(manager, server, ks1, 'test')
+
+            logger.info("Verifying both storage mode columns are cleared after finalization")
+            rows = await cql.run_async("SELECT intended_storage_mode, current_storage_mode FROM system.topology WHERE key = 'topology'")
+            assert len(rows) == 1, f"Expected 1 row, got {len(rows)}"
+            assert rows[0].intended_storage_mode is None and rows[0].current_storage_mode is None, \
+                f"Expected both storage modes cleared, got intended='{rows[0].intended_storage_mode}' " \
+                f"current='{rows[0].current_storage_mode}'"
+
+            # A node only publishes the mode while an intent is recorded for it, so a
+            # restart outside a migration must not put the column back.
+            logger.info("Restarting the node outside a migration and rechecking the columns")
+            await manager.server_restart(server.server_id)
+            await reconnect_driver(manager)
+            cql, _ = await manager.get_ready_cql(servers)
+            await read_barrier(manager.api, server.ip_addr)
+            rows = await cql.run_async("SELECT intended_storage_mode, current_storage_mode FROM system.topology WHERE key = 'topology'")
+            assert rows[0].intended_storage_mode is None and rows[0].current_storage_mode is None, \
+                f"Restart outside a migration resurrected a storage mode: intended='{rows[0].intended_storage_mode}' " \
+                f"current='{rows[0].current_storage_mode}'"
+
+            # The node runs tablet-flavored tables for ks1 now, but its tables for ks2 were
+            # built before ks2 had a tablet map, so it has to restart again. The status must
+            # say so instead of reporting the mode left over from the previous migration.
+            logger.info(f"Starting a migration for {ks2} and verifying the node reports vnodes")
+            await manager.api.create_vnode_tablet_migration(server.ip_addr, ks2)
+            await verify_migration_status(manager, server, ks2,
+                expected_status='migrating_to_tablets',
+                expected_node_statuses={host_id: ('vnodes', 'vnodes')})
+
+            logger.info(f"Marking and restarting the node for {ks2}")
+            await manager.api.upgrade_node_to_tablets(server.ip_addr)
+            await manager.server_restart(server.server_id)
+            await reconnect_driver(manager)
+            cql, _ = await manager.get_ready_cql(servers)
+
+            await verify_migration_status(manager, server, ks2,
+                expected_status='migrating_to_tablets',
+                expected_node_statuses={host_id: ('tablets', 'tablets')})
+
+            logger.info(f"Finalizing the migration of {ks2}")
+            await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks2)
+            await read_barrier(manager.api, server.ip_addr)
+
+            logger.info("Verifying both keyspaces use tablets")
+            for ks in (ks1, ks2):
+                res = await cql.run_async(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{ks}'")
+                assert len(res) == 1 and res[0].initial_tablets is not None, \
+                    f"Keyspace {ks} is still using vnodes after migration finalization"
