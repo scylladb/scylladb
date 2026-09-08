@@ -26,6 +26,7 @@
 #include "azure_host.hh"
 #include "encryption.hh"
 #include "encryption_exceptions.hh"
+#include "key_cache.hh"
 
 using namespace std::chrono_literals;
 
@@ -120,17 +121,8 @@ private:
 
     friend struct fmt::formatter<id_cache_key>;
 
-    template<typename Key, typename Value, typename Hash>
-    using cache_type = utils::loading_cache<
-        Key,
-        Value,
-        2,
-        utils::loading_cache_reload_enabled::yes,
-        utils::simple_entry_size<Value>,
-        Hash
-    >;
-    cache_type<attr_cache_key, key_and_id_type, attr_cache_key_hash> _attr_cache;
-    cache_type<id_cache_key, bytes, id_cache_key_hash> _id_cache;
+    attr_cache<attr_cache_key, key_and_id_type, attr_cache_key_hash> _attr_cache;
+    id_cache<id_cache_key, bytes, id_cache_key_hash> _id_cache;
 
     static constexpr char AKV_HOST_TEMPLATE[] = "{}.vault.azure.net";
     static constexpr char AKV_PATH_TEMPLATE[] = "/keys/{}/{}/{}?api-version=7.4";
