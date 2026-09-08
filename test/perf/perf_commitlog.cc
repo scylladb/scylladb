@@ -243,7 +243,7 @@ int main(int argc, char** argv) {
 
         try {
             if (cfg.max_data_size > test_commitlog.local().log->max_record_size()) {
-                throw std::invalid_argument(sstring("Too large max data size: ") + std::to_string(cfg.max_data_size));
+                throw std::invalid_argument("Too large max data size: " + std::to_string(cfg.max_data_size));
             }
             // test "framework" expects seastar thread
             auto results = co_await seastar::async([&] {

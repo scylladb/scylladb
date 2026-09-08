@@ -1582,7 +1582,7 @@ schema_builder::default_names::default_names(const schema::raw_schema& raw)
 
 sstring schema_builder::default_names::unique_name(const sstring& base, size_t& idx, size_t off) const {
     for (;;) {
-        auto candidate = idx == 0 ? base : base + std::to_string(idx + off);
+        auto candidate = idx == 0 ? base : seastar::format("{}{}", base, idx + off);
         ++idx;
         auto i = std::find_if(_raw._columns.begin(), _raw._columns.end(), [b = to_bytes(candidate)](const column_definition& c) {
             return c.name() == b;

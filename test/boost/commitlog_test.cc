@@ -1751,7 +1751,7 @@ SEASTAR_TEST_CASE(test_delete_recycled_segment_removes_size) {
     // Add a bunch of fake segments (pretending replayed). The total footprint will be much 
     // more than above limit.
     for (int i = 0; i < 20; ++i) {
-        fakes.emplace_back(cfg.commit_log_location + "/fake" + std::to_string(i) + ".log");
+        fakes.emplace_back(seastar::format("{}/fake{}.log", cfg.commit_log_location, i));
 
         auto f = co_await open_file_dma(fakes.back(), open_flags::wo|open_flags::create);
         co_await f.truncate(max_file_size_bytes);

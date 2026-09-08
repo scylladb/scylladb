@@ -59,11 +59,10 @@ shared_ptr<key_provider> gcp_key_provider_factory::get_provider(encryption_conte
     }
 
     auto host = ctxt.get_gcp_host(*gcp_host);
-    auto id = gcp_host.value()
-        + ":" + oov.master_key.value_or(host->options().master_key)
-        + ":" + oov.gcp_credentials_file.value_or(host->options().gcp_credentials_file)
-        + ":" + oov.gcp_impersonate_service_account.value_or(host->options().gcp_impersonate_service_account)
-        ;
+    auto id = seastar::format("{}:{}:{}:{}", gcp_host.value(),
+        oov.master_key.value_or(host->options().master_key),
+        oov.gcp_credentials_file.value_or(host->options().gcp_credentials_file),
+        oov.gcp_impersonate_service_account.value_or(host->options().gcp_impersonate_service_account));
 
     auto provider = ctxt.get_cached_provider(id);
 

@@ -168,7 +168,7 @@ sstring get_available_index_name(
         return !has_schema(ks_name, index_table_name) && !existing_names.contains(accepted_name);
     };
     while (!name_accepted()) {
-        accepted_name = base_name + "_" + std::to_string(++i);
+        accepted_name = seastar::format("{}_{}", base_name, ++i);
     }
     return accepted_name;
 }

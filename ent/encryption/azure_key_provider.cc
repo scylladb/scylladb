@@ -52,7 +52,7 @@ shared_ptr<key_provider> azure_key_provider_factory::get_provider(encryption_con
     };
 
     auto host = ctxt.get_azure_host(*azure_host);
-    auto id = azure_host.value() + ":" + oov.master_key.value_or(host->options().master_key);
+    auto id = seastar::format("{}:{}", azure_host.value(), oov.master_key.value_or(host->options().master_key));
 
     auto provider = ctxt.get_cached_provider(id);
 

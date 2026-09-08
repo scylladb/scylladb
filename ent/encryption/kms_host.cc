@@ -602,9 +602,8 @@ future<rjson::value> encryption::kms_host::impl::do_post(std::string_view target
             .host = sts_host,
             .service = "sts",
             .content_type = "application/x-www-form-urlencoded; charset=utf-8",
-            .content = "Action=AssumeRole&Version=2011-06-15&RoleArn=" 
-                + seastar::http::internal::url_encode(aws_assume_role_arn)
-                + "&RoleSessionName=" + role_session,
+            .content = seastar::format("Action=AssumeRole&Version=2011-06-15&RoleArn={}&RoleSessionName={}",
+                seastar::http::internal::url_encode(aws_assume_role_arn), role_session),
             .aws_access_key_id = aws_access_key_id,
             .aws_secret_access_key = aws_secret_access_key,
             .security_token = session,

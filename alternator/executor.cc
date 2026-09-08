@@ -4673,7 +4673,7 @@ future<executor::request_return_type> executor::describe_continuous_backups(clie
     // table doesn't exists, this operation returns a TableNoteFoundException.
     // So we can't use the usual get_table() wrapper and need a bit more code:
     std::string table_name = get_table_name(request);
-    sstring ks_name = sstring(executor::KEYSPACE_NAME_PREFIX) + table_name;
+    sstring ks_name = seastar::format("{}{}", executor::KEYSPACE_NAME_PREFIX, table_name);
     maybe_audit(audit_info, audit::statement_category::QUERY, ks_name, table_name, "DescribeContinuousBackups", request);
     schema_ptr schema;
     try {

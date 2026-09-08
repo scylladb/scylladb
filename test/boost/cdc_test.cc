@@ -613,7 +613,8 @@ SEASTAR_THREAD_TEST_CASE(test_pre_post_image_logging) {
             for (auto i = 0u; i < 10; ++i) {
                 auto nv = last + 1;
                 const int64_t new_ttl = 100 * (i + 1);
-                cquery_nofail(e, "UPDATE ks.tbl" + (with_ttl ? format(" USING TTL {}", new_ttl) : "") + " SET val=" + std::to_string(nv) +" where pk=1 AND pk2=11 AND ck=111 AND ck2=1111");
+                cquery_nofail(e, seastar::format("UPDATE ks.tbl{} SET val={} where pk=1 AND pk2=11 AND ck=111 AND ck2=1111",
+                        with_ttl ? seastar::format(" USING TTL {}", new_ttl) : "", nv));
 
                 rows = select_log(e, "tbl");
 
@@ -708,7 +709,8 @@ SEASTAR_THREAD_TEST_CASE(test_pre_post_image_logging_static_row) {
             for (auto i = 0u; i < 10; ++i) {
                 auto nv = last + 1;
                 const int64_t new_ttl = 100 * (i + 1);
-                cquery_nofail(e, "UPDATE ks.tbl" + (with_ttl ? format(" USING TTL {}", new_ttl) : "") + " SET s=" + std::to_string(nv) +" where pk=1 AND pk2=11");
+                cquery_nofail(e, seastar::format("UPDATE ks.tbl{} SET s={} where pk=1 AND pk2=11",
+                        with_ttl ? seastar::format(" USING TTL {}", new_ttl) : "", nv));
 
                 rows = select_log(e, "tbl");
 

@@ -453,7 +453,7 @@ shared_ptr<key_provider> replicated_key_provider_factory::get_provider(encryptio
         throw std::invalid_argument("system key and local key cannot be the same");
     }
 
-    auto name = system_key->name() + ":" + local_key_file.string();
+    auto name = seastar::format("{}:{}", system_key->name(), local_key_file.string());
     auto debug = opts("DEBUG");
     if (debug) {
         name = name + ":" + *debug;

@@ -591,8 +591,8 @@ private:
             create_directories(cfg->hints_directory().c_str());
             create_directories(cfg->view_hints_directory().c_str());
             for (unsigned i = 0; i < this_smp_shard_count(); ++i) {
-                create_directories((cfg->hints_directory() + "/" + std::to_string(i)).c_str());
-                create_directories((cfg->view_hints_directory() + "/" + std::to_string(i)).c_str());
+                create_directories(seastar::format("{}/{}", cfg->hints_directory(), i).c_str());
+                create_directories(seastar::format("{}/{}", cfg->view_hints_directory(), i).c_str());
             }
 
             if (!cfg->max_memory_for_unlimited_query_soft_limit.is_set()) {

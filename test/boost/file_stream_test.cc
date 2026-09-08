@@ -95,7 +95,7 @@ static sstring make_storage_clause(const data_dictionary::storage_options& so) {
 }
 
 static future<bool>
-do_test_file_stream(replica::database& db, netw::messaging_service& ms, std::vector<sstring> filelist, const std::string& suffix, bool inject_error, bool unsupported_file_ops = false) {
+do_test_file_stream(replica::database& db, netw::messaging_service& ms, std::vector<sstring> filelist, const sstring& suffix, bool inject_error, bool unsupported_file_ops = false) {
     bool ret = false;
     bool verb_register = false;
     auto ops_id = file_stream_id::create_random_id();
@@ -321,7 +321,7 @@ void do_test_file_stream(bool inject_error) {
     std::vector<sstring> hash_rx;
     size_t nr_files = 10;
     size_t file_size = 0;
-    static const std::string suffix = ".rx";
+    static const sstring suffix = ".rx";
 
     while (files.size() != nr_files) {
         auto name = generate_random_filename();

@@ -63,7 +63,7 @@ shared_ptr<key_provider> kmip_key_provider_factory::get_provider(encryption_cont
                     opts(KEY_NAMESPACE).value_or(""),
     };
 
-    auto cache_key = *host + ":" + boost::lexical_cast<std::string>(kopts);
+    auto cache_key = seastar::format("{}:{}", *host, boost::lexical_cast<std::string>(kopts));
     auto provider = ctxt.get_cached_provider(cache_key);
 
     if (!provider) {
