@@ -314,7 +314,7 @@ SEASTAR_TEST_CASE(test_sstable_set_fast_forward_by_cache_reader_simulation) {
 
 static future<> guarantee_all_tablet_replicas_on_shard0(cql_test_env& env) {
     auto& ss = env.get_storage_service().local();
-    auto& stm = env.get_shared_token_metadata().local();
+    auto& stm = env.shared_token_metadata().local();
     auto my_host_id = ss.get_token_metadata_ptr()->get_topology().my_host_id();
 
     co_await ss.set_tablet_balancing_enabled(false);
@@ -330,7 +330,7 @@ static void mutate_tablet_map(cql_test_env& env,
                               seastar::noncopyable_function<future<>(locator::tablet_map&)> updater) {
     seastar::abort_source as;
     auto guard = env.get_raft_group0_client().start_operation(as).get();
-    auto& stm = env.get_shared_token_metadata().local();
+    auto& stm = env.shared_token_metadata().local();
     stm.mutate_token_metadata([table, updater = std::move(updater)] (auto& tm) mutable -> future<> {
         return tm.tablets().mutate_tablet_map_async(table, std::move(updater));
     }).get();
@@ -523,7 +523,7 @@ SEASTAR_TEST_CASE(test_tablet_sstable_set_preserves_arbitrary_boundaries) {
         auto& sgm = column_family_test::get_storage_group_manager(table);
         std::ranges::sort(emitted_keys, dht::decorated_key::less_comparator(s));
 
-        auto original_tmap = env.get_shared_token_metadata().local().get()->tablets().get_tablet_map(s->id()).clone();
+        auto original_tmap = env.local_token_metadata_ptr()->tablets().get_tablet_map(s->id()).clone();
         auto last_tokens = original_tmap.get_sorted_tokens().get();
         auto raw_last_tokens = last_tokens
                 | std::views::transform([] (dht::token t) { return dht::raw_token(t); })

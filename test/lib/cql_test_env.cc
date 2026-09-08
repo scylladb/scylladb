@@ -449,10 +449,6 @@ public:
         return _task_manager;
     }
 
-    virtual sharded<locator::shared_token_metadata>& get_shared_token_metadata() override {
-        return _token_metadata;
-    }
-
     virtual sharded<service::topology_state_machine>& get_topology_state_machine() override {
         return _topology_state_machine;
     }

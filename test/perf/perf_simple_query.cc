@@ -515,7 +515,7 @@ int scylla_simple_query_main(int argc, char** argv) {
             cfg.bypass_cache = app.configuration().contains("bypass-cache");
             cfg.shard_aware = app.configuration()["shard-aware"].as<bool>();
             cfg.consistency_level = db::consistency_level_from_string(app.configuration()["consistency-level"].as<std::string>());
-            audit::audit::start_audit(env.local_db().get_config(), env.get_shared_token_metadata(), env.qp(), env.migration_manager()).handle_exception([&] (auto&& e) {
+            audit::audit::start_audit(env.local_db().get_config(), env.shared_token_metadata(), env.qp(), env.migration_manager()).handle_exception([&] (auto&& e) {
                 fmt::print("audit start failed: {}", e);
             }).get();
             audit::audit::start_storage(env.local_db().get_config()).get();

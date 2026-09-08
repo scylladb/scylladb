@@ -164,6 +164,12 @@ public:
 
     virtual sharded<locator::shared_token_metadata>& shared_token_metadata() = 0;
 
+    // Convenience wrapper for the most common shared_token_metadata() access
+    // pattern: grab a token_metadata_ptr for the current shard.
+    locator::token_metadata_ptr local_token_metadata_ptr() {
+        return shared_token_metadata().local().get();
+    }
+
     virtual cql3::query_processor& local_qp() = 0;
 
     virtual sharded<replica::database>& db() = 0;
@@ -212,8 +218,6 @@ public:
     virtual sharded<service::storage_service>& get_storage_service() = 0;
 
     virtual sharded<tasks::task_manager>& get_task_manager() = 0;
-
-    virtual sharded<locator::shared_token_metadata>& get_shared_token_metadata() = 0;
 
     virtual sharded<service::topology_state_machine>& get_topology_state_machine() = 0;
 

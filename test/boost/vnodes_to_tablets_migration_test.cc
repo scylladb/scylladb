@@ -50,7 +50,7 @@ static future<> test_tablet_map_creation(std::vector<int64_t> tokens) {
 
         e.get_storage_service().local().prepare_for_tablets_migration(ks_name).get();
 
-        auto& stm = e.local_db().get_shared_token_metadata();
+        auto& stm = e.shared_token_metadata().local();
         auto& tmap = stm.get()->tablets().get_tablet_map(tid);
 
         // Collect actual tablet boundaries.
@@ -154,7 +154,7 @@ SEASTAR_TEST_CASE(test_tablet_map_creation_already_pow2_layout) {
 
         e.get_storage_service().local().prepare_for_tablets_migration(ks_name).get();
 
-        auto& stm = e.local_db().get_shared_token_metadata();
+        auto& stm = e.shared_token_metadata().local();
         auto& tmap = stm.get()->tablets().get_tablet_map(tid);
 
         BOOST_REQUIRE(tmap.get_layout() == locator::tablet_layout::pow_of_2);
