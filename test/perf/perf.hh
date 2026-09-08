@@ -55,6 +55,7 @@ struct executor_shard_stats {
     uint64_t allocations = 0;
     uint64_t log_allocations = 0;
     uint64_t tasks_executed = 0;
+    uint64_t reactor_polls = 0;
     uint64_t instructions_retired = 0;
     uint64_t cpu_cycles_retired = 0;
     uint64_t errors = 0;
@@ -67,6 +68,7 @@ operator+(executor_shard_stats a, executor_shard_stats b) {
     a.allocations += b.allocations;
     a.log_allocations += b.log_allocations;
     a.tasks_executed += b.tasks_executed;
+    a.reactor_polls += b.reactor_polls;
     a.instructions_retired += b.instructions_retired;
     a.cpu_cycles_retired += b.cpu_cycles_retired;
     a.errors += b.errors;
@@ -80,6 +82,7 @@ operator-(executor_shard_stats a, executor_shard_stats b) {
     a.allocations -= b.allocations;
     a.log_allocations -= b.log_allocations;
     a.tasks_executed -= b.tasks_executed;
+    a.reactor_polls -= b.reactor_polls;
     a.instructions_retired -= b.instructions_retired;
     a.cpu_cycles_retired -= b.cpu_cycles_retired;
     a.errors -= b.errors;
@@ -89,6 +92,10 @@ operator-(executor_shard_stats a, executor_shard_stats b) {
 uint64_t perf_tasks_processed();
 uint64_t perf_mallocs();
 uint64_t perf_logallocs();
+// Times the reactor went round its poll loop. A test that waits for the disk is charged, per
+// operation, for the instructions the reactor retired looking for work while it waited, and those
+// are proportional to this rather than to anything the test does. See perf_logstor.cc.
+uint64_t perf_reactor_polls();
 
 // Drives concurrent and continuous execution of given asynchronous action
 // until a deadline. Counts invocations and collects statistics.
@@ -160,6 +167,7 @@ executor<Func>::executor_shard_stats_snapshot() {
         .allocations = perf_mallocs(),
         .log_allocations = perf_logallocs(),
         .tasks_executed = perf_tasks_processed(),
+        .reactor_polls = perf_reactor_polls(),
         .instructions_retired = _instructions_retired_counter.read(),
         .cpu_cycles_retired = _cpu_cycles_retired_counter.read(),
         .errors = _errors,
@@ -171,6 +179,7 @@ struct perf_result {
     double mallocs_per_op;
     double logallocs_per_op;
     double tasks_per_op;
+    double polls_per_op;
     double instructions_per_op;
     double cpu_cycles_per_op;
     uint64_t errors;
@@ -213,6 +222,45 @@ template <> struct fmt::formatter<perf_result_with_aio_writes> : fmt::formatter<
     auto format(const perf_result_with_aio_writes&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 
+// The physical IO the reactors did, summed over the shards so that it is comparable with the
+// throughput, which is also a whole node number.
+struct io_counters {
+    uint64_t reads = 0;
+    uint64_t read_bytes = 0;
+    uint64_t writes = 0;
+    uint64_t write_bytes = 0;
+
+    // Blocks while it collects the counters of the other shards, so it has to be called from a
+    // seastar thread. The measurement loop runs in one.
+    static io_counters sample();
+
+    io_counters operator-(const io_counters& other) const noexcept;
+};
+
+// The IO one operation cost. This is what tells a read served from a cache apart from one that went
+// to the disk, and what shows how many bytes a write really wrote.
+struct io_result_mixin {
+    double reads = 0;
+    double read_bytes = 0;
+    double writes = 0;
+    double write_bytes = 0;
+};
+
+struct perf_result_with_io : public perf_result, public io_result_mixin {};
+
+// Fills io_result_mixin, as the update function of time_parallel_ex(). Holds the sample the
+// previous iteration ended with, so that every iteration reports the IO of its own operations, and
+// is therefore constructed right before the run it measures.
+class io_counters_updater {
+    io_counters _last = io_counters::sample();
+public:
+    void operator()(io_result_mixin& result, const executor_shard_stats& stats);
+};
+
+template <> struct fmt::formatter<perf_result_with_io> : fmt::formatter<string_view> {
+    auto format(const perf_result_with_io&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+
 /**
  * Measures throughput of an asynchronous action. Executes the action on all cores
  * in parallel, with given number of concurrent executions per core.
@@ -247,6 +295,7 @@ std::vector<Res> time_parallel_ex(Func func, unsigned concurrency_per_core, int 
         result.mallocs_per_op = double(stats.allocations) / stats.invocations;
         result.logallocs_per_op = double(stats.log_allocations) / stats.invocations;
         result.tasks_per_op = double(stats.tasks_executed) / stats.invocations;
+        result.polls_per_op = double(stats.reactor_polls) / stats.invocations;
         result.instructions_per_op = double(stats.instructions_retired) / stats.invocations;
         result.cpu_cycles_per_op = double(stats.cpu_cycles_retired) / stats.invocations;
         result.errors = stats.errors;
@@ -322,7 +371,10 @@ public:
 
 std::tuple<int, char**> cut_arg(int ac, char** av, std::string name, int num_args = 2);
 
-void write_json_result(const std::string& filename, const aggregated_perf_results& agg, const Json::Value& params, const std::string& test_type);
+// The members of extra_stats are added to the stats of the result, for the numbers a test reports
+// beyond the ones aggregated_perf_results aggregates.
+void write_json_result(const std::string& filename, const aggregated_perf_results& agg, const Json::Value& params, const std::string& test_type,
+        const Json::Value& extra_stats = Json::Value());
 
 future<> run_standalone(std::function<void(sharded<abort_source>*)> fun);
 
