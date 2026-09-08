@@ -111,3 +111,5 @@ If your table generates very little data and generating partitions is not much m
 You can do this by setting `_shard_aware = false` in the constructor of your virtual table.
 
 Whichever you choose to do, just make sure to match your implementation with what you set `_shard_aware` to, doing otherwise can cause all sorts of unpredictable errors when your table is queried.
+
+Tables built `.with_sharder(1, 0)` receive every range on a single shard, but do not add a `this_shard_id() == 0` check on top of it: reversed reads (`ORDER BY ... DESC`) use the registry-unfrozen reversed schema, which carries the default sharder, so the read can land on any shard. `execute()` must be correct wherever it runs.
