@@ -31,6 +31,10 @@ uint64_t perf_tasks_processed() {
     return engine().get_sched_stats().tasks_processed;
 }
 
+uint64_t perf_reactor_polls() {
+    return engine().polls();
+}
+
 void scheduling_latency_measurer::schedule_tick() {
     seastar::schedule(make_task(default_scheduling_group(), [self = weak_from_this()] () mutable {
         if (self) {
@@ -60,8 +64,8 @@ auto fmt::formatter<scheduling_latency_measurer>::format(const scheduling_latenc
 
 auto fmt::formatter<perf_result>::format(const perf_result& result, fmt::format_context& ctx) const
         -> decltype(ctx.out()) {
-    return fmt::format_to(ctx.out(), "{:.2f} tps ({:5.1f} allocs/op, {:5.1f} logallocs/op, {:5.1f} tasks/op, {:7.0f} insns/op, {:7.0f} cycles/op, {:8} errors)",
-            result.throughput, result.mallocs_per_op, result.logallocs_per_op, result.tasks_per_op, result.instructions_per_op, result.cpu_cycles_per_op, result.errors);
+    return fmt::format_to(ctx.out(), "{:.2f} tps ({:5.1f} allocs/op, {:5.1f} logallocs/op, {:5.1f} tasks/op, {:5.1f} polls/op, {:7.0f} insns/op, {:7.0f} cycles/op, {:8} errors)",
+            result.throughput, result.mallocs_per_op, result.logallocs_per_op, result.tasks_per_op, result.polls_per_op, result.instructions_per_op, result.cpu_cycles_per_op, result.errors);
 }
 
 aggregated_perf_results::aggregated_perf_results(std::vector<perf_result>& results) {
@@ -130,8 +134,8 @@ void aio_writes_result_mixin::update(aio_writes_result_mixin& result, const exec
 
 auto fmt::formatter<perf_result_with_aio_writes>::format(const perf_result_with_aio_writes& result, fmt::format_context& ctx) const
         -> decltype(ctx.out()) {
-    return fmt::format_to(ctx.out(), "{:.2f} tps ({:5.1f} allocs/op, {:5.1f} logallocs/op, {:5.1f} tasks/op, {:7.0f} insns/op, {:7.0f} cycles/op, {:8} errors, {:7.2f} bytes/op, {:5.1f} writes/op)",
-            result.throughput, result.mallocs_per_op, result.logallocs_per_op, result.tasks_per_op, result.instructions_per_op, result.cpu_cycles_per_op, result.errors, result.aio_write_bytes, result.aio_writes);
+    return fmt::format_to(ctx.out(), "{:.2f} tps ({:5.1f} allocs/op, {:5.1f} logallocs/op, {:5.1f} tasks/op, {:5.1f} polls/op, {:7.0f} insns/op, {:7.0f} cycles/op, {:8} errors, {:7.2f} bytes/op, {:5.1f} writes/op)",
+            result.throughput, result.mallocs_per_op, result.logallocs_per_op, result.tasks_per_op, result.polls_per_op, result.instructions_per_op, result.cpu_cycles_per_op, result.errors, result.aio_write_bytes, result.aio_writes);
 }
 
 namespace perf {
@@ -172,6 +176,7 @@ void write_json_result(const std::string& filename, const aggregated_perf_result
     stats["allocs_per_op"] = med.mallocs_per_op;
     stats["logallocs_per_op"] = med.logallocs_per_op;
     stats["tasks_per_op"] = med.tasks_per_op;
+    stats["polls_per_op"] = med.polls_per_op;
     stats["instructions_per_op"] = med.instructions_per_op;
     stats["cpu_cycles_per_op"] = med.cpu_cycles_per_op;
     const auto& tps = agg.stats.at("throughput");

@@ -55,6 +55,7 @@ struct executor_shard_stats {
     uint64_t allocations = 0;
     uint64_t log_allocations = 0;
     uint64_t tasks_executed = 0;
+    uint64_t reactor_polls = 0;
     uint64_t instructions_retired = 0;
     uint64_t cpu_cycles_retired = 0;
     uint64_t errors = 0;
@@ -67,6 +68,7 @@ operator+(executor_shard_stats a, executor_shard_stats b) {
     a.allocations += b.allocations;
     a.log_allocations += b.log_allocations;
     a.tasks_executed += b.tasks_executed;
+    a.reactor_polls += b.reactor_polls;
     a.instructions_retired += b.instructions_retired;
     a.cpu_cycles_retired += b.cpu_cycles_retired;
     a.errors += b.errors;
@@ -80,6 +82,7 @@ operator-(executor_shard_stats a, executor_shard_stats b) {
     a.allocations -= b.allocations;
     a.log_allocations -= b.log_allocations;
     a.tasks_executed -= b.tasks_executed;
+    a.reactor_polls -= b.reactor_polls;
     a.instructions_retired -= b.instructions_retired;
     a.cpu_cycles_retired -= b.cpu_cycles_retired;
     a.errors -= b.errors;
@@ -89,6 +92,7 @@ operator-(executor_shard_stats a, executor_shard_stats b) {
 uint64_t perf_tasks_processed();
 uint64_t perf_mallocs();
 uint64_t perf_logallocs();
+uint64_t perf_reactor_polls();
 
 // Drives concurrent and continuous execution of given asynchronous action
 // until a deadline. Counts invocations and collects statistics.
@@ -160,6 +164,7 @@ executor<Func>::executor_shard_stats_snapshot() {
         .allocations = perf_mallocs(),
         .log_allocations = perf_logallocs(),
         .tasks_executed = perf_tasks_processed(),
+        .reactor_polls = perf_reactor_polls(),
         .instructions_retired = _instructions_retired_counter.read(),
         .cpu_cycles_retired = _cpu_cycles_retired_counter.read(),
         .errors = _errors,
@@ -171,6 +176,7 @@ struct perf_result {
     double mallocs_per_op;
     double logallocs_per_op;
     double tasks_per_op;
+    double polls_per_op;
     double instructions_per_op;
     double cpu_cycles_per_op;
     uint64_t errors;
@@ -247,6 +253,7 @@ std::vector<Res> time_parallel_ex(Func func, unsigned concurrency_per_core, int 
         result.mallocs_per_op = double(stats.allocations) / stats.invocations;
         result.logallocs_per_op = double(stats.log_allocations) / stats.invocations;
         result.tasks_per_op = double(stats.tasks_executed) / stats.invocations;
+        result.polls_per_op = double(stats.reactor_polls) / stats.invocations;
         result.instructions_per_op = double(stats.instructions_retired) / stats.invocations;
         result.cpu_cycles_per_op = double(stats.cpu_cycles_retired) / stats.invocations;
         result.errors = stats.errors;
