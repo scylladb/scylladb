@@ -243,6 +243,8 @@ struct io_result_mixin {
     double write_bytes = 0;
 };
 
+struct perf_result_with_io : public perf_result, public io_result_mixin {};
+
 // Fills io_result_mixin, as the update function of time_parallel_ex(). Holds the sample the
 // previous iteration ended with, so that every iteration reports the IO of its own operations, and
 // is therefore constructed right before the run it measures.
@@ -250,6 +252,10 @@ class io_counters_updater {
     io_counters _last = io_counters::sample();
 public:
     void operator()(io_result_mixin& result, const executor_shard_stats& stats);
+};
+
+template <> struct fmt::formatter<perf_result_with_io> : fmt::formatter<string_view> {
+    auto format(const perf_result_with_io&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 
 /**

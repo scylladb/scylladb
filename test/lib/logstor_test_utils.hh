@@ -36,18 +36,30 @@ struct shared_logstor_cache {
     }
 };
 
-inline replica::logstor::logstor_config make_test_logstor_config(const std::filesystem::path& base_dir) {
-    constexpr size_t segment_size = 128 * 1024;
-    constexpr size_t file_size = 32 * segment_size;
+// The defaults are a logstor small enough for a unit test: a disk of four files of 32 segments
+// each, created sparse so that formatting them costs neither disk space nor IO. A perf test wants
+// a larger pool and real files, and says so.
+struct logstor_params {
+    size_t segment_size = 128 * 1024;
+    size_t file_size = 32 * 128 * 1024;
+    size_t disk_size = 4 * 32 * 128 * 1024;
+    bool format_on_startup = true;
+    bool sparse_files = true;
+    bool compaction_enabled = true;
+    size_t max_segments_per_compaction = 8;
+};
+
+inline replica::logstor::logstor_config make_test_logstor_config(const std::filesystem::path& base_dir, logstor_params params = {}) {
     return replica::logstor::logstor_config{
         .segment_manager_cfg = {
             .base_dir = base_dir,
-            .segment_size = segment_size,
-            .file_size = file_size,
-            .disk_size = 4 * file_size,
-            .sparse_files = true,
-            .compaction_enabled = true,
-            .max_segments_per_compaction = 8,
+            .segment_size = params.segment_size,
+            .file_size = params.file_size,
+            .disk_size = params.disk_size,
+            .format_on_startup = params.format_on_startup,
+            .sparse_files = params.sparse_files,
+            .compaction_enabled = params.compaction_enabled,
+            .max_segments_per_compaction = params.max_segments_per_compaction,
             .compaction_sg = seastar::current_scheduling_group(),
             .compaction_static_shares = utils::updateable_value<float>(0.0f),
             .compaction_max_shares = utils::updateable_value<float>(2000.0f),

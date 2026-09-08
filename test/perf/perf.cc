@@ -182,6 +182,14 @@ void io_counters_updater::operator()(io_result_mixin& result, const executor_sha
     result.write_bytes = double(done.write_bytes) / stats.invocations;
 }
 
+auto fmt::formatter<perf_result_with_io>::format(const perf_result_with_io& result, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+    return fmt::format_to(ctx.out(), "{:.2f} tps ({:5.1f} allocs/op, {:5.1f} logallocs/op, {:5.1f} tasks/op, {:5.1f} polls/op, {:7.0f} insns/op, {:7.0f} cycles/op, {:8} errors,"
+            " {:5.2f} reads/op, {:8.0f} read bytes/op, {:5.2f} writes/op, {:8.0f} write bytes/op)",
+            result.throughput, result.mallocs_per_op, result.logallocs_per_op, result.tasks_per_op, result.polls_per_op, result.instructions_per_op, result.cpu_cycles_per_op, result.errors,
+            result.reads, result.read_bytes, result.writes, result.write_bytes);
+}
+
 namespace perf {
 
 reader_concurrency_semaphore_wrapper::reader_concurrency_semaphore_wrapper(sstring name)
