@@ -1790,13 +1790,13 @@ public:
         co_return res;
     }
 
-    future<migration_plan> make_rf_change_plan(node_load_map& nodes, std::vector<rf_change_action> actions, sstring dc, sstring rack) {
+    future<migration_plan> make_rf_change_plan(node_load_map& target_nodes, std::vector<rf_change_action> actions, sstring dc, sstring rack) {
         lblogger.debug("In make_rf_change_plan");
 
         migration_plan mplan;
         keyspace_rf_change_plan plan;
 
-        auto nodes_by_load_dst = nodes | std::views::filter([&] (const auto& host_load) {
+        auto nodes_by_load_dst = target_nodes | std::views::filter([&] (const auto& host_load) {
             auto& [host, load] = host_load;
             auto& node = *load.node;
             return node.dc_rack().dc == dc && node.dc_rack().rack == rack;
@@ -1817,7 +1817,7 @@ public:
                 if (rack_it != dc_it->second.end()) {
                     for (const auto& node_ref : rack_it->second) {
                         const auto& node = node_ref.get();
-                        if (node.is_normal() && !node.is_excluded() && !nodes.contains(node.host_id())) {
+                        if (node.is_normal() && !node.is_excluded() && !target_nodes.contains(node.host_id())) {
                             missing_node = true;
                             break;
                         }
@@ -1837,7 +1837,7 @@ public:
             }
         }
 
-        auto nodes_cmp = nodes_by_load_cmp(nodes);
+        auto nodes_cmp = nodes_by_load_cmp(target_nodes);
         auto nodes_dst_cmp = [&] (const host_id& a, const host_id& b) {
             return nodes_cmp(b, a);
         };
@@ -1907,13 +1907,13 @@ public:
                         std::pop_heap(nodes_by_load_dst.begin(), nodes_by_load_dst.end(), nodes_dst_cmp);
                         auto target = nodes_by_load_dst.back();
 
-                        lblogger.debug("target node: {}, avg_load={}", target, nodes[target].avg_load);
+                        lblogger.debug("target node: {}, avg_load={}", target, target_nodes[target].avg_load);
 
                         auto dst = global_shard_id {target, _load_sketch->get_least_loaded_shard(target)};
 
                         lblogger.trace("target shard: {}, tablets={}, load={}", dst.shard,
-                                    nodes[target].shards[dst.shard].tablet_count,
-                                    nodes[target].shard_load(dst.shard, _target_tablet_size));
+                                    target_nodes[target].shards[dst.shard].tablet_count,
+                                    target_nodes[target].shard_load(dst.shard, _target_tablet_size));
 
                         tablet_replica pending_replica{
                             .host = target,
@@ -1929,13 +1929,13 @@ public:
                         };
                         auto mig_streaming_info = get_migration_streaming_info(topo, ti, mig);
                         pick(*_load_sketch, dst.host, dst.shard, source_tablets);
-                        if (can_accept_load(nodes, mig_streaming_info)) {
+                        if (can_accept_load(target_nodes, mig_streaming_info)) {
                             lblogger.debug("Starting rebuild_v2 transition to {}.{} of tablet {}; new_replica = {}", dc, rack, gid, pending_replica);
-                            apply_load(nodes, mig_streaming_info);
+                            apply_load(target_nodes, mig_streaming_info);
                             mark_as_scheduled(mig);
                             mplan.add(std::move(mig));
                         }
-                        increase_node_load(nodes, dst, source_tablets);
+                        increase_node_load(target_nodes, dst, source_tablets);
                         std::push_heap(nodes_by_load_dst.begin(), nodes_by_load_dst.end(), nodes_dst_cmp);
                     } else {
                         auto next = ti.replicas | std::views::filter([&] (const tablet_replica& r) {
@@ -1954,13 +1954,13 @@ public:
                         if (_load_sketch->has_node(replica->host) && !(rep_node && rep_node->is_excluded())) {
                             unload(*_load_sketch, replica->host, replica->shard, source_tablets);
                         }
-                        if (can_accept_load(nodes, mig_streaming_info)) {
-                            apply_load(nodes, mig_streaming_info);
+                        if (can_accept_load(target_nodes, mig_streaming_info)) {
+                            apply_load(target_nodes, mig_streaming_info);
                             mark_as_scheduled(mig);
                             mplan.add(std::move(mig));
                         }
-                        if (nodes.contains(replica->host)) {
-                            decrease_node_load(nodes, *replica, source_tablets);
+                        if (target_nodes.contains(replica->host)) {
+                            decrease_node_load(target_nodes, *replica, source_tablets);
                         }
                     }
                     return make_ready_future<>();
