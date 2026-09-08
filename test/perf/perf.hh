@@ -219,6 +219,39 @@ template <> struct fmt::formatter<perf_result_with_aio_writes> : fmt::formatter<
     auto format(const perf_result_with_aio_writes&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 
+// The physical IO the reactors did, summed over the shards so that it is comparable with the
+// throughput, which is also a whole node number.
+struct io_counters {
+    uint64_t reads = 0;
+    uint64_t read_bytes = 0;
+    uint64_t writes = 0;
+    uint64_t write_bytes = 0;
+
+    // Blocks while it collects the counters of the other shards, so it has to be called from a
+    // seastar thread. The measurement loop runs in one.
+    static io_counters sample();
+
+    io_counters operator-(const io_counters& other) const noexcept;
+};
+
+// The IO one operation cost. This is what tells a read served from a cache apart from one that went
+// to the disk, and what shows how many bytes a write really wrote.
+struct io_result_mixin {
+    double reads = 0;
+    double read_bytes = 0;
+    double writes = 0;
+    double write_bytes = 0;
+};
+
+// Fills io_result_mixin, as the update function of time_parallel_ex(). Holds the sample the
+// previous iteration ended with, so that every iteration reports the IO of its own operations, and
+// is therefore constructed right before the run it measures.
+class io_counters_updater {
+    io_counters _last = io_counters::sample();
+public:
+    void operator()(io_result_mixin& result, const executor_shard_stats& stats);
+};
+
 /**
  * Measures throughput of an asynchronous action. Executes the action on all cores
  * in parallel, with given number of concurrent executions per core.
@@ -329,7 +362,10 @@ public:
 
 std::tuple<int, char**> cut_arg(int ac, char** av, std::string name, int num_args = 2);
 
-void write_json_result(const std::string& filename, const aggregated_perf_results& agg, const Json::Value& params, const std::string& test_type);
+// The members of extra_stats are added to the stats of the result, for the numbers a test reports
+// beyond the ones aggregated_perf_results aggregates.
+void write_json_result(const std::string& filename, const aggregated_perf_results& agg, const Json::Value& params, const std::string& test_type,
+        const Json::Value& extra_stats = Json::Value());
 
 future<> run_standalone(std::function<void(sharded<abort_source>*)> fun);
 

@@ -8,7 +8,10 @@
 
 #include "perf.hh"
 #include <seastar/core/reactor.hh>
+#include <seastar/core/map_reduce.hh>
 #include <seastar/core/memory.hh>
+#include <seastar/core/smp.hh>
+#include <ranges>
 #include "seastarx.hh"
 #include "reader_concurrency_semaphore.hh"
 #include "schema/schema.hh"
@@ -138,6 +141,47 @@ auto fmt::formatter<perf_result_with_aio_writes>::format(const perf_result_with_
             result.throughput, result.mallocs_per_op, result.logallocs_per_op, result.tasks_per_op, result.polls_per_op, result.instructions_per_op, result.cpu_cycles_per_op, result.errors, result.aio_write_bytes, result.aio_writes);
 }
 
+io_counters io_counters::sample() {
+    auto shards = std::views::iota(0u, this_smp_shard_count());
+    return map_reduce(shards.begin(), shards.end(), [] (unsigned shard) {
+        return smp::submit_to(shard, [] {
+            const auto& stats = engine().get_io_stats();
+            return io_counters{
+                .reads = stats.aio_reads,
+                .read_bytes = stats.aio_read_bytes,
+                .writes = stats.aio_writes,
+                .write_bytes = stats.aio_write_bytes,
+            };
+        });
+    }, io_counters{}, [] (io_counters a, io_counters b) {
+        return io_counters{
+            .reads = a.reads + b.reads,
+            .read_bytes = a.read_bytes + b.read_bytes,
+            .writes = a.writes + b.writes,
+            .write_bytes = a.write_bytes + b.write_bytes,
+        };
+    }).get();
+}
+
+io_counters io_counters::operator-(const io_counters& other) const noexcept {
+    return io_counters{
+        .reads = reads - other.reads,
+        .read_bytes = read_bytes - other.read_bytes,
+        .writes = writes - other.writes,
+        .write_bytes = write_bytes - other.write_bytes,
+    };
+}
+
+void io_counters_updater::operator()(io_result_mixin& result, const executor_shard_stats& stats) {
+    auto sample = io_counters::sample();
+    auto done = sample - _last;
+    _last = sample;
+    result.reads = double(done.reads) / stats.invocations;
+    result.read_bytes = double(done.read_bytes) / stats.invocations;
+    result.writes = double(done.writes) / stats.invocations;
+    result.write_bytes = double(done.write_bytes) / stats.invocations;
+}
+
 namespace perf {
 
 reader_concurrency_semaphore_wrapper::reader_concurrency_semaphore_wrapper(sstring name)
@@ -165,7 +209,8 @@ std::tuple<int, char**> cut_arg(int ac, char** av, std::string name, int num_arg
     return std::make_tuple(ac, av);
 }
 
-void write_json_result(const std::string& filename, const aggregated_perf_results& agg, const Json::Value& params, const std::string& test_type) {
+void write_json_result(const std::string& filename, const aggregated_perf_results& agg, const Json::Value& params, const std::string& test_type,
+        const Json::Value& extra_stats) {
     Json::Value results;
 
     results["parameters"] = params;
@@ -194,6 +239,9 @@ void write_json_result(const std::string& filename, const aggregated_perf_result
     };
     write_spread("instructions_per_op");
     write_spread("cpu_cycles_per_op");
+    for (const auto& name : extra_stats.getMemberNames()) {
+        stats[name] = extra_stats[name];
+    }
     results["stats"] = std::move(stats);
 
     results["test_properties"]["type"] = test_type;
