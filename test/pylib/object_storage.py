@@ -72,6 +72,13 @@ class S3Server:
         self.secret_key = secret_key
         self.region = region
         self.bucket_name = bucket_name
+        # Buckets create_test_bucket() itself created and destroy_test_bucket()
+        # failed to clean up yet. Tracked separately from bucket_name (which
+        # create_test_bucket() overwrites per test, and may hold a
+        # server-configured default this fixture never created and must not
+        # delete) so a failed destroy is never silently orphaned, even across
+        # more than one consecutive failure.
+        self._pending_destroy_buckets: set[str] = set()
 
     def __repr__(self):
         return f"[unknown] {self.address}/{self.bucket_name}"
@@ -96,9 +103,36 @@ class S3Server:
 
     def create_test_bucket(self, test_name: str):
         """Create a unique per-test bucket using boto3."""
+        # Retry any previous tests' failed destroys first: with a shared server
+        # object (module-scoped fixture), losing track of a still-undestroyed
+        # bucket here would orphan it permanently. Gated on the pending-destroy
+        # set, not bucket_name, since bucket_name may hold a server-configured
+        # default (e.g. MinioWrapper.start() or --s3-server-bucket) that this
+        # fixture never created and must not delete.
+        self.retry_pending_destroys()
         self.bucket_name = _make_bucket_name(test_name)
+        self._pending_destroy_buckets.add(self.bucket_name)
         resource = self.get_resource()
         resource.Bucket(self.bucket_name).create()
+
+    def _destroy_bucket(self, bucket_name: str) -> bool:
+        """Empty and delete one bucket. Returns whether it succeeded."""
+        try:
+            resource = self.get_resource()
+            bucket = resource.Bucket(bucket_name)
+            bucket.objects.all().delete()
+            bucket.delete()
+        except Exception as e:
+            # Keep it pending so that a retry still has a bucket to delete.
+            logging.warning("Failed to destroy test bucket %s: %s", bucket_name, e)
+            return False
+        self._pending_destroy_buckets.discard(bucket_name)
+        return True
+
+    def retry_pending_destroys(self):
+        """Retry destroying every bucket a previous destroy failed to clean up."""
+        for bucket_name in list(self._pending_destroy_buckets):
+            self._destroy_bucket(bucket_name)
 
     def destroy_test_bucket(self):
         """Empty and delete the per-test bucket using boto3.
@@ -108,18 +142,9 @@ class S3Server:
         run too.  A failed destroy leaves the bucket on record, so whichever of
         the two runs second retries it.
         """
-        if not self.bucket_name:
+        if self.bucket_name not in self._pending_destroy_buckets:
             return
-        try:
-            resource = self.get_resource()
-            bucket = resource.Bucket(self.bucket_name)
-            bucket.objects.all().delete()
-            bucket.delete()
-        except Exception as e:
-            # Keep the name so that a retry still has a bucket to delete.
-            logging.warning("Failed to destroy test bucket %s: %s", self.bucket_name, e)
-            return
-        self.bucket_name = None
+        self._destroy_bucket(self.bucket_name)
 
     async def start(self):
         pass
@@ -387,17 +412,33 @@ def create_gs_server(log_dir):
     return GSServerImpl(log_dir)
 
 
-@pytest.fixture(scope="function")
-async def s3_server(request, pytestconfig, tmpdir, suite_log_dir):
-    server = create_s3_server(pytestconfig, tmpdir, suite_log_dir)
+@pytest.fixture(scope="module")
+async def _s3_server_process(pytestconfig, tmpdir_factory, suite_log_dir):
+    # module-scoped: starting MinIO (~seconds) per test dominated runtime;
+    # per-test isolation comes from the bucket, not the server process.
+    server = create_s3_server(pytestconfig, tmpdir_factory.mktemp("s3_server"), suite_log_dir)
     await server.start()
-    bucket_created = False
     try:
-        server.create_test_bucket(request.node.name)
-        bucket_created = True
         yield server
     finally:
-        if bucket_created:
-            server.destroy_test_bucket()
+        # Last chance to retry a bucket a per-test destroy failed to clean up:
+        # an externally-configured S3Server's stop() is a no-op, so anything
+        # still pending here would otherwise leak permanently.
+        server.retry_pending_destroys()
+        pending = server._pending_destroy_buckets
         await server.stop()
+        if pending:
+            raise RuntimeError(f"Failed to destroy S3 test bucket(s): {sorted(pending)}")
+
+
+@pytest.fixture(scope="function")
+async def s3_server(request, _s3_server_process):
+    bucket_created = False
+    try:
+        _s3_server_process.create_test_bucket(request.node.name)
+        bucket_created = True
+        yield _s3_server_process
+    finally:
+        if bucket_created:
+            _s3_server_process.destroy_test_bucket()
 
