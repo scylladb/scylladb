@@ -81,6 +81,23 @@ future<> execute(reader_permit permit, result_collector& result, const query_res
 }
 ```
 
+#### Clustering-key restrictions as query parameters
+
+`query_restrictions` also exposes `clustering_row_ranges()`: the clustering ranges requested by the `WHERE` clause.
+A table can read equality values out of these to use them as *inputs* rather than as filters -- `system.toppartitions` takes its sampler `capacity` and `list_size` this way, substituting defaults when a column is left unrestricted.
+The rules of thumb, all inherited from ordinary CQL:
+* Parameter columns must be a clustering-key prefix, so the values arrive as a common prefix of every range; reject ranges or multiple distinct prefixes explicitly, otherwise an unrestricted query would silently run with defaults.
+* Skipping a prefix column (`WHERE capacity = 512` with no keyspace/table) requires `ALLOW FILTERING`, and then the value only filters the output; document that on the table.
+* The reader still applies the full slice downstream, so columns *after* the parameters (e.g. `kind`, `rank`) may stay ordinary filters.
+
+Validation failures thrown from `execute()` surface to the client as `ReadFailure`, not `InvalidRequest`: `execute()` runs on the replica and `replica::exception_variant` does not carry `invalid_request_exception`. There is no coordinator-side hook for virtual tables yet.
+
+#### Bounded waits inside `execute()`
+
+`execute()` may block for a bounded time when the data has to be collected rather than read (`system.toppartitions` samples traffic; `system.load_per_node` waits for the group0 leader).
+Bound the wait by `permit.timeout()`, which the client controls with `USING TIMEOUT`, and leave a margin for producing the result.
+Every page is a fresh `execute()` call, so such tables should be read in a single page.
+
 #### Shard awareness
 
 Virtual tables have to take care to not emit partitions that don't belong to the shard the read runs on.
