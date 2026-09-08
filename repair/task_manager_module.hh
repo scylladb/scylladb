@@ -8,7 +8,10 @@
 
 #pragma once
 
-#include "node_ops/node_ops_ctl.hh"
+#include <seastar/core/condition-variable.hh>
+#include <seastar/core/semaphore.hh>
+
+#include "gc_clock.hh"
 #include "repair/repair.hh"
 #include "tasks/task_manager.hh"
 

@@ -8,6 +8,7 @@
 
 #include "repair.hh"
 #include "gms/gossip_address_map.hh"
+#include "node_ops/node_ops_ctl.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "repair/row_level.hh"
 
