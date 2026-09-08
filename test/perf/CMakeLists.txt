@@ -81,6 +81,16 @@ add_perf_test(perf_hash)
 add_perf_test(perf_idl
   LIBRARIES
     idl)
+add_perf_test(perf_logstor
+  LIBRARIES
+    dht
+    idl
+    JsonCpp::JsonCpp
+    mutation
+    replica
+    schema
+    types
+    utils)
 add_perf_test(perf_mutation)
 add_perf_test(perf_mutation_readers
   LIBRARIES
