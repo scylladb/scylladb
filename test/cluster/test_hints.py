@@ -1422,3 +1422,146 @@ async def test_hint_storage_proxy_metrics(manager: ScyllaClusterManager):
 
     assert sent_total == received_total
     assert sent_bytes_total == received_bytes_total
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_hint_retransmission_keeps_column_mappings(manager: ScyllaClusterManager):
+    """
+    This test reproduces: https://github.com/scylladb/scylladb/issues/4122.
+
+    A commitlog segment encodes the schema - and with it the column mapping - only in the
+    *first* entry written for a given schema version, see `_known_schema_versions` in
+    db/commitlog/commitlog.cc. When sending a segment fails partway through, `hint_sender`
+    remembers the position of the first hint that failed and retries the segment from there
+    (`_last_not_complete_rp`). The entries it re-reads carry no column mapping of their own,
+    so the mapping learnt during the previous attempt must survive the retry in
+    `_last_schema_ver_to_column_mapping`. Before the fix that cache was dropped between
+    attempts, `get_column_mapping()` threw `no_column_mapping`, and the affected hints were
+    silently dropped and only accounted for in `scylla_hints_manager_discarded`.
+
+    Reproducing that requires the segment to be retransmitted from a position *past* the
+    entry holding the column mapping, i.e. some hints of the segment must be applied before
+    the rest fail. The test arranges exactly that:
+      1. node2 is stopped and hints for it accumulate on node1 while replay is paused,
+      2. node2 is restarted with hint application blocked on an error injection, so that we
+         decide which hints get applied,
+      3. the first hint of the segment - the one whose entry carries the column mapping - is
+         let through,
+      4. applying a hint is then made to fail on node2, which aborts the segment and makes
+         node1 record a resume position in the middle of it,
+      5. hints are let through again and the segment is retransmitted from that position.
+
+    Hint replay is paused while node2's injection is reconfigured. That does not stop a hint
+    that is already past the pause check, so the prefix let through in step 3 may be one hint
+    longer than intended, but the send concurrency of 1 keeps it at that.
+    """
+    # Enough hints for the segment to still hold unsent ones once the first ones are applied.
+    row_count = 200
+
+    # A single shard means a single hint_sender, so the segment we interrupt is the one that
+    # gets retransmitted.
+    cmdline = ["--smp=1", "--logger-log-level", "hints_manager=trace"]
+    config = {
+        # This test relies on the fact that hinted handoff limits the number
+        # of hints that can be sent at a time. Set it explicitly.
+        #
+        # We set it to 1 to avoid problems with mixed results: if we set
+        # concurrency to, say, 10, some of the sent hints could succeed,
+        # while others fail. If the first hint in the segment failed,
+        # then when we started retrying to send the hints, we'd read the
+        # segment from the very beginning. That would defeat the point.
+        "max_hinted_handoff_concurrency": 1,
+        # Make hints replayable quickly.
+        "error_injections_at_startup": ["decrease_hints_flush_period"]
+    }
+    node1, node2 = await manager.servers_add(2, cmdline=cmdline, config=config, auto_rack_dc="dc")
+
+    table = "ks.tbl"
+    ks_name, cf_name = table.split(".")
+
+    cql = await manager.get_cql_exclusive(node1)
+    await cql.run_async(f"CREATE KEYSPACE {ks_name} WITH replication = "
+                        f"{{'class': 'NetworkTopologyStrategy', 'replication_factor': 2}}")
+    await cql.run_async(f"CREATE TABLE {table} (pk int PRIMARY KEY, v int)")
+
+    logger.info("Stopping node 2 so that every write stores a hint on node 1")
+    await manager.server_stop_gracefully(node2.server_id)
+    await manager.others_not_see_server(node2.ip_addr)
+
+    # Replay must not start before we are able to control which hints get applied.
+    await manager.api.enable_injection(node1.ip_addr, "hinted_handoff_pause_hint_replay", one_shot=False)
+
+    logger.info(f"Writing {row_count} rows with CL=ONE")
+    stmt = cql.prepare(f"INSERT INTO {table} (pk, v) VALUES (?, ?)")
+    stmt.consistency_level = ConsistencyLevel.ONE
+    await gather_safely(*(cql.run_async(stmt, [i, i + 1]) for i in range(row_count)))
+
+    await wait_until_hint_writing_settled(manager, [node1])
+    written = await get_hint_metrics(manager.metrics, node1.ip_addr, "written")
+    assert written > 0
+
+    logger.info("Restarting node 2 with hint application blocked on an injection")
+    await manager.server_start(node2.server_id)
+    await manager.servers_see_each_other([node1, node2])
+    await manager.api.enable_injection(node2.ip_addr, "database_apply", one_shot=False,
+                                       parameters={"ks_name": ks_name, "cf_name": cf_name, "what": "wait"})
+
+    node1_log, node2_log = await gather_safely(*[
+        asyncio.create_task(manager.server_open_log(node1.server_id)),
+        asyncio.create_task(manager.server_open_log(node2.server_id))])
+    node2_mark = await node2_log.mark()
+
+    logger.info("Resuming hint replay")
+    await manager.api.disable_injection(node1.ip_addr, "hinted_handoff_pause_hint_replay")
+
+    # The first hint is the one that carries the column mapping.
+    logger.info("Waiting for the first hint to reach node 2")
+    await node2_log.wait_for("database_apply: wait", from_mark=node2_mark)
+
+    # Pause the sender again. The injection is checked once per hint, right before it's sent,
+    # so this does not stop the hints that are already past that check: the first one is
+    # blocked on node 2, and the second one may already be waiting for the send budget the
+    # first one holds. It does stop the third one: the budget is not released until the
+    # second hint has been sent, and by then this injection is enabled again.
+    await manager.api.enable_injection(node1.ip_addr, "hinted_handoff_pause_hint_replay", one_shot=False)
+
+    node2_mark = await node2_log.mark()
+    logger.info("Letting the hint that carries the column mapping through")
+    await manager.api.disable_injection(node2.ip_addr, "database_apply")
+    await node2_log.wait_for("database_apply: done", from_mark=node2_mark)
+
+    # The first hint - the one whose entry carries the column mapping - has been sent by now.
+    # The second one may have been sent too, as described above, but nothing beyond it, so
+    # the segment still holds hints that have to be retransmitted.
+    await wait_until_hints_are_sent_from(manager, [node1], expected_count=1)
+    sent = await get_hint_metrics(manager.metrics, node1.ip_addr, "sent_total")
+    assert sent <= 2, f"More hints were sent than expected: {sent}"
+
+    # From now on applying a hint fails on node2, so the rest of the segment cannot be sent.
+    logger.info("Making the remaining hints fail on node 2")
+    await manager.api.enable_injection(node2.ip_addr, "database_apply", one_shot=False,
+                                       parameters={"ks_name": ks_name, "cf_name": cf_name, "what": "throw"})
+
+    node1_mark = await node1_log.mark()
+    await manager.api.disable_injection(node1.ip_addr, "hinted_handoff_pause_hint_replay")
+
+    # hint_sender logs this when it gives up on a segment and records where to resume it.
+    logger.info("Waiting for the segment to be aborted mid-way")
+    await node1_log.wait_for("Error while sending hints from", from_mark=node1_mark)
+
+    logger.info("Letting hints through again - the segment is retransmitted from the recorded position")
+    await manager.api.disable_injection(node2.ip_addr, "database_apply")
+
+    await wait_until_hints_are_sent_from(manager, [node1], expected_count=written)
+
+    discarded = await get_hint_metrics(manager.metrics, node1.ip_addr, "discarded")
+    assert discarded == 0, f"{discarded} hints were discarded while retransmitting the segment"
+
+    # The metric above is the direct regression check. Verify the data as well so that the
+    # test keeps its meaning if hints ever get lost without being accounted as discarded.
+    logger.info("Verifying that node 2 received all the rows")
+    await manager.server_stop_gracefully(node1.server_id)
+    cql = await manager.get_cql_exclusive(node2)
+    rows = await cql.run_async(SimpleStatement(f"SELECT pk, v FROM {table}",
+                                                consistency_level=ConsistencyLevel.ONE))
+    assert sorted((row.pk, row.v) for row in rows) == [(i, i + 1) for i in range(row_count)]
