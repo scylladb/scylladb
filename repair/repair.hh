@@ -393,6 +393,9 @@ public:
     streaming::stream_reason reason() const noexcept {
         return _reason;
     }
+    service::frozen_topology_guard get_frozen_topology_guard() const noexcept {
+        return _frozen_topology_guard;
+    }
     locator::effective_replication_map_ptr get_erm();
 
     friend class repair_service;

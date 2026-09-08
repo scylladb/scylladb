@@ -366,8 +366,7 @@ class repair_writer;
 
 future<> repair_cf_range_row_level(repair_info& ri,
         sstring cf_name, table_id table_id, dht::token_range range,
-        const std::vector<locator::host_id>& all_peer_nodes, bool small_table_optimization, gc_clock::time_point flush_time,
-        service::frozen_topology_guard topo_guard);
+        const std::vector<locator::host_id>& all_peer_nodes, gc_clock::time_point flush_time);
 future<std::list<repair_row>> to_repair_rows_list(repair_rows_on_wire rows,
         schema_ptr s, uint64_t seed, repair_master is_master,
         reader_permit permit, repair_hasher hasher);

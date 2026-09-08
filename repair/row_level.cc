@@ -3126,19 +3126,17 @@ public:
             table_id table_id,
             dht::token_range range,
             std::vector<locator::host_id> all_live_peer_nodes,
-            bool small_table_optimization,
-            gc_clock::time_point start_time,
-            service::frozen_topology_guard topo_guard)
+            gc_clock::time_point start_time)
         : _ri(ri)
         , _cf_name(std::move(cf_name))
         , _table_id(std::move(table_id))
         , _range(std::move(range))
         , _all_live_peer_nodes(sort_peer_nodes(all_live_peer_nodes))
-        , _small_table_optimization(small_table_optimization)
+        , _small_table_optimization(ri.small_table_optimization)
         , _seed(get_random_seed())
         , _start_time(start_time)
         , _is_tablet(_ri.db.local().find_column_family(_table_id).uses_tablets())
-        , _topo_guard(topo_guard)
+        , _topo_guard(ri.get_frozen_topology_guard())
     {
         repair_neighbors r_neighbors = _ri.get_repair_neighbors(_range);
         auto& map = r_neighbors.shard_map;
@@ -3712,10 +3710,9 @@ public:
 
 future<> repair_cf_range_row_level(repair_info& ri,
         sstring cf_name, table_id table_id, dht::token_range range,
-        const std::vector<locator::host_id>& all_peer_nodes, bool small_table_optimization, gc_clock::time_point flush_time,
-        service::frozen_topology_guard topo_guard) {
+        const std::vector<locator::host_id>& all_peer_nodes, gc_clock::time_point flush_time) {
     auto start_time = flush_time;
-    auto repair = row_level_repair(ri, std::move(cf_name), std::move(table_id), std::move(range), all_peer_nodes, small_table_optimization, start_time, topo_guard);
+    auto repair = row_level_repair(ri, std::move(cf_name), std::move(table_id), std::move(range), all_peer_nodes, start_time);
     bool is_tablet = ri.db.local().find_column_family(table_id).uses_tablets();
     bool is_tablet_rebuild = ri.sched_info.for_tablet_rebuild;
     auto t = std::chrono::steady_clock::now();
