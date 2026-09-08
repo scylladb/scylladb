@@ -15,22 +15,14 @@
 #include "replica/logstor/index.hh"
 #include "db/cache_tracker.hh"
 #include "schema/schema_builder.hh"
+#include "test/lib/logstor_test_utils.hh"
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/simple_schema.hh"
 
 using namespace replica::logstor;
+using namespace tests::logstor;
 
 namespace {
-
-struct shared_logstor_cache {
-    ::cache_tracker shared_tracker;
-    replica::logstor::cache_tracker logstor_tracker;
-
-    shared_logstor_cache()
-        : shared_tracker(utils::updateable_value<double>(1.0), ::cache_tracker::register_metrics::no)
-        , logstor_tracker(shared_tracker) {
-    }
-};
 
 struct noop_space_accounting_subscriber final : space_accounting_subscriber {
     void on_add_record(log_location) noexcept override {}
