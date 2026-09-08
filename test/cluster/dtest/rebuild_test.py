@@ -10,6 +10,7 @@ import string
 from concurrent.futures.thread import ThreadPoolExecutor
 
 import pytest
+from cassandra.concurrent import execute_concurrent_with_args
 
 from dtest_class import Tester
 
@@ -53,11 +54,12 @@ class TestRebuildStreamingAbortRepro(Tester):
                 "INSERT INTO keyspace1.standard1 (key, C0, C1, C2, C3, C4) VALUES (?, ?, ?, ?, ?, ?)"
             )
             key_chars = string.ascii_uppercase + string.digits
-            for _ in range(100_000):
-                session.execute(insert_query, [
-                    "".join(random.choices(key_chars, k=10)).encode(),
-                    *(random.randbytes(34) for _ in range(5)),
-                ])
+
+            # not on the race-timing path (insert precedes the rebuild/abort window) -> parallelize freely
+            execute_concurrent_with_args(session, insert_query, (
+                ["".join(random.choices(key_chars, k=10)).encode(), *(random.randbytes(34) for _ in range(5))]
+                for _ in range(100_000)
+            ))
 
             logger.debug("Changing keyspace1 replication in dc2 to 2.")
             session.execute("""\
