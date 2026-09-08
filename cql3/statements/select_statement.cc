@@ -2308,10 +2308,22 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
                 && restrictions->partition_key_restrictions_size() == schema->partition_key_size());
     };
 
-    if (strong_consistency::is_strongly_consistent(db, schema->ks_name())) {
-        if (_parameters->is_mutation_fragments()) {
-            throw exceptions::invalid_request_exception("SELECT FROM MUTATION_FRAGMENTS() is not supported on strongly consistent tables");
-        }
+    if (_parameters->is_mutation_fragments()) {
+        stmt = ::make_shared<cql3::statements::mutation_fragments_select_statement>(
+                schema,
+                underlying_schema,
+                ctx.bound_variables_size(),
+                _parameters,
+                std::move(selection),
+                std::move(restrictions),
+                std::move(group_by_cell_indices),
+                is_reversed_,
+                std::move(ordering_comparator),
+                prepare_limit(db, ctx, _limit),
+                prepare_limit(db, ctx, _per_partition_limit),
+                stats,
+                std::move(prepared_attrs));
+    } else if (strong_consistency::is_strongly_consistent(db, schema->ks_name())) {
         if (_parameters->is_prune_materialized_view()) {
             throw exceptions::invalid_request_exception("PRUNE MATERIALIZED VIEW is not supported on strongly consistent tables");
         }
@@ -2334,21 +2346,6 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     } else if (_parameters->is_prune_materialized_view()) {
         stmt = ::make_shared<cql3::statements::prune_materialized_view_statement>(
                 schema,
-                ctx.bound_variables_size(),
-                _parameters,
-                std::move(selection),
-                std::move(restrictions),
-                std::move(group_by_cell_indices),
-                is_reversed_,
-                std::move(ordering_comparator),
-                prepare_limit(db, ctx, _limit),
-                prepare_limit(db, ctx, _per_partition_limit),
-                stats,
-                std::move(prepared_attrs));
-    } else if (_parameters->is_mutation_fragments()) {
-        stmt = ::make_shared<cql3::statements::mutation_fragments_select_statement>(
-                schema,
-                underlying_schema,
                 ctx.bound_variables_size(),
                 _parameters,
                 std::move(selection),
