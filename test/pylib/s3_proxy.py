@@ -69,6 +69,18 @@ def true_or_false():
 
 
 class InjectingHandler(BaseHTTPRequestHandler):
+    # These describe the connection we forwarded over rather than the payload, so they
+    # must not be relayed to the client. Transfer-Encoding matters most: we hand the
+    # body to the client with a Content-Length of our own, and a chunked one inherited
+    # from the S3 server would make the client parse that body as a chunk header.
+    hop_by_hop_headers = frozenset(('CONNECTION',
+                                    'KEEP-ALIVE',
+                                    'PROXY-AUTHENTICATE',
+                                    'PROXY-AUTHORIZATION',
+                                    'TE',
+                                    'TRAILER',
+                                    'TRANSFER-ENCODING',
+                                    'UPGRADE'))
     retryable_codes = list((408, 419, 429, 440, 500)) + list(range(502, 599))
     error_names = list(("InternalFailureException",
                         "InternalFailure",
@@ -204,7 +216,7 @@ class InjectingHandler(BaseHTTPRequestHandler):
                 self.policies.remove(self.path)
                 self.send_response(response.status_code)
                 for key, value in response.headers.items():
-                    if key.upper() != 'CONTENT-LENGTH':
+                    if key.upper() != 'CONTENT-LENGTH' and key.upper() not in self.hop_by_hop_headers:
                         self.send_header(key, value)
 
                 if self.command == 'HEAD':
