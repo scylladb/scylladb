@@ -14,6 +14,8 @@
 #include <seastar/core/seastar.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/thread.hh>
+#include <seastar/core/metrics.hh>
+#include <seastar/core/metrics_api.hh>
 #include <seastar/util/defer.hh>
 #include <seastar/net/dns.hh>
 #include <seastar/net/tls.hh>
@@ -191,6 +193,43 @@ static future<> test_provider(const std::string& options, const tmpdir& tmp, con
         .n_restarts = n_restarts, 
         .explicit_provider = explicit_provider
     };
+    co_await test_provider(args);
+}
+
+auto get_metrics_value(std::string_view metric_name, const auto& all_metrics) {
+    const auto& all_metadata = *all_metrics->metadata;
+    const auto m = find_if(cbegin(all_metadata), cend(all_metadata), [&metric_name](const auto& x) {
+        return x.mf.name == metric_name;
+    });
+    return all_metrics->values[distance(cbegin(all_metadata), m)].cbegin();
+}
+
+/**
+ * Very simple test helper to do minimal verification that we update the key cache
+ * metrics on key lookup using one of the caching providers. Just starts a scylla
+ * with an encrypted CF, and after population verifies we did in fact touch the 
+ * cache.
+ */
+static future<> test_key_cache_metrics(const std::string& options, const tmpdir& tmp, const std::string& extra_yaml = {}) {
+    test_provider_args args{
+        .tmp = tmp,
+        .options = options,
+        .extra_yaml = extra_yaml,
+        .n_tables = 1, 
+        .n_restarts = 0, 
+
+        .after_insert = [&](cql_test_env&) {
+            auto metrics = seastar::metrics::impl::get_values();
+            auto hits = get_metrics_value("encryption_key_attr_cache_hits", metrics)->ui();
+            auto misses = get_metrics_value("encryption_key_attr_cache_misses", metrics)->ui();
+            auto blocks = get_metrics_value("encryption_key_attr_cache_blocked", metrics)->ui();
+
+            BOOST_REQUIRE_GE(hits, 0); // can't guarantee a hit - might only do a single query
+            BOOST_REQUIRE_GT(misses, 0); // but can guarantee a miss
+            BOOST_REQUIRE_GT(blocks, 0); // and it will block.
+        },
+    };
+
     co_await test_provider(args);
 }
 
@@ -1049,6 +1088,23 @@ SEASTAR_TEST_CASE(test_kmip_provider_broken_sstables_on_restart, *check_run_test
     });
 }
 
+SEASTAR_TEST_CASE(test_kmip_key_cache_metrics, *check_run_test_decorator("ENABLE_KMIP_TEST", true)) {
+    co_await kmip_test_helper([](const kmip_test_info& info, const tmpdir& tmp) -> future<> {
+        auto yaml = fmt::format(R"foo(
+            kmip_hosts:
+                kmip_test:
+                    hosts: {0}
+                    certificate: {1}
+                    keyfile: {2}
+                    truststore: {3}
+                    priority_string: {4}
+                    )foo"
+            , info.host, info.cert, info.key, info.ca, info.prio
+        );
+        co_await test_key_cache_metrics("'key_provider': 'KmipKeyProviderFactory', 'kmip_host': 'kmip_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", tmp, yaml);
+    });
+}
+
 #endif // HAVE_KMIP
 
 std::string make_aws_host(std::string_view aws_region, std::string_view service);
@@ -1187,6 +1243,26 @@ SEASTAR_FIXTURE_TEST_CASE(test_kms_network_error, local_aws_kms_wrapper, *check_
         );
         return std::make_tuple(scopts_map({ { "key_provider", "KmsKeyProviderFactory" }, { "kms_host", "kms_test" } }), yaml);
     });
+}
+
+SEASTAR_FIXTURE_TEST_CASE(test_kms_key_cache_metrics, local_aws_kms_wrapper, *check_run_test_decorator("ENABLE_KMS_TEST", true)) {
+    tmpdir tmp;
+    /**
+     * Note: NOT including any auth stuff here. The provider will pick up AWS credentials
+     * from ~/.aws/credentials
+     */
+    auto yaml = fmt::format(R"foo(
+        kms_hosts:
+            kms_test:
+                master_key: {0}
+                aws_region: {1}
+                aws_profile: {2}
+                endpoint: '{3}'
+                )foo"
+        , kms_key_alias, kms_aws_region, kms_aws_profile, endpoint
+    );
+
+    co_await test_key_cache_metrics("'key_provider': 'KmsKeyProviderFactory', 'kms_host': 'kms_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", tmp, yaml);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
@@ -1429,6 +1505,25 @@ SEASTAR_FIXTURE_TEST_CASE(test_gcp_network_error, local_gcp_kms_wrapper, *check_
         );
         return std::make_tuple(scopts_map({ { "key_provider", "GcpKeyProviderFactory" }, { "gcp_host", "gcp_test" } }), yaml);
     });
+}
+
+SEASTAR_FIXTURE_TEST_CASE(test_gcp_key_cache_metrics, local_gcp_kms_wrapper, *check_run_test_decorator("ENABLE_GCP_TEST", true)) {
+    tmpdir tmp;
+    {
+        auto yaml = fmt::format(R"foo(
+            gcp_hosts:
+                gcp_test:
+                    master_key: {0}
+                    gcp_project_id: {1}
+                    gcp_location: {2}
+                    gcp_credentials_file: {3}
+                    endpoint: '{4}'
+                    )foo"
+            , gcp_key_name, gcp_project_id, gcp_location, gcp_user_1_credentials, endpoint
+        );
+
+        co_await test_key_cache_metrics("'key_provider': 'GcpKeyProviderFactory', 'gcp_host': 'gcp_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", tmp, yaml);
+    }
 }
 
 // Note: cannot do the above test for gcp, because we can't use false endpoints there. Could mess with address resolution,
@@ -1886,6 +1981,21 @@ SEASTAR_FIXTURE_TEST_CASE(test_azure_host, fake_azure, *check_azure_mock_test_de
             encryption::service_error
         );
     }
+}
+
+
+SEASTAR_FIXTURE_TEST_CASE(test_azure_key_cache_metrics, local_azure_kms_wrapper, *check_azure_mock_test_decorator()) {
+    tmpdir tmp;
+    auto yaml = fmt::format(R"foo(
+        azure_hosts:
+            azure_test:
+                master_key: {0}
+                imds_endpoint: {1}
+                )foo"
+        , key_name, imds_endpoint
+    );
+
+    co_await test_key_cache_metrics("'key_provider': 'AzureKeyProviderFactory', 'azure_host': 'azure_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", tmp, yaml);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
