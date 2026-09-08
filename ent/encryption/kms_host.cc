@@ -29,6 +29,7 @@
 
 #include "kms_host.hh"
 #include "encryption.hh"
+#include "key_cache.hh"
 #include "encryption_exceptions.hh"
 #include "symmetric_key.hh"
 #include "utils.hh"
@@ -239,10 +240,8 @@ private:
     encryption_context& _ctxt;
     std::string _name;
     host_options _options;
-    utils::loading_cache<attr_cache_key, key_and_id_type, 2, utils::loading_cache_reload_enabled::yes,
-        utils::simple_entry_size<key_and_id_type>, attr_cache_key_hash> _attr_cache;
-    utils::loading_cache<id_cache_key, bytes, 2, utils::loading_cache_reload_enabled::yes, 
-        utils::simple_entry_size<bytes>, id_cache_key_hash> _id_cache;
+    attr_cache<attr_cache_key, key_and_id_type, attr_cache_key_hash> _attr_cache;
+    id_cache<id_cache_key, bytes, id_cache_key_hash> _id_cache;
     shared_ptr<seastar::tls::certificate_credentials> _creds;
     std::unordered_map<bytes, shared_ptr<symmetric_key>> _cache;
     bool _initialized = false;
