@@ -36,6 +36,8 @@
 #include "replica/database.hh"
 #include <seastar/core/sleep.hh>
 #include <seastar/core/sharded.hh>
+#include <seastar/core/loop.hh>
+#include <ranges>
 
 static const sstring table_name = "cf";
 
@@ -65,31 +67,12 @@ static sstring make_collection_literal(unsigned n) {
     return result;
 }
 
-static void execute_update_for_key(cql_test_env& env, const bytes& key, unsigned collection) {
-    sstring col_suffix;
-    if (collection > 0) {
-        col_suffix = fmt::format(", \"CC\" = {}", make_collection_literal(collection));
-    }
-    // Strongly consistent writes need QUORUM/LOCAL_QUORUM.
-    // For eventual consistency it does not matter because there is only one node involved.
-    auto qo = std::make_unique<cql3::query_options>(db::consistency_level::QUORUM, std::vector<cql3::raw_value>{}, cql3::query_options::specific_options::DEFAULT);
-    env.execute_cql(fmt::format("UPDATE cf SET "
-        "\"C0\" = 0x8f75da6b3dcec90c8a404fb9a5f6b0621e62d39c69ba5758e5f41b78311fbb26cc7a,"
-        "\"C1\" = 0xa8761a2127160003033a8f4f3d1069b7833ebe24ef56b3beee728c2b686ca516fa51,"
-        "\"C2\" = 0x583449ce81bfebc2e1a695eb59aad5fcc74d6d7311fc6197b10693e1a161ca2e1c64,"
-        "\"C3\" = 0x62bcb1dbc0ff953abc703bcb63ea954f437064c0c45366799658bd6b91d0f92908d7,"
-        "\"C4\" = 0x222fcbe31ffa1e689540e1499b87fa3f9c781065fccd10e4772b4c7039c2efd0fb27{} "
-        "WHERE \"KEY\"= 0x{};", col_suffix, to_hex(key)), std::move(qo)).get();
-};
-
-static void execute_counter_update_for_key(cql_test_env& env, const bytes& key) {
-    env.execute_cql(fmt::format("UPDATE cf SET "
-        "\"C0\" = \"C0\" + 1,"
-        "\"C1\" = \"C1\" + 2,"
-        "\"C2\" = \"C2\" + 3,"
-        "\"C3\" = \"C3\" + 4,"
-        "\"C4\" = \"C4\" + 5 "
-        "WHERE \"KEY\"= 0x{};", to_hex(key))).get();
+static constexpr std::string_view cell_values[] = {
+    "0x8f75da6b3dcec90c8a404fb9a5f6b0621e62d39c69ba5758e5f41b78311fbb26cc7a",
+    "0xa8761a2127160003033a8f4f3d1069b7833ebe24ef56b3beee728c2b686ca516fa51",
+    "0x583449ce81bfebc2e1a695eb59aad5fcc74d6d7311fc6197b10693e1a161ca2e1c64",
+    "0x62bcb1dbc0ff953abc703bcb63ea954f437064c0c45366799658bd6b91d0f92908d7",
+    "0x222fcbe31ffa1e689540e1499b87fa3f9c781065fccd10e4772b4c7039c2efd0fb27",
 };
 
 struct test_config {
@@ -139,19 +122,70 @@ std::ostream& operator<<(std::ostream& os, const test_config& cfg) {
            << "}";
 }
 
+// The statements the test measures, with the key left to be bound. Shared by the loader and by the
+// tests, so that the partitions the loader writes are the ones the write test overwrites.
+static sstring make_write_query(const test_config& cfg, std::string_view usings = "") {
+    std::string collection_assignment;
+    if (cfg.collection > 0) {
+        collection_assignment = fmt::format(", \"CC\" = {}", make_collection_literal(cfg.collection));
+    }
+    return format("UPDATE cf {}SET \"C0\" = {}, \"C1\" = {}, \"C2\" = {}, \"C3\" = {}, \"C4\" = {}{} "
+            "WHERE \"KEY\" = ?",
+            usings, cell_values[0], cell_values[1], cell_values[2], cell_values[3], cell_values[4],
+            collection_assignment);
+}
+
+static sstring make_counter_update_query(std::string_view usings = "") {
+    return format("UPDATE cf {}SET "
+            "\"C0\" = \"C0\" + 1, \"C1\" = \"C1\" + 2, \"C2\" = \"C2\" + 3, \"C3\" = \"C3\" + 4, \"C4\" = \"C4\" + 5 "
+            "WHERE \"KEY\" = ?", usings);
+}
+
+static sstring make_delete_query(const test_config& cfg, std::string_view usings = "") {
+    std::string collection_column;
+    if (cfg.collection > 0) {
+        collection_column = ", \"CC\"";
+    }
+    return format("DELETE \"C0\", \"C1\", \"C2\", \"C3\", \"C4\"{} FROM cf {}WHERE \"KEY\" = ?", collection_column, usings);
+}
+
+// A USING clause, with the trailing space the statements above expect between it and what follows.
+// The per statement `usings` strings this replaces were built without that space, so --timeout made
+// the write `UPDATE cf USING TIMEOUT 5sSET "C0" = ...`.
+static std::string make_timeout_using(const test_config& cfg) {
+    return cfg.timeout.empty() ? std::string() : fmt::format("USING TIMEOUT {} ", std::string_view(cfg.timeout));
+}
+
+// How many partitions the loader writes at a time. Writing them one at a time waits for a round
+// trip through the write path per partition, which for a dataset of any size is most of the run.
+static constexpr unsigned populate_concurrency = 100;
+
 static void create_partitions(cql_test_env& env, test_config& cfg) {
     std::cout << "Creating " << cfg.partitions << " partitions..." << std::endl;
-    unsigned next_flush = (cfg.memtable_partitions > 0 ? cfg.memtable_partitions : cfg.partitions);
-    for (unsigned sequence = 0; sequence < cfg.partitions; ++sequence) {
-        if (cfg.counters) {
-            execute_counter_update_for_key(env, make_key(sequence));
-        } else {
-            execute_update_for_key(env, make_key(sequence), cfg.collection);
+    auto id = env.prepare(cfg.counters ? make_counter_update_query() : make_write_query(cfg)).get();
+    // Strongly consistent writes need QUORUM/LOCAL_QUORUM. For eventual consistency it does not
+    // matter because there is only one node involved.
+    auto write = [&env, id] (unsigned sequence) {
+        return env.execute_prepared(id, {{cql3::raw_value::make_value(make_key(sequence))}},
+                db::consistency_level::QUORUM).discard_result();
+    };
+    if (cfg.memtable_partitions > 0) {
+        // Flushing every so many partitions needs the writes to happen in a known order.
+        unsigned next_flush = cfg.memtable_partitions;
+        for (unsigned sequence = 0; sequence < cfg.partitions; ++sequence) {
+            write(sequence).get();
+            if (sequence + 1 >= next_flush) {
+                env.db().invoke_on_all(&replica::database::flush_all_memtables).get();
+                next_flush += cfg.memtable_partitions;
+            }
         }
-        if (sequence + 1 >= next_flush) {
-            env.db().invoke_on_all(&replica::database::flush_all_memtables).get();
-            next_flush += cfg.memtable_partitions;
-        }
+    } else {
+        auto sequences = std::views::iota(0u, cfg.partitions);
+        max_concurrent_for_each(sequences.begin(), sequences.end(), populate_concurrency, std::move(write)).get();
+        // The loop this replaces flushed on its last iteration, which is what put the dataset into
+        // the sstables a read test means to measure; a read of a memtable is not one of those. A
+        // logstor table has no memtable, so this costs a logstor run nothing.
+        env.db().invoke_on_all(&replica::database::flush_all_memtables).get();
     }
 
     if (cfg.flush_memtables) {
@@ -225,22 +259,7 @@ static std::vector<perf_result> test_read(cql_test_env& env, test_config& cfg, s
 }
 
 static std::vector<perf_result> test_write(cql_test_env& env, test_config& cfg, sharded<std::vector<uint64_t>>& shard_seqs) {
-    sstring usings;
-    if (!cfg.timeout.empty()) {
-        usings += "USING TIMEOUT " + cfg.timeout;
-    }
-    sstring col_suffix;
-    if (cfg.collection > 0) {
-        col_suffix = fmt::format(", \"CC\" = {}", make_collection_literal(cfg.collection));
-    }
-    sstring query = format("UPDATE cf {}SET "
-            "\"C0\" = 0x8f75da6b3dcec90c8a404fb9a5f6b0621e62d39c69ba5758e5f41b78311fbb26cc7a,"
-            "\"C1\" = 0xa8761a2127160003033a8f4f3d1069b7833ebe24ef56b3beee728c2b686ca516fa51,"
-            "\"C2\" = 0x583449ce81bfebc2e1a695eb59aad5fcc74d6d7311fc6197b10693e1a161ca2e1c64,"
-            "\"C3\" = 0x62bcb1dbc0ff953abc703bcb63ea954f437064c0c45366799658bd6b91d0f92908d7,"
-            "\"C4\" = 0x222fcbe31ffa1e689540e1499b87fa3f9c781065fccd10e4772b4c7039c2efd0fb27{} "
-            "WHERE \"KEY\" = ?", usings, col_suffix);
-    auto id = env.prepare(query).get();
+    auto id = env.prepare(make_write_query(cfg, make_timeout_using(cfg))).get();
     return time_parallel([&env, &cfg, &shard_seqs, id] {
             auto key = next_key(cfg, shard_seqs.local());
             if (!key) {
@@ -254,16 +273,7 @@ static std::vector<perf_result> test_write(cql_test_env& env, test_config& cfg, 
 
 static std::vector<perf_result> test_delete(cql_test_env& env, test_config& cfg, sharded<std::vector<uint64_t>>& shard_seqs) {
     create_partitions(env, cfg);
-    sstring usings;
-    if (!cfg.timeout.empty()) {
-        usings += "USING TIMEOUT " + cfg.timeout;
-    }
-    sstring col_suffix;
-    if (cfg.collection > 0) {
-        col_suffix = ", \"CC\"";
-    }
-    sstring query = format("DELETE \"C0\", \"C1\", \"C2\", \"C3\", \"C4\"{} FROM cf {}WHERE \"KEY\" = ?", col_suffix, usings);
-    auto id = env.prepare(query).get();
+    auto id = env.prepare(make_delete_query(cfg, make_timeout_using(cfg))).get();
     return time_parallel([&env, &cfg, &shard_seqs, id] {
             auto key = next_key(cfg, shard_seqs.local());
             if (!key) {
@@ -276,18 +286,7 @@ static std::vector<perf_result> test_delete(cql_test_env& env, test_config& cfg,
 }
 
 static std::vector<perf_result> test_counter_update(cql_test_env& env, test_config& cfg, sharded<std::vector<uint64_t>>& shard_seqs) {
-    sstring usings;
-    if (!cfg.timeout.empty()) {
-        usings += "USING TIMEOUT " + cfg.timeout;
-    }
-    sstring query = format("UPDATE cf {}SET "
-            "\"C0\" = \"C0\" + 1,"
-            "\"C1\" = \"C1\" + 2,"
-            "\"C2\" = \"C2\" + 3,"
-            "\"C3\" = \"C3\" + 4,"
-            "\"C4\" = \"C4\" + 5 "
-            "WHERE \"KEY\" = ?", usings);
-    auto id = env.prepare(query).get();
+    auto id = env.prepare(make_counter_update_query(make_timeout_using(cfg))).get();
     return time_parallel([&env, &cfg, &shard_seqs, id] {
             auto key = next_key(cfg, shard_seqs.local());
             if (!key) {
