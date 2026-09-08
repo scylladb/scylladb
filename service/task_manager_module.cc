@@ -401,7 +401,7 @@ future<std::optional<tasks::virtual_task_hint>> global_topology_request_virtual_
         co_return std::nullopt;
     }
 
-    auto hint = std::make_optional<tasks::virtual_task_hint>({});
+    auto hint = std::make_optional(tasks::virtual_task_hint{});
     auto entry = co_await _ss._sys_ks.local().get_topology_request_entry_opt(task_id.uuid());
     if (entry.has_value() && std::holds_alternative<service::global_topology_request>(entry->request_type) &&
             std::get<service::global_topology_request>(entry->request_type) == global_topology_request::keyspace_rf_change) {
