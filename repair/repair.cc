@@ -924,7 +924,7 @@ future<> repair_service::repair_range(shard_repair_state& rstate, const dht::tok
     }
     try {
         auto dropped = co_await streaming::with_table_drop_silenced(rstate.db.local(), _mm, table.id, [&] (const table_id& uuid) {
-            return repair_cf_range_row_level(rstate, table.name, table.id, range, neighbors, rstate.small_table_optimization, flush_time, rstate._frozen_topology_guard);
+            return repair_cf_range_row_level(rstate, table.name, table.id, range, neighbors, flush_time);
         });
         if (dropped) {
             rstate.dropped_tables.insert(table.name);
