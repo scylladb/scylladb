@@ -75,6 +75,62 @@ static constexpr std::string_view cell_values[] = {
     "0x222fcbe31ffa1e689540e1499b87fa3f9c781065fccd10e4772b4c7039c2efd0fb27",
 };
 
+// How many partition reads the caches of all the shards served, and how many they had to go to the
+// storage engine for. Both the row cache of an sstable backed table and the logstor cache of a
+// logstor one count here, so this says which of the two paths a read test really measured.
+struct cache_counters {
+    uint64_t hits = 0;
+    uint64_t misses = 0;
+
+    static cache_counters sample(sharded<replica::database>& db) {
+        return db.map_reduce0([] (replica::database& db) {
+            const auto& stats = db.row_cache_tracker().get_stats();
+            return cache_counters{.hits = stats.partition_hits, .misses = stats.partition_misses};
+        }, cache_counters{}, [] (cache_counters a, cache_counters b) {
+            return cache_counters{.hits = a.hits + b.hits, .misses = a.misses + b.misses};
+        }).get();
+    }
+};
+
+struct cache_result_mixin {
+    double cache_hits = 0;
+    double cache_misses = 0;
+};
+
+// What every measurement iteration reports, on top of the throughput and the CPU counters: the IO
+// and the cache lookups one operation cost.
+struct query_perf_result : public perf_result, public io_result_mixin, public cache_result_mixin {};
+
+// The update function of the measurement loop. Like io_counters_updater, it holds the sample the
+// previous iteration ended with, and is constructed right before the run it measures.
+class query_stats_updater {
+    sharded<replica::database>& _db;
+    io_counters_updater _io;
+    cache_counters _last_cache;
+public:
+    explicit query_stats_updater(sharded<replica::database>& db)
+        : _db(db)
+        , _last_cache(cache_counters::sample(db)) {
+    }
+
+    void operator()(query_perf_result& result, const executor_shard_stats& stats) {
+        _io(result, stats);
+        auto sample = cache_counters::sample(_db);
+        result.cache_hits = double(sample.hits - _last_cache.hits) / stats.invocations;
+        result.cache_misses = double(sample.misses - _last_cache.misses) / stats.invocations;
+        _last_cache = sample;
+    }
+};
+
+template <> struct fmt::formatter<query_perf_result> : fmt::formatter<string_view> {
+    auto format(const query_perf_result& r, fmt::format_context& ctx) const -> decltype(ctx.out()) {
+        return fmt::format_to(ctx.out(), "{:.2f} tps ({:5.1f} allocs/op, {:5.1f} logallocs/op, {:5.1f} tasks/op, {:5.1f} polls/op, {:7.0f} insns/op, {:7.0f} cycles/op, {:8} errors,"
+                " {:5.2f} reads/op, {:8.0f} read bytes/op, {:5.2f} writes/op, {:8.0f} write bytes/op, {:5.2f} cache hits/op, {:5.2f} cache misses/op)",
+                r.throughput, r.mallocs_per_op, r.logallocs_per_op, r.tasks_per_op, r.polls_per_op, r.instructions_per_op, r.cpu_cycles_per_op, r.errors,
+                r.reads, r.read_bytes, r.writes, r.write_bytes, r.cache_hits, r.cache_misses);
+    }
+};
+
 struct test_config {
     enum class run_mode { read, write, del };
     run_mode mode;
@@ -260,7 +316,7 @@ static std::optional<bytes> next_key(test_config& cfg, const std::vector<uint64_
     return make_key(tests::random::get_int<uint64_t>(cfg.partitions - 1));
 }
 
-static std::vector<perf_result> test_read(cql_test_env& env, test_config& cfg, sharded<std::vector<uint64_t>>& shard_seqs) {
+static std::vector<query_perf_result> test_read(cql_test_env& env, test_config& cfg, sharded<std::vector<uint64_t>>& shard_seqs) {
     create_partitions(env, cfg);
     sstring query = "select \"C0\", \"C1\", \"C2\", \"C3\", \"C4\"";
     if (cfg.collection > 0) {
@@ -274,7 +330,7 @@ static std::vector<perf_result> test_read(cql_test_env& env, test_config& cfg, s
         query += " using timeout " + cfg.timeout;
     }
     auto id = env.prepare(query).get();
-    return time_parallel([&env, &cfg, &shard_seqs, id] {
+    return time_parallel_ex<query_perf_result>([&env, &cfg, &shard_seqs, id] {
             auto key = next_key(cfg, shard_seqs.local());
             if (!key) {
                 // This shard owns no partitions in shard-aware mode; idle for
@@ -282,12 +338,12 @@ static std::vector<perf_result> test_read(cql_test_env& env, test_config& cfg, s
                 return seastar::sleep(std::chrono::seconds(1));
             }
             return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(*key))}}, cfg.consistency_level).discard_result();
-        }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error);
+        }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error, query_stats_updater(env.db()));
 }
 
-static std::vector<perf_result> test_write(cql_test_env& env, test_config& cfg, sharded<std::vector<uint64_t>>& shard_seqs) {
+static std::vector<query_perf_result> test_write(cql_test_env& env, test_config& cfg, sharded<std::vector<uint64_t>>& shard_seqs) {
     auto id = env.prepare(make_write_query(cfg, make_timeout_using(cfg))).get();
-    return time_parallel([&env, &cfg, &shard_seqs, id] {
+    return time_parallel_ex<query_perf_result>([&env, &cfg, &shard_seqs, id] {
             auto key = next_key(cfg, shard_seqs.local());
             if (!key) {
                 // This shard owns no partitions in shard-aware mode; idle for
@@ -295,13 +351,13 @@ static std::vector<perf_result> test_write(cql_test_env& env, test_config& cfg, 
                 return seastar::sleep(std::chrono::seconds(1));
             }
             return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(*key))}}, cfg.consistency_level).discard_result();
-        }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error);
+        }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error, query_stats_updater(env.db()));
 }
 
-static std::vector<perf_result> test_delete(cql_test_env& env, test_config& cfg, sharded<std::vector<uint64_t>>& shard_seqs) {
+static std::vector<query_perf_result> test_delete(cql_test_env& env, test_config& cfg, sharded<std::vector<uint64_t>>& shard_seqs) {
     create_partitions(env, cfg);
     auto id = env.prepare(make_delete_query(cfg, make_timeout_using(cfg))).get();
-    return time_parallel([&env, &cfg, &shard_seqs, id] {
+    return time_parallel_ex<query_perf_result>([&env, &cfg, &shard_seqs, id] {
             auto key = next_key(cfg, shard_seqs.local());
             if (!key) {
                 // This shard owns no partitions in shard-aware mode; idle for
@@ -309,12 +365,12 @@ static std::vector<perf_result> test_delete(cql_test_env& env, test_config& cfg,
                 return seastar::sleep(std::chrono::seconds(1));
             }
             return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(*key))}}, cfg.consistency_level).discard_result();
-        }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error);
+        }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error, query_stats_updater(env.db()));
 }
 
-static std::vector<perf_result> test_counter_update(cql_test_env& env, test_config& cfg, sharded<std::vector<uint64_t>>& shard_seqs) {
+static std::vector<query_perf_result> test_counter_update(cql_test_env& env, test_config& cfg, sharded<std::vector<uint64_t>>& shard_seqs) {
     auto id = env.prepare(make_counter_update_query(make_timeout_using(cfg))).get();
-    return time_parallel([&env, &cfg, &shard_seqs, id] {
+    return time_parallel_ex<query_perf_result>([&env, &cfg, &shard_seqs, id] {
             auto key = next_key(cfg, shard_seqs.local());
             if (!key) {
                 // This shard owns no partitions in shard-aware mode; idle for
@@ -322,7 +378,7 @@ static std::vector<perf_result> test_counter_update(cql_test_env& env, test_conf
                 return seastar::sleep(std::chrono::seconds(1));
             }
             return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(*key))}}, cfg.consistency_level).discard_result();
-        }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error);
+        }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error, query_stats_updater(env.db()));
 }
 
 static schema_ptr make_counter_schema(std::string_view ks_name) {
@@ -336,7 +392,7 @@ static schema_ptr make_counter_schema(std::string_view ks_name) {
             .build();
 }
 
-static std::vector<perf_result> do_cql_test(cql_test_env& env, test_config& cfg) {
+static std::vector<query_perf_result> do_cql_test(cql_test_env& env, test_config& cfg) {
     std::cout << "Running test with config: " << cfg << std::endl;
     env.create_table([&cfg] (auto ks_name) {
         if (cfg.counters) {
@@ -393,7 +449,7 @@ static std::vector<perf_result> do_cql_test(cql_test_env& env, test_config& cfg)
     abort();
 }
 
-void write_json_result(std::string result_file, const test_config& cfg, const aggregated_perf_results& agg) {
+void write_json_result(std::string result_file, const test_config& cfg, const aggregated_perf_results& agg, const query_perf_result& median) {
     Json::Value params;
     params["concurrency"] = cfg.concurrency;
     params["partitions"] = cfg.partitions;
@@ -422,7 +478,15 @@ void write_json_result(std::string result_file, const test_config& cfg, const ag
         test_type += "_logstor";
     }
 
-    perf::write_json_result(result_file, agg, params, test_type);
+    Json::Value extra_stats;
+    extra_stats["reads_per_op"] = median.reads;
+    extra_stats["read_bytes_per_op"] = median.read_bytes;
+    extra_stats["writes_per_op"] = median.writes;
+    extra_stats["write_bytes_per_op"] = median.write_bytes;
+    extra_stats["cache_hits_per_op"] = median.cache_hits;
+    extra_stats["cache_misses_per_op"] = median.cache_misses;
+
+    perf::write_json_result(result_file, agg, params, test_type, extra_stats);
 }
 
 /// If app configuration contains the named parameter, store its value into \p store.
@@ -592,10 +656,16 @@ int scylla_simple_query_main(int argc, char** argv) {
                 a.on_role_created("tester");
             }).get();
             auto results = do_cql_test(env, cfg);
-            aggregated_perf_results agg(results);
+            std::vector<perf_result> throughput_results(results.begin(), results.end());
+            aggregated_perf_results agg(throughput_results);
             std::cout << agg << std::endl;
+            // The same median as aggregated_perf_results reports, with the IO and cache counters of
+            // that iteration, which are not part of the aggregation.
+            std::ranges::sort(results, std::less<>{}, &perf_result::throughput);
+            const auto& median = results[results.size() / 2];
+            fmt::print("median: {}\n", median);
             if (app.configuration().contains("json-result")) {
-                write_json_result(app.configuration()["json-result"].as<std::string>(), cfg, agg);
+                write_json_result(app.configuration()["json-result"].as<std::string>(), cfg, agg, median);
             }
           }, std::move(cfg));
         });
