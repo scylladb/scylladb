@@ -288,7 +288,7 @@ private:
     bool _is_pending_for_write = false;
 };
 
-class tracing : public seastar::async_sharded_service<tracing> {
+class tracing : public seastar::async_sharded_service<tracing>, public seastar::peering_sharded_service<tracing> {
 public:
     static const gc_clock::duration write_period;
     // maximum number of sessions pending for write per shard

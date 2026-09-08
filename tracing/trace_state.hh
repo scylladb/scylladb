@@ -143,6 +143,12 @@ public:
         return _records->session_id;
     }
 
+    // Valid on any shard, but the returned reference is for the shard
+    // this state was created on
+    tracing& local_tracing() const noexcept {
+        return *_local_tracing_ptr;
+    }
+
     bool is_in_state(state s) const {
         return _state == s;
     }
@@ -762,11 +768,16 @@ inline void add_prepared_query_options(const trace_state_ptr& state, const cql3:
 class global_trace_state_ptr {
     unsigned _cpu_of_origin;
     trace_state_ptr _ptr;
+    // Captured on the origin shard, but points to the sharded service
+    // container which is shard-agnostic, so it's valid to use (though
+    // not to assign) on any shard. Non-null iff _ptr is non-null.
+    sharded<tracing>* _tracing;
 public:
     // Note: the trace_state_ptr must come from the current shard
     global_trace_state_ptr(trace_state_ptr t)
             : _cpu_of_origin(this_shard_id())
             , _ptr(std::move(t))
+            , _tracing(_ptr ? &_ptr->local_tracing().container() : nullptr)
     { }
 
     // May be invoked across shards.
@@ -791,7 +802,7 @@ public:
         if (_cpu_of_origin != this_shard_id()) {
             auto opt_trace_info = make_trace_info(_ptr);
             if (opt_trace_info) {
-                trace_state_ptr new_trace_state = tracing::get_local_tracing_instance().create_session(*opt_trace_info);
+                trace_state_ptr new_trace_state = _tracing->local().create_session(*opt_trace_info);
                 begin(new_trace_state);
                 return new_trace_state;
             } else {
