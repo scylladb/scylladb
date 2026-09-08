@@ -11,6 +11,7 @@
 #include <vector>
 #include "gms/gossip_address_map.hh"
 #include "gms/inet_address.hh"
+#include "node_ops/node_ops_ctl.hh"
 #include "repair/repair.hh"
 #include "repair/task_manager_module.hh"
 #include "service/topology_guard.hh"
