@@ -1381,13 +1381,13 @@ future<> server_impl::process_fsm_output(index_t& last_stable, fsm_output&& batc
         // Persisting the commit index is optional (see
         // persistence::store_commit_idx): a restarted server re-learns it from
         // the leader or, after a full cluster restart, the new leader recomputes
-        // it from a quorum. So the commit notification above does not need to
-        // wait for this write.
-        co_await _persistence->store_commit_idx(ids.last_idx);
+        // it from a quorum. So neither the commit notification above nor the
+        // applier fiber needs to wait for this write.
         _stats.queue_entries_for_apply += ids.size();
         SCYLLA_ASSERT(ids.last_idx > _applier_mailbox.commit_idx);
         _applier_mailbox.commit_idx = ids.last_idx;
         _applier_mailbox.notify();
+        co_await _persistence->store_commit_idx(ids.last_idx);
     }
 
     if (batch.max_read_id_with_quorum) {
