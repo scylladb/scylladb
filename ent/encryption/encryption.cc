@@ -27,6 +27,7 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/fstream.hh>
 #include <seastar/core/reactor.hh>
+#include <seastar/core/metrics.hh>
 
 #include <fmt/ranges.h>
 #include <fmt/ostream.h>
@@ -61,6 +62,7 @@
 #include "encryption_config.hh"
 #include "utils/UUID_gen.hh"
 #include "init.hh"
+#include "key_cache.hh"
 
 static seastar::logger logg{"encryption"};
 
@@ -266,6 +268,7 @@ sstring encryption_context::maybe_decrypt_config_value(const sstring& s) const {
 }
 
 class encryption_schema_extension;
+namespace sm = seastar::metrics;
 
 class encryption_context_impl : public encryption_context {
     // poor mans per-thread instance variable. We need a lookup map
@@ -287,6 +290,9 @@ class encryption_context_impl : public encryption_context {
     sharded<service::storage_service>* _ss;
     shared_ptr<symmetric_key> _cfg_encryption_key;
     bool _allow_per_table_encryption;
+    // also per-shard
+    std::vector<sm::metric_groups> _metrics;
+
 public:
     encryption_context_impl(std::unique_ptr<encryption_config> cfg, const service_set& services)
         : _per_thread_provider_cache(this_smp_shard_count())
@@ -302,6 +308,7 @@ public:
         , _db(find_or_null<replica::database>(services))
         , _ss(find_or_null<service::storage_service>(services))
         , _allow_per_table_encryption(_cfg->allow_per_table_encryption())
+        , _metrics(this_smp_shard_count())
     {}
 
     template<typename T>
@@ -454,6 +461,9 @@ public:
     }
 
     future<> start() override {
+        co_await smp::invoke_on_all([this] {
+            register_key_cache_metrics(_metrics[this_shard_id()]);
+        });
         if (_qp && _ss && _db && _mm) {
             co_await replicated_key_provider_factory::on_started(get_database().local(), get_migration_manager().local());
         }
@@ -486,6 +496,8 @@ public:
             _per_thread_gcp_host_cache[this_shard_id()].clear();
             _per_thread_azure_host_cache[this_shard_id()].clear();
             _per_thread_global_user_extension[this_shard_id()] = {};
+
+            _metrics[this_shard_id()].clear();
 
             // only relevant for testing, but...
             // If we are re-starting, say, cql-test-env, the thread_local statics that are the system schemas will
