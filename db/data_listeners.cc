@@ -49,7 +49,9 @@ toppartitions_item_key::operator sstring() const {
 }
 
 toppartitions_data_listener::toppartitions_data_listener(replica::database& db, std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash> table_filters,
-        std::unordered_set<sstring> keyspace_filters) : _db(db), _table_filters(std::move(table_filters)), _keyspace_filters(std::move(keyspace_filters)) {
+        std::unordered_set<sstring> keyspace_filters, bool track_read, bool track_write)
+        : _db(db), _table_filters(std::move(table_filters)), _keyspace_filters(std::move(keyspace_filters))
+        , _track_read(track_read), _track_write(track_write) {
     dblog.debug("toppartitions_data_listener: installing {}", fmt::ptr(this));
     _db.data_listeners().install(this);
 }
@@ -66,6 +68,9 @@ future<> toppartitions_data_listener::stop() {
 
 mutation_reader toppartitions_data_listener::on_read(const schema_ptr& s, const dht::partition_range& range,
         const query::partition_slice& slice, mutation_reader&& rd) {
+    if (!_track_read) {
+        return std::move(rd);
+    }
     bool include_all = _table_filters.empty() && _keyspace_filters.empty();
 
     if (include_all || _keyspace_filters.contains(s->ks_name()) || _table_filters.contains({s->ks_name(), s->cf_name()})) {
@@ -83,8 +88,11 @@ mutation_reader toppartitions_data_listener::on_read(const schema_ptr& s, const 
 }
 
 void toppartitions_data_listener::on_write(const schema_ptr& s, const frozen_mutation& m) {
+    if (!_track_write) {
+        return;
+    }
     bool include_all = _table_filters.empty() && _keyspace_filters.empty();
-    
+
     if (include_all || _keyspace_filters.contains(s->ks_name()) || _table_filters.contains({s->ks_name(), s->cf_name()})) {
         dblog.trace("toppartitions_data_listener::on_write: {}.{}", s->ks_name(), s->cf_name());
         _top_k_write.append(toppartitions_item_key{s, m.decorated_key(*s)});
@@ -112,15 +120,17 @@ toppartitions_data_listener::localize(const global_top_k::results& r) {
 }
 
 toppartitions_query::toppartitions_query(sharded<replica::database>& xdb, std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash>&& table_filters,
-        std::unordered_set<sstring>&& keyspace_filters, std::chrono::milliseconds duration, size_t list_size, size_t capacity)
+        std::unordered_set<sstring>&& keyspace_filters, std::chrono::milliseconds duration, size_t list_size, size_t capacity, std::optional<sstring> kind)
         : _xdb(xdb), _table_filters(std::move(table_filters)), _keyspace_filters(std::move(keyspace_filters)), _duration(duration), _list_size(list_size), _capacity(capacity),
-          _query(std::make_unique<sharded<toppartitions_data_listener>>()) {
+          _kind(std::move(kind)), _query(std::make_unique<sharded<toppartitions_data_listener>>()) {
     dblog.debug("toppartitions_query on {} column families and {} keyspaces", !_table_filters.empty() ? std::to_string(_table_filters.size()) : "all",
                 !_keyspace_filters.empty() ? std::to_string(_keyspace_filters.size()) : "all");
 }
 
 future<> toppartitions_query::scatter() {
-    return _query->start(std::ref(_xdb), _table_filters, _keyspace_filters);
+    bool track_read = !_kind || *_kind == "read";
+    bool track_write = !_kind || *_kind == "write";
+    return _query->start(std::ref(_xdb), _table_filters, _keyspace_filters, track_read, track_write);
 }
 
 using top_t = toppartitions_data_listener::global_top_k::results;
