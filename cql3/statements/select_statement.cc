@@ -1870,6 +1870,12 @@ mutation_fragments_select_statement::do_execute(query_processor& qp, service::qu
     tracing::add_table_name(state.get_trace_state(), keyspace(), column_family());
 
     auto cl = options.get_consistency();
+    if (strong_consistency::is_strongly_consistent(qp.db(), keyspace())) {
+        if (cl != db::consistency_level::ONE && cl != db::consistency_level::LOCAL_ONE) {
+            throw exceptions::invalid_request_exception(
+                    "SELECT FROM MUTATION_FRAGMENTS() on strongly consistent tables must use ONE/LOCAL_ONE consistency level, it reads the local replica only");
+        }
+    }
 
     const auto parsed_limit = get_limit(options, _limit);
     const uint64_t limit = get_inner_loop_limit(parsed_limit, _selection->is_aggregate());
