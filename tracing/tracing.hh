@@ -87,7 +87,7 @@ public:
     /**
      * @return New span_id with a random legal value
      */
-    static span_id make_span_id();
+    static span_id make_span_id(tracing& tr);
 };
 
 // !!!!IMPORTANT!!!!
@@ -242,7 +242,7 @@ public:
     span_id parent_id;
     span_id my_span_id;
 
-    one_session_records(trace_type type, std::chrono::seconds slow_query_ttl, std::chrono::seconds slow_query_rec_ttl,
+    one_session_records(tracing& tr, trace_type type, std::chrono::seconds slow_query_ttl, std::chrono::seconds slow_query_rec_ttl,
             std::optional<utils::UUID> session_id = std::nullopt, span_id parent_id = span_id::illegal_id);
 
     /**
@@ -655,9 +655,9 @@ void one_session_records::data_consumed() {
     budget_ptr = _local_tracing_ptr->get_cached_records_ptr();
 }
 
-inline span_id span_id::make_span_id() {
+inline span_id span_id::make_span_id(tracing& tr) {
     // make sure the value is always greater than 0
-    return 1 + (tracing::get_local_tracing_instance().get_next_rand_uint64() << 1);
+    return 1 + (tr.get_next_rand_uint64() << 1);
 }
 }
 
