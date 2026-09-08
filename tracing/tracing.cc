@@ -103,7 +103,7 @@ trace_state_ptr tracing::create_session(trace_type type, trace_state_props_set p
         props.set_if<trace_state_props::ignore_events>(!props.contains<trace_state_props::full_tracing>() && ignore_trace_events_enabled());
 
         ++_active_sessions;
-        return make_lw_shared<trace_state>(type, props);
+        return make_lw_shared<trace_state>(*this, type, props);
     } catch (...) {
         // return an uninitialized state in case of any error (OOM?)
         return nullptr;
@@ -122,7 +122,7 @@ trace_state_ptr tracing::create_session(const trace_info& secondary_session_info
         }
 
         ++_active_sessions;
-        return make_lw_shared<trace_state>(secondary_session_info);
+        return make_lw_shared<trace_state>(*this, secondary_session_info);
     } catch (...) {
         // return an uninitialized state in case of any error (OOM?)
         return nullptr;
