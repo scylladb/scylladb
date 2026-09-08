@@ -1746,8 +1746,17 @@ void server_impl::check_state_machine_usable() const {
 void server_impl::handle_background_error(const char* fiber_name) {
     _is_alive = false;
     auto e = std::current_exception();
-    if (_aborted && try_catch<const seastar::gate_closed_exception>(e)) {
-        logger.debug("[{}] {} fiber stopped while aborting raft server: {}", _tag, fiber_name, e);
+    if (_aborted) {
+        // The state machine, the rpc module and the persistence are aborted
+        // while the fibers still run, so a failure here is expected. Don't
+        // report it: abort() fails all the waiters anyway, and some users
+        // escalate on_background_error to on_internal_error, which would
+        // turn a shutdown into a crash.
+        const bool expected = try_catch_nested<seastar::abort_requested_exception>(e)
+                || try_catch_nested<seastar::gate_closed_exception>(e)
+                || try_catch_nested<stopped_error>(e);
+        logger.log(expected ? log_level::debug : log_level::warn,
+                "[{}] {} fiber stopped while aborting raft server: {}", _tag, fiber_name, e);
         return;
     }
     logger.error("[{}] {} fiber stopped because of the error: {}", _tag, fiber_name, e);
@@ -1778,9 +1787,12 @@ future<> server_impl::abort(sstring reason) {
     _add_entry_admission.broken(stopped_error(*_aborted));
 
     // IO and applier fibers may update waiters and start new snapshot
-    // transfers, so abort them first
+    // transfers, so abort them first. Aborting the state machine here, before
+    // waiting for the fibers, is what interrupts an apply/snapshot operation
+    // the applier fiber is already inside of.
     _apply_entries.abort(std::make_exception_ptr(stop_apply_fiber()));
 
+    auto abort_sm = _state_machine->abort();
     auto io_applied_future = co_await coroutine::as_future(seastar::when_all_succeed(
             std::move(_io_status), std::move(_applier_status)).discard_result());
     if (io_applied_future.failed()) {
@@ -1791,7 +1803,6 @@ future<> server_impl::abort(sstring reason) {
     // After calling `_rpc->abort()` no new snapshot applications should be started or new waiters created
     // (see `rpc::abort()` comment and `_aborted` flag).
     auto abort_rpc = _rpc->abort();
-    auto abort_sm = _state_machine->abort();
     auto abort_persistence = _persistence->abort();
 
     // Abort snapshot applications before waiting for `abort_rpc`,
