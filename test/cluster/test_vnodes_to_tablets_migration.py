@@ -196,43 +196,32 @@ async def wait_for_pow2_convergence(manager: ScyllaClusterManager, server: Serve
 
 async def verify_migration_status(manager: ScyllaClusterManager, server: ServerInfo,
                                   ks: str, expected_status: str,
-                                  expected_node_statuses: dict[str, tuple[str, str]],
-                                  retries: int = 0, retry_interval: float = 0):
-    async def _check():
-        # Verify migration status via the migration status API
-        status = await manager.api.get_vnode_tablet_migration_status(server.ip_addr, ks)
-        actual_node_statuses = {n['host_id']: (n['current_mode'], n['intended_mode']) for n in status['nodes']}
-        assert status['status'] == expected_status, f"Expected migration status '{expected_status}', got '{status['status']}'"
-        assert actual_node_statuses == expected_node_statuses, f"Expected node statuses {expected_node_statuses}, got {actual_node_statuses}"
+                                  expected_node_statuses: dict[str, tuple[str, str]]):
+    # The status API takes a group0 read barrier, so a single check is enough:
+    # anything a node published before it finished starting up is already visible.
+    status = await manager.api.get_vnode_tablet_migration_status(server.ip_addr, ks)
+    actual_node_statuses = {n['host_id']: (n['current_mode'], n['intended_mode']) for n in status['nodes']}
+    assert status['status'] == expected_status, f"Expected migration status '{expected_status}', got '{status['status']}'"
+    assert actual_node_statuses == expected_node_statuses, f"Expected node statuses {expected_node_statuses}, got {actual_node_statuses}"
 
-        # Verify migration status via the tasks API
-        tm = TaskManagerClient(manager.api)
-        tasks = await tm.list_tasks(server.ip_addr, "vnodes_to_tablets_migration")
-        ks_tasks = [t for t in tasks if t.keyspace == ks and t.type == "vnodes_to_tablets_migration"]
+    # Verify migration status via the tasks API
+    tm = TaskManagerClient(manager.api)
+    tasks = await tm.list_tasks(server.ip_addr, "vnodes_to_tablets_migration")
+    ks_tasks = [t for t in tasks if t.keyspace == ks and t.type == "vnodes_to_tablets_migration"]
 
-        if expected_status == "migrating_to_tablets":
-            assert len(ks_tasks) == 1, f"Expected 1 virtual task for keyspace '{ks}', got {len(ks_tasks)}"
-            task = ks_tasks[0]
-            assert task.state == "running", f"Expected task state 'running', got '{task.state}'"
-            assert task.type == "vnodes_to_tablets_migration", f"Expected task type 'vnodes_to_tablets_migration', got '{task.type}'"
+    if expected_status == "migrating_to_tablets":
+        assert len(ks_tasks) == 1, f"Expected 1 virtual task for keyspace '{ks}', got {len(ks_tasks)}"
+        task = ks_tasks[0]
+        assert task.state == "running", f"Expected task state 'running', got '{task.state}'"
+        assert task.type == "vnodes_to_tablets_migration", f"Expected task type 'vnodes_to_tablets_migration', got '{task.type}'"
 
-            task_status = await tm.get_task_status(server.ip_addr, task.task_id)
-            expected_total = len(expected_node_statuses)
-            expected_completed = sum(1 for cm, _ in expected_node_statuses.values() if cm == 'tablets')
-            assert task_status.progress_total == expected_total, f"Expected progress_total {expected_total}, got {task_status.progress_total}"
-            assert task_status.progress_completed == expected_completed, f"Expected progress_completed {expected_completed}, got {task_status.progress_completed}"
-        else:
-            assert len(ks_tasks) == 0, f"Expected no virtual tasks for keyspace '{ks}' when status is '{expected_status}', got {len(ks_tasks)}"
-
-    for attempt in range(retries + 1):
-        try:
-            await _check()
-            return
-        except AssertionError:
-            if attempt < retries and retry_interval > 0:
-                await asyncio.sleep(retry_interval)
-            else:
-                raise
+        task_status = await tm.get_task_status(server.ip_addr, task.task_id)
+        expected_total = len(expected_node_statuses)
+        expected_completed = sum(1 for cm, _ in expected_node_statuses.values() if cm == 'tablets')
+        assert task_status.progress_total == expected_total, f"Expected progress_total {expected_total}, got {task_status.progress_total}"
+        assert task_status.progress_completed == expected_completed, f"Expected progress_completed {expected_completed}, got {task_status.progress_completed}"
+    else:
+        assert len(ks_tasks) == 0, f"Expected no virtual tasks for keyspace '{ks}' when status is '{expected_status}', got {len(ks_tasks)}"
 
 
 async def test_migration(manager: ScyllaClusterManager):
@@ -603,8 +592,7 @@ async def test_migration_multinode(manager: ScyllaClusterManager):
         logger.info("Verifying migration status after rolling restarts")
         await verify_migration_status(manager, servers[0], ks,
             expected_status='migrating_to_tablets',
-            expected_node_statuses={host_id: ('tablets', 'tablets') for host_id in host_ids},
-            retries=1, retry_interval=1) # the status is derived from the topology coordinator's load stats which are refreshed every second; give it one retry after 1 second
+            expected_node_statuses={host_id: ('tablets', 'tablets') for host_id in host_ids})
 
         logger.info("Finalizing tablets migration")
         await manager.api.finalize_vnode_tablet_migration(servers[0].ip_addr, ks)
@@ -760,8 +748,7 @@ async def test_migration_multidc(manager: ScyllaClusterManager):
         logger.info("Verifying migration status after rolling restarts")
         await verify_migration_status(manager, servers[0], ks,
             expected_status='migrating_to_tablets',
-            expected_node_statuses={host_id: ('tablets', 'tablets') for host_id in host_ids},
-            retries=1, retry_interval=1)
+            expected_node_statuses={host_id: ('tablets', 'tablets') for host_id in host_ids})
 
         logger.info("Finalizing tablets migration")
         await manager.api.finalize_vnode_tablet_migration(servers[0].ip_addr, ks)
@@ -1016,12 +1003,10 @@ async def test_migration_multiple_keyspaces(manager: ScyllaClusterManager):
             logger.info("Verifying both keyspaces show as migrating")
             await verify_migration_status(manager, server, ks1,
                 expected_status='migrating_to_tablets',
-                expected_node_statuses={host_id: ('tablets', 'tablets')},
-                retries=1, retry_interval=1)
+                expected_node_statuses={host_id: ('tablets', 'tablets')})
             await verify_migration_status(manager, server, ks2,
                 expected_status='migrating_to_tablets',
-                expected_node_statuses={host_id: ('tablets', 'tablets')},
-                retries=1, retry_interval=1)
+                expected_node_statuses={host_id: ('tablets', 'tablets')})
 
             logger.info("Finalizing migration for ks1")
             await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks1)
