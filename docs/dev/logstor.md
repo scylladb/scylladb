@@ -139,6 +139,52 @@ mutation sources:
 SELECT * FROM MUTATION_FRAGMENTS(keyspace.table_name) WHERE pk = 1;
 ```
 
+## Measuring Performance
+
+Two tests measure the cost of a logstor operation on one node, at two levels.
+
+**`scylla perf-simple-query --logstor`** measures the whole read and write path - CQL, the
+coordinator, the replica and logstor - against a logstor table. It is the same test that measures an
+sstable backed table, so the baseline is the same command without the flag. Use it for the cost of
+an operation as a workload sees it, and for the two storage engines side by side.
+
+**`test/perf/perf_logstor`** drives a logstor directly - no CQL, no coordinator, no replica - and
+measures the steps of a read and of a write both together and one at a time, so that a change to the
+hot path can be attributed to the step it moved. Its tests, its options, how its steps add up and
+what a run has to get right are in the comment at the top of
+[test/perf/perf_logstor.cc](../../test/perf/perf_logstor.cc).
+
+The two have to agree. `perf-simple-query --logstor` costs several times what `perf_logstor` reports
+for the same operation, and the difference is the layers above logstor; a change to logstor moves
+both by the same absolute amount, and one that moves only the end to end number moved something
+else.
+
+### What is particular to a logstor run
+
+`--logstor` implies `--tablets`, and it sizes the segment pool, which is empty by default:
+`--logstor-disk-size-in-mb` has to hold the dataset and the dead records the overwrites leave
+behind. `--auto-compaction` defaults to on for a logstor run, since compaction is what gives free
+segments back - with it off, a write test stalls once the pool fills with dead records. Every read
+goes to a segment under `--enable-cache 0` or `--bypass-cache`. `--counters` is refused, and the
+write is an `INSERT` of a whole row while the delete removes the partition, since a record takes its
+timestamp from a row marker or a partition tombstone. `--logstor-sparse-files` is off here and on
+elsewhere in the test environment: off is the file a node has, and a read of a hole is not a read.
+Both tools put their files under `TMPDIR`, which is a tmpfs on many machines, where a read from disk
+is a read from memory.
+
+A logstor table has neither a commitlog nor sstables, so the per operation IO and cache counters of
+a run attribute every disk read and every cache lookup to logstor. They are what says whether a read
+was served from the cache or went to a segment, and therefore which path the run measured.
+
+Against the sstable baseline, two differences are not a logstor result. A logstor write has no
+commitlog but waits for its record to reach a segment, where an sstable write goes to the commitlog
+and the memtable, so the two are not the same amount of durability. And an sstable read of a dataset
+that was never flushed comes from the memtable, which is not a comparison against anything a logstor
+read does - flush first, or use a dataset that does not fit in memory.
+
+For the behaviour of a cluster under a workload, which is a question about metrics rather than about
+these tools, see [metrics.md](metrics.md).
+
 ## On-Disk Format
 
 ### Files
