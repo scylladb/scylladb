@@ -19,6 +19,7 @@
 #include <seastar/core/loop.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/util/log.hh>
+#include <seastar/util/defer.hh>
 #include <seastar/util/later.hh>
 #include <seastar/util/variant_utils.hh>
 #include <seastar/testing/random.hh>
@@ -31,6 +32,7 @@
 #include "utils/assert.hh"
 #include "utils/xx_hasher.hh"
 #include "utils/to_string.hh"
+#include "utils/error_injection.hh"
 #include "test/raft/helpers.hh"
 #include "test/lib/eventually.hh"
 #include "test/lib/random_utils.hh"
@@ -353,6 +355,7 @@ public:
     raft_cluster(const raft_cluster&) = delete;
     raft_cluster(raft_cluster&&) = default;
     raft::server& get_server(size_t id);
+    future<raft::snapshot_reply> receive_snapshot(size_t id, raft::server_id from, raft::install_snapshot snp);
     future<> stop_server(size_t id, sstring reason = "");
     future<> reset_server(size_t id, initial_state state); // Reset a stopped server
     size_t size() {
@@ -408,6 +411,8 @@ class raft_cluster<Clock>::state_machine : public raft::state_machine {
     size_t _seen = 0;
     promise<> _done;
     snapshots* _snapshots;
+    seastar::abort_source _as;
+
 public:
     lw_shared_ptr<hasher_int> hasher;
     state_machine(raft::server_id id, apply_fn apply, size_t apply_entries,
@@ -415,6 +420,8 @@ public:
         _id(id), _apply(std::move(apply)), _apply_entries(apply_entries), _snapshots(snapshots),
         hasher(make_lw_shared<hasher_int>()) {}
     future<> apply(raft::log_entry_ptr_list commands) override {
+        co_await utils::get_local_injector().inject("raft_test_sm_block_apply",
+                std::chrono::minutes(5), _as);
         auto n = _apply(_id, commands, hasher);
         _seen += n;
         if (n && _seen >= _apply_entries) {
@@ -425,20 +432,23 @@ public:
             _done.set_value();
         }
         tlogger.debug("sm::apply[{}] got {}/{} entries", _id, _seen, _apply_entries);
-        return make_ready_future<>();
     }
 
     future<raft::snapshot_id> take_snapshot() override {
+        co_await utils::get_local_injector().inject("raft_test_sm_block_take_snapshot",
+                std::chrono::minutes(5), _as);
         auto snp_id = raft::snapshot_id::create_random_id();
         (*_snapshots)[_id][snp_id].hasher = *hasher;
         tlogger.debug("sm[{}] takes snapshot id {} {} seen {}", _id, (*_snapshots)[_id][snp_id].hasher.finalize_uint64(), snp_id, _seen);
         (*_snapshots)[_id][snp_id].idx = raft::index_t{_seen};
-        return make_ready_future<raft::snapshot_id>(snp_id);
+        co_return snp_id;
     }
     void drop_snapshot(raft::snapshot_id snp_id) override {
         (*_snapshots)[_id].erase(snp_id);
     }
     future<> load_snapshot(raft::snapshot_id snp_id) override {
+        co_await utils::get_local_injector().inject("raft_test_sm_block_load_snapshot",
+                std::chrono::minutes(5), _as);
         hasher = make_lw_shared<hasher_int>((*_snapshots)[_id][snp_id].hasher);
         tlogger.debug("sm[{}] loads snapshot {} idx={}", _id, (*_snapshots)[_id][snp_id].hasher.finalize_uint64(), (*_snapshots)[_id][snp_id].idx);
         _seen = (*_snapshots)[_id][snp_id].idx.value();
@@ -451,7 +461,10 @@ public:
         }
         co_return;
     };
-    future<> abort() override { return make_ready_future<>(); }
+    future<> abort() override {
+        _as.request_abort();
+        return make_ready_future<>();
+    }
 
     future<> done() {
         return _done.get_future();
@@ -605,6 +618,10 @@ public:
     }
     void unpublish() {
         _net.erase(_id);
+    }
+    // Feeds an install_snapshot into the local server as if it came from `from`.
+    future<raft::snapshot_reply> receive_snapshot(raft::server_id from, raft::install_snapshot snp) {
+        return _client->apply_snapshot(from, std::move(snp));
     }
     bool drop_packet() {
         return _rpc_config.drops && !(rand() % 5);
@@ -891,6 +908,11 @@ void raft_cluster<Clock>::init_tick_delays(size_t n) {
 template <typename Clock>
 raft::server& raft_cluster<Clock>::get_server(size_t id) {
     return *_servers[id].server;
+}
+
+template <typename Clock>
+future<raft::snapshot_reply> raft_cluster<Clock>::receive_snapshot(size_t id, raft::server_id from, raft::install_snapshot snp) {
+    return _servers[id].rpc->receive_snapshot(from, std::move(snp));
 }
 
 template <typename Clock>
