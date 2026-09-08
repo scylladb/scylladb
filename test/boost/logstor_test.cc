@@ -34,6 +34,7 @@
 #include "replica/logstor/segment_io.hh"
 #include "schema/schema_builder.hh"
 #include <seastar/core/simple-stream.hh>
+#include "test/lib/logstor_test_utils.hh"
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/tmpdir.hh"
 #include "utils/disk-error-handler.hh"
@@ -41,6 +42,7 @@
 #include "utils/exceptions.hh"
 
 using namespace replica::logstor;
+using namespace tests::logstor;
 
 namespace {
 
@@ -310,83 +312,6 @@ void assert_records_in_order(schema_ptr schema, const std::vector<scanned_record
     }
 }
 
-struct shared_logstor_cache {
-    ::cache_tracker shared_tracker;
-    replica::logstor::cache_tracker logstor_tracker;
-
-    shared_logstor_cache()
-        : shared_tracker(utils::updateable_value<double>(1.0), ::cache_tracker::register_metrics::no)
-        , logstor_tracker(shared_tracker) {
-    }
-};
-
-logstor_config make_test_logstor_config(const std::filesystem::path& base_dir) {
-    constexpr size_t segment_size = 128 * 1024;
-    constexpr size_t file_size = 32 * segment_size;
-    return logstor_config{
-        .segment_manager_cfg = {
-            .base_dir = base_dir,
-            .segment_size = segment_size,
-            .file_size = file_size,
-            .disk_size = 4 * file_size,
-            .sparse_files = true,
-            .compaction_enabled = true,
-            .max_segments_per_compaction = 8,
-            .compaction_sg = seastar::current_scheduling_group(),
-            .compaction_static_shares = utils::updateable_value<float>(0.0f),
-            .compaction_max_shares = utils::updateable_value<float>(2000.0f),
-            .separator_sg = seastar::current_scheduling_group(),
-            .split_compaction_sg = seastar::current_scheduling_group(),
-        },
-        .flush_sg = seastar::current_scheduling_group(),
-    };
-}
-
-class test_compaction_group_handle final : public logstor_group {
-    ::table_id _table_id;
-    std::unique_ptr<primary_index> _owned_index;
-    primary_index& _index;
-    compaction_manager& _cm;
-public:
-    test_compaction_group_handle(schema_ptr schema, logstor& ls)
-        : _table_id(schema->id())
-        , _owned_index(ls.make_primary_index(schema, false))
-        , _index(*_owned_index)
-        , _cm(ls.get_compaction_manager()) {
-        _cm.add(*this);
-    }
-
-    // A group of a table that already has an index: the index is per table, and all the groups of
-    // a table share it. This is what the groups of a split have.
-    test_compaction_group_handle(schema_ptr schema, logstor& ls, primary_index& index)
-        : _table_id(schema->id())
-        , _index(index)
-        , _cm(ls.get_compaction_manager()) {
-        _cm.add(*this);
-    }
-
-    ~test_compaction_group_handle() override {
-        _cm.remove(*this).get();
-    }
-
-    ::table_id table_id() const noexcept override {
-        return _table_id;
-    }
-
-    primary_index& logstor_index() noexcept override {
-        return _index;
-    }
-
-    const primary_index& logstor_index() const noexcept override {
-        return _index;
-    }
-
-protected:
-    compaction_manager& logstor_compaction_manager() noexcept override {
-        return _cm;
-    }
-};
-
 std::set<log_segment_id> snapshot_segment_ids(const utils::chunked_vector<segment_snapshot>& snapshot) {
     std::set<log_segment_id> ids;
     for (const auto& seg : snapshot) {
@@ -397,7 +322,7 @@ std::set<log_segment_id> snapshot_segment_ids(const utils::chunked_vector<segmen
 
 // Writes all the mutations and flushes the group's separator once, so that they all end up in a
 // single segment of the group.
-void write_and_flush_segment(logstor& ls, test_compaction_group_handle& cg, std::span<const mutation> ms) {
+void write_and_flush_segment(logstor& ls, test_logstor_group& cg, std::span<const mutation> ms) {
     for (const auto& m : ms) {
         ls.write(m, write_target(&cg, {}), db::no_timeout).get();
     }
@@ -405,7 +330,7 @@ void write_and_flush_segment(logstor& ls, test_compaction_group_handle& cg, std:
     cg.flush_separator().get();
 }
 
-void write_and_flush_segment(logstor& ls, test_compaction_group_handle& cg, const mutation& m) {
+void write_and_flush_segment(logstor& ls, test_logstor_group& cg, const mutation& m) {
     write_and_flush_segment(ls, cg, std::span(&m, 1));
 }
 
@@ -553,7 +478,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_largest_accepted_record_can_be_separated) 
     ls.start().get();
     auto stop_store = seastar::defer([&ls] noexcept { ls.stop().get(); });
 
-    test_compaction_group_handle cg(schema, ls);
+    test_logstor_group cg(schema, ls);
 
     const auto segment_size = ls.get_segment_manager().get_segment_size();
     const auto max_size = raw_write_buffer::max_record_size_any_kind(segment_size);
@@ -584,7 +509,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_rejects_record_that_does_not_fit_a_segment
     ls.start().get();
     auto stop_store = seastar::defer([&ls] noexcept { ls.stop().get(); });
 
-    test_compaction_group_handle cg(schema, ls);
+    test_logstor_group cg(schema, ls);
 
     const auto segment_size = ls.get_segment_manager().get_segment_size();
     const auto max_size = raw_write_buffer::max_record_size_any_kind(segment_size);
@@ -742,7 +667,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_failed_compaction_returns_its_buffer_to_th
     ls.start().get();
     auto stop_store = seastar::defer([&ls] noexcept { ls.stop().get(); });
 
-    test_compaction_group_handle cg(schema, ls);
+    test_logstor_group cg(schema, ls);
     auto setup_guard = std::make_optional(ls.get_compaction_manager().disable_compaction(cg).get());
 
     auto pk0_v0 = make_kv_mutation(schema, "pk0", "v0", api::timestamp_type(1));
@@ -812,7 +737,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_compaction_failing_index_update_returns_it
     ls.start().get();
     auto stop_store = seastar::defer([&ls] noexcept { ls.stop().get(); });
 
-    test_compaction_group_handle cg(schema, ls);
+    test_logstor_group cg(schema, ls);
     auto setup_guard = std::make_optional(ls.get_compaction_manager().disable_compaction(cg).get());
 
     auto pk0_v0 = make_kv_mutation(schema, "pk0", "v0", api::timestamp_type(1));
@@ -1999,7 +1924,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_write_io_error_signals_disk_error)
     ls.start().get();
     auto stop_store = seastar::defer([&ls] noexcept { ls.stop().get(); });
 
-    test_compaction_group_handle cg(schema, ls);
+    test_logstor_group cg(schema, ls);
 
     unsigned signalled = 0;
     boost::signals2::scoped_connection conn = logstor_error.connect([&signalled] { ++signalled; });
@@ -2025,7 +1950,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_write_and_separator_flush) {
     ls.start().get();
     auto stop_store = seastar::defer([&ls] noexcept { ls.stop().get(); });
 
-    test_compaction_group_handle cg(schema, ls);
+    test_logstor_group cg(schema, ls);
 
     auto expected = make_kv_mutation(schema, "pk0", "separator-value");
     auto key = expected.decorated_key();
@@ -2077,11 +2002,11 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_discarded_group_does_not_free_its_unflushe
     auto stop_store = seastar::defer([&ls] noexcept { ls.stop().get(); });
 
     auto& sm = ls.get_segment_manager();
-    test_compaction_group_handle cg(schema, ls);
+    test_logstor_group cg(schema, ls);
     // Writes for this group fill the shared active segment, so that the segment holding the record
     // below is switched away from and drops the reference it holds itself. Its own records are
     // separated out, which gives back the reference its separator buffer takes.
-    test_compaction_group_handle filler(schema, ls);
+    test_logstor_group filler(schema, ls);
 
     auto expected = make_kv_mutation(schema, "pk0", "separator-value");
     auto key = expected.decorated_key();
@@ -2136,7 +2061,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_closed_group_takes_no_separator_writes) {
     ls.start().get();
     auto stop_store = seastar::defer([&ls] noexcept { ls.stop().get(); });
 
-    test_compaction_group_handle cg(schema, ls);
+    test_logstor_group cg(schema, ls);
 
     // Close the group's separator the way stopping its compaction group does, and then write to it
     // anyway.
@@ -2422,7 +2347,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_group_compaction_rewrites_live_records) {
     ls.start().get();
     auto stop_store = seastar::defer([&ls] noexcept { ls.stop().get(); });
 
-    test_compaction_group_handle cg(schema, ls);
+    test_logstor_group cg(schema, ls);
     auto setup_guard = std::make_optional(ls.get_compaction_manager().disable_compaction(cg).get());
 
     auto pk0_v0 = make_kv_mutation(schema, "pk0", "v0", api::timestamp_type(1));
@@ -2530,7 +2455,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_disabled_group_does_not_compact_on_submit)
     ls.start().get();
     auto stop_store = seastar::defer([&ls] noexcept { ls.stop().get(); });
 
-    test_compaction_group_handle cg(schema, ls);
+    test_logstor_group cg(schema, ls);
     auto compaction_guard = ls.get_compaction_manager().disable_compaction(cg).get();
 
     auto pk0_v0 = make_kv_mutation(schema, "pk0", "v0", api::timestamp_type(1));
@@ -2609,9 +2534,9 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_split_compaction_splits_segments_between_t
     auto stop_store = seastar::defer([&ls] noexcept { ls.stop().get(); });
 
     // The src and target groups in a split share the logstor index.
-    test_compaction_group_handle src(schema, ls);
-    test_compaction_group_handle left(schema, ls, src.logstor_index());
-    test_compaction_group_handle right(schema, ls, src.logstor_index());
+    test_logstor_group src(schema, ls);
+    test_logstor_group left(schema, ls, src.logstor_index());
+    test_logstor_group right(schema, ls, src.logstor_index());
     auto& index = src.logstor_index();
     auto setup_guard = std::make_optional(ls.get_compaction_manager().disable_compaction(src).get());
 
