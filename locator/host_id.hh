@@ -24,3 +24,13 @@ using host_id_or_exception_callback = noncopyable_function<void(host_id_or_excep
 
 }
 
+// host_id::to_sstring() is the only non-trivial (non-constexpr) member of
+// tagged_uuid<Tag>; it is odr-used from several widely-included headers
+// (notably gms/versioned_value.hh), so suppress its per-TU re-instantiation.
+// See the matching `template struct ...;` explicit instantiation in
+// gms/versioned_value.cc. Explicit instantiation/extern template of a
+// namespace-scoped class template must appear in the template's own
+// namespace (utils) or one enclosing it - locator::host_id_tag must
+// therefore be named fully-qualified from outside namespace locator.
+extern template struct utils::tagged_uuid<locator::host_id_tag>;
+

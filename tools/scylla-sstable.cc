@@ -41,6 +41,7 @@
 #include "schema/compression_initializer.hh"
 #include "schema/speculative_retry_initializer.hh"
 #include "sstables/index_reader.hh"
+#include "sstables/metadata.hh"
 #include "sstables/sstables_manager.hh"
 #include "sstables/sstable_directory.hh"
 #include "sstables/open_info.hh"

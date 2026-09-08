@@ -6,7 +6,9 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
+#ifdef SCYLLA_BUILD_WASMTIME
 #include "lang/wasm.hh"
+#endif
 #include "lang/manager.hh"
 #include "exceptions/exceptions.hh"
 
@@ -19,6 +21,7 @@ manager::manager(config cfg)
         , lua_max_contiguous(cfg.lua.max_contiguous)
         , lua_timeout(cfg.lua.timeout)
 {
+#ifdef SCYLLA_BUILD_WASMTIME
     if (cfg.wasm) {
         if (this_shard_id() == 0) {
             // Other shards will get this pointer in .start()
@@ -27,21 +30,30 @@ manager::manager(config cfg)
         }
         _instance_cache.emplace(cfg.wasm->cache_size, cfg.wasm->cache_instance_size, cfg.wasm->cache_timer_period);
     }
+#endif
 }
 
 future<> manager::start() {
+#ifdef SCYLLA_BUILD_WASMTIME
     if (this_shard_id() == 0) {
         co_await container().invoke_on_others([this] (auto& m) {
             m._engine = this->_engine;
             m._alien_runner = this->_alien_runner;
         });
     }
+#else
+    co_return;
+#endif
 }
 
 future<> manager::stop() {
+#ifdef SCYLLA_BUILD_WASMTIME
     if (_instance_cache) {
         co_await _instance_cache->stop();
     }
+#else
+    co_return;
+#endif
 }
 
 future<manager::context> manager::create(sstring language, sstring name, const std::vector<sstring>& arg_names, std::string script) {
@@ -58,6 +70,7 @@ future<manager::context> manager::create(sstring language, sstring name, const s
 
         ctx = std::move(lua_ctx);
     } else if (language == "wasm") {
+#ifdef SCYLLA_BUILD_WASMTIME
        // FIXME: need better way to test wasm compilation without real_database()
        auto wasm_ctx = wasm::context(**_engine, std::move(name), *_instance_cache, wasm_yield_fuel, wasm_total_fuel);
        try {
@@ -66,6 +79,9 @@ future<manager::context> manager::create(sstring language, sstring name, const s
            throw exceptions::invalid_request_exception(we.what());
        }
        ctx.emplace(std::move(wasm_ctx));
+#else
+       throw exceptions::invalid_request_exception("WASM UDFs are not supported: scylla was built without wasmtime");
+#endif
     }
     co_return ctx;
 }

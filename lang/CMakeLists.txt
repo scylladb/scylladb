@@ -2,10 +2,14 @@ add_library(lang STATIC)
 target_sources(lang
   PRIVATE
     manager.cc
-    lua.cc
-    wasm.cc
-    wasm_alien_thread_runner.cc
-    wasm_instance_cache.cc)
+    lua.cc)
+if(Scylla_BUILD_WASMTIME)
+  target_sources(lang
+    PRIVATE
+      wasm.cc
+      wasm_alien_thread_runner.cc
+      wasm_instance_cache.cc)
+endif()
 target_include_directories(lang
   PUBLIC
     ${CMAKE_SOURCE_DIR}
@@ -23,5 +27,13 @@ if (Scylla_USE_PRECOMPILED_HEADER_USE)
   target_precompile_headers(lang REUSE_FROM scylla-precompiled-header)
 endif()
 
-check_headers(check-headers lang
-  GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)
+if(Scylla_BUILD_WASMTIME)
+  check_headers(check-headers lang
+    GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)
+else()
+  # The wasm*.hh headers need the generated rust/wasmtime_bindings.hh,
+  # which does not exist in this configuration.
+  check_headers(check-headers lang
+    GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh
+    EXCLUDE "wasm")
+endif()

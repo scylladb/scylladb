@@ -24,7 +24,7 @@
 
 namespace service::strong_consistency {
 
-logging::logger rgslog("raft_groups_storage");
+static logging::logger rgslog("raft_groups_storage");
 
 raft_groups_storage::raft_groups_storage(cql3::query_processor& qp, raft::group_id gid, raft::server_id server_id, shard_id shard, db::commitlog& commit_log,
         table_id target_table_id, replayed_data_per_group replayed_data)

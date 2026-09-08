@@ -11,7 +11,6 @@
 #include <seastar/core/shared_ptr.hh>
 
 #include "utils/UUID.hh"
-#include "utils/UUID_gen.hh"
 
 using column_count_type = uint32_t;
 
@@ -19,11 +18,17 @@ using column_count_type = uint32_t;
 using column_id = column_count_type;
 
 class schema;
-class schema_extension;
+class schema_extension; // full definition in schema/schema_extension.hh
 
 using schema_ptr = seastar::lw_shared_ptr<const schema>;
 
 using table_id = utils::tagged_uuid<struct table_id_tag>;
+
+// table_id::to_sstring() is the only non-trivial (non-constexpr) member of
+// tagged_uuid<Tag>; suppress its per-TU re-instantiation given how broadly
+// table_id itself is used. Matching explicit instantiation lives in
+// schema/schema.cc.
+extern template struct utils::tagged_uuid<table_id_tag>;
 
 struct table_info {
     sstring name;
@@ -53,6 +58,11 @@ struct fmt::formatter<table_info> : fmt::formatter<string_view> {
 //
 using table_schema_version = utils::tagged_uuid<struct table_schema_version_tag>;
 
-inline table_schema_version reversed(table_schema_version v) noexcept {
-    return table_schema_version(utils::UUID_gen::negate(v.uuid()));
-}
+// See the comment on the analogous declaration above for table_id: this
+// suppresses per-TU re-instantiation of table_schema_version::to_sstring(),
+// which is odr-used from gms/versioned_value.hh (included by ~60
+// translation units). Matching explicit instantiation lives in
+// gms/versioned_value.cc.
+extern template struct utils::tagged_uuid<table_schema_version_tag>;
+
+table_schema_version reversed(table_schema_version v) noexcept;

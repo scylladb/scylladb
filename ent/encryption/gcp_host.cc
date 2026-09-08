@@ -50,7 +50,7 @@
 using namespace std::chrono_literals;
 using namespace std::string_literals;
 
-logger gcp_log("gcp");
+static logger gcp_log("gcp");
 
 namespace encryption {
 bool operator==(const gcp_host::credentials_source& k1, const gcp_host::credentials_source& k2) {

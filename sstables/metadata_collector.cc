@@ -10,7 +10,7 @@
 #include "metadata_collector.hh"
 #include "mutation/position_in_partition.hh"
 
-logging::logger mdclogger("metadata_collector");
+static logging::logger mdclogger("metadata_collector");
 
 namespace sstables {
 

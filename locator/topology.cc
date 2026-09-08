@@ -23,6 +23,7 @@
 #include "utils/assert.hh"
 #include "utils/stall_free.hh"
 #include "utils/to_string.hh"
+#include "utils/UUID_gen.hh"
 
 struct node_printer {
     const locator::node* v;

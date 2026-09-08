@@ -6,7 +6,13 @@ edition = "2021"
 
 [dependencies]
 inc = { path = "inc", version = "0.1.0" }
-wasmtime_bindings = { path = "wasmtime_bindings", version = "0.1.0" }
+wasmtime_bindings = { path = "wasmtime_bindings", version = "0.1.0", optional = true }
+
+[features]
+# Wasmtime (WASM UDF backend) is optional; disable via configure.py
+# --disable-wasmtime, which builds with --no-default-features.
+default = ["wasmtime"]
+wasmtime = ["dep:wasmtime_bindings"]
 
 [lib]
 crate-type = ["staticlib"]

@@ -8,8 +8,11 @@
 
 #pragma once
 
-#include "locator/tablets.hh"
+#include <optional>
+
+#include "locator/tablets_fwd.hh"
 #include "schema/schema_fwd.hh"
+#include "seastarx.hh"
 namespace tasks {
 
 struct virtual_task_hint {

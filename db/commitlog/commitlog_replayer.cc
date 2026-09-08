@@ -21,6 +21,7 @@
 #include "commitlog.hh"
 #include "commitlog_replayer.hh"
 #include "replica/database.hh"
+#include "locator/abstract_replication_strategy.hh"
 #include "db/system_keyspace.hh"
 #include "utils/log.hh"
 #include "mutation/converting_mutation_partition_applier.hh"

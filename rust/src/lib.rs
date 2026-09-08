@@ -7,4 +7,5 @@
  */
 
 extern crate inc;
+#[cfg(feature = "wasmtime")]
 extern crate wasmtime_bindings;

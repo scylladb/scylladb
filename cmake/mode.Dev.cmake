@@ -19,3 +19,13 @@ foreach(definition ${Seastar_DEFINITIONS_DEV})
 endforeach()
 
 maybe_limit_stack_usage_in_KB(21 Dev)
+
+# Trims backend compile time; Dev doesn't need release's vectorization.
+check_cxx_compiler_flag("-fno-vectorize" _vectorize_supported)
+if(_vectorize_supported)
+  add_compile_options($<$<CONFIG:Dev>:-fno-vectorize>)
+endif()
+check_cxx_compiler_flag("-fno-slp-vectorize" _slp_vectorize_supported)
+if(_slp_vectorize_supported)
+  add_compile_options($<$<CONFIG:Dev>:-fno-slp-vectorize>)
+endif()

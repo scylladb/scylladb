@@ -18,6 +18,7 @@
 #include "db/config.hh"
 #include "db/consistency_level_type.hh"
 #include "db/system_keyspace.hh"
+#include "gms/gossiper.hh"
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/core/timer.hh>
 #include <seastar/core/future.hh>

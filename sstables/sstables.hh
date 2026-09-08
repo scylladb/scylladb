@@ -37,6 +37,7 @@
 #include "sstables/storage.hh"
 #include "sstables/generation_type.hh"
 #include "sstables/types.hh"
+#include "sstables/metadata.hh"
 #include "sstables/checksummed_data_source.hh"
 #include "mutation/mutation_fragment_stream_validator.hh"
 #include "readers/mutation_reader_fwd.hh"

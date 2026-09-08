@@ -21,6 +21,7 @@
 #include <fmt/chrono.h>
 
 #include "cql3/query_processor.hh"
+#include "db/config.hh"
 
 namespace cql3 {
 

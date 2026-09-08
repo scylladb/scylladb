@@ -10,15 +10,16 @@
 #include "topology_state_machine.hh"
 #include "utils/log.hh"
 #include "db/system_keyspace.hh"
+#include "gms/gossiper.hh"
 #include "replica/database.hh"
-#include "locator/tablets.hh"
+#include "locator/tablets_fwd.hh"
 #include "topology_mutation.hh"
 #include "raft/raft_group0_client.hh"
 #include "raft/raft_group0.hh"
 
 namespace service {
 
-logging::logger tsmlogger("topology_state_machine");
+static logging::logger tsmlogger("topology_state_machine");
 
 const std::pair<const raft::server_id, replica_state>* topology::find(raft::server_id id) const {
     auto it = normal_nodes.find(id);

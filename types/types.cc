@@ -73,7 +73,7 @@ requires requires {
         typename T::duration;
         requires std::same_as<typename T::duration, std::chrono::milliseconds>;
     }
-sstring
+static sstring
 time_point_to_string(const T& tp, bool use_time_separator = true)
 {
     auto count = tp.time_since_epoch().count();
@@ -101,7 +101,7 @@ time_point_to_string(const T& tp, bool use_time_separator = true)
             tm.tm_hour, tm.tm_min, tm.tm_sec, millis);
 }
 
-sstring simple_date_to_string(const uint32_t days_count) {
+static sstring simple_date_to_string(const uint32_t days_count) {
     date::days days{days_count - (1UL << 31)};
     date::year_month_day ymd{date::local_days{days}};
     std::ostringstream str;
@@ -109,7 +109,7 @@ sstring simple_date_to_string(const uint32_t days_count) {
     return std::move(str).str();
 }
 
-sstring time_to_string(const int64_t nanoseconds_count) {
+static sstring time_to_string(const int64_t nanoseconds_count) {
     std::string s;
     std::chrono::nanoseconds nanoseconds{nanoseconds_count};
     fmt::format_to(std::back_inserter(s), "{:%H:%M:%S}", nanoseconds);
@@ -473,7 +473,7 @@ counter_type_impl::counter_type_impl()
 
 // TODO(jhaberku): Move this to Seastar.
 template <size_t... Ts, class Function>
-auto generate_tuple_from_index(std::index_sequence<Ts...>, Function&& f) {
+static auto generate_tuple_from_index(std::index_sequence<Ts...>, Function&& f) {
     // To ensure that tuple is constructed in the correct order (because the evaluation order of the arguments to
     // `std::make_tuple` is unspecified), use braced initialization  (which does define the order). However, we still
     // need to figure out the type.
@@ -1151,7 +1151,7 @@ map_type_impl::get_instance(data_type keys, data_type values, bool is_multi_cell
     return intern::get_instance(std::move(keys), std::move(values), is_multi_cell);
 }
 
-sstring make_map_type_name(data_type keys, data_type values, bool is_multi_cell)
+static sstring make_map_type_name(data_type keys, data_type values, bool is_multi_cell)
 {
     sstring ret = "";
     if (!is_multi_cell) {
@@ -1352,7 +1352,7 @@ set_type_impl::get_instance(data_type elements, bool is_multi_cell) {
     return intern::get_instance(elements, is_multi_cell);
 }
 
-sstring make_set_type_name(data_type elements, bool is_multi_cell)
+static sstring make_set_type_name(data_type elements, bool is_multi_cell)
 {
     sstring ret = "";
     if (!is_multi_cell) {
@@ -1493,7 +1493,7 @@ list_type_impl::get_instance(data_type elements, bool is_multi_cell) {
     return intern::get_instance(elements, is_multi_cell);
 }
 
-sstring make_list_type_name(data_type elements, bool is_multi_cell)
+static sstring make_list_type_name(data_type elements, bool is_multi_cell)
 {
     sstring ret = "";
     if (!is_multi_cell) {
@@ -1856,7 +1856,7 @@ private:
 } // anonymous namespace
 
 template <FragmentedView View>
-data_value
+static data_value
 deserialize_vector(const vector_type_impl& t, View v){
     return visit(*t.get_elements_type(), deserialize_vector_visitor<View>{t, v});
 }
@@ -2347,7 +2347,7 @@ template int read_collection_size(ser::buffer_view<bytes_ostream::fragment_itera
 template ser::buffer_view<bytes_ostream::fragment_iterator> read_collection_value_nonnull(ser::buffer_view<bytes_ostream::fragment_iterator>& in);
 
 template <FragmentedView View>
-data_value deserialize_aux(const tuple_type_impl& t, View v) {
+static data_value deserialize_aux(const tuple_type_impl& t, View v) {
     tuple_type_impl::native_type ret;
     ret.reserve(t.all_types().size());
     auto ti = t.all_types().begin();
@@ -2585,7 +2585,7 @@ template data_value abstract_type::deserialize_impl<>(single_fragmented_view) co
 template data_value abstract_type::deserialize_impl<>(ser::buffer_view<bytes_ostream::fragment_iterator>) const;
 template data_value abstract_type::deserialize_impl<>(managed_bytes_view) const;
 
-std::strong_ordering compare_aux(const tuple_type_impl& t, const managed_bytes_view& v1, const managed_bytes_view& v2) {
+static std::strong_ordering compare_aux(const tuple_type_impl& t, const managed_bytes_view& v1, const managed_bytes_view& v2) {
     // This is a slight modification of lexicographical_tri_compare:
     // when the only difference between the tuples is that one of them has additional trailing nulls,
     // we consider them equal. For example, in the following CQL scenario:

@@ -14,6 +14,7 @@
 #include <vector>
 #include <seastar/core/shared_ptr.hh>
 #include "seastarx.hh"
+#include "db_clock.hh"
 #include "schema/schema_fwd.hh"
 
 namespace replica {

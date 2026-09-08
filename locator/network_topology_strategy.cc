@@ -26,6 +26,7 @@
 #include "utils/assert.hh"
 #include "utils/class_registrator.hh"
 #include "utils/hash.hh"
+#include "utils/UUID_gen.hh"
 
 namespace std {
 

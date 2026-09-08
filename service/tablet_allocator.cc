@@ -23,6 +23,7 @@
 #include "utils/overloaded_functor.hh"
 #include "utils/div_ceil.hh"
 #include "db/config.hh"
+#include "locator/abstract_replication_strategy.hh"
 #include "db/tablet_options.hh"
 #include "locator/load_sketch.hh"
 #include "replica/database.hh"
@@ -44,7 +45,7 @@ using namespace replica;
 
 namespace service {
 
-seastar::logger lblogger("load_balancer");
+static seastar::logger lblogger("load_balancer");
 
 void load_balancer_stats_manager::setup_metrics(const dc_name& dc, load_balancer_dc_stats& stats) {
     namespace sm = seastar::metrics;

@@ -12,6 +12,7 @@
 #include "gms/inet_address.hh"
 #include <seastar/util/defer.hh>
 #include "replica/database.hh"
+#include "db/view/view.hh"
 #include "view_update_generator.hh"
 #include "utils/error_injection.hh"
 #include "db/view/view_updating_consumer.hh"

@@ -15,7 +15,9 @@
 #include <utility>
 #include <vector>
 #include "db/view/view_build_status.hh"
-#include "gms/gossiper.hh"
+#include "gms/inet_address.hh"
+#include "gms/generation-number.hh"
+#include "gms/loaded_endpoint_state.hh"
 #include "schema/schema_fwd.hh"
 #include "utils/UUID.hh"
 #include "query/query-result-set.hh"
@@ -28,7 +30,6 @@
 #include "cdc/generation.hh"
 #include "locator/host_id.hh"
 #include "virtual_tables.hh"
-#include "types/types.hh"
 #include "auth_version.hh"
 #include "db/view/view_building_state.hh"
 

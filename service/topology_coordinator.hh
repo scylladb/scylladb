@@ -22,7 +22,7 @@
 #include "service/topology_state_machine.hh"
 #include "db/view/view_building_state.hh"
 #include "service/qos/service_level_controller.hh"
-#include "locator/tablets.hh"
+#include "locator/tablets_fwd.hh"
 
 namespace db {
 class system_keyspace;
