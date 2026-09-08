@@ -125,6 +125,8 @@ def freeze(item):
         return frozenset((key, freeze(value)) for key, value in item.items())
     elif isinstance(item, list):
         return tuple(freeze(value) for value in item)
+    elif isinstance(item, (set, frozenset)):
+        return frozenset(freeze(value) for value in item)
     elif isinstance(item, bytearray):
         return bytes(item)
     return item
@@ -249,9 +251,11 @@ def is_aws(dynamodb):
 # ImportTable in test_import.py. Those services reach into S3 themselves,
 # so the objects have to really be there and cannot be faked.
 
-# Helper to create a unique S3 bucket name.
-def unique_bucket_name():
-    return f"alternator-export-test-{uuid.uuid4().hex[:12]}"
+# Helper to create a unique S3 bucket name. `kind` says which test file made it,
+# so a leftover bucket can be told apart from another's when hunting them by
+# hand; it defaults to the export tests, which were here first.
+def unique_bucket_name(kind="export"):
+    return f"alternator-{kind}-test-{uuid.uuid4().hex[:12]}"
 
 
 # Create an S3 client using the same endpoint configuration as the DynamoDB
@@ -284,9 +288,9 @@ def block_bucket_writes_on_s3(s3_client, bucket_name):
 
 # Context manager that creates a uniquely-named S3 bucket and deletes it (including all objects) on exit.
 @contextmanager
-def new_s3_bucket(s3_client, bucket_name=None):
+def new_s3_bucket(s3_client, bucket_name=None, kind="export"):
     if bucket_name is None:
-        bucket_name = unique_bucket_name()
+        bucket_name = unique_bucket_name(kind)
     region = s3_client.meta.region_name
     kwargs: dict = {'Bucket': bucket_name}
     # us-east-1 does not accept a LocationConstraint - in other words if you want `us-east-1` bucket, you need to omit `LocationConstraint` entirely,
