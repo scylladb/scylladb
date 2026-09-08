@@ -294,7 +294,7 @@ async def wait_for_no_pending_topology_transition(manager: ScyllaClusterManager,
             return None
         return True
 
-    await wait_for(no_transition, deadline, period=.5)
+    await wait_for(no_transition, deadline)
 
 
 async def wait_for_no_running_compactions(manager: ScyllaClusterManager,
