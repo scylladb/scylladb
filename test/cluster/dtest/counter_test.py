@@ -17,6 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from cassandra import ConsistencyLevel, InvalidRequest, Unauthorized
+from cassandra.concurrent import execute_concurrent
 from cassandra.policies import RetryPolicy
 from cassandra.query import SimpleStatement
 
@@ -389,22 +390,30 @@ class TestCounters(Tester):
             nb_increment //= 10
         nb_counter = 2
 
-        def run(connection):
-            for i in range(nb_increment):
-                for c in range(nb_counter):
-                    query = SimpleStatement("UPDATE cf SET c = c + 1 WHERE key = 'counter%i'" % c, consistency_level=ConsistencyLevel.QUORUM)
-                    connection.execute(query)
-
-        threads = []
         num_threads = 200
         if hasattr(cluster, "scylla_mode") and cluster.scylla_mode == "debug":
             num_threads //= 10
-        executor = ThreadPoolExecutor(max_workers=num_threads)
+
+        # Counters are order-independent sums, so instead of num_threads blocking
+        # Python threads, batch each session's share of statements through the
+        # driver's own concurrent-execution machinery (one OS thread per session).
+        stmts = [
+            (SimpleStatement("UPDATE cf SET c = c + 1 WHERE key = 'counter%i'" % c, consistency_level=ConsistencyLevel.QUORUM), None)
+            for _ in range(nb_increment)
+            for c in range(nb_counter)
+        ]
+        per_session_stmts = [[] for _ in sessions]
         for x in range(num_threads):
-            conn = sessions[x % len(nodes)]
-            threads.append(executor.submit(run, conn))
-        for t in threads:
-            t.result()
+            per_session_stmts[x % len(nodes)].extend(stmts)
+
+        with ThreadPoolExecutor(max_workers=len(sessions)) as executor:
+            futures = [
+                executor.submit(execute_concurrent, sessions[i], per_session_stmts[i], concurrency=100, raise_on_first_error=True)
+                for i in range(len(sessions))
+                if per_session_stmts[i]
+            ]
+            for f in futures:
+                f.result()
 
         conn = sessions[1 % len(nodes)]
         keys = ",".join(["'counter%i'" % c for c in range(nb_counter)])
@@ -442,26 +451,38 @@ class TestCounters(Tester):
             nb_increment //= 10
         nb_counter = 2
 
-        def run(connection, decrement):
-            for i in range(nb_increment):
-                for c in range(nb_counter):
-                    if decrement:
-                        query = SimpleStatement("UPDATE cf SET c = c - 1 WHERE key = 'counter%i'" % c, consistency_level=ConsistencyLevel.QUORUM)
-                    else:
-                        query = SimpleStatement("UPDATE cf SET c = c + 1 WHERE key = 'counter%i'" % c, consistency_level=ConsistencyLevel.QUORUM)
-                    connection.execute(query)
-
-        threads = []
         num_threads = 600
         if hasattr(cluster, "scylla_mode") and cluster.scylla_mode == "debug":
             num_threads //= 10
-        executor = ThreadPoolExecutor(max_workers=num_threads)
+
+        def stmts_for(decrement):
+            op = "-" if decrement else "+"
+            return [
+                (SimpleStatement("UPDATE cf SET c = c %s 1 WHERE key = 'counter%i'" % (op, c), consistency_level=ConsistencyLevel.QUORUM), None)
+                for _ in range(nb_increment)
+                for c in range(nb_counter)
+            ]
+
+        # Counters are order-independent sums, so instead of num_threads blocking
+        # Python threads, batch each session's share of statements through the
+        # driver's own concurrent-execution machinery (one OS thread per session).
+        # x % len(nodes) fixes both the session and the increment/decrement direction,
+        # so every "thread" landing on a given session shares the same direction.
+        stmts_by_direction = {False: stmts_for(False), True: stmts_for(True)}
+        per_session_stmts = [[] for _ in sessions]
         for x in range(num_threads):
-            conn = sessions[x % len(nodes)]
-            decrement = (x % len(nodes)) == 0
-            threads.append(executor.submit(run, conn, decrement))
-        for t in threads:
-            t.result()
+            session_idx = x % len(nodes)
+            decrement = session_idx == 0
+            per_session_stmts[session_idx].extend(stmts_by_direction[decrement])
+
+        with ThreadPoolExecutor(max_workers=len(sessions)) as executor:
+            futures = [
+                executor.submit(execute_concurrent, sessions[i], per_session_stmts[i], concurrency=100, raise_on_first_error=True)
+                for i in range(len(sessions))
+                if per_session_stmts[i]
+            ]
+            for f in futures:
+                f.result()
 
         conn = sessions[1 % len(nodes)]
         keys = ",".join(["'counter%i'" % c for c in range(nb_counter)])
