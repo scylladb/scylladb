@@ -69,6 +69,12 @@ def true_or_false():
 
 
 class InjectingHandler(BaseHTTPRequestHandler):
+    # (connect, read) timeouts for the request we forward, so that an S3 server
+    # that accepts the connection and then goes quiet turns into a retryable
+    # error instead of wedging the handler forever. Deliberately generous: the
+    # tests should never fail because a reply was merely slow, we only want to
+    # rule out waiting for one that will never come.
+    forward_timeout = (30, 300)
     # These describe the connection we forwarded over rather than the payload, so they
     # must not be relayed to the client. Transfer-Encoding matters most: we hand the
     # body to the client with a Content-Length of our own, and a chunked one inherited
@@ -198,7 +204,8 @@ class InjectingHandler(BaseHTTPRequestHandler):
                 target_url = self.minio_uri + self.path
                 headers = {key: value for key, value in self.headers.items()}
                 try:
-                    response = requests.request(self.command, target_url, headers=headers, data=body)
+                    response = requests.request(self.command, target_url, headers=headers, data=body,
+                                                timeout=self.forward_timeout)
                 except requests.exceptions.RequestException as e:
                     # Forwarding to minio failed (e.g. connection reset while minio is under
                     # load from concurrent requests). Nothing has been written to the client
