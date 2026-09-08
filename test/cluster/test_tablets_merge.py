@@ -56,12 +56,10 @@ async def test_tablet_merge_simple(manager: ScyllaClusterManager):
         # Initial average table size of 400k (1 tablet), so triggers some splits.
         total_keys = 200
         keys = range(total_keys)
-        def populate(keys):
+        async def populate(keys):
             insert = cql.prepare(f"INSERT INTO {ks}.test(pk, c) VALUES(?, ?)")
-            for pk in keys:
-                value = random.randbytes(2000)
-                cql.execute(insert, [pk, value])
-        populate(keys)
+            await asyncio.gather(*[cql.run_async(insert, [pk, random.randbytes(2000)]) for pk in keys])
+        await populate(keys)
 
         async def check():
             logger.info("Checking table")
@@ -151,7 +149,7 @@ async def test_tablet_merge_simple(manager: ScyllaClusterManager):
         # Without the fix, new groups are added to tablet being migrated away and never closed, potentially
         # resulting in an use-after-free.
         keys = range(total_keys)
-        populate(keys)
+        await populate(keys)
         # Migrates a tablet to another node and put artificial delay on cleanup stage
         await manager.api.enable_injection(servers[0].ip_addr, "delay_tablet_compaction_groups_cleanup", one_shot=True)
         tablet_replicas = await get_all_tablet_replicas(manager, servers[0], ks, 'test')
@@ -219,9 +217,7 @@ async def test_tablet_split_and_merge_with_concurrent_topology_changes(manager: 
             total_keys = 200
             keys = range(total_keys)
             insert = cql.prepare(f"INSERT INTO {ks}.test(pk, c) VALUES(?, ?)")
-            for pk in keys:
-                value = random.randbytes(2000)
-                cql.execute(insert, [pk, value])
+            await asyncio.gather(*[cql.run_async(insert, [pk, random.randbytes(2000)]) for pk in keys])
 
             async def check():
                 logger.info("Checking table")
@@ -341,9 +337,7 @@ async def test_tablet_merge_cross_rack_migrations(manager: ScyllaClusterManager,
     total_keys = 400
     keys = range(total_keys)
     insert = cql.prepare(f"INSERT INTO {ks}.test(pk, c) VALUES(?, ?)")
-    for pk in keys:
-        value = random.randbytes(2000)
-        cql.execute(insert, [pk, value])
+    await asyncio.gather(*[cql.run_async(insert, [pk, random.randbytes(2000)]) for pk in keys])
 
     for server in servers:
         await manager.api.flush_keyspace(server.ip_addr, ks)
@@ -402,9 +396,7 @@ async def test_tablet_split_merge_with_many_tables(build_mode: str, manager: Scy
     total_keys = 400
     keys = range(total_keys)
     insert = cql.prepare(f"INSERT INTO {ks}.test(pk, c) VALUES(?, ?)")
-    for pk in keys:
-        value = random.randbytes(2000)
-        cql.execute(insert, [pk, value])
+    await asyncio.gather(*[cql.run_async(insert, [pk, random.randbytes(2000)]) for pk in keys])
 
     for server in servers:
         await manager.api.flush_keyspace(server.ip_addr, ks)
