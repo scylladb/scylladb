@@ -399,6 +399,8 @@ public:
     void disconnect(::disconnect nodes);
     future<> isolate(::isolate node);
     void verify();
+    size_t sm_calls_after_abort(size_t id);
+    bool sm_aborted(size_t id);
 private:
     test_server create_server(size_t id, initial_state state);
 };
@@ -412,6 +414,16 @@ class raft_cluster<Clock>::state_machine : public raft::state_machine {
     promise<> _done;
     snapshots* _snapshots;
     seastar::abort_source _as;
+    bool _abort_requested = false;
+    // Counts the calls raft made after aborting this state machine. Must stay 0.
+    size_t _calls_after_abort = 0;
+
+    void note_call(const char* op) {
+        if (_abort_requested) {
+            tlogger.error("sm[{}] {}: called after abort()", _id, op);
+            ++_calls_after_abort;
+        }
+    }
 
 public:
     lw_shared_ptr<hasher_int> hasher;
@@ -420,6 +432,7 @@ public:
         _id(id), _apply(std::move(apply)), _apply_entries(apply_entries), _snapshots(snapshots),
         hasher(make_lw_shared<hasher_int>()) {}
     future<> apply(raft::log_entry_ptr_list commands) override {
+        note_call("apply");
         co_await utils::get_local_injector().inject("raft_test_sm_block_apply",
                 std::chrono::minutes(5), _as);
         auto n = _apply(_id, commands, hasher);
@@ -435,6 +448,7 @@ public:
     }
 
     future<raft::snapshot_id> take_snapshot() override {
+        note_call("take_snapshot");
         co_await utils::get_local_injector().inject("raft_test_sm_block_take_snapshot",
                 std::chrono::minutes(5), _as);
         auto snp_id = raft::snapshot_id::create_random_id();
@@ -444,9 +458,11 @@ public:
         co_return snp_id;
     }
     void drop_snapshot(raft::snapshot_id snp_id) override {
+        note_call("drop_snapshot");
         (*_snapshots)[_id].erase(snp_id);
     }
     future<> load_snapshot(raft::snapshot_id snp_id) override {
+        note_call("load_snapshot");
         co_await utils::get_local_injector().inject("raft_test_sm_block_load_snapshot",
                 std::chrono::minutes(5), _as);
         hasher = make_lw_shared<hasher_int>((*_snapshots)[_id][snp_id].hasher);
@@ -462,12 +478,21 @@ public:
         co_return;
     };
     future<> abort() override {
+        _abort_requested = true;
         _as.request_abort();
         return make_ready_future<>();
     }
 
     future<> done() {
         return _done.get_future();
+    }
+
+    size_t calls_after_abort() const {
+        return _calls_after_abort;
+    }
+
+    bool aborted() const {
+        return _abort_requested;
     }
 };
 
@@ -916,10 +941,21 @@ future<raft::snapshot_reply> raft_cluster<Clock>::receive_snapshot(size_t id, ra
 }
 
 template <typename Clock>
+size_t raft_cluster<Clock>::sm_calls_after_abort(size_t id) {
+    return _servers[id].sm->calls_after_abort();
+}
+
+template <typename Clock>
+bool raft_cluster<Clock>::sm_aborted(size_t id) {
+    return _servers[id].sm->aborted();
+}
+
+template <typename Clock>
 future<> raft_cluster<Clock>::stop_server(size_t id, sstring reason) {
     cancel_ticker(id);
     _servers[id].rpc->unpublish();
     co_await _servers[id].server->abort(std::move(reason));
+    BOOST_CHECK_EQUAL(_servers[id].sm->calls_after_abort(), 0);
     if (_snapshots->contains(to_raft_id(id))) {
         BOOST_CHECK_LE((*_snapshots)[to_raft_id(id)].size(), 2);
         _snapshots->erase(to_raft_id(id));
