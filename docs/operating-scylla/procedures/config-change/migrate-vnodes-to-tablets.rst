@@ -362,6 +362,11 @@ Procedure
          t2      converging   2176      2048
          t3      converged    2048      -
 
+#. Optionally, run a full cluster repair to ensure that all nodes have the
+   most up-to-date data. As the storage upgrade process kept each node offline
+   for an extended period of time, its dataset might have become stale.
+
+
 Rollback Procedure
 ------------------
 
@@ -548,6 +553,10 @@ following:
    .. code-block:: console
 
       nodetool migrate-to-tablets finalize <keyspace>
+
+#. Optionally, run a full cluster repair to ensure that all nodes have the
+   most up-to-date data. As the storage upgrade process kept each node offline
+   for an extended period of time, its dataset might have become stale.
 
 Migrating multiple keyspaces
 ----------------------------
