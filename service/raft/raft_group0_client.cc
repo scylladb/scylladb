@@ -294,9 +294,7 @@ void raft_group0_client::validate_change(const Command& change) {
 }
 
 template<typename Command>
-requires std::same_as<Command, schema_change> || std::same_as<Command, topology_change> || std::same_as<Command, write_mutations> || std::same_as<Command, mixed_change>
-group0_command raft_group0_client::prepare_command(Command change, group0_guard& guard, std::string_view description) {
-    validate_change(change);
+group0_command raft_group0_client::make_command(Command change, group0_guard& guard, std::string_view description) {
     group0_command group0_cmd {
         .change{std::move(change)},
         .history_append{db::system_keyspace::make_group0_history_state_id_mutation(
@@ -312,6 +310,13 @@ group0_command raft_group0_client::prepare_command(Command change, group0_guard&
     };
 
     return group0_cmd;
+}
+
+template<typename Command>
+requires std::same_as<Command, schema_change> || std::same_as<Command, topology_change> || std::same_as<Command, write_mutations> || std::same_as<Command, mixed_change>
+group0_command raft_group0_client::prepare_command(Command change, group0_guard& guard, std::string_view description) {
+    validate_change(change);
+    return make_command(std::move(change), guard, description);
 }
 
 template<typename Command>

@@ -118,6 +118,10 @@ class raft_group0_client {
     requires std::same_as<Command, topology_change> || std::same_as<Command, mixed_change>
     void validate_change(const Command& change);
 
+    // Assembles the command envelope around an already validated change.
+    template<typename Command>
+    group0_command make_command(Command change, group0_guard& guard, std::string_view description);
+
 public:
     raft_group0_client(service::raft_group_registry&, gms::gossiper&,
                        db::system_keyspace&, locator::shared_token_metadata&, maintenance_mode_enabled);
