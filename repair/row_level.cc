@@ -2858,8 +2858,9 @@ future<repair_flush_hints_batchlog_response> repair_service::repair_flush_hints_
             return rs.repair_flush_hints_batchlog_handler(from, std::move(req));
         });
     }
-    rlogger.debug("repair[{}]: Started to process repair_flush_hints_batchlog_request from node={} hints_timeout={}s batchlog_timeout={}s",
-            req.repair_uuid, from, req.hints_timeout.count(), req.batchlog_timeout.count());
+    auto prefix = req.repair_uuid ? format("repair[{}]: ", req.repair_uuid) : sstring("global flush: ");
+    rlogger.debug("{}Started to process repair_flush_hints_batchlog_request from node={} hints_timeout={}s batchlog_timeout={}s",
+            prefix, from, req.hints_timeout.count(), req.batchlog_timeout.count());
     auto arrival = gc_clock::now();
     auto queue_timeout = std::min(req.hints_timeout, req.batchlog_timeout);
     lowres_clock::time_point deadline = lowres_clock::now() + req.hints_timeout;
@@ -2867,22 +2868,22 @@ future<repair_flush_hints_batchlog_response> repair_service::repair_flush_hints_
     auto permit = co_await coroutine::as_future(seastar::get_units(_flush_hints_batchlog_sem, 1, queue_timeout));
     if (permit.failed()) {
         auto ex = permit.get_exception();
-        rlogger.warn("repair[{}]: Failed to process repair_flush_hints_batchlog_request from node={}: still queued behind earlier flush requests after {}s: {}",
-                req.repair_uuid, from, queue_timeout.count(), ex);
+        rlogger.warn("{}Failed to process repair_flush_hints_batchlog_request from node={}: still queued behind earlier flush requests after {}s: {}",
+                prefix, from, queue_timeout.count(), ex);
         co_return coroutine::exception(std::move(ex));
     }
     auto units = permit.get();
     co_await utils::get_local_injector().inject("repair_flush_hints_batchlog_handler_hold", utils::wait_for_message(std::chrono::minutes(5)));
     // gc_clock counts whole seconds, so only a later second proves the flush started after arrival.
     if (_flush_hints_batchlog_time > arrival) {
-        rlogger.debug("repair[{}]: Finished to process repair_flush_hints_batchlog_request from node={} with a flush that started after it arrived, flush_hints_batchlog_time={}",
-                req.repair_uuid, from, _flush_hints_batchlog_time);
+        rlogger.debug("{}Finished to process repair_flush_hints_batchlog_request from node={} with a flush that started after it arrived, flush_hints_batchlog_time={}",
+                prefix, from, _flush_hints_batchlog_time);
         co_return repair_flush_hints_batchlog_response{ .flush_time = _flush_hints_batchlog_time };
     }
     bool updated = false;
     auto now = gc_clock::now();
     auto cache_time = std::chrono::milliseconds(_config.repair_hints_batchlog_flush_cache_time_in_ms());
-    auto cache_disabled = cache_time == std::chrono::milliseconds(0);
+    auto cache_disabled = req.skip_cache || cache_time == std::chrono::milliseconds(0);
     auto flush_time = now;
     db::all_batches_replayed all_replayed = db::all_batches_replayed::yes;
     if (cache_disabled || (now - _flush_hints_batchlog_time > cache_time)) {
@@ -2894,8 +2895,8 @@ future<repair_flush_hints_batchlog_response> repair_service::repair_flush_hints_
                 throw std::runtime_error("Backlog manager isn't initialized");
             }
             co_await coroutine::all(
-                [this, &from, &req, &sync_point, &deadline] () -> future<> {
-                    rlogger.info("repair[{}]: Started to flush hints for repair_flush_hints_batchlog_request from node={}", req.repair_uuid, from);
+                [this, &from, &sync_point, &deadline, &prefix] () -> future<> {
+                    rlogger.info("{}Started to flush hints for repair_flush_hints_batchlog_request from node={}", prefix, from);
                     // Read once: a discard without the flush below would take the hints written since.
                     bool discard_enabled = discard_unreplayed_hints_enabled();
                     if (discard_enabled) {
@@ -2903,8 +2904,8 @@ future<repair_flush_hints_batchlog_response> repair_service::repair_flush_hints_
                         // sync point keeps the hints written from now on out of a later discard.
                         auto flush = co_await coroutine::as_future(_sp.local().flush_hints());
                         if (flush.failed()) {
-                            rlogger.warn("repair[{}]: Failed to close the hint segments for repair_flush_hints_batchlog_request from node={}, not discarding hints on a timeout: {}",
-                                    req.repair_uuid, from, flush.get_exception());
+                            rlogger.warn("{}Failed to close the hint segments for repair_flush_hints_batchlog_request from node={}, not discarding hints on a timeout: {}",
+                                    prefix, from, flush.get_exception());
                             discard_enabled = false;
                         }
                     }
@@ -2922,21 +2923,21 @@ future<repair_flush_hints_batchlog_response> repair_service::repair_flush_hints_
                     if (regular.failed()) {
                         auto ex = regular.get_exception();
                         if (try_catch<timed_out_error>(ex) && discard_enabled) {
-                            rlogger.warn("repair[{}]: Timed out flushing hints for repair_flush_hints_batchlog_request from node={}, discarding the hints written before the request",
-                                    req.repair_uuid, from);
+                            rlogger.warn("{}Timed out flushing hints for repair_flush_hints_batchlog_request from node={}, discarding the hints written before the request",
+                                    prefix, from);
                             // The timeout is what the coordinator has to see, a failed discard is only logged.
                             auto discard = co_await coroutine::as_future(_sp.local().discard_hint_segments_up_to(sync_point));
                             if (discard.failed()) {
-                                rlogger.warn("repair[{}]: Failed to discard the hints for repair_flush_hints_batchlog_request from node={}: {}",
-                                        req.repair_uuid, from, discard.get_exception());
+                                rlogger.warn("{}Failed to discard the hints for repair_flush_hints_batchlog_request from node={}: {}",
+                                        prefix, from, discard.get_exception());
                             }
                         }
                         co_await coroutine::return_exception_ptr(std::move(ex));
                     }
-                    rlogger.info("repair[{}]: Finished to flush hints for repair_flush_hints_batchlog_request from node={}", req.repair_uuid, from);
+                    rlogger.info("{}Finished to flush hints for repair_flush_hints_batchlog_request from node={}", prefix, from);
                 },
-                [this, now, cache_disabled, &flush_time, &cache_time, &from, &req, &all_replayed, batchlog_deadline] () -> future<>  {
-                    rlogger.info("repair[{}]: Started to flush batchlog for repair_flush_hints_batchlog_request from node={}", req.repair_uuid, from);
+                [this, now, cache_disabled, &flush_time, &cache_time, &from, &prefix, &all_replayed, batchlog_deadline] () -> future<>  {
+                    rlogger.info("{}Started to flush batchlog for repair_flush_hints_batchlog_request from node={}", prefix, from);
                     auto last_replay = _bm.local().get_last_replay();
                     bool issue_flush = false;
                     if (cache_disabled) {
@@ -2967,15 +2968,15 @@ future<repair_flush_hints_batchlog_response> repair_service::repair_flush_hints_
                         all_replayed = co_await _bm.local().do_batch_log_replay(
                                 db::batchlog_manager::post_replay_cleanup::no, batchlog_deadline);
                     }
-                    rlogger.info("repair[{}]: Finished to flush batchlog for repair_flush_hints_batchlog_request from node={}, flushed={} all_replayed={}", req.repair_uuid, from, issue_flush, all_replayed);
+                    rlogger.info("{}Finished to flush batchlog for repair_flush_hints_batchlog_request from node={}, flushed={} all_replayed={}", prefix, from, issue_flush, all_replayed);
                 }
             );
             if (!all_replayed) {
                 throw std::runtime_error("Not all batchlog entries were replayed");
             }
         } catch (...) {
-            rlogger.warn("repair[{}]: Failed to process repair_flush_hints_batchlog_request from node={}: {}",
-                    req.repair_uuid, from, std::current_exception());
+            rlogger.warn("{}Failed to process repair_flush_hints_batchlog_request from node={}: {}",
+                    prefix, from, std::current_exception());
             throw;
         }
         co_await container().invoke_on_all([flush_time] (repair_service& rs) {
@@ -2988,8 +2989,8 @@ future<repair_flush_hints_batchlog_response> repair_service::repair_flush_hints_
     // bounded by the flush cache time. The cache hit path is logged at debug
     // level since it is performed for each tablet repair and can flood the log.
     auto level = updated ? seastar::log_level::info : seastar::log_level::debug;
-    rlogger.log(level, "repair[{}]: Finished to process repair_flush_hints_batchlog_request from node={} updated={} flush_hints_batchlog_time={} flush_cache_time={} flush_duration={}",
-            req.repair_uuid, from, updated, _flush_hints_batchlog_time, cache_time, duration);
+    rlogger.log(level, "{}Finished to process repair_flush_hints_batchlog_request from node={} updated={} flush_hints_batchlog_time={} flush_cache_time={} flush_duration={}",
+            prefix, from, updated, _flush_hints_batchlog_time, cache_time, duration);
     repair_flush_hints_batchlog_response resp{ .flush_time = _flush_hints_batchlog_time };
     co_return resp;
 }

@@ -99,6 +99,7 @@ struct repair_flush_hints_batchlog_request {
     std::list<gms::inet_address> unused;
     std::chrono::seconds hints_timeout;
     std::chrono::seconds batchlog_timeout;
+    bool skip_cache [[version 2027.1]] = false;
 };
 
 struct repair_flush_hints_batchlog_response {

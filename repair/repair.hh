@@ -280,6 +280,9 @@ struct repair_flush_hints_batchlog_request {
     std::list<gms::inet_address> unused;
     std::chrono::seconds hints_timeout;
     std::chrono::seconds batchlog_timeout;
+    // A cached flush time can be up to the cache time old, which a caller with
+    // a cache of its own would otherwise add to its own.
+    bool skip_cache = false;
 };
 
 struct repair_flush_hints_batchlog_response {
