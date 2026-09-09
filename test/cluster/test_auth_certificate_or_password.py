@@ -530,15 +530,21 @@ async def _certificate_authenticator_node(manager, tmp_path):
     a test for a refused login needs this authenticator instead.  The manager's own
     driver cannot log into it on the plain port, hence connect_driver=False and an
     admin connection over TLS retried until the listener answers.
+
+    The unencrypted ports are left unset, which keeps the node from opening them
+    at all: this authenticator refuses, and audits under an empty user name, every
+    connection that presents no certificate, so anything reaching a plain port
+    would record the failure these tests attribute to themselves.
     """
     _gen_certs(tmp_path)
-    server = await manager.server_add(
-        config=_server_config(tmp_path, extra_config={
-            'authenticator': 'CertificateAuthenticator',
-            'audit': 'table',
-            'audit_categories': 'AUTH',
-        }),
-        connect_driver=False)
+    config = _server_config(tmp_path, extra_config={
+        'authenticator': 'CertificateAuthenticator',
+        'audit': 'table',
+        'audit_categories': 'AUTH',
+    })
+    del config['native_transport_port']
+    del config['native_shard_aware_transport_port']
+    server = await manager.server_add(config=config, connect_driver=False)
 
     def connect_admin():
         cluster = _make_tls_cluster(
