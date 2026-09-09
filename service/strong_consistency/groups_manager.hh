@@ -183,6 +183,15 @@ public:
     // Called during node shutdown. Waits for all raft::server instances to stop.
     future<> stop();
 
+    // Hands Raft leadership over to another replica for every strongly consistent
+    // tablet group hosted on this shard which this node currently leads.
+    //
+    // Transferring leadership takes a round of Raft RPCs with the other replicas,
+    // so it must run while messaging_service is still up. stop() runs late in the
+    // shutdown sequence, after storage_service::do_drain() has already shut the
+    // transport down, so we need a separate entry point to trigger stepdown().
+    future<> stepdown_leaders();
+
     future<> wait_for_groups_to_start(lowres_clock::time_point timeout);
 
     // Sends an RPC to every host that holds a tablet replica of the given table, asking it to wait
