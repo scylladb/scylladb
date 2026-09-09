@@ -12,6 +12,7 @@ import os
 import pathlib
 import platform
 import random
+import shlex
 import shutil
 import sys
 import time
@@ -44,7 +45,8 @@ from test.pylib.host_registry import HostRegistry
 from test.pylib.s3_proxy import S3ProxyServer
 from test.pylib.s3_server_mock import MockS3Server
 from test.pylib.scylla_cluster import ScyllaCluster
-from test.pylib.scylla_server import merge_cmdline_options
+from test.pylib.running_shards import claimed_shards
+from test.pylib.scylla_server import merge_cmdline_options, specifies_shards
 from test.pylib.skip_reason_plugin import skip_marker
 from test.pylib.util import get_modes_to_run, scale_timeout_by_mode, get_xdist_worker_id, LogPrefixAdapter
 from test.pylib.version_fetch_utils import fetch_and_install_scylla_version
@@ -85,6 +87,10 @@ def pytest_addoption(parser: pytest.Parser) -> None:
                      help="Specific byte limit for failure injection (random by default)")
     parser.addoption("--gather-metrics", action=BooleanOptionalAction, default=False,
                      help='Switch on gathering cgroup metrics')
+    parser.addoption("--measure-running-shards", action='store_true', default=False,
+                     help="Ignore every max_running_shards claim and record the peak each test "
+                          "reaches unrestricted. Only for re-measuring a test that already has a "
+                          "claim: an unclaimed test is unrestricted anyway")
     parser.addoption('--random-seed', action="store",
                      help="Random number generator seed to be used by boost tests")
 
@@ -323,6 +329,27 @@ def scale_timeout(build_mode: str) -> Callable[[int | float], int | float]:
     return scale_timeout_inner
 
 
+@cache
+def _ignore_claims(config: pytest.Config) -> bool:
+    """Whether this run's max_running_shards claims do not apply to it.
+
+    True in measurement mode.  Also true when the run resizes the servers
+    itself: that override beats every other source (see
+    ScyllaCluster.add_server), so the servers are not the size the claims
+    describe, and every test would fail for an unrelated reason.  Cached, so
+    the warning is logged once per run.
+    """
+    if config.getoption("--measure-running-shards"):
+        return True
+    extra = shlex.split(config.getoption("--extra-scylla-cmdline-options", default="") or "")
+    if specifies_shards(extra):
+        logger.warning(
+            "not enforcing max_running_shards: --extra-scylla-cmdline-options %s changes the "
+            "servers' shard count, so the claims no longer describe this run", extra)
+        return True
+    return False
+
+
 @pytest.fixture(scope="module")
 def testpy_cluster_factory(request: pytest.FixtureRequest,
                            build_mode: str,
@@ -357,6 +384,10 @@ def testpy_cluster_factory(request: pytest.FixtureRequest,
             scylla_exe=scylla_binary,
             save_log_on_success=options.save_log_on_success,
         )
+        # Set the claim before anything can start a server.  A test with no
+        # marker is not restricted, so a new test can run before it is
+        # measured.
+        cluster.shard_usage.claim = None if _ignore_claims(request.config) else claimed_shards(node)
         testpy_logger.info("Created Scylla cluster %s for test %s", cluster, test_name)
         try:
             yield cluster
@@ -783,6 +814,7 @@ def modify_pytest_item(item: pytest.Item, run_ids: defaultdict[tuple[str, str], 
 
     item._nodeid = f"{item._nodeid}{suffix}"
     item.name = f"{item.name}{suffix}"
+    claimed_shards(item)  # a malformed claim fails collection, not one test
     skip_marks = [
         mark for mark in item.iter_markers("skip_mode")
         if mark.name == "skip_mode"
