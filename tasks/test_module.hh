@@ -10,61 +10,68 @@
 
 #pragma once
 
+#include <unordered_map>
+
+#include <seastar/core/shared_ptr.hh>
+
 #include "task_manager.hh"
 
 namespace tasks {
 
-class test_module : public task_manager::module {
-public:
-    test_module(task_manager& tm) noexcept : module(tm, "test") {}
+// The state a test steers a task through: the task's action waits on the
+// promise until the test resolves it.
+struct task_finalization {
+    promise<> finish_run;
+    bool finished = false;
 };
 
-class test_task_impl : public task_manager::task::impl {
+using finalization_ptr = seastar::shared_ptr<task_finalization>;
+
+// The module owns the finalization state of its tasks, keyed by task id,
+// so that a test which only knows a task's id can finish it.
+class test_module : public task_manager::module {
 private:
-    promise<> _finish_run;
-    bool _finished = false;
-    tasks::is_user_task _user_task;
+    std::unordered_map<task_id, finalization_ptr> _finalizations;
 public:
-    test_task_impl(task_manager::module_ptr module, task_id id, uint64_t sequence_number = 0, std::string keyspace = "", std::string table = "", std::string entity = "", task_id parent_id = task_id::create_null_id(), tasks::is_user_task user_task = tasks::is_user_task::no) noexcept
-        : task_manager::task::impl(module, id, sequence_number, "test", std::move(keyspace), std::move(table), std::move(entity), parent_id)
-        , _user_task(user_task)
-    {}
+    test_module(task_manager& tm) noexcept : module(tm, "test") {}
 
-    virtual std::string type() const override {
-        return "test";
+    void register_finalization(task_id id, finalization_ptr finalization) {
+        _finalizations[id] = std::move(finalization);
     }
 
-    future<> run() override {
-        return _finish_run.get_future();
+    finalization_ptr get_finalization(task_id id) const noexcept {
+        auto it = _finalizations.find(id);
+        return it != _finalizations.end() ? it->second : nullptr;
     }
 
-    tasks::is_user_task is_user_task() const noexcept override {
-        return _user_task;
+    void erase_finalization(task_id id) noexcept {
+        _finalizations.erase(id);
     }
-
-    friend class test_task;
 };
 
 class test_task {
 private:
     task_manager::task_ptr _task;
+    // Null once the task has finished and its finalizer erased the state.
+    finalization_ptr _finalization;
 public:
-    test_task(task_manager::task_ptr task) noexcept : _task(task) {}
+    test_task(task_manager::task_ptr task) noexcept
+        : _task(task)
+        , _finalization(dynamic_pointer_cast<test_module>(task->get_module())->get_finalization(task->id()))
+    {}
 
     future<> finish() noexcept {
-        auto& task_impl = dynamic_cast<test_task_impl&>(*_task->_impl);
-        if (!task_impl._finished) {
-            task_impl._finish_run.set_value();
-            task_impl._finished = true;
+        if (_finalization && !_finalization->finished) {
+            _finalization->finish_run.set_value();
+            _finalization->finished = true;
         }
         return _task->done();
     }
 
     future<> finish_failed(std::exception_ptr ex) {
-        auto& task_impl = dynamic_cast<test_task_impl&>(*_task->_impl);
-        if (!task_impl._finished) {
-            task_impl._finish_run.set_exception(ex);
-            task_impl._finished = true;
+        if (_finalization && !_finalization->finished) {
+            _finalization->finish_run.set_exception(std::move(ex));
+            _finalization->finished = true;
         }
         return _task->done().then_wrapped([] (auto&& f) {
             f.ignore_ready_future();
@@ -76,9 +83,7 @@ public:
     }
 
     future<> unregister_task() noexcept {
-        auto& task_impl = dynamic_cast<test_task_impl&>(*_task->_impl);
         co_await finish();
-        co_await task_impl._done.get_shared_future();
         _task->unregister_task();
     }
 };

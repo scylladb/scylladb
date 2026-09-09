@@ -557,7 +557,7 @@ SEASTAR_TEST_CASE(test_group0_hard_timeout_history_absent_after_real_gc_is_hard_
         auto restore_clocks = defer([] noexcept { forward_jump_clocks(-std::chrono::seconds{1}); });
         auto& history_cf = e.local_db().find_column_family("system", db::system_keyspace::GROUP0_HISTORY);
         co_await history_cf.flush();
-        co_await history_cf.compact_all_sstables(tasks::task_info{});
+        co_await history_cf.compact_all_sstables(tasks::make_empty_task_info());
 
         // After real GC, A's prev_state_id row is physically absent (not just
         // covered by a tombstone). Still ambiguous => must throw group0_hard_timeout.

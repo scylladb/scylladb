@@ -1089,7 +1089,7 @@ future<> storage_service::sstable_vnodes_cleanup_fiber(raft::server& server, gat
                     auto& compaction_module = _db.local().get_compaction_manager().get_task_manager_module();
                     // we flush all tables before cleanup the keyspaces individually, so skip the flush-tables step here
                     auto task = co_await compaction_module.make_and_start_task<compaction::cleanup_keyspace_compaction_task_impl>(
-                        {}, ks_name, _db, table_infos, compaction::flush_mode::skip, tasks::is_user_task::no);
+                        tasks::make_empty_task_info(), ks_name, _db, table_infos, compaction::flush_mode::skip, tasks::is_user_task::no);
                     try {
                         rtlogger.info("vnodes_cleanup {} started", ks_name);
                         co_await task->done();
@@ -4700,7 +4700,7 @@ future<> storage_service::finalize_tablets_migration(const sstring& ks_name) {
 }
 
 future<> storage_service::process_tablet_split_candidate(table_id table) noexcept {
-    tasks::task_info tablet_split_task_info;
+    auto tablet_split_task_info = tasks::make_empty_task_info();
 
     auto all_compaction_groups_split = [&] () mutable {
         return _db.map_reduce0([table_ = table] (replica::database& db) {
@@ -4729,7 +4729,7 @@ future<> storage_service::process_tablet_split_candidate(table_id table) noexcep
                 release_guard(std::move(guard));
                 break;
             }
-            tablet_split_task_info.id = tasks::task_id{tmap.resize_task_info().tablet_task_id.uuid()};
+            tablet_split_task_info = tasks::make_cluster_task_info(tasks::task_id{tmap.resize_task_info().tablet_task_id.uuid()});
 
             if (co_await all_compaction_groups_split()) {
                 slogger.debug("All compaction groups of table {} are split ready.", table);
@@ -5078,11 +5078,11 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                                 cf->notify_bootstrap_or_replace_start();
                             }
                         });
-                        tasks::task_info parent_info{tasks::task_id{rs.request_id}, 0};
+                        auto parent_info = tasks::make_cluster_task_info(tasks::task_id{rs.request_id});
                         if (rs.state == node_state::bootstrapping) {
                             if (!_topology_state_machine._topology.normal_nodes.empty()) { // stream only if there is a node in normal state
                                 auto task = co_await get_node_ops_module().make_and_start_task<node_ops::streaming_task_impl>(parent_info,
-                                        parent_info.id, streaming::stream_reason::bootstrap, _bootstrap_result, [this, &rs, session] (this auto) -> future<> {
+                                        parent_info.get_id(), streaming::stream_reason::bootstrap, _bootstrap_result, [this, &rs, session] (this auto) -> future<> {
                                     if (is_repair_based_node_ops_enabled(streaming::stream_reason::bootstrap)) {
                                         co_await utils::get_local_injector().inject("delay_bootstrap_120s", std::chrono::seconds(120));
 
@@ -5103,7 +5103,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                         } else {
                             auto replaced_id = std::get<replace_param>(_topology_state_machine._topology.req_param[id]).replaced_id;
                             auto task = co_await get_node_ops_module().make_and_start_task<node_ops::streaming_task_impl>(parent_info,
-                                    parent_info.id, streaming::stream_reason::replace, _bootstrap_result, [this, &rs, &id, replaced_id, session] (this auto) -> future<> {
+                                    parent_info.get_id(), streaming::stream_reason::replace, _bootstrap_result, [this, &rs, &id, replaced_id, session] (this auto) -> future<> {
                                 if (!_topology_state_machine._topology.req_param.contains(id)) {
                                     on_internal_error(rtlogger, ::format("Cannot find request_param for node id {}", id));
                                 }
@@ -5134,9 +5134,9 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                     }
                     break;
                     case node_state::decommissioning: {
-                        tasks::task_info parent_info{tasks::task_id{rs.request_id}, 0};
+                        auto parent_info = tasks::make_cluster_task_info(tasks::task_id{rs.request_id});
                         auto task = co_await get_node_ops_module().make_and_start_task<node_ops::streaming_task_impl>(parent_info,
-                                parent_info.id, streaming::stream_reason::decommission, _decommission_result, [this] (this auto) -> future<> {
+                                parent_info.get_id(), streaming::stream_reason::decommission, _decommission_result, [this] (this auto) -> future<> {
                             co_await utils::get_local_injector().inject("streaming_task_impl_decommission_run", utils::wait_for_message(60s));
                             co_await unbootstrap();
                             co_await utils::get_local_injector().inject("streaming_task_impl_decommission_done_wait", utils::wait_for_message(5min));
@@ -5155,9 +5155,9 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                         }
                         auto id = it->first;
                         rtlogger.debug("streaming to remove node {}", id);
-                        tasks::task_info parent_info{tasks::task_id{it->second.request_id}, 0};
+                        auto parent_info = tasks::make_cluster_task_info(tasks::task_id{it->second.request_id});
                         auto task = co_await get_node_ops_module().make_and_start_task<node_ops::streaming_task_impl>(parent_info,
-                                parent_info.id, streaming::stream_reason::removenode, _remove_result[id], [this, id = locator::host_id{id.uuid()}, session] (this auto) {
+                                parent_info.get_id(), streaming::stream_reason::removenode, _remove_result[id], [this, id = locator::host_id{id.uuid()}, session] (this auto) {
                             auto as = make_shared<abort_source>();
                             auto sub = _abort_source.subscribe([as] () noexcept {
                                 if (!as->abort_requested()) {
@@ -5181,9 +5181,9 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                     case node_state::rebuilding: {
                         auto source_dc = std::get<rebuild_param>(_topology_state_machine._topology.req_param[id]).source_dc;
                         rtlogger.info("rebuild from dc: {}", source_dc == "" ? "(any dc)" : source_dc);
-                        tasks::task_info parent_info{tasks::task_id{rs.request_id}, 0};
+                        auto parent_info = tasks::make_cluster_task_info(tasks::task_id{rs.request_id});
                         auto task = co_await get_node_ops_module().make_and_start_task<node_ops::streaming_task_impl>(parent_info,
-                                parent_info.id, streaming::stream_reason::rebuild, _rebuild_result, [this, &source_dc, session] (this auto) -> future<> {
+                                parent_info.get_id(), streaming::stream_reason::rebuild, _rebuild_result, [this, &source_dc, session] (this auto) -> future<> {
                             auto tmptr = get_token_metadata_ptr();
                             auto ks_erms = _db.local().get_non_local_strategy_keyspaces_erms();
                             if (is_repair_based_node_ops_enabled(streaming::stream_reason::rebuild)) {
@@ -5381,7 +5381,7 @@ future<service::tablet_operation_repair_result> storage_service::repair_tablet(l
         auto session = session_id ? session_id : trinfo->session_id;
         slogger.debug("repair_tablet: tablet={} session_id={}", tablet, session);
 
-        tasks::task_info global_tablet_repair_task_info;
+        auto global_tablet_repair_task_info = tasks::make_empty_task_info();
         std::optional<locator::tablet_replica_set> replicas = std::nullopt;
         if (trinfo->stage == locator::tablet_transition_stage::repair) {
             auto& tinfo = tmap.get_tablet_info(tablet.tablet);
@@ -5392,7 +5392,7 @@ future<service::tablet_operation_repair_result> storage_service::repair_tablet(l
             if (!tinfo.repair_task_info) {
                 throw std::runtime_error(fmt::format("Repair request for tablet {} was deleted", tablet));
             }
-            global_tablet_repair_task_info = {tasks::task_id{tinfo.repair_task_info->tablet_task_id.uuid()}, 0};
+            global_tablet_repair_task_info = tasks::make_cluster_task_info(tasks::task_id{tinfo.repair_task_info->tablet_task_id.uuid()});
         } else {
             auto migration_streaming_info = get_migration_streaming_info(get_token_metadata_ptr()->get_topology(), tmap.get_tablet_info(tablet.tablet), *trinfo);
             replicas = locator::tablet_replica_set{migration_streaming_info.read_from.begin(), migration_streaming_info.read_from.end()};

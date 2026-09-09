@@ -333,7 +333,7 @@ future<tasks::task_id> snapshot_ctl::start_backup(sstring endpoint, sstring buck
     cancel_expiration(snapshot_name, {keyspace}, table);
 
     auto task = co_await _task_manager_module->make_and_start_task<::db::snapshot::backup_task_impl>(
-        {}, *this, _storage_manager.container(), std::move(endpoint), std::move(bucket), std::move(prefix), keyspace, std::move(*dir), move_files);
+        tasks::make_empty_task_info(), *this, _storage_manager.container(), std::move(endpoint), std::move(bucket), std::move(prefix), keyspace, std::move(*dir), move_files);
     co_return task->id();
 }
 

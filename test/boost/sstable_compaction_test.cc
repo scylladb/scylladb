@@ -3049,7 +3049,7 @@ void partial_sstable_run_filtered_out_fn(test_env& env) {
 
     // register partial sstable run
     run_compaction_task(env, partial_sstable_run_identifier, cf.as_compaction_group_view(), [&cf] (compaction::compaction_data&) {
-        return cf->compact_all_sstables(tasks::task_info{});
+        return cf->compact_all_sstables(tasks::make_empty_task_info());
     }).get();
 
     // make sure partial sstable run has none of its fragments compacted.
@@ -3978,7 +3978,7 @@ void test_offstrategy_sstable_compaction_fn(test_env& env) {
         for (auto& sst : ssts) {
             cf->add_sstable_and_update_cache(std::move(sst), sstables::offstrategy::yes).get();
         }
-        BOOST_REQUIRE(cf->perform_offstrategy_compaction(tasks::task_info{}).get());
+        BOOST_REQUIRE(cf->perform_offstrategy_compaction(tasks::make_empty_task_info()).get());
     }
 }
 
@@ -4824,7 +4824,7 @@ void test_major_does_not_miss_data_in_memtable_fn(test_env& env) {
     }();
     cf->apply(deletion_mut);
 
-    cf->compact_all_sstables(tasks::task_info{}).get();
+    cf->compact_all_sstables(tasks::make_empty_task_info()).get();
     assert_table_sstable_count(cf, 1);
     auto new_sst = *(cf->get_sstables()->begin());
     BOOST_REQUIRE(new_sst->generation() != sst->generation());
@@ -5647,7 +5647,7 @@ static future<> run_incremental_compaction_test(sstables::offstrategy offstrateg
 
 SEASTAR_TEST_CASE(cleanup_incremental_compaction_test) {
     return run_incremental_compaction_test(sstables::offstrategy::no, [](table_for_tests& t, compaction::owned_ranges_ptr owned_ranges) -> future<> {
-        return t->perform_cleanup_compaction(std::move(owned_ranges), tasks::task_info{});
+        return t->perform_cleanup_compaction(std::move(owned_ranges), tasks::make_empty_task_info());
     });
 }
 
@@ -5655,7 +5655,7 @@ SEASTAR_TEST_CASE(cleanup_incremental_compaction_s3_test, *boost::unit_test::pre
     return run_incremental_compaction_test(
         sstables::offstrategy::no,
         [](table_for_tests& t, compaction::owned_ranges_ptr owned_ranges) -> future<> {
-            return t->perform_cleanup_compaction(std::move(owned_ranges), tasks::task_info{});
+            return t->perform_cleanup_compaction(std::move(owned_ranges), tasks::make_empty_task_info());
         },
         test_env_config{.storage = make_test_object_storage_options("S3")});
 }
@@ -5664,14 +5664,14 @@ SEASTAR_FIXTURE_TEST_CASE(cleanup_incremental_compaction_gcs_test, gcs_fixture, 
     return run_incremental_compaction_test(
         sstables::offstrategy::no,
         [](table_for_tests& t, compaction::owned_ranges_ptr owned_ranges) -> future<> {
-            return t->perform_cleanup_compaction(std::move(owned_ranges), tasks::task_info{});
+            return t->perform_cleanup_compaction(std::move(owned_ranges), tasks::make_empty_task_info());
         },
         test_env_config{.storage = make_test_object_storage_options("GS")});
 }
 
 SEASTAR_TEST_CASE(offstrategy_incremental_compaction_test) {
     return run_incremental_compaction_test(sstables::offstrategy::yes, [] (table_for_tests& t, compaction::owned_ranges_ptr owned_ranges) -> future<> {
-        bool performed = co_await t->perform_offstrategy_compaction(tasks::task_info{});
+        bool performed = co_await t->perform_offstrategy_compaction(tasks::make_empty_task_info());
         BOOST_REQUIRE(performed);
     });
 }
@@ -5680,7 +5680,7 @@ SEASTAR_TEST_CASE(offstrategy_incremental_compaction_s3_test, *boost::unit_test:
     return run_incremental_compaction_test(
         sstables::offstrategy::yes,
         [](table_for_tests& t, compaction::owned_ranges_ptr owned_ranges) -> future<> {
-            bool performed = co_await t->perform_offstrategy_compaction(tasks::task_info{});
+            bool performed = co_await t->perform_offstrategy_compaction(tasks::make_empty_task_info());
             BOOST_REQUIRE(performed);
         },
         test_env_config{.storage = make_test_object_storage_options("S3")});
@@ -5690,7 +5690,7 @@ SEASTAR_FIXTURE_TEST_CASE(offstrategy_incremental_compaction_gcs_test, gcs_fixtu
     return run_incremental_compaction_test(
         sstables::offstrategy::yes,
         [](table_for_tests& t, compaction::owned_ranges_ptr owned_ranges) -> future<> {
-            bool performed = co_await t->perform_offstrategy_compaction(tasks::task_info{});
+            bool performed = co_await t->perform_offstrategy_compaction(tasks::make_empty_task_info());
             BOOST_REQUIRE(performed);
         },
         test_env_config{.storage = make_test_object_storage_options("GS")});
@@ -5802,7 +5802,7 @@ void cleanup_during_offstrategy_incremental_compaction_fn(test_env& env) {
             }));
         }
         auto owned_ranges_ptr = make_lw_shared<const dht::token_range_vector>(std::move(owned_token_ranges));
-        t->perform_cleanup_compaction(std::move(owned_ranges_ptr), tasks::task_info{}).get();
+        t->perform_cleanup_compaction(std::move(owned_ranges_ptr), tasks::make_empty_task_info()).get();
         BOOST_REQUIRE(cm.sstables_requiring_cleanup(t->try_get_compaction_group_view_with_static_sharding()).empty());
         testlog.info("Cleanup has finished");
         ssts = {}; // release test-side references; remaining refs are dropped
@@ -6385,7 +6385,7 @@ static future<> test_perform_component_rewrite_single_sstable(sstables::update_s
             return sst == original_sst;
         };
         auto rewritten_map = cm.perform_component_rewrite(compaction_group_view,
-                                                          tasks::task_info{},
+                                                          tasks::make_empty_task_info(),
                                                           filter,
                                                           component_type::Statistics,
                                                           std::move(modifier),
@@ -6577,7 +6577,7 @@ SEASTAR_TEST_CASE(test_perform_component_rewrite_multiple_sstables) {
                 return sst_set.contains(sst);
             };
             auto rewritten_map = cm.perform_component_rewrite(*cg_view,
-                                                              tasks::task_info{},
+                                                              tasks::make_empty_task_info(),
                                                               std::move(filter),
                                                               component_type::Statistics,
                                                               std::move(modifier)).get();

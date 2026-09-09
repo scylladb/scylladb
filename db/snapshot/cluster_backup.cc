@@ -82,7 +82,7 @@ cluster_backup_task::cluster_backup_task(tasks::task_manager::module_ptr module
     , std::unordered_multimap<sstring, sstring> ks_tables
     , std::unordered_map<sstring, db::snapshot_dc_location> locations
     , bool move_files) noexcept
-    : tasks::task_manager::task::impl(module, tasks::task_id::create_random_id(), 0, "datacenter", ks_tables.begin()->first, ks_tables.begin()->second, "", tasks::task_id::create_null_id())    
+    : tasks::task_manager::task::impl(module, tasks::task_id::create_random_id(), 0, "datacenter", ks_tables.begin()->first, ks_tables.begin()->second, "", tasks::task_id::create_null_id())
     , _snap_ctl(ctl)
     , _snapshot(std::move(snapshot))
     , _ks_tables(std::move(ks_tables))
@@ -379,7 +379,7 @@ db::snapshot::start_global_backup(db::snapshot_ctl& ctl, tasks::task_manager::mo
     if (ks_tables.empty()) {
         throw std::invalid_argument("No tables provided for backup");
     }
-    auto task = co_await tm->make_and_start_task<cluster_backup_task>({}, ctl, std::move(snapshot_name), std::move(ks_tables), std::move(locations), move_files);
+    auto task = co_await tm->make_and_start_task<cluster_backup_task>(tasks::make_empty_task_info(), ctl, std::move(snapshot_name), std::move(ks_tables), std::move(locations), move_files);
     co_return task->id();
 }
 

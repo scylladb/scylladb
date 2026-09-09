@@ -47,11 +47,6 @@ using is_user_task = bool_class<struct user_task_tag>;
 
 extern logging::logger tmlogger;
 
-enum class task_kind {
-    cluster,
-    node,
-};
-
 struct task_identity;
 struct task_status;
 struct task_stats;
@@ -225,7 +220,14 @@ public:
             void set_virtual_parent() noexcept;
             task_id id() const noexcept;
             task_manager::task::status& get_status() noexcept;
+            seastar::abort_source& get_abort_source() noexcept {
+                return _as;
+            }
             future<> done() const noexcept;
+            // A handle for making this task the parent of a new task.
+            tasks::task_info info() const noexcept {
+                return tasks::make_node_task_info(_status.id, _status.shard, _status.sequence_number);
+            }
         protected:
             virtual future<> run() = 0;
             future<> run_to_completion();
@@ -269,8 +271,117 @@ public:
         future<utils::chunked_vector<task_essentials>> get_failed_children() const;
         void set_virtual_parent() noexcept;
 
-        friend class test_task;
         friend class ::repair::task_manager_module;
+    };
+
+    class generic_task_impl : public task::impl {
+    public:
+        using action_fn = noncopyable_function<future<> (task::impl&)>;
+        using progress_fn = noncopyable_function<future<task::progress> ()>;
+        using workload_fn = noncopyable_function<future<std::optional<double>> ()>;
+        using abort_fn = noncopyable_function<void (seastar::abort_source&)>;
+        using finalize_fn = noncopyable_function<future<> ()>;
+    private:
+        std::string _type;
+        tasks::is_abortable _is_abortable;
+        tasks::is_internal _is_internal;
+        tasks::is_user_task _is_user_task;
+
+        action_fn _action;
+        progress_fn _progress_fn;
+        workload_fn _workload_fn;
+        abort_fn _abort_fn;
+        finalize_fn _finalizer;
+
+        // Engaged only after the task is finished and its resources have been released.
+        std::optional<task_manager::task::progress> _cached_progress;
+        std::optional<double> _cached_workload;
+    public:
+        generic_task_impl(
+            module_ptr module,
+            task_id id,
+            uint64_t sequence_number,
+            std::string scope,
+            std::string keyspace,
+            std::string table,
+            std::string entity,
+            task_info info,
+            std::string type,
+            std::string progress_units,
+            tasks::is_abortable is_abortable,
+            tasks::is_internal is_internal,
+            tasks::is_user_task is_user_task,
+            action_fn action,
+            progress_fn progress_fn,
+            workload_fn workload_fn,
+            abort_fn abort_fn,
+            finalize_fn finalizer) noexcept;
+
+        std::string type() const override;
+        future<task_manager::task::progress> get_progress() const override;
+        tasks::is_abortable is_abortable() const noexcept override;
+        tasks::is_internal is_internal() const noexcept override;
+        tasks::is_user_task is_user_task() const noexcept override;
+        void abort() noexcept override;
+        future<> release_resources() noexcept override;
+    protected:
+        future<> run() override;
+        future<std::optional<double>> expected_total_workload() const override;
+
+        friend task;
+    };
+
+    class task_builder {
+        module_ptr _module;
+        std::string _type;
+        task_id _id;
+
+        std::optional<uint64_t> _sequence_number;
+        std::optional<std::string> _scope;
+        std::optional<std::string> _keyspace;
+        std::optional<std::string> _table;
+        std::optional<std::string> _entity;
+        std::optional<std::string> _progress_units;
+        std::optional<task_info> _parent_info;
+
+        std::optional<tasks::is_abortable> _is_abortable;
+        std::optional<tasks::is_internal> _is_internal;
+        std::optional<tasks::is_user_task> _is_user_task;
+
+        generic_task_impl::action_fn _action;
+        generic_task_impl::progress_fn _progress_fn;
+        generic_task_impl::workload_fn _workload_fn;
+        generic_task_impl::abort_fn _abort_fn;
+        generic_task_impl::finalize_fn _finalizer;
+    public:
+        task_builder(module_ptr module, std::string type);
+        task_builder(module_ptr module, std::string type, task_id id);
+
+        task_builder() = delete;
+        task_builder(const task_builder&) = delete;
+        task_builder& operator=(const task_builder&) = delete;
+        task_builder(task_builder&&) = delete;
+        task_builder& operator=(task_builder&&) = delete;
+        ~task_builder() = default;
+
+        task_builder& set_sequence_number(uint64_t sequence_number);
+        task_builder& set_scope(std::string scope);
+        task_builder& set_keyspace(std::string keyspace);
+        task_builder& set_table(std::string table);
+        task_builder& set_entity(std::string entity);
+        task_builder& set_progress_units(std::string progress_units);
+        task_builder& set_parent_info(task_info parent_info);
+
+        task_builder& set_is_abortable(tasks::is_abortable is_abortable);
+        task_builder& set_is_internal(tasks::is_internal is_internal);
+        task_builder& set_is_user_task(tasks::is_user_task is_user_task);
+
+        task_builder& set_progress_fn(generic_task_impl::progress_fn progress_fn);
+        task_builder& set_workload_fn(generic_task_impl::workload_fn workload_fn);
+        task_builder& set_abort_fn(generic_task_impl::abort_fn abort_fn);
+        task_builder& set_finalizer(generic_task_impl::finalize_fn finalizer);
+
+        future<task_ptr> build(generic_task_impl::action_fn action) &&;
     };
 
     class virtual_task : public enable_lw_shared_from_this<virtual_task> {
@@ -357,7 +468,7 @@ public:
         // Must be called on target shard.
         // If task has a parent, data concerning its children is updated and sequence number is inherited
         // from a parent and set. Otherwise, it must be set by caller.
-        future<task_ptr> make_task(task::task_impl_ptr task_impl_ptr, task_info parent_d = task_info{});
+        future<task_ptr> make_task(task::task_impl_ptr task_impl_ptr, task_info parent_d = make_empty_task_info());
 
         // Must be called on target shard.
         template<typename TaskImpl, typename... Args>

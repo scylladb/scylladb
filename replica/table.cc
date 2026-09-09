@@ -1372,7 +1372,7 @@ future<> tablet_storage_group_manager::maybe_split_compaction_group_of(size_t id
     if (!tablet_map().needs_split()) {
         co_return;
     }
-    tasks::task_info tablet_split_task_info{tasks::task_id{tablet_map().resize_task_info().tablet_task_id.uuid()}, 0};
+    auto tablet_split_task_info = tasks::make_cluster_task_info(tasks::task_id{tablet_map().resize_task_info().tablet_task_id.uuid()});
 
     auto sg = _storage_groups[idx];
     if (!sg) {
@@ -2853,7 +2853,7 @@ void table::trigger_offstrategy_compaction() {
     // Run in background.
     // This is safe since the the compaction task is tracked
     // by the compaction_manager until stop()
-    (void)perform_offstrategy_compaction(tasks::task_info{}).then_wrapped([this] (future<bool> f) {
+    (void)perform_offstrategy_compaction(tasks::make_empty_task_info()).then_wrapped([this] (future<bool> f) {
         if (f.failed()) {
             auto ex = f.get_exception();
             tlogger.warn("Offstrategy compaction of {}.{} failed: {}, ignoring", schema()->ks_name(), schema()->cf_name(), ex);
@@ -3987,7 +3987,7 @@ future<> table::update_repaired_at_for_merge() {
             }
             return filtered;
         };
-        co_await perform_component_rewrite(*sg, tasks::task_info{}, std::move(filter),
+        co_await perform_component_rewrite(*sg, tasks::make_empty_task_info(), std::move(filter),
                 sstables::component_type::Statistics, modifier);
         tlogger.info("Completed updating repaired_at={} for tablet merge in compaction group_id={} range {}",
                      new_repaired_at, id, sg->token_range());
