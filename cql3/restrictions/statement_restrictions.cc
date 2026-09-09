@@ -865,6 +865,67 @@ statement_restrictions::statement_restrictions(private_tag, schema_ptr schema, b
     , _partition_range_is_simple(true)
 { }
 
+// A mutation's WHERE clause has to name the rows to write, and IS [NOT] NULL
+// cannot name one: it tests whether a column has a value instead of saying
+// which value it has, so it never yields a concrete key. Reject them -
+// otherwise the restriction would silently be ignored and the statement would
+// write more than was asked for, e.g. DELETE ... WHERE p = 1 AND c IS NULL
+// deleting the whole partition.
+static void reject_identity_restrictions(
+        const std::vector<predicate>& predicates, statements::statement_type type) {
+    for (const auto& pred : predicates) {
+        if (pred.op == oper_t::IS || pred.op == oper_t::IS_NOT) {
+            throw exceptions::invalid_request_exception(format(
+                    "Restriction '{:user}' is not supported in {} statements", pred.filter, type));
+        }
+    }
+}
+
+// In a view definition, IS NOT NULL declares which base rows have a view row,
+// rather than filtering. Takes those restrictions out of the list and returns
+// the columns they name.
+static std::unordered_set<const column_definition*> extract_view_key_columns(
+        std::vector<predicate>& predicates) {
+    std::unordered_set<const column_definition*> not_null_columns;
+    auto declares_view_key = [&] (const predicate& pred) {
+        if (pred.op == oper_t::IS) {
+            // A view row exists only for base rows whose view key columns are
+            // all non-null, so IS NULL on a view key column could only ever
+            // select an empty view. On any other column it would be a filter on
+            // a non-key column, which views don't support. Either way there is
+            // nothing useful to do with it.
+            throw exceptions::invalid_request_exception(format(
+                    "Restriction '{:user}' is not supported in materialized view creation. Only IS NOT NULL is allowed.",
+                    pred.filter));
+        }
+        if (!pred.is_not_null_single_column) {
+            return false;
+        }
+        not_null_columns.insert(require_on_single_column(pred));
+        return true;
+    };
+    std::erase_if(predicates, declares_view_key);
+    return not_null_columns;
+}
+
+// A partition key column is never null, so IS NOT NULL on one matches every
+// row. The restriction carries no information, so drop it - in particular it
+// must not make the query require ALLOW FILTERING.
+//
+// This does not extend to a clustering key column. A partition with no
+// clustering rows still has a static row, and SELECT returns it with every
+// clustering key column null - so "c IS NOT NULL" does carry information there,
+// and has to be evaluated like any other restriction on c rather than dropped.
+//
+// A schema with no static columns has no such rows, which would make the
+// restriction a tautology again, but we deliberately don't make use of that:
+// it isn't worth a second, schema-dependent rule.
+static void drop_tautological_not_null_restrictions(std::vector<predicate>& predicates) {
+    std::erase_if(predicates, [] (const predicate& pred) {
+        return pred.is_not_null_single_column && require_on_single_column(pred)->is_partition_key();
+    });
+}
+
 statement_restrictions::statement_restrictions(private_tag,
         data_dictionary::database db,
         schema_ptr schema,
@@ -879,6 +940,35 @@ statement_restrictions::statement_restrictions(private_tag,
     : statement_restrictions(private_tag{}, schema, allow_filtering)
 {
     _check_indexes = do_check_indexes;
+
+    auto where = prepare_where_clause(db, where_clause, ctx);
+
+    if (!where.scoring_functions.empty() && !type.is_select()) {
+        throw exceptions::invalid_request_exception("Scoring functions are only supported in SELECT statements");
+    }
+    _scoring_function_restrictions = std::move(where.scoring_functions);
+
+    if (type.is_update() || type.is_delete()) {
+        reject_identity_restrictions(where.predicates, type);
+    }
+    if (for_view) {
+        _not_null_columns = extract_view_key_columns(where.predicates);
+    }
+    drop_tautological_not_null_restrictions(where.predicates);
+
+    auto preds = classify_predicates(std::move(where.predicates), allow_filtering);
+
+    plan_query(db, preds, type, selects_only_static_columns, allow_filtering, std::move(pinned_plan));
+
+    build_key_range_fns();
+    build_index_fns();
+}
+
+statement_restrictions::where_clause_predicates
+statement_restrictions::prepare_where_clause(
+        data_dictionary::database db,
+        const expr::expression& where_clause,
+        prepare_context& ctx) {
     std::vector<binary_operator> prepared_where_clause;
     for (auto&& relation_expr : boolean_factors(where_clause)) {
         const expr::binary_operator* relation_binop = expr::as_if<expr::binary_operator>(&relation_expr);
@@ -887,11 +977,11 @@ statement_restrictions::statement_restrictions(private_tag,
             on_internal_error(rlogger, format("statement_restrictions: where clause has non-binop element: {}", relation_expr));
         }
 
-        expr::binary_operator prepared_restriction = expr::validate_and_prepare_new_restriction(*relation_binop, db, schema, ctx);
+        expr::binary_operator prepared_restriction = expr::validate_and_prepare_new_restriction(*relation_binop, db, _schema, ctx);
         prepared_where_clause.push_back(std::move(prepared_restriction));
     }
 
-    std::vector<predicate> predicates;
+    where_clause_predicates result;
     for (auto& prepared_restriction : prepared_where_clause) {
         if (const auto* fc = expr::as_if<expr::function_call>(&prepared_restriction.lhs)) {
             // Scoring restrictions are purely declarative.
@@ -901,10 +991,7 @@ statement_restrictions::statement_restrictions(private_tag,
             // and select_statement::prepare() rejects any that no index claimed.
             if (expr::is_native_function_call(*fc, functions::BM25_FUNCTION_NAME)
                     || expr::is_native_function_call(*fc, functions::ANN_FUNCTION_NAME)) {
-                if (!type.is_select()) {
-                    throw exceptions::invalid_request_exception("Scoring functions are only supported in SELECT statements");
-                }
-                _scoring_function_restrictions.push_back(std::move(prepared_restriction));
+                result.scoring_functions.push_back(std::move(prepared_restriction));
                 continue;
             }
             // token() is the only other allowed function-call restriction.
@@ -915,9 +1002,14 @@ statement_restrictions::statement_restrictions(private_tag,
             }
         }
         auto preds = to_predicates(prepared_restriction, _schema.get());
-        predicates.insert(predicates.end(), std::make_move_iterator(preds.begin()), std::make_move_iterator(preds.end()));
+        result.predicates.insert(result.predicates.end(),
+                std::make_move_iterator(preds.begin()), std::make_move_iterator(preds.end()));
     }
+    return result;
+}
 
+column_predicates
+statement_restrictions::classify_predicates(std::vector<predicate> predicates, bool allow_filtering) {
     bool ck_is_empty = true;
     bool has_mc_clustering = false;
     bool ck_has_slice = false;
@@ -933,49 +1025,12 @@ statement_restrictions::statement_restrictions(private_tag,
     std::unordered_map<const column_definition*, predicate> pk_range_preds;
     std::vector<predicate> mc_ck_preds;
     std::unordered_map<const column_definition*, predicate> sc_ck_preds;
-    single_column_predicate_vectors sc_pk_pred_vectors;
-    single_column_predicate_vectors sc_ck_pred_vectors;
-    single_column_predicate_vectors sc_nonpk_pred_vectors;
+    column_predicates per_column_predicates;
+    auto& sc_pk_pred_vectors = per_column_predicates.partition_key;
+    auto& sc_ck_pred_vectors = per_column_predicates.clustering_key;
+    auto& sc_nonpk_pred_vectors = per_column_predicates.other;
     for (auto& pred : predicates) {
-        if ((pred.op == oper_t::IS || pred.op == oper_t::IS_NOT) && (type.is_update() || type.is_delete())) {
-            // The WHERE clause of a mutation has to name the rows to write, and
-            // IS [NOT] NULL cannot name one: it tests whether a column has a
-            // value instead of saying which value it has, so it never yields a
-            // concrete key. So reject them - otherwise the restriction would
-            // silently be ignored and the statement would write more than was
-            // asked for, e.g. DELETE ... WHERE p = 1 AND c IS NULL deleting the
-            // whole partition.
-            throw exceptions::invalid_request_exception(format(
-                    "Restriction '{:user}' is not supported in {} statements", pred.filter, type));
-        }
-        if ((pred.op == oper_t::IS || pred.is_not_null_single_column) && for_view) {
-            if (pred.op == oper_t::IS) {
-                // A view row exists only for base rows whose view key columns
-                // are all non-null, so IS NULL on a view key column could only
-                // ever select an empty view. On any other column it would be a
-                // filter on a non-key column, which views don't support. Either
-                // way there is nothing useful to do with it.
-                throw exceptions::invalid_request_exception(format(
-                        "Restriction '{:user}' is not supported in materialized view creation. Only IS NOT NULL is allowed.",
-                        pred.filter));
-            }
-            _not_null_columns.insert(require_on_single_column(pred));
-        } else if (pred.is_not_null_single_column && require_on_single_column(pred)->is_partition_key()) {
-            // A partition key column is never null, so IS NOT NULL on one matches
-            // every row. The restriction carries no information, so drop it - in
-            // particular it must not make the query require ALLOW FILTERING.
-            //
-            // This does not extend to a clustering key column. A partition with
-            // no clustering rows still has a static row, and SELECT returns it
-            // with every clustering key column null - so "c IS NOT NULL" does
-            // carry information there, and has to be evaluated like any other
-            // restriction on c rather than dropped.
-            //
-            // A schema with no static columns has no such rows, which would make
-            // the restriction a tautology again, but we deliberately don't make
-            // use of that: it isn't worth a second, schema-dependent rule.
-            continue;
-        } else if (pred.is_multi_column) {
+        if (pred.is_multi_column) {
             // Multi column restrictions are only allowed on clustering columns
             if (ck_is_empty) {
                 _clustering_columns_restrictions = pred.filter;
@@ -1062,8 +1117,9 @@ statement_restrictions::statement_restrictions(private_tag,
         } else if (std::holds_alternative<on_column>(pred.on)) {
             const column_definition* def = std::get<on_column>(pred.on).column;
             if (def->is_partition_key()) {
-                // View definition allows PK slices, because it's not a performance problem.
-                if (!pred.equality && !pred.is_in && !allow_filtering && !for_view) {
+                // A slice of the partition key cannot be turned into partition
+                // ranges, so only a statement that may filter can have one.
+                if (!pred.equality && !pred.is_in && !allow_filtering) {
                     throw exceptions::invalid_request_exception(
                             "Only EQ and IN relation are supported on the partition key "
                             "(unless you use the token() function or ALLOW FILTERING)");
@@ -1108,12 +1164,12 @@ statement_restrictions::statement_restrictions(private_tag,
                 const column_definition* last_column = ck_last_column;
 
                 if (last_column != nullptr && !allow_filtering) {
-                    if (ck_has_slice && schema->position(*new_column) > schema->position(*last_column)) {
+                    if (ck_has_slice && _schema->position(*new_column) > _schema->position(*last_column)) {
                         throw exceptions::invalid_request_exception(format("Clustering column \"{}\" cannot be restricted (preceding column \"{}\" is restricted by a non-EQ relation)",
                             new_column->name_as_text(), last_column->name_as_text()));
                     }
 
-                    if (schema->position(*new_column) < schema->position(*last_column)) {
+                    if (_schema->position(*new_column) < _schema->position(*last_column)) {
                         if (pred.is_slice) {
                             throw exceptions::invalid_request_exception(format("PRIMARY KEY column \"{}\" cannot be restricted (preceding column \"{}\" is restricted by a non-EQ relation)",
                                 last_column->name_as_text(), new_column->name_as_text()));
@@ -1143,7 +1199,7 @@ statement_restrictions::statement_restrictions(private_tag,
                 if (!pred.equality) {
                     ck_is_all_eq = false;
                 }
-                if (ck_last_column == nullptr || schema->position(*new_column) > schema->position(*ck_last_column)) {
+                if (ck_last_column == nullptr || _schema->position(*new_column) > _schema->position(*ck_last_column)) {
                     ck_last_column = new_column;
                 }
             } else {
@@ -1158,9 +1214,7 @@ statement_restrictions::statement_restrictions(private_tag,
             throw exceptions::invalid_request_exception(format("Unhandled restriction: {}", pred.filter));
         }
 
-        if (!(for_view && pred.is_not_null_single_column)) {
-            _where.push_back(pred.filter);
-        }
+        _where.push_back(pred.filter);
         // Subscript EQ (e.g. m[1] = 'a') is not considered an EQ on the column
         // itself, matching the behavior of the old expression-walking code which
         // only recognized column_value and tuple_constructor in the LHS.
@@ -1208,6 +1262,66 @@ statement_restrictions::statement_restrictions(private_tag,
     _ck_is_all_eq = ck_is_all_eq;
     _pk_is_all_eq = pk_is_all_eq;
     _pk_has_slice_or_needs_filtering = pk_has_slice_or_needs_filtering;
+    return per_column_predicates;
+}
+
+void statement_restrictions::detect_queriable_indexes(
+        data_dictionary::database db,
+        const column_predicates& preds,
+        statements::statement_type type,
+        bool allow_filtering,
+        bool force_base_plan,
+        const std::optional<sstring>& pinned_index_name) {
+    if (!_check_indexes) {
+        _has_queriable_ck_index = false;
+        _has_queriable_pk_index = false;
+        _has_queriable_regular_index = false;
+        return;
+    }
+    // Hide every index the pinned plan did not use, so the analysis below
+    // reaches the conclusions the page that saved the position reached.
+    if (force_base_plan) {
+        _has_queriable_ck_index = false;
+        _has_queriable_pk_index = false;
+        _has_queriable_regular_index = false;
+        // A query needing an index cannot have saved a base-table position,
+        // so the state came from another query. Mirrors the check below.
+        // Only regular-column restrictions are looked at: a query needing an
+        // index on a key column is rejected a few steps down by the ordinary
+        // filtering validation instead, and reported as that.
+        if (!allow_filtering && !type.is_delete() && !type.is_update()
+                && !is_empty_restriction(_nonprimary_key_restrictions)) {
+            throw_pinned_plan_foreign();
+        }
+        return;
+    }
+    auto cf = db.find_column_family(_schema);
+    auto& sim = cf.get_index_manager();
+    const expr::allow_local_index allow_local(
+            !has_partition_key_unrestricted_components()
+            && partition_key_restrictions_is_all_eq());
+    if (!_has_multi_column) {
+        _has_queriable_ck_index = index_supports_some_column(preds.clustering_key, sim, allow_local, pinned_index_name)
+                && !type.is_delete();
+    } else {
+        _has_queriable_ck_index = multi_column_predicates_have_supporting_index(
+                        _clustering_prefix_restrictions, sim, allow_local, pinned_index_name)
+                && !type.is_delete();
+    }
+    _has_queriable_pk_index = !has_token_restrictions()
+            && index_supports_some_column(preds.partition_key, sim, allow_local, pinned_index_name)
+            && !type.is_delete();
+    _has_queriable_regular_index = index_supports_some_column(preds.other, sim, allow_local, pinned_index_name)
+            && !type.is_delete();
+}
+
+void statement_restrictions::plan_query(
+        data_dictionary::database db,
+        const column_predicates& preds,
+        statements::statement_type type,
+        bool selects_only_static_columns,
+        bool allow_filtering,
+        pinned_plan_opt pinned_plan) {
     std::optional<sstring> pinned_index_name;
     bool force_base_plan = false;
     std::optional<table_id> pinned_view_id;
@@ -1218,16 +1332,12 @@ statement_restrictions::statement_restrictions(private_tag,
         }, *pinned_plan);
     }
     if (_check_indexes) {
-        auto cf = db.find_column_family(schema);
-        auto& sim = cf.get_index_manager();
-        const expr::allow_local_index allow_local(
-                !has_partition_key_unrestricted_components()
-                && partition_key_restrictions_is_all_eq());
         // Resolve the pinned view id to the index it names, so the plan search
         // below can filter by it. An id naming no live index means it is gone.
         if (pinned_view_id) {
-            for (const auto& idx : sim.list_indexes()) {
-                if (index_view_id(db, *schema, idx) == *pinned_view_id) {
+            auto cf = db.find_column_family(_schema);
+            for (const auto& idx : cf.get_index_manager().list_indexes()) {
+                if (index_view_id(db, *_schema, idx) == *pinned_view_id) {
                     pinned_index_name = idx.metadata().name();
                     break;
                 }
@@ -1236,60 +1346,29 @@ statement_restrictions::statement_restrictions(private_tag,
                 throw_pinned_plan_gone();
             }
         }
-        // Hide every index the pinned plan did not use, so the analysis below
-        // reaches the conclusions the page that saved the position reached.
-        if (force_base_plan) {
-            _has_queriable_ck_index = false;
-            _has_queriable_pk_index = false;
-            _has_queriable_regular_index = false;
-            // A query needing an index cannot have saved a base-table position,
-            // so the state came from another query. Mirrors the check below.
-            // Only regular-column restrictions are looked at: a query needing an
-            // index on a key column is rejected a few steps down by the ordinary
-            // filtering validation instead, and reported as that.
-            if (!allow_filtering && !type.is_delete() && !type.is_update()
-                    && !is_empty_restriction(_nonprimary_key_restrictions)) {
-                throw_pinned_plan_foreign();
-            }
-        } else {
-            if (!_has_multi_column) {
-                _has_queriable_ck_index = index_supports_some_column(sc_ck_pred_vectors, sim, allow_local, pinned_index_name)
-                        && !type.is_delete();
-            } else {
-                _has_queriable_ck_index = multi_column_predicates_have_supporting_index(mc_ck_preds, sim, allow_local, pinned_index_name)
-                        && !type.is_delete();
-            }
-            _has_queriable_pk_index = !has_token
-                    && index_supports_some_column(sc_pk_pred_vectors, sim, allow_local, pinned_index_name)
-                    && !type.is_delete();
-            _has_queriable_regular_index = index_supports_some_column(sc_nonpk_pred_vectors, sim, allow_local, pinned_index_name)
-                    && !type.is_delete();
-        }
-        // The pinned index cannot serve this query, so the state came from
-        // another one. Caught here, before ALLOW FILTERING is complained about.
-        if (pinned_index_name
-                && !_has_queriable_ck_index && !_has_queriable_pk_index && !_has_queriable_regular_index) {
-            throw_pinned_plan_foreign();
-        }
-    } else {
+    } else if (pinned_view_id) {
         // No index manager here, so a pin on an index view cannot be honoured -
         // and must not be ignored, or its position is read against the base.
-        if (pinned_view_id) {
-            throw_pinned_plan_foreign();
-        }
-        _has_queriable_ck_index = false;
-        _has_queriable_pk_index = false;
-        _has_queriable_regular_index = false;
+        throw_pinned_plan_foreign();
+    }
+
+    detect_queriable_indexes(db, preds, type, allow_filtering, force_base_plan, pinned_index_name);
+
+    // The pinned index cannot serve this query, so the state came from
+    // another one. Caught here, before ALLOW FILTERING is complained about.
+    if (pinned_index_name
+            && !_has_queriable_ck_index && !_has_queriable_pk_index && !_has_queriable_regular_index) {
+        throw_pinned_plan_foreign();
     }
 
     // At this point, the select statement if fully constructed, but we still have a few things to validate
-    process_partition_key_restrictions(for_view, allow_filtering, type);
+    process_partition_key_restrictions(allow_filtering, type);
 
     // Some but not all of the partition key columns have been specified;
     // hence we need turn these restrictions into index expressions.
     std::vector<index_search_group> search_groups;
     if (_uses_secondary_indexing || pk_restrictions_need_filtering()) {
-        search_groups.push_back({sc_pk_pred_vectors, _partition_key_restrictions});
+        search_groups.push_back({preds.partition_key, _partition_key_restrictions});
     }
 
     // If the only updated/deleted columns are static, then we don't need clustering columns.
@@ -1313,7 +1392,7 @@ statement_restrictions::statement_restrictions(private_tag,
         }
     }
 
-    process_clustering_columns_restrictions(for_view, allow_filtering);
+    process_clustering_columns_restrictions(allow_filtering);
 
     // Covers indexes on the first clustering column (among others).
     if (_is_key_range && _has_queriable_ck_index && !_has_multi_column) {
@@ -1321,7 +1400,7 @@ statement_restrictions::statement_restrictions(private_tag,
     }
 
     if (_uses_secondary_indexing || clustering_key_restrictions_need_filtering()) {
-        search_groups.push_back({sc_ck_pred_vectors, _clustering_columns_restrictions});
+        search_groups.push_back({preds.clustering_key, _clustering_columns_restrictions});
     } else if (_ck_is_on_collection) {
         fail(unimplemented::cause::INDEXES);
     }
@@ -1334,11 +1413,11 @@ statement_restrictions::statement_restrictions(private_tag,
                 "thus may have unpredictable performance. If you want to execute "
                 "this query despite the performance unpredictability, use ALLOW FILTERING");
         }
-        search_groups.push_back({sc_nonpk_pred_vectors, _nonprimary_key_restrictions});
+        search_groups.push_back({preds.other, _nonprimary_key_restrictions});
     }
 
-    if (_uses_secondary_indexing && !(for_view || allow_filtering)) {
-        validate_secondary_index_selections(selects_only_static_columns);
+    if (_uses_secondary_indexing && !allow_filtering) {
+        validate_secondary_index_selections();
     }
 
     if (_check_indexes) {
@@ -1355,8 +1434,31 @@ statement_restrictions::statement_restrictions(private_tag,
         _idx_column_predicates = std::move(idx_result.indexed_column_predicates);
     }
 
-    calculate_column_defs_for_filtering_and_erase_restrictions_used_for_index(db, sc_pk_pred_vectors, sc_ck_pred_vectors, sc_nonpk_pred_vectors);
+    calculate_column_defs_for_filtering_and_erase_restrictions_used_for_index(db, preds);
 
+    build_filters(preds);
+
+    if (_uses_secondary_indexing) {
+        if (!_idx_opt) {
+            throw std::runtime_error("No index found.");
+        }
+
+        const auto& im = _idx_opt->metadata();
+        if (db::schema_tables::view_should_exist(im)) {
+            sstring index_table_name = im.name() + "_index";
+            schema_ptr view_schema = db.find_schema(_schema->ks_name(), index_table_name);
+            _view_schema = view_schema;
+
+            if (im.local()) {
+                prepare_indexed_local(*view_schema, preds);
+            } else {
+                prepare_indexed_global(*view_schema);
+            }
+        }
+    }
+}
+
+void statement_restrictions::build_filters(const column_predicates& preds) {
     if (pk_restrictions_need_filtering()) {
         auto partition_key_filter = expr::conjunction{
             .children = _single_column_partition_key_restrictions
@@ -1375,17 +1477,15 @@ statement_restrictions::statement_restrictions(private_tag,
         _clustering_row_level_filter = expr::make_conjunction(std::move(_clustering_row_level_filter), std::move(clustering_key_filter));
     }
 
-    auto check_column_kind = [] (column_kind kind, const expr::single_column_restrictions_map::value_type& v) -> bool {
-        return v.first->kind == kind;
-    };
-
-    auto make_column_kind_checker = [&] (column_kind kind) {
-        return std::bind_front(check_column_kind, kind);
+    auto of_kind = [] (column_kind kind) {
+        return std::ranges::views::filter([kind] (const expr::single_column_restrictions_map::value_type& v) {
+            return v.first->kind == kind;
+        });
     };
 
     auto static_columns_filter = expr::conjunction{
         .children = _single_column_nonprimary_key_restrictions
-                | std::ranges::views::filter(make_column_kind_checker(column_kind::static_column))
+                | of_kind(column_kind::static_column)
                 | std::ranges::views::values
                 | std::ranges::to<std::vector>(),
     };
@@ -1394,7 +1494,7 @@ statement_restrictions::statement_restrictions(private_tag,
 
     auto regular_columns_filter = expr::conjunction{
         .children = _single_column_nonprimary_key_restrictions
-                | std::ranges::views::filter(make_column_kind_checker(column_kind::regular_column))
+                | of_kind(column_kind::regular_column)
                 | std::ranges::views::values
                 | std::ranges::to<std::vector>(),
     };
@@ -1404,30 +1504,14 @@ statement_restrictions::statement_restrictions(private_tag,
     if (_has_multi_column) {
         _clustering_row_level_filter = expr::make_conjunction(std::move(_clustering_row_level_filter), _clustering_columns_restrictions);
     }
+}
 
-    if (uses_secondary_indexing()) {
-        auto& index_opt = _idx_opt;
-        if (!index_opt) {
-            throw std::runtime_error("No index found.");
-        }
-
-        const auto& im = index_opt->metadata();
-        if (db::schema_tables::view_should_exist(im)) {
-            sstring index_table_name = im.name() + "_index";
-            schema_ptr view_schema = db.find_schema(schema->ks_name(), index_table_name);
-            _view_schema = view_schema;
-
-            if (im.local()) {
-                prepare_indexed_local(*view_schema, sc_pk_pred_vectors, sc_ck_pred_vectors, sc_nonpk_pred_vectors);
-            } else {
-                prepare_indexed_global(*view_schema);
-            }
-        }
-    }
-
+void statement_restrictions::build_key_range_fns() {
     _get_partition_key_ranges_fn = build_partition_key_ranges_fn();
-
     _get_clustering_bounds_fn = build_get_clustering_bounds_fn();
+}
+
+void statement_restrictions::build_index_fns() {
     _get_global_index_clustering_ranges_fn = build_get_global_index_clustering_ranges_fn();
     _get_global_index_token_clustering_ranges_fn = build_get_global_index_token_clustering_ranges_fn();
     _get_local_index_clustering_ranges_fn = build_get_local_index_clustering_ranges_fn();
@@ -1593,9 +1677,7 @@ std::vector<const column_definition*> statement_restrictions::get_column_defs_fo
 
 void statement_restrictions::calculate_column_defs_for_filtering_and_erase_restrictions_used_for_index(
         data_dictionary::database db,
-        const single_column_predicate_vectors& sc_pk_pred_vectors,
-        const single_column_predicate_vectors& sc_ck_pred_vectors,
-        const single_column_predicate_vectors& /* sc_nonpk_pred_vectors */) {
+        const column_predicates& preds) {
     std::vector<const column_definition*> column_defs_for_filtering;
     if (need_filtering()) {
         std::optional<secondary_index::index> opt_idx;
@@ -1616,7 +1698,7 @@ void statement_restrictions::calculate_column_defs_for_filtering_and_erase_restr
         if (pk_restrictions_need_filtering()) {
             for (auto&& cdef : expr::get_sorted_column_defs(_partition_key_restrictions)) {
                 auto it = _single_column_partition_key_restrictions.find(cdef);
-                if (!column_uses_indexing(sc_pk_pred_vectors, cdef)) {
+                if (!column_uses_indexing(preds.partition_key, cdef)) {
                     column_defs_for_filtering.emplace_back(cdef);
                 } else {
                     _single_column_partition_key_restrictions.erase(it);
@@ -1629,7 +1711,7 @@ void statement_restrictions::calculate_column_defs_for_filtering_and_erase_restr
                     num_clustering_prefix_columns_that_need_not_be_filtered();
             for (auto&& cdef : expr::get_sorted_column_defs(_clustering_columns_restrictions)) {
                 auto it = _single_column_clustering_key_restrictions.find(cdef);
-                if (cdef->id >= first_filtering_id && !column_uses_indexing(sc_ck_pred_vectors, cdef)) {
+                if (cdef->id >= first_filtering_id && !column_uses_indexing(preds.clustering_key, cdef)) {
                     column_defs_for_filtering.emplace_back(cdef);
                 } else {
                     _single_column_clustering_key_restrictions.erase(it);
@@ -1652,7 +1734,7 @@ void statement_restrictions::calculate_column_defs_for_filtering_and_erase_restr
     _column_defs_for_filtering = std::move(column_defs_for_filtering);
 }
 
-void statement_restrictions::process_partition_key_restrictions(bool for_view, bool allow_filtering, statements::statement_type type) {
+void statement_restrictions::process_partition_key_restrictions(bool allow_filtering, statements::statement_type type) {
     // If there is a queryable index, no special condition are required on the other restrictions.
     // But we still need to know 2 things:
     // - If we don't have a queryable index, is the query ok
@@ -1667,7 +1749,7 @@ void statement_restrictions::process_partition_key_restrictions(bool for_view, b
     }
 
     if (pk_restrictions_need_filtering()) {
-        if (!allow_filtering && !for_view && !_has_queriable_pk_index && !type.is_delete() && !type.is_update()) {
+        if (!allow_filtering && !_has_queriable_pk_index && !type.is_delete() && !type.is_update()) {
             throw exceptions::invalid_request_exception("Cannot execute this query as it might involve data filtering and "
                 "thus may have unpredictable performance. If you want to execute "
                 "this query despite the performance unpredictability, use ALLOW FILTERING");
@@ -1731,7 +1813,19 @@ const column_definition& statement_restrictions::unrestricted_column(column_kind
             to_sstring(kind), restrictions));
 };
 
-void statement_restrictions::process_clustering_columns_restrictions(bool for_view, bool allow_filtering) {
+void statement_restrictions::validate_clustering_columns_form_a_prefix() const {
+    auto clustering_columns_iter = _schema->clustering_key_columns().begin();
+    for (auto&& restricted_column : expr::get_sorted_column_defs(_clustering_columns_restrictions)) {
+        const column_definition* clustering_column = &(*clustering_columns_iter);
+        ++clustering_columns_iter;
+        if (clustering_column != restricted_column) {
+                throw exceptions::invalid_request_exception(format("PRIMARY KEY column \"{}\" cannot be restricted as preceding column \"{}\" is not restricted",
+                    restricted_column->name_as_text(), clustering_column->name_as_text()));
+        }
+    }
+}
+
+void statement_restrictions::process_clustering_columns_restrictions(bool allow_filtering) {
     if (!has_clustering_columns_restriction()) {
         return;
     }
@@ -1742,19 +1836,11 @@ void statement_restrictions::process_clustering_columns_restrictions(bool for_vi
             "Cannot restrict clustering columns by a CONTAINS relation without a secondary index or filtering");
     }
 
-    if (has_clustering_columns_restriction() && clustering_key_restrictions_need_filtering()) {
+    if (clustering_key_restrictions_need_filtering()) {
         if (_has_queriable_ck_index) {
             _uses_secondary_indexing = true;
-        } else if (!allow_filtering && !for_view) {
-            auto clustering_columns_iter = _schema->clustering_key_columns().begin();
-            for (auto&& restricted_column : expr::get_sorted_column_defs(_clustering_columns_restrictions)) {
-                const column_definition* clustering_column = &(*clustering_columns_iter);
-                ++clustering_columns_iter;
-                if (clustering_column != restricted_column) {
-                        throw exceptions::invalid_request_exception(format("PRIMARY KEY column \"{}\" cannot be restricted as preceding column \"{}\" is not restricted",
-                            restricted_column->name_as_text(), clustering_column->name_as_text()));
-                }
-            }
+        } else if (!allow_filtering) {
+            validate_clustering_columns_form_a_prefix();
         }
     }
 }
@@ -2599,7 +2685,7 @@ bool statement_restrictions::need_filtering() const {
     return clustering_key_restrictions_need_filtering();
 }
 
-void statement_restrictions::validate_secondary_index_selections(bool selects_only_static_columns) const {
+void statement_restrictions::validate_secondary_index_selections() const {
     if (key_is_in_relation()) {
         throw exceptions::invalid_request_exception(
             "Index cannot be used if the partition key is restricted with IN clause. This query would require filtering instead.");
@@ -2698,10 +2784,7 @@ void statement_restrictions::prepare_indexed_global(const schema& idx_tbl_schema
     };
 }
 
-void statement_restrictions::prepare_indexed_local(const schema& idx_tbl_schema,
-        const single_column_predicate_vectors& sc_pk_pred_vectors,
-        const single_column_predicate_vectors& sc_ck_pred_vectors,
-        const single_column_predicate_vectors& sc_nonpk_pred_vectors) {
+void statement_restrictions::prepare_indexed_local(const schema& idx_tbl_schema, const column_predicates& preds) {
     if (!_partition_range_is_simple) {
         return;
     }
@@ -2716,19 +2799,19 @@ void statement_restrictions::prepare_indexed_local(const schema& idx_tbl_schema,
     // Find index column restrictions in the pre-built predicate vectors
     const single_column_predicate_vectors* pvecs;
     switch (indexed_column_base_schema.kind) {
-    case column_kind::partition_key:  pvecs = &sc_pk_pred_vectors; break;
-    case column_kind::clustering_key: pvecs = &sc_ck_pred_vectors; break;
-    default:                          pvecs = &sc_nonpk_pred_vectors; break;
+    case column_kind::partition_key:  pvecs = &preds.partition_key; break;
+    case column_kind::clustering_key: pvecs = &preds.clustering_key; break;
+    default:                          pvecs = &preds.other; break;
     }
     auto it = pvecs->find(&indexed_column_base_schema);
     if (it == pvecs->end()) {
         on_internal_error(rlogger, format("prepare_indexed_local: no predicates found for column {}", indexed_column_base_schema.name_as_text()));
     }
-    const auto& preds = it->second;
+    const auto& indexed_column_preds = it->second;
 
     // Translate each predicate to use column from the index schema, then merge
     auto folded = std::ranges::fold_left_first(
-        preds | std::views::transform([&indexed_column](const predicate& p) {
+        indexed_column_preds | std::views::transform([&indexed_column](const predicate& p) {
             return replace_column_def(p, &indexed_column);
         }),
         make_conjunction
