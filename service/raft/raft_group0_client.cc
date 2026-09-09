@@ -472,25 +472,6 @@ void group0_batch::add_generator(generator_func f, std::string_view description)
     }
 }
 
-static future<> add_write_mutations_entry(
-        ::service::raft_group0_client& group0_client,
-        std::string_view description,
-        utils::chunked_vector<canonical_mutation> muts,
-        ::service::group0_guard group0_guard,
-        seastar::abort_source& as,
-        std::optional<::service::raft_timeout> timeout) {
-    logger.trace("add_write_mutations_entry: {} mutations with description {}",
-            muts.size(), description);
-    auto group0_cmd = group0_client.prepare_command(
-        ::service::write_mutations{
-            .mutations{std::move(muts)},
-        },
-        group0_guard,
-        description
-    );
-    return group0_client.add_entry(std::move(group0_cmd), std::move(group0_guard), as, timeout);
-}
-
 future<> group0_batch::materialize_mutations() {
     auto t = _guard->write_timestamp();
     for (auto& generator : _generators) {
@@ -502,27 +483,35 @@ future<> group0_batch::materialize_mutations() {
 }
 
 future<> group0_batch::commit(::service::raft_group0_client& group0_client, seastar::abort_source& as, std::optional<::service::raft_timeout> timeout) && {
-    if (_muts.size() == 0 && _generators.size() == 0) {
+    if (_muts.empty() && _generators.empty()) {
         co_return;
     }
     if (!_guard) {
         on_internal_error(logger, "group0_batch: trying to announce without guard");
     }
     auto description = fmt::to_string(fmt::join(_descriptions, "; "));
-    // common case, don't bother with generators as we would have only 1-2 mutations,
-    // when producer expects substantial number or size of mutations it should use generator
-    if (_generators.size() == 0) {
-        utils::chunked_vector<canonical_mutation> cmuts = {_muts.begin(), _muts.end()};
-        co_return co_await add_write_mutations_entry(group0_client, description, std::move(cmuts), std::move(*_guard), as, timeout);
+    // raft doesn't support streaming, so the generators are drained into the collector,
+    // which merges and bounds the mutations as they come.
+    group0_update_collector updates;
+    for (auto& m : _muts) {
+        co_await updates.add(std::move(m));
     }
-    // raft doesn't support streaming so we need to materialize all mutations in memory
-    co_await materialize_mutations();
-    if (_muts.empty()) {
+    _muts.clear();
+    auto t = _guard->write_timestamp();
+    for (auto& generator : _generators) {
+        auto g = generator(t);
+        while (auto mut = co_await g()) {
+            co_await updates.add(std::move(*mut));
+        }
+    }
+    _generators.clear();
+    if (updates.empty()) {
         co_return;
     }
-    utils::chunked_vector<canonical_mutation> cmuts = {_muts.begin(), _muts.end()};
-    _muts.clear();
-    co_await add_write_mutations_entry(group0_client, description, std::move(cmuts), std::move(*_guard), as, timeout);
+    logger.trace("group0_batch::commit: description {}", description);
+    auto group0_cmd = co_await group0_client.prepare_command<::service::write_mutations>(
+            std::move(updates), *_guard, description);
+    co_await group0_client.add_entry(std::move(group0_cmd), std::move(*_guard), as, timeout);
 }
 
 future<std::pair<utils::chunked_vector<mutation>, ::service::group0_guard>> group0_batch::extract() && {
