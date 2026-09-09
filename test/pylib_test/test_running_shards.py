@@ -10,6 +10,7 @@ import asyncio
 import logging
 import shlex
 import sqlite3
+import subprocess
 import sys
 import textwrap
 from pathlib import Path
@@ -27,6 +28,7 @@ from test.pylib.db.writer import (
 )
 from test.pylib.host_registry import Host
 from test.pylib.internal_types import ServerNum
+from test.pylib.marker_index import build_index
 from test.pylib.running_shards import (
     MARKER,
     RunningShards,
@@ -685,6 +687,26 @@ def test_a_start_stop_cycle_does_not_accumulate(tmp_path):
         del cluster.running[ServerNum(1)]       # the test stops it again
 
     assert cluster.shard_usage.high_water_mark == 2
+
+# --- the marker index -------------------------------------------------------
+
+def test_build_index_ignores_the_callers_pytest_options(tmp_path, monkeypatch):
+    """A -k in PYTEST_ADDOPTS would silently narrow what the index covers."""
+    captured: dict[str, str] = {}
+
+    def fake_run(argv, **kwargs):
+        captured.update(kwargs["env"])
+        (tmp_path / "marker_index.json").write_text('{"tests": []}')
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setenv("PYTEST_ADDOPTS", "-k nothing_matches")
+    monkeypatch.setenv("PYTEST_XDIST_WORKER", "gw3")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    assert build_index(["test/cluster"], tmpdir=tmp_path) == []
+    assert "PYTEST_ADDOPTS" not in captured
+    assert "PYTEST_XDIST_WORKER" not in captured
+
 
 # --- the metrics database outlives a run ------------------------------------
 
