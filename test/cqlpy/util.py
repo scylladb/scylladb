@@ -355,7 +355,29 @@ class ScyllaMetrics:
         url = f'http://{cql.cluster.contact_points[0]}:9180/metrics'
         return ScyllaMetrics(requests.get(url).text.split('\n'))
     def get(self, name, labels = None, shard='total'):
+        """Return the value of the metric `name`, or None if it doesn't exist.
+
+        `labels` restricts which series of the metric are matched, and can express
+        both AND and OR conditions:
+          - Different keys in `labels` are ANDed together, e.g.
+            labels={'class': 'user', 'ks': 'ks1'} matches series with both
+            class="user" and ks="ks1".
+          - A single key may be given a collection of accepted values (list, tuple,
+            set or frozenset) to OR across them, e.g. labels={'class': {'sl:default',
+            'sl:driver'}} matches series with class="sl:default" OR class="sl:driver".
+        All matching series (across shards, and across OR'ed label values) are
+        summed up and returned as a single value.
+
+        `shard` restricts the result to a specific shard instead of the 'total'
+        (all-shards sum) pseudo-shard that Scylla itself reports.
+        """
         result = None
+        # An OR'ed label means more than one series per shard can match, so the
+        # early-exit-after-first-match optimization below (for shard != 'total')
+        # must be disabled in that case, or it would silently drop the other
+        # OR'ed series.
+        has_or_label = labels is not None and any(
+            isinstance(v, (list, tuple, set, frozenset)) for v in labels.values())
         for l in self._lines:
             if not l.startswith(name) or l[len(name):len(name) + 1] not in ('{', ' '):
                 continue
@@ -371,8 +393,6 @@ class ScyllaMetrics:
                 if labels is None:
                     return True
                 expected = labels.get(key, None)
-                # A label may be given a collection of accepted values, in which case
-                # all of the matching series are summed up by the loop below.
                 if isinstance(expected, (list, tuple, set, frozenset)):
                     return val in expected
                 return expected == val
@@ -383,6 +403,6 @@ class ScyllaMetrics:
                     result = value
                 else:
                     result += value
-                if shard != 'total':
+                if shard != 'total' and not has_or_label:
                     break
         return result

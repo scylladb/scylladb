@@ -2,14 +2,11 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
-import logging
 import math
 
 import cassandra.concurrent
 
 from .util import new_test_table, ScyllaMetrics
-
-logger = logging.getLogger(__name__)
 
 
 # Test that executing CQL requests with client-provided timestamps
