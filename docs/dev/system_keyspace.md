@@ -21,6 +21,7 @@ This section describes the layouts and usage of `system.*` tables.
 - [system.compaction_history](#systemcompaction_history)
 - [system.config](#systemconfig)
 - [system.corrupt_data](#systemcorrupt_data)
+- [system.custom_indexes](#systemcustom_indexes)
 - [system.dicts](#systemdicts)
 - [system.discovery](#systemdiscovery)
 - [system.group0_history](#systemgroup0_history)
@@ -76,7 +77,7 @@ This section describes the layouts and usage of `system.*` tables.
 | **Lightweight Transactions (Paxos)** | [paxos](#systempaxos) |
 | **Compaction** | [compaction_history](#systemcompaction_history) |
 | **Repair** | [repair_history](#systemrepair_history), [repair_tasks](#systemrepair_tasks) |
-| **Diagnostic and Monitoring** | [large_partitions](#systemlarge_partitions), [large_rows](#systemlarge_rows), [large_cells](#systemlarge_cells), [clients](#systemclients), [client_routes](#systemclient_routes), [corrupt_data](#systemcorrupt_data), [protocol_servers](#systemprotocol_servers), [runtime_info](#systemruntime_info) |
+| **Diagnostic and Monitoring** | [large_partitions](#systemlarge_partitions), [large_rows](#systemlarge_rows), [large_cells](#systemlarge_cells), [clients](#systemclients), [client_routes](#systemclient_routes), [corrupt_data](#systemcorrupt_data), [custom_indexes](#systemcustom_indexes), [protocol_servers](#systemprotocol_servers), [runtime_info](#systemruntime_info) |
 | **Configuration** | [config](#systemconfig), [versions](#systemversions) |
 | **Batchlog** | [batchlog](#systembatchlog), [batchlog_v2](#systembatchlog_v2) |
 | **Truncation** | [truncated](#systemtruncated) |
@@ -570,6 +571,59 @@ CREATE TABLE system.corrupt_data (
 - `frozen_mutation_fragment`: The serialized mutation fragment itself
 - `origin`: The name of the process that found the corruption (e.g., `sstable-writer`)
 - `sstable_name`: The name of the SSTable that contains the corrupt data, if known (SSTable may have been compacted or deleted)
+
+---
+
+## system.custom_indexes
+
+Virtual table reporting the state of every external custom index (vector and
+fulltext) on every configured search node, from this node's point of view.
+
+Schema:
+```cql
+CREATE TABLE system.custom_indexes (
+    keyspace_name text,
+    index_name text,
+    address text,
+    port int,
+    host text,
+    role text,
+    index_type text,
+    node_status text,
+    index_state text,
+    build_progress float,
+    size bigint,
+    dimensions int,
+    options frozen<map<text, text>>,
+    PRIMARY KEY (keyspace_name, index_name, address, port)
+);
+```
+
+**Columns:**
+- `keyspace_name`: Keyspace the index belongs to
+- `index_name`: Name of the custom index
+- `address`: Resolved IP address of the search node, or the configured host name while it has not been resolved yet
+- `port`: Port of the search node
+- `host`: Host name of the search node as configured
+- `role`: Role of the search node, `primary` or `secondary`
+- `index_type`: Custom index class, e.g. `vector_index`
+- `node_status`: Connectivity of the search node from this node, e.g. `up`, `down`, `unknown`
+- `index_state`: State of the index on that node, one of `INITIALIZING`, `BOOTSTRAPPING`, `SERVING`. Null when this node could not determine the state, for example because the search node is unreachable or returned an unexpected response
+- `build_progress`: Percentage of the index build completed, in the range 0-100, only set while the index is being built
+- `size`: Number of items currently in the index on that node
+- `dimensions`: Vector indexes only - dimension of the indexed vector, taken from the `dimensions` index option (Alternator) or from the indexed column's `vector<float, N>` type (CQL)
+- `options`: Remaining index options, e.g. the similarity function, quantization and HNSW tuning parameters
+
+A host name resolving to several addresses yields one row per resolved node. A
+host that has not been resolved yet is reported once, with `address` set to the
+configured host name, `node_status` set to `unknown` and a null `index_state`,
+and is not queried.
+
+**Note:** Reading this table issues a status request to every reachable
+configured search node, for every custom index in the schema. The time spent
+querying them is bound by the read timeout.
+
+Implemented by `custom_indexes_table` in `db/virtual_tables.cc`.
 
 ---
 
@@ -1882,6 +1936,7 @@ The following system tables are virtual tables:
 - [cluster_status](#systemcluster_status)
 - [clients](#systemclients)
 - [config](#systemconfig)
+- [custom_indexes](#systemcustom_indexes)
 - [load_per_node](#systemload_per_node)
 - [protocol_servers](#systemprotocol_servers)
 - [runtime_info](#systemruntime_info)
