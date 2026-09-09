@@ -334,6 +334,126 @@ clean up resources, including added servers, when tests end.
 Every test gets its own cluster, created when the test starts and
 destroyed when it ends, so tests never share or reuse a cluster.
 
+## Declaring how much of the machine a test uses
+
+A cluster test can state the peak capacity it needs, in shards:
+
+```python
+@pytest.mark.max_running_shards(6)
+async def test_something(manager: ScyllaClusterManager):
+    await manager.servers_add(3)   # 3 servers x --smp 2 = 6 shards
+```
+
+Shards rather than servers, because a 1-server `--smp 8` test is not as cheap
+as a 1-server `--smp 1` one and servers cannot tell them apart. A server's
+shard count is its effective `--smp`, which is 2 unless the test passes its
+own (`manager.server_add(cmdline=['--smp', '1'])`).
+
+**The claim is an upper bound on shards running at once, not a total.** A test
+that starts two servers, stops both and starts two more peaks at 4 shards, not
+8. Everything running counts, including the servers the cluster is handed to
+the test with and any a fixture starts.
+
+**It is enforced.** The cluster refuses to start a server that would take the
+test over its claim, so the `servers_add()` that would break it raises
+`RunningShardsExceeded`, naming the marker, and the test fails there. The
+refusal comes before the server exists, so a claim that is too low costs the
+run nothing. When a test legitimately needs more of the machine, raise the
+number; when it does not, the failure is telling you the cluster grew by
+accident.
+
+Claims are not enforced when the run itself changes how big the servers are --
+`--extra-scylla-cmdline-options="--smp 4"` outranks every other source, so the
+servers are not the size the claims were measured at. The log says so once when
+that happens, rather than failing every test for a reason that has nothing to
+do with the tests.
+
+A test with no marker runs unrestricted. What a missing claim means for
+scheduling is up to whichever scheduler reads the markers -- nothing is imposed
+here.
+
+### Writing the claim for a new test
+
+You do not work the number out by hand. A new test has no marker, so nothing
+caps it -- run it, and let what it actually did write the claim:
+
+```bash
+./test.py --mode dev test/cluster/my_new_test.py
+./test/pylib/update_max_running_shards_markers.py testlog/sqlite_*.db
+```
+
+Commit the test and its marker together: `test/pylib_test` fails the build for a
+cluster test with no claim, so an unclaimed test passes locally and then stops at
+CI.
+
+The script writes a marker where there is none and raises one that has become
+too low, leaving everything else alone -- so running it twice over the same
+measurements produces no diff, and its output is an ordinary PR to review. Use
+`--headroom-shards N` for a test whose cluster varies between runs, and `--path`
+to limit it to one directory.
+
+**Re-measuring a test that already has a claim needs
+`pytest --measure-running-shards`**, because a claim caps the peak recorded
+under it: the server that would exceed it never runs, so it never counts. Every
+`cluster_metrics` row records the claim in force, and the backfill uses only
+the rows without one.
+
+Only runs that passed count: a test that failed part-way never reached its
+peak, and that under-estimate would leave the test failing on its own claim
+next time. Pass several databases at once (`testlog/sqlite_*.db`) to fold runs
+and modes together, which you need when the suite pins a test to one mode.
+
+Parametrized tests get one marker for the whole function, covering the heaviest
+parameter; `--repeat` copies of a test share its claim, which is the point --
+that is the case where too many heavy tests land on one machine at once.
+
+The measurement counts the shards the cluster manager runs, so a Scylla process
+a test launches itself -- a `scylla perf-*` or tool subprocess -- is invisible
+to it and comes out as 0. Write those claims by hand; the backfill leaves them
+alone, since it only ever raises a claim and skips measurements of 0.
+
+### Suites that declare one claim for all of their tests
+
+Only `test/cluster` leases a cluster per test. Everywhere else the shard count
+is a constant known before the run, so there is nothing to measure and no
+marker to write:
+
+- a suite whose cluster is created once per module declares
+  `pytestmark = pytest.mark.max_running_shards(n)` in its `conftest.py`, and
+  every test under it inherits that claim (a marker on the test, or on its
+  module, still wins);
+- a C++ test case's claim is derived from the `-c` on its own command line
+  (`-c2` by default, overridden per case in the suite's `custom_args`);
+- a suite that starts no Scylla at all declares nothing.
+
+None of these is enforced, and that is not an omission: nothing a test in them
+does can exceed a cluster it did not create, or a shard count Seastar fixed at
+startup from the argv we passed.
+
+Because those claims cannot be forgotten, `test/pylib_test` fails the build for
+a **cluster** test with no claim -- that being the only place one can go
+missing. Tests skipped at collection, `non_gating` and `no_parallel` are exempt:
+no scheduler places them.
+
+### Asking what the markers actually are
+
+Markers come from decorators, from `pytestmark` in a module or a conftest, from
+parametrize and from collection hooks, so the source does not tell you what a
+test ends up carrying. One collect-only pass does:
+
+```python
+from test.pylib.marker_index import build_index
+
+tests = build_index(["--mode", "dev", "test/cluster"], tmpdir)
+```
+
+The index lists every selected test with the markers it carries and their
+arguments, uninterpreted -- which is what a scheduler needs in order to weigh
+the selection before the run starts. The same module is a pytest plugin, so
+`python -m pytest --collect-only -p test.pylib.marker_index
+--marker-index=out.json ...` writes the index of any run. As a module: `-p`
+imports the plugin before any conftest puts the repo root on `sys.path`.
+
 ## Test metrics
 
 The parameter `--gather-metrics` is used to gather CPU/RAM usage during tests from the cgroup and system overall CPU/RAM
@@ -346,6 +466,10 @@ The database is created in the `testlog` directory and contains the following ta
 - `test_metrics` - contains the metrics for each test, such as memory peak usage, CPU usage, and duration
 - `system_resource_metrics` - contains system CPU and memory utilization in percents during the whole run
 - `cgroup_memory_metrics` - contains cgroup memory usage during the test run
+- `cluster_metrics` - contains the peak shard count each test's cluster ran and the `max_running_shards` claim in
+  force while it did, written for every test that leases a cluster. A row with no claim reports what the test uses
+  unrestricted; a row with one only shows that it stayed within it (see "Declaring how much of the machine a test
+  uses")
 
 ## Automation, CI, and Jenkins
 
