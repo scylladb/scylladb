@@ -2040,6 +2040,17 @@ user_cflags += ' -DSEASTAR_NO_EXCEPTION_HACK'
 # https://github.com/llvm/llvm-project/issues/163007
 user_cflags += ' -fextend-variable-liveness=none'
 
+# Use LLVM's compiler runtime (compiler-rt) instead of libgcc.
+rtlib_flag = '--rtlib=compiler-rt'
+user_ldflags += ' ' + rtlib_flag
+if platform.machine() == 'aarch64':
+    # On aarch64 the runtime library choice also gates code generation: clang
+    # emits ifunc-based function multi-versioning (target_clones/target_version)
+    # only with compiler-rt, and silently emits just the default version with
+    # libgcc. So the flag is needed while compiling too. Elsewhere it is unused
+    # during compilation, which -Werror turns into an error.
+    user_cflags += ' ' + rtlib_flag
+
 if args.target != '':
     user_cflags += ' -march=' + args.target
 

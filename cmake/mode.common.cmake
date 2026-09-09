@@ -121,6 +121,17 @@ add_compile_options("-ffile-prefix-map=${CMAKE_BINARY_DIR}/=${build_dir_name}")
 # https://github.com/llvm/llvm-project/issues/163007
 add_compile_options("-fextend-variable-liveness=none")
 
+# Use LLVM's compiler runtime (compiler-rt) instead of libgcc.
+add_link_options("--rtlib=compiler-rt")
+if(CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
+  # On aarch64 the runtime library choice also gates code generation: clang
+  # emits ifunc-based function multi-versioning (target_clones/target_version)
+  # only with compiler-rt, and silently emits just the default version with
+  # libgcc. So the flag is needed while compiling too. Elsewhere it is unused
+  # during compilation, which -Werror turns into an error.
+  add_compile_options("--rtlib=compiler-rt")
+endif()
+
 default_target_arch(target_arch)
 if(target_arch)
   add_compile_options("-march=${target_arch}")
