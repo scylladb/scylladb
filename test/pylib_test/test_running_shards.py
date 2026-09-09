@@ -5,14 +5,19 @@
 #
 """Tests for max_running_shards: the marker, and the claim it makes true."""
 
+import ast
 import asyncio
 import logging
+import shlex
 import sqlite3
+import sys
+import textwrap
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
+from test.pylib.cpp.base import DEFAULT_CUSTOM_ARGS, DEFAULT_SCYLLA_ARGS
 from test.pylib.db import writer
 from test.pylib.db.writer import (
     CLUSTER_METRICS_TABLE,
@@ -29,12 +34,18 @@ from test.pylib.running_shards import (
     claimed_shards,
 )
 from test.pylib.scylla_cluster import ScyllaCluster
-from test.pylib.scylla_server import ScyllaServer
 from test.pylib.scylla_server import (
     SCYLLA_CMDLINE_OPTIONS,
+    ScyllaServer,
     merge_cmdline_options,
     shards_of,
     specifies_shards,
+)
+from test.pylib.update_max_running_shards_markers import (
+    main,
+    measured_shards,
+    parse_nodeid,
+    update_file,
 )
 
 
@@ -173,6 +184,331 @@ def test_claim_exceeded_is_refused_before_anything_starts():
 
     # The mark did not move: those shards were never put on the machine.
     assert shards.high_water_mark == 2
+
+
+# --- the backfill -----------------------------------------------------------
+
+@pytest.mark.parametrize("nodeid,expected", [
+    ("cluster/test_x.py::test_y", (Path("cluster/test_x.py"), None, "test_y")),
+    ("cluster/test_x.py::TestC::test_y", (Path("cluster/test_x.py"), "TestC", "test_y")),
+    ("cluster/test_x.py::test_y[3-True]", (Path("cluster/test_x.py"), None, "test_y")),
+])
+def test_parse_nodeid(nodeid, expected):
+    assert parse_nodeid(nodeid) == expected
+
+
+@pytest.mark.parametrize("nodeid", ["cluster/test_x.py", "a.py::A::B::test_y"])
+def test_parse_nodeid_rejects(nodeid):
+    with pytest.raises(ValueError):
+        parse_nodeid(nodeid)
+
+
+def make_db(tmp_path: Path, rows: list[tuple[str, int]], *,
+            status: str = "passed", claim: int | None = None) -> Path:
+    """A measurements DB holding `rows` as (nodeid, shards), one row each.
+
+    `claim` is what was in force while they were measured; None -- the default --
+    is a --measure-running-shards run, the only kind the backfill trusts.
+    """
+    db_path = tmp_path / "measurements.db"
+    conn = sqlite3.connect(db_path)
+    with conn:
+        conn.execute(f"CREATE TABLE {CLUSTER_METRICS_TABLE} "
+                     "(id INTEGER PRIMARY KEY, test_id INT, nodeid TEXT, "
+                     "max_running_shards INTEGER, status VARCHAR(15), claim INTEGER)")
+        for test_id, (nodeid, shards) in enumerate(rows):
+            conn.execute(f"INSERT INTO {CLUSTER_METRICS_TABLE} "
+                         "(test_id, nodeid, max_running_shards, status, claim) VALUES (?, ?, ?, ?, ?)",
+                         (test_id, nodeid, shards, status, claim))
+    conn.close()
+    return db_path
+
+
+def test_measured_shards_folds_repeats_modes_and_params(tmp_path):
+    """One function carries one marker, so everything folding into it takes the max."""
+    db_path = make_db(tmp_path, [
+        ("cluster/test_x.py::test_y[1]", 2),
+        ("cluster/test_x.py::test_y[2]", 6),   # the heaviest parameter wins
+        ("cluster/test_x.py::test_y[2]", 4),   # a --repeat copy of the same one
+        ("cluster/test_x.py::TestC::test_y", 8),
+    ])
+    assert measured_shards([db_path], headroom=0) == {
+        Path("cluster/test_x.py"): {None: {"test_y": 6}, "TestC": {"test_y": 8}},
+    }
+
+
+def test_measured_shards_ignores_tests_that_started_nothing(tmp_path):
+    """A test that leased a cluster but ran no server has nothing to claim.
+
+    A marker of 0 would be a claim it breaks the first time it does start one,
+    and claimed_shards() rejects it anyway.
+    """
+    db_path = make_db(tmp_path, [("cluster/test_x.py::test_y", 0)])
+    assert measured_shards([db_path], headroom=0) == {}
+
+
+def test_measured_shards_ignores_runs_held_to_a_claim(tmp_path):
+    """A claim caps the peak recorded under it, so such a row proves nothing new."""
+    db_path = make_db(tmp_path, [("cluster/test_x.py::test_y", 6)], claim=6)
+    assert measured_shards([db_path], headroom=0) == {}
+
+
+def test_measured_shards_ignores_failed_runs(tmp_path):
+    """A test that failed part-way never reached its peak, so it makes no claim."""
+    db_path = make_db(tmp_path, [("cluster/test_x.py::test_y", 2)], status="failed")
+    assert measured_shards([db_path], headroom=0) == {}
+
+
+def test_measured_shards_does_not_let_one_run_vouch_for_another(tmp_path):
+    """Two runs of one test share a tests.id, so the outcome has to be per row.
+
+    Here the run that measured 2 failed, and the run that passed was held to a
+    claim.  Neither says what the test uses, and joining them would say 2.
+    """
+    db_path = tmp_path / "two_runs.db"
+    conn = sqlite3.connect(db_path)
+    with conn:
+        conn.execute(f"CREATE TABLE {CLUSTER_METRICS_TABLE} "
+                     "(id INTEGER PRIMARY KEY, test_id INT, nodeid TEXT, "
+                     "max_running_shards INTEGER, status VARCHAR(15), claim INTEGER)")
+        for shards, status, claim in [(2, "failed", None), (6, "passed", 6)]:
+            conn.execute(f"INSERT INTO {CLUSTER_METRICS_TABLE} "
+                         "(test_id, nodeid, max_running_shards, status, claim) VALUES (1, ?, ?, ?, ?)",
+                         ("cluster/test_x.py::test_y", shards, status, claim))
+    conn.close()
+    assert measured_shards([db_path], headroom=0) == {}
+
+
+@pytest.mark.parametrize("status", ["skipped", "xfailed"])
+def test_measured_shards_ignores_runs_that_stopped_early(tmp_path, status):
+    """These are recorded as successes, but the test did not run to the end.
+
+    A mid-test skip or an xfail leaves the peak short of what the test does
+    when it runs through, and a claim written from that fails the test later.
+    """
+    db_path = make_db(tmp_path, [("cluster/test_x.py::test_y", 2)], status=status)
+    assert measured_shards([db_path], headroom=0) == {}
+
+
+def test_negative_headroom_is_refused(monkeypatch, tmp_path, capsys):
+    """It would write a claim below the measured peak, and at enough below it a
+    zero or negative one that claimed_shards() rejects."""
+    db = make_db(tmp_path, [("cluster/test_x.py::test_y", 6)])
+    monkeypatch.setattr(sys, "argv", ["update_max_running_shards_markers",
+                                      str(db), "--headroom-shards", "-1"])
+    with pytest.raises(SystemExit) as refused:
+        main()
+    assert refused.value.code != 0
+    assert "cannot be negative" in capsys.readouterr().err
+
+
+def test_measured_shards_headroom(tmp_path):
+    db_path = make_db(tmp_path, [("cluster/test_x.py::test_y", 6)])
+    assert measured_shards([db_path], headroom=2)[Path("cluster/test_x.py")][None]["test_y"] == 8
+
+
+SOURCE = textwrap.dedent(f'''\
+    import pytest
+
+
+    async def test_plain(manager):
+        pass
+
+
+    @pytest.mark.asyncio
+    async def test_decorated(manager):
+        pass
+
+
+    @pytest.mark.{MARKER}(2)
+    async def test_claims_too_little(manager):
+        pass
+
+
+    @pytest.mark.{MARKER}(100)
+    async def test_claims_plenty(manager):
+        pass
+
+
+    class TestC:
+        async def test_method(self, manager):
+            pass
+    ''')
+
+
+def write_source(tmp_path: Path, source: str = SOURCE) -> Path:
+    path = tmp_path / "test_x.py"
+    path.write_text(source)
+    return path
+
+
+TESTS = {
+    None: {
+        "test_plain": 4,
+        "test_decorated": 4,
+        "test_claims_too_little": 6,
+        "test_claims_plenty": 6,
+    },
+    "TestC": {"test_method": 8},
+}
+
+
+def test_update_file_writes_and_raises_claims(tmp_path):
+    path = write_source(tmp_path)
+    assert update_file(path, TESTS)
+    updated = path.read_text()
+
+    assert f"@pytest.mark.{MARKER}(4)\nasync def test_plain" in updated
+    # Above the whole decorator stack, not between it and the function.
+    assert f"@pytest.mark.{MARKER}(4)\n@pytest.mark.asyncio\nasync def test_decorated" in updated
+    # Too low, so raised in place; already generous, so left alone.
+    assert f"@pytest.mark.{MARKER}(6)\nasync def test_claims_too_little" in updated
+    assert f"@pytest.mark.{MARKER}(100)\nasync def test_claims_plenty" in updated
+    # Methods keep their indentation.
+    assert f"    @pytest.mark.{MARKER}(8)\n    async def test_method" in updated
+
+
+def test_update_file_is_idempotent(tmp_path):
+    path = write_source(tmp_path)
+    assert update_file(path, TESTS)
+    once = path.read_text()
+
+    assert not update_file(path, TESTS), "a second run should find nothing to change"
+    assert path.read_text() == once
+
+
+def test_update_file_adds_the_pytest_import(tmp_path):
+    path = write_source(tmp_path, textwrap.dedent('''\
+        from test.pylib.manager_client import ManagerClient
+
+
+        async def test_plain(manager):
+            pass
+        '''))
+    assert update_file(path, {None: {"test_plain": 4}})
+    updated = path.read_text()
+    assert "import pytest" in updated
+    assert updated.index("import pytest") < updated.index(f"@pytest.mark.{MARKER}(4)")
+
+
+@pytest.mark.parametrize("source", [
+    "import pytest as pt\n\n\n@pt.mark.asyncio\nasync def test_plain(manager):\n    pass\n",
+    "def helper():\n    import pytest\n\n\nasync def test_plain(manager):\n    pass\n",
+    "async def test_plain(manager):\n    pass\n",
+], ids=["aliased-import", "import-inside-a-helper", "no-imports-at-all"])
+def test_update_file_adds_the_pytest_import_when_the_name_is_not_bound(tmp_path, source):
+    """The marker needs `pytest` bound at module level, above it."""
+    path = write_source(tmp_path, source)
+    assert update_file(path, {None: {"test_plain": 4}})
+    updated = path.read_text().splitlines()
+    assert "import pytest" in updated, "the marker would fail with NameError without it"
+    assert updated.index("import pytest") < next(i for i, line in enumerate(updated) if MARKER in line)
+    ast.parse("\n".join(updated))
+
+
+def test_update_file_adds_the_pytest_import_above_a_class(tmp_path):
+    """An import cannot be indented into the class body the method lives in."""
+    path = write_source(tmp_path, "class TestX:\n    async def test_plain(self, manager):\n        pass\n")
+    assert update_file(path, {"TestX": {"test_plain": 4}})
+    updated = path.read_text()
+    assert updated.index("import pytest") < updated.index("class TestX")
+    ast.parse(updated)
+
+
+def test_update_file_leaves_a_marker_it_cannot_rewrite(tmp_path):
+    """A second marker would sit above the first, and the first is the one that counts."""
+    source = "import pytest as pt\n\n\n@pt.mark.max_running_shards(2)\nasync def test_plain(manager):\n    pass\n"
+    path = write_source(tmp_path, source)
+    assert not update_file(path, {None: {"test_plain": 6}})
+    assert path.read_text() == source
+
+
+@pytest.mark.parametrize("trailing", ["\n", ""], ids=["final-newline", "no-final-newline"])
+def test_update_file_changes_only_the_markers(tmp_path, trailing):
+    """Whatever else the file has, only the marker lines may move.
+
+    The rewrite has to round-trip the source exactly: a file that ended without
+    a newline must not gain one, and a form feed must not become a line break.
+    """
+    source = ("import pytest\n"
+              "\n"
+              "PAGE = 'a\fb'  # a form feed, which splitlines() would break on\n"
+              "\n"
+              "\n"
+              "async def test_plain(manager):\n"
+              "    pass" + trailing)
+    path = write_source(tmp_path, source)
+    assert update_file(path, {None: {"test_plain": 4}})
+
+    updated = path.read_text()
+    assert updated == source.replace("async def test_plain",
+                                     f"@pytest.mark.{MARKER}(4)\nasync def test_plain")
+
+
+def test_update_file_ignores_a_function_nested_in_a_test(tmp_path):
+    """Only a test gets a marker, not a helper that happens to share its name."""
+    source = textwrap.dedent("""\
+        import pytest
+
+
+        async def test_plain(manager):
+            def test_plain():   # a helper, not a test
+                pass
+            test_plain()
+        """)
+    path = write_source(tmp_path, source)
+    assert update_file(path, {None: {"test_plain": 4}})
+    updated = path.read_text()
+    assert updated.count(f"@pytest.mark.{MARKER}(4)") == 1
+    assert updated.startswith("import pytest\n\n\n"
+                              f"@pytest.mark.{MARKER}(4)\nasync def test_plain(manager):")
+
+
+def test_update_file_raises_a_multi_line_claim_without_moving_the_rest(tmp_path):
+    """Replacing a marker spelled across several lines shortens the file.
+
+    Every edit position comes from the original AST, so if that replacement ran
+    before an insert below it, the insert would land at a stale index -- the
+    marker for the second test ended up after it, as invalid Python.
+    """
+    source = textwrap.dedent(f"""\
+        import pytest
+
+
+        @pytest.mark.{MARKER}(
+            2
+        )
+        async def test_first(manager):
+            pass
+
+
+        async def test_second(manager):
+            pass
+        """)
+    path = write_source(tmp_path, source)
+    assert update_file(path, {None: {"test_first": 6, "test_second": 4}})
+
+    updated = path.read_text()
+    assert f"@pytest.mark.{MARKER}(6)\nasync def test_first" in updated
+    assert f"@pytest.mark.{MARKER}(4)\nasync def test_second" in updated
+    ast.parse(updated)   # and it is still Python
+
+
+def test_update_file_leaves_a_computed_claim_alone(tmp_path):
+    """A claim this script cannot read is a human's to change."""
+    source = textwrap.dedent(f'''\
+        import pytest
+
+        SHARDS = 2
+
+
+        @pytest.mark.{MARKER}(SHARDS)
+        async def test_plain(manager):
+            pass
+        ''')
+    path = write_source(tmp_path, source)
+    assert not update_file(path, {None: {"test_plain": 6}})
+    assert path.read_text() == source
 
 
 # --- the cluster's side of the claim ----------------------------------------
@@ -432,8 +768,4 @@ def test_writer_reports_a_migration_that_really_failed(tmp_path, monkeypatch):
 
 def test_shards_of_cpp_defaults():
     """The command line every C++ test case gets by default claims two shards."""
-    import shlex
-
-    from test.pylib.cpp.base import DEFAULT_CUSTOM_ARGS, DEFAULT_SCYLLA_ARGS
-
     assert shards_of([*DEFAULT_SCYLLA_ARGS, *shlex.split(DEFAULT_CUSTOM_ARGS[0])]) == 2
