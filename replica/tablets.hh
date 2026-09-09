@@ -116,4 +116,7 @@ future<std::optional<locator::tablet_transition_stage>> read_tablet_transition_s
 /// Validates changes to system.tablets represented by mutations
 void validate_tablet_metadata_change(const locator::tablet_metadata& tm, const utils::chunked_vector<canonical_mutation>& mutations);
 
+// Same, given the mutation. Ignores mutations of other tables.
+void validate_tablet_metadata_change(const locator::tablet_metadata& tm, const mutation& m);
+
 } // namespace replica
