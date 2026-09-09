@@ -62,8 +62,7 @@ struct segment_header {
 };
 
 struct record_header {
-    uint32_t header_size; // size of the serialized log_record_header
-    uint32_t data_size;   // size of the serialized canonical_mutation
+    uint32_t data_size; // size of the serialized canonical_mutation
 
     bool operator==(const record_header& other) const noexcept = default;
 };
@@ -80,6 +79,10 @@ namespace ser {
 // lives here rather than in an IDL definition.
 template <>
 struct serializer<replica::logstor::primary_index_key> {
+    static constexpr size_t serialized_size =
+        sizeof(int64_t)             // token
+        + replica::logstor::key_hash_size;
+
     template <typename Output>
     static void write(Output& out, const replica::logstor::primary_index_key& key) {
         serializer<int64_t>::write(out, key._token.raw());
@@ -101,6 +104,11 @@ struct serializer<replica::logstor::primary_index_key> {
 
 template <>
 struct serializer<replica::logstor::log_record_header> {
+    static constexpr size_t serialized_size =
+        serializer<replica::logstor::primary_index_key>::serialized_size
+        + sizeof(api::timestamp_type)
+        + 2 * sizeof(int64_t);      // table id
+
     template <typename Output>
     static void write(Output& out, const replica::logstor::log_record_header& h) {
         serializer<replica::logstor::primary_index_key>::write(out, h.key);
@@ -204,27 +212,22 @@ struct serializer<replica::logstor::ondisk::segment_header> {
 
 template <>
 struct serializer<replica::logstor::ondisk::record_header> {
-    static constexpr size_t serialized_size =
-        sizeof(uint32_t)            // header_size
-        + sizeof(uint32_t);         // data_size
+    static constexpr size_t serialized_size = sizeof(uint32_t);   // data_size
 
     template <typename Output>
     static void write(Output& out, const replica::logstor::ondisk::record_header& h) {
-        serializer<uint32_t>::write(out, h.header_size);
         serializer<uint32_t>::write(out, h.data_size);
     }
 
     template <typename Input>
     static replica::logstor::ondisk::record_header read(Input& in) {
         replica::logstor::ondisk::record_header h;
-        h.header_size = serializer<uint32_t>::read(in);
         h.data_size = serializer<uint32_t>::read(in);
         return h;
     }
 
     template <typename Input>
     static void skip(Input& in) {
-        serializer<uint32_t>::skip(in);
         serializer<uint32_t>::skip(in);
     }
 };
@@ -235,6 +238,8 @@ namespace replica::logstor::ondisk {
 
 // The on-disk sizes are aliases of the serializers above, so that each size is stated
 // next to the code that writes it.
+static constexpr size_t serialized_primary_index_key_size = ser::serializer<primary_index_key>::serialized_size;
+static constexpr size_t serialized_log_record_header_size = ser::serializer<log_record_header>::serialized_size;
 static constexpr size_t buffer_header_size = ser::serializer<buffer_header>::serialized_size;
 static constexpr size_t segment_header_size = ser::serializer<segment_header>::serialized_size;
 static constexpr size_t record_header_size = ser::serializer<record_header>::serialized_size;

@@ -523,7 +523,20 @@ void check_serialized_size(const char* name, const T& value) {
 // These sizes drive the substream sizing in write_buffer and segment_io, where a mismatch would
 // silently truncate or pad records rather than fail, so they are verified against the real encoding.
 SEASTAR_THREAD_TEST_CASE(test_logstor_ondisk_serialized_sizes) {
+    key_hash hash;
+    for (size_t i = 0; i < hash.size(); ++i) {
+        hash[i] = static_cast<uint8_t>(i + 1);
+    }
+    auto key = primary_index_key(dht::token::from_int64(0x0123456789abcdef), hash);
     auto table = table_id(utils::UUID(int64_t(0x1122334455667788), int64_t(0x99aabbccddeeff00)));
+
+    check_serialized_size("primary_index_key", key);
+
+    check_serialized_size("log_record_header", log_record_header {
+        .key = key,
+        .timestamp = api::timestamp_type(0x0f0e0d0c0b0a0908),
+        .table = table,
+    });
 
     check_serialized_size("buffer_header", ondisk::buffer_header {
         .magic = ondisk::buffer_header_magic,
@@ -542,7 +555,6 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_ondisk_serialized_sizes) {
     });
 
     check_serialized_size("record_header", ondisk::record_header {
-        .header_size = 0x0a0b0c0d,
         .data_size = 0xcafebabe,
     });
 }

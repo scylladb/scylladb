@@ -26,10 +26,6 @@
 namespace replica::logstor {
 
 void log_record_writer::compute_sizes() const {
-    seastar::measuring_output_stream ms_header;
-    ser::serialize(ms_header, _record.header);
-    _header_size = ms_header.size();
-
     seastar::measuring_output_stream ms_data;
     ser::serialize(ms_data, _record.mut);
     _data_size = ms_data.size();
@@ -93,7 +89,6 @@ raw_write_buffer::append_result raw_write_buffer::append_record(const log_record
 
     size_t record_header_offset = offset_in_buffer();
     auto rh = ondisk::record_header {
-        .header_size = static_cast<uint32_t>(header_size),
         .data_size = static_cast<uint32_t>(data_size)
     };
     ser::serialize(_stream, rh);
@@ -326,7 +321,11 @@ bool ondisk::validate_header(const ondisk::buffer_header& bh) {
 }
 
 bool ondisk::validate_record_header(const ondisk::record_header& rh) {
-    return rh.header_size != 0;
+    // A record always carries a serialized canonical_mutation, so a zero data_size cannot come
+    // from a record this code wrote. It is what a scan sees in the zero-filled tail of a torn
+    // buffer, and rejecting it stops the scan there instead of walking the tail as a run of
+    // zero-length records.
+    return rh.data_size != 0;
 }
 
 // write_buffer_pool
