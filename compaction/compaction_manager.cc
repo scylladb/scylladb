@@ -1281,11 +1281,7 @@ compaction_manager::do_stop_ongoing_compactions(sstring reason, std::function<bo
     return tasks;
 }
 
-future<> compaction_manager::stop_ongoing_compactions(sstring reason, compaction_group_view* t, std::optional<compaction_type_set> types_opt) noexcept {
-    return stop_ongoing_compactions(std::move(reason), [t] (const compaction_group_view* x) { return !t || x == t; }, types_opt);
-}
-
-future<> compaction_manager::stop_ongoing_compactions(sstring reason, std::function<bool(const compaction_group_view* t)> filter, std::optional<compaction_type_set> types_opt) noexcept {
+future<> compaction_manager::stop_ongoing_compactions(sstring reason, std::optional<compaction_type_set> types_opt, std::function<bool(const compaction_group_view*)> filter) noexcept {
     try {
         auto tasks = do_stop_ongoing_compactions(std::move(reason), std::move(filter), types_opt);
         bool task_stopped = true;
@@ -2630,6 +2626,7 @@ bool compaction_manager::compaction_disabled(compaction_group_view& t) const {
 }
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 future<> compaction_manager::stop_compaction(sstring type, std::function<bool(const compaction_group_view*)> filter) {
     compaction_type target_type;
     try {
@@ -2675,6 +2672,13 @@ future<> compaction_manager::stop_compaction(compaction_type_set types, std::fun
 >>>>>>> be6a7872c3 (api: fix stop_compaction of type COMPACTION not stopping major compaction)
 }
 
+||||||| parent of e589019b8a (compaction/compaction_manager: drop stop_compaction())
+future<> compaction_manager::stop_compaction(compaction_type_set types, std::function<bool(const compaction_group_view*)> filter) {
+    return stop_ongoing_compactions("user request", std::move(filter), types);
+}
+
+=======
+>>>>>>> e589019b8a (compaction/compaction_manager: drop stop_compaction())
 void compaction_manager::propagate_replacement(compaction_group_view& t,
         const std::vector<sstables::shared_sstable>& removed, const std::vector<sstables::shared_sstable>& added) {
     for (auto& task : _tasks) {
