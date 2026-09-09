@@ -415,21 +415,26 @@ jobs:
             fi
           done <<< "$ALL_FILES"
 
-          # dtest: required if any file does NOT match test*, dist/docker/*, dist/common/scripts/*
+          # Files that cannot affect dtest or unit-test results (RELENG-872):
+          # docs/, .github/, *.md at any depth, root repo-metadata dotfiles,
+          # licenses/, NOTICE.txt and ORIGIN.
+          NON_CODE='docs/|\.github/|(.*/)?[^/]+\.md$|\.(clang-format|coderabbit\.yaml|dockerignore|gitattributes|gitignore|gitorderfile|mailmap)$|licenses/|NOTICE\.txt$|ORIGIN$'
+
+          # dtest: required if any file does NOT match test*, dist/docker/*, dist/common/scripts/*, NON_CODE
           DTEST_REQUIRED=false
           while IFS= read -r FILE; do
             [ -z "$FILE" ] && continue
-            if ! echo "$FILE" | grep -qE '^(test(\.py|/)|dist/docker/|dist/common/scripts/)'; then
+            if ! echo "$FILE" | grep -qE "^(test(\.py|/)|dist/docker/|dist/common/scripts/|$NON_CODE)"; then
               DTEST_REQUIRED=true
               break
             fi
           done <<< "$ALL_FILES"
 
-          # unittest: required if any file does NOT match dist/docker/*, dist/common/scripts*
+          # unittest: required if any file does NOT match dist/docker/*, dist/common/scripts*, NON_CODE
           UNITTEST_REQUIRED=false
           while IFS= read -r FILE; do
             [ -z "$FILE" ] && continue
-            if ! echo "$FILE" | grep -qE '^(dist/docker/|dist/common/scripts)'; then
+            if ! echo "$FILE" | grep -qE "^(dist/docker/|dist/common/scripts|$NON_CODE)"; then
               UNITTEST_REQUIRED=true
               break
             fi
