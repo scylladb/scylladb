@@ -30,6 +30,9 @@
 #include "idl/commitlog.dist.impl.hh"
 #include "test/lib/mutation_source_test.hh"
 #include "service/strong_consistency/raft_commitlog.hh"
+#include "service/strong_consistency/raft_groups_storage.hh"
+#include "locator/tablets.hh"
+#include "locator/token_metadata.hh"
 #include "idl/raft_storage.dist.hh"
 #include "idl/raft_storage.dist.impl.hh"
 
@@ -381,6 +384,114 @@ SEASTAR_TEST_CASE(test_raft_replay_buffer_process_discards_unknown_groups) {
                 BOOST_CHECK_EQUAL(buffer.remaining_groups(), 0);
 
                 // take should return empty since the group was discarded.
+                auto data = buffer.take_replayed_group_entries(gid);
+                BOOST_CHECK(data.entries.empty());
+                BOOST_CHECK(data.replay_positions.empty());
+            },
+            std::move(db_cfg_ptr));
+}
+
+// Installs a tablet map for `table` with a single tablet, one raft group and the given
+// replica set, so that process_raft_replayed_items() has tablet metadata to decide
+// ownership from.
+future<> set_sc_tablet_metadata(cql_test_env& env, table_id table, raft::group_id gid,
+        locator::tablet_replica_set replicas) {
+    co_await locator::shared_token_metadata::mutate_on_all_shards(env.get_shared_token_metadata(),
+            [table, gid, replicas = std::move(replicas)] (locator::token_metadata& tm) -> future<> {
+        locator::tablet_map tmap(1, true /* with_raft_info */);
+        const auto tid = *tmap.tablet_ids().begin();
+        tmap.set_tablet(tid, locator::tablet_info{replicas});
+        tmap.set_tablet_raft_info(tid, locator::tablet_raft_info{gid});
+        locator::tablet_metadata tmeta = co_await tm.tablets().copy();
+        tmeta.set_tablet_map(table, std::move(tmap));
+        tm.set_tablets(std::move(tmeta));
+    });
+}
+
+// Test that process_raft_replayed_items discards a group whose tablet has no replica on
+// this shard, even though the group is still present in tablet metadata because it lives
+// on its other replicas. Applying its entries here would resurrect data on a node that
+// gave the range up.
+SEASTAR_TEST_CASE(test_raft_replay_buffer_process_discards_groups_without_local_replica) {
+    auto db_cfg_ptr = make_shared<db::config>();
+    db_cfg_ptr->experimental_features({db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES});
+    return do_with_cql_env(
+            [](cql_test_env& env) -> future<> {
+                const auto gid = make_group_id();
+                const auto table = table_id(utils::UUID_gen::get_time_UUID());
+                const auto my_id = env.local_db().get_token_metadata().get_my_id();
+
+                // The group has persisted state here - the replica used to be a member
+                // and its cleanup hasn't erased it yet - so only the ownership test can
+                // discard these entries.
+                co_await service::strong_consistency::raft_groups_storage::store_snapshot_index(
+                        env.local_qp(), gid, this_shard_id(), raft::snapshot_descriptor{
+                            .idx = raft::index_t(1),
+                            .term = raft::term_t(1),
+                            .id = raft::snapshot_id(utils::make_random_uuid()),
+                        });
+
+                // The tablet's only replica is on another host.
+                co_await set_sc_tablet_metadata(env, table, gid,
+                        locator::tablet_replica_set{{locator::host_id{utils::UUID_gen::get_time_UUID()}, 0}});
+
+                db::raft_commitlog_replay_buffer buffer;
+                buffer.add(gid, make_command_entry(raft::term_t(1), raft::index_t(1)));
+                buffer.add(gid, make_command_entry(raft::term_t(1), raft::index_t(2)));
+                BOOST_CHECK_EQUAL(buffer.remaining_groups(), 1);
+
+                co_await buffer.process_raft_replayed_items(env.local_db(), env.local_qp(), env.get_system_keyspace().local());
+
+                auto data = buffer.take_replayed_group_entries(gid);
+                BOOST_CHECK(data.entries.empty());
+                BOOST_CHECK(data.replay_positions.empty());
+
+                // The same group, now with a replica on this shard, is not discarded.
+                co_await set_sc_tablet_metadata(env, table, gid,
+                        locator::tablet_replica_set{{my_id, this_shard_id()}});
+
+                db::raft_commitlog_replay_buffer owned_buffer;
+                owned_buffer.add(gid, make_command_entry(raft::term_t(1), raft::index_t(1)));
+                owned_buffer.add(gid, make_command_entry(raft::term_t(1), raft::index_t(2)));
+
+                co_await owned_buffer.process_raft_replayed_items(env.local_db(), env.local_qp(), env.get_system_keyspace().local());
+
+                // Nothing is committed - the group has a snapshot descriptor but no
+                // commit index - so both entries are kept for the group's log. What
+                // matters here is that they were kept at all: the ownership test must
+                // not discard a group whose tablet this shard does hold.
+                auto owned_data = owned_buffer.take_replayed_group_entries(gid);
+                BOOST_CHECK_EQUAL(owned_data.entries.size(), 2u);
+                BOOST_CHECK_EQUAL(owned_data.replay_positions.size(), 2u);
+            },
+            std::move(db_cfg_ptr));
+}
+
+// Test that process_raft_replayed_items discards a group this shard persists nothing
+// about. That is the state tablet cleanup leaves behind if it crashes after erasing the
+// raft state and before removing the tablet's storage: the tablet metadata still places
+// a replica here, so only the persisted-state test can discard these entries.
+SEASTAR_TEST_CASE(test_raft_replay_buffer_process_discards_groups_without_persisted_state) {
+    auto db_cfg_ptr = make_shared<db::config>();
+    db_cfg_ptr->experimental_features({db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES});
+    return do_with_cql_env(
+            [](cql_test_env& env) -> future<> {
+                const auto gid = make_group_id();
+                const auto table = table_id(utils::UUID_gen::get_time_UUID());
+                const auto my_id = env.local_db().get_token_metadata().get_my_id();
+
+                co_await set_sc_tablet_metadata(env, table, gid,
+                        locator::tablet_replica_set{{my_id, this_shard_id()}});
+                BOOST_CHECK(!(co_await service::strong_consistency::raft_groups_storage::load_commit_idx_if_persisted(
+                        env.local_qp(), gid, this_shard_id())));
+
+                db::raft_commitlog_replay_buffer buffer;
+                buffer.add(gid, make_command_entry(raft::term_t(1), raft::index_t(1)));
+                buffer.add(gid, make_command_entry(raft::term_t(1), raft::index_t(2)));
+                BOOST_CHECK_EQUAL(buffer.remaining_groups(), 1);
+
+                co_await buffer.process_raft_replayed_items(env.local_db(), env.local_qp(), env.get_system_keyspace().local());
+
                 auto data = buffer.take_replayed_group_entries(gid);
                 BOOST_CHECK(data.entries.empty());
                 BOOST_CHECK(data.replay_positions.empty());

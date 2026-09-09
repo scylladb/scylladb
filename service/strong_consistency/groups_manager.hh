@@ -10,6 +10,7 @@
 
 #include "locator/abstract_replication_strategy.hh"
 #include "locator/tablets.hh"
+#include "locator/tablet_metadata_guard.hh"
 #include "message/messaging_service.hh"
 #include "service/raft/raft_group_registry.hh"
 #include "cql3/query_processor.hh"
@@ -31,6 +32,10 @@ class migration_manager;
 namespace service::strong_consistency {
 
 class raft_server;
+
+// What separates a raft group's live configuration from the one its tablet's current
+// migration stage implies. Defined in groups_manager.cc.
+struct config_sync_work;
 
 /// A cache of leader locations for raft groups where this node is not a replica.
 /// Populated by the CQL transport layer after a redirect reveals the actual leader.
@@ -127,6 +132,26 @@ class groups_manager : public peering_sharded_service<groups_manager> {
         std::optional<leader_info> leader_info = std::nullopt;
         condition_variable leader_info_cond = condition_variable();
         future<> leader_info_updater = make_ready_future<>();
+
+        // At most one raft configuration change attempt is in flight per group.
+        // Deliberately kept out of server_control_op: a configuration change must
+        // never delay starting or stopping the server, nor be queued behind a
+        // deletion that is waiting for it. The attempt never resolves to an
+        // exception, so waiters don't have to handle one.
+        shared_future<> config_sync = make_ready_future<>();
+
+        // Ends the in-flight configuration change attempt, so that whoever stops
+        // waiting for one can also stop it.
+        //
+        // Owned here rather than by the fiber that scheduled the attempt, and handed to
+        // that attempt as a shared pointer, because the attempt outlives the fiber: an
+        // abort source must never be destroyed while something is still subscribed to
+        // it, and the attempt subscribes for as long as it runs.
+        //
+        // Replaced by every scheduled attempt, so a fiber that means to end the attempt
+        // it was waiting for has to hold on to the pointer it saw rather than read this
+        // back later.
+        lw_shared_ptr<abort_source> config_sync_as;
     };
 
     netw::messaging_service& _ms;
@@ -159,6 +184,44 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     void init_messaging_service();
     future<> uninit_messaging_service();
 
+    // Schedules a single attempt to move the group's raft configuration to the one
+    // the tablet's current migration stage implies, unless an attempt is already in
+    // flight or this node can't drive one.
+    //
+    // Cheap, synchronous and best-effort: a skipped attempt is never a correctness
+    // problem, because converge_group_config() both observes whether the group
+    // converged and reschedules until its deadline.
+    void maybe_schedule_config_sync(raft_group_state& state, locator::global_tablet_id tablet,
+        raft::group_id group_id, const locator::tablet_map& tmap);
+
+    // Performs the configuration change scheduled by maybe_schedule_config_sync().
+    // Runs only on the group leader and is internally bounded; errors are logged and
+    // never propagated.
+    //
+    // `as` is the attempt's own abort source, kept alive by this coroutine's frame for
+    // as long as the attempt runs. Ending it is how the fiber that scheduled the
+    // attempt stops one it doesn't want anymore.
+    future<> run_config_sync(raft_group_state& state, locator::global_tablet_id tablet,
+        raft::group_id group_id, config_sync_work work, gate::holder holder,
+        lw_shared_ptr<abort_source> as);
+
+    // Drives one raft group's configuration to the one the tablet's current migration
+    // stage implies and doesn't return until it got there. On behalf of
+    // sync_raft_group_config(); see there for what a failure means.
+    //
+    // The tablet's stage and replica set are read from `guard` on every pass, so the
+    // configuration this drives towards is always the one the coordinator currently
+    // wants. Waiting for an attempt is done under `as`, which the guard aborts as soon
+    // as the stage moves, and giving up on an attempt aborts that attempt too - so no
+    // proposal is left running towards a configuration this stopped wanting.
+    future<> converge_group_config(locator::global_tablet_id tablet, raft::group_id group_id,
+        locator::tablet_metadata_guard& guard, lowres_clock::time_point deadline, abort_source& as);
+
+    // Waits until the raft server of a group this node is no longer a member of is torn
+    // down. On behalf of local_topology_barrier(); see there for what a failure means.
+    future<> drain_group_deletion(locator::global_tablet_id tablet, raft::group_id group_id,
+        lowres_clock::time_point deadline);
+
 public:
     groups_manager(netw::messaging_service& ms, raft_group_registry& raft_gr,
         cql3::query_processor& qp, replica::database& _db, service::migration_manager& mm, db::system_keyspace& sys_ks,
@@ -184,6 +247,62 @@ public:
     future<> stop();
 
     future<> wait_for_groups_to_start(lowres_clock::time_point timeout);
+
+    future<> wait_for_snapshot_transfer(locator::global_tablet_id tablet, raft::group_id group_id, service::session_id session_id);
+
+    // Is a raft server for the group running on this shard? Note that a group being
+    // deleted counts as running until its raft server is destroyed.
+    bool is_group_running(raft::group_id group_id) const;
+
+    // Deletes everything this shard persists about the group, so that a tablet migrated
+    // back here later rejoins the group with no history of its previous membership.
+    //
+    // Called by tablet cleanup, which is the point at which a replica has definitively
+    // left: the raft server is already gone by then, and the tablet's storage is about
+    // to be. Refuses while a raft server for the group is still running, because that
+    // would pull the state out from under a live group.
+    future<> erase_raft_group_state(raft::group_id group_id);
+
+    // Drives the raft group of one tablet in transition to the configuration its
+    // current migration stage implies, and doesn't return until it got there.
+    //
+    // This is the only place where a configuration mismatch becomes an error, and it
+    // is per tablet: the topology coordinator receives it as a failed background
+    // action of that one tablet, and the stage logic decides what to do about it -
+    // retry, exclude a replica, or roll back. No other tablet's migration and no node
+    // operation is held up by a group that can't converge.
+    //
+    // Called through the sync_raft_group_config RPC, whose stale invocations are fenced
+    // the same way streaming's are: the stage that asked for the change is checked
+    // against live tablet metadata here, the configuration to drive towards is derived
+    // from that metadata on every pass rather than from the request, and the barrier of
+    // the next stage waits for the tablet_metadata_guard this holds, which aborts it as
+    // soon as the stage moves on.
+    //
+    // The guard bounds this call, not the raft proposal it schedules: that runs in the
+    // background holding the group's gate. Ending the wait for one also aborts it, and
+    // what keeps an aborted proposal from landing a configuration of an abandoned stage
+    // is spelled out at the end of sync_raft_group_config().
+    //
+    // Called on every shard; a shard that runs no raft server for the group at the
+    // tablet's current stage returns immediately.
+    future<> sync_raft_group_config(locator::global_tablet_id tablet, raft::group_id group_id,
+        lowres_clock::time_point deadline);
+
+    // Makes sure the raft server of a group whose membership the tablet's current
+    // migration stage ended is torn down - before the tablet cleanup of the same
+    // migration removes the tablet's storage on this node.
+    //
+    // This is all the topology barrier does for strongly consistent tablets. The wait
+    // is local and short: the deletion was scheduled when the stage was published,
+    // which this barrier already synchronized with. Establishing a stage's raft
+    // configuration is not part of it - that is sync_raft_group_config()'s job, driven
+    // per tablet by the coordinator.
+    //
+    // Bounded by `as` as well, so that a barrier nobody is waiting for anymore - the
+    // node is shutting down, or the topology command was superseded - returns instead
+    // of waiting out its deadline.
+    future<> local_topology_barrier(locator::token_metadata_ptr tm, abort_source& as);
 
     // Sends an RPC to every host that holds a tablet replica of the given table, asking it to wait
     // until the raft groups for those tablets are started and ready to serve queries.
