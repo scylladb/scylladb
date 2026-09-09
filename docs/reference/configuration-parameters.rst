@@ -21,6 +21,10 @@ having the highest priority:
 #. command line options
 #. ``scylla.yaml``
 
+In addition to the per-node options in ``scylla.yaml``, cluster-configuration options are set
+through CQL and are automatically applied by all nodes in the cluster. See
+:doc:`Configuring a Cluster with CQL </cql/cluster-config>` for those options.
+
 .. scylladb_config_list:: ../../db/config.hh ../../db/config.cc
   :template: db_config.tmpl
   :value_status: Used
