@@ -34,6 +34,7 @@
 #include "test/boost/sstable_test.hh"
 #include "compaction/compaction_manager.hh"
 #include "test/lib/tmpdir.hh"
+#include "test/lib/s3_fixture.hh"
 #include "utils/interval.hh"
 #include "partition_slice_builder.hh"
 #include "compaction/time_window_compaction_strategy.hh"
@@ -238,7 +239,8 @@ SEASTAR_TEST_CASE(compaction_manager_basic_test) {
     return test_env::do_with_async([](test_env& env) { compaction_manager_basic(env); });
 }
 
-SEASTAR_TEST_CASE(compaction_manager_basic_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(compaction_manager_basic_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { compaction_manager_basic(env); },
                                    test_env_config{
                                        .storage = make_test_object_storage_options("S3"),
@@ -351,7 +353,8 @@ SEASTAR_TEST_CASE(compact_test) {
     return sstables::test_env::do_with_async([](sstables::test_env& env) { compact(env); });
 }
 
-SEASTAR_TEST_CASE(compact_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(compact_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return sstables::test_env::do_with_async([](sstables::test_env& env) { compact(env); },
                                              test_env_config{
                                                  .storage = make_test_object_storage_options("S3"),
@@ -553,7 +556,8 @@ SEASTAR_TEST_CASE(compact_02_test) {
     return test_env::do_with_async([](test_env& env) { compact_02(env); });
 }
 
-SEASTAR_TEST_CASE(compact_02_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(compact_02_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { compact_02(env); },
                                    test_env_config{
                                        .storage = make_test_object_storage_options("S3"),
@@ -680,33 +684,39 @@ SEASTAR_THREAD_TEST_CASE(compact_with_corrupted_sstable_split) {
             "Failed to read partition from SSTable");
 }
 
-SEASTAR_THREAD_TEST_CASE(compact_with_corrupted_sstable_regular_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_THREAD_TEST_CASE(compact_with_corrupted_sstable_regular_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     compact_corrupted<sstables::malformed_sstable_exception>(get_name(), test_env_config{.storage = make_test_object_storage_options("S3")},
             compaction::compaction_type_options::make_regular(),
             "Failed to read partition from SSTable");
 }
-SEASTAR_THREAD_TEST_CASE(compact_with_corrupted_sstable_scrub_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_THREAD_TEST_CASE(compact_with_corrupted_sstable_scrub_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     using scrub_mode = compaction::compaction_type_options::scrub::mode;
     compact_corrupted<compaction::compaction_aborted_exception>(get_name(), test_env_config{.storage = make_test_object_storage_options("S3")},
             compaction::compaction_type_options::make_scrub(scrub_mode::segregate),
             "scrub compaction failed due to unrecoverable error: sstables::malformed_sstable_exception");
 }
-SEASTAR_THREAD_TEST_CASE(compact_with_corrupted_sstable_cleanup_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_THREAD_TEST_CASE(compact_with_corrupted_sstable_cleanup_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     compact_corrupted<sstables::malformed_sstable_exception>(get_name(), test_env_config{.storage = make_test_object_storage_options("S3")},
             compaction::compaction_type_options::make_cleanup(),
             "Failed to read partition from SSTable");
 }
-SEASTAR_THREAD_TEST_CASE(compact_with_corrupted_sstable_reshape_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_THREAD_TEST_CASE(compact_with_corrupted_sstable_reshape_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     compact_corrupted<sstables::malformed_sstable_exception>(get_name(), test_env_config{.storage = make_test_object_storage_options("S3")},
             compaction::compaction_type_options::make_reshape(),
             "Failed to read partition from SSTable");
 }
-SEASTAR_THREAD_TEST_CASE(compact_with_corrupted_sstable_reshard_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_THREAD_TEST_CASE(compact_with_corrupted_sstable_reshard_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     compact_corrupted<sstables::malformed_sstable_exception>(get_name(), test_env_config{.storage = make_test_object_storage_options("S3")},
             compaction::compaction_type_options::make_reshard(),
             "Failed to read partition from SSTable");
 }
-SEASTAR_THREAD_TEST_CASE(compact_with_corrupted_sstable_split_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_THREAD_TEST_CASE(compact_with_corrupted_sstable_split_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     auto classify_fn = [] (dht::token t) -> mutation_writer::token_group_id { return 1; };
     compact_corrupted<sstables::malformed_sstable_exception>(get_name(), test_env_config{.storage = make_test_object_storage_options("S3")},
             compaction::compaction_type_options::make_split(classify_fn),
@@ -853,7 +863,8 @@ SEASTAR_TEST_CASE(leveled_01) {
     return test_env::do_with_async([](test_env& env) { leveled_01_fn(env); });
 }
 
-SEASTAR_TEST_CASE(leveled_01_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(leveled_01_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { leveled_01_fn(env); }, test_env_config{.storage = make_test_object_storage_options("S3")});
 }
 
@@ -915,7 +926,8 @@ SEASTAR_TEST_CASE(leveled_02) {
     return test_env::do_with_async([](test_env& env) { leveled_02_fn(env); });
 }
 
-SEASTAR_TEST_CASE(leveled_02_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(leveled_02_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { leveled_02_fn(env); }, test_env_config{.storage = make_test_object_storage_options("S3")});
 }
 
@@ -978,7 +990,8 @@ SEASTAR_TEST_CASE(leveled_03) {
     return test_env::do_with_async([](test_env& env) { leveled_03_fn(env); });
 }
 
-SEASTAR_TEST_CASE(leveled_03_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(leveled_03_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { leveled_03_fn(env); }, test_env_config{.storage = make_test_object_storage_options("S3")});
 }
 
@@ -1053,7 +1066,8 @@ SEASTAR_TEST_CASE(leveled_04) {
     return test_env::do_with_async([](test_env& env) { leveled_04_fn(env); });
 }
 
-SEASTAR_TEST_CASE(leveled_04_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(leveled_04_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { leveled_04_fn(env); }, test_env_config{.storage = make_test_object_storage_options("S3")});
 }
 
@@ -1077,7 +1091,8 @@ SEASTAR_TEST_CASE(leveled_05) {
     return test_env::do_with_async([](test_env& env) { leveled_05_fn(env); });
 }
 
-SEASTAR_TEST_CASE(leveled_05_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(leveled_05_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { leveled_05_fn(env); }, test_env_config{.storage = make_test_object_storage_options("S3")});
 }
 
@@ -1121,7 +1136,8 @@ SEASTAR_TEST_CASE(leveled_06) {
     return test_env::do_with_async([](test_env& env) { leveled_06_fn(env); });
 }
 
-SEASTAR_TEST_CASE(leveled_06_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(leveled_06_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { leveled_06_fn(env); }, test_env_config{.storage = make_test_object_storage_options("S3")});
 }
 
@@ -1156,7 +1172,8 @@ SEASTAR_TEST_CASE(leveled_07) {
     return test_env::do_with_async([](test_env& env) { leveled_07_fn(env); });
 }
 
-SEASTAR_TEST_CASE(leveled_07_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(leveled_07_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { leveled_07_fn(env); }, test_env_config{.storage = make_test_object_storage_options("S3")});
 }
 
@@ -1240,7 +1257,8 @@ SEASTAR_TEST_CASE(leveled_invariant_fix) {
     return test_env::do_with_async([](test_env& env) { leveled_invariant_fix_fn(env); });
 }
 
-SEASTAR_TEST_CASE(leveled_invariant_fix_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(leveled_invariant_fix_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { leveled_invariant_fix_fn(env); }, test_env_config{.storage = make_test_object_storage_options("S3")});
 }
 
@@ -1301,7 +1319,8 @@ SEASTAR_TEST_CASE(leveled_stcs_on_L0) {
     return test_env::do_with_async([](test_env& env) { leveled_stcs_on_L0_fn(env); });
 }
 
-SEASTAR_TEST_CASE(leveled_stcs_on_L0_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(leveled_stcs_on_L0_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { leveled_stcs_on_L0_fn(env); },
                                    test_env_config{.storage = make_test_object_storage_options("S3")});
 }
@@ -1346,7 +1365,8 @@ SEASTAR_TEST_CASE(overlapping_starved_sstables_test) {
     return test_env::do_with_async([](test_env& env) { overlapping_starved_sstables_fn(env); });
 }
 
-SEASTAR_TEST_CASE(overlapping_starved_sstables_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(overlapping_starved_sstables_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { overlapping_starved_sstables_fn(env); },
                                    test_env_config{.storage = make_test_object_storage_options("S3")});
 }
@@ -1383,7 +1403,8 @@ SEASTAR_TEST_CASE(check_overlapping) {
     return test_env::do_with_async([](test_env& env) { check_overlapping_fn(env); });
 }
 
-SEASTAR_TEST_CASE(check_overlapping_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(check_overlapping_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { check_overlapping_fn(env); }, test_env_config{.storage = make_test_object_storage_options("S3")});
 }
 
@@ -1685,7 +1706,8 @@ SEASTAR_TEST_CASE(tombstone_purge_test) {
     return test_env::do_with_async([](test_env& env) { tombstone_purge(env).get(); });
 }
 
-SEASTAR_TEST_CASE(tombstone_purge_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(tombstone_purge_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { tombstone_purge(env).get(); }, test_env_config{.storage = make_test_object_storage_options("S3")});
 }
 
@@ -1793,7 +1815,8 @@ SEASTAR_TEST_CASE(mv_tombstone_purge_test) {
     return test_env::do_with_async([](test_env& env) { mv_tombstone_purge(env).get(); });
 }
 
-SEASTAR_TEST_CASE(mv_tombstone_purge_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(mv_tombstone_purge_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { mv_tombstone_purge(env).get(); }, test_env_config{.storage = make_test_object_storage_options("S3")});
 }
 
@@ -1849,7 +1872,8 @@ SEASTAR_TEST_CASE(sstable_rewrite_test) {
     return test_env::do_with_async([](test_env& env) { sstable_rewrite(env).get(); });
 }
 
-SEASTAR_TEST_CASE(sstable_rewrite_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(sstable_rewrite_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { sstable_rewrite(env).get(); }, test_env_config{.storage = make_test_object_storage_options("S3")});
 }
 
@@ -1911,7 +1935,8 @@ SEASTAR_TEST_CASE(test_sstable_max_local_deletion_time_2) {
     return test_env::do_with_async([](test_env& env) { sstable_max_local_deletion_time_2(env).get(); });
 }
 
-SEASTAR_TEST_CASE(test_sstable_max_local_deletion_time_2_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(test_sstable_max_local_deletion_time_2_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { sstable_max_local_deletion_time_2(env).get(); },
                                    test_env_config{.storage = make_test_object_storage_options("S3")});
 }
@@ -1972,7 +1997,8 @@ SEASTAR_TEST_CASE(get_fully_expired_sstables_test) {
     return test_env::do_with_async([](test_env& env) { get_fully_expired_sstables_fn(env); });
 }
 
-SEASTAR_TEST_CASE(get_fully_expired_sstables_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(get_fully_expired_sstables_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { get_fully_expired_sstables_fn(env); },
                                    test_env_config{.storage = make_test_object_storage_options("S3")});
 }
@@ -2019,7 +2045,8 @@ SEASTAR_TEST_CASE(compaction_with_fully_expired_table) {
     return test_env::do_with_async([](test_env& env) { compaction_with_fully_expired_table_fn(env); });
 }
 
-SEASTAR_TEST_CASE(compaction_with_fully_expired_table_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(compaction_with_fully_expired_table_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { compaction_with_fully_expired_table_fn(env); },
                                    test_env_config{.storage = make_test_object_storage_options("S3")});
 }
@@ -2094,7 +2121,8 @@ SEASTAR_TEST_CASE(time_window_strategy_ts_resolution_check) {
     return test_env::do_with_async([](test_env& env) { time_window_strategy_ts_resolution_check_fn(env); });
 }
 
-SEASTAR_TEST_CASE(time_window_strategy_ts_resolution_check_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(time_window_strategy_ts_resolution_check_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { time_window_strategy_ts_resolution_check_fn(env); },
                                    test_env_config{.storage = make_test_object_storage_options("S3")});
 }
@@ -2203,7 +2231,8 @@ SEASTAR_TEST_CASE(time_window_strategy_correctness_test) {
     return test_env::do_with_async([](test_env& env) { time_window_strategy_correctness_fn(env); });
 }
 
-SEASTAR_TEST_CASE(time_window_strategy_correctness_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(time_window_strategy_correctness_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { time_window_strategy_correctness_fn(env); },
                                    test_env_config{.storage = make_test_object_storage_options("S3")});
 }
@@ -2305,7 +2334,8 @@ SEASTAR_TEST_CASE(time_window_strategy_size_tiered_behavior_correctness) {
     return test_env::do_with_async([](test_env& env) { time_window_strategy_size_tiered_behavior_correctness_fn(env); });
 }
 
-SEASTAR_TEST_CASE(time_window_strategy_size_tiered_behavior_correctness_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(time_window_strategy_size_tiered_behavior_correctness_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { time_window_strategy_size_tiered_behavior_correctness_fn(env); },
                                    test_env_config{.storage = make_test_object_storage_options("S3")});
 }
@@ -2378,7 +2408,8 @@ SEASTAR_TEST_CASE(min_max_clustering_key_test_2_test) {
     return test_env::do_with_async([](test_env& env) { min_max_clustering_key_2(env).get(); }, {});
 }
 
-SEASTAR_TEST_CASE(min_max_clustering_key_test_2_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(min_max_clustering_key_test_2_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { min_max_clustering_key_2(env).get(); },
                                    test_env_config{.storage = make_test_object_storage_options("S3")});
 }
@@ -2413,7 +2444,8 @@ SEASTAR_TEST_CASE(size_tiered_beyond_max_threshold_test) {
     return test_env::do_with_async([](test_env& env) { size_tiered_beyond_max_threshold_fn(env); });
 }
 
-SEASTAR_TEST_CASE(size_tiered_beyond_max_threshold_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(size_tiered_beyond_max_threshold_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { size_tiered_beyond_max_threshold_fn(env); },
                                    test_env_config{.storage = make_test_object_storage_options("S3")});
 }
@@ -2550,7 +2582,8 @@ SEASTAR_TEST_CASE(sstable_expired_data_ratio_test, *boost::unit_test::preconditi
     return test_env::do_with_async([](test_env& env) { sstable_expired_data_ratio(env); });
 }
 
-SEASTAR_TEST_CASE(sstable_expired_data_ratio_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(sstable_expired_data_ratio_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { sstable_expired_data_ratio(env); }, test_env_config{.storage = make_test_object_storage_options("S3")});
 }
 
@@ -2665,7 +2698,8 @@ SEASTAR_TEST_CASE(compaction_correctness_with_partitioned_sstable_set) {
     return test_env::do_with_async([](test_env& env) { compaction_correctness_with_partitioned_sstable_set_fn(env); });
 }
 
-SEASTAR_TEST_CASE(compaction_correctness_with_partitioned_sstable_set_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(compaction_correctness_with_partitioned_sstable_set_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { compaction_correctness_with_partitioned_sstable_set_fn(env); },
                                    test_env_config{.storage = make_test_object_storage_options("S3")});
 }
@@ -2761,7 +2795,8 @@ static future<> run_sstable_cleanup_correctness_with_storage(data_dictionary::st
     }, std::move(cql_cfg));
 }
 
-SEASTAR_TEST_CASE(sstable_cleanup_correctness_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(sstable_cleanup_correctness_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return run_sstable_cleanup_correctness_with_storage(make_test_object_storage_options("S3"));
 }
 
@@ -2892,7 +2927,8 @@ SEASTAR_TEST_CASE(sstable_run_based_compaction_test) {
     return test_env::do_with_async([](test_env& env) { sstable_run_based_compaction_fn(env); });
 }
 
-SEASTAR_TEST_CASE(sstable_run_based_compaction_test_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(sstable_run_based_compaction_test_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { sstable_run_based_compaction_fn(env); },
                                    test_env_config{.storage = make_test_object_storage_options("S3")});
 }
@@ -2942,7 +2978,8 @@ SEASTAR_TEST_CASE(compaction_strategy_aware_major_compaction_test) {
     return test_env::do_with_async([](test_env& env) { compaction_strategy_aware_major_compaction_fn(env); });
 }
 
-SEASTAR_TEST_CASE(compaction_strategy_aware_major_compaction_test_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(compaction_strategy_aware_major_compaction_test_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { compaction_strategy_aware_major_compaction_fn(env); },
                                    test_env_config{.storage = make_test_object_storage_options("S3")});
 }
@@ -3007,7 +3044,8 @@ SEASTAR_TEST_CASE(backlog_tracker_correctness_after_changing_compaction_strategy
     return test_env::do_with_async([](test_env& env) { backlog_tracker_correctness_after_changing_compaction_strategy_fn(env); });
 }
 
-SEASTAR_TEST_CASE(backlog_tracker_correctness_after_changing_compaction_strategy_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(backlog_tracker_correctness_after_changing_compaction_strategy_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { backlog_tracker_correctness_after_changing_compaction_strategy_fn(env); },
                                    test_env_config{.storage = make_test_object_storage_options("S3")});
 }
@@ -3060,7 +3098,8 @@ SEASTAR_TEST_CASE(partial_sstable_run_filtered_out_test) {
     return test_env::do_with_async([](test_env& env) { partial_sstable_run_filtered_out_fn(env); });
 }
 
-SEASTAR_TEST_CASE(partial_sstable_run_filtered_out_test_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(partial_sstable_run_filtered_out_test_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { partial_sstable_run_filtered_out_fn(env); },
                                    test_env_config{.storage = make_test_object_storage_options("S3")});
 }
@@ -3208,7 +3247,8 @@ SEASTAR_TEST_CASE(purged_tombstone_consumer_sstable_test) {
     return test_env::do_with_async([](test_env& env) { purged_tombstone_consumer_sstable_fn(env); });
 }
 
-SEASTAR_TEST_CASE(purged_tombstone_consumer_sstable_test_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(purged_tombstone_consumer_sstable_test_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { purged_tombstone_consumer_sstable_fn(env); },
                                    test_env_config{.storage = make_test_object_storage_options("S3")});
 }
@@ -3351,7 +3391,8 @@ SEASTAR_TEST_CASE(incremental_compaction_data_resurrection_test) {
     return test_env::do_with_async([](test_env& env) { incremental_compaction_data_resurrection_fn(env); });
 }
 
-SEASTAR_TEST_CASE(incremental_compaction_data_resurrection_test_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(incremental_compaction_data_resurrection_test_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { incremental_compaction_data_resurrection_fn(env); },
                                    test_env_config{.storage = make_test_object_storage_options("S3")});
 }
@@ -3420,7 +3461,8 @@ SEASTAR_TEST_CASE(twcs_major_compaction_test) {
     return test_env::do_with_async([](test_env& env) { twcs_major_compaction_fn(env); });
 }
 
-SEASTAR_TEST_CASE(twcs_major_compaction_test_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(twcs_major_compaction_test_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { twcs_major_compaction_fn(env); }, test_env_config{.storage = make_test_object_storage_options("S3")});
 }
 
@@ -3489,7 +3531,8 @@ SEASTAR_TEST_CASE(autocompaction_control_test) {
     return test_env::do_with_async([](test_env& env) { autocompaction_control_fn(env); });
 }
 
-SEASTAR_TEST_CASE(autocompaction_control_test_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(autocompaction_control_test_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { autocompaction_control_fn(env); }, test_env_config{.storage = make_test_object_storage_options("S3")});
 }
 
@@ -3568,7 +3611,8 @@ SEASTAR_TEST_CASE(test_bug_6472) {
     return test_env::do_with_async([](test_env& env) { test_bug_6472_fn(env); });
 }
 
-SEASTAR_TEST_CASE(test_bug_6472_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(test_bug_6472_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { test_bug_6472_fn(env); }, test_env_config{.storage = make_test_object_storage_options("S3")});
 }
 
@@ -3614,7 +3658,8 @@ SEASTAR_TEST_CASE(sstable_needs_cleanup_test) {
     return test_env::do_with_async([](test_env& env) { sstable_needs_cleanup_fn(env); });
 }
 
-SEASTAR_TEST_CASE(sstable_needs_cleanup_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(sstable_needs_cleanup_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { sstable_needs_cleanup_fn(env); }, test_env_config{.storage = make_test_object_storage_options("S3")});
 }
 
@@ -3704,7 +3749,8 @@ SEASTAR_TEST_CASE(test_twcs_partition_estimate) {
     return test_env::do_with_async([](test_env& env) { test_twcs_partition_estimate_fn(env); });
 }
 
-SEASTAR_TEST_CASE(test_twcs_partition_estimate_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(test_twcs_partition_estimate_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { test_twcs_partition_estimate_fn(env); },
                                    test_env_config{.storage = make_test_object_storage_options("S3")});
 }
@@ -3747,7 +3793,8 @@ SEASTAR_TEST_CASE(stcs_reshape_test) {
     return test_env::do_with_async([](test_env& env) { stcs_reshape_fn(env); });
 }
 
-SEASTAR_TEST_CASE(stcs_reshape_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(stcs_reshape_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { stcs_reshape_fn(env); }, test_env_config{.storage = make_test_object_storage_options("S3")});
 }
 
@@ -3800,7 +3847,8 @@ SEASTAR_TEST_CASE(lcs_reshape_test) {
     return test_env::do_with_async([](test_env& env) { lcs_reshape_fn(env); });
 }
 
-SEASTAR_TEST_CASE(lcs_reshape_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(lcs_reshape_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { lcs_reshape_fn(env); }, test_env_config{.storage = make_test_object_storage_options("S3")});
 }
 
@@ -3861,7 +3909,8 @@ SEASTAR_TEST_CASE(test_twcs_interposer_on_memtable_flush_split) {
     return test_twcs_interposer_on_memtable_flush(true);
 }
 
-SEASTAR_TEST_CASE(test_twcs_interposer_on_memtable_flush_split_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(test_twcs_interposer_on_memtable_flush_split_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_twcs_interposer_on_memtable_flush(true, test_env_config{.storage = make_test_object_storage_options("S3")});
 }
 
@@ -3873,7 +3922,8 @@ SEASTAR_TEST_CASE(test_twcs_interposer_on_memtable_flush_no_split) {
     return test_twcs_interposer_on_memtable_flush(false);
 }
 
-SEASTAR_TEST_CASE(test_twcs_interposer_on_memtable_flush_no_split_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(test_twcs_interposer_on_memtable_flush_no_split_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_twcs_interposer_on_memtable_flush(false, test_env_config{.storage = make_test_object_storage_options("S3")});
 }
 
@@ -3940,7 +3990,8 @@ SEASTAR_TEST_CASE(test_twcs_compaction_across_buckets) {
     return test_env::do_with_async([](test_env& env) { test_twcs_compaction_across_buckets_fn(env); });
 }
 
-SEASTAR_TEST_CASE(test_twcs_compaction_across_buckets_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(test_twcs_compaction_across_buckets_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { test_twcs_compaction_across_buckets_fn(env); },
                                    test_env_config{.storage = make_test_object_storage_options("S3")});
 }
@@ -3986,7 +4037,8 @@ SEASTAR_TEST_CASE(test_offstrategy_sstable_compaction) {
     return test_env::do_with_async([](test_env& env) { test_offstrategy_sstable_compaction_fn(env); });
 }
 
-SEASTAR_TEST_CASE(test_offstrategy_sstable_compaction_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(test_offstrategy_sstable_compaction_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { test_offstrategy_sstable_compaction_fn(env); },
                                    test_env_config{.storage = make_test_object_storage_options("S3")});
 }
@@ -4187,7 +4239,8 @@ SEASTAR_TEST_CASE(twcs_reshape_with_disjoint_set_test) {
     return test_env::do_with_async([](test_env& env) { twcs_reshape_with_disjoint_set_fn(env); });
 }
 
-SEASTAR_TEST_CASE(twcs_reshape_with_disjoint_set_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(twcs_reshape_with_disjoint_set_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { twcs_reshape_with_disjoint_set_fn(env, 64); },
                                    test_env_config{.storage = make_test_object_storage_options("S3")});
 }
@@ -4249,7 +4302,8 @@ SEASTAR_TEST_CASE(stcs_reshape_overlapping_test) {
     return test_env::do_with_async([](test_env& env) { stcs_reshape_overlapping_fn(env); });
 }
 
-SEASTAR_TEST_CASE(stcs_reshape_overlapping_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(stcs_reshape_overlapping_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { stcs_reshape_overlapping_fn(env, 64); }, test_env_config{.storage = make_test_object_storage_options("S3")});
 }
 
@@ -4324,7 +4378,8 @@ SEASTAR_TEST_CASE(test_twcs_single_key_reader_filtering) {
     return test_env::do_with_async([](test_env& env) { test_twcs_single_key_reader_filtering_fn(env); });
 }
 
-SEASTAR_TEST_CASE(test_twcs_single_key_reader_filtering_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(test_twcs_single_key_reader_filtering_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { test_twcs_single_key_reader_filtering_fn(env); },
                                    test_env_config{.storage = make_test_object_storage_options("S3")});
 }
@@ -4463,7 +4518,8 @@ SEASTAR_TEST_CASE(max_ongoing_compaction_test) {
     return test_env::do_with_async([](test_env& env) { max_ongoing_compaction_fn(env); });
 }
 
-SEASTAR_TEST_CASE(max_ongoing_compaction_test_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(max_ongoing_compaction_test_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { max_ongoing_compaction_fn(env); }, test_env_config{.storage = make_test_object_storage_options("S3")});
 }
 
@@ -4585,7 +4641,8 @@ SEASTAR_TEST_CASE(compound_sstable_set_incremental_selector_test) {
     return test_env::do_with_async([](test_env& env) { compound_sstable_set_incremental_selector_fn(env); });
 }
 
-SEASTAR_TEST_CASE(compound_sstable_set_incremental_selector_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(compound_sstable_set_incremental_selector_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { compound_sstable_set_incremental_selector_fn(env); },
                                    test_env_config{.storage = make_test_object_storage_options("S3")});
 }
@@ -4663,7 +4720,8 @@ SEASTAR_TEST_CASE(twcs_single_key_reader_through_compound_set_test) {
     return test_env::do_with_async([](test_env& env) { twcs_single_key_reader_through_compound_set_fn(env); });
 }
 
-SEASTAR_TEST_CASE(twcs_single_key_reader_through_compound_set_test_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(twcs_single_key_reader_through_compound_set_test_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { twcs_single_key_reader_through_compound_set_fn(env); },
                                    test_env_config{.storage = make_test_object_storage_options("S3")});
 }
@@ -4720,7 +4778,8 @@ SEASTAR_TEST_CASE(basic_ics_controller_correctness_test) {
     return test_env::do_with_async([](test_env& env) { basic_ics_controller_correctness_fn(env); });
 }
 
-SEASTAR_TEST_CASE(basic_ics_controller_correctness_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(basic_ics_controller_correctness_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { basic_ics_controller_correctness_fn(env); },
                                    test_env_config{.storage = make_test_object_storage_options("S3")});
 }
@@ -4837,7 +4896,8 @@ SEASTAR_TEST_CASE(test_major_does_not_miss_data_in_memtable) {
     return test_env::do_with_async([](test_env& env) { test_major_does_not_miss_data_in_memtable_fn(env); });
 }
 
-SEASTAR_TEST_CASE(test_major_does_not_miss_data_in_memtable_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(test_major_does_not_miss_data_in_memtable_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { test_major_does_not_miss_data_in_memtable_fn(env); },
                                    test_env_config{.storage = make_test_object_storage_options("S3")});
 }
@@ -4983,19 +5043,23 @@ SEASTAR_TEST_CASE(simple_backlog_controller_test_incremental) {
     return run_controller_test(compaction::compaction_strategy_type::incremental);
 }
 
-SEASTAR_TEST_CASE(simple_backlog_controller_test_size_tiered_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(simple_backlog_controller_test_size_tiered_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return run_controller_test(compaction::compaction_strategy_type::size_tiered, test_env_config{.storage = make_test_object_storage_options("S3")});
 }
 
-SEASTAR_TEST_CASE(simple_backlog_controller_test_time_window_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(simple_backlog_controller_test_time_window_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return run_controller_test(compaction::compaction_strategy_type::time_window, test_env_config{.storage = make_test_object_storage_options("S3")});
 }
 
-SEASTAR_TEST_CASE(simple_backlog_controller_test_leveled_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(simple_backlog_controller_test_leveled_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return run_controller_test(compaction::compaction_strategy_type::leveled, test_env_config{.storage = make_test_object_storage_options("S3")});
 }
 
-SEASTAR_TEST_CASE(simple_backlog_controller_test_incremental_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(simple_backlog_controller_test_incremental_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return run_controller_test(compaction::compaction_strategy_type::incremental, test_env_config{.storage = make_test_object_storage_options("S3")});
 }
 
@@ -5111,7 +5175,8 @@ SEASTAR_TEST_CASE(test_compaction_strategy_cleanup_method) {
     return test_env::do_with_async([](test_env& env) { test_compaction_strategy_cleanup_method_fn(env); });
 }
 
-SEASTAR_TEST_CASE(test_compaction_strategy_cleanup_method_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(test_compaction_strategy_cleanup_method_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { test_compaction_strategy_cleanup_method_fn(env); },
                                    test_env_config{.storage = make_test_object_storage_options("S3")});
 }
@@ -5257,7 +5322,8 @@ SEASTAR_TEST_CASE(test_large_partition_splitting_on_compaction) {
     return test_env::do_with_async([](test_env& env) { test_large_partition_splitting_on_compaction_fn(env); });
 }
 
-SEASTAR_TEST_CASE(test_large_partition_splitting_on_compaction_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(test_large_partition_splitting_on_compaction_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { test_large_partition_splitting_on_compaction_fn(env); },
                                    test_env_config{.storage = make_test_object_storage_options("S3")});
 }
@@ -5289,7 +5355,8 @@ SEASTAR_TEST_CASE(check_table_sstable_set_includes_maintenance_sstables) {
     return test_env::do_with_async([](test_env& env) { check_table_sstable_set_includes_maintenance_sstables_fn(env); });
 }
 
-SEASTAR_TEST_CASE(check_table_sstable_set_includes_maintenance_sstables_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(check_table_sstable_set_includes_maintenance_sstables_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { check_table_sstable_set_includes_maintenance_sstables_fn(env); },
                                    test_env_config{.storage = make_test_object_storage_options("S3")});
 }
@@ -5326,7 +5393,8 @@ SEASTAR_TEST_CASE(compaction_manager_stop_and_drain_race_test) {
     return test_env::do_with_async([](test_env& env) { compaction_manager_stop_and_drain_race_fn(env); });
 }
 
-SEASTAR_TEST_CASE(compaction_manager_stop_and_drain_race_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(compaction_manager_stop_and_drain_race_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { compaction_manager_stop_and_drain_race_fn(env); },
                                    test_env_config{.storage = make_test_object_storage_options("S3")});
 }
@@ -5363,7 +5431,8 @@ SEASTAR_TEST_CASE(test_print_shared_sstables_vector) {
     return test_env::do_with_async([](test_env& env) { test_print_shared_sstables_vector_fn(env); });
 }
 
-SEASTAR_TEST_CASE(test_print_shared_sstables_vector_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(test_print_shared_sstables_vector_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { test_print_shared_sstables_vector_fn(env); },
                                    test_env_config{.storage = make_test_object_storage_options("S3")});
 }
@@ -5467,7 +5536,8 @@ SEASTAR_TEST_CASE(tombstone_gc_disabled_test) {
     return test_env::do_with_async([](test_env& env) { tombstone_gc_disabled_fn(env); });
 }
 
-SEASTAR_TEST_CASE(tombstone_gc_disabled_test_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(tombstone_gc_disabled_test_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { tombstone_gc_disabled_fn(env); }, test_env_config{.storage = make_test_object_storage_options("S3")});
 }
 
@@ -5528,7 +5598,8 @@ SEASTAR_TEST_CASE(compaction_optimization_to_avoid_bloom_filter_checks) {
     return test_env::do_with_async([](test_env& env) { compaction_optimization_to_avoid_bloom_filter_checks_fn(env); });
 }
 
-SEASTAR_TEST_CASE(compaction_optimization_to_avoid_bloom_filter_checks_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(compaction_optimization_to_avoid_bloom_filter_checks_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { compaction_optimization_to_avoid_bloom_filter_checks_fn(env); },
                                    test_env_config{.storage = make_test_object_storage_options("S3")});
 }
@@ -5651,7 +5722,8 @@ SEASTAR_TEST_CASE(cleanup_incremental_compaction_test) {
     });
 }
 
-SEASTAR_TEST_CASE(cleanup_incremental_compaction_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(cleanup_incremental_compaction_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return run_incremental_compaction_test(
         sstables::offstrategy::no,
         [](table_for_tests& t, compaction::owned_ranges_ptr owned_ranges) -> future<> {
@@ -5676,7 +5748,8 @@ SEASTAR_TEST_CASE(offstrategy_incremental_compaction_test) {
     });
 }
 
-SEASTAR_TEST_CASE(offstrategy_incremental_compaction_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(offstrategy_incremental_compaction_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return run_incremental_compaction_test(
         sstables::offstrategy::yes,
         [](table_for_tests& t, compaction::owned_ranges_ptr owned_ranges) -> future<> {
@@ -5860,7 +5933,8 @@ SEASTAR_TEST_CASE(cleanup_during_offstrategy_incremental_compaction_test) {
     return test_env::do_with_async([](test_env& env) { cleanup_during_offstrategy_incremental_compaction_fn(env); });
 }
 
-SEASTAR_TEST_CASE(cleanup_during_offstrategy_incremental_compaction_test_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(cleanup_during_offstrategy_incremental_compaction_test_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { cleanup_during_offstrategy_incremental_compaction_fn(env); },
                                    test_env_config{.storage = make_test_object_storage_options("S3")});
 }
@@ -5924,7 +5998,8 @@ SEASTAR_TEST_CASE(test_sstables_excluding_staging_correctness_local) {
     return test_sstables_excluding_staging_correctness({});
 }
 
-SEASTAR_TEST_CASE(test_sstables_excluding_staging_correctness_s3) {
+SEASTAR_TEST_CASE(test_sstables_excluding_staging_correctness_s3,
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_sstables_excluding_staging_correctness({ .storage = make_test_object_storage_options("S3") });
 }
 
@@ -5986,7 +6061,8 @@ SEASTAR_TEST_CASE(produces_optimal_filter_by_estimating_correctly_partitions_per
     return test_env::do_with_async([](test_env& env) { produces_optimal_filter_by_estimating_correctly_partitions_per_sstable_fn(env); });
 }
 
-SEASTAR_TEST_CASE(produces_optimal_filter_by_estimating_correctly_partitions_per_sstable_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(produces_optimal_filter_by_estimating_correctly_partitions_per_sstable_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { produces_optimal_filter_by_estimating_correctly_partitions_per_sstable_fn(env); },
                                    test_env_config{.storage = make_test_object_storage_options("S3")});
 }
@@ -6096,7 +6172,8 @@ SEASTAR_TEST_CASE(splitting_compaction_test) {
     return test_env::do_with_async([](test_env& env) { splitting_compaction_fn(env); });
 }
 
-SEASTAR_TEST_CASE(splitting_compaction_test_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(splitting_compaction_test_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { splitting_compaction_fn(env); }, test_env_config{.storage = make_test_object_storage_options("S3")});
 }
 
@@ -6146,7 +6223,8 @@ SEASTAR_TEST_CASE(unsealed_sstable_compaction_test) {
     return test_env::do_with_async([](test_env& env) { unsealed_sstable_compaction_fn(env); });
 }
 
-SEASTAR_TEST_CASE(unsealed_sstable_compaction_test_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(unsealed_sstable_compaction_test_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { unsealed_sstable_compaction_fn(env); },
                                    test_env_config{.storage = make_test_object_storage_options("S3")});
 }
@@ -6253,7 +6331,8 @@ void object_storage_sstable_clone_leaving_unsealed_dest_sstable(test_env& env) {
     }
 }
 
-SEASTAR_TEST_CASE(sstable_clone_leaving_unsealed_dest_sstable_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(sstable_clone_leaving_unsealed_dest_sstable_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { object_storage_sstable_clone_leaving_unsealed_dest_sstable(env); },
                                    test_env_config{.storage = make_test_object_storage_options("S3")});
 }
@@ -6335,7 +6414,8 @@ SEASTAR_TEST_CASE(failure_when_adding_new_sstable_test) {
     return test_env::do_with_async([](test_env& env) { failure_when_adding_new_sstable_fn(env); });
 }
 
-SEASTAR_TEST_CASE(failure_when_adding_new_sstable_test_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(failure_when_adding_new_sstable_test_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { failure_when_adding_new_sstable_fn(env); },
                                    test_env_config{.storage = make_test_object_storage_options("S3")});
 }
@@ -6508,7 +6588,8 @@ static void object_storage_perform_component_rewrite_single_sstable_fn(test_env&
     require_sstable_toc_object_attributes(env, new_sst);
 }
 
-SEASTAR_TEST_CASE(test_object_storage_perform_component_rewrite_single_sstable_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(test_object_storage_perform_component_rewrite_single_sstable_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([] (test_env& env) { object_storage_perform_component_rewrite_single_sstable_fn(env); },
             test_env_config{.storage = make_test_object_storage_options("S3")});
 }

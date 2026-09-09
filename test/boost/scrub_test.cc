@@ -15,6 +15,7 @@
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/test_fixture.hh>
 #include "test/lib/error_injection.hh"
+#include "test/lib/s3_fixture.hh"
 #include "test/lib/eventually.hh"
 #include "test/lib/key_utils.hh"
 #include "test/lib/log.hh"
@@ -833,7 +834,8 @@ void sstable_validate_fn(test_env& env) {
 SEASTAR_TEST_CASE(sstable_validate_test) {
     return test_env::do_with_async([](test_env& env) { sstable_validate_fn(env); });
 }
-SEASTAR_TEST_CASE(sstable_validate_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(sstable_validate_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { sstable_validate_fn(env); },
                                    test_env_config{.storage = make_test_object_storage_options("S3")});
 }
@@ -1380,7 +1382,8 @@ SEASTAR_TEST_CASE(scrubbed_sstable_removal_test) {
     return test_env::do_with_async([](test_env& env) { scrubbed_sstable_removal_fn(env); });
 }
 
-SEASTAR_TEST_CASE(scrubbed_sstable_removal_test_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(scrubbed_sstable_removal_test_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { scrubbed_sstable_removal_fn(env); }, test_env_config{.storage = make_test_object_storage_options("S3")});
 }
 
@@ -1442,7 +1445,8 @@ SEASTAR_TEST_CASE(compact_uncompressed_sstable_during_scrub_validate_test) {
     return test_env::do_with_async([](test_env& env) { compact_uncompressed_sstable_during_scrub_validate_fn(env); });
 }
 
-SEASTAR_TEST_CASE(compact_uncompressed_sstable_during_scrub_validate_test_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(compact_uncompressed_sstable_during_scrub_validate_test_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
 #ifndef SCYLLA_ENABLE_ERROR_INJECTION
     fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
     return make_ready_future();

@@ -34,6 +34,7 @@
 #include <seastar/testing/test_case.hh>
 #include "dht/i_partitioner.hh"
 #include "test/lib/mutation_reader_assertions.hh"
+#include "test/lib/s3_fixture.hh"
 #include "test/lib/mutation_assertions.hh"
 #include "mutation/counters.hh"
 #include "test/lib/index_reader_assertions.hh"
@@ -290,7 +291,8 @@ SEASTAR_TEST_CASE(datafile_generation_16) {
     return test_datafile_generation_16({});
 }
 
-SEASTAR_TEST_CASE(datafile_generation_16_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(datafile_generation_16_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_datafile_generation_16(test_env_config{ .storage = make_test_object_storage_options("S3") });
 }
 
@@ -3224,7 +3226,8 @@ SEASTAR_TEST_CASE(test_sstable_bytes_on_disk_correctness) {
     return test_sstable_bytes_correctness(get_name() + "_disk", {});
 }
 
-SEASTAR_TEST_CASE(test_sstable_bytes_on_s3_correctness) {
+SEASTAR_TEST_CASE(test_sstable_bytes_on_s3_correctness,
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_sstable_bytes_correctness(get_name() + "_s3", test_env_config{ .storage = make_test_object_storage_options("S3") });
 }
 
