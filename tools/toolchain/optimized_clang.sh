@@ -41,6 +41,7 @@ if [[ -z ${CLANG_ARCHIVE} ]]; then
     exit 1
 fi
 echo "CLANG_ARCHIVE: ${CLANG_ARCHIVE}"
+RUNTIMES_FLAGS=""
 if [[ "${ARCH}" = "x86_64" ]]; then
     LLVM_TARGET_ARCH=X86
     LLVM_CXX_FLAGS="-march=x86-64-v3"
@@ -49,6 +50,16 @@ elif [[ "${ARCH}" = "aarch64" ]]; then
     # Based on https://community.arm.com/arm-community-blogs/b/tools-software-ides-blog/posts/compiler-flags-across-architectures-march-mtune-and-mcpu
     # and https://github.com/aws/aws-graviton-getting-started/blob/main/c-c%2B%2B.md
     LLVM_CXX_FLAGS="-march=armv8.2-a+crc+crypto"
+    # The sanitizers' fast unwinder reads return addresses out of the frame
+    # records on the stack. Where the unwound code was built with pointer
+    # authentication - as everything Fedora ships for aarch64 is, it builds with
+    # -mbranch-protection=standard - those are signed, and have to be stripped
+    # before they can be used. compiler-rt does that (StackTrace::UnwindFast
+    # calls STRIP_PAC_PC), but only if the runtime itself was built with branch
+    # protection: sanitizer_ptrauth.h gates the strip on __ARM_FEATURE_PAC_DEFAULT.
+    # So build the runtimes that way, otherwise every backtrace asan records at
+    # malloc time is garbage and leak suppressions do not match against it.
+    RUNTIMES_FLAGS="-mbranch-protection=standard"
 else
     echo "Unsupported architecture: ${ARCH}"
     exit 1
@@ -69,7 +80,26 @@ SCYLLA_NINJA_FILE_FULLPATH="${SCYLLA_DIR}"/"${SCYLLA_NINJA_FILE}"
 # Which LLVM release to build in order to compile Scylla
 LLVM_CLANG_TAG=22.1.8
 
+# Installed libraries, and with them clang's resource directory, go to
+# ${CMAKE_INSTALL_PREFIX}/lib${LLVM_LIBDIR_SUFFIX}. This is not architecture
+# dependent; the architecture only appears in the per-target subdirectory of the
+# resource dir (e.g. lib64/clang/22/lib/aarch64-unknown-linux-gnu).
+LLVM_LIBDIR_SUFFIX=64
+
 CLANG_ARCHIVE=$(cd "${SCYLLA_DIR}" && realpath -m "${CLANG_ARCHIVE}")
+
+# CMAKE_CXX_FLAGS below tunes the compiler we are building for the machine it
+# will run on; it does not reach the runtimes, which are configured as separate
+# CMake projects and are compiled for whoever links against them. Flags for
+# those have to be passed explicitly.
+BUILTINS_CMAKE_ARGS="-DLLVM_LIBDIR_SUFFIX=${LLVM_LIBDIR_SUFFIX}"
+RUNTIMES_CMAKE_ARGS=""
+if [[ -n "${RUNTIMES_FLAGS}" ]]; then
+    for flag_type in ASM C CXX; do
+        BUILTINS_CMAKE_ARGS+=";-DCMAKE_${flag_type}_FLAGS=${RUNTIMES_FLAGS}"
+        RUNTIMES_CMAKE_ARGS+="${RUNTIMES_CMAKE_ARGS:+;}-DCMAKE_${flag_type}_FLAGS=${RUNTIMES_FLAGS}"
+    done
+fi
 
 CLANG_OPTS=(
     -G Ninja
@@ -83,7 +113,12 @@ CLANG_OPTS=(
     -DLLVM_INCLUDE_EXAMPLES=OFF
     -DLLVM_INCLUDE_TESTS=OFF
     -DLLVM_ENABLE_BINDINGS=OFF
-    -DLLVM_ENABLE_PROJECTS="clang"
+    # clang-tools-extra is here for clangd, which developers need for editor
+    # integration against this toolchain (a clangd built from a different LLVM
+    # cannot read the module and PCH files this clang produces). It builds a
+    # dozen other tools as well; _get_distribution_components below picks which
+    # of them are installed.
+    -DLLVM_ENABLE_PROJECTS="clang;clang-tools-extra"
     -DLLVM_ENABLE_RUNTIMES="compiler-rt"
     -DLLVM_ENABLE_LTO=Thin
     -DCLANG_DEFAULT_PIE_ON_LINUX=OFF
@@ -92,7 +127,15 @@ CLANG_OPTS=(
     -DLLVM_BUILD_LLVM_DYLIB=ON
     -DLLVM_LINK_LLVM_DYLIB=ON
     -DCMAKE_INSTALL_PREFIX="/usr/local"
-    -DLLVM_LIBDIR_SUFFIX=64
+    -DLLVM_LIBDIR_SUFFIX="${LLVM_LIBDIR_SUFFIX}"
+    # The builtins sub-build of the runtimes is a standalone CMake project which
+    # does not load LLVMConfig.cmake, so LLVM_LIBDIR_SUFFIX does not reach it
+    # (unlike the sanitizers, which are configured via runtimes/CMakeLists.txt).
+    # Without this, libclang_rt.builtins.a is installed into lib/clang/<ver>
+    # while clang looks for it in its resource dir, lib${LLVM_LIBDIR_SUFFIX}/clang/<ver>,
+    # and linking with --rtlib=compiler-rt fails.
+    -DBUILTINS_CMAKE_ARGS="${BUILTINS_CMAKE_ARGS}"
+    -DRUNTIMES_CMAKE_ARGS="${RUNTIMES_CMAKE_ARGS}"
     -DLLVM_INSTALL_TOOLCHAIN_ONLY=ON
     -DCMAKE_CXX_FLAGS="${LLVM_CXX_FLAGS}"
 )
@@ -119,7 +162,32 @@ _get_distribution_components() {
             clang-tidy-headers)
                 continue
                 ;;
-            clang|clangd|clang-*)
+            # The tools from clang-tools-extra that are worth carrying: clangd
+            # for editor and agent integration, clang-tidy (plus
+            # clang-apply-replacements, which run-clang-tidy needs to apply
+            # exported fixes) for linting, clang-include-cleaner for include
+            # hygiene over a whole target, and clang-query for developing AST
+            # matchers.
+            clangd|clang-tidy|clang-apply-replacements|clang-include-cleaner|clang-query)
+                ;;
+            # The rest of clang-tools-extra. Nothing here is wired into an
+            # editor: they are one-shot refactoring tools (clang-move,
+            # clang-change-namespace, clang-reorder-fields), a documentation
+            # generator (clang-doc), the pre-C++20 header modularization
+            # checker (modularize), a preprocessor callback tracer (pp-trace),
+            # and the include suggester whose index-file approach clangd's own
+            # index superseded (clang-include-fixer and the find-all-symbols
+            # tool that builds its index). They are built either way; this only
+            # keeps them out of the archive.
+            clang-change-namespace|clang-doc|clang-include-fixer|clang-move|clang-reorder-fields)
+                continue
+                ;;
+            # These match none of the patterns below, so they would otherwise
+            # reach the echo and be installed.
+            find-all-symbols|modularize|pp-trace)
+                continue
+                ;;
+            clang|clang-*)
                 ;;
             clang*|findAllSymbols)
                 continue
@@ -141,9 +209,21 @@ if [[ "${CLANG_BUILD}" = "INSTALL" ]]; then
     # are intentionally omitted.
     #  - SDAG select-of-load fold (#208683): target-independent, affects x86_64 and aarch64
     #  - X86 EVEX compression for VPMOV*2M + KMOV (#198220): x86_64
+    #
+    # Also backport a clangd use-after-free that 22.1.8 has and 23.1.0 fixed:
+    #  - clangd ModuleCache lifetime (#203952, fixes #203799). Since #164889,
+    #    which is in 22.1.8, the preamble's CompilerInstance solely owns the
+    #    in-memory buffers of the loaded module files. CapturedASTCtx did not
+    #    retain the ModuleCache, so those buffers were freed with the
+    #    CompilerInstance while ASTReader still held ArrayRefs into them (the
+    #    TU_UPDATE_LEXICAL blobs). Indexing the preamble then walked freed
+    #    memory and clangd crashed in ASTReader::FindExternalLexicalDecls. It
+    #    only triggers when an imported .pcm contributes translation-unit level
+    #    lexical decls, i.e. exactly when Scylla is built with C++20 modules.
     for patch in \
         0001-SDAG-Freeze-condition-in-select-of-load-fold-208683.patch \
-        0001-X86-Fix-EVEX-compression-for-VPMOV-2M-KMOV-with-tied.patch
+        0001-X86-Fix-EVEX-compression-for-VPMOV-2M-KMOV-with-tied.patch \
+        0001-clangd-Keep-ModuleCache-alive-for-captured-preamble-.patch
     do
         git -C "${CLANG_BUILD_DIR}" apply "${SCRIPT_DIR}/clang-patches/${patch}"
     done
@@ -195,10 +275,18 @@ fi
 
 # make sure it is correct archive, before extracting to /
 set +e
-tar -tpf "${CLANG_ARCHIVE}" ./usr/local/bin/clang > /dev/null 2>&1
+tar -tpf "${CLANG_ARCHIVE}" ./usr/local/bin/clang ./usr/local/bin/clangd > /dev/null 2>&1
 if [[ $? -ne 0 ]]; then
-    echo "Unable to detect prebuilt clang on ${CLANG_ARCHIVE}, aborted."
+    echo "Unable to detect prebuilt clang and clangd on ${CLANG_ARCHIVE}, aborted."
     exit 1
 fi
 set -e
 tar -C / -xpzf "${CLANG_ARCHIVE}"
+
+# Scylla links with --rtlib=compiler-rt, so the builtins have to be where clang
+# looks for them, i.e. in its resource dir.
+CLANG_RT_BUILTINS="$(/usr/local/bin/clang --rtlib=compiler-rt -print-libgcc-file-name)"
+if [[ ! -f "${CLANG_RT_BUILTINS}" ]]; then
+    echo "Installed clang is missing ${CLANG_RT_BUILTINS}, aborted."
+    exit 1
+fi

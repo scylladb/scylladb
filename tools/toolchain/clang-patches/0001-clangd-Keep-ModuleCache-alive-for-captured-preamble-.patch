@@ -1,0 +1,60 @@
+From 89a086927f1ef5384c457c202f1732b2f1f5ec38 Mon Sep 17 00:00:00 2001
+From: Ryan Mansfield <ryan_mansfield@apple.com>
+Date: Mon, 15 Jun 2026 14:03:53 -0400
+Subject: [PATCH] [clangd] Keep ModuleCache alive for captured preamble AST
+ (#203952)
+
+Since #164889 made ModuleManager's ModuleCache reference non-owning, the
+preamble's CompilerInstance solely owns the module buffers so retain the
+shared_ptr<ModuleCache> in CapturedASTCtx.
+
+Fixes #203799
+---
+ clang-tools-extra/clangd/Preamble.h | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/clang-tools-extra/clangd/Preamble.h b/clang-tools-extra/clangd/Preamble.h
+index 2051930dae05..8a5edf1fee1a 100644
+--- a/clang-tools-extra/clangd/Preamble.h
++++ b/clang-tools-extra/clangd/Preamble.h
+@@ -34,10 +34,11 @@
+ #include "clang/Basic/SourceManager.h"
+ #include "clang/Basic/TargetOptions.h"
+ #include "clang/Frontend/CompilerInvocation.h"
+ #include "clang/Frontend/PrecompiledPreamble.h"
+ #include "clang/Lex/Lexer.h"
++#include "clang/Serialization/ModuleCache.h"
+ #include "clang/Tooling/CompilationDatabase.h"
+ #include "llvm/ADT/ArrayRef.h"
+ #include "llvm/ADT/StringRef.h"
+ 
+ #include <cstddef>
+@@ -57,11 +58,12 @@ namespace clangd {
+ /// inside is still not thread-safe.
+ 
+ struct CapturedASTCtx {
+ public:
+   CapturedASTCtx(CompilerInstance &Clang)
+-      : Invocation(Clang.getInvocationPtr()),
++      : ModCache(Clang.getModuleCachePtr()),
++        Invocation(Clang.getInvocationPtr()),
+         Diagnostics(Clang.getDiagnosticsPtr()), Target(Clang.getTargetPtr()),
+         AuxTarget(Clang.getAuxTarget()), FileMgr(Clang.getFileManagerPtr()),
+         SourceMgr(Clang.getSourceManagerPtr()), PP(Clang.getPreprocessorPtr()),
+         Context(Clang.getASTContextPtr()) {}
+ 
+@@ -77,10 +79,11 @@ public:
+   void setStatCache(std::shared_ptr<PreambleFileStatusCache> StatCache) {
+     this->StatCache = StatCache;
+   }
+ 
+ private:
++  std::shared_ptr<ModuleCache> ModCache;
+   std::shared_ptr<CompilerInvocation> Invocation;
+   IntrusiveRefCntPtr<DiagnosticsEngine> Diagnostics;
+   IntrusiveRefCntPtr<TargetInfo> Target;
+   IntrusiveRefCntPtr<TargetInfo> AuxTarget;
+   IntrusiveRefCntPtr<FileManager> FileMgr;
+-- 
+2.55.0
+
