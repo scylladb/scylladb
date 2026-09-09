@@ -23,8 +23,16 @@ std::optional<raft::server_id> delay_apply;
 seastar::semaphore apply_entered(0);
 seastar::semaphore apply_release(0);
 
+std::optional<raft::server_id> delay_load_snapshot;
+seastar::semaphore load_snapshot_entered(0);
+seastar::semaphore load_snapshot_release(0);
+
 std::optional<raft::server_id> notify_snapshot_received;
 seastar::semaphore snapshot_received(0);
+
+std::optional<raft::server_id> track_stored_commit_idx;
+raft::index_t stored_commit_idx{0};
+seastar::condition_variable stored_commit_idx_changed;
 
 std::vector<raft::server_id> to_raft_id_vec(std::vector<node_id> nodes) noexcept {
     std::vector<raft::server_id> ret;

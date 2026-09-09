@@ -2382,9 +2382,25 @@ SEASTAR_TEST_CASE(test_frequent_snapshotting) {
         auto id2 = co_await env.new_server(false, server_config);
         auto id3 = co_await env.new_server(false, server_config);
 
-        env.for_each_server([](raft::server_id, raft_server<ExReg>* srv) {
-            srv->get_server()->set_applier_queue_max_size(1);
-        });
+        // The snapshot leak this test was written for (see 210d9dd026c)
+        // requires the applier fiber to take a second snapshot before io_fiber
+        // has consumed the fsm output holding the first: the second replaces
+        // the first in the output, and the first must still reach
+        // drop_snapshot() through snps_to_drop.
+        //
+        // It no longer reaches that state, and has not since that fix, which
+        // also made fsm::apply_snapshot() signal _sm_events -- io_fiber runs
+        // after every snapshot and consumes the output before the next one
+        // replaces it. Instrumenting the replacement and running this test
+        // gives 441 snapshots in a run and not one of them replacing an
+        // unconsumed output, with or without the applier queue bound the test
+        // used to set for that purpose.
+        //
+        // What it still checks is the teardown assertion that no more than two
+        // snapshots survive per server, which catches a leak by any route, and
+        // it does drive snapshotting hard: snapshot_threshold = 1 snapshots
+        // after every applied batch. Covering the replacement itself again
+        // would take a deliberate io_fiber delay.
 
         tlogger.debug("Started 2 more servers, changing configuration");
 
