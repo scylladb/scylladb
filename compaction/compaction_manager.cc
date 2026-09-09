@@ -1473,7 +1473,10 @@ future<stop_iteration> compaction_task_executor::maybe_retry(std::exception_ptr 
             cmlog.error("{}: failed: {}. Will retry in {} seconds", *this, std::current_exception(),
                     std::chrono::duration_cast<std::chrono::seconds>(_compaction_retry.sleep_time()).count());
             switch_state(state::pending);
-            return _compaction_retry.retry(_compaction_data.abort).handle_exception_type([this] (sleep_aborted&) {
+            auto retry_future = utils::get_local_injector().enter("compaction_task_executor_compaction_retry_sleep_aborted")
+                ? make_exception_future(sleep_aborted{})
+                : _compaction_retry.retry(_compaction_data.abort);
+            return retry_future.handle_exception_type([this] (sleep_aborted&) {
                 return make_exception_future<>(make_compaction_stopped_exception());
             }).then([] {
                 return make_ready_future<stop_iteration>(false);
