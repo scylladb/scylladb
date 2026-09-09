@@ -16,6 +16,7 @@ from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 logger = logging.getLogger(__name__)
 
 
+@pytest.mark.max_running_shards(6)
 async def test_streaming_deadlock_removenode(request, manager: ScyllaClusterManager):
     # Force removenode to exercise range_streamer and not repair.
     # The bug is in the streaming, and when senders are on different nodes,

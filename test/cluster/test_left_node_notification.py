@@ -13,6 +13,7 @@ from test.cluster.util import check_token_ring_and_group0_consistency
 logger = logging.getLogger(__name__)
 
 
+@pytest.mark.max_running_shards(6)
 async def test_left_node_notification(manager: ScyllaClusterManager) -> None:
     """
     Create a 3-node multi-DC cluster with 2 nodes in dc1 and 1 node in dc2.

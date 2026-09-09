@@ -182,6 +182,7 @@ incremental_repair_test_data = [pytest.param(row_tombstone_data, id="row-tombsto
                                 pytest.param(partition_tombstone_data, id="partition-tombstone")]
 
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.parametrize("data_class", incremental_repair_test_data)
 async def test_incremental_read_repair(data_class: DataClass, manager: ScyllaClusterManager):
     """Stress the incremental read repair logic
@@ -329,6 +330,7 @@ async def test_incremental_read_repair(data_class: DataClass, manager: ScyllaClu
         check_rows(cql, host2, all_rows)
 
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_read_repair_with_trace_logging(request, manager):
     logger.info("Creating a new cluster")

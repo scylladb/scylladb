@@ -13,6 +13,7 @@ from cassandra.protocol import WriteTimeout
 from test.cluster.util import new_test_keyspace
 
 
+@pytest.mark.max_running_shards(1)
 @pytest.mark.skip_mode(mode='debug', reason='aarch64/debug is unpredictably slow', platform_key='aarch64')
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_cas_semaphore(manager):

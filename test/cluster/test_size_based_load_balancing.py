@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 GB = 1024 * 1024 * 1024
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_balance_empty_tablets(manager: ScyllaClusterManager):
 

@@ -30,6 +30,7 @@ QUIESCE_DEBUG_CMDLINE = [
 ]
 
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.asyncio
 async def test_quiesce_waits_for_balancer(manager: ScyllaClusterManager):
     """
@@ -69,6 +70,7 @@ async def test_quiesce_waits_for_balancer(manager: ScyllaClusterManager):
         for host_id, count in replicas.items():
             assert 5 <= count <= 6, f"Node {host_id} has {count} tablets, expected 5 or 6"
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_quiesce_blocks_until_refresh_completes(manager: ScyllaClusterManager):
@@ -122,6 +124,7 @@ async def test_quiesce_blocks_until_refresh_completes(manager: ScyllaClusterMana
         logger.info("Quiesce completed after refresh was released")
 
 
+@pytest.mark.max_running_shards(8)
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_quiesce_retries_until_balance_plan_is_empty(manager: ScyllaClusterManager):

@@ -44,6 +44,7 @@ async def delete_table_sstables(manager: ScyllaClusterManager, server: ServerInf
             os.remove(path)
         break # break unconditionally here to remove only files in `table_dir`
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_staging_backlog_processed_after_restart(manager: ScyllaClusterManager):
     """

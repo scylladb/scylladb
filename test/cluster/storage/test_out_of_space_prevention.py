@@ -116,6 +116,7 @@ global_cmdline = ["--disk-space-monitor-normal-polling-interval-in-seconds", "1"
                   ]
 
 
+@pytest.mark.max_running_shards(6)
 async def test_user_writes_rejection(manager: ScyllaClusterManager, volumes_factory: Callable) -> None:
     async with space_limited_servers(manager, volumes_factory, ["20M"]*3, cmdline=global_cmdline) as servers:
         cql, hosts = await manager.get_ready_cql(servers)
@@ -167,6 +168,7 @@ async def test_user_writes_rejection(manager: ScyllaClusterManager, volumes_fact
                 await cql.run_async(SimpleStatement(next(wgen), consistency_level=ConsistencyLevel.ALL))
 
 
+@pytest.mark.max_running_shards(6)
 async def test_autotoggle_compaction(manager: ScyllaClusterManager, volumes_factory: Callable) -> None:
     cmdline = [*global_cmdline,
                "--logger-log-level", "compaction=debug"]
@@ -212,6 +214,7 @@ async def test_autotoggle_compaction(manager: ScyllaClusterManager, volumes_fact
                 await log.wait_for(rf"Major {ks}\.{table} .* Compacted .* sstables to .*", from_mark=mark)
 
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_critical_utilization_during_decommission(manager: ScyllaClusterManager, volumes_factory: Callable) -> None:
     """
@@ -266,6 +269,7 @@ async def test_critical_utilization_during_decommission(manager: ScyllaClusterMa
 
 
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_reject_split_compaction(manager: ScyllaClusterManager, volumes_factory: Callable) -> None:
     async with space_limited_servers(manager, volumes_factory, ["20M"]*3, cmdline=global_cmdline) as servers:
@@ -295,6 +299,7 @@ async def test_reject_split_compaction(manager: ScyllaClusterManager, volumes_fa
                     await log.wait_for(f"Split task .* for table {cf} .* stopped, reason: Compaction for {cf} was stopped due to: drain", from_mark=mark)
 
 
+@pytest.mark.max_running_shards(6)
 async def test_split_compaction_not_triggered(manager: ScyllaClusterManager, volumes_factory: Callable) -> None:
     cmd = [*global_cmdline,
            "--logger-log-level", "compaction=debug"]
@@ -328,6 +333,7 @@ async def test_split_compaction_not_triggered(manager: ScyllaClusterManager, vol
                     assert await s1_log.grep(f"compaction.*Split {cf}", from_mark=s1_mark) == []
 
 
+@pytest.mark.max_running_shards(6)
 async def test_tablet_repair(manager: ScyllaClusterManager, volumes_factory: Callable) -> None:
     async with space_limited_servers(manager, volumes_factory, ["20M"]*3, cmdline=global_cmdline) as servers:
         cql, _ = await manager.get_ready_cql(servers)
@@ -394,6 +400,7 @@ async def test_tablet_repair(manager: ScyllaClusterManager, volumes_factory: Cal
                 await manager.api.wait_task(servers[0].ip_addr, task_id)
 
 
+@pytest.mark.max_running_shards(6)
 async def test_autotoggle_reject_incoming_migrations(manager: ScyllaClusterManager, volumes_factory: Callable) -> None:
     async with space_limited_servers(manager, volumes_factory, ["20M"]*3, cmdline=global_cmdline) as servers:
         await manager.disable_tablet_balancing()
@@ -453,6 +460,7 @@ async def test_autotoggle_reject_incoming_migrations(manager: ScyllaClusterManag
                 mark, _ = await log.wait_for("Streaming for tablet migration .* successful", from_mark=mark)
 
 
+@pytest.mark.max_running_shards(6)
 async def test_node_restart_while_tablet_split(manager: ScyllaClusterManager, volumes_factory: Callable) -> None:
     cmd = [*global_cmdline,
            "--logger-log-level", "compaction=debug"]
@@ -520,6 +528,7 @@ async def test_node_restart_while_tablet_split(manager: ScyllaClusterManager, vo
                 await assert_resize_task_info(table_id, lambda response: len(response) == 2 and all(r.resize_task_info is None for r in response))
 
 # Verify that new sstable produced by repair cannot be split, if disk utilization level is critical.
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_repair_failure_on_split_rejection(manager: ScyllaClusterManager, volumes_factory: Callable) -> None:
     cmd = [*global_cmdline,
@@ -615,6 +624,7 @@ global_cmdline_with_disabled_monitor = [
     # "Rate-limit: suppressed N backtraces" line with no backtrace (SCYLLADB-3850).
     "--blocked-reactor-reports-per-minute", "60",
 ]
+@pytest.mark.max_running_shards(4)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_sstables_incrementally_released_during_streaming(manager: ScyllaClusterManager, volumes_factory: Callable) -> None:
     """
@@ -697,6 +707,7 @@ async def test_sstables_incrementally_released_during_streaming(manager: ScyllaC
                     await decomm_task
 
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_load_and_stream_rejected_on_critical_disk(manager: ScyllaClusterManager, volumes_factory: Callable) -> None:
     """

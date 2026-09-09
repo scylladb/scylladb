@@ -12,6 +12,7 @@ from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import inject_error_one_shot
 
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
 async def test_prepare_fails_if_cached_statement_is_invalidated_mid_prepare(manager: ScyllaClusterManager):
     server = await manager.server_add()

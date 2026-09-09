@@ -13,6 +13,7 @@ import pytest
 pytestmark = pytest.mark.prepare_3_racks_cluster
 
 
+@pytest.mark.max_running_shards(8)
 async def test_topology_schema_changes(manager, random_tables):
     """Test schema consistency with restart, add, and sudden stop of servers"""
     table = await random_tables.add_table(ncolumns=5)

@@ -17,6 +17,7 @@ SUPPRESS_FEATURES = "suppress_features"
 ERROR_INJECTIONS_AT_STARTUP_CONFIG_KEY = "error_injections_at_startup"
 
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_feature_deprecation_works(manager: ScyllaClusterManager) -> None:
     """Simulate a very old node which, long ago, has enabled some features,
@@ -50,6 +51,7 @@ async def check_features_status(cql, features, enabled):
         assert check_feature(topology_features[0].supported_features, feature)
 
 
+@pytest.mark.max_running_shards(2)
 async def test_features_suppress_works(manager: ScyllaClusterManager, build_mode) -> None:
     """ `suppress_features` error injection allows to revoke support for
         specified cluster features. It can be used to simulate upgrade process.

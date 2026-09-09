@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 # Checks basic functionality on the cluster with different values of the --smp parameter on the nodes.
+@pytest.mark.max_running_shards(12)
 async def test_nodes_with_different_smp(request: FixtureRequest, manager: ScyllaClusterManager, build_mode) -> None:
     # In this test it's more convenient to start with a fresh cluster.
 

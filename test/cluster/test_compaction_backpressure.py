@@ -16,6 +16,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+@pytest.mark.max_running_shards(1)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_intranode_migration_not_blocked_by_backpressure(manager: ScyllaClusterManager):
     """

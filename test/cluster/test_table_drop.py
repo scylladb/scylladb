@@ -9,6 +9,7 @@ import pytest
 
 logger = logging.getLogger(__name__)
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_drop_table_during_streaming_receiver_side(manager: ScyllaClusterManager):
     servers = [await manager.server_add(config={
@@ -19,6 +20,7 @@ async def test_drop_table_during_streaming_receiver_side(manager: ScyllaClusterM
     }) for _ in range(2)]
 
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.parametrize("feature_config", feature_configs(FeatureConfigurations.EVENTUAL_CONSISTENCY,
     FeatureConfigurations.STRONG_CONSISTENCY, FeatureConfigurations.LOGSTOR_EVENTUAL_CONSISTENCY,
     FeatureConfigurations.LOGSTOR_STRONG_CONSISTENCY))
@@ -38,6 +40,7 @@ async def test_drop_table_during_flush(manager: ScyllaClusterManager, feature_co
         await manager.api.keyspace_flush(servers[0].ip_addr, ks, "test")
 
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.parametrize("feature_config", feature_configs(FeatureConfigurations.EVENTUAL_CONSISTENCY,
     FeatureConfigurations.STRONG_CONSISTENCY))
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')

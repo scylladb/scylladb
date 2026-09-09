@@ -50,6 +50,7 @@ async def remove_error_on(manager: ScyllaClusterManager, error_name: str, server
     await asyncio.gather(*errs)
 
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_drain_failure_during_decommission(manager: ScyllaClusterManager):
     cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled'}
@@ -73,6 +74,7 @@ async def test_tablet_drain_failure_during_decommission(manager: ScyllaClusterMa
         assert node.draining == False and node.excluded == False and node.status == 'NORMAL'
 
 
+@pytest.mark.max_running_shards(8)
 @pytest.mark.prepare_3_nodes_cluster
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_topology_streaming_failure(request, manager: ScyllaClusterManager):

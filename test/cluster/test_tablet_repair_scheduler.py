@@ -106,18 +106,22 @@ async def do_test_tablet_repair_progress_split_merge(manager: ScyllaClusterManag
     await inject_error_off(manager, "tablet_repair_skip_sched", servers)
     await wait_task_progress(nr_tablets, nr_tablets)
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_repair_progress(manager: ScyllaClusterManager):
     await do_test_tablet_repair_progress_split_merge(manager, do_split=False, do_merge=False)
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_repair_progress_split(manager: ScyllaClusterManager):
     await do_test_tablet_repair_progress_split_merge(manager, do_split=True)
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_repair_progress_merge(manager: ScyllaClusterManager):
     await do_test_tablet_repair_progress_split_merge(manager, do_merge=True)
 
+@pytest.mark.max_running_shards(6)
 async def test_tablet_manual_repair(manager: ScyllaClusterManager):
     servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager, fast_stats_refresh=False, disable_flush_cache_time=True)
     token = -1
@@ -142,6 +146,7 @@ async def test_tablet_manual_repair(manager: ScyllaClusterManager):
 
     assert t2 > t1
 
+@pytest.mark.max_running_shards(6)
 async def test_tombstone_gc_insert_flush(manager: ScyllaClusterManager):
     servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager, fast_stats_refresh=False, disable_flush_cache_time=True)
     token = "all"
@@ -172,6 +177,7 @@ async def test_tombstone_gc_insert_flush(manager: ScyllaClusterManager):
         else:
             assert time.time() < deadline
 
+@pytest.mark.max_running_shards(6)
 async def test_tablet_manual_repair_all_tokens(manager: ScyllaClusterManager):
     servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager, fast_stats_refresh=False, disable_flush_cache_time=True)
     token = "all"
@@ -190,6 +196,7 @@ async def test_tablet_manual_repair_all_tokens(manager: ScyllaClusterManager):
         assert v != None
         assert v > now
 
+@pytest.mark.max_running_shards(6)
 async def test_tablet_manual_repair_async(manager: ScyllaClusterManager):
     servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager, fast_stats_refresh=False)
     token = "-1"
@@ -201,6 +208,7 @@ async def test_tablet_manual_repair_async(manager: ScyllaClusterManager):
     logging.info(f"{res=}")
     assert len(res) == 1
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_manual_repair_reject_parallel_requests(manager: ScyllaClusterManager):
     servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager, fast_stats_refresh=False)
@@ -229,6 +237,7 @@ async def test_tablet_manual_repair_reject_parallel_requests(manager: ScyllaClus
     assert state.ok == 1
     assert state.error == 2
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_repair_error_and_retry(manager: ScyllaClusterManager):
     servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager)
@@ -239,6 +248,7 @@ async def test_tablet_repair_error_and_retry(manager: ScyllaClusterManager):
     await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token)
     await inject_error_off(manager, "repair_tablet_fail_on_rpc_call", servers)
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_repair_error_not_finish(manager: ScyllaClusterManager):
     servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager)
@@ -253,6 +263,7 @@ async def test_tablet_repair_error_not_finish(manager: ScyllaClusterManager):
         logger.info("Repair timeout as expected")
     await inject_error_off(manager, "repair_tablet_fail_on_rpc_call", servers)
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_repair_error_delete(manager: ScyllaClusterManager):
     servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager)
@@ -296,6 +307,7 @@ def check_repairs(row_num_before: list[int], row_num_after: list[int], expected_
         else:
             assert val_before == row_num_after[i]
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.parametrize("included_host_count", [2, 1, 0])
 async def test_tablet_repair_hosts_filter(manager: ScyllaClusterManager, included_host_count):
@@ -344,6 +356,7 @@ async def prepare_multi_dc_repair(manager) -> tuple[list[ServerInfo], CassandraS
     hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
     return (servers, cql, hosts, ks, table_id)
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.parametrize("dcs_filter_and_res", [("DC1", [0, 1]), ("DC2", []), ("DC3", [])])
 async def test_tablet_repair_dcs_filter(manager: ScyllaClusterManager, dcs_filter_and_res):
@@ -373,6 +386,7 @@ async def test_tablet_repair_dcs_filter(manager: ScyllaClusterManager, dcs_filte
     row_num_after = [get_repair_row_from_disk(server) for server in servers]
     check_repairs(row_num_before, row_num_after, expected_repairs)
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_repair_hosts_and_dcs_filter(manager: ScyllaClusterManager):
     servers, cql, hosts, ks, table_id = await prepare_multi_dc_repair(manager)
@@ -402,6 +416,7 @@ async def test_tablet_repair_hosts_and_dcs_filter(manager: ScyllaClusterManager)
     row_num_after = [get_repair_row_from_disk(server) for server in servers]
     check_repairs(row_num_before, row_num_after, [0, 2])
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_repair_multiple_rows(manager: ScyllaClusterManager):
     cmdline = ["--hinted-handoff-enabled", "0"]
@@ -469,10 +484,12 @@ async def run_tablet_repair_multiple_rows_merge(manager: ScyllaClusterManager, i
     rows_query = [(r.pk, r.ck, r.data) for r in results]
     assert sorted(rows) == sorted(rows_query)
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_repair_multiple_rows_merge_fragments_nr(manager: ScyllaClusterManager):
     await run_tablet_repair_multiple_rows_merge(manager, "row_level_repair_max_fragments_nr", "10")
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_repair_multiple_rows_merge_fragments_size(manager: ScyllaClusterManager):
     await run_tablet_repair_multiple_rows_merge(manager, "row_level_repair_max_fragments_size", "1000")
@@ -489,6 +506,7 @@ async def config_auto_repair(manager, servers, ks, table, auto_repair_enabled, a
     else:
         raise NotImplementedError("Per-table auto-repair configuration is not supported yet.")
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_auto_repair(manager: ScyllaClusterManager):
     servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager, fast_stats_refresh=True, disable_flush_cache_time=True)
@@ -545,6 +563,7 @@ async def check_has_repair_time(cql, hosts, table_id, timeout = 300):
         assert duration < timeout
         time.sleep(1)
 
+@pytest.mark.max_running_shards(6)
 async def test_tablet_auto_repair_cfg_enable(manager: ScyllaClusterManager):
     cmdline = ["--auto-repair-enabled-default", "1",  "--auto-repair-threshold-default-in-seconds", "1"]
     servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager, cmdline=cmdline, fast_stats_refresh=True, disable_flush_cache_time=True)
@@ -623,6 +642,7 @@ def verify_sort_order(plans):
                 is_sorted = False
     return is_sorted
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_user_and_auto_repair_priority(manager: ScyllaClusterManager):
     servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager, fast_stats_refresh=True, disable_flush_cache_time=True)

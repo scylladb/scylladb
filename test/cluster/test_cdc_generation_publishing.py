@@ -22,6 +22,7 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_cdc_generations_are_published(request, manager: ScyllaClusterManager):
     """Test that the CDC generation publisher eventually publishes committed CDC generations in the correct order."""
@@ -76,6 +77,7 @@ async def test_cdc_generations_are_published(request, manager: ScyllaClusterMana
     logger.info(f"Timestamps after check_and_repair: {gen_timestamps}")
 
 
+@pytest.mark.max_running_shards(8)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_multiple_unpublished_cdc_generations(request, manager: ScyllaClusterManager):
     """Test that the CDC generation publisher works correctly when there is more than one unpublished CDC generation."""

@@ -15,6 +15,7 @@ from cassandra.query import SimpleStatement  # type: ignore
 # This test makes sure that even if the view building encounter errors, the view building is eventually finished
 # and the view is consistent with the base table.
 # Reproduces the scenario in #19261
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason="error injections aren't enabled in release mode")
 async def test_mv_fail_building(manager: ScyllaClusterManager) -> None:
     node_count = 3
@@ -45,6 +46,7 @@ async def test_mv_fail_building(manager: ScyllaClusterManager) -> None:
 # Test view build operations running during node shutdown and view drain.
 # Verify the drain order is correct and the view build doesn't fail with
 # database write failures.
+@pytest.mark.max_running_shards(2)
 @pytest.mark.skip_mode(mode='release', reason="error injections aren't enabled in release mode")
 async def test_mv_build_during_shutdown(manager: ScyllaClusterManager):
     server = await manager.server_add()

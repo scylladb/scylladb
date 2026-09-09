@@ -18,6 +18,7 @@ from cassandra.auth import PlainTextAuthProvider
 Checks whether the default superuser is replaced by a custom one,
 and that the default superuser is not present in the system.
 """
+@pytest.mark.max_running_shards(6)
 async def test_auth_default_superuser_replaced(manager: ScyllaClusterManager) -> None:
     servers = await manager.servers_add(3, config=auth_config, auto_rack_dc="dc1")
     cql, _ = await manager.get_ready_cql(servers)

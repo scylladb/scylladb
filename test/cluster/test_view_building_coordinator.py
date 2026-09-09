@@ -93,6 +93,7 @@ async def check_view_contents(cql: Session, ks: str, table: str, view: str, part
 ### TESTS ###
 #############
 
+@pytest.mark.max_running_shards(6)
 async def test_build_no_data(manager: ScyllaClusterManager):
     node_count = 3
     servers = await manager.servers_add(node_count, cmdline=cmdline_loggers, property_file=[
@@ -108,6 +109,7 @@ async def test_build_no_data(manager: ScyllaClusterManager):
         await wait_for_view(cql, 'mv_cf_view', node_count)
         await check_view_contents(cql, ks, "tab", "mv_cf_view")
 
+@pytest.mark.max_running_shards(6)
 async def test_build_one_view(manager: ScyllaClusterManager):
     node_count = 3
     servers = await manager.servers_add(node_count, cmdline=cmdline_loggers, property_file=[
@@ -125,6 +127,7 @@ async def test_build_one_view(manager: ScyllaClusterManager):
         await wait_for_view(cql, 'mv_cf_view', node_count)
         await check_view_contents(cql, ks, "tab", "mv_cf_view")
 
+@pytest.mark.max_running_shards(6)
 async def test_build_filtered_view(manager: ScyllaClusterManager):
     node_count = 3
     servers = await manager.servers_add(node_count, cmdline=cmdline_loggers)
@@ -139,6 +142,7 @@ async def test_build_filtered_view(manager: ScyllaClusterManager):
         await check_view_contents(cql, ks, "tab", "mv_cf_view", partition_list=[1, 4, 9])
 
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_build_two_views(manager: ScyllaClusterManager):
     node_count = 3
@@ -168,6 +172,7 @@ async def test_build_two_views(manager: ScyllaClusterManager):
         await check_view_contents(cql, ks, "tab", "mv_cf_view1")
         await check_view_contents(cql, ks, "tab", "mv_cf_view2")
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_add_view_while_build_in_progress(manager: ScyllaClusterManager):
     node_count = 3
@@ -201,6 +206,7 @@ async def test_add_view_while_build_in_progress(manager: ScyllaClusterManager):
         await check_view_contents(cql, ks, "tab", "mv_cf_view1")
         await check_view_contents(cql, ks, "tab", "mv_cf_view2")
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_add_view_after_view_build_flush_races_with_delete(manager: ScyllaClusterManager):
     server = await manager.server_add(cmdline=cmdline_loggers, property_file={"dc": "dc1", "rack": "r1"})
@@ -236,6 +242,7 @@ async def test_add_view_after_view_build_flush_races_with_delete(manager: Scylla
         await check_view_contents(cql, ks, "tab", "mv_cf_view1")
         await check_view_contents(cql, ks, "tab", "mv_cf_view2")
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_remove_some_view_while_build_in_progress(manager: ScyllaClusterManager):
     node_count = 3
@@ -264,6 +271,7 @@ async def test_remove_some_view_while_build_in_progress(manager: ScyllaClusterMa
         await wait_for_view(cql, 'mv_cf_view1', node_count)
         await check_view_contents(cql, ks, "tab", "mv_cf_view1")
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_abort_building_by_remove_view(manager: ScyllaClusterManager):
     node_count = 3
@@ -290,6 +298,7 @@ async def test_abort_building_by_remove_view(manager: ScyllaClusterManager):
         views = await cql.run_async(f"SELECT * FROM system_schema.views WHERE keyspace_name = '{ks}'")
         assert len(views) == 0
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.parametrize("change", ["add", "rename"])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_alter_base_schema_while_build_in_progress(manager: ScyllaClusterManager, change: str):
@@ -325,6 +334,7 @@ async def test_alter_base_schema_while_build_in_progress(manager: ScyllaClusterM
         elif change == "rename":
             await check_view_contents(cql, ks, "tab", "mv_cf_view", clustering_key="renamed_c")
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.parametrize("change", ["increase", "decrease"])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_change_rf_while_build_in_progress(manager: ScyllaClusterManager, change: str):
@@ -366,6 +376,7 @@ async def test_change_rf_while_build_in_progress(manager: ScyllaClusterManager, 
         await wait_for_view(cql, 'mv_cf_view', node_count)
         await check_view_contents(cql, ks, "tab", "mv_cf_view")
 
+@pytest.mark.max_running_shards(8)
 @pytest.mark.parametrize("operation", ["add", "remove", "decommission", "replace"])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_node_operation_during_view_building(manager: ScyllaClusterManager, operation: str):
@@ -417,6 +428,7 @@ async def test_node_operation_during_view_building(manager: ScyllaClusterManager
         await wait_for_view(cql, 'mv_cf_view', node_count)
         await check_view_contents(cql, ks, "tab", "mv_cf_view")
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_leader_change_while_building(manager: ScyllaClusterManager):
     node_count = 3
@@ -450,6 +462,7 @@ async def test_leader_change_while_building(manager: ScyllaClusterManager):
         await wait_for_view(cql, 'mv_cf_view1', node_count)
         await check_view_contents(cql, ks, "tab", "mv_cf_view1")
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.xfail
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_truncate_while_building(manager: ScyllaClusterManager):
@@ -481,6 +494,7 @@ async def test_truncate_while_building(manager: ScyllaClusterManager):
         await wait_for_view(cql, 'mv_cf_view1', node_count)
         await check_view_contents(cql, ks, "tab", "mv_cf_view1")
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.parametrize("view_action", ["finish_build", "drop_while_building"])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_scylla_views_builds_in_progress(manager: ScyllaClusterManager, view_action):
@@ -528,6 +542,7 @@ async def test_scylla_views_builds_in_progress(manager: ScyllaClusterManager, vi
 
         await check_scylla_views_builds_in_progress(expect_zero_rows=True)
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_view_building_while_tablet_streaming_fail(manager: ScyllaClusterManager):
     servers = [await manager.server_add(cmdline=cmdline_loggers)]
@@ -558,6 +573,7 @@ async def test_view_building_while_tablet_streaming_fail(manager: ScyllaClusterM
         await wait_for_view(cql, 'mv_cf_view', 2)
         await check_view_contents(cql, ks, "tab", "mv_cf_view")
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_view_building_failure(manager: ScyllaClusterManager):
     node_count = 3
@@ -585,6 +601,7 @@ async def test_view_building_failure(manager: ScyllaClusterManager):
         await check_view_contents(cql, ks, "tab", "mv_cf_view")
 
 # Reproduces scylladb/scylladb#25912
+@pytest.mark.max_running_shards(12)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_concurrent_tablet_migrations(manager: ScyllaClusterManager):
     """
@@ -690,6 +707,7 @@ async def assert_row_count_on_host(cql, host, ks, table, row_count):
 # Staging sstables are created by removing table's normal sstables and repairing it.
 # Then processing staging sstables is prevented using error injection and the tablet is
 # migrated to a new node, which will receive the staging sstables via file streaming.
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_file_streaming(manager: ScyllaClusterManager):
     node_count = 2
@@ -825,6 +843,7 @@ async def test_file_streaming(manager: ScyllaClusterManager):
 #   However after tablet merge, view building tasks of those sstables are merged into one task,
 #   but the map stays the same, so one sstable won't be processed
 #   because last token after tablet merge = last token of tablet2 before merge
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_staging_sstables_with_tablet_merge(manager: ScyllaClusterManager):
     node_count = 2
@@ -932,6 +951,7 @@ async def test_staging_sstables_with_tablet_merge(manager: ScyllaClusterManager)
         await assert_row_count_on_host(cql, new_hosts[0], ks, "mv", 1000)
         await manager.server_start(servers[1].server_id)
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_migration_during_view_building(manager: ScyllaClusterManager):
     node_count = 1
@@ -962,6 +982,7 @@ async def test_tablet_migration_during_view_building(manager: ScyllaClusterManag
         await wait_for_view(cql, 'mv_cf_view1', 2)
         await check_view_contents(cql, ks, "tab", "mv_cf_view1")
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_merge_during_view_building(manager: ScyllaClusterManager):
     node_count = 3
@@ -1015,6 +1036,7 @@ async def test_tablet_merge_during_view_building(manager: ScyllaClusterManager):
 #
 # We check that the observed bad behavior no longer occurs by checking that
 # the view_building_state_observer no longer prints warnings.
+@pytest.mark.max_running_shards(4)
 async def test_all_good_on_node_restart(manager: ScyllaClusterManager):
     node_count = 2
     servers = await manager.servers_add(node_count, cmdline=cmdline_loggers, property_file=[
@@ -1040,6 +1062,7 @@ async def test_all_good_on_node_restart(manager: ScyllaClusterManager):
 # Test that view building does not trigger tombstone_warn_threshold warnings.
 # Uses a high tablet count (2048) to create many tasks, which produces many
 # tombstones when tasks are cleaned up. Verifies no warnings appear in logs.
+@pytest.mark.max_running_shards(2)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tombstone_warn_threshold(manager: ScyllaClusterManager):
     node_count = 1
@@ -1070,6 +1093,7 @@ async def test_tombstone_warn_threshold(manager: ScyllaClusterManager):
 
 # Test that in presence of view update hints, view building will not be marked as finished
 # Migrated from dtest materialized_views_test.py::TestMaterializedViews::test_do_not_finish_view_building_with_hints
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_do_not_finish_view_building_with_hints(manager: ScyllaClusterManager):
     node_count = 3
@@ -1123,6 +1147,7 @@ async def test_do_not_finish_view_building_with_hints(manager: ScyllaClusterMana
 # - the task cleaning fiber removes the finished task - this indirectly triggers broadcast on the CV by commiting to group0
 # before unpausing the coordinator (`view_building_coordinator_wait_before_await_event`)
 # Reproduces scylladb/scylladb#27298
+@pytest.mark.max_running_shards(2)
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_coordinator_misses_cv_broadcast(manager: ScyllaClusterManager):
@@ -1167,6 +1192,7 @@ async def test_coordinator_misses_cv_broadcast(manager: ScyllaClusterManager):
 # `_staging_sstables` and creates a `process_staging` task. That task tries to link() the TOC file
 # which no longer exists, hitting ENOENT, and retries indefinitely.
 # Reproduces SCYLLADB-2312
+@pytest.mark.max_running_shards(8)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_staging_registration_race_with_tablet_migration(manager: ScyllaClusterManager):
     node_count = 2

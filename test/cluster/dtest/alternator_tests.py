@@ -65,6 +65,7 @@ class TesterAlternator(BaseAlternator):
             nr_nodes += 1
         return nr_nodes
 
+    @pytest.mark.max_running_shards(6)
     def test_load_older_snapshot_and_refresh(self):
         """
         The test loading older snapshot files and checking the refresh command works
@@ -85,6 +86,7 @@ class TesterAlternator(BaseAlternator):
         diff = self.compare_table_data(table_name=table_name, expected_table_data=table_data, node=node1)
         assert not diff, f"The following items are missing:\n{pformat(diff)}"
 
+    @pytest.mark.max_running_shards(2)
     def test_create_snapshot_and_refresh(self, request):
         """
         The test checks the behavior of the `snapshot` and `refresh` commands for Alternator
@@ -114,6 +116,7 @@ class TesterAlternator(BaseAlternator):
         diff = self.compare_table_data(table_name=table_name, expected_table_data=data_before_refresh, node=node1)
         assert not diff, f"The following items are missing:\n{pformat(diff)}"
 
+    @pytest.mark.max_running_shards(8)
     def test_dynamo_gsi(self):
         self.prepare_dynamodb_cluster(num_of_nodes=4)
         node1 = self.cluster.nodelist()[0]
@@ -134,6 +137,7 @@ class TesterAlternator(BaseAlternator):
         diff_result = DeepDiff(t1=result_items, t2=expected_items, ignore_order=True)
         assert not diff_result, f"The following items differs:\n{pformat(diff_result)}"
 
+    @pytest.mark.max_running_shards(6)
     def test_drain_during_dynamo_load(self):
         """
         1. Create a load of read + update-items delete-set-elements
@@ -152,6 +156,7 @@ class TesterAlternator(BaseAlternator):
         logger.info("Drain finished")
         read_and_delete_set_elements_thread.join()
 
+    @pytest.mark.max_running_shards(6)
     def test_decommission_during_dynamo_load(self):
         self.prepare_dynamodb_cluster(num_of_nodes=3)
         node1, node2, node3 = self.cluster.nodelist()
@@ -181,6 +186,7 @@ class TesterAlternator(BaseAlternator):
         with pytest.raises(expected_exception=(EndpointConnectionError,), match="Could not connect to the endpoint URL"):
             self.get_table_items(table_name=TABLE_NAME, node=node2, num_of_items=10, consistent_read=True)
 
+    @pytest.mark.max_running_shards(6)
     def test_dynamo_reads_after_repair(self):
         self.prepare_dynamodb_cluster(num_of_nodes=3)
         node1, node2 = self.cluster.nodelist()[:2]
@@ -201,6 +207,7 @@ class TesterAlternator(BaseAlternator):
         logger.info(f"Reading Alternator queries from node {node2.name}")
         self.get_table_items(table_name=TABLE_NAME, node=node2)
 
+    @pytest.mark.max_running_shards(12)
     def test_dynamo_queries_on_multi_dc(self):
         self.prepare_dynamodb_cluster(num_of_nodes=3, is_multi_dc=True)
         dc1_node = self.cluster.nodelist()[0]
@@ -214,6 +221,7 @@ class TesterAlternator(BaseAlternator):
         logger.info(f"Reading Alternator queries from node {dc2_node.name} on data-center {dc2_node.data_center}")
         wait_for(func=lambda: not self.compare_table_data(expected_table_data=items, table_name=TABLE_NAME, node=dc2_node, consistent_read=False), timeout=5 * 60, text="Waiting until the DC2 will contain all items that insert in DC1")
 
+    @pytest.mark.max_running_shards(8)
     def test_dynamo_reads_after_new_node_repair(self):
         num_of_nodes = self._num_of_nodes_for_test(rf=3)
         self.prepare_dynamodb_cluster(num_of_nodes=num_of_nodes)
@@ -237,6 +245,7 @@ class TesterAlternator(BaseAlternator):
         logger.info(f"Reading Alternator queries from node {tested_node.name}")
         self.get_table_items(table_name=TABLE_NAME, node=tested_node, consistent_read=False)
 
+    @pytest.mark.max_running_shards(2)
     def test_batch_with_auto_snapshot_false(self):
         """Test triggers scylladb/scylladb#6995"""
 
@@ -249,6 +258,7 @@ class TesterAlternator(BaseAlternator):
                 batch.put_item({"pk": random_string(length=DEFAULT_STRING_LENGTH), "c": i, "a": load})
         self.delete_table(TABLE_NAME, node1)
 
+    @pytest.mark.max_running_shards(12)
     def test_update_condition_unused_entries_short_circuit(self):
         """
         A test for https://github.com/scylladb/scylla/issues/6572 plus a multi DC configuration
@@ -306,6 +316,7 @@ class TesterAlternator(BaseAlternator):
         item = table.get_item(Key={self._table_primary_key: new_pk_val}, ConsistentRead=True)["Item"]
         assert item == {self._table_primary_key: new_pk_val, "a": 1, "c": 3}
 
+    @pytest.mark.max_running_shards(4)
     def test_modified_tag_is_propagated_to_other_dc(self):
         self.prepare_dynamodb_cluster(num_of_nodes=1, is_multi_dc=True)
         node1 = self.cluster.nodelist()[0]
@@ -315,6 +326,7 @@ class TesterAlternator(BaseAlternator):
         set_write_isolation(table, WriteIsolation.FORBID_RMW)
         wait_for(self.is_table_schema_synced, timeout=30, step=3, text="Waiting until table schema is updated", table_name=TABLE_NAME, nodes=[node1, dc2_node])
 
+    @pytest.mark.max_running_shards(6)
     def test_read_system_tables_via_dynamodb_api(self):
         """
         make sure we could only read system tables via dynamodb api
@@ -338,6 +350,7 @@ class TesterAlternator(BaseAlternator):
             with pytest.raises(expected_exception=(ClientError,), match="ResourceNotFoundException"):
                 self.batch_write_actions(table_name=".scylla.alternator.system.peers", new_items=[dict(pk=1)], node=node)
 
+    @pytest.mark.max_running_shards(6)
     def test_table_name_with_dot_prefix(self):
         valid_dynamodb_chars = list(string.digits) + list(string.ascii_uppercase) + ["_", "-", "."]
         self.prepare_dynamodb_cluster(num_of_nodes=3)
@@ -360,6 +373,7 @@ class TesterAlternator(BaseAlternator):
         logger.info(f"Executing the following command '{cmd}'")
         node1.nodetool(cmd)
 
+    @pytest.mark.max_running_shards(2)
     @pytest.mark.parametrize("create_gsi", [False, True])
     def test_alternator_nodetool_tablestats(self, create_gsi):
         """nodetool_additional_test.py::TesterAlternator::test_cfstats_syntax
@@ -390,6 +404,7 @@ class TesterAlternator(BaseAlternator):
         ret = node1.nodetool(f"tablestats alternator_{table_name}.{table_name}")
         assert table_name in str(ret)
 
+    @pytest.mark.max_running_shards(2)
     @pytest.mark.parametrize("create_gsi", [False, True])
     def test_alternator_nodetool_info(self, create_gsi):
         """Tests that "nodetool info" works on Alternator tables.
@@ -404,6 +419,7 @@ class TesterAlternator(BaseAlternator):
         # We don't check anything specific in the output, just that
         # "nodetool info" didn't fail as it used to.
 
+    @pytest.mark.max_running_shards(4)
     def test_putitem_contention(self):  # pylint:disable=too-many-locals
         """
         This test reproduces issue #7218, where PutItem operations sometimes
@@ -475,6 +491,7 @@ class TesterAlternator(BaseAlternator):
         assert n_items == total_items
         assert n_bad_items == 0
 
+    @pytest.mark.max_running_shards(2)
     def test_tls_connection(self):
         """
         Create a HTTPS (SSL/TLS) connection, and verify the test can create a table and insert data into it.
@@ -497,6 +514,7 @@ class TesterAlternator(BaseAlternator):
             self.batch_write_actions(table_name=table_name, node=node, new_items=new_items)
         self.compare_table_data(expected_table_data=new_items, table_name=table_name, node=node1)
 
+    @pytest.mark.max_running_shards(2)
     def test_limit_concurrent_requests(self):
         """
         Test Support limiting the number of concurrent requests in alternator.
@@ -610,6 +628,7 @@ class TesterAlternator(BaseAlternator):
             if not self.is_found_in_slow_queries_log(name=table, log_result=create_table_results):
                 raise SlowQueriesLoggingError(f"Table {table} not found in slow-query-log full-scan")
 
+    @pytest.mark.max_running_shards(8)
     def test_slow_query_logging(self):
         """
         Test slow query logging for alternator queries.
@@ -648,6 +667,7 @@ class TesterAlternator(BaseAlternator):
         stress_thread.join()
         decommission_thread.join()
 
+    @pytest.mark.max_running_shards(8)
     def test_delete_elements_from_a_set(self):
         """
         Verifies https://github.com/scylladb/scylla/commit/253387ea07962d4fd8cb221eb90298b9127caf9f
@@ -678,6 +698,7 @@ class TesterAlternator(BaseAlternator):
         items = self.get_table_items(table_name=TABLE_NAME, node=node1, consistent_read=False, num_of_items=num_of_items)
         assert [item for item in items if NUM_OF_ELEMENTS_IN_SET > len(item["Item"]["hello_set"]) > 0]
 
+    @pytest.mark.max_running_shards(8)
     def test_ttl_with_load_and_decommission(self):
         """
         1. Configure a table with TTL enabled and an 'expiration' column.

@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 pytestmark = pytest.mark.prepare_3_nodes_cluster
 
 
+@pytest.mark.max_running_shards(10)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_coordinator_queue_management(manager: ScyllaClusterManager):
     """This test creates a 5 node cluster with 2 down nodes (A and B). After that it

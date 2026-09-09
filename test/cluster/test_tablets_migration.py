@@ -37,6 +37,7 @@ async def await_api_task(task, allowed_exception: Optional[Type[Exception]]=None
             raise
 
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.parametrize("action", ['move', 'add_replica', 'del_replica'])
 async def test_tablet_transition_sanity(manager: ScyllaClusterManager, action):
     logger.info("Bootstrapping cluster")
@@ -159,6 +160,7 @@ def pick_replica_and_free_host_in_rack(replicas, rack_hosts):
     return old_replica, (new_host, 0)
 
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.parametrize("action", ['add_replica', 'del_replica'])
 @pytest.mark.parametrize("constraint", ['rf_rack_valid', 'views', 'rack_list'])
 async def test_tablet_replica_change_requires_force_with_rack_constraints(manager: ScyllaClusterManager, action, constraint):
@@ -211,6 +213,7 @@ async def test_tablet_replica_change_requires_force_with_rack_constraints(manage
         assert sorted(r[0] for r in await get_single_tablet_replicas(manager, servers[0], ks)) == expected_replicas
 
 
+@pytest.mark.max_running_shards(6)
 async def test_tablet_replica_change_without_rack_constraints(manager: ScyllaClusterManager):
     """When the keyspace neither uses rack lists nor is required to be RF-rack-valid, adding
     and removing tablet replicas is allowed. Adding a replica to a rack which already holds
@@ -248,6 +251,7 @@ async def test_tablet_replica_change_without_rack_constraints(manager: ScyllaClu
                sorted([h for h in replica_hosts if h != old_replica[0]] + [new_replica[0]])
 
 
+@pytest.mark.max_running_shards(10)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_bootstrap_starts_while_tablet_migration_is_blocked(manager: ScyllaClusterManager, scale_timeout):
     cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled'}
@@ -308,6 +312,7 @@ async def test_bootstrap_starts_while_tablet_migration_is_blocked(manager: Scyll
         await wait_for_no_pending_topology_transition(manager, time.time() + scale_timeout(60))
 
 
+@pytest.mark.max_running_shards(12)
 @pytest.mark.parametrize("feature_config", feature_configs(FeatureConfigurations.EVENTUAL_CONSISTENCY,
     FeatureConfigurations.LOGSTOR_EVENTUAL_CONSISTENCY))
 @pytest.mark.parametrize("fail_replica", ["source", "destination"])
@@ -476,6 +481,7 @@ async def test_node_failure_during_tablet_migration(manager: ScyllaClusterManage
         await reconnect_driver(manager)
 
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.parametrize("feature_config", feature_configs(FeatureConfigurations.EVENTUAL_CONSISTENCY,
     FeatureConfigurations.LOGSTOR_EVENTUAL_CONSISTENCY))
 async def test_tablet_back_and_forth_migration(manager: ScyllaClusterManager, feature_config: FeatureConfig):
@@ -528,6 +534,7 @@ async def test_tablet_back_and_forth_migration(manager: ScyllaClusterManager, fe
         await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({3}, {3});")
         await assert_rows(3)
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_staging_backlog_is_preserved_with_file_based_streaming(manager: ScyllaClusterManager):
     logger.info("Bootstrapping cluster")
@@ -623,6 +630,7 @@ async def test_staging_backlog_is_preserved_with_file_based_streaming(manager: S
 
         await check(keys)
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.parametrize("migration_stage_and_injection", [("cleanup", "cleanup_tablet_wait"), ("end_migration", "handle_tablet_migration_end_migration")], ids=["cleanup", "end_migration"])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_restart_leaving_replica_during_cleanup(manager: ScyllaClusterManager, migration_stage_and_injection):
@@ -707,6 +715,7 @@ async def test_restart_leaving_replica_during_cleanup(manager: ScyllaClusterMana
         await wait_for(tablets_merged, time.time() + 60)
 
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.parametrize("feature_config", feature_configs(FeatureConfigurations.EVENTUAL_CONSISTENCY,
     FeatureConfigurations.STRONG_CONSISTENCY, FeatureConfigurations.LOGSTOR_EVENTUAL_CONSISTENCY,
     FeatureConfigurations.LOGSTOR_STRONG_CONSISTENCY))

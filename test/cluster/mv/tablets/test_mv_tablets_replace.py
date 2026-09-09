@@ -64,6 +64,7 @@ def select_non_coordinator_replica_pair(base_by_rack, view_by_rack, coord_serv):
         f"base_by_rack={base_by_rack}, view_by_rack={view_by_rack}")
 
 
+@pytest.mark.max_running_shards(5)
 @pytest.mark.tier2
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_mv_replica_pairing_during_replace(manager: ScyllaClusterManager, scale_timeout: Callable[[int | float], int | float]):

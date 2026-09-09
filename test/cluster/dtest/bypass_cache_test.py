@@ -147,6 +147,7 @@ class TestBypassCache(Tester):
         )
         assert not errors, "Running query that is suppose to read from cache following errors found:\n" + "\n".join(errors)
 
+    @pytest.mark.max_running_shards(2)
     def test_simple_bypass_cache(self):
         session = self.prepare()
         node = self.cluster.nodelist()[0]
@@ -154,6 +155,7 @@ class TestBypassCache(Tester):
 
         self.verify_read_was_from_disk(node=node, query=query, session=session)
 
+    @pytest.mark.max_running_shards(2)
     def test_multiple_bypass_cache(self):
         session = self.prepare()
         node = self.cluster.nodelist()[0]
@@ -162,6 +164,7 @@ class TestBypassCache(Tester):
             query = "SELECT * FROM cf BYPASS CACHE"
             self.verify_read_was_from_disk(node=node, query=query, session=session)
 
+    @pytest.mark.max_running_shards(2)
     def test_read_from_cache_and_then_bypass_cache(self):
         session = self.prepare()
         node = self.cluster.nodelist()[0]
@@ -215,6 +218,7 @@ class TestBypassCache(Tester):
         )
         assert not errors, "Running range query that is suppose to read from disk following errors found:\n" + "\n".join(errors)
 
+    @pytest.mark.max_running_shards(2)
     def test_full_scan_bypass_cache(self):
         session = self.prepare()
         node = self.cluster.nodelist()[0]
@@ -239,6 +243,7 @@ class TestBypassCache(Tester):
             },
         )
 
+    @pytest.mark.max_running_shards(2)
     def test_parallelized_aggregation_range_scan_no_bypass_cache(self):
         """Verify that select_partition_range_scan_no_bypass_cache is incremented
         for parallelized aggregation queries (e.g. SELECT count(*) FROM ...) that
@@ -298,6 +303,7 @@ class TestBypassCache(Tester):
         )
         assert not errors, "Parallelized aggregation with BYPASS CACHE metric errors:\n" + "\n".join(errors)
 
+    @pytest.mark.max_running_shards(2)
     @pytest.mark.parametrize("cache_index_pages", [True, False], ids=["cache_index_pages", "no_cache_index_pages"])
     def test_create_table_caching_disabled(self, cache_index_pages: bool):
         session = self.prepare(insert_data=False, cache_index_pages=cache_index_pages)
@@ -309,6 +315,7 @@ class TestBypassCache(Tester):
         # TODO: After https://github.com/scylladb/scylla/issues/9968 is solved, remove index_cache_involved=True
         self.verify_read_was_from_disk(node=node, query=query, session=session, index_cache_involved=cache_index_pages)
 
+    @pytest.mark.max_running_shards(2)
     @pytest.mark.parametrize("cache_index_pages", [True, False], ids=["cache_index_pages", "no_cache_index_pages"])
     def test_alter_table_caching_disable(self, cache_index_pages: bool):
         session = self.prepare(insert_data=False, cache_index_pages=cache_index_pages)
@@ -323,6 +330,7 @@ class TestBypassCache(Tester):
         # TODO: After https://github.com/scylladb/scylla/issues/9968 is solved, remove index_cache_involved=True
         self.verify_read_was_from_disk(node=node, query=query, session=session, index_cache_involved=cache_index_pages)
 
+    @pytest.mark.max_running_shards(2)
     @pytest.mark.parametrize("cache_index_pages", [True, False], ids=["cache_index_pages", "no_cache_index_pages"])
     def test_alter_table_caching_enable(self, cache_index_pages: bool):
         session = self.prepare(insert_data=False, cache_index_pages=cache_index_pages)

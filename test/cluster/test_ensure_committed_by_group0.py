@@ -13,6 +13,7 @@ from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 logger = logging.getLogger(__name__)
 
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.asyncio
 async def test_ensure_committed_by_group0(manager: ScyllaClusterManager):
     """Tables with committed_by_group0 = null or false get fixed on restart."""

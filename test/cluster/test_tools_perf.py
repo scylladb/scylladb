@@ -32,12 +32,14 @@ def scylla_path(build_mode):
     return path_to(build_mode, "scylla")
 
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.parametrize("mode", ["read"])
 async def test_perf_simple_query(scylla_path, mode, tmp_path):
     args = [scylla_path, "perf-simple-query", "--duration", "1", "--partitions", "1000", "--stop-on-error", "false", "--memory", "2G", "--smp", "2", "--overprovisioned"]
     await run(args)
 
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.parametrize("workload", ["read", "write"])
 async def test_perf_cql_raw(scylla_path, tmp_path, workload):
     hosts = HostRegistry()
@@ -65,6 +67,7 @@ async def test_perf_cql_raw(scylla_path, tmp_path, workload):
          await hosts.release_host(host)
 
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.parametrize("workload", ["write", "batch_read"])
 async def test_perf_alternator(scylla_path, tmp_path, workload):
     hosts = HostRegistry()
@@ -95,6 +98,7 @@ async def test_perf_alternator(scylla_path, tmp_path, workload):
          await hosts.release_host(host)
 
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.parametrize("workload", ["read"])
 async def test_perf_cql_raw_remote(scylla_path, tmp_path, workload, manager):
     await manager.server_add()
@@ -115,6 +119,7 @@ async def test_perf_cql_raw_remote(scylla_path, tmp_path, workload, manager):
     await run(client_cmd)
 
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.parametrize("workload", ["read", "batch_read"])
 async def test_perf_alternator_remote(scylla_path, tmp_path, workload, manager):
     server = await manager.server_add(cmdline=[

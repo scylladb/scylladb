@@ -128,6 +128,7 @@ SSTABLE_FORMAT_MATRIX: list[tuple[Optional[str], bool, bool, str]] = [
     ("mt",   True,  True,  "mt"),
 ]
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_bti_index_output_format(manager: ScyllaClusterManager) -> None:
     """Checks that the sstable format written by Scylla is consistent with the
@@ -187,6 +188,7 @@ async def test_bti_index_output_format(manager: ScyllaClusterManager) -> None:
 
     manager.driver_close()
 
+@pytest.mark.max_running_shards(1)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_bti_index_read_path(manager: ScyllaClusterManager) -> None:
     """Checks that the read path uses the right index components for each sstable

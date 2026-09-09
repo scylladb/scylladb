@@ -86,6 +86,7 @@ async def four_nodes_cluster(manager: ScyllaClusterManager) -> None:
     await wait_for_token_ring_and_group0_consistency(manager=manager, deadline=time.time() + 30)
 
 
+@pytest.mark.max_running_shards(10)
 @pytest.mark.usefixtures("four_nodes_cluster")
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_random_failures(manager: ScyllaClusterManager,

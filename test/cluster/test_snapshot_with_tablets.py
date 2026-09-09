@@ -10,6 +10,7 @@ import json
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.internal_types import ServerInfo
 from test.cluster.object_store.test_backup import do_test_snapshot_on_all_nodes
+import pytest
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,7 @@ async def get_snapshot_manifest(manager:ScyllaClusterManager, server, keyspace:s
         return json.load(f)
 
 
+@pytest.mark.max_running_shards(6)
 async def test_snapshot_on_all_nodes(manager: ScyllaClusterManager):
     """
     Tests that a topology operation snapshot is done on all nodes,
