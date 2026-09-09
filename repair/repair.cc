@@ -2619,9 +2619,9 @@ future<gc_clock::time_point> repair_service::repair_tablet(gms::gossip_address_m
                 .set_is_abortable(tasks::is_abortable::yes)
                 .set_is_user_task(tasks::is_user_task::yes)
                 .set_workload_fn([metas_size = task_metas.size()] () { return make_ready_future<std::optional<double>>(metas_size); });
-    auto task = co_await std::move(task_builder).build([module = _repair_module, id, keyspace_name, table_names, metas = std::move(task_metas), ranges_parallelism, &flush_time, &should_flush_and_flush_failed, &topo_guard, sched_info = std::move(sched_info), skip_flush = rebuild_replicas.has_value()] (tasks::task_manager::task::impl& self) mutable -> future<> {
+    auto task = co_await std::move(task_builder).build([module = _repair_module, id, keyspace_name, table_names, metas = std::move(task_metas), ranges_parallelism, &flush_time, &should_flush_and_flush_failed, &topo_guard, sched_info = std::move(sched_info), flush] (tasks::task_manager::task::impl& self) mutable -> future<> {
         auto& rs = module->get_repair_service();
-        auto res = co_await rs.run_tablet_repair(std::move(keyspace_name), std::move(table_names), std::move(metas), std::move(ranges_parallelism), topo_guard, skip_flush, std::move(sched_info), streaming::stream_reason::repair, self.info(), id);
+        auto res = co_await rs.run_tablet_repair(std::move(keyspace_name), std::move(table_names), std::move(metas), std::move(ranges_parallelism), topo_guard, flush, std::move(sched_info), streaming::stream_reason::repair, self.info(), id);
         flush_time = res.flush_time;
         should_flush_and_flush_failed = res.should_flush_and_flush_failed;
     });
@@ -2648,7 +2648,7 @@ future<repair_service::tablet_repair_result> repair_service::run_tablet_repair(
         std::vector<tablet_repair_task_meta> metas,
         std::optional<int> ranges_parallelism,
         service::frozen_topology_guard topo_guard,
-        bool skip_flush,
+        service::tablet_repair_flush_info flush,
         tablet_repair_sched_info sched_info,
         streaming::stream_reason reason,
         tasks::task_info parent_data,
@@ -2656,7 +2656,7 @@ future<repair_service::tablet_repair_result> repair_service::run_tablet_repair(
     gc_clock::time_point flush_time = gc_clock::time_point();
     bool should_flush_and_flush_failed = false;
     rlogger.debug("repair[{}]: Repair tablet for keyspace={} tables={} status=started", id.uuid(), keyspace, tables);
-    auto f = co_await coroutine::as_future(_repair_module->run(id, [this, id, keyspace, &tables, &metas,  &ranges_parallelism, &flush_time, &should_flush_and_flush_failed, &topo_guard, &skip_flush, &parent_data, &reason, &sched_info] () mutable {
+    auto f = co_await coroutine::as_future(_repair_module->run(id, [this, id, keyspace, &tables, &metas,  &ranges_parallelism, &flush_time, &should_flush_and_flush_failed, &topo_guard, &flush, &parent_data, &reason, &sched_info] () mutable {
         // This runs inside a seastar thread
         auto start_time = std::chrono::steady_clock::now();
         std::atomic<int> idx{1};
@@ -2709,7 +2709,7 @@ future<repair_service::tablet_repair_result> repair_service::run_tablet_repair(
 
         auto parent_shard = this_shard_id();
         auto flush_time_tmp = flush_time;
-        auto res = container().map_reduce0([&idx, id, metas = metas, parent_data, reason = reason, tables = tables, sched_info = sched_info, ranges_parallelism = ranges_parallelism, parent_shard, topo_guard = topo_guard, skip_flush = skip_flush] (repair_service& rs) -> future<std::pair<gc_clock::time_point, bool>> {
+        auto res = container().map_reduce0([&idx, id, metas = metas, parent_data, reason = reason, tables = tables, sched_info = sched_info, ranges_parallelism = ranges_parallelism, parent_shard, topo_guard = topo_guard, flush] (repair_service& rs) -> future<std::pair<gc_clock::time_point, bool>> {
             std::exception_ptr error;
             gc_clock::time_point shard_flush_time;
             bool flush_failed = false;
@@ -2748,8 +2748,19 @@ future<repair_service::tablet_repair_result> repair_service::run_tablet_repair(
                     rlogger.info("Execute repair_tablet_repair_task_delay={}", *delay);
                     co_await seastar::sleep(std::chrono::milliseconds(*delay));
                 }
-                if (!skip_flush) {
+                switch (flush.mode) {
+                case service::tablet_repair_flush_mode::flush:
                     std::tie(needs_flush_before_repair, hints_batchlog_flushed, flush_time) = co_await rs.flush_hints(id, m.keyspace_name, tables, ignore_nodes);
+                    break;
+                case service::tablet_repair_flush_mode::skip:
+                    break;
+                case service::tablet_repair_flush_mode::supplied:
+                    needs_flush_before_repair = true;
+                    hints_batchlog_flushed = flush.time.has_value();
+                    flush_time = flush.time.value_or(gc_clock::time_point());
+                    break;
+                default:
+                    on_internal_error(rlogger, fmt::format("Unknown tablet repair flush mode {}", static_cast<int>(flush.mode)));
                 }
                 bool small_table_optimization = false;
 
