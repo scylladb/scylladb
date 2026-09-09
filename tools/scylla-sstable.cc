@@ -326,7 +326,8 @@ std::optional<schema_with_source> try_load_schema_autodetect(const bpo::variable
         sst_log.debug("Trying to load schema from the sstable itself failed: {:t}", std::current_exception());
     }
 
-    fmt::print(std::cerr, "Failed to autodetect and load schema, try again with --logger-log-level scylla-sstable=debug to learn more or provide the schema source manually\n");
+    fmt::print(std::cerr, "Failed to autodetect and load schema, try again with --logger-log-level scylla-sstable=debug to learn more or provide the schema source manually.\n"
+            "If the schema is expected to come from the schema tables of a running node, they have to be on disk: nodetool flush system_schema\n");
     return {};
 }
 
