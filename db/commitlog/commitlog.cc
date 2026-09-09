@@ -519,6 +519,10 @@ public:
     void flush_segments(uint64_t size_to_remove);
     void check_no_data_older_than_allowed();
 
+    replay_position flush_position() const {
+        return _flush_position;
+    }
+
     // whitebox testing
     std::function<future<>()> _oversized_pre_wait_memory_func;
 
@@ -4088,6 +4092,10 @@ db::replay_position db::commitlog::min_position() const {
 
 db::replay_position db::commitlog::current_position() const {
     return _segment_manager->current_position();
+}
+
+db::replay_position db::commitlog::flush_position() const {
+    return _segment_manager->flush_position();
 }
 
 size_t db::commitlog::sector_overhead(segment_id_type id, size_t size) const {
