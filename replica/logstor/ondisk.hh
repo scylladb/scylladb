@@ -11,8 +11,14 @@
 #include "idl/uuid.dist.hh"
 #include "idl/uuid.dist.impl.hh"
 #include "dht/token.hh"
+#include "dht/decorated_key.hh"
+#include "keys/keys.hh"
 #include "replica/logstor/types.hh"
 #include "serializer.hh"
+// Declares serializer<dht::decorated_key>, which the index key serializer below delegates to.
+// It names the key types without including them, so it has to come after the headers above.
+#include "idl/token.dist.hh"
+#include "idl/token.dist.impl.hh"
 
 namespace replica::logstor {
 
@@ -75,6 +81,51 @@ bool validate_record_header(const record_header& rh);
 } // namespace replica::logstor
 
 namespace ser {
+
+// The index key and the log record header are logstor's own on-disk format, so their encoding
+// lives here rather than in an IDL definition. The key delegates to the decorated_key serializer,
+// which is shared with the rest of the tree.
+template <>
+struct serializer<replica::logstor::primary_index_key> {
+    template <typename Output>
+    static void write(Output& out, const replica::logstor::primary_index_key& key) {
+        serializer<dht::decorated_key>::write(out, key.dk);
+    }
+    template <typename Input>
+    static replica::logstor::primary_index_key read(Input& in) {
+        return replica::logstor::primary_index_key{serializer<dht::decorated_key>::read(in)};
+    }
+    template <typename Input>
+    static void skip(Input& in) {
+        serializer<dht::decorated_key>::skip(in);
+    }
+};
+
+template <>
+struct serializer<replica::logstor::log_record_header> {
+    template <typename Output>
+    static void write(Output& out, const replica::logstor::log_record_header& h) {
+        serializer<replica::logstor::primary_index_key>::write(out, h.key);
+        serializer<api::timestamp_type>::write(out, h.timestamp);
+        serializer<int64_t>::write(out, h.table.uuid().get_most_significant_bits());
+        serializer<int64_t>::write(out, h.table.uuid().get_least_significant_bits());
+    }
+    template <typename Input>
+    static replica::logstor::log_record_header read(Input& in) {
+        auto key = serializer<replica::logstor::primary_index_key>::read(in);
+        auto timestamp = serializer<api::timestamp_type>::read(in);
+        auto msb = serializer<int64_t>::read(in);
+        auto lsb = serializer<int64_t>::read(in);
+        return replica::logstor::log_record_header{std::move(key), timestamp, table_id(utils::UUID(msb, lsb))};
+    }
+    template <typename Input>
+    static void skip(Input& in) {
+        serializer<replica::logstor::primary_index_key>::skip(in);
+        serializer<api::timestamp_type>::skip(in);
+        serializer<int64_t>::skip(in);
+        serializer<int64_t>::skip(in);
+    }
+};
 
 template <>
 struct serializer<replica::logstor::ondisk::buffer_header> {
