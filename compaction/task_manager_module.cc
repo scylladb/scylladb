@@ -543,17 +543,20 @@ future<tasks::task_manager::task_ptr> task_manager_module::start_shard_major_com
     });
 }
 
-future<> table_major_keyspace_compaction_task_impl::run() {
-    co_await wait_for_your_turn(_cv, _current_task, _status.id);
-    auto info = this->info();
-    replica::table::do_flush do_flush(_flush_mode != flush_mode::skip);
-    co_await run_on_table("force_keyspace_compaction", _db, _status.keyspace, _ti, [info, do_flush, consider_only_existing_data = _consider_only_existing_data] (replica::table& t) {
-        return t.compact_all_sstables(info, do_flush, consider_only_existing_data);
+static future<> run_table_major_compaction(replica::database& db, std::string keyspace, const table_info& ti, seastar::condition_variable& cv, current_task_type& current_task, flush_mode fm, bool consider_only_existing_data, tasks::task_info task_info) {
+    co_await wait_for_your_turn(cv, current_task, task_info.get_id());
+    replica::table::do_flush do_flush(fm != flush_mode::skip);
+    co_await run_on_table("force_keyspace_compaction", db, keyspace, ti, [task_info, do_flush, consider_only_existing_data] (replica::table& t) {
+        return t.compact_all_sstables(task_info, do_flush, consider_only_existing_data);
     });
 
     utils::get_local_injector().inject("table_major_keyspace_compaction_task_impl_run_fail", [] () {
         throw std::runtime_error("Injected failure in table_major_keyspace_compaction_task_impl::run");
     });
+}
+
+future<> table_major_keyspace_compaction_task_impl::run() {
+    return run_table_major_compaction(_db, _status.keyspace, _ti, _cv, _current_task, _flush_mode, _consider_only_existing_data, info());
 }
 
 future<std::optional<double>> table_major_keyspace_compaction_task_impl::expected_total_workload() const {
