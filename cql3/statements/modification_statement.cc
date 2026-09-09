@@ -539,8 +539,11 @@ void modification_statement::build_cas_result_set_metadata() {
 
 void
 modification_statement::process_where_clause(data_dictionary::database db, expr::expression where_clause, prepare_context& ctx) {
-    _restrictions = restrictions::analyze_statement_restrictions(db, s, type, where_clause, ctx,
-            applies_only_to_static_columns(), false /* for_view */, false /* allow_filtering */, restrictions::check_indexes::no);
+    _restrictions = type.is_insert()
+            ? restrictions::analyze_insert_restrictions(db, s, where_clause, ctx,
+                    applies_only_to_static_columns())
+            : restrictions::analyze_modification_restrictions(db, s, type, where_clause, ctx,
+                    applies_only_to_static_columns());
     /*
      * If there's no clustering columns restriction, we may assume that EXISTS
      * check only selects static columns and hence we can use any row from the

@@ -493,7 +493,7 @@ std::unique_ptr<service::pager::query_pager> service::pager::query_pagers::pager
     // If partition row limit is applied to paging, we still need to fall back
     // to filtering the results to avoid extraneous rows on page breaks.
     if (!filtering_restrictions && cmd->slice.partition_row_limit() < query::max_rows_if_set) {
-        filtering_restrictions = cql3::restrictions::make_trivial_statement_restrictions(s, true);
+        filtering_restrictions = cql3::restrictions::make_empty_select_restrictions(s);
     }
     if (filtering_restrictions) {
         return std::make_unique<filtering_query_pager>(proxy, std::move(s), std::move(selection), state,

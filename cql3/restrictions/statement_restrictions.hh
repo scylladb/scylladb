@@ -135,7 +135,11 @@ using single_column_predicate_vectors = std::map<const column_definition*, std::
  * The restrictions corresponding to the relations specified on the where-clause of CQL query.
  */
 class statement_restrictions {
-    struct private_tag {}; // Tag for private constructor
+public:
+    // Marks the constructors as internal: go through the analyze_*_restrictions()
+    // factories at the bottom of this file.
+    struct private_tag { explicit private_tag() = default; };
+
 private:
     schema_ptr _schema;
 
@@ -252,21 +256,6 @@ public:
     statement_restrictions(private_tag, schema_ptr schema, bool allow_filtering);
 
 public:
-    friend shared_ptr<const statement_restrictions> analyze_statement_restrictions(
-        data_dictionary::database db,
-        schema_ptr schema,
-        statements::statement_type type,
-        const expr::expression& where_clause,
-        prepare_context& ctx,
-        bool selects_only_static_columns,
-        bool for_view,
-        bool allow_filtering,
-        check_indexes do_check_indexes,
-        pinned_plan_opt pinned_plan);
-    friend shared_ptr<const statement_restrictions> make_trivial_statement_restrictions(
-        schema_ptr schema,
-        bool allow_filtering);
-
     // Important: objects of this class captures `this` extensively and so must remain non-copyable.
     statement_restrictions(const statement_restrictions&) = delete;
     statement_restrictions& operator=(const statement_restrictions&) = delete;
@@ -533,21 +522,59 @@ public:
     bool is_empty() const;
 };
 
-shared_ptr<const statement_restrictions> analyze_statement_restrictions(
+// One entry point per statement type.  What a statement may do with a WHERE
+// clause depends on the statement: only a SELECT can read an index or filter
+// rows, a mutation has to name the rows it writes, and IS NOT NULL declares a
+// materialized view's key columns rather than filtering.  Asking for the
+// analysis by statement type keeps each caller from having to spell out the
+// rules its statement plays by.
+
+/// Analyzes the WHERE clause of a SELECT statement.
+shared_ptr<const statement_restrictions> analyze_select_restrictions(
+        data_dictionary::database db,
+        schema_ptr schema,
+        const expr::expression& where_clause,
+        prepare_context& ctx,
+        bool selects_only_static_columns,
+        bool allow_filtering,
+        check_indexes do_check_indexes,
+        pinned_plan_opt pinned_plan = std::nullopt);
+
+/// Analyzes the WHERE clause of the SELECT statement defining a materialized view.
+shared_ptr<const statement_restrictions> analyze_view_restrictions(
+        data_dictionary::database db,
+        schema_ptr schema,
+        const expr::expression& where_clause,
+        prepare_context& ctx,
+        bool selects_only_static_columns,
+        check_indexes do_check_indexes);
+
+/// Analyzes the WHERE clause of an UPDATE or DELETE statement.
+shared_ptr<const statement_restrictions> analyze_modification_restrictions(
         data_dictionary::database db,
         schema_ptr schema,
         statements::statement_type type,
         const expr::expression& where_clause,
         prepare_context& ctx,
-        bool selects_only_static_columns,
-        bool for_view,
-        bool allow_filtering,
-        check_indexes do_check_indexes,
-        pinned_plan_opt pinned_plan = std::nullopt);
+        bool applies_only_to_static_columns);
 
-shared_ptr<const statement_restrictions> make_trivial_statement_restrictions(
+/// Analyzes the primary-key equalities an INSERT statement names.
+shared_ptr<const statement_restrictions> analyze_insert_restrictions(
+        data_dictionary::database db,
         schema_ptr schema,
-        bool allow_filtering);
+        const expr::expression& where_clause,
+        prepare_context& ctx,
+        bool applies_only_to_static_columns);
+
+/// Restrictions that restrict nothing, for a statement that does not work out
+/// the rows it addresses from a WHERE clause.
+///
+/// The pager asks for these to put a query on the filtering path - which
+/// re-applies the per-partition limit on every page - with no filter of its own.
+shared_ptr<const statement_restrictions> make_empty_select_restrictions(schema_ptr schema);
+/// INSERT ... JSON takes its primary key from the JSON document at execution
+/// time, and computes the keys to write itself.
+shared_ptr<const statement_restrictions> make_empty_insert_restrictions(schema_ptr schema);
 
 
 // Checks whether this expression is empty - doesn't restrict anything
