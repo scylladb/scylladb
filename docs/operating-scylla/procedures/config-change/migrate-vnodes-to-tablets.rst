@@ -369,6 +369,31 @@ Procedure
 
       sctool resume --cluster <cluster-id|name> --no-continue
 
+#. Run a full cluster repair to ensure that all nodes have the most up-to-date
+   data. As the storage upgrade process kept each node offline for an extended
+   period of time, its dataset might have become stale.
+
+   Either run the repair with ``nodetool``, as described below, or let
+   `ScyllaDB Manager <https://manager.docs.scylladb.com/>`_ run it for you.
+
+   For vnode-based keyspaces, run
+   :doc:`nodetool repair </operating-scylla/nodetool-commands/repair>` on
+   **every** node:
+
+   .. code-block:: console
+
+      nodetool repair -pr
+
+   For tablet-based keyspaces, including the one you just migrated, run
+   :doc:`nodetool cluster repair </operating-scylla/nodetool-commands/cluster/repair>`
+   on **any** single node:
+
+   .. code-block:: console
+
+      nodetool cluster repair
+
+   Run both if the cluster has keyspaces of both kinds.
+
 Rollback Procedure
 ------------------
 
@@ -561,6 +586,31 @@ following:
    .. code-block:: console
 
       sctool resume --cluster <cluster-id|name> --no-continue
+
+#. Run a full cluster repair to ensure that all nodes have the most up-to-date
+   data. As the storage downgrade process kept each node offline for an extended
+   period of time, its dataset might have become stale.
+
+   Either run the repair with ``nodetool``, as described below, or let
+   `ScyllaDB Manager <https://manager.docs.scylladb.com/>`_ run it for you.
+
+   For vnode-based keyspaces, including the one you just rolled back, run
+   :doc:`nodetool repair </operating-scylla/nodetool-commands/repair>` on
+   **every** node:
+
+   .. code-block:: console
+
+      nodetool repair -pr
+
+   For tablet-based keyspaces, run
+   :doc:`nodetool cluster repair </operating-scylla/nodetool-commands/cluster/repair>`
+   on **any** single node:
+
+   .. code-block:: console
+
+      nodetool cluster repair
+
+   Run both if the cluster has keyspaces of both kinds.
 
 Migrating multiple keyspaces
 ----------------------------
