@@ -549,3 +549,8 @@ def cql(dynamodb):
         skip_env('Could not connect to Scylla-only CQL API')
     yield ret
     safe_driver_shutdown(cluster)
+
+# Every test here shares one cluster, created per module from
+# cluster.initial_size (which defaults to 1) at --smp 2, and no test changes
+# it -- so the claim is a constant of the suite, not something to measure.
+pytestmark = pytest.mark.max_running_shards(2)

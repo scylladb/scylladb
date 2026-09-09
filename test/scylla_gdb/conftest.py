@@ -75,3 +75,7 @@ def execute_gdb_command(gdb_cmd, scylla_command: str = None, full_command: str =
         command, capture_output=True, text=True, encoding="utf-8", errors="replace"
     )
     return result
+
+# Every test here shares one cluster, created per module from
+# cluster.initial_size (which defaults to 1) at --smp 2, unchanged throughout.
+pytestmark = pytest.mark.max_running_shards(2)

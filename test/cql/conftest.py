@@ -77,3 +77,8 @@ async def output_path(suite_log_dir: Path, testpy_uname: str) -> Path:
     """A file to collect real output of test's CQL queries to compare with .result file."""
 
     return suite_log_dir / f"{testpy_uname}.reject"
+
+# The .cql tests run their statements through the `cql` fixture, so they need
+# the module's server: one cluster of cluster.initial_size (default 1) at
+# --smp 2, unchanged throughout.
+pytestmark = pytest.mark.max_running_shards(2)

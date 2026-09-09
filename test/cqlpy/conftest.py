@@ -309,3 +309,8 @@ def _vector_store_mock_session(cql):
 def vector_store_mock(_vector_store_mock_session):
     _vector_store_mock_session.reset()
     yield _vector_store_mock_session
+
+# Every test here shares one cluster, created per module from
+# cluster.initial_size (which defaults to 1) at --smp 2, and no test changes
+# it -- so the claim is a constant of the suite, not something to measure.
+pytestmark = pytest.mark.max_running_shards(2)
