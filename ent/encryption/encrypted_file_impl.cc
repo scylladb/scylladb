@@ -322,7 +322,20 @@ future<size_t> encrypted_file_impl::read_dma(uint64_t pos, std::vector<iovec> io
         return f.then([this, pos, iov = std::move(iov)](size_t len) mutable {
             size_t off = 0;
             for (auto& i : iov) {
-                off += transform(pos + off, i.iov_base, i.iov_len, i.iov_base, mode::decrypt);
+                if (off >= len) {
+                    break;
+                }
+                auto n = transform(pos + off, i.iov_base, std::min(i.iov_len, len - off), i.iov_base, mode::decrypt);
+                off += n;
+                // Stop once a block has been left partly consumed. That is the end of
+                // the data, or a read that stopped short, or an iovec that is not a
+                // whole number of blocks - in every case there is no further block to
+                // decode, and transform() requires a block-aligned position, which
+                // off no longer is. Unlike write_dma() this path never asserted the
+                // iovec lengths, so the last case reaches us from callers.
+                if (n < i.iov_len || !is_aligned(off, block_size)) {
+                    break;
+                }
             }
             return off;
         });
