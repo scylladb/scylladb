@@ -461,11 +461,19 @@ public:
     future<> stop() override {
         return smp::invoke_on_all([this]() -> future<> {
             for (auto&& [id, h] : _per_thread_kmip_host_cache[this_shard_id()]) {
-                co_await h->disconnect();
+                try {
+                    co_await h->disconnect();
+                } catch (...) {
+                    logg.warn("Exception when disconnecting KMIP: {}", std::current_exception());
+                }
             }
             static auto stop_all = [](auto&& cache) -> future<> {
                 for (auto& [k, host] : cache) {
-                    co_await host->stop();
+                    try {
+                        co_await host->stop();
+                    } catch (...) {
+                        logg.warn("Exception when stopping provider {}: {}", k, std::current_exception());
+                    }
                 }
             };
             co_await stop_all(_per_thread_kms_host_cache[this_shard_id()]);
@@ -478,6 +486,19 @@ public:
             _per_thread_gcp_host_cache[this_shard_id()].clear();
             _per_thread_azure_host_cache[this_shard_id()].clear();
             _per_thread_global_user_extension[this_shard_id()] = {};
+
+            // only relevant for testing, but...
+            // If we are re-starting, say, cql-test-env, the thread_local statics that are the system schemas will
+            // retain any extension we place into them when test ends. If we then run a second test after, these
+            // stale extension will be alive and potentially mess a whole lot with us.
+            // This is perhaps an additional argument to refactor away the extension usage...
+            co_await smp::invoke_on_all([] {
+                db::extensions exts;
+                for (auto& s : { db::system_keyspace::paxos(), db::system_keyspace::batchlog(), db::system_keyspace::dicts(), db::system_keyspace::raft() }) {
+                    exts.add_extension_to_schema(s, encryption_attribute, {});
+                }
+            });
+
         });
     }
 
