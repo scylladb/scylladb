@@ -9,13 +9,16 @@
 #include "cdc/cdc_options.hh"
 #include "cql3/statements/ks_prop_defs.hh"
 #include "db/system_keyspace.hh"
+#include "dht/token.hh"
 #include "locator/tablets.hh"
+#include "locator/token_metadata.hh"
 #include "locator/topology.hh"
 #include "replica/tablets.hh"
 #include "locator/tablet_replication_strategy.hh"
 #include "replica/database.hh"
 #include "service/migration_listener.hh"
 #include "service/tablet_allocator.hh"
+#include "service/topology_state_machine.hh"
 #include "utils/UUID.hh"
 #include "utils/assert.hh"
 #include "utils/error_injection.hh"
@@ -27,6 +30,7 @@
 #include "locator/load_sketch.hh"
 #include "replica/database.hh"
 #include "gms/feature_service.hh"
+#include <algorithm>
 #include <bit>
 #include <iterator>
 #include <ranges>
@@ -5063,6 +5067,230 @@ void tablet_allocator::on_leadership_lost() {
 
 load_balancer_stats_manager& tablet_allocator::stats() {
     return impl().stats();
+}
+
+const locator::tablet_aware_replication_strategy* validate_keyspace_for_migration(
+        replica::database& db, const sstring& ks_name, const topology& topo) {
+    if (!db.has_keyspace(ks_name)) {
+        throw std::runtime_error(fmt::format("Keyspace '{}' does not exist", ks_name));
+    }
+    auto& ks = db.find_keyspace(ks_name);
+    if (ks.uses_tablets()) {
+        throw std::runtime_error(fmt::format("Keyspace '{}' already uses tablets", ks_name));
+    }
+    if (ks.metadata()->cf_meta_data().empty()) {
+        throw std::runtime_error(fmt::format("Keyspace '{}' has no tables to migrate."
+                " To use tablets, recreate the keyspace with tablets enabled", ks_name));
+    }
+    for (const auto& [node_id, replica_state] : topo.normal_nodes) {
+        if (replica_state.storage_mode) {
+            throw std::runtime_error(fmt::format(
+                    "Another migration is in progress (node '{}' has intended storage mode '{}')"
+                    " - cannot prepare tablets migration for keyspace '{}'",
+                    node_id, *replica_state.storage_mode, ks_name));
+        }
+    }
+    const auto* trs = dynamic_cast<const locator::tablet_aware_replication_strategy*>(&ks.get_replication_strategy());
+    if (!trs) {
+        throw std::runtime_error(fmt::format(
+                "Keyspace '{}' uses a replication strategy that does not support tablets."
+                " Please convert to NetworkTopologyStrategy first.", ks_name));
+    }
+    return trs;
+}
+
+// Each vnode token becomes a tablet boundary, giving one tablet per vnode range, and
+// tablets inherit their replica hosts from their vnode. Shards are picked per node so
+// that the aggregate token range owned by each shard is as even as possible, since
+// vnode-derived tablets differ widely in size and counting them alone would
+// misrepresent the load.
+//
+// The 1:1 mapping alone gives unevenly sized tablets which are hard to balance. With
+// TABLET_POW2_CONVERGENCE the map is additionally split at the boundaries of
+// `target_pow2` evenly spaced tablets ("pre-splitting"), which define the target
+// uniform layout. After the migration, selective merges remove the vnode boundaries,
+// converging the map toward that layout without any splits:
+//
+//   Before (4 vnodes, uneven):
+//
+//     V4               V1       V2        V3                V4
+//     |----------------|------|-----------|-----------------|
+//
+//   Power-of-two boundaries (P=4, evenly spaced):
+//
+//    min           P1            P2            P3          max
+//     |------------|-------------|-------------|------------|
+//
+//   After set_union (7 tablets):
+//
+//     0            P1 V1      V2 P2       V3   P3          max
+//     |------------|--|-------|--|--------|----|------------|
+//
+//   Post-migration merges of tablets (1, 2, 3) and (4, 5) eliminate V1, V2, V3:
+//
+//    min           P1            P2            P3          max
+//     |------------|-------------|-------------|------------|
+future<locator::tablet_map> build_tablet_map_for_migration(
+        const locator::static_effective_replication_map_ptr& erm,
+        size_t target_pow2) {
+    const auto& tm = erm->get_token_metadata_ptr();
+    const auto& sorted_tokens = tm->sorted_tokens();
+
+    // Construct token boundaries: union of vnode tokens + optional pow2 boundaries.
+    // target_pow2 == 0 means no pow2 convergence target and only wrap-around pre-split.
+    utils::chunked_vector<dht::raw_token> last_tokens;
+    auto presplit_pow2 = std::max<size_t>(target_pow2, 1);
+    auto log2count = std::bit_width(presplit_pow2) - 1;
+    last_tokens.reserve(sorted_tokens.size() + presplit_pow2);
+
+    auto vnode_view = sorted_tokens
+        | std::views::transform([] (const auto& t) { return dht::raw_token(t); });
+    auto pow2_view = std::views::iota(size_t{0}, presplit_pow2)
+        | std::views::transform([&] (size_t i) { return dht::raw_token(dht::last_token_of_compaction_group(log2count, i)); });
+
+    std::ranges::set_union(vnode_view, pow2_view, std::back_inserter(last_tokens));
+
+    if (last_tokens.empty() || last_tokens.back() != dht::raw_token(dht::last_token())) {
+        on_internal_error(lblogger, "build_migrating_tablet_map: token list does not end with the maximum token");
+    }
+
+    // Construct tablet map and assign replicas.
+    locator::tablet_map tmap(std::move(last_tokens));
+    auto tablet_count = tmap.tablet_count();
+
+    struct tablet_desc {
+        locator::tablet_id id;
+        dht::token vnode_token;
+        uint64_t token_range_size;
+    };
+    utils::chunked_vector<tablet_desc> tablets;
+    tablets.reserve(tablet_count);
+
+    size_t vnode_idx = 0;
+    // unbias() maps tokens monotonically onto [0, 2^64), so the distance between
+    // consecutive tablet boundaries is the size of the range a tablet owns.
+    // unbias(minimum_token()) is 0, the lower bound of the first tablet.
+    uint64_t prev_boundary = dht::minimum_token().unbias();
+    for (size_t i = 0; i < tablet_count; ++i) {
+        auto tablet_last = tmap.get_last_token(locator::tablet_id(i));
+        while (vnode_idx < sorted_tokens.size() && dht::raw_token(sorted_tokens[vnode_idx]) < dht::raw_token(tablet_last)) {
+            ++vnode_idx;
+        }
+        auto vnode_token = (vnode_idx < sorted_tokens.size())
+            ? sorted_tokens[vnode_idx]
+            : sorted_tokens[0]; // wrap-around vnode
+        auto boundary = tablet_last.unbias();
+        tablets.push_back(tablet_desc{locator::tablet_id(i), vnode_token, boundary - prev_boundary});
+        prev_boundary = boundary;
+        co_await coroutine::maybe_yield();
+    }
+
+    // Aggregate token range assigned to each shard of a node, kept as a min-heap
+    // ordered by (range, shard). A tablet is placed on at most one shard per node,
+    // so the per-shard sums add up to the size of the ring at most, which uint64_t
+    // holds exactly.
+    using shard_range = std::pair<uint64_t, shard_id>;
+    std::unordered_map<locator::host_id, std::vector<shard_range>> shard_load;
+    tm->for_each_token_owner([&] (const locator::node& node) {
+        auto shard_count = node.get_shard_count();
+        if (!shard_count) {
+            throw std::runtime_error(fmt::format("Shard count not known for node {}", node.host_id()));
+        }
+        std::vector<shard_range> shards;
+        shards.reserve(shard_count);
+        for (shard_id shard = 0; shard < shard_count; ++shard) {
+            shards.emplace_back(0, shard);
+        }
+        std::ranges::make_heap(shards, std::greater<>{});
+        shard_load.emplace(node.host_id(), std::move(shards));
+    });
+
+    std::ranges::sort(tablets, std::ranges::greater(), &tablet_desc::token_range_size);
+
+    for (const auto& tablet : tablets) {
+        locator::tablet_replica_set tablet_replicas;
+        for (auto host : erm->get_natural_replicas(tablet.vnode_token, true)) {
+            auto& shards = shard_load.at(host);
+            std::ranges::pop_heap(shards, std::greater<>{});
+            auto& [range, shard] = shards.back();
+            range += tablet.token_range_size;
+            tablet_replicas.push_back(locator::tablet_replica{host, shard});
+            std::ranges::push_heap(shards, std::greater<>{});
+        }
+        tmap.set_tablet(tablet.id, locator::tablet_info(std::move(tablet_replicas)));
+        co_await coroutine::maybe_yield();
+    }
+
+    if (target_pow2 && tablet_count != target_pow2) {
+        tmap.set_target_pow2_tablet_count(target_pow2);
+    }
+
+    co_return tmap;
+}
+
+future<size_per_table_map> collect_table_sizes_for_migration(
+    replica::database& db,
+    const sstring& ks_name,
+    const locator::static_effective_replication_map_ptr& erm,
+    const locator::tablet_aware_replication_strategy* trs,
+    const std::vector<std::pair<table_id, sstring>>& tables_to_estimate) {
+
+    size_per_table_map table_sizes;
+
+    const auto& tm = *erm->get_token_metadata_ptr();
+
+    const auto& local_dc = tm.get_topology().get_location().dc;
+    auto local_rf = trs->get_replication_factor(local_dc);
+    if (local_rf == 0) {
+        throw std::runtime_error(fmt::format(
+            "Cannot estimate table sizes for migration: replication factor for local DC '{}' is zero. Try again on a node with a non-zero replication factor.", local_dc));
+    }
+
+    const auto local_host = tm.get_my_id();
+
+    // Compute the token ring fraction for which this node is a replica.
+    // (Same logic as in storage_service::effective_ownership(), but only for a single node.)
+    double local_fraction = 0.0;
+    const auto token_ownership = dht::token::describe_ownership(tm.sorted_tokens());
+    const auto ranges = co_await erm->get_ranges(local_host);
+    for (const auto& r : ranges) {
+        // Corner case for wrap-around range:
+        // get_ranges() unwraps the wrapping range (t1, t0] as two ranges
+        // (t1, +inf) and (-inf, t0]. Skipping the former yields the same
+        // ownership as if the range were not split.
+        if (!r.end()) {
+            continue;
+        }
+        auto end_token = r.end()->value();
+        auto it = token_ownership.find(end_token);
+        if (it == token_ownership.end()) {
+            on_internal_error(lblogger, fmt::format("Cannot find token ownership for token {}", end_token));
+        }
+        local_fraction += it->second;
+    }
+
+    if (local_fraction <= 0) {
+        throw std::runtime_error(fmt::format(
+            "Cannot estimate table sizes for migration: local token ownership fraction is {}", local_fraction));
+    }
+
+    lblogger.info("Estimating table sizes for migration of keyspace {} (dc={}, rf={}): "
+            "this node is a replica for {:.2f}% of the token ring",
+            ks_name, local_dc, local_rf, local_fraction * 100);
+
+    for (const auto& [tid, cf_name] : tables_to_estimate) {
+        // Table statistics are per-shard, so the size of the local dataset is
+        // the sum over all shards.
+        auto local_size = co_await db.container().map_reduce0([tid] (replica::database& db) {
+            return uint64_t(db.find_column_family(tid).get_stats().live_disk_space_used.on_disk);
+        }, uint64_t(0), std::plus<uint64_t>());
+        auto estimated_total_size = static_cast<uint64_t>(local_size / local_fraction);
+        table_sizes.emplace(tid, estimated_total_size);
+        lblogger.info("Estimated size of table {}.{}: {} byte(s) (local data set is {} byte(s))",
+                ks_name, cf_name, estimated_total_size, local_size);
+    }
+
+    co_return table_sizes;
 }
 
 }

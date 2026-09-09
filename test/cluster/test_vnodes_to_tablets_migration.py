@@ -1052,6 +1052,17 @@ async def test_migration_multiple_keyspaces(manager: ScyllaClusterManager):
                     f"intended_storage_mode should be cleared for node {row.host_id} after all migrations are done, got '{row.intended_storage_mode}'"
 
 
+async def tables_with_tablet_map(manager: ScyllaClusterManager, server: ServerInfo, ks: str, tables: list[str]) -> list[str]:
+    """Return the tables among `tables` which have a tablet map, as seen by `server`."""
+    return [t for t in tables if await get_tablet_count(manager, server, ks, t) > 0]
+
+
+async def assert_all_tables_have_tablet_map(manager: ScyllaClusterManager, server: ServerInfo, ks: str, tables: list[str]):
+    mapped = await tables_with_tablet_map(manager, server, ks, tables)
+    missing = sorted(set(tables) - set(mapped))
+    assert not missing, f"tables of {ks} without a tablet map: {missing}"
+
+
 @pytest.mark.asyncio
 async def test_migration_multiple_tables(manager: ScyllaClusterManager):
     """Verify vnodes-to-tablets migration on keyspace with multiple tables.

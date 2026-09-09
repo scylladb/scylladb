@@ -15,6 +15,7 @@
 #include "tablet_allocator_fwd.hh"
 #include "locator/token_metadata_fwd.hh"
 #include <seastar/core/metrics.hh>
+#include <optional>
 
 namespace db {
 class system_keyspace;
@@ -417,6 +418,34 @@ public:
     /// Should be called when the node is no longer a leader.
     void on_leadership_lost();
 };
+
+/// Checks that the keyspace can be migrated from vnodes to tablets and returns its
+/// replication strategy. Throws a message meant for the operator otherwise. Both the API
+/// path and the topology coordinator ask this: the first so that a mistake is reported to
+/// the caller directly, the second because the state can change before it picks the
+/// request up.
+const locator::tablet_aware_replication_strategy* validate_keyspace_for_migration(
+        replica::database& db, const sstring& ks_name, const topology& topo);
+
+/// Builds the initial tablet map of a table being migrated from vnodes to tablets: one
+/// tablet per vnode range, replicated like that vnode, additionally split at the
+/// boundaries of `target_pow2` evenly spaced tablets when `target_pow2` is not 0.
+/// Depends on nothing but its arguments, so it can be driven with a synthetic topology.
+future<locator::tablet_map> build_tablet_map_for_migration(
+        const locator::static_effective_replication_map_ptr& erm,
+        size_t target_pow2 = 0);
+
+/// Estimates the total size of each of the given tables from this node's share of it, for
+/// choosing their power-of-two tablet count targets. Throws when this node has no share to
+/// estimate from: the keyspace has no replicas in its datacenter, or the node owns no
+/// tokens. Run it on the node the operator called, so that this is something they can act
+/// on by calling another node.
+future<size_per_table_map> collect_table_sizes_for_migration(
+        replica::database& db,
+        const sstring& ks_name,
+        const locator::static_effective_replication_map_ptr& erm,
+        const locator::tablet_aware_replication_strategy* trs,
+        const std::vector<std::pair<table_id, sstring>>& tables_to_estimate);
 
 future<bool> requires_rack_list_colocation(
         replica::database& db,
