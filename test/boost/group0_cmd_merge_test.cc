@@ -182,6 +182,50 @@ SEASTAR_TEST_CASE(test_group0_update_collector_splits_oversized_mutations) {
     });
 }
 
+// Verifies that for_each_mutation() visits every collected mutation, post-merge,
+// which is what command validation relies on.
+SEASTAR_TEST_CASE(test_group0_update_collector_for_each_mutation) {
+    return seastar::async([] {
+        simple_schema ss;
+        auto s = ss.schema();
+
+        service::group0_update_collector collector;
+
+        auto mut = ss.new_mutation("pk0");
+        ss.add_row(mut, ss.make_ckey(0), make_random_string(64));
+        collector.add_small(mut);
+
+        // Same partition as `mut`, so it merges into it.
+        auto mut_more = ss.new_mutation("pk0");
+        ss.add_row(mut_more, ss.make_ckey(1), make_random_string(64));
+        collector.add_small(mut_more);
+
+        auto mut2 = ss.new_mutation("pk1");
+        ss.add_row(mut2, ss.make_ckey(0), make_random_string(32));
+        collector.add_small(mut2);
+
+        std::vector<mutation> seen;
+        collector.for_each_mutation([&] (const mutation& m) {
+            seen.push_back(m);
+        }).get();
+
+        BOOST_REQUIRE_EQUAL(seen.size(), 2u);
+        std::ranges::sort(seen, [] (const mutation& a, const mutation& b) {
+            return a.decorated_key().less_compare(*a.schema(), b.decorated_key());
+        });
+
+        auto merged = mut;
+        merged.apply(mut_more);
+        auto expected = std::vector<mutation>{merged, mut2};
+        std::ranges::sort(expected, [] (const mutation& a, const mutation& b) {
+            return a.decorated_key().less_compare(*a.schema(), b.decorated_key());
+        });
+
+        assert_that(seen[0]).is_equal_to(expected[0]);
+        assert_that(seen[1]).is_equal_to(expected[1]);
+    });
+}
+
 // Verifies that group0_update_collector::add(canonical_mutation) accepts canonical_mutations
 // and collect() returns them unchanged.
 SEASTAR_TEST_CASE(test_group0_update_collector_accepts_canonical_mutations) {

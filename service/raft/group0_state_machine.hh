@@ -9,6 +9,7 @@
 
 #include <seastar/core/gate.hh>
 #include <seastar/core/abort_source.hh>
+#include <functional>
 #include <unordered_map>
 
 #include "data_dictionary/data_dictionary.hh"
@@ -138,6 +139,11 @@ public:
     utils::chunked_vector<canonical_mutation>& frozen_mutations() {
         return _frozen_mutations;
     }
+
+    /// Calls `f` on every collected mutation, in unspecified order.
+    /// Lets the update be inspected, e.g. validated, without deserializing it.
+    /// Mutations added as canonical_mutation are not visited.
+    future<> for_each_mutation(std::function<void(const mutation&)> f) const;
 
     /// Converts accumulated mutations into a vector of canonical_mutations.
     /// Any collected mutation whose (in-memory) size exceeds max_mutation_size

@@ -19,6 +19,7 @@
 #include "mutation/async_utils.hh"
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/on_internal_error.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include "schema/schema_mutations.hh"
 #include "schema/frozen_schema.hh"
@@ -680,6 +681,17 @@ void group0_update_collector::add(utils::chunked_vector<canonical_mutation> muts
 void group0_update_collector::add(canonical_mutation m) {
     ++_change_counter;
     _frozen_mutations.emplace_back(std::move(m));
+}
+
+future<> group0_update_collector::for_each_mutation(std::function<void(const mutation&)> f) const {
+    for (const auto& [m, m_size] : _closed_mutations) {
+        f(m);
+        co_await coroutine::maybe_yield();
+    }
+    for (const auto& [m, m_size] : _mutations) {
+        f(m);
+        co_await coroutine::maybe_yield();
+    }
 }
 
 void group0_update_collector::clear() {
