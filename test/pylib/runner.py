@@ -72,6 +72,7 @@ PYTEST_LOG_FILE = pytest.StashKey[str]()
 # published by the manager fixture for pytest_runtest_protocol to record.
 MAX_RUNNING_SHARDS = pytest.StashKey[int]()
 MAX_RUNNING_SHARDS_CLAIM = pytest.StashKey[int | None]()
+CONFTEST_MARKERS_APPLIED = pytest.StashKey[bool]()
 
 EXIT_MAXFAIL_REACHED = 11
 
@@ -441,6 +442,7 @@ async def scylla_cluster(request: pytest.FixtureRequest,
 def pytest_collection_modifyitems(items: list[pytest.Item], config: pytest.Config) -> None:
     run_ids = defaultdict(lambda: count(start=int(config.getoption("--run_id") or 1)))
     for item in items:
+        apply_conftest_markers(item)
         modify_pytest_item(item=item, run_ids=run_ids)
 
     suites_order = defaultdict(count().__next__)  # number suites in order of appearance
@@ -814,6 +816,27 @@ def get_params_stash(node: _pytest.nodes.Node) -> pytest.Stash | None:
     if parent is None:
         return None
     return parent.stash
+
+
+def apply_conftest_markers(item: pytest.Item) -> None:
+    """Apply the `pytestmark` of every conftest that covers this item.
+
+    pytest honours it in a test module but not in a conftest, so a suite has no
+    other way to say "this goes for every test here".  On the file node, and
+    nearest conftest first, so the usual precedence holds: test beats module
+    beats closest conftest beats outer one.  Once per file.
+
+    _getconftestmodules() is pytest-internal and the only way to ask which
+    conftests cover a path, so it stays here.
+    """
+    node = item.getparent(pytest.File)
+    if node is None or node.stash.get(CONFTEST_MARKERS_APPLIED, False):
+        return
+    node.stash[CONFTEST_MARKERS_APPLIED] = True
+    for conftest in reversed(item.config.pluginmanager._getconftestmodules(item.path)):
+        marks = getattr(conftest, "pytestmark", [])
+        for mark in marks if isinstance(marks, (list, tuple)) else [marks]:
+            node.add_marker(mark)
 
 
 def modify_pytest_item(item: pytest.Item, run_ids: defaultdict[tuple[str, str], count]) -> None:
