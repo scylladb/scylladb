@@ -1119,14 +1119,10 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>>
 cql_server::connection::connection(cql_server& server, socket_address server_addr, connected_socket&& fd, socket_address addr, named_semaphore& sem, semaphore_units<named_semaphore_exception_factory> initial_sem_units)
     : generic_server::connection{server, std::move(fd), sem, std::move(initial_sem_units)}
     , _server(server)
+    , _current_scheduling_group(server.get_scheduling_group_for_new_connection())
     , _server_port(server_addr.port())
     , _client_state(service::client_state::external_tag{}, server._auth_service, &server._sl_controller, server.timeout_config(), addr, bool(server._used_by_maintenance_socket), &server._abort_source)
-    , _current_scheduling_group(server.get_scheduling_group_for_new_connection())
 {
-    _shedding_timer.set_callback([this] {
-        clogger.debug("Shedding all incoming requests due to overload");
-        _shed_incoming_requests = true;
-    });
     ++_server._stats.connects;
     ++_server._stats.connections;
     if (clogger.is_enabled(logging::log_level::trace)) {
@@ -1216,7 +1212,7 @@ future<> cql_server::connection::process_request() {
         auto request_start_timestamp = lowres_server_timestamp();
 
         const bool allow_shedding = _client_state.get_workload_type() == service::client_state::workload_type::interactive;
-        if (allow_shedding && _shed_incoming_requests) {
+        if (allow_shedding && lowres_clock::now() >= _shed_after) {
             ++_server._stats.requests_shed;
             return _read_buf.skip(f.length).then([this, stream = f.stream] {
                 const char* message = "request shed due to coordinator overload";
@@ -1276,7 +1272,7 @@ future<> cql_server::connection::process_request() {
                     } catch (semaphore_timed_out& sto) {
                         // Cancel shedding in case no more requests are going to do that on completion
                         if (_pending_requests_gate.get_count() == 0) {
-                            _shed_incoming_requests = false;
+                            _shed_after = lowres_clock::time_point::max();
                         }
                         return _read_buf.skip(length).then([sto = std::move(sto)] () mutable {
                             return make_exception_future<semaphore_units<>>(std::move(sto));
@@ -1285,8 +1281,8 @@ future<> cql_server::connection::process_request() {
                 })
                 : get_units(_server._memory_available, mem_estimate);
         if (_server._memory_available.waiters()) {
-            if (allow_shedding && !_shedding_timer.armed()) {
-                _shedding_timer.arm(shedding_timeout);
+            if (allow_shedding && _shed_after == lowres_clock::time_point::max()) {
+                _shed_after = lowres_clock::now() + shedding_timeout;
             }
             ++_server._stats.requests_blocked_memory;
         }
@@ -1309,8 +1305,7 @@ future<> cql_server::connection::process_request() {
             auto leave = defer([this, &sg_stats] noexcept {
                 --_server._stats.requests_serving;
                 --sg_stats._requests_serving;
-                _shedding_timer.cancel();
-                _shed_incoming_requests = false;
+                _shed_after = lowres_clock::time_point::max();
                 _pending_requests_gate.leave();
             });
             auto istream = buf.get_istream();

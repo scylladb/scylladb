@@ -82,7 +82,7 @@ class request_reader;
 class response;
 enum class cql_binary_opcode : uint8_t;
 
-enum class cql_compression {
+enum class cql_compression : uint8_t {
     none,
     lz4,
     snappy,
@@ -305,16 +305,18 @@ private:
     class connection : public generic_server::connection {
         cql_server& _server;
         fragmented_temporary_buffer::reader _buffer_reader;
-        cql_compression _compression = cql_compression::none;
+        scheduling_group _current_scheduling_group;
         uint16_t _server_port = 0;
         cql_protocol_version_type _version = 0;
+        // Bit-packed with the flags: one byte for all of them.
+        cql_compression _compression : 2 = cql_compression::none;
+        bool _ready : 1 = false;
+        bool _authenticating : 1 = false;
         service::client_state _client_state;
-        timer<lowres_clock> _shedding_timer;
-        scheduling_group _current_scheduling_group;
-        bool _shed_incoming_requests = false;
-        bool _ready = false;
-        bool _authenticating = false;
-        bool _tenant_switch = false;
+        // Once a request has waited this long for memory, incoming requests are shed
+        // until a request completes. Replaces a 96-byte timer: the check only ever
+        // happens when the next frame arrives anyway.
+        lowres_clock::time_point _shed_after = lowres_clock::time_point::max();
 
         enum class tracing_request_type : uint8_t {
             not_requested,
