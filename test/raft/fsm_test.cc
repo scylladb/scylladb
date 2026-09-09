@@ -1962,6 +1962,12 @@ BOOST_AUTO_TEST_CASE(test_non_voter_confchange_in_snapshot) {
     A.apply_snapshot(A_snp, 0, 0, true);
     A.tick();
     communicate(A, B, C);
+    // C commits an entry and is sent the snapshot before communicate() polls
+    // it again, so C turns the snapshot down until it has reported that entry
+    // (see fsm::apply_snapshot()). The leader retries from tick(), which
+    // communicate() does not do on its own.
+    A.tick();
+    communicate(A, B, C);
     BOOST_CHECK(A.is_leader());
     BOOST_CHECK_EQUAL(A.get_current_term(), C.get_current_term());
     BOOST_CHECK_EQUAL(A.log_last_idx(), C.log_last_idx());
@@ -2266,6 +2272,68 @@ BOOST_AUTO_TEST_CASE(test_reject_outdated_remote_snapshot) {
     BOOST_CHECK(!B.apply_snapshot(snp, 0, 0, false));
     // But it should apply this snapshot if it's locally generated
     BOOST_CHECK(B.apply_snapshot(snp, 0, 0, true));
+}
+
+// A remote snapshot is rejected while there are committed entries get_output()
+// has not reported yet, and accepted once it has.
+//
+// Accepting it would truncate the log those entries' terms live in, and
+// get_output() reports from above the snapshot index, so they would never be
+// reported: their waiters would be told commit_status_unknown about entries
+// that did commit and whose effect the snapshot itself carries. The leader
+// retries, and by then the output has been consumed.
+//
+// Nothing polls B between the commit and the snapshot here, which is what a
+// server looks like while its io_fiber is busy elsewhere: deliver() steps the
+// target without draining it, unlike communicate().
+BOOST_AUTO_TEST_CASE(test_remote_snapshot_rejected_until_committed_entries_are_reported) {
+    server_id A_id = id(), B_id = id();
+    raft::configuration cfg = config_from_ids({A_id, B_id});
+    raft::log log(raft::snapshot_descriptor{.idx = index_t{0}, .config = cfg});
+    auto A = create_follower(A_id, log);
+    auto B = create_follower(B_id, log);
+    election_timeout(A);
+    communicate(A, B);
+    BOOST_CHECK(A.is_leader());
+
+    raft_routing_map routes{{A_id, &A}, {B_id, &B}};
+
+    // Get the entries onto B, then let B's reply bring A's commit index up.
+    A.add_entry(log_entry::dummy{});
+    A.add_entry(log_entry::dummy{});
+    deliver(routes, A_id, A.get_output().messages);
+    deliver(routes, B_id, B.get_output().messages);
+
+    // Everything B has committed so far has been reported: the get_output()
+    // above drained it.
+    const auto reported_commit_idx = B.commit_idx();
+    BOOST_REQUIRE(A.commit_idx() > reported_commit_idx);
+
+    // One more entry, so that A has something to replicate and carries its
+    // advanced commit index along with it. This is the last thing B is told;
+    // it is not polled again until further down.
+    A.add_entry(log_entry::dummy{});
+    deliver(routes, A_id, A.get_output().messages);
+
+    const auto committed_idx = B.commit_idx();
+    BOOST_REQUIRE(committed_idx > reported_commit_idx);
+
+    // A snapshot from the leader above everything B has committed. B has to
+    // turn it down: the entries it committed just now are still unreported.
+    const auto snp_idx = B.log_last_idx() + index_t{1};
+    auto snp = raft::snapshot_descriptor{.idx = snp_idx, .term = A.get_current_term(), .config = cfg};
+    BOOST_REQUIRE(!B.apply_snapshot(snp, 0, 0, false));
+    // Turned down, not applied: the entries are still there to be reported.
+    BOOST_CHECK(B.get_log().term_for(committed_idx));
+
+    // Which is what the next poll does, terms and all.
+    auto output = B.get_output();
+    BOOST_REQUIRE(!output.committed.empty());
+    BOOST_CHECK_EQUAL(output.committed.front()->idx, reported_commit_idx + index_t{1});
+    BOOST_CHECK_EQUAL(output.committed.back()->idx, committed_idx);
+
+    // The leader's retry now gets through.
+    BOOST_REQUIRE(B.apply_snapshot(snp, 0, 0, false));
 }
 
 // A server should sometimes become a candidate even though it is outside the current configuration,
