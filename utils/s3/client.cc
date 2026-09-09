@@ -2060,6 +2060,18 @@ class client::readable_file : public file_impl {
         });
     }
 
+    // A truncated body was already retried below, so anything short here is a
+    // reply that described a different range than the one asked for.  Clamped
+    // because a range running past the end of the object is answered short by
+    // design.
+    void verify_full_read(uint64_t pos, size_t requested, size_t got) const {
+        auto expected = std::min<uint64_t>(requested, _stats->size - pos);
+        if (got != expected) {
+            throw storage_io_error(EIO, format("Short read of object {}: asked for {} bytes at offset {} of a {} byte object, got {}",
+                    _object_name, requested, pos, _stats->size, got));
+        }
+    }
+
 public:
     readable_file(shared_ptr<client> cln, sstring object_name, seastar::abort_source* as = nullptr)
         : _client(std::move(cln))
@@ -2127,6 +2139,7 @@ public:
         }
 
         auto buf = co_await _client->get_object_contiguous(_object_name, range{ pos, len }, _as);
+        verify_full_read(pos, len, buf.size());
         std::copy_n(buf.get(), buf.size(), reinterpret_cast<uint8_t*>(buffer));
         co_return buf.size();
     }
@@ -2138,6 +2151,7 @@ public:
         }
 
         auto buf = co_await _client->get_object_contiguous(_object_name, range{ pos, utils::iovec_len(iov) }, _as);
+        verify_full_read(pos, utils::iovec_len(iov), buf.size());
         uint64_t off = 0;
         for (auto& v : iov) {
             auto sz = std::min(v.iov_len, buf.size() - off);
@@ -2157,6 +2171,7 @@ public:
         }
 
         auto buf = co_await _client->get_object_contiguous(_object_name, range{ offset, range_size }, _as);
+        verify_full_read(offset, range_size, buf.size());
         co_return temporary_buffer<uint8_t>(reinterpret_cast<uint8_t*>(buf.get_write()), buf.size(), buf.release());
     }
 
