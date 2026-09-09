@@ -21,6 +21,7 @@
 #include "gms/inet_address.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "replica/database_fwd.hh"
+#include "schema/schema_fwd.hh"
 #include "mutation/frozen_mutation.hh"
 #include "utils/hash.hh"
 #include "repair/hash.hh"
@@ -300,6 +301,13 @@ struct tablet_repair_task_meta {
     locator::tablet_replica_set replicas;
     locator::effective_replication_map_ptr erm;
 };
+
+// Repair mode tombstone GC lets compaction drop tombstones older than the
+// last repair of a range, on the ground that the repair made all replicas
+// agree on the data written before its time. Writes still waiting in hints
+// or batchlog at that time are not covered by that, so they are flushed on
+// all nodes before the repair starts.
+bool repair_needs_hints_batchlog_flush(const schema& s);
 
 struct tablet_repair_sched_info {
     bool sched_by_scheduler = false;
