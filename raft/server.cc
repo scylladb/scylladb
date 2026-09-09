@@ -224,14 +224,28 @@ private:
     // as the fsm reports the entry committed, independently of the applier
     // fiber's progress (abort() fails whatever is left). Dropping the waiters
     // in a single fiber, in commit order, is what maintains the ordering
-    // invariant asserted in notify_waiters().
+    // invariant asserted in notify_commit_waiters().
     waiter_queue _awaited_commits;
 
     // Entries that have a waiter that needs to be notified after
     // the respective entry is applied.
     // Waiters are inserted by wait_for_entry() and dropped by the applier
-    // fiber, in apply order (abort() fails whatever is left).
+    // fiber, in apply order (abort() fails whatever is left). io_fiber only
+    // settles which of them are committed, by advancing
+    // _committed_apply_waiters_idx over them; every waiter here is either
+    // committed with the term it expects or of an unknown fate, never of an
+    // entry known to have been replaced.
     waiter_queue _awaited_applies;
+
+    // Every apply waiter at or below this index is for an entry that was
+    // committed with the term that waiter expects. mark_committed()
+    // establishes that for a whole range at once -- it drops the waiters in
+    // the range whose term does not match -- and a committed entry is never
+    // replaced afterwards, so the property holds for good and this index only
+    // ever grows. It is what lets an apply waiter be resolved after a
+    // snapshot replaced its entry in the log, when the term is no longer
+    // there to compare against (see the applier fiber's snapshot handling).
+    index_t _committed_apply_waiters_idx{0};
 
     // Maps each destination to the abort_source of the currently active
     // snapshot transfer.  The abort_source itself lives on the coroutine
@@ -265,16 +279,35 @@ private:
 
     server_requests _new_server_requests;
 
-    // Called to commit entries (on a leader or otherwise).
-    void notify_waiters(waiter_queue& waiters, const log_entry_ptr_list& entries);
+    // Notifies the commit waiters for the given committed entries.
+    void notify_commit_waiters(const log_entry_ptr_list& entries);
+
+    // Settles the fate of the apply waiters for the given committed entries
+    // while their terms are still known: the waiters whose term does not
+    // match are dropped, their entries having been replaced, and
+    // _committed_apply_waiters_idx is advanced over the rest. Called by
+    // io_fiber alongside notify_commit_waiters(); the applier fiber then only
+    // has to resolve what is left.
+    void mark_committed(const log_entry_ptr_list& entries);
 
     // Drop waiters that we lost track of, can happen due to a snapshot transfer,
     // or a leader removed from cluster while some entries added on it are uncommitted.
     // When `snp` is provided (snapshot transfer case), only waiters up to the
-    // snapshot index are dropped, and those whose term matches the snapshot term
-    // are resolved successfully, since the snapshot-term match proves they were
-    // committed and included in the snapshot (by the Log Matching Property).
-    void drop_waiters(waiter_queue& waiters, const snapshot_descriptor* snp = nullptr);
+    // snapshot index are dropped, and those whose term matches the snapshot
+    // term are resolved successfully instead, since the snapshot-term match
+    // proves they were committed and included in the snapshot (by the Log
+    // Matching Property).
+    void drop_commit_waiters(const snapshot_descriptor* snp = nullptr);
+
+    // The body shared by the above and by the applier fiber, which uses it
+    // both to notify the waiters of the entries it has applied and to settle
+    // the rest when it will not apply any more of them. Resolves the
+    // waiters at or below `upto` and leaves those above it queued, each
+    // successfully if the entry is known committed -- at or below
+    // `committed_upto`, or by a snapshot-term match when `snp` is given -- and
+    // with commit_status_unknown otherwise.
+    void resolve_waiters(waiter_queue& waiters, index_t upto, index_t committed_upto,
+            const snapshot_descriptor* snp);
 
     // Wake up all waiter that wait for entries with idx smaller of equal to the one provided
     // to be applied.
@@ -346,6 +379,25 @@ private:
     // Wait for an entry with a specific term to get committed or
     // applied locally.
     future<> wait_for_entry(entry_id eid, wait_type type, seastar::abort_source* as);
+
+    // Establishes what became of `eid`, which is at or below the commit
+    // index. Returns nullopt when the entry is still in the log with the term
+    // the caller expects, and the index of the snapshot that subsumed it when
+    // it is gone but known to have committed and to be included there. Throws
+    // dropped_entry when a leadership change replaced it, and
+    // commit_status_unknown when nothing left can say which entry committed at
+    // that index; counts the waiter either way.
+    //
+    // A truncated entry is judged by the last snapshot's term. If it equals
+    // eid.term we can deduce that eid committed at eid.idx and not some other
+    // entry: let snap_idx be the last snapshot index (snap_idx >= eid.idx) and
+    // consider the entry committed at snap_idx, whose term is the snapshot's.
+    // If eid.term equals it, that entry was created by the same leader as eid.
+    // A leader doesn't replace an entry it previously appended, so when it
+    // appended the snap_idx entry the entry at eid.idx was still eid. By the
+    // Log Matching Property every log that had (snap_idx, snap_term) also had
+    // eid, so the snapshot includes it.
+    std::optional<index_t> committed_entry_fate(entry_id eid);
     // Wait for a read barrier index to be applied. The index
     // is typically already committed, so we don't worry about the
     // term.
@@ -577,6 +629,34 @@ future<bool> server_impl::trigger_snapshot(seastar::abort_source* as) {
     co_return true;
 }
 
+std::optional<index_t> server_impl::committed_entry_fate(entry_id eid) {
+    auto term = _fsm->log_term_for(eid.idx);
+    if (!term) {
+        auto snap_idx = _fsm->log_last_snapshot_idx();
+        auto snap_term = _fsm->log_term_for(snap_idx);
+        SCYLLA_ASSERT(snap_term);
+        SCYLLA_ASSERT(snap_idx >= eid.idx);
+        if (snap_term != eid.term) {
+            logger.trace("[{}] wait_for_entry {}.{}: entry got truncated away", _tag, eid.term, eid.idx);
+            // No result to give: the entry is gone and the snapshot that
+            // replaced it cannot say whether it was this entry that committed
+            // at its index.
+            _stats.waiters_dropped++;
+            throw commit_status_unknown();
+        }
+        logger.trace("[{}] wait_for_entry {}.{}: entry got truncated away, but has the snapshot's term"
+                     " (snapshot index: {})", _tag, eid.term, eid.idx, snap_idx);
+        return snap_idx;
+    }
+    if (*term != eid.term) {
+        // Between the times the entry was submitted and committed there was a
+        // leadership change and the entry was replaced.
+        _stats.waiters_awoken++;
+        throw dropped_entry();
+    }
+    return std::nullopt;
+}
+
 future<> server_impl::wait_for_entry(entry_id eid, wait_type type, seastar::abort_source* as) {
     // The entry may have been already committed and even applied
     // in case it was forwarded to the leader. In this case
@@ -585,45 +665,29 @@ future<> server_impl::wait_for_entry(entry_id eid, wait_type type, seastar::abor
         if ((type == wait_type::committed) ||
             (type == wait_type::applied && eid.idx <= _applied_idx)) {
 
-            auto term = _fsm->log_term_for(eid.idx);
-
-            if (!term) {
-                // The entry at index `eid.idx` got truncated away.
-                // Still, if the last snapshot's term is the same as `eid.term`, we can deduce
-                // that our entry `eid` got committed at index `eid.idx` and not some different entry.
-                // Indeed, let `snp_idx` be the last snapshot index (`snp_idx >= eid.idx`). Consider
-                // the entry that was committed at `snp_idx`; it had the same term as the snapshot's term,
-                // `snp_term`. If `eid.term == snp_term`, then we know that the entry at `snp_idx` was
-                // created by the same leader as the entry `eid`. A leader doesn't replace an entry
-                // that it previously appended, so when it appended the `snp_idx` entry, the entry at
-                // `eid.idx` was still `eid`. By the Log Matching Property, every log that had the entry
-                // `(snp_idx, snp_term)` also had the entry `eid`. Thus when the snapshot at `snp_idx`
-                // was created, it included the entry `eid`.
-                auto snap_idx = _fsm->log_last_snapshot_idx();
-                auto snap_term = _fsm->log_term_for(snap_idx);
-                SCYLLA_ASSERT(snap_term);
-                SCYLLA_ASSERT(snap_idx >= eid.idx);
-                if (snap_term == eid.term) {
-                    logger.trace("[{}] wait_for_entry {}.{}: entry got truncated away, but has the snapshot's term"
-                                 " (snapshot index: {})", _tag, eid.term, eid.idx, snap_idx);
-                    _stats.waiters_awoken++;
-                    co_return;
-                }
-
-                logger.trace("[{}] wait_for_entry {}.{}: entry got truncated away", _tag, eid.term, eid.idx);
-                // No result to give: the entry is gone and the snapshot that
-                // replaced it cannot say whether it was this entry that
-                // committed at its index.
-                _stats.waiters_dropped++;
-                throw commit_status_unknown();
-            }
-
+            // Throws unless the entry committed at its index; which of the
+            // two ways it did is of no interest here, the caller is waiting
+            // for no more than this.
+            (void)committed_entry_fate(eid);
             _stats.waiters_awoken++;
+            co_return;
+        }
 
-            if (*term != eid.term) {
-                throw dropped_entry();
-            }
-
+        // An apply waiter for an entry that is committed but not applied
+        // yet. io_fiber's mark_committed() has run for this entry already,
+        // so the waiter registered below would be below
+        // _committed_apply_waiters_idx without having had its term checked
+        // the way that index promises. Check it here instead, while the
+        // entry is still in the log.
+        if (auto snap_idx = committed_entry_fate(eid)) {
+            // Gone from the log, but included in that snapshot, so it is
+            // applied once the applier fiber has loaded it -- there is
+            // nothing left to register a waiter against. The bound is that
+            // snapshot rather than whichever is current when the applier
+            // fiber gets that far.
+            logger.trace("[{}] wait_for_entry {}.{}: waiting for the snapshot at {} to be applied",
+                    _tag, eid.term, eid.idx, *snap_idx);
+            co_await wait_for_apply(*snap_idx, as);
             co_return;
         }
     }
@@ -1013,13 +1077,12 @@ void server_impl::read_quorum_reply(server_id from, struct read_quorum_reply rea
     _fsm->step(from, std::move(read_quorum_reply));
 }
 
-void server_impl::notify_waiters(waiter_queue& waiters,
-        const log_entry_ptr_list& entries) {
+void server_impl::notify_commit_waiters(const log_entry_ptr_list& entries) {
     index_t commit_idx = entries.back()->idx;
     index_t first_idx = entries.front()->idx;
 
-    while (!waiters.empty()) {
-        index_t entry_idx = waiters.base_index();
+    while (!_awaited_commits.empty()) {
+        index_t entry_idx = _awaited_commits.base_index();
         if (entry_idx > commit_idx) {
             break;
         }
@@ -1028,7 +1091,7 @@ void server_impl::notify_waiters(waiter_queue& waiters,
         // it means that notification is out of order which is prohibited
         SCYLLA_ASSERT(entry_idx >= first_idx);
 
-        auto status = waiters.extract(entry_idx);
+        auto status = _awaited_commits.extract(entry_idx);
         if (status.term == entries[(entry_idx - first_idx).value()]->term) {
             status.done.set_value();
         } else {
@@ -1043,10 +1106,10 @@ void server_impl::notify_waiters(waiter_queue& waiters,
     // since there is no way they will be committed any longer (terms in
     // the log only grow).
     term_t last_committed_term = entries.back()->term;
-    while (auto* status = waiters.peek_front()) {
+    while (auto* status = _awaited_commits.peek_front()) {
         if (status->term < last_committed_term) {
             status->done.set_exception(dropped_entry());
-            waiters.extract(waiters.base_index());
+            _awaited_commits.extract(_awaited_commits.base_index());
             _stats.waiters_awoken++;
         } else {
             break;
@@ -1054,16 +1117,84 @@ void server_impl::notify_waiters(waiter_queue& waiters,
     }
 }
 
-void server_impl::drop_waiters(waiter_queue& waiters, const snapshot_descriptor* snp) {
+void server_impl::mark_committed(const log_entry_ptr_list& entries) {
+    const index_t first_idx = entries.front()->idx;
+    // Unlike the commit waiters, the apply waiters are not consumed from the
+    // front here: the ones below this range are committed already and stay
+    // until the applier fiber, which may lag arbitrarily far behind, gets to
+    // their entries. So walk the range instead of the front of the queue.
+    _awaited_applies.erase_if_in_range(first_idx, entries.back()->idx,
+            [&] (index_t entry_idx, op_status& status) {
+        if (status.term == entries[(entry_idx - first_idx).value()]->term) {
+            return true;
+        }
+        // The terms do not match, which means that between the times the
+        // entry was submitted and committed there was a leadership change
+        // and the entry was replaced. It will never be committed or
+        // applied, so the waiter is dropped here, with the same status a
+        // regular apply gives it, rather than left for the applier fiber
+        // to reach an index it never will.
+        status.done.set_exception(dropped_entry());
+        _stats.waiters_awoken++;
+        return false;
+    });
+    // Drop all waiters with a smaller term than the last one committed
+    // since there is no way they will be committed any longer (terms in
+    // the log only grow). Those are above the range, the ones below it are
+    // committed and only waiting to be applied.
+    term_t last_committed_term = entries.back()->term;
+    // Stopping at the first waiter that is not stale is what this rule did
+    // when it lived in notify_waiters(), and it keeps the walk proportional to
+    // the waiters dropped rather than to those above the commit index. Waiter
+    // terms are all but monotonic in index -- a waiter for a higher index was
+    // submitted later, so with an equal or higher term -- the exception being
+    // two waiters from different logs, where a newer leader's entry sits below
+    // an older leader's. A stale waiter above the stopping point is then
+    // missed, and the pass above drops it once its index is committed: a
+    // delayed failure rather than a wrong one, as before.
+    _awaited_applies.erase_leading_above(entries.back()->idx + index_t{1}, [&] (index_t, op_status& status) {
+        if (status.term >= last_committed_term) {
+            return true;
+        }
+        status.done.set_exception(dropped_entry());
+        _stats.waiters_awoken++;
+        return false;
+    });
+    // Every apply waiter up to here has now had its term checked against the
+    // entry that was committed at its index, so the ones still around are
+    // committed with the term they expect.
+    _committed_apply_waiters_idx = entries.back()->idx;
+}
+
+void server_impl::drop_commit_waiters(const snapshot_descriptor* snp) {
+    resolve_waiters(_awaited_commits, snp ? snp->idx : std::numeric_limits<index_t>::max(),
+            index_t{0}, snp);
+}
+
+void server_impl::resolve_waiters(waiter_queue& waiters, index_t upto, index_t committed_upto,
+        const snapshot_descriptor* snp) {
     while (!waiters.empty()) {
         index_t entry_idx = waiters.base_index();
-        if (snp && entry_idx > snp->idx) {
+        if (entry_idx > upto) {
             break;
         }
         auto status = waiters.extract(entry_idx);
-        if (snp && status.term == snp->term) {
-            // entry_idx <= snapshot index and the entry's term matches the snapshot term.
-            // By the Log Matching Property the entry was committed and included in the snapshot.
+        if (entry_idx <= committed_upto || (snp && status.term == snp->term)) {
+            // The entry was committed: either we saw it committed ourselves,
+            // at or below committed_upto, or its term matches the snapshot's,
+            // which by the Log Matching Property proves as much.
+            //
+            // For an apply waiter that also means the state machine holds the
+            // entry's effect, which is what resolving one successfully
+            // promises. With a snapshot, load_snapshot() has just put it
+            // there, a committed entry being included in every later snapshot.
+            // Without one, the applier fiber has already applied everything
+            // committed by then and notified those waiters, so nothing at or
+            // below committed_upto is still queued to reach this.
+            //
+            // The commit queue passes no bound at all: a commit waiter at or
+            // below the reported commit index has already been notified and
+            // removed by notify_commit_waiters().
             status.done.set_value();
             _stats.waiters_awoken++;
         } else {
@@ -1200,9 +1331,9 @@ future<> server_impl::process_fsm_output(index_t& last_stable, fsm_output&& batc
             // waiters may never get a committed batch covering them. Drop
             // them here, before the committed entries of this batch (which
             // start above the snapshot index) are notified below: this keeps
-            // commit waiters dropped in index order, which notify_waiters()
-            // asserts.
-            drop_waiters(_awaited_commits, &snp);
+            // commit waiters dropped in index order, which
+            // notify_commit_waiters() asserts.
+            drop_commit_waiters(&snp);
             if (_non_joint_conf_commit_promise && !snp.config.is_joint() &&
                     snp.idx > _non_joint_conf_commit_promise->joint_idx) {
                 // A configuration change is in progress here, and the
@@ -1323,7 +1454,11 @@ future<> server_impl::process_fsm_output(index_t& last_stable, fsm_output&& batc
         // of how far the local state machine got with applying entries, so the
         // notification must not depend on the applier fiber's progress (which
         // may lag behind, e.g. when its queue backs up on a slow state machine).
-        notify_waiters(_awaited_commits, batch.committed);
+        notify_commit_waiters(batch.committed);
+        // Settle what this commit means for the apply waiters while the
+        // committed terms are at hand: the applier fiber may only get to the
+        // entries much later, or never, if a snapshot replaces them first.
+        mark_committed(batch.committed);
         // Persisting the commit index is optional (see
         // persistence::store_commit_idx): a restarted server re-learns it from
         // the leader or, after a full cluster restart, the new leader recomputes
@@ -1350,7 +1485,7 @@ future<> server_impl::process_fsm_output(index_t& last_stable, fsm_output&& batc
             // waiters with commit_status_unknown. This runs after the waiters for
             // entries committed in this batch were notified above, so they are
             // not spuriously dropped.
-            drop_waiters(_awaited_commits);
+            drop_commit_waiters();
             // - Tell the applier fiber to drop the apply waiters as well. It's
             // important we push this after we pushed committed entries above, so
             // that waiters for entries applied in this batch are notified before
@@ -1535,7 +1670,13 @@ future<> server_impl::applier_fiber() {
                 co_await override_snapshot_thresholds();
 
                 _applied_idx = last_idx;
-                notify_waiters(_awaited_applies, batch);
+                // Notify the waiters of the entries just applied. They are all
+                // known committed with the term they expect: io_fiber reports
+                // an entry committed before the applier fiber may apply it, and
+                // settles the waiters then (see mark_committed()), so an
+                // applied index is always covered.
+                SCYLLA_ASSERT(last_idx <= _committed_apply_waiters_idx);
+                resolve_waiters(_awaited_applies, last_idx, _committed_apply_waiters_idx, nullptr);
 
                 // It may happen that _fsm has already applied a later snapshot (from remote) that we didn't yet 'observe'
                 // (i.e. didn't yet receive from _apply_entries queue) but will soon. We avoid unnecessary work
@@ -1576,23 +1717,37 @@ future<> server_impl::applier_fiber() {
                 // Apply snapshot it to the state machine
                 logger.trace("[{}] apply_fiber applying snapshot {}", _tag, snp.id);
                 co_await _state_machine->load_snapshot(snp.id);
-                // Drop apply waiters covered by the snapshot only now, after
-                // load_snapshot(): a resolved "applied" waiter promises that the
-                // local state machine already contains the entry's effect.
+                // Settle the apply waiters covered by the snapshot only now,
+                // after load_snapshot(): a resolved "applied" waiter promises
+                // that the local state machine already contains the entry's
+                // effect. Those at or below _committed_apply_waiters_idx
+                // committed here, and a committed entry is included in every
+                // later snapshot, so this one has just put their effects in
+                // place -- _applied_idx is no use as the bound here, being
+                // still behind the snapshot until the line below.
                 // The commit waiters were already dropped by io_fiber when it
                 // received this snapshot, commitment does not depend on the
                 // local apply progress.
-                drop_waiters(_awaited_applies, &snp);
+                resolve_waiters(_awaited_applies, snp.idx, _committed_apply_waiters_idx, &snp);
                 _applied_idx = snp.idx;
                 _stats.sm_load_snapshot++;
             },
             [this] (const removed_from_config&) -> future<> {
                 // If the node is no longer part of a config and no longer the leader
                 // it may never know the status of entries it submitted. The commit
-                // waiters were already dropped by io_fiber; drop the apply waiters
-                // here, after all batches queued before this message were applied
-                // and their waiters notified.
-                drop_waiters(_awaited_applies);
+                // waiters were already dropped by io_fiber; settle the apply
+                // waiters here, after all batches queued before this message were
+                // applied and their waiters notified.
+                //
+                // Only what is applied may be reported applied, so the bound is
+                // _applied_idx rather than _committed_apply_waiters_idx: io_fiber
+                // advances the latter when it reports a commit, which is before
+                // the entries reach this fiber, so a batch marked committed
+                // behind this message in the queue would otherwise have its
+                // waiters told their entries were applied while the state
+                // machine does not hold them yet.
+                resolve_waiters(_awaited_applies, std::numeric_limits<index_t>::max(),
+                        _applied_idx, nullptr);
                 co_return;
             },
             [this] (const trigger_snapshot_msg&) -> future<> {
