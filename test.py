@@ -9,6 +9,71 @@
 
 from __future__ import annotations
 
+import os
+import pathlib
+import subprocess
+import sys
+
+
+def _ensure_running_under_uv() -> None:
+    """Re-exec test.py under `uv run --locked`, so the whole process (not
+    just some packages spliced onto sys.path) runs inside a venv synced
+    from test/pyproject.toml / test/uv.lock, instead of test.py depending
+    on whatever happens to be frozen into the toolchain image.
+
+    `--locked` makes `uv run` fail loudly instead of silently re-resolving
+    if test/pyproject.toml and test/uv.lock have drifted apart. `uv run`
+    also re-syncs the venv in place before running if the lockfile changed
+    since the last run, so bumping a pin there takes effect immediately,
+    with no toolchain image rebuild required.
+
+    The venv lives under build/test-dependencies, keyed by the ABI of the
+    interpreter `uv` will actually run it with (per test/pyproject.toml's
+    requires-python, not necessarily the interpreter currently running this
+    function), so `rm -rf build` wipes it along with everything else, and
+    different checkouts (potentially on different Python versions) never
+    share (or clobber) each other's packages.
+
+    Set DISABLE_VENV=1 to skip all of this and run test.py directly under
+    whatever Python/environment invoked it -- e.g. to use a specific
+    interpreter, a manually-managed venv, or a debugger, or when `uv` isn't
+    available. Dependencies are then whatever's already importable; nothing
+    installs or syncs them. The re-exec sets DISABLE_VENV=1 itself, so the
+    same variable doubles as the guard that makes this run exactly once per
+    process tree rather than looping.
+    """
+    if os.environ.get("DISABLE_VENV"):
+        return
+
+    top_src_dir = pathlib.Path(__file__).resolve().parent
+    # The rest of test.py (and the test harness under test/) assumes it runs
+    # from the repo root -- e.g. path_to() in test/__init__.py builds
+    # "build/{mode}/..." relative to the cwd. Every current caller (ninja,
+    # dbuild) already invokes "./test.py" from the root, but chdir here too
+    # so a run started from elsewhere (or via a symlink) behaves the same
+    # way instead of failing later on a missing relative path.
+    os.chdir(top_src_dir)
+    os.environ["UV_PROJECT"] = str(top_src_dir / "test")
+    # Ask uv which interpreter it will use to satisfy test/pyproject.toml's
+    # requires-python, rather than assuming it matches the one running this
+    # function -- they can differ, e.g. the system's default "python3" is
+    # older than what the project requires and uv fetches/uses a newer one.
+    resolved_python = subprocess.check_output(["uv", "python", "find"], text=True).strip()
+    soabi = subprocess.check_output(
+        [resolved_python, "-c", "import sysconfig; print(sysconfig.get_config_var('SOABI'))"],
+        text=True).strip()
+    venv_dir = top_src_dir / "build" / "test-dependencies" / soabi
+
+    os.environ["DISABLE_VENV"] = "1"
+    os.environ["UV_PROJECT_ENVIRONMENT"] = str(venv_dir)
+    # Given a .py path, `uv run` runs it with the synced venv's own interpreter
+    # (__file__ is already absolute), so no explicit "python3" is needed.
+    os.execvp("uv", ["uv", "run", "--locked", "--quiet", __file__, *sys.argv[1:]])
+
+
+if __name__ == "__main__":
+    _ensure_running_under_uv()
+
 import argparse
 import asyncio
 import dataclasses
@@ -25,10 +90,7 @@ import itertools
 import logging
 import multiprocessing
 import os
-import pathlib
 import resource
-import subprocess
-import sys
 import time
 
 import humanfriendly
