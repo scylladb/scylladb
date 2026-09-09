@@ -18,6 +18,26 @@ please manually install all Python modules it lists with `pip`.
 Additionally, `toolchain/dbuild` could be used to run `test.py`. In this
 case you don't need to run `./install-dependencies.sh`
 
+`test.py`'s own Python dependencies (scylla-driver and everything else it
+or pytest need to run) are declared in `test/pyproject.toml` and pinned
+in `test/uv.lock`, independent of the frozen toolchain image. On
+startup, `test.py` re-execs itself under `uv run --locked` against
+`test/pyproject.toml`, so the whole process runs inside a venv synced
+from that lockfile, reused across runs (keyed by the interpreter ABI)
+under `build/test-dependencies`. Bumping a version in
+`test/pyproject.toml` (and regenerating `test/uv.lock` with `uv lock
+--project test`) takes effect immediately without having to rebuild the
+toolchain. `--locked` makes `uv run` fail instead of silently
+re-resolving if the two files have drifted apart, so a forgotten `uv
+lock` is caught right away. Since the venv lives under `build/`,
+different checkouts never share packages, and `rm -rf build` removes it.
+Running `test.py` this way requires `uv` to be on `PATH` (it is included
+in the frozen toolchain image; `./install-dependencies.sh` installs it
+otherwise). Anything invoking pytest directly on `test/` rather than
+through `test.py` should likewise run it via
+`uv run --project test --locked -- pytest ...`, so it gets the same
+dependencies.
+
 By default `test.py` has `--gather-metrics` parameter, that is used to gather
 CPU/RAM usage during tests from the cgroup.
 This means that before execute `test.py` current terminal process should be located in
