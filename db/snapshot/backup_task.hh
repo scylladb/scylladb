@@ -49,7 +49,6 @@ class backup_task_impl : public tasks::task_manager::task::impl {
     sstring _bucket;
     sstring _prefix;
     std::filesystem::path _snapshot_dir;
-    table_id _table_id;
     bool _remove_on_uploaded;
     tasks::task_manager::task::progress _total_progress;
 
@@ -70,7 +69,7 @@ class backup_task_impl : public tasks::task_manager::task::impl {
         std::exception_ptr _ex;
 
     public:
-        worker(const replica::database& db, table_id t, backup_task_impl& task);
+        worker(const replica::database& db, backup_task_impl& task);
         ~worker();
 
         future<> start_uploading();
@@ -112,7 +111,6 @@ public:
                      sstring prefix,
                      sstring ks,
                      std::filesystem::path snapshot_dir,
-                     table_id tid,
                      bool move_files) noexcept;
 
     virtual std::string type() const override;
