@@ -2899,7 +2899,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         rtlogger.info("Initiating repair phase of tablet rebuild host={} tablet={}", dst, gid);
                         for (auto tablet : gids) {
                             co_await ser::storage_service_rpc_verbs::send_tablet_repair(&_messaging,
-                                    dst, _as, raft::server_id(dst.uuid()), tablet, session_id).discard_result();
+                                    dst, _as, raft::server_id(dst.uuid()), tablet, session_id, tablet_repair_flush_info{tablet_repair_flush_mode::skip}).discard_result();
                         }
                     })) {
                         rtlogger.debug("Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::streaming);
@@ -3250,7 +3250,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         auto session_id = utils::get_local_injector().enter("handle_tablet_migration_repair_random_session") ?
                             service::session_id::create_random_id() : trinfo->session_id;
                         auto res = co_await ser::storage_service_rpc_verbs::send_tablet_repair(&_messaging,
-                                dst, _as, raft::server_id(dst.uuid()), gid, session_id);
+                                dst, _as, raft::server_id(dst.uuid()), gid, session_id, tablet_repair_flush_info{tablet_repair_flush_mode::flush});
                         auto duration = std::chrono::duration<float>(db_clock::now() - sched_time);
                         auto& tablet_state = _tablets[tablet];
                         tablet_state.repair_time = db_clock::from_time_t(gc_clock::to_time_t(res.repair_time));
