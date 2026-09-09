@@ -1969,6 +1969,139 @@ SEASTAR_TEST_CASE(test_commitlog_update_max_data_lifetime) {
     co_await log.clear();
 }
 
+// The commitlog only knows a segment is still needed via the per-table dirty
+// counts, but the data those counts protect can reach the memtables long after
+// the segment was first named in a flush request (e.g. a raft log entry is
+// applied to the memtables only once its raft group commits it; until then the
+// rp_handle is held by the raft layer). A request round that ran in that window
+// found nothing to flush, yet used to advance _flush_position past the segment,
+// so no request for it was repeated and the segment stayed on disk until some
+// later write of the same table landed above the watermark - for a quiescent
+// table, indefinitely. Verify that the max-data-lifetime sweep keeps
+// requesting a flush while the segment remains dirty.
+SEASTAR_TEST_CASE(test_commitlog_flush_requests_repeat_while_segment_dirty) {
+    commitlog::config cfg;
+
+    constexpr auto max_size_mb = 1;
+
+    cfg.commitlog_segment_size_in_mb = max_size_mb;
+    // Plenty of headroom: disk usage stays below the flush threshold (half the
+    // total space), so the max-data-lifetime sweep is the only source of flush
+    // requests in this test.
+    cfg.commitlog_total_space_in_mb = 8 * max_size_mb * this_smp_shard_count();
+    cfg.commitlog_sync_period_in_ms = 10;
+    cfg.commitlog_data_max_lifetime_in_seconds = 1;
+    cfg.allow_going_over_size_limit = false;
+    cfg.use_o_dsync = true; // make sure we pre-allocate.
+
+    tmpdir tmp;
+    cfg.commit_log_location = tmp.path().string();
+    auto log = co_await commitlog::create_commitlog(cfg);
+
+    rp_set rps;
+    auto tid = make_table_id();
+    promise<> released;
+    // Not captured by value: each request round invokes a fresh copy of the
+    // handler (flush_segments copies the handler map defensively), so state
+    // inside the lambda would reset on every round.
+    int requests = 0;
+
+    auto r = log.add_flush_handler([&](cf_id_type id, replay_position) {
+        BOOST_CHECK(id == tid);
+        // The first request finds the data still outside the memtables (the
+        // rp_handle is stashed in rps). By the second request the data has
+        // reached the memtables, so the flush releases the segment.
+        if (++requests == 2) {
+            log.discard_completed_segments(id, rps);
+            released.set_value();
+        }
+    });
+
+    rp_handle h = co_await log.add_mutation(tid, 1, db::commitlog::force_sync::no, [](db::commitlog::output& dst) {
+        dst.fill('1', 1);
+    });
+    rps.put(std::move(h));
+
+    co_await with_timeout(timeout_clock::now() + 60s, released.get_future());
+
+    BOOST_CHECK_EQUAL(log.get_num_dirty_segments(), 0);
+
+    co_await log.shutdown();
+    co_await log.clear();
+}
+
+// Same scenario, but exercising the disk-pressure request rounds
+// (segment_manager::flush_segments) instead of the max-data-lifetime sweep.
+// A table whose only dirty segment is behind _flush_position must still be
+// named in later rounds while the segment stays dirty. The timer runs a round
+// only when a new segment was activated since the previous round
+// (_new_counter), so the test writes one more entry after the first request
+// to arm the second round.
+SEASTAR_TEST_CASE(test_commitlog_flush_requests_repeat_under_pressure) {
+    commitlog::config cfg;
+
+    constexpr auto max_size_mb = 1;
+
+    cfg.commitlog_segment_size_in_mb = max_size_mb;
+    // Two segments of total space: the flush threshold is half of it, and a
+    // closed pre-allocated segment counts toward the footprint in full (the
+    // unwritten remainder as waste), so one closed segment keeps the footprint
+    // at the threshold and every armed round fires.
+    cfg.commitlog_total_space_in_mb = 2 * max_size_mb * this_smp_shard_count();
+    cfg.commitlog_sync_period_in_ms = 10;
+    cfg.allow_going_over_size_limit = false;
+    cfg.use_o_dsync = true; // make sure we pre-allocate.
+
+    tmpdir tmp;
+    cfg.commit_log_location = tmp.path().string();
+    auto log = co_await commitlog::create_commitlog(cfg);
+
+    rp_set rps;
+    auto tid = make_table_id();
+    promise<> first_request, released;
+    // Not captured by value: see the sibling test above.
+    int requests = 0;
+
+    auto r = log.add_flush_handler([&](cf_id_type id, replay_position) {
+        BOOST_CHECK(id == tid);
+        switch (++requests) {
+        case 1:
+            first_request.set_value();
+            break;
+        case 2:
+            // By now the data has reached the memtables; the flush releases
+            // the stashed segment.
+            log.discard_completed_segments(id, rps);
+            released.set_value();
+            break;
+        }
+    });
+
+    rp_handle h = co_await log.add_mutation(tid, 1, db::commitlog::force_sync::no, [](db::commitlog::output& dst) {
+        dst.fill('1', 1);
+    });
+    rps.put(std::move(h));
+
+    // Flush requests only ever name closed segments.
+    co_await log.force_new_active_segment();
+    co_await with_timeout(timeout_clock::now() + 60s, first_request.get_future());
+
+    // The first round named the stashed segment and moved _flush_position
+    // past it. Activate one more segment to arm the next round; only the
+    // re-request of the old, still-dirty segment can deliver the second call.
+    h = co_await log.add_mutation(tid, 1, db::commitlog::force_sync::no, [](db::commitlog::output& dst) {
+        dst.fill('1', 1);
+    });
+    rps.put(std::move(h));
+
+    co_await with_timeout(timeout_clock::now() + 60s, released.get_future());
+
+    BOOST_CHECK_EQUAL(log.get_num_dirty_segments(), 0);
+
+    co_await log.shutdown();
+    co_await log.clear();
+}
+
 /**
  * Test allocating oversized multi-entry
 */
