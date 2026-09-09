@@ -46,4 +46,39 @@ future<tablets_t> load_system_tablets(const db::config& dbcfg,
     co_return tablets;
 }
 
+future<std::optional<local_node_info>> load_local_node_info(const db::config& dbcfg,
+                                      std::filesystem::path scylla_data_path,
+                                      reader_permit permit) {
+    std::optional<local_node_info> info;
+    auto local = db::system_keyspace::local();
+    co_await query_system_table_offline(dbcfg, scylla_data_path, local,
+            partition_key::from_singular(*local, sstring(db::system_keyspace::LOCAL)), std::nullopt, permit,
+            [&info] (const query::result_set_row& row) {
+                if (auto host_id = row.get<utils::UUID>("host_id"); host_id && !info) {
+                    info = local_node_info{.host_id = locator::host_id(*host_id)};
+                }
+            });
+    if (!info) {
+        co_return std::nullopt;
+    }
+
+    // The sharding parameters of the node live in "system.topology", in the row
+    // of its host id. The "scylla_nr_shards" and "scylla_msb_ignore" columns of
+    // "system.local" are not an alternative: they are dropped columns, so
+    // nothing has written them for a long time.
+    auto topology = db::system_keyspace::topology();
+    co_await query_system_table_offline(dbcfg, scylla_data_path, topology,
+            partition_key::from_singular(*topology, sstring(db::system_keyspace::TOPOLOGY)),
+            clustering_key::from_singular(*topology, info->host_id.uuid()), permit,
+            [&info] (const query::result_set_row& row) {
+                if (auto shard_count = row.get<int32_t>("shard_count")) {
+                    info->shard_count = unsigned(*shard_count);
+                }
+                if (auto ignore_msb_bits = row.get<int32_t>("ignore_msb")) {
+                    info->ignore_msb_bits = unsigned(*ignore_msb_bits);
+                }
+            });
+    co_return info;
+}
+
 } // namespace tools
