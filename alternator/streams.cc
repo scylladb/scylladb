@@ -1504,8 +1504,10 @@ future<executor::request_return_type> executor::get_records(client_state& client
         per_table_stats->returned_records += nrecords;
         _stats.operation_sizes.get_records_op_size_kb.add((total_item_bytes + 1023) / 1024);
         per_table_stats->operation_sizes.get_records_op_size_kb.add((total_item_bytes + 1023) / 1024);
-        auto str = rjson::print(std::move(ret));
-        co_return str;
+        if (is_big(ret)) {
+            co_return make_streamed(std::move(ret));
+        }
+        co_return rjson::print(std::move(ret));
     }
 
     // ugh. figure out if we are and end-of-shard
