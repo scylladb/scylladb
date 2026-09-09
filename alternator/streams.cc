@@ -1276,7 +1276,7 @@ future<executor::request_return_type> executor::get_records(client_state& client
         | std::ranges::to<attrs_to_get>()
     ;
     // Include all base table columns as values (in case pre or post is enabled).
-    // This will include attributes not stored in the frozen map column
+    // This will include attributes not stored in the :attrs map column
     std::optional<attrs_to_get> attr_names = base->regular_columns()
         // this will include the :attrs column, which we will also force evaluating. 
         // But not having this set empty forces out any cdc columns from actual result 
@@ -1412,16 +1412,13 @@ future<executor::request_return_type> executor::get_records(client_state& client
          * This is pretty much needed, because a CDC row typically
          * encodes ~half the info of an alternator write.
          *
-         * A big, big downside to how alternator records are written
-         * (i.e. CQL), is that the distinction between INSERT and UPDATE
-         * is somewhat lost/unmappable to actual eventName.
-         * A write (currently) always looks like an insert+modify
-         * regardless whether we wrote existing record or not.
-         *
-         * Maybe RMW ops could be done slightly differently so
-         * we can distinguish them here...
-         *
-         * For now, all writes will become MODIFY.
+         * A CQL write does not say by itself whether it created or
+         * overwrote an item, so the event type comes from CDC: it marks
+         * the row insert or update depending on whether a pre-image row
+         * was available, and we map insert to INSERT and update to
+         * MODIFY below. Where no pre-image is read - KEYS_ONLY with
+         * alternator_streams_increased_compatibility off - every write
+         * therefore looks like an INSERT.
          *
          * Note: we do not check the current pre/post
          * flags on CDC log, instead we use data to 
@@ -1490,7 +1487,7 @@ future<executor::request_return_type> executor::get_records(client_state& client
     rjson::add(ret, "Records", std::move(records));
 
     if (timestamp) {
-        // #9642. Set next iterators threshold to > last
+        // #6942. Set next iterators threshold to > last
         shard_iterator next_iter(iter.table, iter.shard, *timestamp, false);
         // Note that here we unconditionally return NextShardIterator,
         // without checking if maybe we reached the end-of-shard. If the
