@@ -330,19 +330,14 @@ modification_statement::do_execute(query_processor& qp, service::query_state& qs
     if (keys_size_one && _may_use_token_aware_routing && table.uses_tablets()) {
         auto erm = table.get_effective_replication_map();
         if (qs.get_client_state().is_protocol_extension_set(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V2_EXPERIMENTAL)) {
-            if (!options.get_tablet_version_block().has_value()) {
-                // V2 is negotiated but no block was parsed. process_execute_internal()
-                // reads the block unconditionally whenever the V2 extension is set and
-                // rejects the request with a protocol_exception if the byte is missing,
-                // so the block is guaranteed present here. Reaching this point is a
-                // server-side invariant violation, not a client error, hence on_internal_error.
-                utils::on_internal_error(
-                    "The protocol extension tablets-routing-v2 requires that every EXECUTE request "
-                    "carry a tablet_version_block");
-            }
-            auto tablet_info_v2 = erm->check_tablet_version(token, *options.get_tablet_version_block());
-            if (tablet_info_v2) {
-                result->add_tablet_info_v2(std::move(*tablet_info_v2));
+            // We only return routing information for EXECUTE requests.
+            // They will carry a tablet version block; QUERY reqeuests
+            // will not.
+            if (options.get_tablet_version_block().has_value()) {
+                auto tablet_info_v2 = erm->check_tablet_version(token, *options.get_tablet_version_block());
+                if (tablet_info_v2) {
+                    result->add_tablet_info_v2(std::move(*tablet_info_v2));
+                }
             }
         } else if (qs.get_client_state().is_protocol_extension_set(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V1)) {
             auto tablet_info = erm->check_locality(token, qs.get_client_state().get_original_shard());

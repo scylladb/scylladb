@@ -91,23 +91,18 @@ future<shared_ptr<result_message>> modification_statement::execute_without_check
     auto result = seastar::make_shared<result_message::void_message>();
 
     if (qs.get_client_state().is_protocol_extension_set(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V2_EXPERIMENTAL)) {
-        if (!options.get_tablet_version_block().has_value()) {
-            // V2 is negotiated but no block was parsed. process_execute_internal()
-            // reads the block unconditionally whenever the V2 extension is set and
-            // rejects the request with a protocol_exception if the byte is missing,
-            // so the block is guaranteed present here. Reaching this point is a
-            // server-side invariant violation, not a client error, hence on_internal_error.
-            utils::on_internal_error(
-                "The protocol extension tablets-routing-v2 requires that every EXECUTE request "
-                "carry a tablet_version_block");
-        }
+        // Only EXECUTE requests carry a tablet version block. However,
+        // QUERY requests may still target a single partition and will
+        // not be rejected. We don't send any routing information for
+        // them, though.
+        if (options.get_tablet_version_block().has_value()) {
+            const auto& groups_manager = coordinator.get().get_groups_manager();
+            const auto& table = _statement->s->table();
 
-        const auto& groups_manager = coordinator.get().get_groups_manager();
-        const auto& table = _statement->s->table();
-
-        auto maybe_routing_info_v2 = groups_manager.check_tablet_version(table, token, *options.get_tablet_version_block());
-        if (maybe_routing_info_v2) {
-            result->add_tablet_info_v2(std::move(*maybe_routing_info_v2));
+            auto maybe_routing_info_v2 = groups_manager.check_tablet_version(table, token, *options.get_tablet_version_block());
+            if (maybe_routing_info_v2) {
+                result->add_tablet_info_v2(std::move(*maybe_routing_info_v2));
+            }
         }
     }
 
