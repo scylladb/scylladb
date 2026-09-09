@@ -146,13 +146,17 @@ struct i_tracing_backend_helper {
 
 protected:
     tracing& _local_tracing;
+    cql3::query_processor& qp() noexcept;
+    const cql3::query_processor& qp() const noexcept;
+    service::migration_manager& mm() noexcept;
+    const service::migration_manager& mm() const noexcept;
 
 public:
     using ptr_type = std::unique_ptr<i_tracing_backend_helper>;
 
     i_tracing_backend_helper(tracing& tr) : _local_tracing(tr) {}
     virtual ~i_tracing_backend_helper() {}
-    virtual future<> start(cql3::query_processor& qp, service::migration_manager& mm) = 0;
+    virtual future<> start() = 0;
     virtual future<> shutdown() = 0;
 
     /**
@@ -289,6 +293,7 @@ private:
 };
 
 class tracing : public seastar::async_sharded_service<tracing> {
+    friend struct i_tracing_backend_helper;
 public:
     static const gc_clock::duration write_period;
     // maximum number of sessions pending for write per shard
@@ -315,6 +320,8 @@ public:
     } stats;
 
 private:
+    cql3::query_processor& _qp;
+    service::migration_manager& _mm;
     // A number of currently active tracing sessions
     uint64_t _active_sessions = 0;
 
@@ -382,7 +389,6 @@ private:
     bool _ignore_trace_events = false;
     std::unique_ptr<i_tracing_backend_helper> _tracing_backend_helper_ptr;
     sstring _thread_name;
-    sstring _tracing_backend_helper_class_name;
     seastar::metrics::metric_groups _metrics;
     double _trace_probability = 0.0; // keep this one for querying purposes
     uint64_t _normalized_trace_probability = 0;
@@ -418,10 +424,10 @@ public:
         return !_down;
     }
 
-    tracing(sstring tracing_backend_helper_class_name);
+    tracing(cql3::query_processor& qp, service::migration_manager& mm, sstring tracing_backend_helper_class_name);
 
     // Initialize a tracing backend (e.g. tracing_keyspace or logstash)
-    future<> start(cql3::query_processor& qp, service::migration_manager& mm);
+    future<> start();
 
     future<> stop();
 
@@ -659,6 +665,23 @@ inline span_id span_id::make_span_id() {
     // make sure the value is always greater than 0
     return 1 + (tracing::get_local_tracing_instance().get_next_rand_uint64() << 1);
 }
+
+inline cql3::query_processor& i_tracing_backend_helper::qp() noexcept {
+    return _local_tracing._qp;
+}
+
+inline const cql3::query_processor& i_tracing_backend_helper::qp() const noexcept {
+    return _local_tracing._qp;
+}
+
+inline service::migration_manager& i_tracing_backend_helper::mm() noexcept {
+    return _local_tracing._mm;
+}
+
+inline const service::migration_manager& i_tracing_backend_helper::mm() const noexcept {
+    return _local_tracing._mm;
+}
+
 }
 
 template <> struct fmt::formatter<tracing::span_id> {

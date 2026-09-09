@@ -27,14 +27,22 @@ std::vector<sstring> trace_type_names = {
     "REPAIR"
 };
 
-tracing::tracing(sstring tracing_backend_helper_class_name)
-        : _write_timer([this] { write_timer_callback(); })
+tracing::tracing(cql3::query_processor& qp, service::migration_manager& mm, sstring tracing_backend_helper_class_name)
+        : _qp(qp)
+        , _mm(mm)
+        , _write_timer([this] { write_timer_callback(); })
         , _thread_name(seastar::format("shard {:d}", this_shard_id()))
-        , _tracing_backend_helper_class_name(std::move(tracing_backend_helper_class_name))
         , _gen(std::random_device()())
         , _slow_query_duration_threshold(default_slow_query_duraion_threshold)
         , _slow_query_record_ttl(default_slow_query_record_ttl) {
     namespace sm = seastar::metrics;
+
+    try {
+        _tracing_backend_helper_ptr = create_object<i_tracing_backend_helper>(tracing_backend_helper_class_name, *this);
+    } catch (no_such_class& e) {
+        tracing_logger.error("Can't create tracing backend helper {}: not supported", tracing_backend_helper_class_name);
+        throw;
+    }
 
     _metrics.add_group("tracing", {
         sm::make_counter("dropped_sessions", stats.dropped_sessions,
@@ -129,17 +137,8 @@ trace_state_ptr tracing::create_session(const trace_info& secondary_session_info
     }
 }
 
-future<> tracing::start(cql3::query_processor& qp, service::migration_manager& mm) {
-    try {
-        _tracing_backend_helper_ptr = create_object<i_tracing_backend_helper>(_tracing_backend_helper_class_name, *this);
-    } catch (no_such_class& e) {
-        tracing_logger.error("Can't create tracing backend helper {}: not supported", _tracing_backend_helper_class_name);
-        throw;
-    } catch (...) {
-        throw;
-    }
-
-    co_await _tracing_backend_helper_ptr->start(qp, mm);
+future<> tracing::start() {
+    co_await _tracing_backend_helper_ptr->start();
     _down = false;
     _write_timer.arm(write_period);
 }

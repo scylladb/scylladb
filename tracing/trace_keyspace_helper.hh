@@ -34,9 +34,6 @@ private:
     int64_t _slow_query_last_nanos = 0;
     service::query_state _dummy_query_state;
 
-    cql3::query_processor* _qp_anchor;
-    service::migration_manager* _mm_anchor;
-
     table_helper _sessions;
     table_helper _sessions_time_idx;
     table_helper _events;
@@ -59,20 +56,16 @@ public:
     //
     // TODO: Create a stub_tracing_session object to discard the traces
     // requested during the initialization phase.
-    virtual future<> start(cql3::query_processor& qp, service::migration_manager& mm) override;
+    virtual future<> start() override;
 
     virtual future<> shutdown() override {
-        return _pending_writes.close().then([this] {
-            _qp_anchor = nullptr;
-            _mm_anchor = nullptr;
-        });
+        return _pending_writes.close();
     };
 
     virtual void write_records_bulk(records_bulk& bulk) override;
     virtual std::unique_ptr<backend_session_state_base> allocate_session_state() const override;
 
 private:
-    // Valid only after start() sets _qp_anchor
     gms::inet_address my_address() const noexcept;
 
     /**
