@@ -35,6 +35,7 @@
 #include "types/types.hh"
 #include <seastar/core/future.hh>
 #include <seastar/core/gate.hh>
+#include <seastar/core/condition-variable.hh>
 #include "db/commitlog/replay_position.hh"
 #include "db/commitlog/commitlog_types.hh"
 #include "logstor/logstor.hh"
@@ -530,6 +531,11 @@ private:
     // The storage_group_manager manages either a single storage_group for vnodes or per-tablet storage_group for tablets.
     // It contains and manages both the compaction_groups list and the storage_groups vector.
     std::unique_ptr<storage_group_manager> _sg_manager;
+    // Storage groups whose truncate_tablet_locally() is between swapping the sstables and
+    // retiring the memtables, see wait_for_tablet_truncate().
+    std::vector<const storage_group*> _truncating_storage_groups;
+    seastar::condition_variable _tablet_truncate_done;
+    future<> wait_for_tablet_truncate(const dht::partition_range& range);
     // Compound SSTable set for all the compaction groups, which is useful for operations spanning all of them.
     lw_shared_ptr<const sstables::sstable_set> _sstables;
     // Control background fibers waiting for sstables to be deleted
@@ -1075,6 +1081,16 @@ public:
     future<> cleanup_tablet(database&, db::system_keyspace&, locator::tablet_id);
     // For tests only.
     future<> cleanup_tablet_without_deallocation(database& db, db::system_keyspace& sys_ks, locator::tablet_id tid);
+    // Drops all data of the tablet on this shard: memtables are discarded without
+    // being flushed, sstables are deleted, the row cache is invalidated for the
+    // tablet's token range. The storage group stays allocated and writable, so the
+    // tablet keeps accepting writes right after the call.
+    //
+    // Meant for truncating a strongly consistent tablet from its Raft state machine,
+    // where the position of the truncate in the Raft log decides which writes survive.
+    // Hence no truncation or commitlog cleanup record is written:
+    // the commitlog is filtered by Raft index during replay, not by replay position
+    future<> truncate_tablet_locally(database& db, locator::tablet_id tid);
     future<const_mutation_partition_ptr> find_partition(schema_ptr, reader_permit permit, const dht::decorated_key& key) const;
     future<const_row_ptr> find_row(schema_ptr, reader_permit permit, const dht::decorated_key& partition_key, clustering_key clustering_key) const;
     shard_id shard_for_reads(dht::token t) const;
