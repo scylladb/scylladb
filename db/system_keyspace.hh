@@ -428,6 +428,10 @@ public:
         std::optional<db_clock::time_point> snapshot_expiry;
         bool snapshot_skip_flush;
         std::optional<sstring> finalize_migration_ks_name;
+        std::optional<sstring> prepare_migration_ks_name;
+        // Tablet count targets of the tables of the keyspace, computed once when the
+        // request was made.
+        std::optional<std::unordered_map<table_id, int64_t>> prepare_migration_target_pow2s;
         std::optional<table_id> restore_table_id;
         std::optional<sstring> restore_snapshot_name;
     };
