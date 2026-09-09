@@ -334,6 +334,41 @@ class ScyllaClusterManager:
         except Exception as exc:
             raise RuntimeError(f"Failed to get local host id address for server {server_id}") from exc
 
+    # Seastar reactor counters, scraped at the end of each test: all file IO
+    # issued by Scylla, counted whether or not the kernel serves it from the
+    # page cache (tests run with --kernel-page-cache 1, so most of it never
+    # reaches a disk).  They are incremented on submission to the IO queue and
+    # carry only a shard label; the scylla_io_queue_total_* counters track the
+    # same submissions broken down per IO class and device, a breakdown that
+    # summing for a per-test total would only throw away.
+    SEASTAR_IO_METRICS = (
+        'scylla_reactor_aio_bytes_read',
+        'scylla_reactor_aio_reads',
+        'scylla_reactor_aio_bytes_write',
+        'scylla_reactor_aio_writes',
+    )
+
+    async def _scrape_seastar_io(self) -> dict[str, int]:
+        """Sum the reactor IO counters of every running server, across shards.
+
+        The cluster is created per test, so the counters start at zero with it
+        and their current value is this test's total -- no baseline needed.
+
+        Best effort, erring towards an undercount rather than charging a test
+        for IO it did not do: a server the test stopped takes its counters
+        with it, and one that does not answer the scrape is left out.
+        """
+        totals = dict.fromkeys(self.SEASTAR_IO_METRICS, 0)
+        for srv in self.cluster.running_servers():
+            try:
+                metrics = await self.metrics.query(srv.ip_addr)
+            except Exception as e:
+                self.logger.debug("Could not scrape IO metrics from %s: %s", srv.ip_addr, e)
+                continue
+            for name in self.SEASTAR_IO_METRICS:
+                totals[name] += int(metrics.get(name) or 0)
+        return totals
+
     # timeout=None: the drain below carries its own budget, which scales with
     # the build mode and so can exceed DEFAULT_OP_TIMEOUT.  A bridge cap
     # shorter than the drain would abandon the cleanup half-way through.
@@ -383,10 +418,15 @@ class ScyllaClusterManager:
             self.logger.error("%s, test case %s", tasks_leaked, self.test_name)
         self.logger.info("Test %s %s, cluster: %s", self.test_name, "SUCCEEDED" if success else "FAILED", self.cluster)
 
+        # Scrape before the fixture tears the cluster down: stopped servers
+        # take their counters with them.
+        seastar_io = await self._scrape_seastar_io()
+
         return {
             "cluster_str": str(self.cluster),
             "tasks_leaked": bool(tasks_leaked),
             "message": tasks_leaked,
+            "seastar_io": seastar_io,
         }
 
     @manager_op
