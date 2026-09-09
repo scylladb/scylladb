@@ -428,3 +428,12 @@ def test_writer_reports_a_migration_that_really_failed(tmp_path, monkeypatch):
     with pytest.raises(sqlite3.OperationalError):
         add_missing_columns(conn.cursor())
     conn.close()
+
+
+def test_shards_of_cpp_defaults():
+    """The command line every C++ test case gets by default claims two shards."""
+    import shlex
+
+    from test.pylib.cpp.base import DEFAULT_CUSTOM_ARGS, DEFAULT_SCYLLA_ARGS
+
+    assert shards_of([*DEFAULT_SCYLLA_ARGS, *shlex.split(DEFAULT_CUSTOM_ARGS[0])]) == 2

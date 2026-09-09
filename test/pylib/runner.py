@@ -45,8 +45,8 @@ from test.pylib.host_registry import HostRegistry
 from test.pylib.s3_proxy import S3ProxyServer
 from test.pylib.s3_server_mock import MockS3Server
 from test.pylib.scylla_cluster import ScyllaCluster
-from test.pylib.running_shards import claimed_shards
-from test.pylib.scylla_server import merge_cmdline_options, specifies_shards
+from test.pylib.running_shards import MARKER as MAX_RUNNING_SHARDS_MARKER, claimed_shards
+from test.pylib.scylla_server import merge_cmdline_options, shards_of, specifies_shards
 from test.pylib.skip_reason_plugin import skip_marker
 from test.pylib.util import get_modes_to_run, scale_timeout_by_mode, get_xdist_worker_id, LogPrefixAdapter
 from test.pylib.version_fetch_utils import fetch_and_install_scylla_version
@@ -198,7 +198,7 @@ def _build_test_mock(item: pytest.Item) -> SimpleNamespace:
     Works for both Python test items and C++ CppTestCase items, providing a
     unified interface for the resource-gather subsystem.
     """
-    from test.pylib.cpp.base import CppTestCase
+    from test.pylib.cpp.base import CppTestCase   # imported here: cpp.base imports this module
 
     params_stash = get_params_stash(node=item)
     build_mode = params_stash[BUILD_MODE] if params_stash else item.config.build_modes[0]
@@ -840,6 +840,8 @@ def apply_conftest_markers(item: pytest.Item) -> None:
 
 
 def modify_pytest_item(item: pytest.Item, run_ids: defaultdict[tuple[str, str], count]) -> None:
+    from test.pylib.cpp.base import CppTestCase
+
     params_stash = get_params_stash(node=item)
 
     if RUN_ID not in params_stash:
@@ -851,6 +853,14 @@ def modify_pytest_item(item: pytest.Item, run_ids: defaultdict[tuple[str, str], 
 
     item._nodeid = f"{item._nodeid}{suffix}"
     item.name = f"{item.name}{suffix}"
+    # A C++ case starts no cluster, but it is not free. It runs one Seastar
+    # process, and its shard count is the -c we pass. So the claim is that
+    # number, and nothing has to declare it.
+    if isinstance(item, CppTestCase) and item.get_closest_marker(MAX_RUNNING_SHARDS_MARKER) is None:
+        # The same option lists run_exe() passes, in the same order, so a
+        # per-case override from `custom_args` wins here as it does at run time.
+        shards = shards_of([*item.parent.test_args, *item.test_custom_args])
+        item.add_marker(getattr(pytest.mark, MAX_RUNNING_SHARDS_MARKER)(shards))
     claimed_shards(item)  # a malformed claim fails collection, not one test
     skip_marks = [
         mark for mark in item.iter_markers("skip_mode")
