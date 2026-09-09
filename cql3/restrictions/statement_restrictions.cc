@@ -2908,25 +2908,72 @@ const std::unordered_set<const column_definition*> statement_restrictions::get_n
 }
 
 shared_ptr<const statement_restrictions>
-analyze_statement_restrictions(
+analyze_select_restrictions(
+        data_dictionary::database db,
+        schema_ptr schema,
+        const expr::expression& where_clause,
+        prepare_context& ctx,
+        bool selects_only_static_columns,
+        bool allow_filtering,
+        check_indexes do_check_indexes,
+        pinned_plan_opt pinned_plan) {
+    return seastar::make_shared<statement_restrictions>(statement_restrictions::private_tag{}, db,
+            std::move(schema), statements::statement_type::SELECT, where_clause, ctx,
+            selects_only_static_columns, /*for_view=*/false, allow_filtering, do_check_indexes,
+            std::move(pinned_plan));
+}
+
+shared_ptr<const statement_restrictions>
+analyze_view_restrictions(
+        data_dictionary::database db,
+        schema_ptr schema,
+        const expr::expression& where_clause,
+        prepare_context& ctx,
+        bool selects_only_static_columns,
+        check_indexes do_check_indexes) {
+    // A view definition is not run on behalf of a client, so it is never asked
+    // to spell out ALLOW FILTERING: whatever the key order cannot express is
+    // filtered when the view is refreshed, and that is the user's stated intent.
+    return seastar::make_shared<statement_restrictions>(statement_restrictions::private_tag{}, db,
+            std::move(schema), statements::statement_type::SELECT, where_clause, ctx,
+            selects_only_static_columns, /*for_view=*/true, /*allow_filtering=*/true, do_check_indexes,
+            std::nullopt);
+}
+
+shared_ptr<const statement_restrictions>
+analyze_modification_restrictions(
         data_dictionary::database db,
         schema_ptr schema,
         statements::statement_type type,
         const expr::expression& where_clause,
         prepare_context& ctx,
-        bool selects_only_static_columns,
-        bool for_view,
-        bool allow_filtering,
-        check_indexes do_check_indexes,
-        pinned_plan_opt pinned_plan) {
-    return seastar::make_shared<statement_restrictions>(statement_restrictions::private_tag{}, db, std::move(schema), type, where_clause, ctx, selects_only_static_columns, for_view, allow_filtering, do_check_indexes, std::move(pinned_plan));
+        bool applies_only_to_static_columns) {
+    return seastar::make_shared<statement_restrictions>(statement_restrictions::private_tag{}, db,
+            std::move(schema), type, where_clause, ctx, applies_only_to_static_columns,
+            /*for_view=*/false, /*allow_filtering=*/false, check_indexes::no, std::nullopt);
 }
 
 shared_ptr<const statement_restrictions>
-make_trivial_statement_restrictions(
+analyze_insert_restrictions(
+        data_dictionary::database db,
         schema_ptr schema,
-        bool allow_filtering) {
-    return make_shared<statement_restrictions>(statement_restrictions::private_tag{}, std::move(schema), allow_filtering);
+        const expr::expression& where_clause,
+        prepare_context& ctx,
+        bool applies_only_to_static_columns) {
+    return seastar::make_shared<statement_restrictions>(statement_restrictions::private_tag{}, db,
+            std::move(schema), statements::statement_type::INSERT, where_clause, ctx,
+            applies_only_to_static_columns, /*for_view=*/false, /*allow_filtering=*/false,
+            check_indexes::no, std::nullopt);
+}
+
+shared_ptr<const statement_restrictions>
+make_empty_select_restrictions(schema_ptr schema) {
+    return make_shared<statement_restrictions>(statement_restrictions::private_tag{}, std::move(schema), true);
+}
+
+shared_ptr<const statement_restrictions>
+make_empty_insert_restrictions(schema_ptr schema) {
+    return make_shared<statement_restrictions>(statement_restrictions::private_tag{}, std::move(schema), false);
 }
 
 } // namespace restrictions

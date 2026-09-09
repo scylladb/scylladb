@@ -36,14 +36,12 @@ query::clustering_row_ranges slice(
         const sstring& table_name = "t", const sstring& keyspace_name = "ks") {
     prepare_context ctx;
     ctx.set_bound_variables({}, internal_dialect());
-    return restrictions::analyze_statement_restrictions(
+    return restrictions::analyze_select_restrictions(
             env.data_dictionary(),
             env.local_db().find_schema(keyspace_name, table_name),
-            statements::statement_type::SELECT,
             expr::conjunction{where_clause},
             ctx,
-            /*contains_only_static_columns=*/false,
-            /*for_view=*/false,
+            /*selects_only_static_columns=*/false,
             /*allow_filtering=*/true,
             restrictions::check_indexes::yes)
             ->get_clustering_bounds(query_options({}));
@@ -406,14 +404,12 @@ SEASTAR_TEST_CASE(index_selection) {
             auto factors = where_clause.empty()
                 ? std::vector<expr::expression>{}
                 : boolean_factors(cql3::util::where_clause_to_relations(where_clause, cql3::dialect{}));
-            auto sr = restrictions::analyze_statement_restrictions(
+            auto sr = restrictions::analyze_select_restrictions(
                     e.data_dictionary(),
                     schema,
-                    statements::statement_type::SELECT,
                     expr::conjunction{std::move(factors)},
                     ctx,
-                    /*contains_only_static_columns=*/false,
-                    /*for_view=*/false,
+                    /*selects_only_static_columns=*/false,
                     /*allow_filtering=*/true,
                     restrictions::check_indexes::yes);
             auto idx = sr->find_idx(sim);
@@ -517,14 +513,12 @@ SEASTAR_TEST_CASE(index_selection) {
 static shared_ptr<const restrictions::statement_restrictions> try_analyze_restrictions(
         cql_test_env& e, schema_ptr schema, const expr::expression& where_expr, prepare_context& ctx) {
     try {
-        return restrictions::analyze_statement_restrictions(
+        return restrictions::analyze_select_restrictions(
                 e.data_dictionary(),
                 schema,
-                statements::statement_type::SELECT,
                 where_expr,
                 ctx,
-                /*contains_only_static_columns=*/false,
-                /*for_view=*/false,
+                /*selects_only_static_columns=*/false,
                 /*allow_filtering=*/true,
                 restrictions::check_indexes::yes);
     } catch (const exceptions::invalid_request_exception&) {
@@ -1169,14 +1163,12 @@ static shared_ptr<const restrictions::statement_restrictions> make_restrictions(
     auto factors = where_clause.empty()
             ? std::vector<expr::expression>{}
             : boolean_factors(cql3::util::where_clause_to_relations(where_clause, cql3::dialect{}));
-    return restrictions::analyze_statement_restrictions(
+    return restrictions::analyze_select_restrictions(
             env.data_dictionary(),
             env.local_db().find_schema(keyspace_name, table_name),
-            statements::statement_type::SELECT,
             expr::conjunction{std::move(factors)},
             ctx,
-            /*contains_only_static_columns=*/false,
-            /*for_view=*/false,
+            /*selects_only_static_columns=*/false,
             /*allow_filtering=*/true,
             restrictions::check_indexes::yes);
 }

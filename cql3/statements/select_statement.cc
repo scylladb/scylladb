@@ -2444,8 +2444,14 @@ select_statement::prepare_restrictions(data_dictionary::database db,
                                        restrictions::pinned_plan_opt pinned_plan)
 {
     try {
-        return restrictions::analyze_statement_restrictions(db, schema, statement_type::SELECT, _where_clause, ctx,
-            selection->contains_only_static_columns(), for_view, allow_filtering, do_check_indexes, std::move(pinned_plan));
+        if (for_view) {
+            // The SELECT defining a materialized view. It differs in what
+            // IS NOT NULL means, and it is never asked for ALLOW FILTERING.
+            return restrictions::analyze_view_restrictions(db, schema, _where_clause, ctx,
+                selection->contains_only_static_columns(), do_check_indexes);
+        }
+        return restrictions::analyze_select_restrictions(db, schema, _where_clause, ctx,
+            selection->contains_only_static_columns(), allow_filtering, do_check_indexes, std::move(pinned_plan));
     } catch (const exceptions::unrecognized_entity_exception& e) {
         if (contains_alias(e.entity)) {
             throw exceptions::invalid_request_exception(format("Aliases aren't allowed in the WHERE clause (name: '{}')", e.entity));
