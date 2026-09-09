@@ -165,7 +165,7 @@ void set_compaction_manager(http_context& ctx, routes& r, sharded<compaction::co
             throw httpd::bad_param_exception(res.error());
         }
         co_await cm.invoke_on_all([types = res.value()] (compaction::compaction_manager& cm) {
-            return cm.stop_compaction(types);
+            return cm.stop_ongoing_compactions("user request", types);
         });
         co_return json_void();
     });
@@ -178,7 +178,7 @@ void set_compaction_manager(http_context& ctx, routes& r, sharded<compaction::co
         }
         co_await cm.invoke_on_all([&, types = res.value()] (compaction::compaction_manager& cm) {
             return parallel_for_each(tables, [&] (const table_info& ti) {
-                return cm.stop_compaction(types, [id = ti.id] (const compaction::compaction_group_view* x) {
+                return cm.stop_ongoing_compactions("user request", types, [id = ti.id] (const compaction::compaction_group_view* x) {
                     return x->schema()->id() == id;
                 });
             });
