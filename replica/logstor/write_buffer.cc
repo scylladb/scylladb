@@ -17,8 +17,8 @@
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/coroutine/as_future.hh>
 #include "serializer_impl.hh"
-#include "idl/logstor.dist.hh"
-#include "idl/logstor.dist.impl.hh"
+#include "idl/frozen_schema.dist.hh"
+#include "idl/frozen_schema.dist.impl.hh"
 #include <seastar/core/align.hh>
 #include <seastar/core/aligned_buffer.hh>
 #include "utils/crc.hh"
