@@ -506,20 +506,23 @@ future<tasks::task_manager::task_ptr> task_manager_module::start_major_keyspace_
     });
 }
 
-future<> shard_major_keyspace_compaction_task_impl::run() {
+static future<> run_shard_major_compaction(tasks::task_manager::module_ptr module, replica::database& db, std::string keyspace, const std::vector<table_info>& tables, flush_mode fm, bool consider_only_existing_data, tasks::task_info task_info) {
     seastar::condition_variable cv;
     current_task_type current_task;
-    auto parent_info = info();
     std::vector<table_tasks_info> table_tasks;
-    for (auto& ti : _local_tables) {
-        table_tasks.emplace_back(co_await _module->make_and_start_task<table_major_keyspace_compaction_task_impl>(parent_info, _status.keyspace, ti.name, _status.id, _db, ti, cv, current_task, _flush_mode, _consider_only_existing_data), ti);
+    for (auto& ti : tables) {
+        table_tasks.emplace_back(co_await module->make_and_start_task<table_major_keyspace_compaction_task_impl>(task_info, keyspace, ti.name, task_info.get_id(), db, ti, cv, current_task, fm, consider_only_existing_data), ti);
     }
 
-    co_await run_table_tasks(_db, std::move(table_tasks), cv, current_task, true);
+    co_await run_table_tasks(db, std::move(table_tasks), cv, current_task, true);
 
     utils::get_local_injector().inject("shard_major_keyspace_compaction_task_impl_run_fail", [] () {
         throw std::runtime_error("Injected failure in shard_major_keyspace_compaction_task_impl::run");
     });
+}
+
+future<> shard_major_keyspace_compaction_task_impl::run() {
+    return run_shard_major_compaction(_module, _db, _status.keyspace, _local_tables, _flush_mode, _consider_only_existing_data, info());
 }
 
 future<std::optional<double>> shard_major_keyspace_compaction_task_impl::expected_total_workload() const {
