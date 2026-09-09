@@ -7,11 +7,19 @@
 
 import asyncio
 import logging
+import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
+from test.pylib.db import writer
+from test.pylib.db.writer import (
+    CLUSTER_METRICS_TABLE,
+    SQLiteWriter,
+    add_column,
+    add_missing_columns,
+)
 from test.pylib.host_registry import Host
 from test.pylib.internal_types import ServerNum
 from test.pylib.running_shards import (
@@ -341,3 +349,82 @@ def test_a_start_stop_cycle_does_not_accumulate(tmp_path):
         del cluster.running[ServerNum(1)]       # the test stops it again
 
     assert cluster.shard_usage.high_water_mark == 2
+
+# --- the metrics database outlives a run ------------------------------------
+
+def test_writer_adds_a_column_missing_from_an_older_database(tmp_path):
+    """The database is not wiped between runs, so an older one has to be updated.
+
+    prepare_dirs() clears *.log from the tmpdir but not sqlite_*.db, and a host
+    with SCYLLA_TEST_HOST_ID set keeps the same filename -- so a file written
+    before a column existed has to gain it, or every insert into it fails.
+    """
+    db_path = tmp_path / "old.db"
+    conn = sqlite3.connect(db_path)
+    with conn:
+        conn.execute(f"CREATE TABLE {CLUSTER_METRICS_TABLE} ("
+                     "id INTEGER PRIMARY KEY, test_id INT NOT NULL, host_id VARCHAR(5) NOT NULL, "
+                     "nodeid TEXT NOT NULL, max_running_shards INTEGER NOT NULL)")
+    conn.close()
+
+    SQLiteWriter(db_path).close()
+
+    conn = sqlite3.connect(db_path)
+    columns = {row[1] for row in conn.execute(f"PRAGMA table_info({CLUSTER_METRICS_TABLE})")}
+    conn.close()
+    assert {"claim", "status"} <= columns, "every column add_column names has to be applied"
+
+    SQLiteWriter(db_path).close()   # and opening it again is a no-op
+
+
+class LostTheRace:
+    """A cursor whose first look at the schema is one migration out of date.
+
+    What a worker sees when another adds a column between its check and its
+    ALTER: the check says missing, the ALTER says duplicate, and looking again
+    says it is there.  Workers share one database file and build a writer per
+    test, so nothing stops them arriving together.
+    """
+
+    def __init__(self, cursor: sqlite3.Cursor) -> None:
+        self.cursor = cursor
+        self.stale = True
+        self.last = ""
+
+    def execute(self, sql: str, *args):
+        self.last = sql
+        return self.cursor.execute(sql, *args)
+
+    def fetchall(self):
+        rows = self.cursor.fetchall()
+        if not self.stale or not self.last.startswith("PRAGMA table_info"):
+            return rows
+        self.stale = False
+        added = {column for _, column, _ in add_column}
+        return [row for row in rows if row[1] not in added]
+
+
+def test_writer_survives_losing_the_migration_race(tmp_path):
+    """The column being there already is the outcome the migration wanted."""
+    db_path = tmp_path / "current.db"
+    SQLiteWriter(db_path).close()               # a database that is already migrated
+
+    conn = sqlite3.connect(db_path)
+    with conn:
+        add_missing_columns(LostTheRace(conn.cursor()))
+    columns = {row[1] for row in conn.execute(f"PRAGMA table_info({CLUSTER_METRICS_TABLE})")}
+    conn.close()
+    assert {column for _, column, _ in add_column} <= columns
+
+
+def test_writer_reports_a_migration_that_really_failed(tmp_path, monkeypatch):
+    """A refused ALTER is only forgivable when the column ended up there anyway."""
+    db_path = tmp_path / "current.db"
+    SQLiteWriter(db_path).close()
+    # SQLite refuses this one outright: ALTER TABLE cannot add an index.
+    monkeypatch.setattr(writer, "add_column", [(CLUSTER_METRICS_TABLE, "late", "INTEGER UNIQUE")])
+
+    conn = sqlite3.connect(db_path)
+    with pytest.raises(sqlite3.OperationalError):
+        add_missing_columns(conn.cursor())
+    conn.close()

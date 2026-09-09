@@ -68,6 +68,10 @@ REPEATING_FILES = pytest.StashKey[set[pathlib.Path]]()
 BUILD_MODE = pytest.StashKey[str]()
 RUN_ID = pytest.StashKey[int]()
 PYTEST_LOG_FILE = pytest.StashKey[str]()
+# Peak shards the test's cluster ran, and the claim in force while it did,
+# published by the manager fixture for pytest_runtest_protocol to record.
+MAX_RUNNING_SHARDS = pytest.StashKey[int]()
+MAX_RUNNING_SHARDS_CLAIM = pytest.StashKey[int | None]()
 
 EXIT_MAXFAIL_REACHED = 11
 
@@ -283,6 +287,16 @@ def pytest_runtest_protocol(item, nextitem):
                     metrics=test_metrics,
                     success=success
                 )
+                peak = item.stash.get(MAX_RUNNING_SHARDS, None)
+                if peak is not None:
+                    # nodeid without the ".mode.run_id" suffix modify_pytest_item()
+                    # appended, so --repeat copies and modes share one key.
+                    resource_gather.write_cluster_metrics(
+                        nodeid=item.nodeid.removesuffix(f".{test_mock.mode}.{test_mock.id}"),
+                        max_running_shards=peak,
+                        claim=item.stash.get(MAX_RUNNING_SHARDS_CLAIM, None),
+                        status=status,
+                    )
             finally:
                 resource_gather.teardown_test_tracking()
 
