@@ -2270,7 +2270,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         return do_with(gids, [this, dst, session_id = trinfo.session_id] (const auto& gids) {
                             return do_for_each(gids, [this, dst, session_id] (locator::global_tablet_id gid) {
                                 return ser::storage_service_rpc_verbs::send_tablet_repair(&_messaging,
-                                        dst, _as, raft::server_id(dst.uuid()), gid, session_id).discard_result();
+                                        dst, _as, raft::server_id(dst.uuid()), gid, session_id, tablet_repair_flush_info{tablet_repair_flush_mode::skip}).discard_result();
                             });
                         });
                     })) {
@@ -2532,7 +2532,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         auto session_id = utils::get_local_injector().enter("handle_tablet_migration_repair_random_session") ?
                             service::session_id::create_random_id() : trinfo->session_id;
                         auto res = co_await ser::storage_service_rpc_verbs::send_tablet_repair(&_messaging,
-                                dst, _as, raft::server_id(dst.uuid()), gid, session_id);
+                                dst, _as, raft::server_id(dst.uuid()), gid, session_id, tablet_repair_flush_info{tablet_repair_flush_mode::flush});
                         auto duration = std::chrono::duration<float>(db_clock::now() - sched_time);
                         auto& tablet_state = _tablets[tablet];
                         tablet_state.repair_time = db_clock::from_time_t(gc_clock::to_time_t(res.repair_time));

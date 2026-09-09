@@ -5404,8 +5404,8 @@ future<tablet_operation_result> storage_service::do_tablet_operation(locator::gl
     }
 }
 
-future<service::tablet_operation_repair_result> storage_service::repair_tablet(locator::global_tablet_id tablet, service::session_id session_id) {
-    auto result = co_await do_tablet_operation(tablet, "Repair", [this, tablet, session_id] (locator::tablet_metadata_guard& guard) -> future<tablet_operation_result> {
+future<service::tablet_operation_repair_result> storage_service::repair_tablet(locator::global_tablet_id tablet, service::session_id session_id, std::optional<tablet_repair_flush_info> flush) {
+    auto result = co_await do_tablet_operation(tablet, "Repair", [this, tablet, session_id, flush] (locator::tablet_metadata_guard& guard) -> future<tablet_operation_result> {
         slogger.debug("Executing repair for tablet={}", tablet);
         auto& tmap = guard.get_tablet_map();
         auto* trinfo = tmap.get_tablet_transition_info(tablet.tablet);
@@ -5420,6 +5420,10 @@ future<service::tablet_operation_repair_result> storage_service::repair_tablet(l
         }
         auto session = session_id ? session_id : trinfo->session_id;
         slogger.debug("repair_tablet: tablet={} session_id={}", tablet, session);
+        // A coordinator too old to send flush expects what the repair did on
+        // its own: flush, except in a rebuild, which has never flushed.
+        auto flush_info = flush.value_or(tablet_repair_flush_info{trinfo->stage == locator::tablet_transition_stage::rebuild_repair
+                ? tablet_repair_flush_mode::skip : tablet_repair_flush_mode::flush});
 
         auto global_tablet_repair_task_info = tasks::make_empty_task_info();
         std::optional<locator::tablet_replica_set> replicas = std::nullopt;
@@ -5440,7 +5444,7 @@ future<service::tablet_operation_repair_result> storage_service::repair_tablet(l
 
         utils::get_local_injector().inject("repair_tablet_fail_on_rpc_call",
             [] { throw std::runtime_error("repair_tablet failed due to error injection"); });
-        auto time = co_await _repair.local().repair_tablet(_address_map, guard, tablet, global_tablet_repair_task_info, session, std::move(replicas), trinfo->stage);
+        auto time = co_await _repair.local().repair_tablet(_address_map, guard, tablet, global_tablet_repair_task_info, session, std::move(replicas), trinfo->stage, flush_info);
         co_return service::tablet_operation_repair_result{time};
     });
     if (std::holds_alternative<service::tablet_operation_repair_result>(result)) {
@@ -7075,9 +7079,9 @@ void storage_service::init_messaging_service() {
             return ss.stream_tablet(tablet);
         });
     });
-    ser::storage_service_rpc_verbs::register_tablet_repair(&_messaging.local(), [this] (raft::server_id dst_id, locator::global_tablet_id tablet, rpc::optional<service::session_id> session_id) {
-        return handle_raft_rpc(dst_id, [tablet, session_id = session_id.value_or(service::session_id::create_null_id())] (auto& ss) -> future<service::tablet_operation_repair_result> {
-            auto res = co_await ss.repair_tablet(tablet, session_id);
+    ser::storage_service_rpc_verbs::register_tablet_repair(&_messaging.local(), [this] (raft::server_id dst_id, locator::global_tablet_id tablet, rpc::optional<service::session_id> session_id, rpc::optional<tablet_repair_flush_info> flush) {
+        return handle_raft_rpc(dst_id, [tablet, session_id = session_id.value_or(service::session_id::create_null_id()), flush] (auto& ss) -> future<service::tablet_operation_repair_result> {
+            auto res = co_await ss.repair_tablet(tablet, session_id, flush);
             co_return res;
         });
     });
