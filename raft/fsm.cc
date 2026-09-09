@@ -437,23 +437,26 @@ fsm_output fsm::get_output() {
         output.term_and_vote = {_current_term, _voted_for};
     }
 
-    // Return committed entries.
+    // Report the entries that became committed: their ids only, the
+    // entries themselves stay in the log.
     // Observer commit index may be smaller than snapshot index
-    // in which case we should not attempt committing entries belonging
+    // in which case we should not report entries belonging
     // to a snapshot.
     auto observed_ci =  std::max(_observed._commit_idx, _log.get_snapshot().idx);
     if (observed_ci < _commit_idx) {
-        output.committed.reserve((_commit_idx - observed_ci).value());
-
+        auto& committed = output.committed;
         for (auto idx = observed_ci + index_t{1}; idx <= _commit_idx; ++idx) {
             const auto& entry = _log[idx.value()];
-            output.committed.push_back(entry);
+            committed.ids.append(idx, entry->term);
+            if (const auto* cfg = std::get_if<configuration>(&entry->data); cfg && !cfg->is_joint()) {
+                committed.non_joint_conf_committed = true;
+            }
         }
     }
 
     // Get a snapshot of all unsent messages.
-    // Do it after populating log_entries and committed arrays
-    // to not lose messages in case arrays population throws
+    // Do it after populating the log_entries array
+    // to not lose messages in case the population throws
     std::swap(output.messages, _messages);
 
     // Get status of leadership transfer (if any)

@@ -80,6 +80,129 @@ concept LeaderAction = requires(const server_id& leader, AsyncAction aa) {
     { aa(leader) } -> std::same_as<future<do_on_leader_result>>;
 };
 
+struct stop_apply_fiber{}; // exception to send when apply fiber is needs to be stopepd
+
+// The applier fiber's pending input, published by io_fiber and by
+// trigger_snapshot() for snapshot requests -- never by the applier fiber
+// itself.
+//
+// This is state rather than a queue of messages: the pending input does
+// not grow with the number of committed entries (newly committed entries
+// just raise the index the applier fiber may apply up to, a newer
+// snapshot replaces the older ones it subsumes), and publishing never
+// blocks. The committed entries are not carried here at all, only the
+// index of the last of them: the fsm log holds the entries, this tells
+// the applier fiber how far it may go and it reads them from there. That
+// is what keeps io_fiber going -- committing entries and notifying commit
+// waiters -- while the state machine is slow or paused inside apply().
+//
+// Being state and not a message also means the applier fiber never has to
+// take anything it cannot act on yet: when a snapshot the fsm accepted
+// removed the entries it was applying, it simply waits again until that
+// snapshot is published here, with nothing to hand back.
+class applier_mailbox {
+    // The newest snapshot received from the leader, persisted by io_fiber
+    // and not yet loaded into the state machine. A newer one replaces an
+    // older one that was not loaded: loading the newest subsumes the
+    // skipped ones.
+    std::optional<snapshot_descriptor> _snapshot_to_load;
+    // The highest index io_fiber reported committed and persisted (see
+    // process_fsm_output()), so the entries up to it are both committed
+    // and on the local disk. The applier fiber may apply up to here,
+    // reading the entries from the fsm log. Only ever grows.
+    index_t _stable_commit_idx{0};
+    // The server found itself outside the cluster configuration: once the
+    // applier fiber has applied everything committed by then, it drops the
+    // remaining apply waiters -- the server may never learn the fate of
+    // later entries.
+    bool _drop_apply_waiters = false;
+    // trigger_snapshot() asked to take a state machine snapshot.
+    bool _snapshot_requested = false;
+
+    seastar::condition_variable _changed;
+    bool _stopped = false;
+
+public:
+    // The publishing side, called by io_fiber unless noted otherwise.
+
+    // A snapshot received from the leader was persisted. It advances the
+    // commit index past every entry reported committed so far (the fsm
+    // accepts one only above its commit index), and those entries are gone
+    // from the log with it, so it also carries the apply limit forward.
+    void publish_snapshot(snapshot_descriptor snp) {
+        _stable_commit_idx = std::max(_stable_commit_idx, snp.idx);
+        _snapshot_to_load = std::move(snp);
+        _changed.signal();
+    }
+    // Entries up to and including last_idx are committed and persisted.
+    void publish_committed(index_t last_idx) {
+        SCYLLA_ASSERT(last_idx >= _stable_commit_idx);
+        _stable_commit_idx = last_idx;
+        _changed.signal();
+    }
+    void request_drop_apply_waiters() {
+        _drop_apply_waiters = true;
+        _changed.signal();
+    }
+    // Called by trigger_snapshot(), not by io_fiber.
+    void request_snapshot() {
+        _snapshot_requested = true;
+        _changed.signal();
+    }
+
+    // Makes the current and every subsequent wait() fail with
+    // stop_apply_fiber. Called on server abort.
+    void stop() {
+        _stopped = true;
+        _changed.broken(std::make_exception_ptr(stop_apply_fiber{}));
+    }
+
+    // The applier fiber side.
+
+    // Waits until has_work() holds, i.e. until there is something the
+    // applier fiber can act on right now. The predicate is re-evaluated on
+    // every publish; it reads this mailbox through the accessors below
+    // together with the applier fiber's own progress, which is why the
+    // caller supplies it instead of it being a member here.
+    template <typename Predicate>
+    future<> wait(Predicate has_work) {
+        co_await _changed.when(std::move(has_work));
+        if (_stopped) {
+            // when() completes without checking whether the condition
+            // variable was broken if the predicate already holds, so the
+            // applier fiber would otherwise start working while abort() is
+            // waiting for it to finish.
+            co_await coroutine::return_exception(stop_apply_fiber{});
+        }
+    }
+
+    const std::optional<snapshot_descriptor>& snapshot_to_load() const {
+        return _snapshot_to_load;
+    }
+    index_t stable_commit_idx() const {
+        return _stable_commit_idx;
+    }
+    bool drop_apply_waiters_requested() const {
+        return _drop_apply_waiters;
+    }
+    bool snapshot_requested() const {
+        return _snapshot_requested;
+    }
+
+    // Take a piece of the input the applier fiber is about to act on,
+    // clearing it here.
+    snapshot_descriptor take_snapshot_to_load() {
+        SCYLLA_ASSERT(_snapshot_to_load);
+        return *std::exchange(_snapshot_to_load, std::nullopt);
+    }
+    bool take_drop_apply_waiters_request() {
+        return std::exchange(_drop_apply_waiters, false);
+    }
+    bool take_snapshot_request() {
+        return std::exchange(_snapshot_requested, false);
+    }
+};
+
 class server_impl : public rpc_server, public server {
 public:
     explicit server_impl(server_id uuid, std::unique_ptr<rpc> rpc,
@@ -123,7 +246,6 @@ public:
     raft::server_id current_leader() const override;
     void tick() override;
     raft::server_id id() const override;
-    void set_applier_queue_max_size(size_t queue_max_size) override;
     future<> stepdown(logical_clock::duration timeout, server_id target) override;
     future<> modify_config(std::vector<config_member> add, std::vector<server_id> del, seastar::abort_source* as) override;
     future<entry_id> add_entry_on_leader(command command, seastar::abort_source* as);
@@ -163,18 +285,8 @@ private:
     // Signaled when _snapshot_desc_idx is changed
     condition_variable _snapshot_desc_idx_changed;
 
-    struct stop_apply_fiber{}; // exception to send when apply fiber is needs to be stopepd
-
-    struct removed_from_config{}; // sent to applier_fiber when we're not a leader and we're outside the current configuration
-
-    struct trigger_snapshot_msg{};
-
-    using applier_fiber_message = std::variant<
-        log_entry_ptr_list,
-        snapshot_descriptor,
-        removed_from_config,
-        trigger_snapshot_msg>;
-    queue<applier_fiber_message> _apply_entries = queue<applier_fiber_message>(10);
+    // The io_fiber -> applier fiber hand-off, see the class comment.
+    applier_mailbox _applier_mailbox;
 
     struct stats {
         uint64_t add_command = 0;
@@ -245,6 +357,17 @@ private:
     // ever grows. It is what lets an apply waiter be resolved after a
     // snapshot replaced its entry in the log, when the term is no longer
     // there to compare against (see drop_apply_waiters()).
+    //
+    // Deliberately not the mailbox's stable commit index, which is what the
+    // applier fiber uses to decide how far to apply. That one is also
+    // advanced by publish_snapshot(), to the snapshot index, which says
+    // nothing about any term having been compared. Handing it to
+    // drop_apply_waiters() as the committed bound would resolve every waiter
+    // the snapshot covers successfully, including one whose entry a different
+    // leader's log replaced and which never committed here -- reporting a
+    // command as applied when a different command took its place. Only
+    // mark_committed() advances this index, and only over entries whose terms
+    // it compared.
     index_t _committed_apply_waiters_idx{0};
 
     // Maps each destination to the abort_source of the currently active
@@ -269,26 +392,19 @@ private:
     };
     absl::flat_hash_map<server_id, append_request_queue> _append_request_status;
 
-    struct server_requests {
-        bool snapshot = false;
-
-        bool empty() const {
-            return !snapshot;
-        }
-    };
-
-    server_requests _new_server_requests;
-
-    // Notifies the commit waiters for the given committed entries.
-    void notify_commit_waiters(const log_entry_ptr_list& entries);
+    // Notifies the commit waiters for the given committed entries. The terms
+    // travel with the ids, so this does not need the entries to still be in
+    // the fsm log.
+    void notify_commit_waiters(const entry_id_range& ids);
 
     // Settles the fate of the apply waiters for the given committed entries
     // while their terms are still known: the waiters whose term does not
     // match are dropped, their entries having been replaced, and
     // _committed_apply_waiters_idx is advanced over the rest. Called by
     // io_fiber alongside notify_commit_waiters(); the applier fiber then only
-    // has to resolve what is left.
-    void mark_committed(const log_entry_ptr_list& entries);
+    // has to resolve what is left, whether it gets to apply the entries or a
+    // snapshot replaces them first.
+    void mark_committed(const entry_id_range& ids);
 
     // Notifies the apply waiters up to and including `idx`, which must have
     // been applied. They are all known committed by now (see
@@ -323,9 +439,7 @@ private:
     //  - send out messages
     future<> process_fsm_output(index_t& stable_idx, fsm_output&&);
 
-    future<> process_server_requests(server_requests&&);
-
-    // Processes new FSM outputs and server requests as they appear.
+    // Processes new FSM outputs as they appear.
     future<> io_fiber(index_t stable_idx);
 
     // This fiber runs in the background and applies committed entries.
@@ -568,8 +682,10 @@ future<bool> server_impl::trigger_snapshot(seastar::abort_source* as) {
         co_return false;
     }
 
-    _new_server_requests.snapshot = true;
-    _events.signal();
+    // The applier fiber takes the snapshot after applying everything
+    // pending in the mailbox, so the snapshot index is at least the
+    // applied index as of now.
+    _applier_mailbox.request_snapshot();
 
     // Wait for persisted snapshot index to catch up to this index.
     auto awaited_idx = _applied_idx;
@@ -1082,22 +1198,31 @@ void server_impl::read_quorum_reply(server_id from, struct read_quorum_reply rea
     _fsm->step(from, std::move(read_quorum_reply));
 }
 
-void server_impl::notify_commit_waiters(const log_entry_ptr_list& entries) {
-    index_t commit_idx = entries.back()->idx;
-    index_t first_idx = entries.front()->idx;
+// Advances `run` to the term run of `ids` that covers `idx`, which must be
+// within [ids.first_idx(), ids.last_idx]. Callers walk the waiters in index
+// order, so the run only ever moves forward.
+static term_t committed_term_for(const entry_id_range& ids, size_t& run, index_t idx) {
+    while (run + 1 < ids.terms.size() && ids.terms[run + 1].first <= idx) {
+        ++run;
+    }
+    return ids.terms[run].second;
+}
 
+void server_impl::notify_commit_waiters(const entry_id_range& ids) {
+    SCYLLA_ASSERT(!ids.empty());
+    size_t run = 0;
     while (!_awaited_commits.empty()) {
         index_t entry_idx = _awaited_commits.base_index();
-        if (entry_idx > commit_idx) {
+        if (entry_idx > ids.last_idx) {
             break;
         }
 
         // if there is a waiter entry with an index smaller than first entry
         // it means that notification is out of order which is prohibited
-        SCYLLA_ASSERT(entry_idx >= first_idx);
+        SCYLLA_ASSERT(entry_idx >= ids.first_idx());
 
         auto status = _awaited_commits.extract(entry_idx);
-        if (status.term == entries[(entry_idx - first_idx).value()]->term) {
+        if (status.term == committed_term_for(ids, run, entry_idx)) {
             status.done.set_value();
         } else {
             // The terms do not match which means that between the
@@ -1110,7 +1235,7 @@ void server_impl::notify_commit_waiters(const log_entry_ptr_list& entries) {
     // Drop all waiters with smaller term that last one been committed
     // since there is no way they will be committed any longer (terms in
     // the log only grow).
-    term_t last_committed_term = entries.back()->term;
+    term_t last_committed_term = ids.terms.back().second;
     while (auto* status = _awaited_commits.peek_front()) {
         if (status->term < last_committed_term) {
             status->done.set_exception(dropped_entry());
@@ -1122,15 +1247,16 @@ void server_impl::notify_commit_waiters(const log_entry_ptr_list& entries) {
     }
 }
 
-void server_impl::mark_committed(const log_entry_ptr_list& entries) {
-    const index_t first_idx = entries.front()->idx;
+void server_impl::mark_committed(const entry_id_range& ids) {
+    SCYLLA_ASSERT(!ids.empty());
     // Unlike the commit waiters, the apply waiters are not consumed from the
     // front here: the ones below this range are committed already and stay
     // until the applier fiber, which may lag arbitrarily far behind, gets to
     // their entries. So walk the range instead of the front of the queue.
-    _awaited_applies.erase_if_in_range(first_idx, entries.back()->idx,
+    size_t run = 0;
+    _awaited_applies.erase_if_in_range(ids.first_idx(), ids.last_idx,
             [&] (index_t entry_idx, op_status& status) {
-        if (status.term == entries[(entry_idx - first_idx).value()]->term) {
+        if (status.term == committed_term_for(ids, run, entry_idx)) {
             return true;
         }
         // The terms do not match, which means that between the times the
@@ -1147,7 +1273,7 @@ void server_impl::mark_committed(const log_entry_ptr_list& entries) {
     // since there is no way they will be committed any longer (terms in
     // the log only grow). Those are above the range, the ones below it are
     // committed and only waiting to be applied.
-    term_t last_committed_term = entries.back()->term;
+    term_t last_committed_term = ids.terms.back().second;
     // Stopping at the first waiter that is not stale is what this rule did
     // when it lived in notify_waiters(), and it keeps the walk proportional to
     // the waiters dropped rather than to those above the commit index. Waiter
@@ -1157,7 +1283,7 @@ void server_impl::mark_committed(const log_entry_ptr_list& entries) {
     // an older leader's. A stale waiter above the stopping point is then
     // missed, and the pass above drops it once its index is committed: a
     // delayed failure rather than a wrong one, as before.
-    _awaited_applies.erase_leading_above(entries.back()->idx + index_t{1}, [&] (index_t, op_status& status) {
+    _awaited_applies.erase_leading_above(ids.last_idx + index_t{1}, [&] (index_t, op_status& status) {
         if (status.term >= last_committed_term) {
             return true;
         }
@@ -1168,7 +1294,7 @@ void server_impl::mark_committed(const log_entry_ptr_list& entries) {
     // Every apply waiter up to here has now had its term checked against the
     // entry that was committed at its index, so the ones still around are
     // committed with the term they expect.
-    _committed_apply_waiters_idx = entries.back()->idx;
+    _committed_apply_waiters_idx = ids.last_idx;
 }
 
 void server_impl::notify_apply_waiters(index_t idx) {
@@ -1339,7 +1465,7 @@ future<> server_impl::process_fsm_output(index_t& last_stable, fsm_output&& batc
     }
 
     if (batch.snp) {
-        const auto& [snp, is_local, preserve_log_entries] = *batch.snp;
+        auto& [snp, is_local, preserve_log_entries] = *batch.snp;
         logger.trace("[{}] io_fiber storing snapshot {}", _tag, snp.id);
         // Persist the snapshot
         co_await _persistence->store_snapshot_descriptor(snp, preserve_log_entries);
@@ -1389,7 +1515,34 @@ future<> server_impl::process_fsm_output(index_t& last_stable, fsm_output&& batc
                         _tag, snp.id, snp.idx, _non_joint_conf_commit_promise->joint_idx);
                 std::exchange(_non_joint_conf_commit_promise, std::nullopt)->promise.set_value();
             }
-            co_await _apply_entries.push_eventually(std::move(snp));
+            // A newer snapshot replaces an older one the applier fiber did
+            // not get to: loading the newest subsumes the skipped ones. The
+            // entries reported committed so far are below the snapshot -- the
+            // fsm accepts one only above its commit index -- and gone from
+            // the log with it, so the applier fiber will not find them; their
+            // apply waiters are marked committed already (see
+            // mark_committed()) and load_snapshot() resolves them.
+            //
+            // The marking has to have happened by now, because publishing
+            // wakes the applier fiber and there are suspension points between
+            // here and mark_committed() below, so it may load the snapshot
+            // first. load_snapshot() then decides which of the waiters the
+            // snapshot covers were committed by _committed_apply_waiters_idx,
+            // which only mark_committed() advances; a committed entry at or
+            // below the snapshot index that this fiber has not marked yet
+            // would have its waiter failed with commit_status_unknown instead
+            // of resolved. Three things rule that out: io_fiber processes
+            // batches one at a time, so earlier ones are fully marked;
+            // fsm::apply_snapshot() refuses a snapshot while committed
+            // entries are unreported, so there are no unmarked ones left
+            // behind; and this batch reports nothing the snapshot subsumes,
+            // which is what the assert below pins down. That last one holds
+            // because fsm::get_output() starts the committed range above the
+            // log's snapshot index -- an assumption about the fsm that this
+            // call site depends on, hence checking it here rather than
+            // trusting it.
+            SCYLLA_ASSERT(batch.committed.ids.empty() || batch.committed.ids.first_idx() > snp.idx);
+            _applier_mailbox.publish_snapshot(std::move(snp));
         }
     }
 
@@ -1462,34 +1615,29 @@ future<> server_impl::process_fsm_output(index_t& last_stable, fsm_output&& batc
     }
 
     // Process committed entries.
-    if (batch.committed.size()) {
-        if (_non_joint_conf_commit_promise) {
-            for (const auto& e: batch.committed) {
-                const auto* cfg = get_if<raft::configuration>(&e->data);
-                if (cfg != nullptr && !cfg->is_joint()) {
-                    std::exchange(_non_joint_conf_commit_promise, std::nullopt)->promise.set_value();
-                    break;
-                }
-            }
+    if (!batch.committed.ids.empty()) {
+        auto& ids = batch.committed.ids;
+        if (_non_joint_conf_commit_promise && batch.committed.non_joint_conf_committed) {
+            std::exchange(_non_joint_conf_commit_promise, std::nullopt)->promise.set_value();
         }
         // Notify commit waiters here rather than in the applier fiber: an entry
         // is committed once a quorum of servers has it in their logs, regardless
         // of how far the local state machine got with applying entries, so the
         // notification must not depend on the applier fiber's progress (which
-        // may lag behind, e.g. when its queue backs up on a slow state machine).
-        notify_commit_waiters(batch.committed);
+        // may lag behind, e.g. on a slow state machine).
+        notify_commit_waiters(ids);
         // Settle what this commit means for the apply waiters while the
         // committed terms are at hand: the applier fiber may only get to the
         // entries much later, or never, if a snapshot replaces them first.
-        mark_committed(batch.committed);
+        mark_committed(ids);
         // Persisting the commit index is optional (see
         // persistence::store_commit_idx): a restarted server re-learns it from
         // the leader or, after a full cluster restart, the new leader recomputes
         // it from a quorum. So the commit notification above does not need to
         // wait for this write.
-        co_await _persistence->store_commit_idx(batch.committed.back()->idx);
-        _stats.queue_entries_for_apply += batch.committed.size();
-        co_await _apply_entries.push_eventually(std::move(batch.committed));
+        co_await _persistence->store_commit_idx(ids.last_idx);
+        _stats.queue_entries_for_apply += ids.size();
+        _applier_mailbox.publish_committed(ids.last_idx);
     }
 
     if (batch.max_read_id_with_quorum) {
@@ -1509,14 +1657,14 @@ future<> server_impl::process_fsm_output(index_t& last_stable, fsm_output&& batc
             // entries committed in this batch were notified above, so they are
             // not spuriously dropped.
             drop_commit_waiters();
-            // - Tell the applier fiber to drop the apply waiters as well. It's
-            // important we push this after we pushed committed entries above, so
-            // that waiters for entries applied in this batch are notified before
-            // the rest are dropped.
+            // - Tell the applier fiber to drop the apply waiters as well, once
+            // it has applied everything committed so far -- so that waiters
+            // that are about to be resolved normally are not spuriously
+            // dropped.
             // - This may happen multiple times if `io_fiber` gets multiple batches when
             // we're outside the configuration, but it should eventually (and generally
             // quickly) stop happening (we're outside the config after all).
-            co_await _apply_entries.push_eventually(removed_from_config{});
+            _applier_mailbox.request_drop_apply_waiters();
         }
         // abort all read barriers
         for (auto& r : _reads) {
@@ -1536,23 +1684,11 @@ future<> server_impl::process_fsm_output(index_t& last_stable, fsm_output&& batc
     }
 }
 
-future<> server_impl::process_server_requests(server_requests&& requests) {
-    if (requests.snapshot) {
-        co_await _apply_entries.push_eventually(trigger_snapshot_msg{});
-    }
-}
-
 future<> server_impl::io_fiber(index_t last_stable) {
     logger.trace("[{}] io_fiber start", _tag);
     try {
         while (true) {
-            bool has_fsm_output = false;
-            bool has_server_request = false;
-            co_await _events.when([this, &has_fsm_output, &has_server_request] {
-                has_fsm_output = _fsm->has_output();
-                has_server_request = !_new_server_requests.empty();
-                return has_fsm_output || has_server_request;
-            });
+            co_await _events.when([this] { return _fsm->has_output(); });
 
             while (utils::get_local_injector().enter("poll_fsm_output/pause")) {
                 co_await seastar::sleep(std::chrono::milliseconds(100));
@@ -1560,20 +1696,11 @@ future<> server_impl::io_fiber(index_t last_stable) {
 
             _stats.polls++;
 
-            if (has_fsm_output) {
-                auto batch = _fsm->get_output();
-                co_await process_fsm_output(last_stable, std::move(batch));
-            }
-
-            if (has_server_request) {
-                auto requests = std::exchange(_new_server_requests, server_requests{});
-                co_await process_server_requests(std::move(requests));
-            }
+            auto batch = _fsm->get_output();
+            co_await process_fsm_output(last_stable, std::move(batch));
         }
     } catch (seastar::broken_condition_variable&) {
         // Log fiber is stopped explicitly.
-    } catch (stop_apply_fiber&) {
-        // Log fiber is stopped explicitly
     } catch (...) {
         handle_background_error("io");
     }
@@ -1651,128 +1778,196 @@ future<snapshot_reply> server_impl::apply_snapshot(server_id from, install_snaps
 future<> server_impl::applier_fiber() {
     logger.trace("applier_fiber start");
 
+    // Loads the snapshot into the state machine and resolves the apply
+    // waiters it covers.
+    auto load_snapshot = [this] (snapshot_descriptor snp) -> future<> {
+        SCYLLA_ASSERT(snp.idx >= _applied_idx);
+        // Lets a test hold the applier fiber here, so that io_fiber
+        // keeps processing fsm output (in particular, notifying commit
+        // waiters) while a remote snapshot is still not applied.
+        co_await utils::get_local_injector().inject("block_raft_applier_fiber_before_load_snapshot",
+                utils::wait_for_message(std::chrono::minutes(5)));
+        // Apply snapshot it to the state machine
+        logger.trace("[{}] apply_fiber applying snapshot {}", _tag, snp.id);
+        co_await _state_machine->load_snapshot(snp.id);
+        // Resolve the apply waiters covered by the snapshot only now, after
+        // load_snapshot(): a resolved "applied" waiter promises that the
+        // local state machine already contains the entry's effect. This
+        // includes the waiters of the entries the snapshot replaced in the
+        // log before this fiber got to apply them: io_fiber marked them
+        // committed when it reported the entries (see mark_committed()), and
+        // a committed entry is included in the snapshot, so
+        // drop_apply_waiters() resolves them successfully. The commit waiters were already
+        // dropped by io_fiber when it received this snapshot, commitment
+        // does not depend on the local apply progress.
+        drop_apply_waiters(&snp);
+        _applied_idx = snp.idx;
+        signal_applied();
+        _stats.sm_load_snapshot++;
+    };
+
+    // Takes a state machine snapshot at the applied index and installs it
+    // into the fsm, which drops the log up to it but for the trailing
+    // entries.
+    auto take_snapshot = [this] (size_t max_trailing, size_t max_trailing_bytes) -> future<> {
+        // A snapshot already covers the applied index: one taken here on
+        // a threshold at the same index, or one received from the leader
+        // that got ahead of this fiber. The fsm would reject ours as
+        // outdated, and a trigger_snapshot() waiter is satisfied by that
+        // snapshot as well, once io_fiber stores it.
+        if (_applied_idx <= _fsm->log_last_snapshot_idx()) {
+            logger.trace("[{}] applier fiber: not taking a snapshot at idx={}, the snapshot at idx={} covers it",
+                    _tag, _applied_idx, _fsm->log_last_snapshot_idx());
+            co_return;
+        }
+        snapshot_descriptor snp;
+        snp.idx = _applied_idx;
+        // In the log: above the snapshot index, at most the applied index.
+        snp.term = *_fsm->log_term_for(snp.idx);
+        snp.config = _fsm->log_last_conf_for(snp.idx);
+        logger.trace("[{}] applier fiber: taking snapshot term={}, idx={}", _tag, snp.term, snp.idx);
+        snp.id = co_await _state_machine->take_snapshot();
+        // Note that at this point (after the `co_await`), _fsm may already have applied a later snapshot.
+        // That's fine, `_fsm->apply_snapshot` will simply ignore our current attempt; we will soon find
+        // a later snapshot in the mailbox.
+        if (!_fsm->apply_snapshot(snp, max_trailing, max_trailing_bytes, true)) {
+            logger.trace("[{}] applier fiber: while taking snapshot term={} idx={} id={},"
+                    " fsm received a later snapshot at idx={}", _tag, snp.term, snp.idx, snp.id, _fsm->log_last_snapshot_idx());
+        }
+        _stats.snapshots_taken++;
+    };
+
+    // Applies the committed entries the mailbox reported, in bounded
+    // batches, taking a state machine snapshot when the configured
+    // thresholds say so. Returns early, leaving _applied_idx below the
+    // mailbox's index, when a snapshot received from the leader removed the
+    // remaining entries from the fsm log.
+    auto apply_entries = [this, &take_snapshot] () -> future<> {
+        while (_applied_idx < _applier_mailbox.stable_commit_idx()) {
+            const index_t first_idx = _applied_idx + index_t{1};
+            const index_t upto_idx = _applier_mailbox.stable_commit_idx();
+            // A snapshot the fsm accepted while apply() was suspended
+            // replaced the entries. Only a snapshot received from the
+            // leader goes above the applied index, and it covers the whole
+            // remaining range rather than a part of it: the fsm accepts one
+            // only above the local commit index (see
+            // fsm::apply_snapshot()), so it is above every entry reported
+            // committed here. That is asserted rather than relied upon
+            // silently. There is nothing to apply until io_fiber publishes
+            // the snapshot, so leave and let the main loop wait for it.
+            const index_t snapshot_idx = _fsm->log_last_snapshot_idx();
+            SCYLLA_ASSERT(snapshot_idx < first_idx || snapshot_idx >= upto_idx);
+            if (snapshot_idx >= first_idx) {
+                co_return;
+            }
+            // Cap the batch: keeps the commands vector at most 100 KiB,
+            // under the default 128 KiB seastar large allocation warning
+            // threshold (see large_memory_allocation_warning_threshold).
+            constexpr size_t max_apply_batch_entries = 100 * 1024 / sizeof(log_entry_ptr);
+            const index_t last_idx = std::min(upto_idx, first_idx + index_t{max_apply_batch_entries - 1});
+
+            // Only the shared pointers are copied, and they must be:
+            // apply() below may suspend, and a snapshot received in
+            // the meantime may truncate the log, so the batch has to
+            // own its entries.
+            log_entry_ptr_list commands;
+            commands.reserve((last_idx - first_idx).value() + 1);
+            for (auto idx = first_idx; idx <= last_idx; ++idx) {
+                const log_entry_ptr& entry = _fsm->log_entry_at(idx);
+                if (std::holds_alternative<command>(entry->data)) {
+                    commands.push_back(entry);
+                }
+            }
+
+            const auto size = commands.size();
+            if (size) {
+                try {
+                    co_await _state_machine->apply(std::move(commands));
+                } catch (abort_requested_exception& e) {
+                    logger.info("[{}] applier fiber stopped because state machine was aborted: {}", _tag, e);
+                    throw stop_apply_fiber{};
+                } catch (...) {
+                    std::throw_with_nested(raft::state_machine_error{});
+                }
+                _stats.applied_entries += size;
+            }
+
+            // Use error injection to override the snapshot thresholds.
+            // NOTE: we do not want to yield later since a snapshot could be applied in the meantime,
+            // outdating the variables _applied_idx and last_snap_idx.
+            co_await override_snapshot_thresholds();
+
+            _applied_idx = last_idx;
+            signal_applied();
+            notify_apply_waiters(last_idx);
+
+            // It may happen that _fsm has already applied a later snapshot (from remote) that we didn't yet 'observe'
+            // (i.e. didn't yet see in the mailbox) but will soon. We avoid unnecessary work
+            // of taking snapshots ourselves but comparing our last index directly with what's currently in _fsm.
+            const auto last_snap_idx = _fsm->log_last_snapshot_idx();
+
+            const bool force_snapshot = utils::get_local_injector().enter("raft_server_force_snapshot");
+
+            if (force_snapshot || (_applied_idx > last_snap_idx &&
+                ((_applied_idx - last_snap_idx).value() >= _config.snapshot_threshold ||
+                _fsm->log_memory_usage() >= _config.snapshot_threshold_log_size)))
+            {
+                const auto max_trailing = force_snapshot ? 0 : _config.snapshot_trailing;
+                const auto max_trailing_bytes = force_snapshot ? 0 : _config.snapshot_trailing_size;
+                co_await take_snapshot(max_trailing, max_trailing_bytes);
+            }
+        }
+    };
+
+    // True when there is something this fiber can act on right now. While a
+    // snapshot the fsm has already accepted is still on its way from
+    // io_fiber, the entries below it are gone from the log, so the fiber
+    // waits for the snapshot rather than for more entries. The truncation
+    // only ever moves up, so a stale read here cannot turn into a missed
+    // wakeup; at worst it costs one extra turn through the loop.
+    auto has_work = [this] {
+        const auto& mailbox = _applier_mailbox;
+        if (mailbox.snapshot_to_load()) {
+            return true;
+        }
+        if (_applied_idx < mailbox.stable_commit_idx()) {
+            return _fsm->log_last_snapshot_idx() <= _applied_idx;
+        }
+        return mailbox.drop_apply_waiters_requested() || mailbox.snapshot_requested();
+    };
+
     try {
         while (true) {
-            auto v = co_await _apply_entries.pop_eventually();
+            co_await _applier_mailbox.wait(has_work);
 
-            co_await std::visit(make_visitor(
-            [this] (log_entry_ptr_list& batch) -> future<> {
-                if (batch.empty()) {
-                    logger.trace("[{}] applier fiber: received empty batch", _tag);
-                    co_return;
-                }
-
-                log_entry_ptr_list commands;
-                commands.reserve(batch.size());
-
-                const index_t last_idx = batch.back()->idx;
-                const term_t last_term = batch.back()->term;
-                SCYLLA_ASSERT(last_idx == _applied_idx + index_t{batch.size()});
-
-                std::ranges::copy(
-                       batch |
-                       std::views::filter([] (const log_entry_ptr& entry) { return std::holds_alternative<command>(entry->data); }) ,
-                       std::back_inserter(commands));
-
-                const auto size = commands.size();
-                if (size) {
-                    try {
-                        co_await _state_machine->apply(std::move(commands));
-                    } catch (abort_requested_exception& e) {
-                        logger.info("[{}] applier fiber stopped because state machine was aborted: {}", _tag, e);
-                        throw stop_apply_fiber{};
-                    } catch (...) {
-                        std::throw_with_nested(raft::state_machine_error{});
-                    }
-                    _stats.applied_entries += size;
-                }
-
-                // Use error injection to override the snapshot thresholds.
-                // NOTE: we do not want to yield later since a snapshot could be applied in the meantime,
-                // outdating the variables _applied_idx and last_snap_idx.
-                co_await override_snapshot_thresholds();
-
-                _applied_idx = last_idx;
-                notify_apply_waiters(last_idx);
-
-                // It may happen that _fsm has already applied a later snapshot (from remote) that we didn't yet 'observe'
-                // (i.e. didn't yet receive from _apply_entries queue) but will soon. We avoid unnecessary work
-                // of taking snapshots ourselves but comparing our last index directly with what's currently in _fsm.
-                const auto last_snap_idx = _fsm->log_last_snapshot_idx();
-
-                const bool force_snapshot = utils::get_local_injector().enter("raft_server_force_snapshot");
-
-                if (force_snapshot || (_applied_idx > last_snap_idx &&
-                    ((_applied_idx - last_snap_idx).value() >= _config.snapshot_threshold ||
-                    _fsm->log_memory_usage() >= _config.snapshot_threshold_log_size)))
-                {
-                    snapshot_descriptor snp;
-                    snp.term = last_term;
-                    snp.idx = _applied_idx;
-                    snp.config = _fsm->log_last_conf_for(_applied_idx);
-                    logger.trace("[{}] applier fiber: taking snapshot term={}, idx={}", _tag, snp.term, snp.idx);
-                    snp.id = co_await _state_machine->take_snapshot();
-                    // Note that at this point (after the `co_await`), _fsm may already have applied a later snapshot.
-                    // That's fine, `_fsm->apply_snapshot` will simply ignore our current attempt; we will soon receive
-                    // a later snapshot from the queue.
-                    auto max_trailing = force_snapshot ? 0 : _config.snapshot_trailing;
-                    auto max_trailing_bytes = force_snapshot ? 0 : _config.snapshot_trailing_size;
-                    if (!_fsm->apply_snapshot(snp, max_trailing, max_trailing_bytes, true)) {
-                        logger.trace("[{}] applier fiber: while taking snapshot term={} idx={} id={},"
-                                " fsm received a later snapshot at idx={}", _tag, snp.term, snp.idx, snp.id, _fsm->log_last_snapshot_idx());
-                    }
-                    _stats.snapshots_taken++;
-                }
-            },
-            [this] (snapshot_descriptor& snp) -> future<> {
-                SCYLLA_ASSERT(snp.idx >= _applied_idx);
-                // Lets a test hold the applier fiber here, so that io_fiber
-                // keeps processing fsm output (in particular, notifying commit
-                // waiters) while a remote snapshot is still not applied.
-                co_await utils::get_local_injector().inject("block_raft_applier_fiber_before_load_snapshot",
-                        utils::wait_for_message(std::chrono::minutes(5)));
-                // Apply snapshot it to the state machine
-                logger.trace("[{}] apply_fiber applying snapshot {}", _tag, snp.id);
-                co_await _state_machine->load_snapshot(snp.id);
-                // Drop apply waiters covered by the snapshot only now, after
-                // load_snapshot(): a resolved "applied" waiter promises that the
-                // local state machine already contains the entry's effect.
-                // The commit waiters were already dropped by io_fiber when it
-                // received this snapshot, commitment does not depend on the
-                // local apply progress.
-                drop_apply_waiters(&snp);
-                _applied_idx = snp.idx;
-                _stats.sm_load_snapshot++;
-            },
-            [this] (const removed_from_config&) -> future<> {
-                // If the node is no longer part of a config and no longer the leader
-                // it may never know the status of entries it submitted. The commit
-                // waiters were already dropped by io_fiber; drop the apply waiters
-                // here, after all batches queued before this message were applied
-                // and their waiters notified.
-                drop_apply_waiters();
-                co_return;
-            },
-            [this] (const trigger_snapshot_msg&) -> future<> {
-                auto applied_term = _fsm->log_term_for(_applied_idx);
-                // last truncation index <= snapshot index <= applied index
-                SCYLLA_ASSERT(applied_term);
-
-                snapshot_descriptor snp;
-                snp.term = *applied_term;
-                snp.idx = _applied_idx;
-                snp.config = _fsm->log_last_conf_for(_applied_idx);
-                logger.trace("[{}] taking snapshot at term={}, idx={} due to request", _tag, snp.term, snp.idx);
-                snp.id = co_await _state_machine->take_snapshot();
-                if (!_fsm->apply_snapshot(snp, 0, 0, true)) {
-                    logger.trace("[{}] while taking snapshot term={} idx={} id={} due to request,"
-                           " fsm received a later snapshot at idx={}", _tag, snp.term, snp.idx, snp.id, _fsm->log_last_snapshot_idx());
-                }
-                _stats.snapshots_taken++;
+            if (_applier_mailbox.snapshot_to_load()) {
+                co_await load_snapshot(_applier_mailbox.take_snapshot_to_load());
             }
-            ), v);
 
-            signal_applied();
+            co_await apply_entries();
+
+            if (_applied_idx < _applier_mailbox.stable_commit_idx()) {
+                // A snapshot the fsm accepted replaced the entries. Wait
+                // for io_fiber to publish it and start the round over from
+                // it -- there is nothing to hand back, the mailbox still
+                // says how far to apply. The requests below wait as well:
+                // they are meant to be acted on once everything committed
+                // before them has been applied.
+                continue;
+            }
+
+            if (_applier_mailbox.take_drop_apply_waiters_request()) {
+                // The node is no longer part of a config and no longer the leader,
+                // so it may never know the status of entries it submitted. The
+                // commit waiters were already dropped by io_fiber; drop the apply
+                // waiters here, now that everything committed by the time of the
+                // removal was applied and its waiters were notified above.
+                drop_apply_waiters();
+            }
+
+            if (_applier_mailbox.take_snapshot_request()) {
+                co_await take_snapshot(0, 0);
+            }
         }
     } catch(stop_apply_fiber& ex) {
         // the fiber is aborted
@@ -1935,7 +2130,7 @@ future<> server_impl::abort(sstring reason) {
 
     // IO and applier fibers may update waiters and start new snapshot
     // transfers, so abort them first
-    _apply_entries.abort(std::make_exception_ptr(stop_apply_fiber()));
+    _applier_mailbox.stop();
     co_await seastar::when_all_succeed(std::move(_io_status), std::move(_applier_status)).discard_result();
 
     // Start RPC abort before aborting snapshot applications or destroying entry waiters.
@@ -2138,7 +2333,7 @@ void server_impl::register_metrics() {
         sm::make_total_operations("persisted_log_entries", _stats.persisted_log_entries,
              sm::description("Number of log entries persisted"), {server_id_label(_id)}),
         sm::make_total_operations("queue_entries_for_apply", _stats.queue_entries_for_apply,
-             sm::description("Number of log entries queued to be applied"), {server_id_label(_id)}),
+             sm::description("Number of log entries scheduled to be applied"), {server_id_label(_id)}),
         sm::make_total_operations("applied_entries", _stats.applied_entries,
              sm::description("Number of log entries applied"), {server_id_label(_id)}),
         sm::make_total_operations("snapshots_taken", _stats.snapshots_taken,
@@ -2212,10 +2407,6 @@ void server_impl::tick() {
 
 raft::server_id server_impl::id() const {
     return _id;
-}
-
-void server_impl::set_applier_queue_max_size(size_t queue_max_size) {
-    _apply_entries.set_max_size(queue_max_size);
 }
 
 const server_address_set& server_impl::get_rpc_config() const {
