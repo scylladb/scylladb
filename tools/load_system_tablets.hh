@@ -33,10 +33,14 @@ using tablets_t = std::map<dht::token, locator::tablet_replica_set>;
 ///        /var/lib/scylla/data
 /// @param table the ID of the table whose tablet rows should be loaded
 /// @param permit the permit for performing read ops
+/// @param tablets_directory the directory holding the sstables of
+///        "system.tablets", when disengaged it is looked up under
+///        \p scylla_data_path
 /// @returns a map from last token to the replica set
 future<tablets_t> load_system_tablets(const db::config& dbcfg,
                                       std::filesystem::path scylla_data_path,
                                       table_id table,
-                                      reader_permit permit);
+                                      reader_permit permit,
+                                      std::optional<std::filesystem::path> tablets_directory = std::nullopt);
 
 }
