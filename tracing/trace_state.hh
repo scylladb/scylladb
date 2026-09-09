@@ -115,19 +115,19 @@ private:
     }
 
 public:
-    trace_state(trace_type type, trace_state_props_set props)
-        : _local_tracing_ptr(tracing::get_local_tracing_instance().shared_from_this())
+    trace_state(tracing& tr, trace_type type, trace_state_props_set props)
+        : _local_tracing_ptr(tr.shared_from_this())
         , _state_props(make_primary(props))
-        , _records(make_lw_shared<one_session_records>(type, ttl_by_type(type, _local_tracing_ptr->slow_query_record_ttl()), _local_tracing_ptr->slow_query_record_ttl()))
+        , _records(make_lw_shared<one_session_records>(tr, type, ttl_by_type(type, _local_tracing_ptr->slow_query_record_ttl()), _local_tracing_ptr->slow_query_record_ttl()))
         , _slow_query_threshold(_local_tracing_ptr->slow_query_threshold())
     {
     }
 
-    trace_state(const trace_info& info)
-        : _local_tracing_ptr(tracing::get_local_tracing_instance().shared_from_this())
+    trace_state(tracing& tr, const trace_info& info)
+        : _local_tracing_ptr(tr.shared_from_this())
         , _state_props(make_secondary(info.state_props))
         // inherit the slow query threshold and ttl from the coordinator
-        , _records(make_lw_shared<one_session_records>(info.type, ttl_by_type(info.type, std::chrono::seconds(info.slow_query_ttl_sec)), std::chrono::seconds(info.slow_query_ttl_sec), info.session_id, info.parent_id))
+        , _records(make_lw_shared<one_session_records>(tr, info.type, ttl_by_type(info.type, std::chrono::seconds(info.slow_query_ttl_sec)), std::chrono::seconds(info.slow_query_ttl_sec), info.session_id, info.parent_id))
         , _slow_query_threshold(info.slow_query_threshold_us)
     {
         if (info.state_props.contains<trace_state_props::log_slow_query>() && info.start_ts_us > 0u) {
@@ -141,6 +141,12 @@ public:
 
     const utils::UUID& session_id() const {
         return _records->session_id;
+    }
+
+    // Valid on any shard, but the returned reference is for the shard
+    // this state was created on
+    tracing& local_tracing() const noexcept {
+        return *_local_tracing_ptr;
     }
 
     bool is_in_state(state s) const {
@@ -762,11 +768,16 @@ inline void add_prepared_query_options(const trace_state_ptr& state, const cql3:
 class global_trace_state_ptr {
     unsigned _cpu_of_origin;
     trace_state_ptr _ptr;
+    // Captured on the origin shard, but points to the sharded service
+    // container which is shard-agnostic, so it's valid to use (though
+    // not to assign) on any shard. Non-null iff _ptr is non-null.
+    sharded<tracing>* _tracing;
 public:
     // Note: the trace_state_ptr must come from the current shard
     global_trace_state_ptr(trace_state_ptr t)
             : _cpu_of_origin(this_shard_id())
             , _ptr(std::move(t))
+            , _tracing(_ptr ? &_ptr->local_tracing().container() : nullptr)
     { }
 
     // May be invoked across shards.
@@ -791,7 +802,7 @@ public:
         if (_cpu_of_origin != this_shard_id()) {
             auto opt_trace_info = make_trace_info(_ptr);
             if (opt_trace_info) {
-                trace_state_ptr new_trace_state = tracing::get_local_tracing_instance().create_session(*opt_trace_info);
+                trace_state_ptr new_trace_state = _tracing->local().create_session(*opt_trace_info);
                 begin(new_trace_state);
                 return new_trace_state;
             } else {

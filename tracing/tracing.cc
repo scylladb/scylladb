@@ -103,7 +103,7 @@ trace_state_ptr tracing::create_session(trace_type type, trace_state_props_set p
         props.set_if<trace_state_props::ignore_events>(!props.contains<trace_state_props::full_tracing>() && ignore_trace_events_enabled());
 
         ++_active_sessions;
-        return make_lw_shared<trace_state>(type, props);
+        return make_lw_shared<trace_state>(*this, type, props);
     } catch (...) {
         // return an uninitialized state in case of any error (OOM?)
         return nullptr;
@@ -122,7 +122,7 @@ trace_state_ptr tracing::create_session(const trace_info& secondary_session_info
         }
 
         ++_active_sessions;
-        return make_lw_shared<trace_state>(secondary_session_info);
+        return make_lw_shared<trace_state>(*this, secondary_session_info);
     } catch (...) {
         // return an uninitialized state in case of any error (OOM?)
         return nullptr;
@@ -182,16 +182,16 @@ void tracing::set_trace_probability(double p) {
     tracing_logger.info("Setting tracing probability to {} (normalized {})", _trace_probability, _normalized_trace_probability);
 }
 
-one_session_records::one_session_records(trace_type type, std::chrono::seconds slow_query_ttl, std::chrono::seconds slow_query_rec_ttl,
+one_session_records::one_session_records(tracing& tr, trace_type type, std::chrono::seconds slow_query_ttl, std::chrono::seconds slow_query_rec_ttl,
             std::optional<utils::UUID> session_id_, span_id parent_id_)
-    : _local_tracing_ptr(tracing::get_local_tracing_instance().shared_from_this())
+    : _local_tracing_ptr(tr.shared_from_this())
     , session_id(session_id_ ? *session_id_ : utils::UUID_gen::get_time_UUID())
     , session_rec(type, slow_query_rec_ttl)
     , ttl(slow_query_ttl)
     , backend_state_ptr(_local_tracing_ptr->allocate_backend_session_state())
     , budget_ptr(_local_tracing_ptr->get_cached_records_ptr())
     , parent_id(parent_id_)
-    , my_span_id(span_id::make_span_id())
+    , my_span_id(span_id::make_span_id(tr))
 {
 }
 
