@@ -439,17 +439,35 @@ mutation_reader logstor::make_reader(schema_ptr schema, const primary_index& ind
             co_return mutations;
         }
 
-        // The index is scanned by token range, which is coarser than the partition range the
-        // reader was given: partition_range_to_token_range() keeps the whole token of a
-        // key-bearing bound, so a batch can hold keys that fall outside the range. Drop them now
-        // that the records are read and the full decorated key is known. Entries arrive in ring
-        // order and the partition range does not wrap, so this can only remove a prefix and/or a
-        // suffix of the batch.
-        void filter_mutations_for_range(std::vector<pending_mutation>& mutations) const {
+        // Scan order is the index's own key order: by token, and within a token by whatever the
+        // index key compares by. Partition ranges and reader output use ring order instead: by
+        // token, then by the full partition key. The two coincide only while the index key is the
+        // decorated key, so restore ring order explicitly, which is possible only once the
+        // records are read and the full key is known.
+        //
+        // The batch is also coarser than the requested range, because
+        // partition_range_to_token_range() keeps the whole token of a key-bearing bound. Sorting
+        // each same-token run first means that filtering against the non-wrapping partition range
+        // can only remove a prefix and/or a suffix of the batch.
+        void sort_and_filter_mutations_for_range(std::vector<pending_mutation>& mutations) const {
             auto cmp = dht::ring_position_comparator(*_schema);
             auto in_range = [&] (const pending_mutation& pending) {
                 return _pr.contains(dht::ring_position(pending.mut.decorated_key()), cmp);
             };
+
+            auto run_begin = mutations.begin();
+            while (run_begin != mutations.end()) {
+                const auto& token = run_begin->mut.decorated_key().token();
+                auto run_end = std::ranges::find_if(run_begin, mutations.end(), [&] (const pending_mutation& pending) {
+                    return pending.mut.decorated_key().token() != token;
+                });
+                if (std::distance(run_begin, run_end) > 1) {
+                    std::ranges::sort(run_begin, run_end, [&] (const pending_mutation& lhs, const pending_mutation& rhs) {
+                        return cmp(lhs.mut.decorated_key(), rhs.mut.decorated_key()) < 0;
+                    });
+                }
+                run_begin = run_end;
+            }
 
             auto first_in_range = std::ranges::find_if(mutations, in_range);
             if (first_in_range == mutations.end()) {
@@ -503,7 +521,7 @@ mutation_reader logstor::make_reader(schema_ptr schema, const primary_index& ind
             }
 
             auto mutations = co_await read_mutations_for_batch(batch->slots);
-            filter_mutations_for_range(mutations);
+            sort_and_filter_mutations_for_range(mutations);
 
             tracing::trace(_trace_state,
                     "logstor_range_reader: fetched {} keys for token range [{}, {}]",
