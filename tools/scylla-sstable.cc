@@ -41,6 +41,7 @@
 #include "schema/compression_initializer.hh"
 #include "schema/speculative_retry_initializer.hh"
 #include "sstables/index_reader.hh"
+#include "sstables/sstable_version.hh"
 #include "sstables/sstables_manager.hh"
 #include "sstables/sstable_directory.hh"
 #include "sstables/open_info.hh"
@@ -331,6 +332,112 @@ std::optional<schema_with_source> try_load_schema_autodetect(const bpo::variable
     return {};
 }
 
+// Allows passing a directory -- typically the table directory -- in place of
+// the individual sstables in it.
+//
+// Only sealed sstables are picked up: an sstable is being written, and thus
+// cannot be loaded, until its TOC is renamed from the temporary one to the
+// final one. Scylla's own directory scan makes the same distinction, and treats
+// a temporary TOC as evidence that the whole sstable is garbage, even if a
+// final TOC is present as well.
+bpo::variables_map expand_sstable_directories(const bpo::variables_map& app_config) {
+    if (!app_config.count("sstables")) {
+        return app_config;
+    }
+    // an object storage path is not a local file, it cannot be a directory
+    auto is_object_storage_path = [] (const std::filesystem::path& path) {
+        using osp = db::object_storage_endpoint_param;
+        static const auto types = { osp::s3_type, osp::gs_type };
+        return std::ranges::any_of(types, std::bind_front(&data_dictionary::is_object_storage_fqn, path));
+    };
+
+    std::vector<sstring> sstables;
+    bool found_directory = false;
+    for (const auto& path : app_config["sstables"].as<std::vector<sstring>>()) {
+        if (is_object_storage_path(std::filesystem::path(path))) {
+            sstables.push_back(path);
+            continue;
+        }
+        const auto ftype = file_type(path, follow_symlink::yes).get();
+        if (!ftype) {
+            // say so here: further down the line the path is only reported as a
+            // schema which could not be autodetected, or as an sstable whose
+            // components are missing
+            throw std::invalid_argument(fmt::format("no such file or directory: {}", path));
+        }
+        if (*ftype != directory_entry_type::directory) {
+            sstables.push_back(path);
+            continue;
+        }
+        found_directory = true;
+        struct components_found {
+            bool data = false;
+            bool toc = false;
+            bool temporary_toc = false;
+        };
+        // component files are named "<prefix>-<component>", where the prefix
+        // identifies the sstable they belong to
+        std::unordered_map<sstring, components_found> sstables_found;
+        auto dir = open_directory(path).get();
+        auto close_dir = deferred_close(dir);
+        auto listing = dir.list_directory([&] (directory_entry de) {
+            const auto dash = std::string_view(de.name).rfind('-');
+            if (dash == std::string_view::npos) {
+                return make_ready_future<>();
+            }
+            const auto component = std::string_view(de.name).substr(dash + 1);
+            const auto prefix = sstring(std::string_view(de.name).substr(0, dash));
+            if (component == sstable_version_constants::TOC_SUFFIX) {
+                sstables_found[prefix].toc = true;
+            } else if (component == sstable_version_constants::TEMPORARY_TOC_SUFFIX) {
+                sstables_found[prefix].temporary_toc = true;
+            } else if (component == "Data.db") {
+                sstables_found[prefix].data = true;
+            }
+            return make_ready_future<>();
+        });
+        listing.done().get();
+        const auto sstables_before = sstables.size();
+        for (const auto& [prefix, found] : sstables_found) {
+            if (!found.data) {
+                continue;
+            }
+            if (found.toc && !found.temporary_toc) {
+                sstables.push_back((std::filesystem::path(path) / fmt::format("{}-Data.db", prefix)).native());
+            } else {
+                sst_log.info("skipping {}, it belongs to an sstable which is not sealed", prefix);
+            }
+        }
+        if (sstables.size() == sstables_before) {
+            throw std::invalid_argument(fmt::format("no sealed sstables found in directory {}", path));
+        }
+    }
+    if (!found_directory) {
+        return app_config;
+    }
+    std::ranges::sort(sstables);
+    auto expanded_config = app_config;
+    expanded_config.at("sstables") = bpo::variable_value(boost::any(std::move(sstables)), false);
+    return expanded_config;
+}
+
+// A running ScyllaDB deletes the components of the sstables it drops, so an
+// sstable listed a moment ago can be gone by the time it is loaded. Tell such an
+// sstable apart from one which is there but broken, so that the former can be
+// left out instead of failing the whole operation.
+bool components_are_missing(std::exception_ptr ex) {
+    try {
+        std::rethrow_exception(std::move(ex));
+    } catch (const sstables::missing_sstable_component_exception&) {
+        return true;
+    } catch (const std::system_error& e) {
+        // the data component is opened directly, an absent one is reported as is
+        return e.code() == std::errc::no_such_file_or_directory;
+    } catch (...) {
+        return false;
+    }
+}
+
 const std::vector<sstables::shared_sstable> load_sstables(schema_ptr schema, sstables::sstables_manager& sst_man, sstables::storage_manager& sstm,
         const std::vector<sstring>& sstable_names) {
     std::vector<sstables::shared_sstable> sstables;
@@ -445,15 +552,23 @@ const std::vector<sstables::shared_sstable> load_sstables(schema_ptr schema, sst
             };
             co_await sst->load(schema->get_sharder(), open_cfg);
         } catch (...) {
+            auto ex = std::current_exception();
+            if (components_are_missing(ex)) {
+                sst_log.warn("Skipping SSTable {}, it was deleted while being loaded: {:t}", sst->get_filename(), ex);
+                co_return;
+            }
             // Print each individual error here since parallel_for_each
             // will propagate only one of them up the stack.
             auto msg = fmt::format("Could not load SSTable: {}", sst->get_filename());
-            fmt::print(std::cerr, "{}: {:t}\n", msg, std::current_exception());
+            fmt::print(std::cerr, "{}: {:t}\n", msg, ex);
             throw_with_nested(std::runtime_error(msg));
         }
 
         sstables[i] = std::move(sst);
     }).get();
+
+    // the sstables which were deleted while being loaded left a hole behind
+    std::erase(sstables, nullptr);
 
     return sstables;
 }
@@ -3111,7 +3226,17 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
     };
     tool_app_template app(std::move(app_cfg));
 
-    return app.run_async(argc, argv, [&app] (const operation& operation, const bpo::variables_map& app_config) {
+    return app.run_async(argc, argv, [&app] (const operation& operation, const bpo::variables_map& raw_app_config) {
+        // A directory can be passed in place of the sstables in it, expand it
+        // before anything looks at the sstable arguments.
+        bpo::variables_map app_config;
+        try {
+            app_config = expand_sstable_directories(raw_app_config);
+        } catch (std::invalid_argument& e) {
+            fmt::print(std::cerr, "error processing arguments: {}\n", e.what());
+            return 1;
+        }
+
         schema_ptr schema;
         std::optional<schema_with_source> schema_with_source;
 
