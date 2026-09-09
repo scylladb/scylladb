@@ -724,7 +724,7 @@ SEASTAR_TEST_CASE(combinatorial_restrictions) {
             // comb_pk1 index selection:
             // Requires: pk1 restricted with EQ and PK incomplete
             // (_is_key_range).  PK restrictions are iterated first in
-            // _index_restrictions, so comb_pk1 (global, score 1) beats
+            // the index search groups, so comb_pk1 (global, score 1) beats
             // all same-score indexes that come later.
             bool selects_comb_pk1 = (mask & PK1) && !(mask & PK2);
 
@@ -734,7 +734,7 @@ SEASTAR_TEST_CASE(combinatorial_restrictions) {
             // no multi-column.
             // In legal combos, CK1_EQ set → no MULTI_* possible.
             // When pk1 is also restricted, comb_pk1 takes priority (PK
-            // group comes before CK group in _index_restrictions).
+            // group comes before CK group in the index search groups).
             bool selects_comb_ck1 = (mask & CK1_EQ) && !(mask & CK1_IN);
 
             // Index clustering range multiplier:
@@ -910,7 +910,7 @@ SEASTAR_TEST_CASE(combinatorial_restrictions) {
             auto idx_opt = sr->find_idx(sim);
 
             // Determine expected index.  The scoring algorithm:
-            //   - do_find_idx iterates _index_restrictions (PK group, then
+            //   - do_find_idx iterates the index search groups (PK group, then
             //     CK group, then non-PK group in WHERE-clause order).
             //   - Multi-column restrictions are skipped (line 1358).
             //   - Score: local index with full PK = 2, global = 1, local
@@ -921,7 +921,7 @@ SEASTAR_TEST_CASE(combinatorial_restrictions) {
             //   (a) pk1 is restricted with EQ, and
             //   (b) PK is incomplete (_is_key_range), which triggers
             //       _uses_secondary_indexing via _has_queriable_pk_index.
-            // PK restrictions are iterated first in _index_restrictions, so
+            // PK restrictions are iterated first in the index search groups, so
             // comb_pk1 (score 1) beats all later global indexes (tie → first
             // wins).
             //
@@ -936,7 +936,7 @@ SEASTAR_TEST_CASE(combinatorial_restrictions) {
             //   (e) pk1 is NOT restricted (otherwise comb_pk1 wins first).
             //
             // When comb_ck1 qualifies it is iterated after PK but before
-            // non-PK in _index_restrictions, and its score 1 ties with any
+            // non-PK in the index search groups, and its score 1 ties with any
             // non-PK global, so it wins.
 
             std::optional<sstring> expected_idx;

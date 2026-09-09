@@ -162,8 +162,6 @@ private:
 
     expr::single_column_restrictions_map _single_column_nonprimary_key_restrictions;
 
-    expr::expression _regular_columns_filter = expr::conjunction({});
-
     /**
      * Scoring-function restrictions, e.g. WHERE BM25(col, 'term') > 0.
      *
@@ -175,11 +173,6 @@ private:
 
 
     std::unordered_set<const column_definition*> _not_null_columns;
-
-    /**
-     * The restrictions used to build the index expressions
-     */
-    std::vector<expr::expression> _index_restrictions;
 
     /**
      * <code>true</code> if the secondary index need to be queried, <code>false</code> otherwise
@@ -289,8 +282,6 @@ public:
         check_indexes do_check_indexes,
         pinned_plan_opt pinned_plan);
 public:
-
-    const std::vector<expr::expression>& index_restrictions() const;
 
     /**
      * Checks if the restrictions on the partition key is an IN restriction.
