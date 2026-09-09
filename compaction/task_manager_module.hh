@@ -91,27 +91,6 @@ protected:
     virtual future<> run() override = 0;
 };
 
-class shard_major_keyspace_compaction_task_impl : public major_compaction_task_impl {
-private:
-    replica::database& _db;
-    std::vector<table_info> _local_tables;
-public:
-    shard_major_keyspace_compaction_task_impl(tasks::task_manager::module_ptr module,
-            std::string keyspace,
-            tasks::task_id parent_id,
-            replica::database& db,
-            std::vector<table_info> local_tables,
-            flush_mode fm,
-            bool consider_only_existing_data) noexcept
-        : major_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, "shard", std::move(keyspace), "", "", parent_id, fm, consider_only_existing_data)
-        , _db(db)
-        , _local_tables(std::move(local_tables))
-    {}
-protected:
-    virtual future<> run() override;
-    virtual future<std::optional<double>> expected_total_workload() const override;
-};
-
 class table_major_keyspace_compaction_task_impl : public major_compaction_task_impl {
 private:
     replica::database& _db;
@@ -700,6 +679,9 @@ public:
 
     // Starts a major compaction of the given tables of a keyspace on all the shards.
     future<tasks::task_manager::task_ptr> start_major_keyspace_compaction(sharded<replica::database>& db, std::string keyspace, std::vector<table_info> table_infos, std::optional<flush_mode> fm, bool consider_only_existing_data, compaction_turn* turn = nullptr, tasks::task_info parent_info = tasks::make_empty_task_info());
+
+    // Starts a major compaction of the given tables of a keyspace on this shard.
+    future<tasks::task_manager::task_ptr> start_shard_major_compaction(replica::database& db, std::string keyspace, const std::vector<table_info>& table_infos, flush_mode fm, bool consider_only_existing_data, tasks::task_info parent_info);
 };
 
 class regular_compaction_task_impl : public compaction_task_impl {
