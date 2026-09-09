@@ -1719,33 +1719,7 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
 
     co_await verify_create_permission(enforce_authorization, warn_authorization, client_state, _stats);
 
-    if (stream_enabled) {
-        auto existing_ks = _proxy.data_dictionary().try_find_keyspace(keyspace_name);
-        const bool uses_tablets = existing_ks ? existing_ks->uses_tablets() : get_initial_tablet_count(tags_map, _proxy.features(), tablets_mode).has_value();
-        if (uses_tablets) {
-            if (!_proxy.features().cdc_block_tablet_merges_for_alternator_streams) {
-                co_return api_error::validation(
-                        "Alternator Streams on tablet tables are not supported until all nodes in the cluster "
-                        "support blocking tablet merges for Alternator Streams");
-            }
-            block_tablet_merges_for_alternator_streams(builder, /*defer_enablement=*/false);
-        }
-    }
-
-    schema_ptr schema = builder.build();
-    for (auto& view_builder : view_builders) {
-        // Note below we don't need to add virtual columns, as all
-        // base columns were copied to view. TODO: reconsider the need
-        // for virtual columns when we support Projection.
-        for (const column_definition& regular_cdef : schema->regular_columns()) {
-            if (!view_builder.has_column(*cql3::to_identifier(regular_cdef))) {
-                view_builder.with_column(regular_cdef.name(), regular_cdef.type, column_kind::regular_column);
-            }
-        }
-        const bool include_all_columns = true;
-        view_builder.with_view_info(schema, include_all_columns, ""/*where clause*/);
-    }
-
+    schema_ptr schema;
     size_t retries = _mm.get_concurrent_ddl_retries();
     for (;;) {
         auto group0_guard = co_await _mm.start_group0_operation();
@@ -1756,6 +1730,30 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
         locator::replication_strategy_params params(ksm->strategy_options(), ksm->initial_tablets(), ksm->consistency_option());
         const auto& topo = _proxy.local_db().get_token_metadata().get_topology();
         auto rs = locator::abstract_replication_strategy::create_replication_strategy(ksm->strategy_name(), params, topo);
+
+        if (stream_enabled && rs->uses_tablets()) {
+            if (!_proxy.features().cdc_block_tablet_merges_for_alternator_streams) {
+                co_return api_error::validation(
+                        "Alternator Streams on tablet tables are not supported until all nodes in the cluster "
+                        "support blocking tablet merges for Alternator Streams");
+            }
+            // Never cleared, so it survives a retry that resolves vnodes. Harmless:
+            // only the tablet allocator reads it, and it doesn't see vnodes tables.
+            block_tablet_merges_for_alternator_streams(builder, /*defer_enablement=*/false);
+        }
+        schema = builder.build();
+        for (auto& view_builder : view_builders) {
+            // Note below we don't need to add virtual columns, as all
+            // base columns were copied to view. TODO: reconsider the need
+            // for virtual columns when we support Projection.
+            for (const column_definition& regular_cdef : schema->regular_columns()) {
+                if (!view_builder.has_column(*cql3::to_identifier(regular_cdef))) {
+                    view_builder.with_column(regular_cdef.name(), regular_cdef.type, column_kind::regular_column);
+                }
+            }
+            const bool include_all_columns = true;
+            view_builder.with_view_info(schema, include_all_columns, ""/*where clause*/);
+        }
 
         // Vector indexes is a new feature that we decided to only support
         // on tablets.
