@@ -1289,7 +1289,6 @@ statement_restrictions::statement_restrictions(private_tag,
     // hence we need turn these restrictions into index expressions.
     std::vector<index_search_group> search_groups;
     if (_uses_secondary_indexing || pk_restrictions_need_filtering()) {
-        _index_restrictions.push_back(_partition_key_restrictions);
         search_groups.push_back({sc_pk_pred_vectors, _partition_key_restrictions});
     }
 
@@ -1322,7 +1321,6 @@ statement_restrictions::statement_restrictions(private_tag,
     }
 
     if (_uses_secondary_indexing || clustering_key_restrictions_need_filtering()) {
-        _index_restrictions.push_back(_clustering_columns_restrictions);
         search_groups.push_back({sc_ck_pred_vectors, _clustering_columns_restrictions});
     } else if (_ck_is_on_collection) {
         fail(unimplemented::cause::INDEXES);
@@ -1336,7 +1334,6 @@ statement_restrictions::statement_restrictions(private_tag,
                 "thus may have unpredictable performance. If you want to execute "
                 "this query despite the performance unpredictability, use ALLOW FILTERING");
         }
-        _index_restrictions.push_back(_nonprimary_key_restrictions);
         search_groups.push_back({sc_nonpk_pred_vectors, _nonprimary_key_restrictions});
     }
 
@@ -1500,10 +1497,6 @@ statement_restrictions::is_restricted(const column_definition* cdef) const {
     return std::find(restricted.begin(), restricted.end(), cdef) != restricted.end();
 }
 
-
-const std::vector<expr::expression>& statement_restrictions::index_restrictions() const {
-    return _index_restrictions;
-}
 
 bool statement_restrictions::is_empty() const {
     return _where.empty();
