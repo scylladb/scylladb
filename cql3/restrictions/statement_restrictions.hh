@@ -131,6 +131,16 @@ using partition_range_restrictions = std::variant<
 // A map of per-column predicate vectors, ordered by schema position.
 using single_column_predicate_vectors = std::map<const column_definition*, std::vector<predicate>, expr::schema_pos_column_definition_comparator>;
 
+// The per-column predicates the WHERE-clause analysis produced, grouped by the
+// kind of column they restrict.  Only the stages that pick an index and decide
+// what has to be filtered need them, so they are handed from the analysis to
+// those stages rather than kept in the object.
+struct column_predicates {
+    single_column_predicate_vectors partition_key;
+    single_column_predicate_vectors clustering_key;
+    single_column_predicate_vectors other;
+};
+
 /**
  * The restrictions corresponding to the relations specified on the where-clause of CQL query.
  */
@@ -378,15 +388,62 @@ public:
 
     schema_ptr get_view_schema() const { return _view_schema; }
 private:
-    void process_partition_key_restrictions(bool for_view, bool allow_filtering, statements::statement_type type);
+    // The WHERE clause, prepared and turned into predicates.  Scoring-function
+    // restrictions are kept apart: they are purely declarative and never enter
+    // the restriction, index or filtering machinery.
+    struct where_clause_predicates {
+        std::vector<predicate> predicates;
+        std::vector<expr::binary_operator> scoring_functions;
+    };
+
+    /// Prepares the WHERE clause against the schema and turns it into predicates.
+    where_clause_predicates prepare_where_clause(
+            data_dictionary::database db,
+            const expr::expression& where_clause,
+            prepare_context& ctx);
+
+    /// Sorts the predicates by the columns they restrict, and works out the
+    /// clustering prefix and the partition range they address.
+    column_predicates classify_predicates(std::vector<predicate> predicates, bool allow_filtering);
+
+    /// Decides which index, if any, this query reads, and what it has to filter.
+    void plan_query(
+            data_dictionary::database db,
+            const column_predicates& preds,
+            statements::statement_type type,
+            bool selects_only_static_columns,
+            bool allow_filtering,
+            pinned_plan_opt pinned_plan);
+
+    void detect_queriable_indexes(
+            data_dictionary::database db,
+            const column_predicates& preds,
+            statements::statement_type type,
+            bool allow_filtering,
+            bool force_base_plan,
+            const std::optional<sstring>& pinned_index_name);
+
+    void build_filters(const column_predicates& preds);
+
+    /// Builds the functions computing the partition ranges and clustering bounds
+    /// this statement addresses.
+    void build_key_range_fns();
+
+    /// Builds the functions computing the ranges to read from an index table.
+    void build_index_fns();
+
+    void process_partition_key_restrictions(bool allow_filtering, statements::statement_type type);
 
     /**
      * Processes the clustering column restrictions.
      *
-     * @param has_queriable_index <code>true</code> if some of the queried data are indexed, <code>false</code> otherwise
      * @throws InvalidRequestException if the request is invalid
      */
-    void process_clustering_columns_restrictions(bool for_view, bool allow_filtering);
+    void process_clustering_columns_restrictions(bool allow_filtering);
+
+    /// Throws unless every restricted clustering column, in order, forms a
+    /// prefix of the clustering key.
+    void validate_clustering_columns_form_a_prefix() const;
 
     /**
      * Returns the <code>Restrictions</code> for the specified type of columns.
@@ -407,9 +464,7 @@ private:
     unsigned int num_clustering_prefix_columns_that_need_not_be_filtered() const;
     void calculate_column_defs_for_filtering_and_erase_restrictions_used_for_index(
             data_dictionary::database db,
-            const single_column_predicate_vectors& sc_pk_pred_vectors,
-            const single_column_predicate_vectors& sc_ck_pred_vectors,
-            const single_column_predicate_vectors& sc_nonpk_pred_vectors);
+            const column_predicates& preds);
     get_partition_key_ranges_fn_t build_partition_key_ranges_fn() const;
     get_clustering_bounds_fn_t build_get_clustering_bounds_fn() const;
     get_clustering_bounds_fn_t build_get_global_index_clustering_ranges_fn() const;
@@ -437,7 +492,7 @@ public:
      */
     bool need_filtering() const;
 
-    void validate_secondary_index_selections(bool selects_only_static_columns) const;
+    void validate_secondary_index_selections() const;
 
     /**
      * Checks if the query has some restrictions on the clustering columns.
@@ -489,10 +544,7 @@ public:
 private:
     /// Prepares internal data for evaluating index-table queries.  Must be called before
     /// get_local_index_clustering_ranges().
-    void prepare_indexed_local(const schema& idx_tbl_schema,
-            const single_column_predicate_vectors& sc_pk_pred_vectors,
-            const single_column_predicate_vectors& sc_ck_pred_vectors,
-            const single_column_predicate_vectors& sc_nonpk_pred_vectors);
+    void prepare_indexed_local(const schema& idx_tbl_schema, const column_predicates& preds);
 
     /// Prepares internal data for evaluating index-table queries.  Must be called before
     /// get_global_index_clustering_ranges() or get_global_index_token_clustering_ranges().
