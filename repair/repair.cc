@@ -486,6 +486,10 @@ future<gc_clock::time_point> flush_hints_batchlog_on_node(netw::messaging_servic
     co_return resp.flush_time;
 }
 
+bool repair_needs_hints_batchlog_flush(const schema& s) {
+    return s.tombstone_gc_options().mode() == tombstone_gc_mode::repair;
+}
+
 std::chrono::seconds repair_hints_batchlog_flush_timeout(const db::cluster_config_manager& ccm) {
     const auto* option = db::cluster_config_registry::find("repair_hints_batchlog_flush_timeout_in_seconds");
     if (!option) {
@@ -510,11 +514,7 @@ future<std::tuple<bool, bool, gc_clock::time_point>> repair_service::flush_hints
     if (db.features().tombstone_gc_options) {
         for (auto& table: cfs) {
             if (const auto* cf = find_column_family_if_exists(db, keyspace, table)) {
-                auto s = cf->schema();
-                const auto& options = s->tombstone_gc_options();
-                if (options.mode() == tombstone_gc_mode::repair) {
-                    needs_flush_before_repair = true;
-                }
+                needs_flush_before_repair |= repair_needs_hints_batchlog_flush(*cf->schema());
             }
         }
     }
