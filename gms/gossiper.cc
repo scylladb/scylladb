@@ -695,10 +695,19 @@ future<> gossiper::apply_pending_states(locator::host_id hid, gate::holder gh) {
     } catch (...) {
         // Drop any state that was queued while the failed apply was running,
         // so the entry cannot be retained forever if nothing arrives for this
-        // endpoint anymore (e.g. because it left the cluster). If the state
-        // is still relevant, the next gossip exchange re-delivers it: the
-        // state was never applied, so our digest still advertises a version
-        // below everything it contained.
+        // endpoint anymore (e.g. because it left the cluster). The failed
+        // apply may already have replicated before throwing, so our
+        // advertised version can have advanced past the dropped state. That
+        // is still safe as long as what we stored stayed downward-closed in
+        // version: every key of the dropped state at or below our advertised
+        // max is then already stored, and the rest is above the max, so the
+        // next gossip exchange re-delivers it.
+        //
+        // apply_new_states() is the one path that can break that: it raises
+        // the heartbeat before copying the application states and replicates
+        // whatever it managed to copy, so a copy failing partway through
+        // stores a state that is not downward-closed. That hole predates the
+        // coalescing and is tracked in SCYLLADB-4195.
         drop_pending_state(hid);
         const auto ex = std::current_exception();
         if (_abort_source.abort_requested()) {
@@ -800,11 +809,28 @@ void gossiper::queue_state_apply(inet_address ep, endpoint_state state) {
             logger.debug("queue_state_apply: dropping a stale-generation state of {}", hid);
             return;
         }
-        if (incoming_gen > pending_gen) {
-            // A newer generation invalidates the older state wholesale.
-            pending = std::move(state);
-        } else {
-            merge_endpoint_state(pending, state);
+        try {
+            if (incoming_gen > pending_gen) {
+                // A newer generation invalidates the older state wholesale.
+                pending = std::move(state);
+            } else {
+                merge_endpoint_state(pending, state);
+            }
+        } catch (...) {
+            // Both paths mutate the slot in place, and the merge can throw
+            // partway through because every merged value is copied: the slot
+            // would be left holding a raised heartbeat version with only some
+            // of the application states below it. Applying that would
+            // advertise a max version that no peer will ever re-send the
+            // missing keys below, losing them permanently. Drop the slot
+            // instead. That loses nothing: the slot was never applied, and
+            // every key it held is either already stored by an earlier apply
+            // -- deltas are downward-closed in version, so anything at or
+            // below our advertised max is in our state already -- or lies
+            // above that max, and the next gossip exchange re-delivers it.
+            drop_pending_state(hid);
+            logger.warn("queue_state_apply: dropped a partially merged state of {}", hid);
+            throw;
         }
         // The slot's criticality is sticky: whatever it holds still has to be
         // applied before gossip can be considered settled.
