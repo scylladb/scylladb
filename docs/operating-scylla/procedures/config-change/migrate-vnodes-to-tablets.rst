@@ -70,6 +70,14 @@ Keyspace and table configuration
   to prevent tombstone garbage collection from running during migration.
   For guidance, see :ref:`Tombstone Garbage Collection <ddl-tombstones-gc>`.
 
+ScyllaDB Manager
+~~~~~~~~~~~~~~~~
+
+If the cluster is managed by `ScyllaDB Manager <https://manager.docs.scylladb.com/>`_,
+suspend the backup, restore, repair, and tablet repair tasks before starting the
+migration and resume afterwards. These operations are not yet supported on
+migrating keyspaces.
+
 Limitations
 -----------
 
