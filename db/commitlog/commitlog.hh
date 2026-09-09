@@ -403,6 +403,11 @@ public:
     // be replayed on the next reboot.
     replay_position min_position() const;
 
+    // How far the flush requests have got: every closed segment at or below this has
+    // had its dirty tables asked to flush, and will not be asked again. Advanced
+    // after a round's handlers run, so a handler sees the value from before it.
+    replay_position flush_position() const;
+
     // For testing only. Returns the active segments current position
     // (ignoring chunk overhead etc)
     replay_position current_position() const;
