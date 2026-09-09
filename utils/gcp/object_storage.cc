@@ -426,6 +426,11 @@ public:
                         throw failed_operation(fmt::format("Could not read object {}:{} ({}/{} - {})",
                                 _bucket, _object_name, pos, _size, int(rep._status)));
                     }
+                    // send_with_retry() re-runs this handler on every attempt, so the
+                    // count has to start over. Carrying it across would place the
+                    // retried range at dst + result, i.e. the right bytes at the
+                    // wrong offset.
+                    result = 0;
                     auto bufs = co_await util::read_entire_stream(in);
                     auto dst = reinterpret_cast<char*>(buffer);
                     for (auto& buf : bufs) {
