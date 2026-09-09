@@ -552,7 +552,7 @@ def test_gsi_composite_swapped_hash_range_keys(dynamodb):
         # RANGE key here) and gives no equality condition on the actual
         # HASH key attributes r1, r2, so it must be rejected for missing
         # the mandatory HASH key equality condition.
-        with pytest.raises(ClientError, match="ValidationException.*HASH.*equality"):
+        with pytest.raises(ClientError, match="ValidationException.*HASH.*r1.*equality"):
             full_query(
                 table,
                 IndexName="gsi_swapped",
@@ -588,7 +588,7 @@ def test_gsi_composite_swapped_hash_range_keys(dynamodb):
 
 
         # Skipping the first RANGE attr (h1) on gsi_swapped is still rejected,
-        with pytest.raises(ClientError, match="ValidationException.*RANGE.*equality"):
+        with pytest.raises(ClientError, match="ValidationException.*RANGE.*h1.*equality.*h2"):
             full_query(
                 table,
                 IndexName="gsi_swapped",
@@ -1018,7 +1018,7 @@ def test_gsi_composite_query_all_hk_eq(test_table_gsi_2h2r):
 # Query specifying only one of two hash key attrs - should fail.
 def test_gsi_composite_query_missing_one_hk(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
-    with pytest.raises(ClientError, match="ValidationException.*HASH.*equality"):
+    with pytest.raises(ClientError, match="ValidationException.*HASH.*h2.*equality"):
         full_query(
             table,
             IndexName="idx_2h2r",
@@ -1031,7 +1031,7 @@ def test_gsi_composite_query_missing_one_hk(test_table_gsi_2h2r):
 # Inequality on a hash key attr - should fail.
 def test_gsi_composite_query_hk_inequality(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
-    with pytest.raises(ClientError, match="ValidationException.*HASH.*equality"):
+    with pytest.raises(ClientError, match="ValidationException.*HASH.*h2.*equality"):
         full_query(
             table,
             IndexName="idx_2h2r",
@@ -1088,7 +1088,7 @@ def test_gsi_composite_query_hk_wrong_type(test_table_gsi_2h2r):
 # BETWEEN on a hash key attr - should fail.
 def test_gsi_composite_query_hk_between_rejected(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
-    with pytest.raises(ClientError, match="ValidationException.*HASH.*equality"):
+    with pytest.raises(ClientError, match="ValidationException.*HASH.*h2.*equality"):
         full_query(
             table,
             IndexName="idx_2h2r",
@@ -1101,7 +1101,7 @@ def test_gsi_composite_query_hk_between_rejected(test_table_gsi_2h2r):
 # begins_with() on a hash key attr - should fail.
 def test_gsi_composite_query_hk_begins_with_rejected(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
-    with pytest.raises(ClientError, match="ValidationException.*HASH.*equality"):
+    with pytest.raises(ClientError, match="ValidationException.*HASH.*h2.*equality"):
         full_query(
             table,
             IndexName="idx_2h2r",
@@ -1209,16 +1209,9 @@ def test_gsi_composite_query_rk_all_eq(test_table_gsi_4h4r):
 
 
 # Skipping the first range key attr (querying r2 without r1) - should fail.
-# The regex below intentionally only checks for "RANGE" + "equality" rather
-# than a message that more specifically names the skipped/incomplete range
-# key attribute: composite-key validation isn't implemented in Alternator
-# yet, so the eventual error message is unknown, and guessing at a more
-# specific wording risks a spurious mismatch once it lands. Tighten this
-# match once the real implementation exists and the actual message is
-# known.
 def test_gsi_composite_query_rk_skip_first_rejected(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
-    with pytest.raises(ClientError, match="ValidationException.*RANGE.*equality"):
+    with pytest.raises(ClientError, match="ValidationException.*RANGE.*r1.*equality.*r2"):
         full_query(
             table,
             IndexName="idx_2h2r",
@@ -1231,7 +1224,7 @@ def test_gsi_composite_query_rk_skip_first_rejected(test_table_gsi_2h2r):
 # Gap in range key attrs (r1 and r3 but not r2) - should fail.
 def test_gsi_composite_query_rk_gap_rejected(test_table_gsi_4h4r):
     table = test_table_gsi_4h4r
-    with pytest.raises(ClientError, match="ValidationException.*RANGE.*equality"):
+    with pytest.raises(ClientError, match="ValidationException.*RANGE.*r2.*equality.*r3"):
         full_query(
             table,
             IndexName="idx_4h4r",
@@ -1349,7 +1342,7 @@ def test_gsi_composite_query_rk_inequality_last(test_table_gsi_2h2r):
 # Inequality on a non-last range key attr followed by equality - should fail.
 def test_gsi_composite_query_rk_inequality_not_last_rejected(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
-    with pytest.raises(ClientError, match="ValidationException.*RANGE.*equality"):
+    with pytest.raises(ClientError, match="ValidationException.*RANGE.*r1.*equality.*r2"):
         full_query(
             table,
             IndexName="idx_2h2r",
@@ -1362,6 +1355,9 @@ def test_gsi_composite_query_rk_inequality_not_last_rejected(test_table_gsi_2h2r
 # Using inequality operators on more than one range key attr at once - should fail
 def test_gsi_composite_query_rk_multiple_inequalities_rejected(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
+    # Unlike the neighbouring tests, Alternator rejects this shape while
+    # parsing the conditions, with a message that names no attribute, so the
+    # match here has to stay wording-agnostic.
     with pytest.raises(ClientError, match="ValidationException.*RANGE.*equality"):
         full_query(
             table,
@@ -1465,7 +1461,7 @@ def test_gsi_composite_query_rk_begins_with_last(test_table_gsi_2h2r):
 # begins_with() on a non-last range key attr followed by another condition - fail.
 def test_gsi_composite_query_rk_begins_with_not_last_rejected(test_table_gsi_2h2r):
     table = test_table_gsi_2h2r
-    with pytest.raises(ClientError, match="ValidationException.*RANGE.*equality"):
+    with pytest.raises(ClientError, match="ValidationException.*RANGE.*r1.*equality.*r2"):
         full_query(
             table,
             IndexName="idx_2h2r",

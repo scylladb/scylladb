@@ -1329,7 +1329,10 @@ calculate_bounds_condition_expression(schema_ptr schema,
         }
         if (r.range && max_sk_index_set) {
             throw api_error::validation(
-                    "KeyConditionExpression: only the last constrained RANGE key may skip the equality (=) condition");
+                    format("KeyConditionExpression: RANGE key attribute {} must have an equality (=) "
+                            "condition, because the later attribute {} has a condition",
+                            r.column->name_as_text(),
+                            restrictions[*max_sk_index_set].column->name_as_text()));
         }
         if ((r.eq_value || r.range) && !max_sk_index_set) {
             max_sk_index_set = i;
@@ -1338,8 +1341,10 @@ calculate_bounds_condition_expression(schema_ptr schema,
     if (first_unset_idx && max_sk_index_set
         && *first_unset_idx < *max_sk_index_set) {
         throw api_error::validation(
-                format("KeyConditionExpression: RANGE key {} must have an equality (=) condition",
-                        restrictions[*first_unset_idx].column->name_as_text()));
+                format("KeyConditionExpression: RANGE key attribute {} must have an equality (=) "
+                        "condition, because the later attribute {} has a condition",
+                        restrictions[*first_unset_idx].column->name_as_text(),
+                        restrictions[*max_sk_index_set].column->name_as_text()));
     }
 
     if (!max_sk_index_set) {
