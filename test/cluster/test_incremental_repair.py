@@ -1405,16 +1405,17 @@ async def test_tombstone_gc_no_resurrection_hints_flush_failure(manager: ScyllaC
     """Verify that repair_time stays at epoch when hints flush fails, so tombstones
     are never GC-eligible after such a repair and data resurrection cannot occur.
 
-    With propagation_delay=0, gc_before = repair_time.  When hints flush fails,
-    repair_time is set to epoch (gc_clock::time_point{}) by the repair framework
-    (flush_time stays at epoch because hints_batchlog_flushed=False).  Therefore
+    With propagation_delay=0, gc_before = repair_time.  When the topology
+    coordinator cannot flush hints on a node, the repair request carries no
+    flush time and the repair framework sets repair_time to epoch
+    (gc_clock::time_point{}), as it does when its own flush fails.  Therefore
     gc_before = epoch, T.deletion_time ≈ now >> epoch, T is never GC-eligible, and
     compaction cannot purge T regardless of what is in the repaired set.
 
     Scenario:
       - D and T written to all replicas and flushed.
-      - Repair runs with injection that makes hints flush fail on servers[2].
-      - repair_time must stay at epoch (guard: hints_batchlog_flushed=False).
+      - Repair runs with injection that makes the hints flush fail on servers[2].
+      - repair_time must stay at epoch (guard: the request carries no flush time).
       - Compaction on the repaired set: T not GC-eligible → key stays deleted.
     """
     servers, cql, hosts, ks, table_id, logs = await _setup_tombstone_gc_cluster(manager)
@@ -1434,8 +1435,8 @@ async def test_tombstone_gc_no_resurrection_hints_flush_failure(manager: ScyllaC
     await manager.api.enable_injection(servers[2].ip_addr, "repair_flush_hints_batchlog_handler_bm_uninitialized", one_shot=False)
 
     try:
-        # Repair warns about hints flush failure but continues (repair.cc outer catch).
-        # flush_time stays at epoch so repair_time will be set to epoch in system.tablets.
+        # The coordinator cannot flush servers[2], so the repair request carries no
+        # flush time and repair_time is set to epoch in system.tablets.
         # Use a short timeout: the call may never return because the topology coordinator
         # keeps re-scheduling repairs when repair_time stays at epoch.
         await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", "all", incremental_mode='incremental', timeout=30)
