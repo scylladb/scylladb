@@ -6,6 +6,7 @@
 
 #include <boost/test/unit_test.hpp>
 #include <stdint.h>
+#include <limits>
 #include <random>
 
 #include <seastar/core/align.hh>
@@ -13,6 +14,7 @@
 #include <seastar/core/seastar.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/thread.hh>
+#include <seastar/core/file.hh>
 #include <seastar/core/fstream.hh>
 
 #include <seastar/testing/test_case.hh>
@@ -343,6 +345,112 @@ SEASTAR_TEST_CASE(test_truncating_extend) {
         }
     }
 
+    co_await f.close();
+}
+
+// SCYLLADB-4602 repro: a short read that is NOT at end of file.
+//
+// encrypted_file_impl::transform() treats any length that is not a multiple of
+// block_size as proof that this is the file's last block, and returns
+// `std::max(_file_length, pos) - pos` -- the distance to end of data -- rather
+// than the number of bytes it actually decrypted. That inference holds for a
+// local disk, where a mid-file short read cannot happen, and is false for an
+// object-storage backend, whose read_dma returns whatever the HTTP body
+// delivered without checking it against the range requested.
+//
+// This wraps a plain on-disk file in a file_impl that truncates exactly one
+// read, mid-file, the way a connection closed mid-body would.
+class truncating_file_impl : public file_impl {
+    file _f;
+    uint64_t _at;
+    size_t _deliver;
+public:
+    // Truncate a read starting at `at` to `deliver` bytes, once.
+    truncating_file_impl(file f, uint64_t at, size_t deliver)
+        : _f(std::move(f)), _at(at), _deliver(deliver)
+    {
+        _memory_dma_alignment = _f.memory_dma_alignment();
+        _disk_read_dma_alignment = _f.disk_read_dma_alignment();
+        _disk_write_dma_alignment = _f.disk_write_dma_alignment();
+    }
+    future<size_t> read_dma(uint64_t pos, void* buffer, size_t len, io_intent* intent) override {
+        auto n = co_await _f.dma_read(pos, reinterpret_cast<uint8_t*>(buffer), len, intent);
+        if (pos == _at && _deliver < n) {
+            testlog.info("truncating read at {} from {} to {} bytes", pos, n, _deliver);
+            n = std::exchange(_deliver, std::numeric_limits<size_t>::max());
+        }
+        co_return n;
+    }
+    future<size_t> read_dma(uint64_t pos, std::vector<iovec> iov, io_intent* intent) override {
+        co_return co_await _f.dma_read(pos, std::move(iov), intent);
+    }
+    future<temporary_buffer<uint8_t>> dma_read_bulk(uint64_t pos, size_t range_size, io_intent* intent) override {
+        temporary_buffer<uint8_t> buf(range_size);
+        auto n = co_await read_dma(pos, buf.get_write(), range_size, intent);
+        buf.trim(n);
+        co_return buf;
+    }
+    future<uint64_t> size() override { return _f.size(); }
+    future<struct stat> stat() override { return _f.stat(); }
+    future<> close() override { return _f.close(); }
+    future<> flush() override { return make_ready_future<>(); }
+    future<> truncate(uint64_t) override { throw std::logic_error("ro"); }
+    future<> allocate(uint64_t, uint64_t) override { return make_ready_future<>(); }
+    future<> discard(uint64_t, uint64_t) override { return make_ready_future<>(); }
+    future<size_t> write_dma(uint64_t, const void*, size_t, io_intent*) override { throw std::logic_error("ro"); }
+    future<size_t> write_dma(uint64_t, std::vector<iovec>, io_intent*) override { throw std::logic_error("ro"); }
+    subscription<directory_entry> list_directory(std::function<future<>(directory_entry)>) override { throw std::logic_error("ro"); }
+};
+
+SEASTAR_TEST_CASE(test_short_read_mid_file_is_not_eof) {
+    key_info kinfo{"AES/CBC", 256};
+    auto k = ::make_shared<symmetric_key>(kinfo);
+    constexpr auto& filename = "short_read_mid_file";
+
+    // Four full 4k blocks of known plaintext, so every offset is mid-file.
+    constexpr size_t plaintext_size = 4 * 4096;
+    auto written = generate_random<char>(plaintext_size, 4096);
+    {
+        auto [f, _] = co_await make_file(filename, open_flags::create | open_flags::wo, k);
+        co_await f.dma_write(0, written.get(), written.size());
+        co_await f.close();
+    }
+
+    auto [dst, _] = make_filename(filename, k);
+    auto raw = co_await open_file_dma(dst, open_flags::ro);
+    auto physical = co_await raw.size();
+    BOOST_REQUIRE_EQUAL(physical, plaintext_size); // 4k-aligned: no padding block
+
+    // Deliver only 1000 of the 8192 bytes asked for, at offset 0. 1000 is not a
+    // multiple of 4096, so transform() takes it for the final block.
+    constexpr uint64_t read_pos = 0;
+    constexpr size_t read_len = 2 * 4096;
+    constexpr size_t delivered = 1000;
+
+    file f(make_encrypted_file(file(seastar::make_shared<truncating_file_impl>(raw, read_pos, delivered)), k));
+
+    auto rbuf = temporary_buffer<char>::aligned(f.memory_dma_alignment(), read_len);
+    std::fill(rbuf.get_write(), rbuf.get_write() + rbuf.size(), '\xa5'); // poison
+    auto n = co_await f.dma_read<char>(read_pos, rbuf.get_write(), read_len);
+
+    testlog.info("underlying delivered {} bytes; encrypted_file reported {}", delivered, n);
+
+    // The layer must never claim more bytes than were actually decrypted.
+    BOOST_CHECK_MESSAGE(n <= delivered, seastar::format(
+            "reported {} bytes from a read that delivered only {} -- {} bytes of the "
+            "caller's buffer were never written by this read", n, delivered, n - delivered));
+
+    // And whatever it does claim must be the real plaintext, not poison.
+    auto good = std::min(n, plaintext_size);
+    for (size_t i = 0; i < good; ++i) {
+        if (rbuf.get()[i] != written.get()[i]) {
+            BOOST_ERROR(seastar::format(
+                    "byte {} of {} reported bytes differs from the plaintext "
+                    "(got {:#x}, expected {:#x}) -- corrupt data reported as a successful read",
+                    i, n, uint8_t(rbuf.get()[i]), uint8_t(written.get()[i])));
+            break;
+        }
+    }
     co_await f.close();
 }
 
