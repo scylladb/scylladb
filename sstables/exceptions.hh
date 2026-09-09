@@ -18,11 +18,27 @@
 namespace sstables {
 class malformed_sstable_exception : public std::exception {
     sstring _msg;
+    // Whether the sstable is malformed because a component of it is not there
+    // at all, as opposed to being there but unreadable. A running ScyllaDB
+    // deletes the components of an sstable it drops, so anything reading an
+    // sstable it doesn't own can see this for an sstable which was deleted
+    // under it, and carry on with the rest. It is a property of the exception
+    // rather than a type of its own, so that what a node logs for a missing
+    // component is what it always was.
+    bool _components_are_missing = false;
 public:
     malformed_sstable_exception(sstring msg, component_name filename)
         : malformed_sstable_exception{format("{} in sstable {}", msg, filename)}
     {}
     malformed_sstable_exception(sstring s) : _msg(s) {}
+    static malformed_sstable_exception missing_component(component_name filename) {
+        auto e = malformed_sstable_exception(format("{}: file not found", filename));
+        e._components_are_missing = true;
+        return e;
+    }
+    bool components_are_missing() const noexcept {
+        return _components_are_missing;
+    }
     const char *what() const noexcept {
         return _msg.c_str();
     }
@@ -61,6 +77,11 @@ bool abort_on_malformed_sstable_error() noexcept;
 // abort the process (with logging) or throw the appropriate exception.
 [[noreturn]] void throw_malformed_sstable_exception(sstring msg);
 [[noreturn]] void throw_malformed_sstable_exception(sstring msg, component_name filename);
+[[noreturn]] void throw_missing_sstable_component_exception(component_name filename);
+
+// Whether the error of a failed sstable load is a component which is not there,
+// as opposed to one which is there but cannot be read.
+bool components_are_missing(std::exception_ptr ex);
 [[noreturn]] void throw_bufsize_mismatch_exception(size_t size, size_t expected);
 
 // Disables aborting on malformed sstable errors for a scope.
