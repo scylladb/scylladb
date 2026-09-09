@@ -236,6 +236,7 @@ size_t encrypted_file_impl::transform(uint64_t pos, const void* buffer, size_t l
             if (m != symmetric_key::mode::decrypt) {
                 throw std::invalid_argument("Output data not aligned");
             }
+            auto decoded = off + align_down(rem, b);
             _key->transform_unpadded(m, i + off, align_down(rem, b), o + off, iv.data());
             // #22236 - ensure we don't wrap numbers here.
             // If reading past actual end of file (_file_length), we can be decoding
@@ -248,7 +249,14 @@ size_t encrypted_file_impl::transform(uint64_t pos, const void* buffer, size_t l
             // If caller now ignores this and just reads 4096 (or more)
             // bytes at next block (4096), we read 15 bytes and decode.
             // But would be past _file_length -> ensure we return zero here.
-            return std::max(l, pos) - pos;
+            //
+            // Clamp to what we actually decoded as well. A partial block means
+            // the end of the data only if the buffer we were handed reaches it,
+            // which a local file guarantees and an object storage read does not:
+            // its read_dma returns whatever the response body carried. Reporting
+            // the distance to end of data for a buffer that stopped short would
+            // hand the caller bytes this read never wrote.
+            return std::min(decoded, std::max(l, pos) - pos);
         }
         _key->transform_unpadded(m, i + off, block_size, o + off, iv.data());
     }
