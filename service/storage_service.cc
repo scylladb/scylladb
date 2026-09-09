@@ -200,6 +200,7 @@ storage_service::storage_service(abort_source& abort_source,
     sharded<db::view::view_building_worker>& view_building_worker,
     cql3::query_processor& qp,
     sharded<qos::service_level_controller>& sl_controller,
+    sharded<db::cluster_config_manager>& cluster_config,
     auth::cache& auth_cache,
     sharded<client_routes_service>& client_routes,
     topology_state_machine& topology_state_machine,
@@ -221,6 +222,7 @@ storage_service::storage_service(abort_source& abort_source,
         , _stream_manager(stream_manager)
         , _snitch(snitch)
         , _sl_controller(sl_controller)
+        , _cluster_config(cluster_config)
         , _auth_cache(auth_cache)
         , _client_routes(client_routes)
         , _group0(nullptr)
@@ -1204,7 +1206,8 @@ future<> storage_service::raft_state_monitor_fiber(raft::server& raft, gate::hol
                     _lifecycle_notifier,
                     _feature_service,
                     _sl_controller.local(),
-                    _topology_cmd_rpc_tracker);
+                    _topology_cmd_rpc_tracker,
+                    _cluster_config.local());
         }
     } catch (...) {
         rtlogger.info("raft_state_monitor_fiber aborted with {:t}", std::current_exception());

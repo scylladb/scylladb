@@ -73,6 +73,7 @@ class stream_manager;
 }
 
 namespace db {
+class cluster_config_manager;
 class system_distributed_keyspace;
 class system_keyspace;
 class batchlog_manager;
@@ -212,6 +213,7 @@ private:
     sharded<streaming::stream_manager>& _stream_manager;
     sharded<locator::snitch_ptr>& _snitch;
     sharded<qos::service_level_controller>& _sl_controller;
+    sharded<db::cluster_config_manager>& _cluster_config;
     auth::cache& _auth_cache;
     sharded<client_routes_service>& _client_routes;
 
@@ -278,6 +280,7 @@ public:
         sharded<db::view::view_building_worker>& view_building_worker,
         cql3::query_processor& qp,
         sharded<qos::service_level_controller>& sl_controller,
+        sharded<db::cluster_config_manager>& cluster_config,
         auth::cache& auth_cache,
         sharded<client_routes_service>& _client_routes,
         topology_state_machine& topology_state_machine,

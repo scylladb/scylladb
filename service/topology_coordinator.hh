@@ -25,6 +25,7 @@
 #include "locator/tablets.hh"
 
 namespace db {
+class cluster_config_manager;
 class system_keyspace;
 class system_distributed_keyspace;
 }
@@ -100,7 +101,8 @@ future<> run_topology_coordinator(
         endpoint_lifecycle_notifier& lifecycle_notifier,
         gms::feature_service& feature_service,
         qos::service_level_controller& sl_controller,
-        topology_coordinator_cmd_rpc_tracker& topology_cmd_rpc_tracker);
+        topology_coordinator_cmd_rpc_tracker& topology_cmd_rpc_tracker,
+        const db::cluster_config_manager& cluster_config);
 
 class tablet_ops_metrics {
 private:

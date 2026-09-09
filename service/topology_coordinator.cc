@@ -54,6 +54,7 @@
 #include "service/tablet_allocator.hh"
 #include "service/tablet_operation.hh"
 #include "service/topology_state_machine.hh"
+#include "service/hints_batchlog_flusher.hh"
 #include "db/view/view_building_coordinator.hh"
 #include "topology_mutation.hh"
 #include "utils/UUID.hh"
@@ -178,6 +179,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
     group0_voter_handler _voter_handler;
 
     topology_coordinator_cmd_rpc_tracker& _topology_cmd_rpc_tracker;
+
+    hints_batchlog_flusher _hints_batchlog_flusher;
 
     const locator::token_metadata& get_token_metadata() const noexcept {
         return *_shared_tm.get();
@@ -2613,7 +2616,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         }
                         break;
                     }
-                    if (advance_in_background(gid, tablet_state.repair, "repair", [&] () -> future<> {
+                    if (advance_in_background(gid, tablet_state.repair, "repair", [&] (this auto) -> future<> {
                         auto& tinfo = tmap.get_tablet_info(gid.tablet);
                         bool valid = tinfo.repair_task_info != nullptr;
                         if (!valid) {
@@ -2654,11 +2657,21 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                             tablet_state.repair_time = db_clock::now();
                             co_return;
                         }
-                        rtlogger.info("Initiating tablet repair host={} tablet={} request_type={}", dst, gid, request_type);
                         auto session_id = utils::get_local_injector().enter("handle_tablet_migration_repair_random_session") ?
                             service::session_id::create_random_id() : trinfo->session_id;
+                        // A dropped table has nothing left to flush for; the repair
+                        // itself finds the table gone and skips it.
+                        auto table = _db.get_tables_metadata().get_table_if_exists(gid.table);
+                        bool needs_flush = table && repair_needs_hints_batchlog_flush(*table->schema());
+                        tablet_repair_flush_info flush{tablet_repair_flush_mode::skip};
+                        if (needs_flush) {
+                            // The caller's frame, and with it everything captured
+                            // by reference, is gone once this yields.
+                            flush = {tablet_repair_flush_mode::flushed, co_await _hints_batchlog_flusher.flush_time()};
+                        }
+                        rtlogger.info("Initiating tablet repair host={} tablet={} request_type={} flush_time={}", dst, tablet, request_type, flush.time);
                         auto res = co_await ser::storage_service_rpc_verbs::send_tablet_repair(&_messaging,
-                                dst, _as, raft::server_id(dst.uuid()), gid, session_id, tablet_repair_flush_info{tablet_repair_flush_mode::flush});
+                                dst, _as, raft::server_id(dst.uuid()), tablet, session_id, flush);
                         auto duration = std::chrono::duration<float>(db_clock::now() - sched_time);
                         auto& tablet_state = _tablets[tablet];
                         tablet_state.repair_time = db_clock::from_time_t(gc_clock::to_time_t(res.repair_time));
@@ -4734,7 +4747,8 @@ public:
             gms::feature_service& feature_service,
             endpoint_lifecycle_notifier& lifecycle_notifier,
             qos::service_level_controller& sl_controller,
-            topology_coordinator_cmd_rpc_tracker& topology_cmd_rpc_tracker)
+            topology_coordinator_cmd_rpc_tracker& topology_cmd_rpc_tracker,
+            const db::cluster_config_manager& cluster_config)
         : _sys_dist_ks(sys_dist_ks), _gossiper(gossiper), _messaging(messaging)
         , _shared_tm(shared_tm), _sys_ks(sys_ks), _db(db)
         , _tablet_load_stats_refresh_interval_in_seconds(db.get_config().tablet_load_stats_refresh_interval_in_seconds)
@@ -4755,6 +4769,7 @@ public:
         , _group0_holder(_group0.hold_group0_gate())
         , _voter_handler(group0, topo_sm._topology, gossiper, feature_service)
         , _topology_cmd_rpc_tracker(topology_cmd_rpc_tracker)
+        , _hints_batchlog_flusher(_gossiper, _messaging, _shared_tm, db.get_config().repair_hints_batchlog_flush_cache_time_in_ms, cluster_config, _as)
         , _async_gate("topology_coordinator")
     {
         _lifecycle_notifier.register_subscriber(this);
@@ -5344,6 +5359,7 @@ future<> topology_coordinator::stop() {
         co_await stop_background_action(tablet_state.rebuild_repair, gid, [] { return "during rebuild_repair"; });
         co_await stop_background_action(tablet_state.repair, gid, [] { return "during repair"; });
     });
+    co_await _hints_batchlog_flusher.stop();
 }
 
 future<> run_topology_coordinator(
@@ -5358,7 +5374,8 @@ future<> run_topology_coordinator(
         endpoint_lifecycle_notifier& lifecycle_notifier,
         gms::feature_service& feature_service,
         qos::service_level_controller& sl_controller,
-        topology_coordinator_cmd_rpc_tracker& topology_cmd_rpc_tracker) {
+        topology_coordinator_cmd_rpc_tracker& topology_cmd_rpc_tracker,
+        const db::cluster_config_manager& cluster_config) {
 
     topology_coordinator coordinator{
             sys_dist_ks, gossiper, messaging, shared_tm,
@@ -5369,7 +5386,8 @@ future<> run_topology_coordinator(
             ring_delay,
             feature_service, lifecycle_notifier,
             sl_controller,
-            topology_cmd_rpc_tracker};
+            topology_cmd_rpc_tracker,
+            cluster_config};
 
     std::exception_ptr ex;
     try {
