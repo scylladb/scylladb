@@ -17,7 +17,6 @@
 #include "db/view/view_building_coordinator.hh"
 #include "db/view/view_build_status.hh"
 #include "locator/tablets.hh"
-#include "mutation/canonical_mutation.hh"
 #include "mutation/mutation.hh"
 #include "raft/raft.hh"
 #include "service/raft/group0_state_machine.hh"
@@ -78,10 +77,11 @@ future<> view_building_coordinator::await_event() {
 }
 
 future<> view_building_coordinator::commit_mutations(service::group0_guard guard, utils::chunked_vector<mutation> mutations, std::string_view description) {
-    utils::chunked_vector<canonical_mutation> cmuts = {mutations.begin(), mutations.end()};
-    auto cmd = _group0.client().prepare_command(service::write_mutations{
-        .mutations{std::move(cmuts)}
-    }, guard, description);
+    service::group0_update_collector updates;
+    for (auto& m : mutations) {
+        co_await updates.add(std::move(m));
+    }
+    auto cmd = co_await _group0.client().prepare_command<service::write_mutations>(std::move(updates), guard, description);
     co_await _group0.client().add_entry(std::move(cmd), std::move(guard), _as);
 }
 
