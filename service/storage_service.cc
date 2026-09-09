@@ -725,6 +725,8 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
                     [[fallthrough]];
                 case topology::transition_state::snapshot_tables:
                     [[fallthrough]];
+                case topology::transition_state::backup_snapshot:
+                    [[fallthrough]];
                 case topology::transition_state::rollback_to_normal:
                     return read_new_t::no;
                 case topology::transition_state::write_both_read_new:
@@ -4866,6 +4868,7 @@ static bool should_abort_repair(const topology& topo) {
     case topology::transition_state::truncate_table:
     case topology::transition_state::lock:
     case topology::transition_state::snapshot_tables:
+    case topology::transition_state::backup_snapshot:
         return true;
     }
 }

@@ -43,6 +43,7 @@
 #include "db/hints/manager.hh"
 #include "db/system_keyspace.hh"
 #include "db/system_distributed_keyspace.hh"
+#include "cql3/query_processor.hh"
 #include "exceptions/exceptions.hh"
 #include <boost/intrusive/list.hpp>
 #include <boost/outcome/result.hpp>
@@ -56,6 +57,7 @@
 #include <seastar/core/metrics.hh>
 #include <seastar/core/execution_stage.hh>
 #include "db/timeout_clock.hh"
+#include "db/snapshot/cluster_backup.hh"
 #include "replica/multishard_query.hh"
 #include "replica/database.hh"
 #include "db/consistency_level_validations.hh"
@@ -313,6 +315,10 @@ public:
         return _paxos_store.local();
     }
 
+    topology_state_machine& topology_state_machine() {
+        return _topology_state_machine;
+    }
+
     const db::view::view_building_state_machine& view_building_state_machine() {
         return _vb_state_machine;
     }
@@ -484,6 +490,13 @@ public:
     future<> snapshot_with_tablets(const std::vector<std::pair<sstring, sstring>>& ks_cf_names, sstring tag, const db::snapshot_options& opts) {
         co_await seastar::with_gate(_snapshot_gate, [&] () -> future<> {
             co_await request_snapshot_with_tablets(ks_cf_names, tag, opts);
+        });
+    }
+
+    future<utils::UUID> start_backup_snapshot(const std::unordered_map<sstring, db::snapshot_dc_location>& locations, const std::vector<std::pair<sstring, sstring>>& ks_cf_names, sstring tag, bool move_files) {
+        co_return co_await seastar::with_gate(_snapshot_gate, [&]() -> future<utils::UUID> {
+            auto id = co_await request_start_backup_snapshot(locations, ks_cf_names, tag, move_files);
+            co_return id;
         });
     }
 
@@ -1156,11 +1169,11 @@ private:
     using can_replace_op_with_ongoing_func = std::function<bool(const db::system_keyspace::topology_requests_entry&, const service::global_topology_request&)>;
     using create_op_mutations_func = std::function<global_topology_request(topology_request_tracking_mutation_builder&)>;
 
-    future<> do_topology_request(std::string_view reason, begin_op_func begin, can_replace_op_with_ongoing_func can_replace_op, create_op_mutations_func create_mutations, std::string_view origin) {
+    future<utils::UUID> start_topology_request(std::string_view reason, begin_op_func begin, can_replace_op_with_ongoing_func can_replace_op, create_op_mutations_func create_mutations, std::string_view origin) {
         if (this_shard_id() != 0) {
             // group0 is only set on shard 0
             co_return co_await _sp.container().invoke_on(0, [&] (storage_proxy& sp) {
-                return sp.remote().do_topology_request(reason, begin, can_replace_op, create_mutations, origin);
+                return sp.remote().start_topology_request(reason, begin, can_replace_op, create_mutations, origin);
             });
         }
 
@@ -1219,6 +1232,19 @@ private:
             }
         }
 
+        co_return global_request_id;
+    }
+
+    future<> do_topology_request(std::string_view reason, begin_op_func begin, can_replace_op_with_ongoing_func can_replace_op, create_op_mutations_func create_mutations, std::string_view origin) {
+        if (this_shard_id() != 0) {
+            // group0 is only set on shard 0
+            co_return co_await _sp.container().invoke_on(0, [&] (storage_proxy& sp) {
+                return sp.remote().do_topology_request(reason, begin, can_replace_op, create_mutations, origin);
+            });
+        }
+
+        auto global_request_id = co_await start_topology_request(reason, begin, can_replace_op, create_mutations, origin);
+ 
         // Wait for the topology request to complete
         sstring error = co_await _topology_state_machine.wait_for_request_completion(_sys_ks.local(), global_request_id, true);
         if (!error.empty()) {
@@ -1254,20 +1280,25 @@ private:
         );
     }
 
+    static std::unordered_set<table_id> ks_names_to_ids(replica::database& db, const std::vector<std::pair<sstring, sstring>>& ks_cf_names) {
+        std::unordered_set<table_id> ids;
+        for (auto& [ks_name, cf_name] : ks_cf_names) {
+            if (cf_name.empty()) {
+                auto& ks = db.find_keyspace(ks_name);
+                auto id_range = ks.metadata()->cf_meta_data() | std::views::values | std::views::transform(std::mem_fn(&schema::id));
+                ids.insert(id_range.begin(), id_range.end());
+            } else {
+                ids.insert(db.find_uuid(ks_name, cf_name));
+            }
+        }
+        return ids;
+    }
+
     future<> request_snapshot_with_tablets(const std::vector<std::pair<sstring, sstring>> ks_cf_names, sstring tag, const db::snapshot_options& opts) {
         std::unordered_set<table_id> ids;
         co_await do_topology_request("Snapshot table"
             , [&] {
-                auto& db = _sp.local_db();
-                for (auto& [ks_name, cf_name] : ks_cf_names) {
-                    if (cf_name.empty()) {
-                        auto& ks = db.find_keyspace(ks_name);
-                        auto id_range = ks.metadata()->cf_meta_data() | std::views::values | std::views::transform(std::mem_fn(&schema::id));
-                        ids.insert(id_range.begin(), id_range.end());
-                    } else {
-                        ids.insert(db.find_uuid(ks_name, cf_name));
-                    }
-                }
+                ids = ks_names_to_ids(_sp.local_db(), ks_cf_names);
                 return fmt::format("SNAPSHOT tables {}", ks_cf_names);
             }
             , [&](const db::system_keyspace::topology_requests_entry& entry, const service::global_topology_request& global_request) {
@@ -1293,6 +1324,35 @@ private:
         );
     }
 
+    future<utils::UUID> request_start_backup_snapshot(const std::unordered_map<sstring, db::snapshot_dc_location>& locations, const std::vector<std::pair<sstring, sstring>>& ks_cf_names, sstring tag, bool move_files) {
+        std::unordered_set<table_id> ids;
+        co_return co_await start_topology_request("Backup snapshot"
+            , [&] {
+                ids = ks_names_to_ids(_sp.local_db(), ks_cf_names);
+                return fmt::format("BACKUP SNAPSHOT tables {}", ks_cf_names);
+            }
+            , [&](const db::system_keyspace::topology_requests_entry& entry, const service::global_topology_request& global_request) {
+                if (global_request == global_topology_request::backup_snapshot) {
+                    const std::optional<topology::transition_state>& tstate = _topology_state_machine._topology.tstate;
+                    if (!tstate || *tstate != topology::transition_state::backup_snapshot) {
+                        return entry.snapshot_table_ids == ids && entry.snapshot_tag == tag
+                            && entry.backup_locations ==  locations
+                            && entry.backup_use_move == move_files
+                            ;
+                    }
+                }
+                return false;
+            }
+            , [&](topology_request_tracking_mutation_builder& trbuilder) {
+                trbuilder.set_backup_snapshot_data(ids, locations, tag, move_files)
+                         .set("done", false)
+                         .set("start_time", db_clock::now());
+                slogger.info("Creating BACKUP SNAPSHOT global topology request for snapshot {}, tables {}", tag, ks_cf_names);
+                return global_topology_request::backup_snapshot;
+            }
+            , "request_backup_tablet_snapshot"
+        );
+    }
 };
 
 using namespace exceptions;
@@ -7298,7 +7358,7 @@ future<> storage_proxy::truncate_blocking(sstring keyspace, sstring cfname, std:
 
 future<> storage_proxy::snapshot_keyspace(std::unordered_multimap<sstring, sstring> ks_tables, sstring tag, const db::snapshot_options& opts) {
     if (!features().snapshot_as_topology_operation) {
-        throw std::runtime_error("Cannot do cluster wide snapshot. Feature 'snapshot_as_topology_operation' is not available in cluster");
+        throw gms::unsupported_feature_exception("Cannot do cluster wide snapshot. Feature 'snapshot_as_topology_operation' is not available in cluster");
     }
 
     for (auto& [ksname, _] : ks_tables) {
@@ -7317,6 +7377,20 @@ future<> storage_proxy::snapshot_keyspace(std::unordered_multimap<sstring, sstri
         | std::ranges::to<std::vector>()
         ;
     co_await remote().snapshot_with_tablets(table_pairs, tag, opts);
+}
+
+future<abortable_topology_task> storage_proxy::start_backup_snapshot(std::unordered_map<sstring, db::snapshot_dc_location> locations, std::unordered_multimap<sstring, sstring> ks_tables, sstring tag, bool move_files) {
+    if (!features().backup_as_topology_operation) {
+        throw gms::unsupported_feature_exception("Cannot do cluster wide topology coordinated backup. Feature 'backup_as_topology_operation' is not available in cluster");
+    }
+
+    slogger.debug("Starting a blocking backup operation on keyspaces {}", ks_tables);
+
+    auto table_pairs = ks_tables | std::views::transform([](auto& p) { return std::pair<sstring, sstring>(p.first, p.second); }) 
+        | std::ranges::to<std::vector>()
+        ;
+    auto id = co_await remote().start_backup_snapshot(locations, table_pairs, tag, move_files);
+    co_return abortable_topology_task(*this, id);
 }
 
 db::system_keyspace& storage_proxy::system_keyspace() {
@@ -7650,4 +7724,52 @@ future<> storage_proxy::cancel_nonlocal_write_response_handlers() {
     }
     co_await g.close();
 }
+
+abortable_topology_task::abortable_topology_task(storage_proxy& sp, utils::UUID id) noexcept 
+    : _sp(&sp)
+    , _request_id(id)
+{}
+
+abortable_topology_task::abortable_topology_task(abortable_topology_task&& t) noexcept = default;
+abortable_topology_task& abortable_topology_task::operator=(abortable_topology_task&& t) noexcept = default;
+
+future<> abortable_topology_task::wait(topology_state_machine::completion_callback cc) {
+    // group0 is only set on shard 0
+    auto me = this_shard_id();
+    std::string result;
+    co_await _sp->container().invoke_on(0, [&](storage_proxy& sp) -> future<> {
+        auto& r = sp.remote();
+        // progress needs to be handled non-waiting. use a gate to ensure we've reported all
+        // before returning (handle exceptions...)
+        gate g;
+        auto error = co_await r.topology_state_machine().wait_for_request_completion(r.system_keyspace(), _request_id, true, [&](int32_t pc) {
+            if (cc) {
+                auto h = g.hold();
+                std::ignore = smp::submit_to(me, [pc, &cc] {
+                    cc(pc);
+                }).finally([h = std::move(h)] {});
+            }
+        }).finally([&] {
+            return g.close();
+        });
+        if (!error.empty()) {
+            co_await smp::submit_to(me, [&error, &result] {
+                result = error; // copy!
+            });
+        }
+    });
+
+    if (!result.empty()) {
+        throw std::runtime_error(fmt::format("Abortable task wait failed: {}", result));
+    }
+}
+
+future<> abortable_topology_task::abort() {
+    co_await _sp->container().invoke_on(0, [id = _request_id](storage_proxy& sp) -> future<> {
+        auto& r = sp.remote();
+        co_await r.system_keyspace().query_processor().storage_service().abort_topology_request(id);
+    });
+}
+
+
 }
