@@ -1342,6 +1342,41 @@ bool fsm::apply_snapshot(snapshot_descriptor snp, size_t max_trailing_entries, s
         return false;
     }
 
+    if (!local && _observed._commit_idx < _commit_idx) {
+        // There are entries this server saw committed and get_output() has not
+        // reported yet. Their terms live only in the log, which this snapshot
+        // would truncate, and get_output() reports from above the snapshot
+        // index -- so they would be skipped for good, and their waiters left
+        // with commit_status_unknown for entries that did commit and whose
+        // effect this very snapshot carries.
+        //
+        // Reject it and let the leader retry. Nothing advances the commit
+        // index while the transfer is outstanding, so the retry finds the
+        // output consumed: a snapshot only goes to a follower the leader
+        // cannot append to, and while it is in snapshot state the leader sends
+        // that follower neither entries nor a higher commit index (see
+        // follower_progress::can_send_to(), tick() and
+        // broadcast_read_quorum(), which carries min(match_idx, commit_idx)).
+        //
+        // This is not cheap. The snapshot has already been transferred by the
+        // time we get here -- rejecting it throws that away and the leader
+        // sends it again, so for a large snapshot the cost is a second full
+        // transfer. The retry is not immediate either: it waits for a tick,
+        // and takes a couple of round trips more than that, because
+        // become_probe() leaves next_idx just above the snapshot index, so the
+        // leader first tries appending and has to be walked back down before
+        // it decides on a snapshot again. Hence the warning rather than a
+        // trace: how often this fires is worth knowing, and if it fires often
+        // it is worth carrying the entries through a snapshot instead of
+        // turning the snapshot away.
+        logger.warn("apply_snapshot[{}]: reject snapshot {}/{}, commit idx {} not reported past {}."
+                        " The leader will transfer it again, which wastes the transfer just made"
+                        " -- expensive for a large snapshot.",
+                        _tag, snp.id, snp.idx, _commit_idx, _observed._commit_idx);
+        _output.snps_to_drop.push_back(snp.id);
+        return false;
+    }
+
     _output.snps_to_drop.push_back(current_snp.id);
 
     // If the snapshot is local, _commit_idx is larger than snp.idx.
