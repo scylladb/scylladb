@@ -123,6 +123,15 @@ vnodes. However, once the migration is finalized, it cannot be reversed.
 Procedure
 ---------
 
+#. If the cluster is managed by `ScyllaDB Manager <https://manager.docs.scylladb.com/>`_,
+   `suspend <https://manager.docs.scylladb.com/stable/sctool/suspend-resume.html>`_
+   its tasks. Backup, restore, and repair are not yet supported on migrating
+   keyspaces:
+
+   .. code-block:: console
+
+      sctool suspend --cluster <cluster-id|name>
+
 #. Prepare the keyspace for migration:
 
    #. Create tablet maps for all tables in the keyspace:
@@ -354,6 +363,12 @@ Procedure
          t2      converging   2176      2048
          t3      converged    2048      -
 
+#. If you suspended ScyllaDB Manager in the first step, resume it:
+
+   .. code-block:: console
+
+      sctool resume --cluster <cluster-id|name> --no-continue
+
 Rollback Procedure
 ------------------
 
@@ -540,6 +555,12 @@ following:
    .. code-block:: console
 
       nodetool migrate-to-tablets finalize <keyspace>
+
+#. If you suspended ScyllaDB Manager before starting the migration, resume it:
+
+   .. code-block:: console
+
+      sctool resume --cluster <cluster-id|name> --no-continue
 
 Migrating multiple keyspaces
 ----------------------------
