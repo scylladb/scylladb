@@ -1320,11 +1320,7 @@ compaction_manager::do_stop_ongoing_compactions(sstring reason, std::function<bo
     return tasks;
 }
 
-future<> compaction_manager::stop_ongoing_compactions(sstring reason, compaction_group_view* t, std::optional<compaction_type_set> types_opt) noexcept {
-    return stop_ongoing_compactions(std::move(reason), [t] (const compaction_group_view* x) { return !t || x == t; }, types_opt);
-}
-
-future<> compaction_manager::stop_ongoing_compactions(sstring reason, std::function<bool(const compaction_group_view* t)> filter, std::optional<compaction_type_set> types_opt) noexcept {
+future<> compaction_manager::stop_ongoing_compactions(sstring reason, std::optional<compaction_type_set> types_opt, std::function<bool(const compaction_group_view*)> filter) noexcept {
     try {
         auto tasks = do_stop_ongoing_compactions(std::move(reason), std::move(filter), types_opt);
         bool task_stopped = true;
@@ -2672,10 +2668,6 @@ bool compaction_manager::compaction_disabled(compaction_group_view& t) const {
         // compaction_state::compaction_disabled()
         return true;
     }
-}
-
-future<> compaction_manager::stop_compaction(compaction_type_set types, std::function<bool(const compaction_group_view*)> filter) {
-    return stop_ongoing_compactions("user request", std::move(filter), types);
 }
 
 void compaction_manager::propagate_replacement(compaction_group_view& t,
