@@ -347,9 +347,9 @@ future<> view_building_worker::create_staging_sstable_tasks() {
     // while the view building state observer holds the read-apply mutex and waits for this mutex.
     started_tasks_lock.return_all();
 
-    utils::chunked_vector<canonical_mutation> cmuts;
-    cmuts.emplace_back(builder.build());
-    auto cmd = _group0.client().prepare_command(service::write_mutations{std::move(cmuts)}, guard, "create view building tasks");
+    service::group0_update_collector updates;
+    co_await updates.add(builder.build());
+    auto cmd = co_await _group0.client().prepare_command<service::write_mutations>(std::move(updates), guard, "create view building tasks");
     co_await _group0.client().add_entry(std::move(cmd), std::move(guard), _as);
 
     // Move staging sstables from `_sstables_to_register` (on shard0) to `_staging_sstables` on corresponding shards.
