@@ -219,7 +219,58 @@ Procedure
 
       .. code-block:: console
 
-         nodetool tasks list compaction --keyspace <keyspace> | grep -i reshard
+         nodetool tasks list compaction --keyspace <keyspace>
+
+      **Example:**
+
+      .. code-block:: console
+
+         $ nodetool tasks list compaction --keyspace ks
+         task_id                                type        kind scope state   sequence_number keyspace table entity shard start_time           end_time
+         ccf28999-d19c-4c94-8b61-592a5f10dba8   resharding  node table running 730             ks       t1           0     2026-08-07T08:22:03Z
+
+      The command should show one resharding task per migrating table.
+      To inspect the progress of one particular task, pass its task ID to
+      ``nodetool tasks status`` and compare the number of resharded bytes
+      (``progress_completed``) with the total number of bytes to be resharded
+      (``progress_total``):
+
+      .. code-block:: console
+
+         nodetool tasks status <task-id>
+
+      **Example:**
+
+      .. code-block:: console
+
+         $ nodetool tasks status ccf28999-d19c-4c94-8b61-592a5f10dba8
+         id: ccf28999-d19c-4c94-8b61-592a5f10dba8
+         type: resharding compaction
+         kind: node
+         scope: table
+         state: running
+         is_abortable: false
+         start_time: 2026-08-07T08:22:03Z
+         end_time:
+         error:
+         parent_id: e85de42c-9bf0-3a0b-a3ce-6d481b093bc7
+         sequence_number: 730
+         shard: 0
+         keyspace: ks
+         table: t1
+         entity:
+         progress_units: bytes
+         progress_total: 5347926524519
+         progress_completed: 252509969840
+         children_ids: [{task_id: 22461a60-ae95-4356-a5cb-dceac72c75b5, node: 172.31.0.228 }, {task_id: e2f86734-6213-42b3-85ca-b86864a97dfb, node: 172.31.0.228 }, ...]
+
+      .. note::
+
+         Resharding may be followed by a reshape compaction, which rewrites the
+         resharded SSTables into the layout expected by the table's compaction
+         strategy. Both resharding and reshaping are part of the node's boot
+         process and both appear in ``nodetool tasks list compaction``. Wait for
+         both to complete before proceeding to the next step.
 
    #. Verify that the node status changed from ``migrating to tablets`` to ``uses tablets``:
 
@@ -405,7 +456,58 @@ following:
 
          .. code-block:: console
 
-            nodetool tasks list compaction --keyspace <keyspace> | grep -i reshard
+            nodetool tasks list compaction --keyspace <keyspace>
+
+         **Example:**
+
+         .. code-block:: console
+
+            $ nodetool tasks list compaction --keyspace ks
+            task_id                                type        kind scope state   sequence_number keyspace table entity shard start_time           end_time
+            ccf28999-d19c-4c94-8b61-592a5f10dba8   resharding  node table running 730             ks       t1           0     2026-08-07T08:22:03Z
+
+         The command should show one resharding task per migrating table.
+         To inspect the progress of one particular task, pass its task ID to
+         ``nodetool tasks status`` and compare the number of resharded bytes
+         (``progress_completed``) with the total number of bytes to be resharded
+         (``progress_total``):
+
+         .. code-block:: console
+
+            nodetool tasks status <task-id>
+
+         **Example:**
+
+         .. code-block:: console
+
+            $ nodetool tasks status ccf28999-d19c-4c94-8b61-592a5f10dba8
+            id: ccf28999-d19c-4c94-8b61-592a5f10dba8
+            type: resharding compaction
+            kind: node
+            scope: table
+            state: running
+            is_abortable: false
+            start_time: 2026-08-07T08:22:03Z
+            end_time:
+            error:
+            parent_id: e85de42c-9bf0-3a0b-a3ce-6d481b093bc7
+            sequence_number: 730
+            shard: 0
+            keyspace: ks
+            table: t1
+            entity:
+            progress_units: bytes
+            progress_total: 5347926524519
+            progress_completed: 252509969840
+            children_ids: [{task_id: 22461a60-ae95-4356-a5cb-dceac72c75b5, node: 172.31.0.228 }, {task_id: e2f86734-6213-42b3-85ca-b86864a97dfb, node: 172.31.0.228 }, ...]
+
+         .. note::
+
+            Resharding may be followed by a reshape compaction, which rewrites the
+            resharded SSTables into the layout expected by the table's compaction
+            strategy. Both resharding and reshaping are part of the node's boot
+            process and both appear in ``nodetool tasks list compaction``. Wait for
+            both to complete before proceeding to the next node.
 
       #. Verify that the node status changed from ``migrating to vnodes`` to ``uses vnodes``:
 
