@@ -140,6 +140,9 @@ def _make_tls_cluster(host: str, port: int,
         protocol_version=4,
         connect_timeout=30,
         control_connection_timeout=30,
+        # The driver picks the encrypted shard-aware port only when ssl_options
+        # is set, and these clusters configure TLS with an ssl_context instead.
+        shard_aware_options={'disable_shardaware_port': True},
     )
 
 
