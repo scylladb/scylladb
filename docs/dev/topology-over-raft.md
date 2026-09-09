@@ -178,6 +178,15 @@ are the currently supported global topology operations:
    contain replicas of the table being truncated. It uses [sessions](#Topology guards)
    to make sure that no stale RPCs are executed outside of the scope of the request.
 - `restore_tablets` See [Tablet restore transition](#tablet-restore-transition) below.
+- `prepare_migration` Creates a tablet map for every table of a keyspace, the first phase
+   of a vnodes-to-tablets migration. It is executed by the topology coordinator rather than
+   by the node which received the API call, for two reasons. The coordinator is a singleton,
+   so two concurrent migrations of the same keyspace cannot interleave their writes. And the
+   request is stored in group0, so it survives coordinator failover and is resumed instead of
+   leaving the keyspace with tablet maps for only some of its tables. The latter matters
+   because the tablet maps of a large keyspace do not fit into a single group0 command and
+   have to be written by several of them. Gated by the
+   `PREPARE_MIGRATION_AS_TOPOLOGY_OPERATION` cluster feature.
 
 ## Tablet draining
 
