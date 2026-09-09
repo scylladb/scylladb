@@ -8,6 +8,7 @@
  */
 
 #include "streaming/stream_session_state.hh"
+#include <string_view>
 #include <map>
 #include "seastarx.hh"
 
