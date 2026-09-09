@@ -858,6 +858,12 @@ future<temporary_buffer<char>> client::get_object_contiguous(sstring object_name
         // would inflate the read-throughput metric exactly when progress stalls.
         gc.read_bytes += off;
     }, expected, as);
+    utils::get_local_injector().inject("s3_client_short_body", [&off] {
+        // Drop a byte once the body has been read whole, standing in for a reply
+        // that declared and delivered less than the range asked for. That is not a
+        // truncation and not retryable, so it has to reach the caller's check.
+        off -= off > 0 ? 1 : 0;
+    });
     ret->trim(off);
     s3l.trace("Consumed {} bytes of {}", off, object_name);
     co_return std::move(*ret);

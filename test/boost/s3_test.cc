@@ -504,6 +504,44 @@ void client_readable_file(const client_maker_function& client_maker) {
     BOOST_REQUIRE_EQUAL(to_sstring(std::move(buf)), sstring("67890ABC"));
 }
 
+// A range that runs past the end of the object is answered short by design, so
+// the short-read check has to clamp what it expects to what remains. A body
+// that ends early inside the object must still fail, which needs the injection
+// point since the http client reports a truncated body as a clean end of stream.
+void client_readable_file_short_read(const client_maker_function& client_maker) {
+    s3_test_fixture guard(client_maker);
+    auto cln = guard.client();
+    const auto name = guard.object_path("testshortreadobject");
+
+    temporary_buffer<char> data = sstring("1234567890ABCDEF").release();
+    cln->put_object(name, std::move(data)).get();
+
+    auto f = cln->make_readable_file(name);
+    auto close_readable_file = deferred_close(f);
+    BOOST_REQUIRE_EQUAL(f.size().get(), 16);
+
+    testlog.info("A read straddling the end of the object must succeed");
+    char buffer[64];
+    BOOST_REQUIRE_EQUAL(f.dma_read(10, buffer, 32).get(), 6);
+    BOOST_REQUIRE_EQUAL(sstring(buffer, 6), sstring("ABCDEF"));
+
+    auto buf = f.dma_read_bulk<char>(12, 64).get();
+    BOOST_REQUIRE_EQUAL(to_sstring(std::move(buf)), sstring("CDEF"));
+
+#ifdef SCYLLA_ENABLE_ERROR_INJECTION
+    testlog.info("A body that ends early inside the object must fail");
+    utils::get_local_injector().enable("s3_client_short_body");
+    auto disable = seastar::defer([] () noexcept { utils::get_local_injector().disable("s3_client_short_body"); });
+    BOOST_REQUIRE_THROW(f.dma_read(0, buffer, 8).get(), storage_io_error);
+#else
+    testlog.info("Skipping the truncated-body case, it requires SCYLLA_ENABLE_ERROR_INJECTION");
+#endif
+}
+
+SEASTAR_THREAD_TEST_CASE(test_client_readable_file_short_read_s3) {
+    client_readable_file_short_read(make_s3_client);
+}
+
 // A truncated body is retried; only a reply that describes a different range
 // than the one asked for reaches the caller.
 void client_readable_file_truncated_body(const client_maker_function& client_maker) {
