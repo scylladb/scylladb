@@ -2189,13 +2189,17 @@ lw_shared_ptr<memtable> memtable_list::new_memtable() {
             _table_stats, this, _compaction_scheduling_group, _shared_gc_state);
 }
 
+std::vector<replica::shared_memtable> memtable_list::make_replacement() {
+    std::vector<replica::shared_memtable> new_memtables;
+    new_memtables.emplace_back(new_memtable());
+    return new_memtables;
+}
+
 // Synchronously swaps the active memtable with a new, empty one,
 // returning the old memtables list.
 // Exception safe.
 std::vector<replica::shared_memtable> memtable_list::clear_and_add() {
-    std::vector<replica::shared_memtable> new_memtables;
-    new_memtables.emplace_back(new_memtable());
-    return std::exchange(_memtables, std::move(new_memtables));
+    return clear_and_add(make_replacement());
 }
 
 future<> database::apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&& h,

@@ -304,6 +304,18 @@ public:
     // Exception safe.
     std::vector<replica::shared_memtable> clear_and_add();
 
+    // Builds a fresh, empty replacement list, to be installed by the overload below.
+    // This is the only part of the swap that allocates.
+    std::vector<replica::shared_memtable> make_replacement();
+
+    // Installs a replacement and returns the old memtables.
+    // Allocates nothing and cannot fail, so a caller that has to swap the lists of
+    // several memtable_lists without letting a reader see a half-done swap can build
+    // all of the replacements first and then install them one after another.
+    std::vector<replica::shared_memtable> clear_and_add(std::vector<replica::shared_memtable> replacement) noexcept {
+        return std::exchange(_memtables, std::move(replacement));
+    }
+
     size_t size() const noexcept {
         return _memtables.size();
     }
