@@ -10,6 +10,7 @@
 
 from ...porting import *
 from cassandra.query import UNSET_VALUE
+from ....util import is_scylla
 
 def testInvalidCollectionEqualityRelation(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int PRIMARY KEY, b set<int>, c list<int>, d map<int, int>)") as table:
@@ -42,11 +43,18 @@ def testInvalidCollectionNonEQRelation(cql, test_keyspace):
                              "SELECT * FROM %s WHERE c = 0 AND b IN (?)", {0})
         assert_invalid_message(cql, table, "Unsupported \"!=\" relation: b != 5",
                 "SELECT * FROM %s WHERE c = 0 AND b != 5")
-        # different error message in Scylla and Cassandra. Note that in the
-        # future, Scylla may want to support this restriction so the error
-        # message will change again.
-        assert_invalid_message(cql, table, "IS NOT",
-                "SELECT * FROM %s WHERE c = 0 AND b IS NOT NULL")
+        # Scylla now supports IS NOT NULL on non-frozen collection columns in
+        # regular SELECT queries (with ALLOW FILTERING) - the predicate only
+        # tests whether the column has any value, so unlike the relations above
+        # it is meaningful for non-frozen collections. Cassandra still rejects
+        # it outside of materialized view creation.
+        if is_scylla(cql):
+            assert_invalid_message(cql, table, "ALLOW FILTERING",
+                    "SELECT * FROM %s WHERE c = 0 AND b IS NOT NULL")
+            assert_row_count(execute(cql, table, "SELECT * FROM %s WHERE c = 0 AND b IS NOT NULL ALLOW FILTERING"), 1)
+        else:
+            assert_invalid_message(cql, table, "IS NOT",
+                    "SELECT * FROM %s WHERE c = 0 AND b IS NOT NULL")
 
 def testClusteringColumnRelations(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a text, b int, c int, d int, primary key (a, b, c))") as table:
@@ -602,7 +610,14 @@ def testInvalidNonFrozenUDTRelation(cql, test_keyspace):
             assert_invalid_message(cql, table, "Unsupported \"!=\" relation",
                              "SELECT * FROM %s WHERE b != {a: 0}", udt)
             # Reproduces #10632:
-            assert_invalid_message(cql, table, "b IS NOT",
-                             "SELECT * FROM %s WHERE b IS NOT NULL", udt)
+            # Scylla now supports IS NOT NULL on non-frozen UDT columns in
+            # regular SELECT queries (with ALLOW FILTERING), so the restriction
+            # itself is no longer rejected with "b IS NOT NULL is only supported
+            # in materialized view creation".
+            if is_scylla(cql):
+                assert_empty(execute(cql, table, "SELECT * FROM %s WHERE b IS NOT NULL ALLOW FILTERING"))
+            else:
+                assert_invalid_message(cql, table, "b IS NOT",
+                                 "SELECT * FROM %s WHERE b IS NOT NULL", udt)
             assert_invalid_message(cql, table, "Cannot use CONTAINS on non-collection column",
                              "SELECT * FROM %s WHERE b CONTAINS ?", udt)

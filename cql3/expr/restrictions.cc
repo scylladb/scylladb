@@ -25,7 +25,11 @@ extern logging::logger expr_logger;
 namespace {
 
 bool is_legal_relation_for_non_frozen_collection(oper_t oper, bool is_lhs_col_indexed) {
-    return oper == oper_t::CONTAINS_KEY || oper == oper_t::CONTAINS || (oper == oper_t::EQ && is_lhs_col_indexed);
+    // IS NULL / IS NOT NULL don't compare the collection against a value, they
+    // only test whether the column has any live cells at all, so they are
+    // meaningful for non-frozen collections too.
+    return oper == oper_t::CONTAINS_KEY || oper == oper_t::CONTAINS || (oper == oper_t::EQ && is_lhs_col_indexed)
+           || oper == oper_t::IS || oper == oper_t::IS_NOT;
 }
 
 void validate_single_column_relation(const column_value& lhs, oper_t oper, const schema& schema, bool is_lhs_subscripted) {
@@ -150,11 +154,11 @@ void preliminary_binop_vaidation_checks(const binary_operator& binop) {
         throw exceptions::invalid_request_exception(format("Unsupported \"!=\" relation: {:user}", binop));
     }
 
-    if (binop.op == oper_t::IS_NOT) {
+    if (binop.op == oper_t::IS || binop.op == oper_t::IS_NOT) {
         bool rhs_is_null = (is<untyped_constant>(binop.rhs) && as<untyped_constant>(binop.rhs).partial_type == untyped_constant::type_class::null)
                            || (is<constant>(binop.rhs) && as<constant>(binop.rhs).is_null());
         if (!rhs_is_null) {
-            throw exceptions::invalid_request_exception(format("Unsupported \"IS NOT\" relation: {:user}", binop));
+            throw exceptions::invalid_request_exception(format("Unsupported \"IS\" or \"IS NOT\" relation: {:user}", binop));
         }
     }
 

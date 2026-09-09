@@ -65,7 +65,8 @@ interval<clustering_key_prefix> to_range(oper_t op, const clustering_key_prefix&
 
 inline bool needs_filtering(oper_t op) {
     return (op == oper_t::CONTAINS) || (op == oper_t::CONTAINS_KEY) || (op == oper_t::LIKE) ||
-           (op == oper_t::IS_NOT) || (op == oper_t::NEQ) || (op == oper_t::NOT_IN);
+           (op == oper_t::NEQ) || (op == oper_t::NOT_IN) ||
+           (op == oper_t::IS) || (op == oper_t::IS_NOT);  // identity operators, currently restricted to NULL
 }
 
 static
@@ -373,6 +374,15 @@ to_predicates(
                                     .filter = oper,
                                     .on = on_column{col.col},
                                     .is_not_null_single_column = is_null_constant(oper.rhs),
+                                    .op = oper.op,
+                                });
+                            } else if (oper.op == oper_t::IS) {
+                                // This predicate constrains LHS to NULL, but we can't represent it in solve_for.
+                                return to_vector(predicate{
+                                    .solve_for = nullptr,
+                                    .filter = oper,
+                                    .on = on_column{col.col},
+                                    .order = oper.order,
                                     .op = oper.op,
                                 });
                             }
@@ -927,13 +937,44 @@ statement_restrictions::statement_restrictions(private_tag,
     single_column_predicate_vectors sc_ck_pred_vectors;
     single_column_predicate_vectors sc_nonpk_pred_vectors;
     for (auto& pred : predicates) {
-        if (pred.is_not_null_single_column) {
-            auto* col = require_on_single_column(pred);
-            _not_null_columns.insert(col);
-
-            if (!for_view) {
-                throw exceptions::invalid_request_exception(format("restriction '{}' is only supported in materialized view creation", pred.filter));
+        if ((pred.op == oper_t::IS || pred.op == oper_t::IS_NOT) && (type.is_update() || type.is_delete())) {
+            // The WHERE clause of a mutation has to name the rows to write, and
+            // IS [NOT] NULL cannot name one: it tests whether a column has a
+            // value instead of saying which value it has, so it never yields a
+            // concrete key. So reject them - otherwise the restriction would
+            // silently be ignored and the statement would write more than was
+            // asked for, e.g. DELETE ... WHERE p = 1 AND c IS NULL deleting the
+            // whole partition.
+            throw exceptions::invalid_request_exception(format(
+                    "Restriction '{:user}' is not supported in {} statements", pred.filter, type));
+        }
+        if ((pred.op == oper_t::IS || pred.is_not_null_single_column) && for_view) {
+            if (pred.op == oper_t::IS) {
+                // A view row exists only for base rows whose view key columns
+                // are all non-null, so IS NULL on a view key column could only
+                // ever select an empty view. On any other column it would be a
+                // filter on a non-key column, which views don't support. Either
+                // way there is nothing useful to do with it.
+                throw exceptions::invalid_request_exception(format(
+                        "Restriction '{:user}' is not supported in materialized view creation. Only IS NOT NULL is allowed.",
+                        pred.filter));
             }
+            _not_null_columns.insert(require_on_single_column(pred));
+        } else if (pred.is_not_null_single_column && require_on_single_column(pred)->is_partition_key()) {
+            // A partition key column is never null, so IS NOT NULL on one matches
+            // every row. The restriction carries no information, so drop it - in
+            // particular it must not make the query require ALLOW FILTERING.
+            //
+            // This does not extend to a clustering key column. A partition with
+            // no clustering rows still has a static row, and SELECT returns it
+            // with every clustering key column null - so "c IS NOT NULL" does
+            // carry information there, and has to be evaluated like any other
+            // restriction on c rather than dropped.
+            //
+            // A schema with no static columns has no such rows, which would make
+            // the restriction a tautology again, but we deliberately don't make
+            // use of that: it isn't worth a second, schema-dependent rule.
+            continue;
         } else if (pred.is_multi_column) {
             // Multi column restrictions are only allowed on clustering columns
             if (ck_is_empty) {
@@ -1117,7 +1158,7 @@ statement_restrictions::statement_restrictions(private_tag,
             throw exceptions::invalid_request_exception(format("Unhandled restriction: {}", pred.filter));
         }
 
-        if (!pred.is_not_null_single_column) {
+        if (!(for_view && pred.is_not_null_single_column)) {
             _where.push_back(pred.filter);
         }
         // Subscript EQ (e.g. m[1] = 'a') is not considered an EQ on the column

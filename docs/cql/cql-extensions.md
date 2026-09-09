@@ -326,9 +326,11 @@ TRUE but `TRUE AND FALSE` is FALSE.
 
 Because `x = NULL` always evaluates to NULL, a `SELECT` filter `WHERE x = NULL`
 matches no row (_matching_ means evaluating to TRUE). It does **not** match
-rows where x is missing. If you really want to match rows with missing x,
-SQL offers a different syntax `x IS NULL` (and similarly, also `x IS NOT
-NULL`), Scylla does not yet implement this syntax.
+rows where x is missing. If you want to match rows with missing x, you can use
+`x IS NULL` (and similarly, `x IS NOT NULL` for rows where x is present).
+On a regular or static column these operators require `ALLOW FILTERING` to be specified;
+on a primary key column the rules differ per column kind. See
+[IS NULL and IS NOT NULL in WHERE clause](#is-null-and-is-not-null-in-where-clause).
 
 In contrast, Cassandra is less consistent in its handling of nulls.
 The example `x = NULL` is considered an error, not a valid expression
@@ -372,6 +374,121 @@ Scylla. The result of the pattern match is `FALSE`.
 For more details, see:
 - [Lightweight Transactions](../features/lwt.rst)
 - [How does ScyllaDB LWT Differ from Apache Cassandra?](../kb/lwt-differences.rst)
+
+## IS NULL and IS NOT NULL in WHERE clause
+
+ScyllaDB supports `IS NULL` and `IS NOT NULL` operators in the WHERE clause of SELECT
+statements. These operators allow filtering rows based on whether a column value is present or absent:
+
+- `IS NULL` returns rows where the column has no value.
+- `IS NOT NULL` returns rows where the column has a value.
+
+Whether these operators require `ALLOW FILTERING` depends on the column:
+
+- On a **partition key column**, `IS NOT NULL` never requires `ALLOW FILTERING`. Such a
+  column can never be null, so the restriction matches every row and is dropped entirely.
+  Being dropped, it also doesn't count as restricting the partition key for the rules
+  below. `IS NULL` on a partition key column matches no row, but it is still a
+  restriction, so it requires `ALLOW FILTERING`.
+- On a **clustering key column**, both operators are ordinary restrictions on that column
+  and neither is dropped, because a clustering key column *can* read as null - see below.
+  They therefore need the partition key fully restricted by `=` or `IN` (a `token()` range
+  is not enough) and every preceding clustering key column restricted; otherwise they
+  require `ALLOW FILTERING`.
+- On any **other column** - regular or static - both operators require `ALLOW FILTERING`,
+  because every row's value has to be inspected. This holds even when the column is
+  indexed: the index is not consulted for a null check.
+
+A clustering key column reads as null in one case: a partition that holds a static row but
+no clustering rows is returned as a single row whose clustering key columns are all null.
+So on a clustering key column `IS NULL` selects exactly those static-only rows, and
+`IS NOT NULL` selects exactly the clustering rows. In a table with no static columns there
+are no such rows, which makes `IS NULL` match nothing and `IS NOT NULL` match everything -
+but the two are still ordinary restrictions there, subject to the same rules.
+
+```cql
+CREATE TABLE events (p int, c int, v int, PRIMARY KEY (p, c));
+
+-- no ALLOW FILTERING needed: p is a partition key column, so IS NOT NULL is
+-- dropped and this is a full scan
+SELECT * FROM events WHERE p IS NOT NULL;
+
+-- no ALLOW FILTERING needed: the partition key is fixed, so IS [NOT] NULL on
+-- the clustering key is an ordinary clustering key restriction
+SELECT * FROM events WHERE p = 1 AND c IS NOT NULL;
+SELECT * FROM events WHERE p = 1 AND c IS NULL;
+
+-- ALLOW FILTERING needed: no partition key restriction to anchor the clustering
+-- key restriction
+SELECT * FROM events WHERE c IS NOT NULL ALLOW FILTERING;
+SELECT * FROM events WHERE c IS NULL ALLOW FILTERING;
+
+-- ALLOW FILTERING needed: v is a regular column
+SELECT * FROM events WHERE p = 1 AND v IS NULL ALLOW FILTERING;
+```
+
+Like other Scylla filtering predicates, they can also be combined with additional
+restrictions on the same column. The result follows ordinary conjunction semantics:
+contradictory predicates such as `x IS NULL AND x = 3` match no rows, while
+compatible predicates such as `x IS NOT NULL AND x = 3` work normally.
+
+> **Note:** In a materialized view definition `IS NOT NULL` on a base table primary key column is a no-op,
+> because a view row is only ever built from a base clustering row, and such a row has a value for every one
+> of the base table's primary key columns. This is why a view definition may name those columns with
+> `IS NOT NULL` freely. On a regular base table column
+> promoted into the view's primary key it is *not* a no-op - see **Usage in Materialized Views** below.
+> For the `SELECT` rules, which differ between partition key and clustering key columns, see the list
+> above rather than this note.
+
+Unlike the other filtering operators, `IS NULL` and `IS NOT NULL` may also be used on
+non-frozen collection columns, because they only test whether the column has a value
+rather than compare it against one. Note that a non-frozen collection with no elements
+is indistinguishable from a missing one, so an empty collection is considered null:
+
+```cql
+CREATE TABLE tags (id int PRIMARY KEY, tags set<text>);
+INSERT INTO tags (id, tags) VALUES (1, {'a'});
+INSERT INTO tags (id, tags) VALUES (2, {});
+
+SELECT * FROM tags WHERE tags IS NULL ALLOW FILTERING;
+
+ id | tags
+----+------
+  2 | null
+```
+
+**Example:**
+
+```cql
+CREATE TABLE users (id int PRIMARY KEY, name text, email text);
+INSERT INTO users (id, name, email) VALUES (1, 'Alice', 'alice@example.com');
+INSERT INTO users (id, name) VALUES (2, 'Bob');
+
+SELECT * FROM users WHERE email IS NULL ALLOW FILTERING;
+
+ id | email | name
+----+-------+------
+  2 |  null |  Bob
+
+SELECT * FROM users WHERE email IS NOT NULL ALLOW FILTERING;
+
+ id | email             | name
+----+-------------------+-------
+  1 | alice@example.com | Alice
+```
+
+**Usage in Materialized Views:**
+
+`IS NOT NULL` is also used in materialized view definitions to ensure that columns
+included in the view's primary key are not null. This usage does not require `ALLOW FILTERING`.
+On a base table primary key column the restriction is a no-op, because a view row is only ever
+built from a base clustering row, and such a row has a value for every one of the base table's
+primary key columns. On a regular base table column promoted into the view's primary key it is
+not a no-op: it is what excludes the base rows
+where that column is null from the view.
+`IS NULL` is not supported in materialized view definitions, and neither operator can be
+used in a view definition on a column that is not part of the view's primary key - views
+do not support filtering on non-key columns.
 
 ## REDUCEFUNC for UDA
 

@@ -302,6 +302,25 @@ def test_is_not_operator_must_be_null(cql, test_keyspace):
         finally:
             cql.execute(f"DROP MATERIALIZED VIEW IF EXISTS {test_keyspace}.{mv}")
 
+# Using IS NULL on either view's pk or regular column is not supported. On a view
+# key column it could only ever select an empty view, because a view row exists
+# only for base rows whose view key columns are all non-null; on a regular column
+# it would be a filter on a non-key column, which views don't support. Either way
+# it is rejected with the same error.
+def test_mv_with_is_null_on_view_column(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, 'pk int primary key, mv_pk int, regular_col int') as table:
+        mv_null = unique_name()
+        try:
+            with pytest.raises(InvalidRequest, match="mv_pk IS null.*not supported.*Only IS NOT NULL"):
+                cql.execute(f"CREATE MATERIALIZED VIEW {test_keyspace}.{mv_null} AS SELECT * FROM {table} WHERE pk IS NOT NULL AND mv_pk IS NULL PRIMARY KEY (mv_pk, pk)")
+            with pytest.raises(InvalidRequest, match="regular_col IS null.*not supported.*Only IS NOT NULL"):
+                cql.execute(f"CREATE MATERIALIZED VIEW {test_keyspace}.{mv_null} AS SELECT * FROM {table} WHERE pk IS NOT NULL AND regular_col IS NULL AND mv_pk IS NOT NULL PRIMARY KEY (mv_pk, pk)")
+            # Also rejected on a base primary key column, where IS NOT NULL is required.
+            with pytest.raises(InvalidRequest, match="pk IS null.*not supported.*Only IS NOT NULL"):
+                cql.execute(f"CREATE MATERIALIZED VIEW {test_keyspace}.{mv_null} AS SELECT * FROM {table} WHERE pk IS NULL AND mv_pk IS NOT NULL PRIMARY KEY (mv_pk, pk)")
+        finally:
+            cql.execute(f"DROP MATERIALIZED VIEW IF EXISTS {test_keyspace}.{mv_null}")
+
 # The IS NOT NULL operator was first added to Cassandra and Scylla for use
 # just in key columns in materialized views. It was not supported in general
 # filters in SELECT (see issue #8517), and in particular cannot be used in
@@ -309,20 +328,12 @@ def test_is_not_operator_must_be_null(cql, test_keyspace):
 # if this usage is not allowed, we expect to see a clear error and not silently
 # ignoring the IS NOT NULL condition as happens in issue #10365.
 #
-# NOTE: if issue #8517 (IS NOT NULL in filters) is implemented, we will need to
-# replace this test by a test that checks that the filter works as expected,
-# both in ordinary base-table SELECT and in materialized-view definition.
+# Note that since #8517 was implemented, "xyz IS NOT NULL" *is* a valid filter
+# in a base-table SELECT (see test_is_null.py) - but a materialized view still
+# cannot filter on a non-key column, so it must still be rejected here.
 def test_is_not_null_forbidden_in_filter(cql, test_keyspace, cassandra_bug):
     with new_test_table(cql, test_keyspace, 'p int primary key, xyz int') as table:
-        # Check that "IS NOT NULL" is not supported in a regular (base table)
-        # SELECT filter. Cassandra reports an InvalidRequest: "Unsupported
-        # restriction: xyz IS NOT NULL". In Scylla the message is different:
-        # "restriction '(xyz) IS NOT { null }' is only supported in materialized
-        # view creation".
-        #
-        with pytest.raises(InvalidRequest, match="xyz"):
-            cql.execute(f'SELECT * FROM {table} WHERE xyz IS NOT NULL ALLOW FILTERING')
-        # Check that "xyz IS NOT NULL" is also not supported in a
+        # Check that "xyz IS NOT NULL" is not supported in a
         # materialized-view definition (where xyz is not a key column)
         # Reproduces #8517
         mv = unique_name()
@@ -1489,7 +1500,7 @@ def test_alter_table_add_select_star(cql, test_keyspace):
             cql.execute(f'INSERT INTO {base} (p,a,b,c) VALUES (0,1,2,3)')
             assert {(0,1,2,3),(1,2,3,None)} == set(cql.execute(f"SELECT p,a,b,c FROM {base}"))
             assert {(0,1,2,3),(1,2,3,None)} == set(cql.execute(f"SELECT p,a,b,c FROM {mv}"))
-            
+
 # Test that if a view is created with "SELECT *", DESC MATERIALIZED VIEW operation shows it
 # as "SELECT *" instead of expanding it (explicitly showing each column).
 # Reproduces issue #21154
