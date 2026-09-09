@@ -87,6 +87,9 @@ The current migration procedure has the following limitations:
   replace, or rebuild nodes while a migration is in progress.
 * **No repair** operations during the migration. Do not run ``nodetool repair``
   on the migrating keyspace while a migration is in progress.
+* **No backup and restore** for migrating tables during the migration.
+  Do not take snapshots, run backups, or restore into the migrating keyspace
+  while the migration is in progress.
 * **No TRUNCATE** on tables in the migrating keyspace during the migration.
 * Only **CQL base tables** can be migrated. Materialized views, secondary
   indexes, CDC tables, and Alternator tables are not supported.
