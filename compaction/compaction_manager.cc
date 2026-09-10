@@ -426,8 +426,13 @@ future<compaction_result> compaction_task_executor::compact_sstables(compaction_
             co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{5});
             cmlog.info("split_pause_before_replacer: released");
         }).get();
-        t.get_compaction_strategy().notify_completion(t, desc.old_sstables, desc.new_sstables);
-        _cm.propagate_replacement(t, desc.old_sstables, desc.new_sstables);
+        // Everything that tracks a replacement has to see the garbage
+        // collected sstables as well as the regular outputs, since both are
+        // attached to the sstable set and both come back as old_sstables when
+        // released. See compaction_completion_desc::all_new_sstables().
+        auto added = desc.all_new_sstables();
+        t.get_compaction_strategy().notify_completion(t, desc.old_sstables, added);
+        _cm.propagate_replacement(t, desc.old_sstables, added);
         // Hold sstable_set_lock while mutating the sstable set and deregistering
         // old sstables.  This serializes with regular compaction's snapshot +
         // filter + registration, preventing the stale-snapshot race.
@@ -445,7 +450,12 @@ future<compaction_result> compaction_task_executor::compact_sstables(compaction_
         // window, where the sstables:
         // - are still in the main set
         // - are not being compacted.
-        on_replace.on_addition(desc.new_sstables);
+        //
+        // This has to cover the garbage collected sstables too. The regular
+        // outputs are shielded twice over, since they carry the output run
+        // identifier this task advertises and get_candidates() filters on it,
+        // but a garbage collected sstable gets a run identifier of its own.
+        on_replace.on_addition(added);
         auto old_sstables = desc.old_sstables;
         _cm.on_compaction_completion(t, std::move(desc), offstrategy).get();
         on_replace.on_removal(old_sstables);

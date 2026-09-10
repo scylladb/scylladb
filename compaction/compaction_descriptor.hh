@@ -44,6 +44,24 @@ struct compaction_completion_desc {
     std::vector<sstables::shared_sstable> new_gc_sstables;
     // Set of compacted partition ranges that should be invalidated in the cache.
     utils::chunked_vector<dht::partition_range> ranges_for_cache_invalidation;
+
+    // Everything this replacement adds to the SSTable set, the regular outputs
+    // followed by the GCed-data ones.
+    //
+    // The two are kept in separate vectors only because
+    // sstable_list_updater::prepare() has to pin the GCed-data SSTables to the
+    // compaction group the compaction runs on, instead of routing them through
+    // the live tablet map like the regular outputs. Every other consumer wants
+    // both, and one that reads new_sstables alone ends up seeing a removal it
+    // was never told to expect, since GCed-data SSTables come back as
+    // old_sstables when they are released.
+    std::vector<sstables::shared_sstable> all_new_sstables() const {
+        std::vector<sstables::shared_sstable> ret;
+        ret.reserve(new_sstables.size() + new_gc_sstables.size());
+        ret.insert(ret.end(), new_sstables.begin(), new_sstables.end());
+        ret.insert(ret.end(), new_gc_sstables.begin(), new_gc_sstables.end());
+        return ret;
+    }
 };
 
 // creates a new SSTable for a given shard
