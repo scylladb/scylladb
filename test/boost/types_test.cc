@@ -1014,6 +1014,24 @@ BOOST_AUTO_TEST_CASE(test_list_to_string) {
     BOOST_REQUIRE_EQUAL(m->to_string(v.serialize_nonnull()), "41, 42");
 }
 
+// A null value rendered on its own - SCYLLADB-3883.
+BOOST_AUTO_TEST_CASE(test_null_value_to_string_impl_is_empty) {
+    BOOST_REQUIRE_EQUAL(int32_type->to_string_impl(data_value::make_null(int32_type)), "");
+}
+
+// A deserialized null element keeps the element type - SCYLLADB-3883.
+BOOST_AUTO_TEST_CASE(test_deserialized_null_list_element_keeps_element_type) {
+    auto m = list_type_impl::get_instance(int32_type, true);
+    using native_type = std::vector<data_value>;
+    native_type native{data_value::make_null(int32_type)};
+    auto v = data_value::make(m, std::make_unique<native_type>(std::move(native)));
+    auto serialized = v.serialize_nonnull();
+    auto deserialized = m->deserialize(serialized);
+    const auto& elements = value_cast<list_type_impl::native_type>(deserialized);
+    BOOST_REQUIRE(elements[0].is_null());
+    BOOST_REQUIRE(elements[0].type() == int32_type);
+}
+
 BOOST_AUTO_TEST_CASE(test_collection_type_compatibility) {
     auto m__bi = map_type_impl::get_instance(bytes_type, int32_type, true);
     auto mf_bi = map_type_impl::get_instance(bytes_type, int32_type, false);

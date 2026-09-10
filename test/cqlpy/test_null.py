@@ -335,3 +335,16 @@ def test_null_int_in_collection(scylla_driver_only, cql, test_keyspace, cassandr
         stmt = cql.prepare(f"INSERT INTO {table} (p,v) VALUES ({p}, ?)")
         with pytest.raises(InvalidRequest, match='null|NULL'):
             cql.execute(stmt, [[2,None]])
+
+def test_traced_null_int_in_collection(scylla_driver_only, cql, test_keyspace, cassandra_bug):
+    '''Tracing formats a request's bound values, so a null element in a bound
+    collection must render as "null" - not crash the node, and not render as
+    nothing, which an empty element also does. Reproduces SCYLLADB-3883.'''
+    schema = 'p int primary key, v list<int>'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        p = unique_key_int()
+        stmt = cql.prepare(f"INSERT INTO {table} (p,v) VALUES ({p}, ?)")
+        fut = cql.execute_async(stmt, [[41, None, 42]], trace=True)
+        with pytest.raises(InvalidRequest, match='null|NULL'):
+            fut.result()
+        assert '41, null, 42' in fut.get_query_trace(max_wait=60).parameters.values()
