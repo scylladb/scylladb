@@ -1311,9 +1311,6 @@ future<executor::request_return_type> executor::get_records(client_state& client
     stream_view_type type = cdc_options_to_stream_view_type(base->cdc_options());
 
     auto selection = cql3::selection::selection::for_columns(schema, std::move(columns));
-    auto partition_slice = query::partition_slice(
-        std::move(bounds)
-        , {}, std::move(regular_columns), selection->get_query_options());
 
 	auto& opts = base->cdc_options();
 	auto mul = 2; // key-only, allow for delete + insert
@@ -1323,43 +1320,60 @@ future<executor::request_return_type> executor::get_records(client_state& client
     if (opts.postimage()) {
         ++mul;
     }
-    auto command = ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, _proxy.get_max_result_size(partition_slice),
-            query::tombstone_limit(_proxy.get_tombstone_limit()), query::row_limit(limit * mul));
 
-    service::storage_proxy::result<service::storage_proxy::coordinator_query_result> rqr =
-            co_await _proxy.query_result(schema, std::move(command), std::move(partition_ranges), cl, service::storage_proxy::coordinator_query_options(default_timeout(), std::move(permit), client_state));
-    if (!rqr) {
-        co_return create_api_error_from_coordinators_exception(std::move(rqr).assume_error());
+    auto metadata = selection->get_result_metadata();
+    auto index_of = [&] (const bytes& name) {
+        return std::distance(metadata->get_names().begin(),
+            std::find_if(metadata->get_names().begin(), metadata->get_names().end(), [&](const lw_shared_ptr<cql3::column_specification>& cdef) {
+                return cdef->name->name() == name;
+            })
+        );
+    };
+    auto op_index = index_of(op_column_name);
+    auto ts_index = index_of(timestamp_column_name);
+    auto eor_index = index_of(eor_column_name);
+    auto clustering_key_index = clustering_key_column_name ? index_of(*clustering_key_column_name) : 0;
+
+    auto timeout = default_timeout();
+    auto row_limit = query::row_limit(limit * mul);
+    std::unique_ptr<cql3::result_set> result_set;
+
+    // A batch is only emitted once its cdc$end_of_batch row has been read, and a
+    // shard iterator cannot address a position inside a batch, so the first batch
+    // in the window has to be read whole. If the row limit cut it, read that one
+    // batch - a single cdc$time - again, unbounded.
+    for (bool retried = false; ; retried = true) {
+        auto partition_slice = query::partition_slice(
+            bounds
+            , {}, regular_columns, selection->get_query_options());
+
+        auto command = ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, _proxy.get_max_result_size(partition_slice),
+                query::tombstone_limit(_proxy.get_tombstone_limit()), row_limit);
+
+        service::storage_proxy::result<service::storage_proxy::coordinator_query_result> rqr =
+                co_await _proxy.query_result(schema, std::move(command), dht::partition_range_vector(partition_ranges), cl, service::storage_proxy::coordinator_query_options(timeout, permit, client_state));
+        if (!rqr) {
+            co_return create_api_error_from_coordinators_exception(std::move(rqr).assume_error());
+        }
+        auto qr = std::move(rqr).assume_value();
+        cql3::selection::result_set_builder builder(*selection, gc_clock::now());
+        query::result_view::consume(*qr.query_result, partition_slice, cql3::selection::result_set_builder::visitor(builder, *schema, *selection));
+
+        result_set = builder.build();
+
+        auto& rows = result_set->rows();
+        if (retried || rows.size() < uint64_t(row_limit) || std::ranges::any_of(rows, [&] (const auto& row) {
+                    return row[eor_index].has_value() && value_cast<bool>(boolean_type->deserialize(*row[eor_index]));
+                })) {
+            break;
+        }
+        auto partial_ts = value_cast<utils::UUID>(data_type_for<utils::UUID>()->deserialize(*rows.back()[ts_index]));
+        bounds = { query::clustering_range::make_singular(clustering_key_prefix::from_exploded(*schema, { partial_ts.serialize() })) };
+        row_limit = query::row_limit::max;
+        result_set.reset();
     }
-    auto qr = std::move(rqr).assume_value();
-    cql3::selection::result_set_builder builder(*selection, gc_clock::now());
-    query::result_view::consume(*qr.query_result, partition_slice, cql3::selection::result_set_builder::visitor(builder, *schema, *selection));
 
-    auto result_set = builder.build();
     auto records = rjson::empty_array();
-
-    auto& metadata = result_set->get_metadata();
-
-    auto op_index = std::distance(metadata.get_names().begin(),
-        std::find_if(metadata.get_names().begin(), metadata.get_names().end(), [](const lw_shared_ptr<cql3::column_specification>& cdef) {
-            return cdef->name->name() == op_column_name;
-        })
-    );
-    auto ts_index = std::distance(metadata.get_names().begin(),
-        std::find_if(metadata.get_names().begin(), metadata.get_names().end(), [](const lw_shared_ptr<cql3::column_specification>& cdef) {
-            return cdef->name->name() == timestamp_column_name;
-        })
-    );
-    auto eor_index = std::distance(metadata.get_names().begin(),
-        std::find_if(metadata.get_names().begin(), metadata.get_names().end(), [](const lw_shared_ptr<cql3::column_specification>& cdef) {
-            return cdef->name->name() == eor_column_name;
-        })
-    );
-    auto clustering_key_index = clustering_key_column_name ? std::distance(metadata.get_names().begin(), 
-        std::find_if(metadata.get_names().begin(), metadata.get_names().end(), [&](const lw_shared_ptr<cql3::column_specification>& cdef) {
-            return cdef->name->name() == *clustering_key_column_name;
-        })
-    ) : 0;
 
     std::optional<utils::UUID> timestamp;
     uint64_t total_item_bytes = 0;
