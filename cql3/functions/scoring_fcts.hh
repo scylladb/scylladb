@@ -18,8 +18,17 @@
 namespace cql3 {
 namespace functions {
 
+// BM25_SCORE(c, t) returns the same score as BM25(c, t), and ANN_SCORE(c, v) the same as ANN(c, v).
+// All calls with the same arguments describe one search, so a query using several of them makes
+// one request.
 static const function_name BM25_FUNCTION_NAME = function_name::native_function("bm25");
+static const function_name BM25_SCORE_FUNCTION_NAME = function_name::native_function("bm25_score");
 static const function_name ANN_FUNCTION_NAME = function_name::native_function("ann");
+static const function_name ANN_SCORE_FUNCTION_NAME = function_name::native_function("ann_score");
+
+/// Whether `name` is one of the ANN family, whose argument types are not fixed but inferred from
+/// the call site.
+bool is_ann_function_name(const function_name& name);
 
 /// The family of external search functions a function belongs to: the vector search family (ANN) or
 /// the full-text search family (BM25). The family decides which index answers the search and what the
@@ -51,10 +60,11 @@ public:
 const external_search_function* as_external_search_function(const expr::function_call& fc);
 
 shared_ptr<function> make_bm25_function();
+shared_ptr<function> make_bm25_score_function();
 
-/// Creates the ANN ordering function. The argument types are not fixed: they are inferred
+/// Creates the ANN-family function `name`. The argument types are not fixed: they are inferred
 /// from the call site and must be float vectors of the same dimension.
-shared_ptr<function> make_ann_function(const std::vector<data_type>& arg_types);
+shared_ptr<function> make_ann_function(const function_name& name, const std::vector<data_type>& arg_types);
 
 } // namespace functions
 } // namespace cql3
