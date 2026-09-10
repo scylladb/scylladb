@@ -280,7 +280,7 @@ public:
         using progress_fn = noncopyable_function<future<task::progress> ()>;
         using workload_fn = noncopyable_function<future<std::optional<double>> ()>;
         using abort_fn = noncopyable_function<void (seastar::abort_source&)>;
-        using finalize_fn = noncopyable_function<future<> ()>;
+        using finalize_fn = noncopyable_function<future<> () noexcept>;
     private:
         std::string _type;
         tasks::is_abortable _is_abortable;

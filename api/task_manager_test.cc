@@ -38,7 +38,7 @@ static future<tasks::task_id> make_test_task(tasks::task_manager& task_manager, 
                     .set_table(std::move(table))
                     .set_entity(std::move(entity))
                     .set_is_user_task(user_task)
-                    .set_finalizer([module_ptr, task_id] {
+                    .set_finalizer([module_ptr, task_id] () noexcept {
                         module_ptr->erase_finalization(task_id);
                         return make_ready_future<>();
                     });

@@ -8,6 +8,7 @@
 
 
 #include <seastar/core/on_internal_error.hh>
+#include <seastar/coroutine/as_future.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/gate.hh>
@@ -460,14 +461,30 @@ void task_manager::generic_task_impl::abort() noexcept {
 }
 
 future<> task_manager::generic_task_impl::release_resources() noexcept {
-    _cached_progress = co_await get_progress();
-    _cached_workload = co_await expected_total_workload();
-    co_await (_finalizer ? _finalizer() : task::impl::release_resources());
-    _finalizer = {};
-    _action = {};
-    _progress_fn = {};
-    _workload_fn = {};
-    _abort_fn = {};
+    auto clear_callables = defer([this] () noexcept {
+        _finalizer = {};
+        _action = {};
+        _progress_fn = {};
+        _workload_fn = {};
+        _abort_fn = {};
+    });
+    auto progress_f = co_await coroutine::as_future(get_progress());
+    if (progress_f.failed()) {
+        tmlogger.warn("Failed to cache the progress of task {}: {}", _status.id, progress_f.get_exception());
+        _cached_progress = task::progress{};
+    } else {
+        _cached_progress = progress_f.get();
+    }
+    auto workload_f = co_await coroutine::as_future(expected_total_workload());
+    if (workload_f.failed()) {
+        tmlogger.warn("Failed to cache the workload of task {}: {}", _status.id, workload_f.get_exception());
+    } else {
+        _cached_workload = workload_f.get();
+    }
+    auto finalize_f = co_await coroutine::as_future(_finalizer ? _finalizer() : task::impl::release_resources());
+    if (finalize_f.failed()) {
+        tmlogger.warn("Failed to finalize task {}: {}", _status.id, finalize_f.get_exception());
+    }
 }
 
 future<> task_manager::generic_task_impl::run() {
