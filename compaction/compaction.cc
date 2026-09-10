@@ -722,9 +722,10 @@ protected:
     }
 
     compaction_completion_desc
-    get_compaction_completion_desc(std::vector<sstables::shared_sstable> input_sstables, std::vector<sstables::shared_sstable> output_sstables) {
+    get_compaction_completion_desc(std::vector<sstables::shared_sstable> input_sstables, std::vector<sstables::shared_sstable> output_sstables,
+                                   std::vector<sstables::shared_sstable> output_gc_sstables = {}) {
         auto ranges = get_ranges_for_invalidation(input_sstables);
-        return compaction_completion_desc{std::move(input_sstables), std::move(output_sstables), std::move(ranges)};
+        return compaction_completion_desc{std::move(input_sstables), std::move(output_sstables), std::move(output_gc_sstables), std::move(ranges)};
     }
 
     // Tombstone expiration is enabled based on the presence of sstable set.
@@ -1362,13 +1363,13 @@ private:
             // to SSTable set. GC SSTables should be added before compaction completes because
             // a failure could result in data resurrection if data is not made available.
             auto unused_gc_sstables = consume_unused_garbage_collected_sstables();
-            _new_unused_sstables.insert(_new_unused_sstables.end(), unused_gc_sstables.begin(), unused_gc_sstables.end());
 
             auto exhausted_ssts = std::vector<sstables::shared_sstable>(exhausted, _sstables.end());
-            log_debug("Replacing earlier exhausted sstable(s) [{}] by new sstable(s) [{}]",
+            log_debug("Replacing earlier exhausted sstable(s) [{}] by new sstable(s) [{}] and new gc sstable(s) [{}]",
                 fmt::join(exhausted_ssts | std::views::transform([] (auto sst) { return to_string(sst, false); }), ","),
-                fmt::join(_new_unused_sstables | std::views::transform([] (auto sst) { return to_string(sst, true); }), ","));
-            _replacer(get_compaction_completion_desc(exhausted_ssts, std::move(_new_unused_sstables)));
+                fmt::join(_new_unused_sstables | std::views::transform([] (auto sst) { return to_string(sst, true); }), ","),
+                fmt::join(unused_gc_sstables | std::views::transform([] (auto sst) { return to_string(sst, true); }), ","));
+            _replacer(get_compaction_completion_desc(exhausted_ssts, std::move(_new_unused_sstables), std::move(unused_gc_sstables)));
             _sstables.erase(exhausted, _sstables.end());
             dynamic_cast<compaction_read_monitor_generator&>(unwrap_monitor_generator()).remove_exhausted_sstables(exhausted_ssts);
         }
