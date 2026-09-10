@@ -15,6 +15,14 @@
 
 namespace cql3::statements {
 
+/// A search term written in a SELECT call that prepare could not prove equal to the ORDER BY term,
+/// because a bind marker is involved. Execution compares the bound values; `function_name` is the
+/// function the call was written with, for the error message.
+struct deferred_select_term {
+    expr::expression term;
+    sstring function_name;
+};
+
 struct bm25_ordering_info {
     secondary_index::index index;
     expr::expression search_term;
@@ -23,7 +31,7 @@ struct bm25_ordering_info {
     std::optional<size_t> score_temporary_index;
     // The SELECT occurrences' search terms that only execution can compare, a bind marker standing
     // where at least one of the two values will be.
-    std::vector<expr::expression> deferred_select_terms;
+    std::vector<deferred_select_term> deferred_select_terms;
     // The WHERE clause's term, likewise.
     std::optional<expr::expression> deferred_where_term;
 };
@@ -35,11 +43,11 @@ std::optional<bm25_ordering_info> get_bm25_ordering_info(
         schema_ptr schema,
         const expr::function_call& fc);
 
-/// Lowers every bm25() call in the SELECT clause, nested occurrences included, to the slot the
-/// row's score is delivered in, allocating it on the first one.  Rejects an occurrence with no
-/// BM25 ordering and WHERE clause to agree with, or one that disagrees with them on the column or
-/// the search term; a disagreement only execution can settle is recorded in ordering_info for it
-/// to check.
+/// Lowers every BM25() and BM25_SCORE() call in the SELECT clause, nested occurrences included, to
+/// the slot the row's score is delivered in, allocating it on the first one.  Rejects an occurrence
+/// with no BM25 ordering and WHERE clause to agree with, or one that disagrees with them on the
+/// column or the search term; a disagreement only execution can settle is recorded in
+/// ordering_info for it to check.
 void prepare_bm25_selectors(std::vector<selection::prepared_selector>& prepared_selectors, std::optional<bm25_ordering_info>& ordering_info,
         expr::temporary_allocator& temporaries_allocator, prepare_context& ctx);
 

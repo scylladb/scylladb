@@ -124,27 +124,35 @@ void prepare_ann_selectors(std::vector<selection::prepared_selector>& prepared_s
     for (auto& ps : prepared_selectors) {
         ps.expr = expr::search_and_replace(ps.expr, [&] (const expr::expression& candidate) -> std::optional<expr::expression> {
             const auto* fc = expr::as_if<expr::function_call>(&candidate);
-            if (!fc || !expr::is_native_function_call(*fc, functions::ANN_FUNCTION_NAME)) {
+            if (!fc) {
+                return std::nullopt;
+            }
+            // Both 'ANN(column, query_vector)' and the legacy 'column ANN OF query_vector' parse
+            // into an ann() call.
+            const auto* fun = functions::as_external_search_function(*fc);
+            if (!fun || fun->family() != functions::search_family::ann) {
                 return std::nullopt;
             }
 
+            const auto function_name = fun->display_name();
             if (!ordering_info) {
-                throw exceptions::invalid_request_exception(
-                        "ANN() is not supported in the SELECT clause without a matching ANN ordering");
+                throw exceptions::invalid_request_exception(seastar::format(
+                        "{}() is not supported in the SELECT clause without a matching ANN ordering", function_name));
             }
 
             const auto& [ordering_column, ordering_vector] = ordering_info->prepared_ann_ordering;
 
-            auto [col, sel_vector] = external_search::extract_call_arguments(*fc, "ANN");
+            auto [col, sel_vector] = external_search::extract_call_arguments(*fc, function_name);
             if (col != ordering_column) {
-                throw exceptions::invalid_request_exception("ANN() in SELECT must reference the same column as the ANN ordering");
+                throw exceptions::invalid_request_exception(
+                        seastar::format("{}() in SELECT must reference the same column as the ANN ordering", function_name));
             }
 
             const auto vectors_equal = external_search::unevaluated_equality(sel_vector, ordering_vector);
             if (vectors_equal != external_search::equality::always) {
                 if (vectors_equal == external_search::equality::never) {
                     throw exceptions::invalid_request_exception(
-                            "ANN() in SELECT must use the same query vector as the ANN ordering");
+                            seastar::format("{}() in SELECT must use the same query vector as the ANN ordering", function_name));
                 }
                 // Lifted out of the selector tree, so nothing else registers a bind marker in this vector.
                 expr::fill_prepare_context(sel_vector, ctx);
@@ -163,8 +171,8 @@ void prepare_ann_selectors(std::vector<selection::prepared_selector>& prepared_s
                 return make_similarity_expression(ordering_info->index, std::make_pair(col, std::move(sel_vector)), db, schema);
             }
 
-            // Every ANN() reports the same score, so one slot serves them all, and a temporary
-            // formats as the call it replaced, so the name needs nothing done to it here.
+            // Every ANN() and ANN_SCORE() reports the same score, so one slot serves them all, and
+            // a temporary formats as the call it replaced, so the name needs nothing done to it here.
             if (!ordering_info->temporary_index) {
                 ordering_info->temporary_index = temporaries_allocator.allocate();
             }
