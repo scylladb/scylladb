@@ -9,7 +9,9 @@
 #pragma once
 
 #include "cql3/expr/expression.hh"
+#include "cql3/expr/temporary_allocator.hh"
 
+#include <optional>
 #include <string_view>
 
 class schema;
@@ -18,6 +20,12 @@ class column_definition;
 namespace cql3::selection {
 
 class selection;
+
+}
+
+namespace cql3::functions {
+
+enum class search_value;
 
 }
 
@@ -48,5 +56,27 @@ equality unevaluated_equality(const expr::expression& a, const expr::expression&
 /// Adds the primary-key columns to those fetched for every row, selected or not: a score arrives
 /// keyed by primary key, and that is how it is matched to its row.
 void fetch_primary_key_columns(selection::selection& selection, const schema& schema);
+
+/// The temporaries holding the score and the rank of one search. Each is allocated by the first
+/// SELECT call asking for that value and filled per row by external_search_provider from the
+/// index's response.
+struct search_temporaries {
+    std::optional<size_t> score;
+    std::optional<size_t> rank;
+
+    /// True when the query returns some value of the search.
+    bool any() const {
+        return score.has_value() || rank.has_value();
+    }
+};
+
+/// The expression that replaces `call`, a call to a search function returning `value`: a read of
+/// the temporary holding that value, allocated if this is the first call asking for it. Every call
+/// asking for one value reads the same temporary, so BM25() and BM25_SCORE() in one query share
+/// one. The temporary is typed by the function's declared return type, since that is what the
+/// selector reading it was typed by, and carries the call in replaced_expr, so an unaliased
+/// selector keeps its name.
+expr::expression replace_search_call(functions::search_value value, const expr::expression& call, search_temporaries& temporaries,
+        expr::temporary_allocator& allocator);
 
 } // namespace cql3::statements::external_search

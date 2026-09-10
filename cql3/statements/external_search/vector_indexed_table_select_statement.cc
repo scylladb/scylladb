@@ -161,6 +161,15 @@ void prepare_ann_selectors(std::vector<selection::prepared_selector>& prepared_s
             }
 
             if (ordering_info->is_rescoring_enabled) {
+                if (fun->value() == functions::search_value::rank) {
+                    // A rescoring index reorders the rows by the recomputed similarity, so the
+                    // Vector Store's rank no longer applies, and the rank in the new order is not
+                    // known until all rows are scored, which happens after the selectors.
+                    throw exceptions::invalid_request_exception(seastar::format(
+                            "{}() is not supported with a rescoring vector index: the rank is not available after rescoring",
+                            function_name));
+                }
+
                 // Name the selector by what the user wrote - ps.expr, untouched so far - or an
                 // unaliased ANN() would come back named similarity_cosine(...).
                 if (!ps.alias) {
@@ -171,17 +180,7 @@ void prepare_ann_selectors(std::vector<selection::prepared_selector>& prepared_s
                 return make_similarity_expression(ordering_info->index, std::make_pair(col, std::move(sel_vector)), db, schema);
             }
 
-            // Every ANN() and ANN_SCORE() reports the same score, so one slot serves them all, and
-            // a temporary formats as the call it replaced, so the name needs nothing done to it here.
-            if (!ordering_info->temporary_index) {
-                ordering_info->temporary_index = temporaries_allocator.allocate();
-            }
-
-            return expr::expression(expr::temporary{
-                    .index = *ordering_info->temporary_index,
-                    .type = float_type,
-                    .replaced_expr = candidate,
-            });
+            return external_search::replace_search_call(fun->value(), candidate, ordering_info->temporaries, temporaries_allocator);
         });
     }
 }
@@ -209,13 +208,17 @@ select_statement::ordering_comparator_type rescored_similarity_ordering(
         ordering_comparator_type ordering_comparator, std::optional<expr::expression> limit,
         std::optional<expr::expression> per_partition_limit, cql_stats& stats, ann_ordering_info ordering_info, std::unique_ptr<attributes> attrs) {
 
-    // Threshold filtering - WHERE ANN(column, query_vector) > score - is not implemented yet,
-    // so the ann() restrictions claimed for this query have nothing to interpret them.
-    if (!restrictions->get_scoring_function_restrictions().empty()) {
-        throw exceptions::invalid_request_exception("ANN() is not supported in the WHERE clause");
+    // Threshold filtering - WHERE ANN_SCORE(column, query_vector) > score - is not implemented
+    // yet, and a rank is not a filter ("ANN_RANK(c, v) < 3" would be a LIMIT), so the ANN-family
+    // restrictions claimed for this query have nothing to interpret them.
+    if (const auto& scoring = restrictions->get_scoring_function_restrictions(); !scoring.empty()) {
+        const auto* fun = functions::as_external_search_function(expr::as<expr::function_call>(scoring.front().lhs));
+        throwing_assert(fun); // statement_restrictions holds out exactly the relations on external functions
+        throw exceptions::invalid_request_exception(seastar::format("{}() is not supported in the WHERE clause", fun->display_name()));
     }
 
-    if (ordering_info.temporary_index) {
+    // The score and the rank are matched to a row by primary key.
+    if (ordering_info.temporaries.any()) {
         external_search::fetch_primary_key_columns(*selection, *schema);
     }
 
@@ -292,16 +295,11 @@ future<shared_ptr<cql_transport::messages::result_message>> vector_indexed_table
     auto table_results = co_await query_base_table(qp, state, options, timeout, pkeys.value());
 
     auto provider = std::optional<external_search::external_search_provider>{};
-    if (table_results && _ann_ordering_info.temporary_index) {
-        // A rescoring index allocates no temporary: there the similarity is computed from the row's
-        // own vector instead.
+    if (table_results && _ann_ordering_info.temporaries.any()) {
         const auto& read = table_results.value();
         auto rows = external_search::join_table_results(*read.rows, read.command->slice, *_schema, *_selection, &pkeys.value());
         external_search::drop_unscored_rows(rows, pkeys.value());
-        auto similarities = external_search::similarities_of(rows, pkeys.value());
-        provider.emplace(
-                std::vector{external_search::external_values{.temporary_index = *_ann_ordering_info.temporary_index, .values = std::move(similarities)}},
-                rows);
+        provider.emplace(external_search::search_values_of(_ann_ordering_info.temporaries, rows, pkeys.value()), rows);
     }
     co_return co_await emit_result_set(std::move(table_results), options, provider ? &*provider : nullptr);
 }

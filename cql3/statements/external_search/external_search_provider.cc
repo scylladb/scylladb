@@ -120,8 +120,33 @@ std::vector<cql3::raw_value> similarities_of(
     auto values = std::vector<cql3::raw_value>{};
     values.reserve(rows.size());
     for (const auto& row : rows) {
-        const auto similarity = row.dropped ? std::nullopt : similarity_of(row, external_results);
+        const auto similarity = similarity_of(row, external_results);
         values.push_back(similarity ? cql3::raw_value::make_value(float_type->decompose(*similarity)) : cql3::raw_value::make_null());
+    }
+    return values;
+}
+
+std::vector<cql3::raw_value> ranks_of(
+        std::span<const joined_row> rows, const vector_search::vector_store_client::primary_keys& external_results) {
+    auto values = std::vector<cql3::raw_value>{};
+    values.reserve(rows.size());
+    for (const auto& row : rows) {
+        // Same rows as similarities_of(): a row without a usable similarity has no rank either.
+        values.push_back(similarity_of(row, external_results)
+                        ? cql3::raw_value::make_value(int32_type->decompose(static_cast<int32_t>(*row.external_result + 1)))
+                        : cql3::raw_value::make_null());
+    }
+    return values;
+}
+
+std::vector<external_values> search_values_of(const search_temporaries& temporaries, std::span<const joined_row> rows,
+        const vector_search::vector_store_client::primary_keys& external_results) {
+    std::vector<external_values> values;
+    if (temporaries.score) {
+        values.push_back({.temporary_index = *temporaries.score, .values = similarities_of(rows, external_results)});
+    }
+    if (temporaries.rank) {
+        values.push_back({.temporary_index = *temporaries.rank, .values = ranks_of(rows, external_results)});
     }
     return values;
 }

@@ -20,9 +20,10 @@ namespace functions {
 extern logging::logger log;
 
 external_search_function::external_search_function(
-        sstring name, data_type return_type, std::vector<data_type> arg_types, search_family family)
+        sstring name, data_type return_type, std::vector<data_type> arg_types, search_family family, search_value value)
     : native_scalar_function(std::move(name), std::move(return_type), std::move(arg_types))
     , _family(family)
+    , _value(value)
     , _display_name(this->name().name) {
     std::ranges::transform(_display_name, _display_name.begin(), [] (unsigned char c) { return std::toupper(c); });
 }
@@ -39,8 +40,17 @@ const external_search_function* as_external_search_function(const expr::function
     return dynamic_cast<const external_search_function*>(std::get<shared_ptr<function>>(fc.func).get());
 }
 
+namespace {
+
+/// The return type of the ANN-family function `name`.
+data_type ann_return_type(const function_name& name) {
+    return name == ANN_RANK_FUNCTION_NAME ? int32_type : float_type;
+}
+
+} // anonymous namespace
+
 bool is_ann_function_name(const function_name& name) {
-    return name == ANN_FUNCTION_NAME || name == ANN_SCORE_FUNCTION_NAME;
+    return name == ANN_FUNCTION_NAME || name == ANN_SCORE_FUNCTION_NAME || name == ANN_RANK_FUNCTION_NAME;
 }
 
 shared_ptr<function> make_bm25_function() {
@@ -49,18 +59,31 @@ shared_ptr<function> make_bm25_function() {
     //
     // BM25 scores depend on document statistics, so the result is not determined by the visible arguments alone.
     return ::make_shared<external_search_function>(
-            BM25_FUNCTION_NAME.name, float_type, std::vector<data_type>{utf8_type, utf8_type}, search_family::bm25);
+            BM25_FUNCTION_NAME.name, float_type, std::vector<data_type>{utf8_type, utf8_type}, search_family::bm25,
+            search_value::score);
 }
 
 shared_ptr<function> make_bm25_score_function() {
     // bm25_score(column, query) -> float, the same score bm25() returns.
     return ::make_shared<external_search_function>(
-            BM25_SCORE_FUNCTION_NAME.name, float_type, std::vector<data_type>{utf8_type, utf8_type}, search_family::bm25);
+            BM25_SCORE_FUNCTION_NAME.name, float_type, std::vector<data_type>{utf8_type, utf8_type}, search_family::bm25,
+            search_value::score);
+}
+
+shared_ptr<function> make_bm25_rank_function() {
+    // bm25_rank(column, query) -> int, the position of the row in the search's result, counted
+    // from 1. A rank cannot be used in a relation: "WHERE BM25_RANK(c, t) < 3" would be a LIMIT,
+    // not a filter.
+    return ::make_shared<external_search_function>(
+            BM25_RANK_FUNCTION_NAME.name, int32_type, std::vector<data_type>{utf8_type, utf8_type}, search_family::bm25,
+            search_value::rank);
 }
 
 shared_ptr<function> make_ann_function(const function_name& name, const std::vector<data_type>& arg_types) {
-    // ann(column, query_vector) -> float, and ann_score(), which returns the same score.
-    return ::make_shared<external_search_function>(name.name, float_type, arg_types, search_family::ann);
+    // ann(column, query_vector) -> float, ann_score(), which returns the same score, and
+    // ann_rank() -> int.
+    return ::make_shared<external_search_function>(name.name, ann_return_type(name), arg_types, search_family::ann,
+            name == ANN_RANK_FUNCTION_NAME ? search_value::rank : search_value::score);
 }
 
 } // namespace functions

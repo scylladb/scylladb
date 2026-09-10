@@ -9,6 +9,7 @@
 #pragma once
 
 #include "cql3/statements/external_search/external_index_select_statement.hh"
+#include "cql3/statements/external_search/external_function.hh"
 #include "cql3/statements/external_search/filter.hh"
 #include "cql3/expr/temporary_allocator.hh"
 
@@ -21,9 +22,10 @@ struct ann_ordering_info {
     secondary_index::index index;
     raw::select_statement::prepared_ann_ordering_type prepared_ann_ordering;
     bool is_rescoring_enabled;
-    /// Temporary slot the Vector Store's own score is delivered in, allocated on the first ann()
-    /// occurrence in SELECT and filled per row by external_search_provider.
-    std::optional<size_t> temporary_index;
+    /// Temporaries holding the Vector Store's score and rank; see
+    /// external_search::search_temporaries. A rescoring index allocates neither: there the
+    /// similarity is computed from the row's own vector instead.
+    external_search::search_temporaries temporaries;
     /// The SELECT occurrences' query vectors that only execution can compare, a bind marker
     /// standing where at least one of the two values will be.
     std::vector<expr::expression> deferred_select_vectors;
@@ -36,10 +38,11 @@ std::optional<ann_ordering_info> get_ann_ordering_info(
         schema_ptr schema,
         const expr::function_call& fc);
 
-/// Lowers every ANN() call in the SELECT clause, nested occurrences included, to where the row's
-/// score comes from: the slot the Vector Store's score is delivered in, or the similarity the
-/// coordinator recomputes when the index rescores.  Rejects an occurrence with no ANN ordering to
-/// agree with, or one that disagrees with it on the column or the query vector; a disagreement only
+/// Replaces every ANN(), ANN_SCORE() and ANN_RANK() call in the SELECT clause, nested occurrences
+/// included, with a read of the temporary holding the Vector Store's score or rank. When the index
+/// rescores, the score is instead the similarity the coordinator recomputes, and there is no rank:
+/// ANN_RANK() is rejected. Also rejects an occurrence with no ANN ordering to agree with, or one
+/// that disagrees with it on the column or the query vector; a disagreement only
 /// execution can settle is recorded in ordering_info for it to check.
 void prepare_ann_selectors(std::vector<selection::prepared_selector>& prepared_selectors,
         std::optional<ann_ordering_info>& ordering_info, expr::temporary_allocator& temporaries_allocator,

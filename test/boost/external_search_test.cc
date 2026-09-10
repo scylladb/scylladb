@@ -354,19 +354,16 @@ BOOST_AUTO_TEST_CASE(test_similarities_are_read_off_the_joined_rows) {
     BOOST_REQUIRE(similarities[2].is_null());
 }
 
-// Drops accumulate: a row another search already dropped is passed over and given no value of its
-// own, so several searches can fill their temporaries against the same rows.
+// drop_unscored_rows() only sets the flag: a row dropped before it is called stays dropped, and one
+// with a score is left alone. Whether a dropped row's value is read is the provider's business.
 BOOST_AUTO_TEST_CASE(test_a_row_already_dropped_stays_dropped) {
     auto results = primary_keys{scored(0.5f), scored(0.75f)};
     auto rows = std::vector<joined_row>{{.external_result = 0, .dropped = true}, {.external_result = 1}};
 
     drop_unscored_rows(rows, results);
-    auto similarities = similarities_of(rows, results);
 
     BOOST_REQUIRE(rows[0].dropped);
     BOOST_REQUIRE(!rows[1].dropped);
-    BOOST_REQUIRE(similarities[0].is_null());
-    BOOST_REQUIRE_EQUAL(score_of(similarities, 1), 0.75f);
 }
 
 // The provider's position moves for every row it is offered, dropped ones included - otherwise the

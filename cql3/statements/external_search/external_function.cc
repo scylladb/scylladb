@@ -9,10 +9,14 @@
 #include "cql3/statements/external_search/external_function.hh"
 
 #include "cql3/expr/expr-utils.hh"
+#include "cql3/functions/scoring_fcts.hh"
 #include "cql3/selection/selection.hh"
 #include "exceptions/exceptions.hh"
 #include "schema/schema.hh"
+#include "types/types.hh"
 #include "utils/assert.hh"
+
+#include <utility>
 
 namespace cql3::statements::external_search {
 
@@ -63,6 +67,24 @@ void fetch_primary_key_columns(selection::selection& selection, const schema& sc
     for (const auto& cdef : schema.primary_key_columns()) {
         selection.add_column_for_post_processing(cdef);
     }
+}
+
+expr::expression replace_search_call(functions::search_value value, const expr::expression& call, search_temporaries& temporaries,
+        expr::temporary_allocator& allocator) {
+    auto read = [&] (std::optional<size_t>& index, data_type type) {
+        if (!index) {
+            index = allocator.allocate();
+        }
+        return expr::expression(expr::temporary{.index = *index, .type = std::move(type), .replaced_expr = call});
+    };
+
+    switch (value) {
+    case functions::search_value::score:
+        return read(temporaries.score, float_type);
+    case functions::search_value::rank:
+        return read(temporaries.rank, int32_type);
+    }
+    std::unreachable();
 }
 
 } // namespace cql3::statements::external_search

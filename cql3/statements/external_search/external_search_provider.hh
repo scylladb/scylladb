@@ -9,6 +9,7 @@
 #pragma once
 
 #include "cql3/selection/selection.hh"
+#include "cql3/statements/external_search/external_function.hh"
 #include "cql3/values.hh"
 #include "vector_search/vector_store_client.hh"
 
@@ -29,8 +30,7 @@ struct joined_row {
     /// Index of the external result naming this row, or nothing when no result does or the rows
     /// were not matched.
     std::optional<size_t> external_result;
-    /// True if the row is left out of the result set. Once set, nothing clears it: for example,
-    /// a row dropped because it has no score stays dropped when the highlights are computed.
+    /// True if the row is left out of the result set; see drop_unscored_rows().
     bool dropped = false;
 };
 
@@ -55,8 +55,13 @@ std::vector<joined_row> join_table_results(const query::result& table_results, c
 void drop_unscored_rows(std::span<joined_row> rows, const vector_search::vector_store_client::primary_keys& external_results);
 
 /// The similarity of each joined row, as the values of one temporary: null for a row that has none
-/// to report (see drop_unscored_rows()) or is already dropped.
+/// to report (see drop_unscored_rows()).
 std::vector<cql3::raw_value> similarities_of(
+        std::span<const joined_row> rows, const vector_search::vector_store_client::primary_keys& external_results);
+
+/// The rank of each joined row, as the values of one temporary: the position of the row's external
+/// result in the response, counted from 1. Null for the same rows similarities_of() gives null.
+std::vector<cql3::raw_value> ranks_of(
         std::span<const joined_row> rows, const vector_search::vector_store_client::primary_keys& external_results);
 
 /// One temporary and the value every row is given under it, in the order the rows are emitted.
@@ -64,6 +69,11 @@ struct external_values {
     size_t temporary_index;
     std::vector<cql3::raw_value> values;
 };
+
+/// The values of one search's temporaries, filled from the joined rows: the similarity of each row
+/// under `temporaries.score` and its rank under `temporaries.rank`, each only if allocated.
+std::vector<external_values> search_values_of(const search_temporaries& temporaries, std::span<const joined_row> rows,
+        const vector_search::vector_store_client::primary_keys& external_results);
 
 /// The values an external search injects into the rows of its result set, handed out in the order
 /// the rows are offered. Single-use: it cannot be rewound, which will matter when paging arrives.
