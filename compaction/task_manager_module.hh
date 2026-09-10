@@ -93,6 +93,8 @@ protected:
     virtual future<> run() override = 0;
 };
 
+inline constexpr auto cleanup_compaction_task_type = "cleanup compaction";
+
 inline constexpr auto global_cleanup_compaction_task_type = "global cleanup compaction";
 
 class cleanup_compaction_task_impl : public compaction_task_impl {
@@ -109,36 +111,10 @@ public:
     {}
 
     virtual std::string type() const override {
-        return "cleanup compaction";
+        return cleanup_compaction_task_type;
     }
 protected:
     virtual future<> run() override = 0;
-};
-
-class cleanup_keyspace_compaction_task_impl : public cleanup_compaction_task_impl {
-private:
-    sharded<replica::database>& _db;
-    std::vector<table_info> _table_infos;
-    const flush_mode _flush_mode;
-    tasks::is_user_task _is_user_task;
-public:
-    cleanup_keyspace_compaction_task_impl(tasks::task_manager::module_ptr module,
-            std::string keyspace,
-            sharded<replica::database>& db,
-            std::vector<table_info> table_infos,
-            flush_mode mode,
-            tasks::is_user_task is_user_task) noexcept
-        : cleanup_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), "keyspace", std::move(keyspace), "", "", tasks::task_id::create_null_id())
-        , _db(db)
-        , _table_infos(std::move(table_infos))
-        , _flush_mode(mode)
-        , _is_user_task(is_user_task)
-    {}
-
-    tasks::is_user_task is_user_task() const noexcept override;
-protected:
-    virtual future<> run() override;
-    virtual future<std::optional<double>> expected_total_workload() const override;
 };
 
 class shard_cleanup_keyspace_compaction_task_impl : public cleanup_compaction_task_impl {
@@ -644,6 +620,9 @@ public:
 
     // Starts a cleanup compaction of all the vnode based keyspaces on the node.
     future<tasks::task_manager::task_ptr> start_global_cleanup_compaction(sharded<replica::database>& db);
+
+    // Starts a cleanup compaction of the given tables of a keyspace on all the shards.
+    future<tasks::task_manager::task_ptr> start_cleanup_keyspace_compaction(sharded<replica::database>& db, std::string keyspace, const std::vector<table_info>& table_infos, flush_mode fm, tasks::is_user_task is_user_task);
 };
 
 class regular_compaction_task_impl : public compaction_task_impl {

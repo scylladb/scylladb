@@ -836,8 +836,7 @@ static future<tasks::task_manager::task_ptr> force_keyspace_cleanup(http_context
         }
 
         auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
-        co_return co_await compaction_module.make_and_start_task<compaction::cleanup_keyspace_compaction_task_impl>(
-            tasks::make_empty_task_info(), std::move(keyspace), db, table_infos, compaction::flush_mode::all_tables, tasks::is_user_task::yes);
+        co_return co_await compaction_module.start_cleanup_keyspace_compaction(db, std::move(keyspace), table_infos, compaction::flush_mode::all_tables, tasks::is_user_task::yes);
 }
 
 static
