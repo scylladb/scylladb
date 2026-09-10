@@ -13,6 +13,7 @@
 #include "data_dictionary/data_dictionary.hh"
 #include "delete_statement.hh"
 #include "raw/delete_statement.hh"
+#include "cql3/statements/strong_consistency/modification_statement.hh"
 #include "mutation/mutation.hh"
 #include "cql3/expr/expression.hh"
 #include "cql3/expr/expr-utils.hh"
@@ -61,7 +62,7 @@ namespace raw {
 ::shared_ptr<cql3::statements::modification_statement>
 delete_statement::prepare_internal(data_dictionary::database db, schema_ptr schema, prepare_context& ctx,
         std::unique_ptr<attributes> attrs, cql_stats& stats) const {
-    auto stmt = ::make_shared<cql3::statements::delete_statement>(audit_info(), statement_type::DELETE, ctx.bound_variables_size(), schema, std::move(attrs), stats);
+    auto stmt = strong_consistency::make_modification<cql3::statements::delete_statement>(db, schema, audit_info(), statement_type::DELETE, ctx.bound_variables_size(), schema, std::move(attrs), stats);
 
     for (auto&& deletion : _deletions) {
         auto&& id = deletion->affected_column().prepare_column_identifier(*schema);

@@ -72,22 +72,11 @@ future<::shared_ptr<result_message>> select_statement::do_execute(query_processo
         read_command, options, now);
 
     if (state.get_client_state().is_protocol_extension_set(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V2_EXPERIMENTAL)) {
-        if (!options.get_tablet_version_block().has_value()) {
-            // V2 is negotiated but no block was parsed. process_execute_internal()
-            // reads the block unconditionally whenever the V2 extension is set and
-            // rejects the request with a protocol_exception if the byte is missing,
-            // so the block is guaranteed present here. Reaching this point is a
-            // server-side invariant violation, not a client error, hence on_internal_error.
-            utils::on_internal_error(
-                "The protocol extension tablets-routing-v2 requires that every EXECUTE request "
-                "carry a tablet_version_block");
-        }
-
         const auto& groups_manager = coordinator.get().get_groups_manager();
         const auto& table = _query_schema->table();
         const auto& token = key_ranges[0].start()->value().token();
 
-        auto maybe_routing_info_v2 = groups_manager.check_tablet_version(table, token, *options.get_tablet_version_block());
+        auto maybe_routing_info_v2 = groups_manager.check_tablet_version(table, token, options.get_negotiated_tablet_version_block());
         if (maybe_routing_info_v2) {
             result->add_tablet_info_v2(std::move(*maybe_routing_info_v2));
         }

@@ -12,12 +12,13 @@
 #############################################################################
 
 import pytest
+from cassandra import ConsistencyLevel
 from cassandra.protocol import ConfigurationException, InvalidRequest
-from cassandra.query import BatchStatement, BatchType
+from cassandra.query import BatchStatement, BatchType, SimpleStatement
 
 from test.pylib.skip_types import skip_env
 
-from ..util import new_test_table, unique_name
+from ..util import new_test_keyspace, new_test_table, unique_name
 
 
 # A keyspace whose tables are strongly consistent. Cassandra and the --vnodes
@@ -68,6 +69,28 @@ def test_reject_user_provided_timestamps(cql, sc_keyspace):
         #   APPLY BATCH
 
 
+def test_reject_conditions(cql, sc_keyspace):
+    """
+    Conditional updates (LWT) are not supported on strongly consistent tables.
+    They must be rejected at prepare time - previously they were accepted and
+    the condition was silently never evaluated.
+    """
+    with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, v int") as table:
+        error_msg = "Strongly consistent updates don't support conditions"
+        with pytest.raises(InvalidRequest, match=error_msg):
+            cql.execute(f"INSERT INTO {table} (pk, v) VALUES (0, 13) IF NOT EXISTS")
+        with pytest.raises(InvalidRequest, match=error_msg):
+            cql.execute(f"UPDATE {table} SET v = 13 WHERE pk = 0 IF EXISTS")
+        with pytest.raises(InvalidRequest, match=error_msg):
+            cql.execute(f"UPDATE {table} SET v = 13 WHERE pk = 0 IF v = 1")
+        with pytest.raises(InvalidRequest, match=error_msg):
+            cql.execute(f"DELETE FROM {table} WHERE pk = 0 IF EXISTS")
+        # A statement inside a batch is prepared through a different entry
+        # point, which used to skip the check.
+        with pytest.raises(InvalidRequest, match=error_msg):
+            cql.execute(f"BEGIN BATCH INSERT INTO {table} (pk, v) VALUES (0, 13) IF NOT EXISTS APPLY BATCH")
+
+
 @pytest.mark.parametrize("batch_mode", ["text", "prepared"], ids=["text", "prepared"])
 def test_batch(cql, sc_keyspace, batch_mode):
     """
@@ -83,6 +106,7 @@ def test_batch(cql, sc_keyspace, batch_mode):
     - batch touching multiple tables,
     - batch touching multiple partitions,
     - statement touching multiple partition keys,
+    - batch at a weaker consistency level,
     - counter batch.
     """
 
@@ -185,6 +209,20 @@ def test_batch(cql, sc_keyspace, batch_mode):
                 ("delete_in", (1, 2, 1)),
             ], kind="unlogged")
 
+        # A Raft group always replicates to a quorum, so a weaker
+        # consistency level cannot be honoured.
+        with pytest.raises(InvalidRequest, match="must use QUORUM/LOCAL_QUORUM"):
+            if batch_mode == "prepared":
+                batch = BatchStatement(batch_type=BatchType.UNLOGGED, consistency_level=ConsistencyLevel.ONE)
+                batch.add(cql.prepare(f"INSERT INTO {table} (pk, ck, v) VALUES (?, ?, ?)"), (1, 1, 10))
+                cql.execute(batch)
+            else:
+                cql.execute(SimpleStatement(f"""
+                    BEGIN UNLOGGED BATCH
+                    INSERT INTO {table} (pk, ck, v) VALUES (1, 1, 10);
+                    APPLY BATCH
+                """, consistency_level=ConsistencyLevel.ONE))
+
         with new_test_table(cql, sc_keyspace, "pk int, ck int, v int, PRIMARY KEY (pk, ck)") as other_table:
             with pytest.raises(InvalidRequest, match="same table"):
                 if batch_mode == "prepared":
@@ -199,6 +237,40 @@ def test_batch(cql, sc_keyspace, batch_mode):
                         INSERT INTO {other_table} (pk, ck, v) VALUES (1, 1, 20);
                         APPLY BATCH
                     """)
+
+        # A batch which mixes strongly and eventually consistent statements
+        # is rejected. The text path used to pick the batch kind from the
+        # keyspace of the first statement alone, so with the eventually
+        # consistent one first it built an eventually consistent batch, and
+        # committed the strongly consistent write through storage_proxy
+        # instead of Raft.
+        with new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ec_ks:
+            with new_test_table(cql, ec_ks, "pk int, ck int, v int, PRIMARY KEY (pk, ck)") as ec_table:
+                with pytest.raises(InvalidRequest, match="Cannot mix strongly consistent and eventually consistent statements"):
+                    if batch_mode == "prepared":
+                        batch = BatchStatement(batch_type=BatchType.UNLOGGED)
+                        batch.add(cql.prepare(f"INSERT INTO {ec_table} (pk, ck, v) VALUES (?, ?, ?)"), (1, 1, 10))
+                        batch.add(cql.prepare(f"INSERT INTO {table} (pk, ck, v) VALUES (?, ?, ?)"), (1, 1, 20))
+                        cql.execute(batch)
+                    else:
+                        cql.execute(f"""
+                            BEGIN UNLOGGED BATCH
+                            INSERT INTO {ec_table} (pk, ck, v) VALUES (1, 1, 10);
+                            INSERT INTO {table} (pk, ck, v) VALUES (1, 1, 20);
+                            APPLY BATCH
+                        """)
+
+        # A batch level USING TIMESTAMP used to be accepted and then
+        # silently ignored, because the Raft coordinator assigns the commit
+        # timestamp and reassigns it on every retry. Only the text path can
+        # express it; the native protocol path has no batch attributes.
+        if batch_mode == "text":
+            with pytest.raises(InvalidRequest, match="don't support user-provided timestamps"):
+                cql.execute(f"""
+                    BEGIN UNLOGGED BATCH USING TIMESTAMP 1234
+                    INSERT INTO {table} (pk, ck, v) VALUES (1, 1, 10);
+                    APPLY BATCH
+                """)
 
     with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, c counter") as table:
         run_counter_batch = _make_batch_runner(table, counter_table=True)
