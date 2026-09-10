@@ -350,6 +350,7 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
         if (topology_state_change_hint) {
             co_await _ss.topology_transition(std::move(*topology_state_change_hint));
         }
+        co_await utils::get_local_injector().inject("group0_state_machine_pause_before_reload_modules", utils::wait_for_message(60s));
         co_await reload_modules(std::move(modules_to_reload));
     }
 
