@@ -71,6 +71,13 @@ class shared_tombstone_gc_state {
     // Tables which have a single replica and thus cannot be repaired (repair will not update the repair time for them).
     std::unordered_set<table_id> _rf_one_tables;
 
+    // Views whose build has finished on every node. Any other view counts as
+    // being built, also one this node has just created or has no state loaded for.
+    // The view builder writes rows with the timestamps of the base cells they
+    // come from, so a tombstone of such a view may still cover a row that has
+    // not arrived yet.
+    std::unordered_set<table_id> _built_views;
+
     std::unordered_map<table_id, utils::chunked_vector<range_repair_time>> _pending_updates;
 
 private:
@@ -108,6 +115,13 @@ public:
     }
     bool is_table_rf_one(table_id id) const noexcept {
         return _rf_one_tables.contains(id);
+    }
+
+    void set_built_views(std::unordered_set<table_id> views) {
+        _built_views = std::move(views);
+    }
+    bool is_view_being_built(table_id id) const noexcept {
+        return !_built_views.contains(id);
     }
 
     using opt_rp = std::optional<db::replay_position>;
