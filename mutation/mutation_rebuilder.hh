@@ -82,6 +82,9 @@ class mutation_rebuilder_v2 {
     mutation_rebuilder _builder;
     range_tombstone_assembler _rt_assembler;
     position_in_partition _pos = position_in_partition::before_all_clustered_rows();
+    // Token range tombstones from the head of the stream. They apply to every
+    // partition which follows, so they have to be kept for the whole stream.
+    token_range_tombstone_list _token_range_tombstones;
 public:
     mutation_rebuilder_v2(schema_ptr s) : _s(std::move(s)), _builder(_s) { }
 public:
@@ -98,11 +101,20 @@ public:
 public:
     // Returned reference is valid until consume_end_of_stream() or flush() is called.
     const mutation& consume_new_partition(const dht::decorated_key& dk) {
-        return _builder.consume_new_partition(dk);
+        auto& m = _builder.consume_new_partition(dk);
+        // A token range tombstone covering this partition acts as a partition
+        // tombstone.
+        _builder.consume(_token_range_tombstones.search(dk.token()));
+        return m;
     }
 
     stop_iteration consume(tombstone t) {
         _builder.consume(t);
+        return stop_iteration::no;
+    }
+
+    stop_iteration consume(token_range_tombstone&& trt) {
+        _token_range_tombstones.apply(trt);
         return stop_iteration::no;
     }
 

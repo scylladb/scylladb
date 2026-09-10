@@ -628,6 +628,18 @@ async def create_new_test_keyspace(cql: Session, opts, host=None):
             logger.warning("wait_for_schema_agreement failed: %s", e)
     return keyspace
 
+async def table_dir_name(cql: Session, ks: str, table: str) -> str:
+    """The name of a table's directory under a node's data directory.
+
+    Scylla names it "<table>-<id with the dashes removed>". Deriving it from the
+    schema rather than listing the data directory keeps it unambiguous when a
+    keyspace holds more than one table, or when a table has been recreated and
+    the old directory has not been removed yet.
+    """
+    rows = await cql.run_async("SELECT id FROM system_schema.tables "
+                               f"WHERE keyspace_name = '{ks}' AND table_name = '{table}'")
+    return f"{table}-{str(rows[0].id).replace('-', '')}"
+
 @asynccontextmanager
 async def new_test_keyspace(manager: ScyllaClusterManager, opts, host=None):
     """

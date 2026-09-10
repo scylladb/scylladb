@@ -262,14 +262,14 @@ SEASTAR_TEST_CASE(test_sstable_set_fast_forward_by_cache_reader_simulation) {
         {
             auto mr = make_mutation_reader_from_mutations(s, env.make_reader_permit(), {muts[0], muts[1], muts[2]});
             auto sst = make_sstable_easy(env, std::move(mr), cfg);
-            testlog.info("sstable [{}, {}]", sst->get_first_decorated_key().token(), sst->get_last_decorated_key().token());
+            testlog.info("sstable [{}, {}]", sst->get_first_ring_position().token(), sst->get_last_ring_position().token());
             ssts.push_back(std::move(sst));
         }
 
         {
             auto mr = make_mutation_reader_from_mutations(s, env.make_reader_permit(), {muts[4], muts[5]});
             auto sst = make_sstable_easy(env, std::move(mr), cfg);
-            testlog.info("sstable [{}, {}]", sst->get_first_decorated_key().token(), sst->get_last_decorated_key().token());
+            testlog.info("sstable [{}, {}]", sst->get_first_ring_position().token(), sst->get_last_ring_position().token());
             ssts.push_back(std::move(sst));
         }
         auto token_range = dht::token_range::make(dht::first_token(), dht::last_token());

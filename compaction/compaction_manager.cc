@@ -41,14 +41,23 @@ class compacting_sstable_registration {
     compaction_manager& _cm;
     compaction::compaction_state& _cs;
     std::unordered_set<sstables::shared_sstable> _compacting;
+    // The task this registration belongs to, if any; it publishes _compacting
+    // through the task for as long as it lives.
+    compaction_task_executor* _owner = nullptr;
 public:
-    explicit compacting_sstable_registration(compaction_manager& cm, compaction::compaction_state& cs) noexcept
+    explicit compacting_sstable_registration(compaction_manager& cm, compaction::compaction_state& cs, compaction_task_executor* owner = nullptr) noexcept
         : _cm(cm)
         , _cs(cs)
-    { }
+        , _owner(owner)
+    {
+        if (_owner) {
+            _owner->publish_compacting(&_compacting);
+        }
+    }
 
-    compacting_sstable_registration(compaction_manager& cm, compaction::compaction_state& cs, const std::vector<sstables::shared_sstable>& compacting)
-        : compacting_sstable_registration(cm, cs)
+    compacting_sstable_registration(compaction_manager& cm, compaction::compaction_state& cs, const std::vector<sstables::shared_sstable>& compacting,
+            compaction_task_executor* owner = nullptr)
+        : compacting_sstable_registration(cm, cs, owner)
     {
         register_compacting(compacting);
     }
@@ -68,9 +77,17 @@ public:
         : _cm(other._cm)
         , _cs(other._cs)
         , _compacting(std::move(other._compacting))
-    { }
+        , _owner(std::exchange(other._owner, nullptr))
+    {
+        if (_owner) {
+            _owner->publish_compacting(&_compacting);
+        }
+    }
 
     ~compacting_sstable_registration() {
+        if (_owner) {
+            _owner->publish_compacting(nullptr);
+        }
         // _compacting might be empty, but this should be just fine
         // for deregister_compacting_sstables.
         _cm.deregister_compacting_sstables(_compacting);
@@ -602,7 +619,7 @@ protected:
         compaction_strategy cs = t->get_compaction_strategy();
         compaction_descriptor descriptor = cs.get_major_compaction_job(*t, co_await _cm.get_candidates(*t));
         descriptor.gc_check_only_compacting_sstables = _consider_only_existing_data;
-        auto compacting = compacting_sstable_registration(_cm, _cm.get_compaction_state(t), descriptor.sstables);
+        auto compacting = compacting_sstable_registration(_cm, _cm.get_compaction_state(t), descriptor.sstables, this);
         auto on_replace = compacting.update_on_sstable_replacement();
         setup_new_compaction(descriptor.run_identifier);
 
@@ -1494,6 +1511,9 @@ public:
     virtual void abort() noexcept override {
         return compaction_task_executor::abort(_as);
     }
+    virtual bool yields_to_token_range_tombstone_compaction() const noexcept override {
+        return true;
+    }
 protected:
     virtual future<> run() override {
         return perform();
@@ -1548,7 +1568,7 @@ protected:
                 _cm.postpone_compaction_for_table(&t);
                 co_return std::nullopt;
             }
-            auto compacting = compacting_sstable_registration(_cm, _cm.get_compaction_state(&t), descriptor.sstables);
+            auto compacting = compacting_sstable_registration(_cm, _cm.get_compaction_state(&t), descriptor.sstables, this);
             auto weight_r = compaction_weight_registration(&_cm, weight);
             auto on_replace = compacting.update_on_sstable_replacement();
             cmlog.debug("Accepted compaction job: task={} ({} sstable(s)) of weight {} for {}",
@@ -1600,6 +1620,136 @@ protected:
         co_return std::nullopt;
     }
 };
+
+// Compacts everything a token range tombstone deletes, as soon as one shows
+// up, instead of leaving the space it frees for the compaction strategy to get
+// to in its own time. See compaction_manager::submit_token_range_tombstone_compaction().
+class token_range_tombstone_compaction_task_executor : public compaction_task_executor, public regular_compaction_task_impl {
+public:
+    token_range_tombstone_compaction_task_executor(compaction_manager& mgr, throw_if_stopping do_throw_if_stopping, compaction_group_view& t)
+        : compaction_task_executor(mgr, do_throw_if_stopping, &t, compaction_type::Compaction, "Token range tombstone compaction")
+        , regular_compaction_task_impl(mgr._task_manager_module, tasks::task_id::create_random_id(), mgr._task_manager_module->new_sequence_number(), t.schema()->ks_name(), t.schema()->cf_name(), "", tasks::task_id::create_null_id())
+    {}
+
+    virtual void abort() noexcept override {
+        return compaction_task_executor::abort(_as);
+    }
+protected:
+    virtual future<> run() override {
+        return perform();
+    }
+
+    // The sstables in `all` which hold something a tombstone in `tombstones`
+    // deletes: their extent overlaps its range and they have data at least as
+    // old as it. The sstables carrying the tombstones come along too, so that
+    // the output carries them and the whole thing collapses into one place.
+    static std::vector<sstables::shared_sstable> select(const std::vector<sstables::shared_sstable>& all, const token_range_tombstone_list& tombstones) {
+        std::vector<sstables::shared_sstable> deleted, carriers;
+        for (const auto& sst : all) {
+            if (!sst->token_range_tombstones().empty()) {
+                carriers.push_back(sst);
+                continue;
+            }
+            if (!sst->has_partitions()) {
+                continue;
+            }
+            auto first = sst->get_first_ring_position().token();
+            auto last = sst->get_last_ring_position().token();
+            auto oldest = sst->get_stats_metadata().min_timestamp;
+            auto deletes_some_of = [&] (const token_range_tombstone& trt) {
+                return oldest <= trt.tomb().timestamp && last > trt.start_exclusive() && first <= trt.end_inclusive();
+            };
+            if (std::ranges::any_of(tombstones, deletes_some_of)) {
+                deleted.push_back(sst);
+            }
+        }
+        if (deleted.empty()) {
+            return {};
+        }
+        deleted.insert(deleted.end(), carriers.begin(), carriers.end());
+        return deleted;
+    }
+
+    virtual future<compaction_manager::compaction_stats_opt> do_run() override {
+        co_await coroutine::switch_to(_cm.compaction_sg());
+        switch_state(state::pending);
+        compaction_group_view& t = *_compacting_table;
+
+        // First pass, to learn what to take and from whom. Only regular
+        // compactions make way; whatever a maintenance operation holds is
+        // simply not taken.
+        auto main_set = co_await t.main_sstable_set();
+        auto wanted = select(*main_set->all() | std::ranges::to<std::vector>(), main_set->token_range_tombstones());
+        if (wanted.empty()) {
+            co_return std::nullopt;
+        }
+        auto wanted_set = wanted | std::ranges::to<std::unordered_set>();
+        auto holds_one = [&] (const compaction_task_executor& task) {
+            return task.compacting_table() == &t && &task != this && task.yields_to_token_range_tombstone_compaction()
+                    && std::ranges::any_of(task.input_sstables(), [&] (const auto& sst) { return wanted_set.contains(sst); });
+        };
+        auto in_the_way = _cm._tasks
+                | std::views::filter(holds_one)
+                | std::views::transform([] (auto& task) { return task.shared_from_this(); })
+                | std::ranges::to<std::vector<shared_ptr<compaction_task_executor>>>();
+        if (!in_the_way.empty()) {
+            cmlog.info("Stopping {} regular compactions of {} to compact what a token range tombstone deletes", in_the_way.size(), t);
+            _cm.stop_tasks(in_the_way, "token range tombstone compaction");
+            co_await _cm.await_tasks(std::move(in_the_way), false);
+        }
+        if (!can_proceed()) {
+            co_return std::nullopt;
+        }
+
+        // Second pass under the locks, the way a major compaction selects and
+        // registers its inputs, since the set may have changed meanwhile.
+        auto lock_holder = co_await _compaction_state.lock.hold_write_lock();
+        if (!can_proceed()) {
+            co_return std::nullopt;
+        }
+        auto sstable_set_units = co_await get_units(_compaction_state.sstable_set_lock, 1);
+        main_set = co_await t.main_sstable_set();
+        wanted = select(_cm.get_candidates(t, *main_set->all()), main_set->token_range_tombstones());
+        if (wanted.empty()) {
+            co_return std::nullopt;
+        }
+        compaction_descriptor descriptor = t.get_compaction_strategy().get_major_compaction_job(t, std::move(wanted));
+        if (descriptor.sstables.empty()) {
+            co_return std::nullopt;
+        }
+        auto compacting = compacting_sstable_registration(_cm, _cm.get_compaction_state(&t), descriptor.sstables, this);
+        auto on_replace = compacting.update_on_sstable_replacement();
+        setup_new_compaction(descriptor.run_identifier);
+        cmlog.info("Compacting {} sstables of {} which a token range tombstone deletes from", descriptor.sstables.size(), t);
+        sstable_set_units.return_all();
+        lock_holder.return_all();
+
+        co_await compact_sstables_and_update_history(std::move(descriptor), _compaction_data, on_replace);
+        finish_compaction();
+        co_return std::nullopt;
+    }
+};
+
+void compaction_manager::submit_token_range_tombstone_compaction(compaction_group_view& t) {
+    if (t.is_auto_compaction_disabled_by_user()) {
+        return;
+    }
+    // One at a time per group; the one running re-reads the set anyway.
+    auto already = std::ranges::any_of(_tasks, [&t] (const compaction_task_executor& task) {
+        return task.compacting_table() == &t && dynamic_cast<const token_range_tombstone_compaction_task_executor*>(&task);
+    });
+    if (already) {
+        return;
+    }
+    auto gh = start_compaction(t);
+    if (!gh) {
+        return;
+    }
+    // OK to drop future, waited via compaction_task_executor::compaction_done()
+    (void)perform_compaction<token_range_tombstone_compaction_task_executor>(throw_if_stopping::no, tasks::task_info{}, t).then_wrapped([gh = std::move(gh)] (auto f) {
+        f.ignore_ready_future();
+    });
+}
 
 void compaction_manager::submit(compaction_group_view& t) {
     if (t.is_auto_compaction_disabled_by_user()) {
@@ -1724,7 +1874,7 @@ private:
 
         std::exception_ptr err;
         while (auto desc = co_await get_next_job()) {
-            auto compacting = compacting_sstable_registration(_cm, _cm.get_compaction_state(&t), desc->sstables);
+            auto compacting = compacting_sstable_registration(_cm, _cm.get_compaction_state(&t), desc->sstables, this);
             auto on_replace = compacting.update_on_sstable_replacement();
 
             try {
@@ -1956,7 +2106,7 @@ public:
     }
 
     static bool sstable_needs_split(const sstables::shared_sstable& sst, const compaction_type_options::split& opt) {
-        return opt.classifier(sst->get_first_decorated_key().token()) != opt.classifier(sst->get_last_decorated_key().token());
+        return opt.classifier(sst->get_first_ring_position().token()) != opt.classifier(sst->get_last_ring_position().token());
     }
 
     static compaction_descriptor
@@ -2307,8 +2457,8 @@ bool needs_cleanup(const sstables::shared_sstable& sst,
         return true;
     }
 
-    auto first_token = sst->get_first_decorated_key().token();
-    auto last_token = sst->get_last_decorated_key().token();
+    auto first_token = sst->get_first_ring_position().token();
+    auto last_token = sst->get_last_ring_position().token();
     dht::token_range sst_token_range = dht::token_range::make(first_token, last_token);
 
     auto r = std::lower_bound(sorted_owned_ranges.begin(), sorted_owned_ranges.end(), first_token,

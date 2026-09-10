@@ -62,6 +62,7 @@
 #include "readers/empty.hh"
 #include "readers/next_partition_adaptor.hh"
 #include "readers/combined.hh"
+#include "readers/token_range_tombstone_prepending.hh"
 #include "readers/compacting.hh"
 #include "readers/foreign.hh"
 #include "readers/filtering.hh"
@@ -1114,6 +1115,59 @@ SEASTAR_TEST_CASE(test_fast_forwarding_combined_reader_is_consistent_with_slicin
         auto prange = dht::partition_range::make_singular(keys[2]);
         rd.fast_forward_to(prange).get();
         check_next_partition(combined[2]);
+    });
+}
+
+// The combining reader has to gather the token range tombstones of all of its
+// readers and emit their union ahead of every partition, because they delete
+// whole partitions and a consumer must see them before deciding anything about
+// a partition they cover.
+SEASTAR_TEST_CASE(test_combined_reader_merges_token_range_tombstone_prologues) {
+    return seastar::async([] {
+        tests::reader_concurrency_semaphore_wrapper semaphore;
+        simple_schema ss;
+        auto s = ss.schema();
+
+        auto m1 = mutation(s, tests::generate_partition_key(s));
+        ss.add_row(m1, ss.make_ckey(0), "v1");
+        auto m2 = mutation(s, tests::generate_partition_key(s));
+        ss.add_row(m2, ss.make_ckey(0), "v2");
+
+        auto now = gc_clock::now();
+        auto trt1 = token_range_tombstone(dht::token::minimum(), dht::token(0), tombstone(100, now));
+        auto trt2 = token_range_tombstone(dht::token(0), dht::token::maximum(), tombstone(200, now));
+
+        auto permit = semaphore.make_permit();
+        std::vector<mutation_reader> readers;
+        readers.push_back(make_token_range_tombstone_prepending_reader(
+                make_mutation_reader_from_mutations(s, permit, {m1}),
+                token_range_tombstone_list{trt1}));
+        readers.push_back(make_token_range_tombstone_prepending_reader(
+                make_mutation_reader_from_mutations(s, permit, {m2}),
+                token_range_tombstone_list{trt2}));
+
+        auto rd = make_combined_reader(s, permit, std::move(readers),
+                streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
+        auto close_rd = deferred_close(rd);
+
+        // Everything both readers declared, ahead of any partition.
+        token_range_tombstone_list expected;
+        expected.apply(trt1);
+        expected.apply(trt2);
+
+        token_range_tombstone_list got;
+        bool seen_partition = false;
+        while (auto mfo = rd().get()) {
+            if (mfo->is_token_range_tombstone()) {
+                BOOST_REQUIRE_MESSAGE(!seen_partition,
+                        fmt::format("{} came after a partition started", mfo->as_token_range_tombstone()));
+                got.apply(mfo->as_token_range_tombstone());
+            } else if (mfo->is_partition_start()) {
+                seen_partition = true;
+            }
+        }
+        BOOST_REQUIRE(seen_partition);
+        BOOST_REQUIRE_MESSAGE(got.equal(expected), fmt::format("got {}, expected {}", got, expected));
     });
 }
 

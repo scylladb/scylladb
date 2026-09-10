@@ -277,7 +277,10 @@ sstable_directory::process_descriptor(sstables::entry_descriptor desc,
     }
 
     if (flags.sort_sstables_according_to_owner) {
-        if (shards.size() == 1) {
+        // An sstable owned by no shard covers no part of the ring, so there is
+        // nothing in it to segregate between shards; keep it here rather than
+        // sending it through resharding.
+        if (shards.size() <= 1) {
             dirlog.trace("{} identified as a local unshared SSTable", sst->get_filename());
             _unshared_local_sstables.push_back(std::move(sst));
         } else {

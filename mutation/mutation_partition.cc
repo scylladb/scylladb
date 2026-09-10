@@ -2215,6 +2215,11 @@ public:
         _mutation->partition().insert_row(_schema, cr.key(), std::move(cr).as_deletable_row());
         return stop_iteration::no;
     }
+    // The compactor folds a covering token range tombstone into each
+    // partition's tombstone, so nothing is left to do here.
+    stop_iteration consume(token_range_tombstone&&) {
+        return stop_iteration::no;
+    }
     stop_iteration consume(range_tombstone_change&& rtc) {
         return stop_iteration::no;
     }

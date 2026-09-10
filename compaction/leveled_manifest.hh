@@ -93,16 +93,16 @@ public:
         const schema& s = *_schema;
         std::unordered_set<sstables::shared_sstable> result;
         std::optional<sstables::shared_sstable> previous;
-        std::optional<dht::decorated_key> last; // keeps track of highest last key in result.
+        std::optional<dht::ring_position> last; // keeps track of highest last position in result.
 
         for (auto& current : _generations[level]) {
-            auto current_first = current->get_first_decorated_key();
-            auto current_last = current->get_last_decorated_key();
+            auto current_first = current->get_first_ring_position();
+            auto current_last = current->get_last_ring_position();
 
-            if (previous && current_first.tri_compare(s, (*previous)->get_last_decorated_key()) <= 0) {
+            if (previous && dht::ring_position_tri_compare(s, current_first, (*previous)->get_last_ring_position()) <= 0) {
                 result.insert(*previous);
                 result.insert(current);
-            } else if (last && current_first.tri_compare(s, *last) <= 0) {
+            } else if (last && dht::ring_position_tri_compare(s, current_first, *last) <= 0) {
                 // current may also overlap on some sstable other than the previous one, if there's
                 // a large token span sstable that comes previously.
                 result.insert(current);
@@ -111,7 +111,7 @@ public:
                 break;
             }
 
-            if (!last || current_last.tri_compare(s, *last) > 0) {
+            if (!last || dht::ring_position_tri_compare(s, current_last, *last) > 0) {
                 last = std::move(current_last);
             }
             previous = current;
@@ -137,7 +137,7 @@ public:
     }
 
 
-    compaction_descriptor get_descriptor_for_level(int level, const std::vector<std::optional<dht::decorated_key>>& last_compacted_keys,
+    compaction_descriptor get_descriptor_for_level(int level, const std::vector<std::optional<dht::ring_position>>& last_compacted_keys,
                                                              const std::vector<int>& compaction_counter) {
         auto info = get_candidates_for(level, last_compacted_keys);
         if (!info.candidates.empty()) {
@@ -157,7 +157,7 @@ public:
      * @return highest-priority sstables to compact, and level to compact them to
      * If no compactions are necessary, will return null
      */
-    compaction_descriptor get_compaction_candidates(const std::vector<std::optional<dht::decorated_key>>& last_compacted_keys,
+    compaction_descriptor get_compaction_candidates(const std::vector<std::optional<dht::ring_position>>& last_compacted_keys,
         const std::vector<int>& compaction_counter) {
         // LevelDB gives each level a score of how much data it contains vs its ideal amount, and
         // compacts the level with the highest score. But this falls apart spectacularly once you
@@ -281,15 +281,15 @@ private:
             // say we are compacting 3 sstables: 0->30 in L1 and 0->12, 12->33 in L2
             // this means that we will not create overlap in L2 if we add an sstable
             // contained within 0 -> 33 to the compaction
-            std::optional<dht::decorated_key> max;
-            std::optional<dht::decorated_key> min;
+            std::optional<dht::ring_position> max;
+            std::optional<dht::ring_position> min;
             for (auto& candidate : candidates) {
-                auto& candidate_first = candidate->get_first_decorated_key();
-                if (!min || candidate_first.tri_compare(*_schema, *min) < 0) {
+                auto candidate_first = candidate->get_first_ring_position();
+                if (!min || dht::ring_position_tri_compare(*_schema, candidate_first, *min) < 0) {
                     min = candidate_first;
                 }
-                auto& candidate_last = candidate->get_last_decorated_key();
-                if (!max || candidate_last.tri_compare(*_schema, *max) > 0) {
+                auto candidate_last = candidate->get_last_ring_position();
+                if (!max || dht::ring_position_tri_compare(*_schema, candidate_last, *max) > 0) {
                     max = candidate_last;
                 }
             }
@@ -298,9 +298,9 @@ private:
             // uncompacting sstables and parallel compaction is also disabled for lcs.
             Set<SSTableReader> compacting = cfs.getDataTracker().getCompacting();
 #endif
-            auto boundaries = ::wrapping_interval<dht::decorated_key>::make(*min, *max);
+            auto boundaries = ::wrapping_interval<dht::ring_position>::make(*min, *max);
             for (auto& sstable : get_level(i)) {
-                auto r = ::wrapping_interval<dht::decorated_key>::make(sstable->get_first_decorated_key(), sstable->get_last_decorated_key());
+                auto r = ::wrapping_interval<dht::ring_position>::make(sstable->get_first_ring_position(), sstable->get_last_ring_position());
                 if (boundaries.contains(r, dht::ring_position_comparator(*_schema))) {
                     logger.info("Adding high-level (L{}) {} to candidates", sstable->get_sstable_level(), sstable->get_filename());
                     candidates.push_back(sstable);
@@ -334,13 +334,13 @@ public:
         auto it = candidates.begin();
         auto& first_sstable = *it;
         it++;
-        dht::token first = first_sstable->get_first_decorated_key()._token;
-        dht::token last = first_sstable->get_last_decorated_key()._token;
+        dht::token first = first_sstable->get_first_ring_position().token();
+        dht::token last = first_sstable->get_last_ring_position().token();
         while (it != candidates.end()) {
             auto& candidate_sstable = *it;
             it++;
-            dht::token first_candidate = candidate_sstable->get_first_decorated_key()._token;
-            dht::token last_candidate = candidate_sstable->get_last_decorated_key()._token;
+            dht::token first_candidate = candidate_sstable->get_first_ring_position().token();
+            dht::token last_candidate = candidate_sstable->get_last_ring_position().token();
 
             first = first <= first_candidate? first : first_candidate;
             last = last >= last_candidate ? last : last_candidate;
@@ -350,7 +350,7 @@ public:
 
     template <typename T>
     static std::vector<sstables::shared_sstable> overlapping(const schema& s, const sstables::shared_sstable& sstable, const T& others) {
-        return overlapping(s, sstable->get_first_decorated_key()._token, sstable->get_last_decorated_key()._token, others);
+        return overlapping(s, sstable->get_first_ring_position().token(), sstable->get_last_ring_position().token(), others);
     }
 
     /**
@@ -364,7 +364,7 @@ public:
         auto range = ::wrapping_interval<dht::token>::make(start, end);
 
         for (auto& candidate : sstables) {
-            auto candidate_range = ::wrapping_interval<dht::token>::make(candidate->get_first_decorated_key()._token, candidate->get_last_decorated_key()._token);
+            auto candidate_range = ::wrapping_interval<dht::token>::make(candidate->get_first_ring_position().token(), candidate->get_last_ring_position().token());
 
             if (range.overlaps(candidate_range, dht::token_comparator())) {
                 overlapped.push_back(candidate);
@@ -416,14 +416,14 @@ private:
     // FIXME: come up with a general fix instead of this heuristic which potentially has weak points. For example,
     //  it may be vulnerable to clients that perform operations by scanning the token range.
     static int sstable_index_based_on_last_compacted_key(const std::vector<sstables::shared_sstable>& sstables, int level,
-            const schema& s, const std::vector<std::optional<dht::decorated_key>>& last_compacted_keys) {
+            const schema& s, const std::vector<std::optional<dht::ring_position>>& last_compacted_keys) {
         int start = 0; // handles case where the prior compaction touched the very last range
         int idx = 0;
         for (auto& sstable : sstables) {
             if (uint32_t(level) >= last_compacted_keys.size()) {
                 throw std::runtime_error(format("Invalid level {:d} out of {:d}", level, (last_compacted_keys.size() - 1)));
             }
-            auto& sstable_first = sstable->get_first_decorated_key();
+            auto sstable_first = sstable->get_first_ring_position();
             if (!last_compacted_keys[level] || sstable_first.tri_compare(s, *last_compacted_keys[level]) > 0) {
                 start = idx;
                 break;
@@ -433,7 +433,7 @@ private:
         return start;
     }
 
-    candidates_info candidates_for_higher_levels_compaction(int level, const std::vector<std::optional<dht::decorated_key>>& last_compacted_keys) {
+    candidates_info candidates_for_higher_levels_compaction(int level, const std::vector<std::optional<dht::ring_position>>& last_compacted_keys) {
         const schema& s = *_schema;
         // for non-L0 compactions, pick up where we left off last time
         auto& sstables = get_level(level);
@@ -466,7 +466,7 @@ private:
      * If no compactions are possible (because of concurrent compactions or because some sstables are blacklisted
      * for prior failure), will return an empty list.  Never returns null.
      */
-    candidates_info get_candidates_for(int level, const std::vector<std::optional<dht::decorated_key>>& last_compacted_keys) {
+    candidates_info get_candidates_for(int level, const std::vector<std::optional<dht::ring_position>>& last_compacted_keys) {
         SCYLLA_ASSERT(!get_level(level).empty());
 
         logger.debug("Choosing candidates for L{}", level);

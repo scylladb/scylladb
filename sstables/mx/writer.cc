@@ -1059,9 +1059,13 @@ void writer::close_index_writer() {
 
 void writer::close_partitions_writer() {
     if (_partitions_writer) {
-        _sst._partitions_db_footer = std::move(*_bti_partition_index_writer).finish(
-            _first_key.value(),
-            _last_key.value());
+        // An sstable which stores no partitions has no first or last key, and
+        // so no partition index footer to write; the index is empty.
+        if (_first_key && _last_key) {
+            _sst._partitions_db_footer = std::move(*_bti_partition_index_writer).finish(
+                *_first_key,
+                *_last_key);
+        }
         _sst.get_components_digests().map[component_type::Partitions] = close_digest_writer(_partitions_writer);
     }
 }
@@ -1815,12 +1819,16 @@ void writer::consume_end_of_stream() {
         close_writer(_hashes_writer);
     }
 
-    _sst.set_first_and_last_keys();
+    if (_first_key) {
+        // Nothing to set for an sstable which stored no partitions; it has no
+        // first or last key. See sstable::get_first_ring_position().
+        _sst.set_first_and_last_keys();
+    }
 
     _sst._components->statistics.contents[metadata_type::Serialization] = std::make_unique<serialization_header>(std::move(_sst_schema.header));
     seal_statistics(_sst.get_version(), _sst._components->statistics, _collector,
         _sst._schema->get_partitioner().name(), _sst._schema->bloom_filter_fp_chance(),
-        _sst._schema, _sst.get_first_decorated_key(), _sst.get_last_decorated_key(), _enc_stats);
+        _sst._schema, _enc_stats);
     close_data_writer();
 
   if (_sst._components->summary) {
@@ -1880,7 +1888,8 @@ void writer::consume_end_of_stream() {
             ld_records = scylla_metadata::large_data_records{.elements = std::move(records)};
         }
     }
-    _sst.write_scylla_metadata(_shard, std::move(identifier), std::move(ld_stats), std::move(ts_stats), std::move(ld_records));
+    _sst.write_scylla_metadata(_shard, std::move(identifier), std::move(ld_stats), std::move(ts_stats), std::move(ld_records),
+            std::move(_token_range_tombstones));
     if (!_cfg.leave_unsealed) {
         _sst.seal_sstable(_cfg.backup).get();
     }

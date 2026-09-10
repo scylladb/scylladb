@@ -33,12 +33,14 @@ enum class compact_for_sstables {
 
 template<typename T>
 concept CompactedFragmentsConsumer = requires(T obj, tombstone t, const dht::decorated_key& dk, static_row sr,
-        clustering_row cr, range_tombstone_change rtc, tombstone current_tombstone, row_tombstone current_row_tombstone, bool is_alive) {
+        clustering_row cr, range_tombstone_change rtc, token_range_tombstone trt, tombstone current_tombstone,
+        row_tombstone current_row_tombstone, bool is_alive) {
     obj.consume_new_partition(dk);
     obj.consume(t);
     { obj.consume(std::move(sr), current_tombstone, is_alive) } -> std::same_as<stop_iteration>;
     { obj.consume(std::move(cr), current_row_tombstone, is_alive) } -> std::same_as<stop_iteration>;
     { obj.consume(std::move(rtc)) } -> std::same_as<stop_iteration>;
+    { obj.consume(std::move(trt)) } -> std::same_as<stop_iteration>;
     { obj.consume_end_of_partition() } -> std::same_as<stop_iteration>;
     obj.consume_end_of_stream();
 };
@@ -56,6 +58,7 @@ public:
     stop_iteration consume(static_row&& sr, tombstone, bool) { return stop_iteration::no; }
     stop_iteration consume(clustering_row&& cr, row_tombstone, bool) { return stop_iteration::no; }
     stop_iteration consume(range_tombstone_change&& rtc) { return stop_iteration::no; }
+    stop_iteration consume(token_range_tombstone&& trt) { return stop_iteration::no; }
     stop_iteration consume_end_of_partition() { return stop_iteration::no; }
     void consume_end_of_stream() {}
 };
@@ -179,6 +182,10 @@ class compact_mutation_state {
     tombstone_gc_state _tombstone_gc_state;
 
     tombstone _partition_tombstone;
+    // Token range tombstones seen at the head of the stream. They delete whole
+    // partitions, so every partition folds the covering one into its own
+    // partition tombstone.
+    token_range_tombstone_list _token_range_tombstones;
 
     bool _static_row_live{};
     uint64_t _rows_in_current_partition;
@@ -407,7 +414,10 @@ public:
         _empty_partition_in_gc_consumer = true;
         _rows_in_current_partition = 0;
         _static_row_live = false;
-        _partition_tombstone = {};
+        // A token range tombstone covering this partition acts as a partition
+        // tombstone; the partition's own tombstone is merged into it by
+        // consume(tombstone) below.
+        _partition_tombstone = _token_range_tombstones.search(dk.token());
         _current_partition_limit = std::min(_row_limit, _partition_row_limit);
         _max_purgeable_regular = {};
         _max_purgeable_shadowable = {};
@@ -424,11 +434,28 @@ public:
     template <typename Consumer, typename GCConsumer>
     requires CompactedFragmentsConsumer<Consumer> && CompactedFragmentsConsumer<GCConsumer>
     void consume(tombstone t, Consumer& consumer, GCConsumer& gc_consumer) {
-        _partition_tombstone = t;
-        if (can_purge_tombstone(t)) {
+        _partition_tombstone.apply(t);
+        if (can_purge_tombstone(_partition_tombstone)) {
             partition_is_not_empty_for_gc_consumer(gc_consumer);
         } else {
             partition_is_not_empty(consumer);
+        }
+    }
+
+    // Token range tombstones precede all partitions in the stream. They are
+    // remembered for the whole stream and folded into the partition tombstone
+    // of every partition they cover.
+    template <typename Consumer, typename GCConsumer>
+    requires CompactedFragmentsConsumer<Consumer> && CompactedFragmentsConsumer<GCConsumer>
+    stop_iteration consume(token_range_tombstone&& trt, Consumer& consumer, GCConsumer& gc_consumer) {
+        _validator(mutation_fragment_v2::kind::token_range_tombstone, position_in_partition_view::for_partition_start(), {});
+        _token_range_tombstones.apply(trt);
+        if constexpr (sstable_compaction()) {
+            // The output sstable has to keep them: they also delete partitions
+            // which live in sstables not taking part in this compaction.
+            return consumer.consume(std::move(trt));
+        } else {
+            return stop_iteration::no;
         }
     }
 
@@ -767,6 +794,10 @@ public:
 
     stop_iteration consume(range_tombstone_change&& rtc) {
         return _state->consume(std::move(rtc), _consumer, _gc_consumer);
+    }
+
+    stop_iteration consume(token_range_tombstone&& trt) {
+        return _state->consume(std::move(trt), _consumer, _gc_consumer);
     }
 
     stop_iteration consume_end_of_partition() {

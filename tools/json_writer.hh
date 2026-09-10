@@ -25,6 +25,9 @@ public:
     mutation_json::json_writer& writer() { return _writer.writer(); }
     void start_stream();
     void start_sstable(const sstables::sstable* const sst);
+    // A token range tombstone is not part of any partition: it is written as
+    // its own element of the sstable's array, ahead of the partitions.
+    void token_range_tombstone_element(const ::token_range_tombstone& trt);
     void start_partition(const partition_start& ps);
     void partition_element(const static_row& sr);
     void partition_element(const clustering_row& cr);

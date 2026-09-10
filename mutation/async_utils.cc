@@ -125,7 +125,8 @@ freeze_gently(const mutation& m) {
                 .partition_gently([&] (auto wr) {
                     return part_ser.write_gently(std::move(wr));
                 });
-    wr.end_mutation();
+    // A mutation covers a single partition and so carries none.
+    std::move(wr).skip_token_range_tombstones().end_mutation();
     fm.representation().reduce_chunk_count();
     co_return fm;
 }

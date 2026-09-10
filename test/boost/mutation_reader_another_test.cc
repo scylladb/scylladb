@@ -87,6 +87,11 @@ struct mock_consumer {
         _result._fragments.emplace_back(_schema, _permit, std::move(rtc));
         return update_depth();
     }
+    stop_iteration consume(token_range_tombstone&& trt) {
+        testlog.debug("mock_consumer [{}]: consume token_range_tombstone: {}", fmt::ptr(this), trt);
+        _result._fragments.emplace_back(_schema, _permit, std::move(trt));
+        return update_depth();
+    }
     stop_iteration consume_end_of_partition() {
         ++_result._consume_end_of_partition_call_count;
         testlog.debug("mock_consumer [{}]: consume_end_of_partition: {}", fmt::ptr(this), _result._consume_end_of_partition_call_count);
@@ -532,6 +537,10 @@ public:
         _previous_position.emplace(cr.position());
         _mut->consume(std::move(cr));
         return stop_iteration(bool(_skip_partition));
+    }
+    stop_iteration consume(token_range_tombstone&&) {
+        BOOST_REQUIRE(!_inside_partition);
+        return stop_iteration::no;
     }
     stop_iteration consume(range_tombstone_change&& rtc) {
         BOOST_REQUIRE(_inside_partition);
@@ -983,6 +992,7 @@ SEASTAR_THREAD_TEST_CASE(test_reverse_reader_memory_limit) {
         stop_iteration consume(static_row&&) { return stop_iteration::no; }
         stop_iteration consume(clustering_row&&) { return stop_iteration::no; }
         stop_iteration consume(range_tombstone_change&&) { return stop_iteration::no; }
+        stop_iteration consume(token_range_tombstone&&) { return stop_iteration::no; }
         stop_iteration consume_end_of_partition() { return stop_iteration::no; }
         void consume_end_of_stream() { }
     };

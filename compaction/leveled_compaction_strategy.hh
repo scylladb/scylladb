@@ -30,7 +30,7 @@ namespace compaction {
 class leveled_manifest;
 
 struct leveled_compaction_strategy_state {
-    std::optional<std::vector<std::optional<dht::decorated_key>>> last_compacted_keys;
+    std::optional<std::vector<std::optional<dht::ring_position>>> last_compacted_keys;
     std::vector<int> compaction_counter;
 
     leveled_compaction_strategy_state();

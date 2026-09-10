@@ -902,6 +902,7 @@ public:
     stop_iteration consume(static_row&& sr, tombstone t, bool is_alive) { return _builder.consume(std::move(sr), t, is_alive); }
     stop_iteration consume(clustering_row&& cr, row_tombstone t, bool is_alive) { return _builder.consume(std::move(cr), t, is_alive); }
     stop_iteration consume(range_tombstone_change&& rtc) { return _builder.consume(std::move(rtc)); }
+    stop_iteration consume(token_range_tombstone&& trt) { return _builder.consume(std::move(trt)); }
     stop_iteration consume_end_of_partition()  { return _builder.consume_end_of_partition(); }
     result_type consume_end_of_stream() { return _builder.consume_end_of_stream(); }
 
@@ -954,6 +955,7 @@ public:
     stop_iteration consume(static_row&& sr, tombstone t, bool is_alive) { return _builder.consume(std::move(sr), t, is_alive); }
     stop_iteration consume(clustering_row&& cr, row_tombstone t, bool is_alive) { return _builder.consume(std::move(cr), t, is_alive); }
     stop_iteration consume(range_tombstone_change&& rtc) { return _builder.consume(std::move(rtc)); }
+    stop_iteration consume(token_range_tombstone&& trt) { return _builder.consume(std::move(trt)); }
     stop_iteration consume_end_of_partition()  { return _builder.consume_end_of_partition(); }
     result_type consume_end_of_stream() {
         _builder.consume_end_of_stream();

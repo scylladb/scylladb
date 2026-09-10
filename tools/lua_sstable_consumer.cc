@@ -1448,6 +1448,21 @@ public:
             return invoke_meta{1, true};
         });
     }
+    virtual future<stop_iteration> consume(token_range_tombstone&& trt) override {
+        return invoke_script_method("consume_token_range_tombstone", [this, trt = std::move(trt)] () mutable {
+            auto* l = _l.get();
+            // A plain table: the token bounds have no userdata type of their
+            // own, and rendering them as strings is what a script wants anyway.
+            lua_newtable(l);
+            lua::push_sstring(l, fmt::to_string(trt.start_exclusive()));
+            lua_setfield(l, -2, "start_exclusive");
+            lua::push_sstring(l, fmt::to_string(trt.end_inclusive()));
+            lua_setfield(l, -2, "end_inclusive");
+            push_userdata<tombstone>(l, tombstone(trt.tomb()));
+            lua_setfield(l, -2, "tombstone");
+            return invoke_meta{1, true};
+        });
+    }
     virtual future<stop_iteration> consume(partition_end&& pe) override {
         return invoke_script_method("consume_partition_end", [] {
             return invoke_meta{0, true};

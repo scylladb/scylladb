@@ -124,6 +124,9 @@ private:
     size_t nr_partitions = 0;
     db::replay_position _replay_position;
     db::rp_set _rp_set;
+    // Token range tombstones written to this memtable. See apply() below for
+    // why these are not in the LSA region.
+    token_range_tombstone_list _token_range_tombstones;
     // mutation source to which reads fall-back after mark_flushed()
     // so that memtable contents can be moved away while there are
     // still active readers. This is needed for this mutation_source
@@ -236,6 +239,17 @@ public:
     future<> apply(memtable&, reader_permit);
     // Applies mutation to this memtable.
     // The mutation is upgraded to current schema.
+    // Applies a tombstone which deletes a range of tokens. Unlike the
+    // partition data this is not kept in the LSA region: the list holds at most
+    // a handful of entries, it does not need to be evictable or relocatable,
+    // and keeping it out of the region means it must not be touched from inside
+    // an allocating section, which would allocate its chunks from the region's
+    // allocator and let LSA move them under it.
+    void apply(const token_range_tombstone& trt);
+    const token_range_tombstone_list& token_range_tombstones() const noexcept {
+        return _token_range_tombstones;
+    }
+
     void apply(const mutation& m, db::large_data_cache_tracker* tracker, db::rp_handle&& = {});
     void apply(const mutation& m, db::rp_handle&& h = {}) {
         apply(m, nullptr, std::move(h));
@@ -333,7 +347,10 @@ public:
 
     mutation_source as_data_source();
 
-    bool empty() const noexcept { return partitions.empty(); }
+    // A memtable holding only token range tombstones has no partitions but is
+    // not empty: it carries a deletion which is lost if the memtable is
+    // discarded without being flushed.
+    bool empty() const noexcept { return partitions.empty() && _token_range_tombstones.empty(); }
     void mark_flushed(mutation_source) noexcept;
     bool is_merging_to_cache() const noexcept;
     bool is_flushed() const noexcept;

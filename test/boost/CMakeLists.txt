@@ -293,6 +293,8 @@ add_scylla_test(tagged_integer_test
   KIND SEASTAR)
 add_scylla_test(token_metadata_test
   KIND SEASTAR)
+add_scylla_test(token_range_tombstone_test
+  KIND SEASTAR)
 add_scylla_test(top_k_test
   KIND BOOST)
 add_scylla_test(transport_test

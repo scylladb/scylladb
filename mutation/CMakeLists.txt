@@ -17,7 +17,8 @@ target_sources(mutation
     mutation_partition_view.cc
     partition_version.cc
     range_tombstone.cc
-    range_tombstone_list.cc)
+    range_tombstone_list.cc
+    token_range_tombstone.cc)
 target_include_directories(mutation
   PUBLIC
     ${CMAKE_SOURCE_DIR})

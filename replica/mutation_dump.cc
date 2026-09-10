@@ -291,6 +291,19 @@ private:
                 writer.write(mf.as_range_tombstone_change().tombstone());
                 writer.writer().EndObject();
                 break;
+            case mutation_fragment_v2::kind::token_range_tombstone:
+                {
+                    auto& trt = mf.as_token_range_tombstone();
+                    writer.writer().StartObject();
+                    writer.writer().Key("start_exclusive");
+                    writer.writer().String(fmt::to_string(trt.start_exclusive()));
+                    writer.writer().Key("end_inclusive");
+                    writer.writer().String(fmt::to_string(trt.end_inclusive()));
+                    writer.writer().Key("tombstone");
+                    writer.write(trt.tomb());
+                    writer.writer().EndObject();
+                }
+                break;
             case mutation_fragment_v2::kind::partition_end:
                 // No value set.
                 break;

@@ -1577,8 +1577,8 @@ compaction_group& tablet_storage_group_manager::compaction_group_for_token_range
 }
 
 compaction_group& tablet_storage_group_manager::compaction_group_for_sstable(const sstables::shared_sstable& sst) const {
-    auto first_token = sst->get_first_decorated_key().token();
-    auto last_token = sst->get_last_decorated_key().token();
+    auto first_token = sst->get_first_ring_position().token();
+    auto last_token = sst->get_last_ring_position().token();
 
     return compaction_group_for_token_range(sstable_desc(sst), first_token, last_token);
 }
@@ -1749,7 +1749,7 @@ table::do_add_sstable_and_update_cache(compaction_group& cg, sstables::shared_ss
         }
         // Resetting sstable ptr to inform the caller the sstable has been loaded successfully.
         sst = nullptr;
-    }), dht::partition_range::make({sst->get_first_decorated_key(), true}, {sst->get_last_decorated_key(), true}), [sst, schema = _schema] (const dht::decorated_key& key) {
+    }), dht::partition_range::make({sst->get_first_ring_position(), true}, {sst->get_last_ring_position(), true}), [sst, schema = _schema] (const dht::decorated_key& key) {
         return sst->filter_has_key(sstables::key::from_partition_key(*schema, key.key()));
     });
 }
@@ -2837,8 +2837,14 @@ void compaction_group::trigger_compaction() {
     // But not if we're locked out or stopping
     if (!_async_gate.is_closed()) {
       // FIXME: indentation
+      // A token range tombstone in the set means data waiting to be dropped;
+      // go after it right away rather than when the strategy gets to it.
+      auto has_token_range_tombstones = !main_sstables()->token_range_tombstones().empty();
       for (auto view : all_views()) {
         _t._compaction_manager.submit(*view);
+        if (has_token_range_tombstones) {
+            _t._compaction_manager.submit_token_range_tombstone_compaction(*view);
+        }
       }
     }
 }
@@ -5055,6 +5061,51 @@ future<> table::apply(const frozen_mutation& m, schema_ptr m_schema, db::rp_hand
 }
 
 template void table::do_apply(compaction_group& cg, db::rp_handle&&, const frozen_mutation&, const schema_ptr&, const db::large_data_guardrail_base&, db::large_data_cache_tracker*&&, db::large_data_violation_type*&&);
+
+token_range_tombstone_list table::token_range_tombstones() {
+    token_range_tombstone_list res;
+    for_each_compaction_group([&res] (compaction_group& cg) {
+        for (const auto& mt : *cg.memtables()) {
+            res.apply(mt->token_range_tombstones());
+        }
+        res.apply(cg.main_sstables()->token_range_tombstones());
+    });
+    return res;
+}
+
+void table::apply(const token_range_tombstone& trt) {
+    if (trt.empty()) {
+        return;
+    }
+    // (start_exclusive, end_inclusive], the shape a compaction group's range
+    // has too.
+    using bound = dht::token_range::bound;
+    auto start = trt.start_exclusive().is_minimum()
+            ? std::optional<bound>()
+            : std::optional<bound>(bound(trt.start_exclusive(), false));
+    auto end = trt.end_inclusive().is_maximum()
+            ? std::optional<bound>()
+            : std::optional<bound>(bound(trt.end_inclusive(), true));
+    auto range = dht::token_range(std::move(start), std::move(end));
+    token_range_tombstone_list whole;
+    whole.apply(trt);
+    for_each_compaction_group([&] (compaction_group& cg) {
+        if (!cg.token_range().overlaps(range, dht::token_comparator())) {
+            return;
+        }
+        // Clamp to the group's own range. A group's sstables must not claim to
+        // cover anything outside it: with tablets that would make the sstable
+        // belong to a tablet this node need not hold storage for, and loading
+        // it would fail. The part of the tombstone outside this group is
+        // applied to whichever group does own it.
+        auto cg_range = cg.token_range();
+        auto start = cg_range.start() ? cg_range.start()->value() : dht::token::minimum();
+        auto end = cg_range.end() ? cg_range.end()->value() : dht::token::maximum();
+        for (const auto& clamped : whole.slice(start, end)) {
+            cg.memtables()->active_memtable().apply(clamped);
+        }
+    });
+}
 
 future<>
 write_memtable_to_sstable(mutation_reader reader,

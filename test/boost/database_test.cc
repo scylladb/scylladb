@@ -204,8 +204,13 @@ SEASTAR_TEST_CASE(test_truncate_without_snapshot_during_writes) {
 // Reproducer for:
 //   https://github.com/scylladb/scylla/issues/21719
 SEASTAR_TEST_CASE(test_truncate_saves_replay_position) {
-    auto cfg = make_shared<db::config>();
-    cfg->auto_snapshot.set(false);
+    cql_test_config cfg;
+    cfg.db_config->auto_snapshot.set(false);
+    // Truncating by writing a token range tombstone saves no replay position:
+    // the tombstone is itself a commitlog entry, so the data it deletes cannot
+    // come back from a replay. A cluster which has not enabled the feature
+    // still truncates the old way, which is what this test is about.
+    cfg.disabled_features.insert("TOKEN_RANGE_TOMBSTONES");
     return do_with_cql_env_thread([] (cql_test_env& e) {
         BOOST_REQUIRE_GT(this_smp_shard_count(), 1);
         const sstring ks_name = "ks";
@@ -220,7 +225,7 @@ SEASTAR_TEST_CASE(test_truncate_saves_replay_position) {
         BOOST_REQUIRE(rows);
         auto row_count = rows->rs().result_set().size();
         BOOST_REQUIRE_EQUAL(row_count, this_smp_shard_count());
-    }, cfg);
+    }, std::move(cfg));
 }
 
 SEASTAR_TEST_CASE(test_querying_with_limits) {

@@ -738,6 +738,11 @@ async def test_table_removal_during_logstor_compaction(manager: ScyllaClusterMan
         'experimental_features': ['logstor'],
         'logstor_disk_size_in_mb': 8,
         'logstor_file_size_in_mb': 8,
+        # Truncating by writing a token range tombstone discards no segments,
+        # so it has no critical section to share with compaction. The old path,
+        # which this is about, is still taken without the feature.
+        'error_injections_at_startup': [
+                {'name': 'suppress_features', 'value': 'TOKEN_RANGE_TOMBSTONES'}],
     }
     server = await manager.server_add(cmdline=cmdline, config=cfg)
     cql = manager.get_cql()
