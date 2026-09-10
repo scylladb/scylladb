@@ -901,8 +901,7 @@ statement_restrictions::statement_restrictions(private_tag,
                 // and select_statement::prepare() rejects any that no such statement claimed.
                 // Search is the only kind of external function that gets here; another would need
                 // a bucket of its own.
-                if (!expr::is_native_function_call(*fc, functions::BM25_FUNCTION_NAME)
-                        && !expr::is_native_function_call(*fc, functions::ANN_FUNCTION_NAME)) {
+                if (!functions::as_external_search_function(*fc)) {
                     on_internal_error(rlogger, "statement_restrictions: external function in WHERE is not a search function");
                 }
                 if (!type.is_select()) {
