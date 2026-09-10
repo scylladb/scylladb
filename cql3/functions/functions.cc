@@ -113,6 +113,8 @@ functions::init() noexcept {
 
     declare(make_bm25_function());
 
+    add_math_functions(ret);
+
     // also needed for smp:
 #if 0
     MigrationManager.instance.register(new FunctionsMigrationListener());
