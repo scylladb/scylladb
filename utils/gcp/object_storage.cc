@@ -1108,9 +1108,27 @@ future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::
                     if (rep._status != status_type::ok && rep._status != status_type::partial_content) {
                         throw failed_operation(fmt::format("Could not read object {}: {} ({}-{}/{} - {})", _bucket, _object_name, s.position, s.position+to_read, _size, int(rep._status)));
                     }
-                    auto old = s.position;
+                    // send_with_retry() re-runs this handler on every attempt.
+                    // Nothing is appended before read_entire_stream() returns, so an
+                    // attempt that fails leaves the shared state as it found it.
                     // ensure these are on our coroutine frame.
                     auto bufs = co_await util::read_entire_stream(in);
+                    auto got = std::accumulate(bufs.cbegin(), bufs.cend(), 0ul, [](size_t init, auto& buf) {
+                        return init + buf.size();
+                    });
+                    // Before the buffers are committed, so a reply this rejects leaves
+                    // the shared state untouched whatever the caller does next.
+                    // to_read never runs past the end of the object, so a satisfiable
+                    // range that came back whole came back complete. Anything else
+                    // means the reply described a different range than the one asked
+                    // for, which is not something a retry can fix, and handing the
+                    // short data back would surface two calls later as an end of
+                    // stream that is not one.
+                    if (got != to_read) {
+                        throw storage_io_error(EIO, fmt::format("Read of {}:{} answered {} bytes for the {} bytes asked for at offset {} of {}",
+                                _bucket, _object_name, got, to_read, s.position, _size));
+                    }
+                    auto old = s.position;
                     for (auto&& buf : bufs) {
                         s.position += buf.size();
                         _impl->count_read_bytes(buf.size());
