@@ -495,10 +495,15 @@ async def trigger_snapshot(manager, server: ServerInfo) -> None:
     host = cql.cluster.metadata.get_host(server.ip_addr)
     await manager.api.client.post(f"/raft/trigger_snapshot/{group0_id}", host=server.ip_addr)
 
-async def trigger_stepdown(manager, server: ServerInfo) -> None:
+async def trigger_stepdown(manager, server: ServerInfo, group_id: str | None = None) -> None:
+    """Make `server` step down as the leader of `group_id`, or of group0 if not given.
+
+    Fails if `server` is not the leader of that group.
+    """
     cql = manager.get_cql()
     host = cql.cluster.metadata.get_host(server.ip_addr)
-    await manager.api.client.post("/raft/trigger_stepdown", host=server.ip_addr)
+    params = {"group_id": group_id} if group_id is not None else None
+    await manager.api.client.post("/raft/trigger_stepdown", host=server.ip_addr, params=params)
 
 
 
