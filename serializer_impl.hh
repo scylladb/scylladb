@@ -854,11 +854,11 @@ unknown_variant_type deserialize(Input& in, std::type_identity<unknown_variant_t
 // using a range.
 // Use begin() and end() to iterate through the frozen vector,
 // deserializing (or skipping) one element at a time.
-template <typename T, bool IsForward=true>
+template <typename T, bool IsForward=true, typename InputStream=utils::input_stream>
 class vector_deserializer {
 public:
     using value_type = T;
-    using input_stream = utils::input_stream;
+    using input_stream = InputStream;
 
 private:
     input_stream _in;
@@ -887,7 +887,7 @@ private:
         }
     };
     struct reverse_iterator_data {
-        std::reverse_iterator<utils::chunked_vector<input_stream>::const_iterator> _substream_it;
+        std::reverse_iterator<typename utils::chunked_vector<input_stream>::const_iterator> _substream_it;
         void skip() {
             ++_substream_it;
         }
