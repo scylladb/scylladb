@@ -222,6 +222,17 @@ jobs:
             PR_LABELS=$(echo "$PR_LABELS_FROM_EVENT" | jq -r '[.[].name] | join(",")')
           fi
 
+          # The labeled-event path bypasses the author trust-check (label-check
+          # already vetted the labeler), on the assumption that it only ever
+          # grants a thin run on a still-draft PR. If the PR was made ready for
+          # review between the label event and this refetch, stop here instead
+          # of falling through to a full, untrusted-author CI run below.
+          if [ "$EVENT_NAME" = "pull_request_target" ] && [ "$EVENT_ACTION" = "labeled" ] && [ "$PR_DRAFT" != "true" ]; then
+            echo "::warning::PR #$PR_NUMBER is no longer a draft; skipping thin CI trigger from 'ci/run-for-draft' label"
+            echo "should_continue=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           # Draft PRs get no CI by default, unless they carry 'ci/run-for-draft'
           # (RELENG-860), in which case they get a thin (dev-mode only) CI run.
           THIN_CI=false
