@@ -93,6 +93,8 @@ protected:
     virtual future<> run() override = 0;
 };
 
+inline constexpr auto global_cleanup_compaction_task_type = "global cleanup compaction";
+
 class cleanup_compaction_task_impl : public compaction_task_impl {
 public:
     cleanup_compaction_task_impl(tasks::task_manager::module_ptr module,
@@ -136,25 +138,6 @@ public:
     tasks::is_user_task is_user_task() const noexcept override;
 protected:
     virtual future<> run() override;
-    virtual future<std::optional<double>> expected_total_workload() const override;
-};
-
-class global_cleanup_compaction_task_impl : public compaction_task_impl {
-private:
-    sharded<replica::database>& _db;
-public:
-    global_cleanup_compaction_task_impl(tasks::task_manager::module_ptr module,
-            sharded<replica::database>& db) noexcept
-        : compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), "global", "", "", "", tasks::task_id::create_null_id())
-        , _db(db)
-    {}
-    std::string type() const final {
-        return "global cleanup compaction";
-    }
-
-    tasks::is_user_task is_user_task() const noexcept override;
-private:
-    future<> run() final;
     virtual future<std::optional<double>> expected_total_workload() const override;
 };
 
@@ -658,6 +641,9 @@ public:
 
     // Starts a major compaction of a single table on this shard, once the turn is taken by the created task.
     future<tasks::task_manager::task_ptr> start_table_major_compaction(replica::database& db, std::string keyspace, const table_info& info, compaction_turn& turn, flush_mode fm, bool consider_only_existing_data, tasks::task_info parent_info);
+
+    // Starts a cleanup compaction of all the vnode based keyspaces on the node.
+    future<tasks::task_manager::task_ptr> start_global_cleanup_compaction(sharded<replica::database>& db);
 };
 
 class regular_compaction_task_impl : public compaction_task_impl {

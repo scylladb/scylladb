@@ -599,10 +599,6 @@ future<std::optional<double>> cleanup_keyspace_compaction_task_impl::expected_to
     co_return _expected_workload = _expected_workload ? _expected_workload : co_await get_keyspace_task_workload(_db, _status.keyspace, _table_infos);
 }
 
-tasks::is_user_task global_cleanup_compaction_task_impl::is_user_task() const noexcept {
-    return tasks::is_user_task::yes;
-}
-
 static future<> run_global_cleanup_compaction(sharded<replica::database>& db, tasks::task_info task_info) {
     co_await db.invoke_on_all([&] (replica::database& local_db) -> future<> {
         co_await local_db.flush_all_tables();
@@ -623,25 +619,37 @@ static future<> run_global_cleanup_compaction(sharded<replica::database>& db, ta
     });
 }
 
-future<> global_cleanup_compaction_task_impl::run() {
-    return run_global_cleanup_compaction(_db, info());
-}
-
-future<std::optional<double>> global_cleanup_compaction_task_impl::expected_total_workload() const {
-    if (_expected_workload) {
-        co_return _expected_workload;
+static future<std::optional<double>> get_global_cleanup_compaction_workload(sharded<replica::database>& db, lw_shared_ptr<uint64_t> workload) {
+    if (*workload) {
+        co_return *workload;
     }
     uint64_t bytes = 0;
-    auto keyspaces = _db.local().get_non_local_vnode_based_strategy_keyspaces();
+    auto keyspaces = db.local().get_non_local_vnode_based_strategy_keyspaces();
     for (const auto& ks : keyspaces) {
         std::vector<table_info> tables;
-        const auto& cf_meta_data = _db.local().find_keyspace(ks).metadata().get()->cf_meta_data();
+        const auto& cf_meta_data = db.local().find_keyspace(ks).metadata().get()->cf_meta_data();
         for (auto& [name, schema] : cf_meta_data) {
             tables.emplace_back(name, schema->id());
         }
-        bytes += co_await get_keyspace_task_workload(_db, _status.keyspace, tables);
+        bytes += co_await get_keyspace_task_workload(db, ks, tables);
     }
-    co_return _expected_workload = bytes;
+    co_return *workload = bytes;
+}
+
+future<tasks::task_manager::task_ptr> task_manager_module::start_global_cleanup_compaction(sharded<replica::database>& db) {
+    tasks::task_manager::task_builder task_builder{shared_from_this(), global_cleanup_compaction_task_type};
+    task_builder.set_sequence_number(new_sequence_number())
+                .set_scope("global")
+                .set_progress_units("bytes")
+                .set_is_abortable(tasks::is_abortable::yes)
+                .set_is_internal(tasks::is_internal::no)
+                .set_is_user_task(tasks::is_user_task::yes)
+                .set_workload_fn([&db, workload = make_lw_shared<uint64_t>(0)] () {
+                    return get_global_cleanup_compaction_workload(db, workload);
+                });
+    return std::move(task_builder).build([&db] (tasks::task_manager::task::impl& self) {
+        return run_global_cleanup_compaction(db, self.info());
+    });
 }
 
 future<> shard_cleanup_keyspace_compaction_task_impl::run() {
