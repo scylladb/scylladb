@@ -1142,7 +1142,11 @@ future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::
                     // A body that ends early is a transport fault and the range is
                     // still there to be fetched, so raise it here where the retry
                     // strategy still gets a say.
-                    if (utils::http::body_ended_early(rep)) {
+                    bool ended_early = utils::http::body_ended_early(rep);
+                    utils::get_local_injector().inject("gcp_source_truncated_body", [&ended_early] {
+                        ended_early = true;
+                    });
+                    if (ended_early) {
                         utils::http::throw_body_ended_early(fmt::format("Body of {}:{} ended early: got {} of the {} bytes it declared at offset {}",
                                 _bucket, _object_name, got, rep.content_length, s.position));
                     }
