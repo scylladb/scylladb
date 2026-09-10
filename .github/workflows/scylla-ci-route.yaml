@@ -29,7 +29,7 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'pull_request_target' && github.event.action != 'unlabeled' && github.event.action != 'labeled' && !github.event.pull_request.draft) ||
       (github.event_name == 'pull_request_target' && github.event.action == 'unlabeled' && github.event.label.name == 'conflicts') ||
-      (github.event_name == 'pull_request_target' && github.event.action == 'labeled' && github.event.label.name == 'ci/run-for-draft') ||
+      (github.event_name == 'pull_request_target' && github.event.action == 'labeled' && github.event.label.name == 'ci/run-for-draft' && github.event.pull_request.draft) ||
       (github.event_name == 'issue_comment' && github.event.issue.pull_request && github.event.comment.user.login != 'scylladbbot')
     runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 30
@@ -96,19 +96,30 @@ jobs:
         if: github.event_name == 'pull_request_target' && github.event.action == 'labeled' && github.event.label.name == 'ci/run-for-draft'
         id: label-check
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.AUTO_BACKPORT_TOKEN }}
           ACTOR: ${{ github.event.sender.login }}
           PR_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         shell: bash
         run: |
-          if gh_api_retry "orgs/scylladb/members/$ACTOR" --silent >/dev/null 2>&1; then
+          # Use AUTO_BACKPORT_TOKEN (same as the trust-check step below): it can
+          # read org membership that GITHUB_TOKEN cannot, so members aren't
+          # mistaken for non-members. gh_api_retry already treats a 404 as a
+          # definitive non-member answer (not retried), while 403/429/5xx are
+          # retried and, if still failing, are transient -- only remove the
+          # label on a confirmed non-member response.
+          if OUTPUT=$(gh_api_retry "orgs/scylladb/members/$ACTOR" --silent 2>&1); then
             echo "valid=true" >> "$GITHUB_OUTPUT"
           else
-            echo "::warning::${ACTOR} is not a member of scylladb; removing 'ci/run-for-draft' label."
-            gh_api_retry -X DELETE "repos/$PR_REPO/issues/$PR_NUMBER/labels/ci%2Frun-for-draft" --silent || true
-            gh_api_retry "repos/$PR_REPO/issues/$PR_NUMBER/comments" \
-              -f body="@${ACTOR} the \`ci/run-for-draft\` label can only be set by members of the scylladb org; removing it." || true
+            HTTP_CODE=$(printf '%s' "$OUTPUT" | grep -oE 'HTTP [0-9]{3}' | tail -1 | grep -oE '[0-9]{3}')
+            if [ "$HTTP_CODE" = "404" ]; then
+              echo "::warning::${ACTOR} is not a member of scylladb; removing 'ci/run-for-draft' label."
+              gh_api_retry -X DELETE "repos/$PR_REPO/issues/$PR_NUMBER/labels/ci%2Frun-for-draft" --silent || true
+              gh_api_retry "repos/$PR_REPO/issues/$PR_NUMBER/comments" \
+                -f body="@${ACTOR} the \`ci/run-for-draft\` label can only be set by members of the scylladb org; removing it." || true
+            else
+              echo "::warning::Could not verify org membership for ${ACTOR}, leaving 'ci/run-for-draft' label in place: $OUTPUT"
+            fi
             echo "valid=false" >> "$GITHUB_OUTPUT"
           fi
 
@@ -535,7 +546,10 @@ jobs:
           echo "Required checks: build=$BUILD_REQUIRED dtest=$DTEST_REQUIRED unittest=$UNITTEST_REQUIRED artifacts=$ARTIFACTS_REQUIRED gdb=$GDB_REQUIRED"
 
       - name: Check trusted contributor
-        if: steps.resolve-pr.outputs.should_continue == 'true' && steps.docs-check.outputs.is_docs_only != 'true' && github.event_name != 'issue_comment' && github.event_name != 'workflow_dispatch'
+        # Skipped for the labeled ci/run-for-draft event: label-check above
+        # already confirmed the labeler (not necessarily the PR author) is an
+        # org member, which is the trust signal for that path.
+        if: steps.resolve-pr.outputs.should_continue == 'true' && steps.docs-check.outputs.is_docs_only != 'true' && github.event_name != 'issue_comment' && github.event_name != 'workflow_dispatch' && github.event.action != 'labeled'
         id: trust-check
         env:
           GH_TOKEN: ${{ secrets.AUTO_BACKPORT_TOKEN }}
@@ -572,7 +586,7 @@ jobs:
         if: |
           steps.resolve-pr.outputs.should_continue == 'true' &&
           steps.docs-check.outputs.is_docs_only != 'true' &&
-          (steps.trust-check.outputs.trusted == 'true' || github.event_name == 'issue_comment' || github.event_name == 'workflow_dispatch') &&
+          (steps.trust-check.outputs.trusted == 'true' || github.event_name == 'issue_comment' || github.event_name == 'workflow_dispatch' || github.event.action == 'labeled') &&
           steps.pr-details.outputs.has_conflicts != 'true' &&
           steps.required-checks.outputs.build_required == 'true' &&
           steps.target-folder.outputs.folder != ''
