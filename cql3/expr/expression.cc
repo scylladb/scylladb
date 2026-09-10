@@ -1526,7 +1526,7 @@ cql3::raw_value evaluate(const expression& e, const evaluation_inputs& inputs) {
 }
 
 cql3::raw_value evaluate(const expression& e, const query_options& options) {
-    return evaluate(e, evaluation_inputs{.options = &options});
+    return evaluate(e, evaluation_inputs{.options = &options, .temporaries = options.cached_pk_function_calls()});
 }
 
 // Takes a value and reserializes it where needs_to_be_reserialized() says it's needed
@@ -1894,20 +1894,7 @@ static cql3::raw_value do_evaluate(const function_call& fun_call, const evaluati
         arguments.emplace_back(to_bytes_opt(std::move(arg_val)));
     }
 
-    bool has_cache_id = fun_call.lwt_cache_id.get() != nullptr && fun_call.lwt_cache_id->has_value();
-    if (has_cache_id) {
-        computed_function_values::mapped_type* cached_value =
-            inputs.options->find_cached_pk_function_call(**fun_call.lwt_cache_id);
-        if (cached_value != nullptr) {
-            return raw_value::make_value(*cached_value);
-        }
-    }
-
     bytes_opt result = scalar_fun->execute(arguments);
-
-    if (has_cache_id) {
-        inputs.options->cache_pk_function_call(**fun_call.lwt_cache_id, result);
-    }
 
     if (!result.has_value()) {
         return cql3::raw_value::make_null();
@@ -2060,13 +2047,15 @@ void fill_prepare_context(expression& e, prepare_context& ctx) {
             }
         },
         [&](function_call& f) {
-            const shared_ptr<functions::function>& func = std::get<shared_ptr<functions::function>>(f.func);
-            if (ctx.is_processing_pk_restrictions() && !func->is_pure()) {
-                ctx.add_pk_function_call(f);
-            }
-
             for (expr::expression& argument : f.args) {
                 fill_prepare_context(argument, ctx);
+            }
+
+            const shared_ptr<functions::function>& func = std::get<shared_ptr<functions::function>>(f.func);
+            if (ctx.is_processing_pk_restrictions() && !func->is_pure()) {
+                // Replaces e with a temporary standing in for the call, so that the
+                // call is evaluated once per request rather than once per evaluation.
+                ctx.add_pk_function_call(e);
             }
         },
         [&](binary_operator& binop) {

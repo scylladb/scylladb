@@ -12,6 +12,7 @@
 
 #include <concepts>
 #include <initializer_list>
+#include <span>
 #include "mutation/timestamp.hh"
 #include "bytes.hh"
 #include "db/consistency_level_type.hh"
@@ -30,6 +31,10 @@ extern const cql_config default_cql_config;
 
 class column_specification;
 
+// The values of the temporaries standing in for non-pure function calls in
+// partition key restrictions, keyed by temporary slot. This is the form they
+// travel in when a request bounces to another shard or node, which is why the
+// key is a uint8_t rather than the size_t a temporary slot really is.
 using computed_function_values = std::unordered_map<uint8_t, bytes_opt>;
 
 using unset_bind_variable_vector = utils::small_vector<bool, 16>;
@@ -101,25 +106,26 @@ private:
     // 3) unique.
     mutable int _list_append_seq = 0;
 
-    // Cached `function_call` evaluation results. `function_call` AST nodes
-    // are created for each function with side effects in a CQL query, i.e.
-    // non-deterministic functions (`uuid()`, `now()` and some others
-    // timeuuid-related).
+    // The results of the non-pure function calls the prepare step found in the
+    // partition key restrictions (`uuid()`, `now()` and some others
+    // timeuuid-related), indexed by the expr::temporary slot that stands in for
+    // the call. statement_restrictions computes them, once per request, before
+    // evaluating anything that reads them; see
+    // statement_restrictions::evaluate_pk_function_calls().
     //
-    // These nodes are evaluated either when a query itself is executed
-    // or query restrictions are computed (e.g. partition/clustering
-    // key ranges for LWT requests).
+    // Entries [0, size) are all computed: the vector only grows by caching one
+    // more call, so its size is how many calls have a result.
     //
-    // We need to cache the calls since otherwise when handling a
-    // `bounce_to_shard` request for an LWT query, we can possibly enter an
-    // infinite bouncing loop (in case a function is used to calculate
+    // The values have to be computed once and then reused, since otherwise when
+    // handling a `bounce_to_shard` request for an LWT query, we can possibly
+    // enter an infinite bouncing loop (in case a function is used to calculate
     // partition key ranges for a query), since the results can be different
     // each time. Furthermore, we don't support bouncing more than one time.
     // Refs: #8604 (https://github.com/scylladb/scylla/issues/8604)
     //
     // Using mutable because `query_state` is not available at
     // evaluation sites and we only have a const reference to `query_options`.
-    mutable computed_function_values _cached_pk_fn_calls;
+    mutable std::vector<raw_value> _cached_pk_fn_calls;
 private:
     // Batch constructor.
     template <typename Values>
@@ -284,11 +290,24 @@ public:
 
     void prepare(const std::vector<lw_shared_ptr<column_specification>>& specs);
 
-    void cache_pk_function_call(computed_function_values::key_type id, computed_function_values::mapped_type value) const;
-    const computed_function_values& cached_pk_function_calls() const;
-    computed_function_values&& take_cached_pk_function_calls();
-    void set_cached_pk_function_calls(computed_function_values vals);
-    computed_function_values::mapped_type* find_cached_pk_function_call(computed_function_values::key_type id) const;
+    // The results the partition key function calls of an expression evaluated
+    // against these options read, indexed by temporary slot.
+    std::span<const raw_value> cached_pk_function_calls() const {
+        return _cached_pk_fn_calls;
+    }
+
+    // How many calls already have a result. They are computed in slot order, so
+    // a statement with more calls than this has to compute the rest itself.
+    size_t nr_cached_pk_function_calls() const {
+        return _cached_pk_fn_calls.size();
+    }
+
+    // Caches the result of the call in slot `index`, which must be the first
+    // one without a result.
+    void cache_pk_function_call(size_t index, raw_value value) const;
+
+    computed_function_values take_cached_pk_function_calls();
+    void set_cached_pk_function_calls(const computed_function_values& vals);
 
 private:
     void fill_value_views();

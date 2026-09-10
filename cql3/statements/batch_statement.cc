@@ -395,7 +395,7 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::exe
         } else if (keys.size() != 1 || keys.front().equal(request->key().front(), dht::ring_position_comparator(*schema)) == false) {
             throw exceptions::invalid_request_exception("BATCH with conditions cannot span multiple partitions");
         }
-        cached_fn_calls.merge(std::move(const_cast<cql3::query_options&>(statement_options).take_cached_pk_function_calls()));
+        cached_fn_calls.merge(const_cast<cql3::query_options&>(statement_options).take_cached_pk_function_calls());
 
         std::vector<query::clustering_range> ranges = statement.create_clustering_ranges(statement_options, json_cache);
 
