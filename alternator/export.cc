@@ -8,12 +8,28 @@
 
 #include "alternator/export.hh"
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/maybe_yield.hh>
+#include "alternator/executor.hh"
+#include "alternator/executor_util.hh"
+#include "alternator/serialization.hh"
+#include "cql3/selection/selection.hh"
+#include "cql3/result_set.hh"
+#include "query/query-request.hh"
+#include "schema/schema.hh"
+#include "service/client_state.hh"
+#include "service/pager/query_pagers.hh"
+#include "service/storage_proxy.hh"
+#include "service_permit.hh"
 #include "utils/rjson.hh"
+
 #include <algorithm>
+#include <ranges>
 #include <string>
 #include <string_view>
 
 namespace alternator {
+
+static logging::logger elogger("alternator-export");
 
 // Interfaces for `sink` / `source` pipelines.
 // The `sink` pipeline consists of 3 stages:
@@ -206,6 +222,106 @@ std::unique_ptr<import_pipeline_interface> create_in_memory_source_pipeline(in_m
     auto parser = std::make_unique<json_parser>(std::move(on_item));
     auto decompressor = std::make_unique<noop_decompressor>(std::move(parser));
     return std::make_unique<in_memory_source>(storage, std::move(decompressor));
+}
+
+
+seastar::future<> scan_table(
+    service::storage_proxy& proxy,
+    schema_ptr schema,
+    abort_source& as,
+    service_permit permit,
+    seastar::noncopyable_function<seastar::future<>(rjson::value)> cb)
+{
+    as.check();
+
+    // Build a wildcard selection (SELECT *) for all columns.
+    auto selection = cql3::selection::selection::wildcard(schema);
+
+    // Collect all regular column IDs to read.
+    // We're only interested in regular columns (that contain user data), not static columns.
+    // We also ignore timestamp columns, which are not part of the user data.
+    auto regular_columns =
+        schema->regular_columns()
+        | std::views::transform(&column_definition::id)
+        | std::ranges::to<query::column_id_vector>();
+
+    // Set up query options: allow short reads and bypass cache.
+    query::partition_slice::option_set opts = selection->get_query_options();
+    opts.set<query::partition_slice::option::allow_short_read>();
+    opts.set<query::partition_slice::option::bypass_cache>();
+
+    // Scan all clustering ranges (no restriction).
+    std::vector<query::clustering_range> ck_bounds{
+        query::clustering_range::make_open_ended_both_sides()};
+
+    auto partition_slice = query::partition_slice(
+        std::move(ck_bounds), {}, std::move(regular_columns), opts);
+
+    auto command = ::make_lw_shared<query::read_command>(
+        schema->id(), schema->version(), partition_slice,
+        proxy.get_max_result_size(partition_slice),
+        query::tombstone_limit(proxy.get_tombstone_limit()));
+
+    // Use an internal client state - no authorization checks needed for
+    // this internal scan operation. The caller should verify, if user has permission to perform the scan.
+    auto& client_state = service::client_state::for_internal_calls();
+    tracing::trace_state_ptr trace_state;
+    auto query_state_ptr = std::make_unique<service::query_state>(
+        client_state, trace_state, std::move(permit));
+
+    db::consistency_level cl = db::consistency_level::LOCAL_QUORUM;
+    auto query_options = std::make_unique<cql3::query_options>(
+        cl, std::vector<cql3::raw_value>{});
+    lw_shared_ptr<service::pager::paging_state> paging_state = nullptr;
+    query_options = std::make_unique<cql3::query_options>(
+        std::move(query_options), std::move(paging_state));
+
+    // Scan the full token ring.
+    dht::partition_range_vector partition_ranges{
+        dht::partition_range::make_open_ended_both_sides()};
+
+    auto p = service::pager::query_pagers::pager(
+        proxy, schema, selection, *query_state_ptr, *query_options,
+        command, std::move(partition_ranges), nullptr);
+
+    while (!p->is_exhausted()) {
+        as.check();
+        std::unique_ptr<cql3::result_set> rs;
+
+        // We will retry reading a page 10 times (nothing special about 10 itself).
+        static constexpr const int max_retries = 10;
+
+        // We will try to read a page several times to avoid accidental timeout aborting
+        // whole scan. We will still abort on any other error.
+        for (int retries = 0; ; ++retries) {
+            try {
+                rs = co_await p->fetch_page(scan_table_page_size, gc_clock::now(), executor::default_timeout());
+                break;
+            } catch(exceptions::read_timeout_exception&) {
+                elogger.warn("S3 export scanner read timed out, will retry: {}", std::current_exception());
+            }
+            // If we didn't break out of this loop, add a minimal sleep
+            if (retries >= max_retries) {
+                // Don't get stuck forever asking the same page, maybe there's
+                // a bug or a real problem in several replicas. We're giving up here -
+                // the caller must catch and handle the exception.
+                throw runtime_exception("scanner thread failed after too many timeouts for the same page");
+            }
+            // Timeout happen for a reason - we don't want to retry too fast, so we wait a bit before retrying.
+            co_await seastar::sleep_abortable(std::chrono::seconds(1), as);
+        }
+
+        co_await coroutine::maybe_yield();
+        for (const auto& row : rs->rows()) {
+            as.check();
+            rjson::value item = rjson::empty_object();
+            // Convert each row to a DynamoDB-style JSON item using the
+            // same logic as describe_single_item() from executor_util.
+            describe_single_item(*selection, row, std::nullopt, item);
+            co_await cb(std::move(item));
+            co_await coroutine::maybe_yield();
+        }
+    }
 }
 
 } // namespace alternator
