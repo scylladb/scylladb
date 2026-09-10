@@ -10,7 +10,7 @@ from typing import Tuple
 
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import gather_safely, wait_for, Host
-from test.cluster.util import new_test_keyspace, new_test_table
+from test.cluster.util import ensure_raft_group_leader_on, new_test_keyspace, new_test_table
 from test.pylib.internal_types import HostID, ServerInfo
 from cassandra import InvalidRequest, ReadTimeout, WriteTimeout
 from cassandra.cluster import ConsistencyLevel
@@ -1652,3 +1652,94 @@ async def test_stepdown_on_graceful_shutdown(manager: ScyllaClusterManager):
             # The new leader can serve writes right away.
             cql, _ = await manager.get_ready_cql(others)
             await cql.run_async(f"INSERT INTO {table} (pk, c) VALUES (2, 2)")
+
+
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+async def test_write_paused_across_leadership_change(manager: ScyllaClusterManager):
+    """
+    Verifies that a strongly consistent write operation is correctly executed
+    if leadership gets transferred away and back, between the moment of choosing
+    the write timestamp and the moment of appending the entry (scylladb/scylladb#26189).
+
+    The test starts a write on one leader, pauses it, transfers leadership
+    and issues a write on the new leader, transfers leadership back and unpauses
+    the first write. The coordinator of the first operation should notice that
+    the term has changed since the timestamp was chosen, and retry the operation,
+    choosing a new, higher timestamp. If the coordinator would instead proceed
+    with the first timestamp, the effect of the write would appear obscured
+    by the other write, breaking linearizability.
+    """
+    servers = await manager.servers_add(2, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE,
+                                        auto_rack_dc='my_dc')
+    cql, hosts = await manager.get_ready_cql(servers)
+    host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
+
+    async with new_test_keyspace(manager,
+            "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}"
+            " AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, v int") as table:
+            table_name = table.split('.')[-1]
+            insert = cql.prepare(f"INSERT INTO {table} (pk, v) VALUES (0, ?)")
+            select = cql.prepare(f"SELECT v FROM {table} WHERE pk = 0")
+            await cql.run_async(insert, [1])
+
+            group_id = await get_table_raft_group_id(manager, ks, table_name)
+            leader_host_id = await wait_for_leader(manager, servers[0], group_id)
+            leader_idx = host_ids.index(leader_host_id)
+            leader_server = servers[leader_idx]
+            leader_host = hosts[leader_idx]
+            other_idx = 1 - leader_idx
+            other_server = servers[other_idx]
+            other_host = hosts[other_idx]
+            other_host_id = host_ids[other_idx]
+            logger.info(f"Initial leader of group {group_id}: {leader_host_id}")
+
+            leader_log = await manager.server_open_log(leader_server.server_id)
+            mark = await leader_log.mark()
+
+            # Pause a write on the leader after the timestamp and the term
+            # are determined, but before an attempt is made to append the entry.
+            await manager.api.enable_injection(leader_server.ip_addr,
+                "sc_coordinator_wait_before_add_entry", one_shot=True)
+            # We need to get the ResponseFuture to get the trace, hence to_thread + cql.execute
+            paused_write = asyncio.create_task(asyncio.to_thread(cql.execute, insert, [2],
+                                                                 host=leader_host, trace=True, timeout=120.0))
+            await leader_log.wait_for("sc_coordinator_wait_before_add_entry: waiting",
+                                      from_mark=mark, timeout=60)
+
+            # Move leadership away and let the new leader write a value to the
+            # same row. The new leader will most likely choose a higher timestamp
+            # than the one chosen for the paused write.
+            await ensure_raft_group_leader_on(manager, other_server, group_id)
+            logger.info(f"Leadership moved to {other_host_id}, writing a newer value")
+            await cql.run_async(insert, [3], host=other_host)
+
+            # Transfer the leadership back and unblock the paused write.
+            await ensure_raft_group_leader_on(manager, leader_server, group_id)
+            logger.info(f"Leadership moved back to {leader_host_id}, releasing the paused write")
+
+            mark = await leader_log.mark()
+            await manager.api.message_injection(leader_server.ip_addr,
+                                                "sc_coordinator_wait_before_add_entry")
+
+            # Wait until the paused write successfully completes
+            paused_write_result = await paused_write
+
+            # Verify that the effect of the paused write is visible. The coordinator
+            # of the previously paused write is a leader again, but it must notice
+            # that leadership got temporarily transferred away and it must choose
+            # a new timestamp for the write. If it didn't do that, then the write
+            # would lose to the write of the other coordinator and the query
+            # would return "3" instead of "2".
+            rows = await cql.run_async(select)
+            assert rows[0].v == 2
+
+            # Assert that there was a retry on the previously-paused leader.
+            await leader_log.wait_for("add_entry, got retriable error.*term has changed",
+                                      from_mark=mark, timeout=60)
+
+            # Assert that no forwarding to a different node took place
+            # and everything was executed within the coordinator
+            trace = paused_write_result.get_query_trace()
+            sources = frozenset(event.source for event in trace.events)
+            assert sources == frozenset([leader_server.ip_addr])
