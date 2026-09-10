@@ -2333,6 +2333,12 @@ def test_streams_disabled_stream(dynamodb, dynamodbstreams):
                 assert not 'NextShardIterator' in response
         assert nrecords == 1
 
+        # The log table is demonstrably still there - we just read from it -
+        # yet Alternator cannot address it by name, so ListTables must not
+        # return it. Reproduces SCYLLADB-4382.
+        tables = list_tables(dynamodb)
+        assert table.name in tables and table.name + '_scylla_cdc_log' not in tables
+
 # When streams are enabled for a table, we get a unique ARN which should be
 # unique but not change unless streams are eventually disabled for this table.
 # If this ARN changes unexpectedly, it can confuse existing readers who are
@@ -2373,6 +2379,20 @@ def test_stream_list_tables(dynamodb):
             for listed_name in tables:
                 if table.name != listed_name:
                     assert table.name not in listed_name
+
+# ListTables must not hide a CDC log table by matching the "_scylla_cdc_log"
+# suffix - cdc::is_log_name() would make that a one-token mistake. The suffix
+# is legal in a DynamoDB table name, and a table the user created under it is
+# an ordinary table which has to be listed.
+# Refs SCYLLADB-4382.
+def test_list_tables_user_table_named_like_cdc_log(dynamodb):
+    with new_test_table(dynamodb,
+        name=unique_table_name() + '_scylla_cdc_log',
+        Tags=TAGS,
+        KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
+        AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' }, ]
+    ) as table:
+        assert table.name in list_tables(dynamodb)
 
 # The DynamoDB documentation for GetRecords says that "GetRecords can retrieve
 # a maximum of 1 MB of data or 1000 stream records, whichever comes first.",
