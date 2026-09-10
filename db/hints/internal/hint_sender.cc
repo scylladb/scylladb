@@ -555,28 +555,28 @@ bool hint_sender::send_one_file(const sstring& fname) {
     // assumes there was no corruption, so we embrace it with an if.
     // Refs: SCYLLADB-4294.
     if (!corrupted_segment) {
-    // If draining was canceled, we can't say anything about the segment's state,
-    // so return immediately. We return false here because of that reason too.
-    if (canceled_draining()) {
-        return false;
-    }
+        // If draining was canceled, we can't say anything about the segment's state,
+        // so return immediately. We return false here because of that reason too.
+        if (canceled_draining()) {
+            return false;
+        }
 
-    // If we are draining ignore failures and drop the segment even if we failed to send it.
-    if (draining() && ctx_ptr->segment_replay_failed) {
-        manager_logger.debug("hint_sender[{}]:send_one_file: We are draining, so we are going to delete the segment anyway", _ep_key);
-        ctx_ptr->segment_replay_failed = false;
-    }
+        // If we are draining ignore failures and drop the segment even if we failed to send it.
+        if (draining() && ctx_ptr->segment_replay_failed) {
+            manager_logger.debug("hint_sender[{}]:send_one_file: We are draining, so we are going to delete the segment anyway", _ep_key);
+            ctx_ptr->segment_replay_failed = false;
+        }
 
-    // update the next iteration replay position if needed
-    if (ctx_ptr->segment_replay_failed) {
-        // If some hints failed to be sent, first_failed_rp will tell the position of first such hint.
-        // If there was an error thrown by read_log_file function itself, we will retry sending from
-        // the last hint that was successfully sent (last_succeeded_rp).
-        _last_not_complete_rp = ctx_ptr->first_failed_rp.value_or(ctx_ptr->last_succeeded_rp.value_or(_last_not_complete_rp));
-        manager_logger.debug("hint_sender[{}]:send_one_file: Error while sending hints from {}, last RP is {}", _ep_key, fname, _last_not_complete_rp);
+        // update the next iteration replay position if needed
+        if (ctx_ptr->segment_replay_failed) {
+            // If some hints failed to be sent, first_failed_rp will tell the position of first such hint.
+            // If there was an error thrown by read_log_file function itself, we will retry sending from
+            // the last hint that was successfully sent (last_succeeded_rp).
+            _last_not_complete_rp = ctx_ptr->first_failed_rp.value_or(ctx_ptr->last_succeeded_rp.value_or(_last_not_complete_rp));
+            manager_logger.debug("hint_sender[{}]:send_one_file: Error while sending hints from {}, last RP is {}", _ep_key, fname, _last_not_complete_rp);
 
-        return false;
-    }
+            return false;
+        }
     }
 
     // If we got here we are done with the current segment and we can remove it.
