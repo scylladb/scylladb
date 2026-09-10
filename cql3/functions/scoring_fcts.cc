@@ -39,6 +39,10 @@ const external_search_function* as_external_search_function(const expr::function
     return dynamic_cast<const external_search_function*>(std::get<shared_ptr<function>>(fc.func).get());
 }
 
+bool is_ann_function_name(const function_name& name) {
+    return name == ANN_FUNCTION_NAME || name == ANN_SCORE_FUNCTION_NAME;
+}
+
 shared_ptr<function> make_bm25_function() {
     // BM25 fulltext scoring function: bm25(column, query) -> float
     // Registered with utf8_type args; ascii is implicitly coerced to utf8 by the type system.
@@ -48,9 +52,15 @@ shared_ptr<function> make_bm25_function() {
             BM25_FUNCTION_NAME.name, float_type, std::vector<data_type>{utf8_type, utf8_type}, search_family::bm25);
 }
 
-shared_ptr<function> make_ann_function(const std::vector<data_type>& arg_types) {
-    // ANN vector ordering function: ann(column, query_vector) -> float
-    return ::make_shared<external_search_function>(ANN_FUNCTION_NAME.name, float_type, arg_types, search_family::ann);
+shared_ptr<function> make_bm25_score_function() {
+    // bm25_score(column, query) -> float, the same score bm25() returns.
+    return ::make_shared<external_search_function>(
+            BM25_SCORE_FUNCTION_NAME.name, float_type, std::vector<data_type>{utf8_type, utf8_type}, search_family::bm25);
+}
+
+shared_ptr<function> make_ann_function(const function_name& name, const std::vector<data_type>& arg_types) {
+    // ann(column, query_vector) -> float, and ann_score(), which returns the same score.
+    return ::make_shared<external_search_function>(name.name, float_type, arg_types, search_family::ann);
 }
 
 } // namespace functions

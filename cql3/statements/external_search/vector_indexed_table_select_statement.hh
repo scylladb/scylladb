@@ -16,6 +16,14 @@
 
 namespace cql3::statements {
 
+/// A query vector written in a SELECT call that prepare could not prove equal to the ORDER BY
+/// vector, because a bind marker is involved. Execution compares the bound values;
+/// `function_name` is the function the call was written with, for the error message.
+struct deferred_select_vector {
+    expr::expression vector;
+    sstring function_name;
+};
+
 /// ANN ordering metadata resolved during prepare.
 struct ann_ordering_info {
     secondary_index::index index;
@@ -26,7 +34,7 @@ struct ann_ordering_info {
     std::optional<size_t> temporary_index;
     /// The SELECT occurrences' query vectors that only execution can compare, a bind marker
     /// standing where at least one of the two values will be.
-    std::vector<expr::expression> deferred_select_vectors;
+    std::vector<deferred_select_vector> deferred_select_vectors;
 };
 
 /// Resolves ANN ordering metadata from the query's prepared ORDER BY call.
