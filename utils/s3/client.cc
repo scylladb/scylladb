@@ -48,6 +48,7 @@
 #include "utils/s3/credentials_providers/sts_assume_role_credentials_provider.hh"
 #include "utils/div_ceil.hh"
 #include "utils/http.hh"
+#include "utils/http_client_error_processing.hh"
 #include "utils/memory_data_sink.hh"
 #include "utils/chunked_vector.hh"
 #include "utils/aws_sigv4.hh"
@@ -840,9 +841,22 @@ future<temporary_buffer<char>> client::get_object_contiguous(sstring object_name
                 off += to_copy;
             }
             return make_ready_future<consumption_result<char>>(continue_consuming());
-        }).then([&gc, &off] {
-            gc.read_bytes += off;
         });
+        // Inside the handler, because make_request() has already reported the
+        // attempt as a success by the time it returns.  Moving this out disables
+        // the retry.
+        bool ended_early = utils::http::body_ended_early(rep);
+        utils::get_local_injector().inject("s3_client_truncated_body", [&ended_early] {
+            ended_early = true;
+        });
+        if (ended_early) {
+            utils::http::throw_body_ended_early(format("Body of {} ended early: got {} of the {} bytes it declared",
+                    object_name, off, rep.content_length));
+        }
+        // Only once the attempt is known to have delivered its range. Billing a
+        // truncated attempt's partial bytes here and the range again on the retry
+        // would inflate the read-throughput metric exactly when progress stalls.
+        gc.read_bytes += off;
     }, expected, as);
     ret->trim(off);
     s3l.trace("Consumed {} bytes of {}", off, object_name);
