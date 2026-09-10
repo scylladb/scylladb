@@ -5,6 +5,7 @@
  */
 
 #include <boost/test/unit_test.hpp>
+#include <fmt/ranges.h>
 #include <boost/range/iterator_range_core.hpp>
 #include <memory>
 #include <utility>
@@ -526,5 +527,202 @@ SEASTAR_TEST_CASE(gc_tombstone_with_grace_seconds_test) {
         auto descriptor = cs.get_sstables_for_compaction(cf.as_compaction_group_view(), *control).get();
         BOOST_REQUIRE_EQUAL(descriptor.sstables.size(), 1);
         BOOST_REQUIRE_EQUAL(descriptor.sstables.front(), sst);
+    });
+}
+
+// Parameters for add_input_sstable(). The defaults produce the mix the garbage
+// collection tests need: a run in which most keys carry a tombstone that has
+// already expired, so that compacting the run has something to collect.
+struct input_sstable_params {
+    // One key in every live_every holds live data, the rest hold expired
+    // tombstones. Pass 1 for an all-live sstable.
+    int live_every = 4;
+    sstring live_value = "live_data";
+    api::timestamp_type live_ts = 100;
+    // Has to exceed live_ts where the tombstones are meant to shadow live data
+    // held by another sstable.
+    api::timestamp_type tombstone_ts = 100;
+};
+
+// Builds an sstable covering dks[first_key, first_key + nkeys) as described by
+// params, adds it to the table's sstable set and tags it with run_id, so that
+// a compaction over several such sstables takes the incremental, and hence the
+// garbage collecting, path.
+static shared_sstable add_input_sstable(test_env& env, table_for_tests& cf, const schema_ptr& schema,
+        const std::vector<dht::decorated_key>& dks, int first_key, int nkeys,
+        sstables::run_id run_id, input_sstable_params params = {}) {
+    auto& cdef = *schema->get_column_definition("data");
+    utils::chunked_vector<mutation> mutations;
+    for (int j = 0; j < nkeys; j++) {
+        int key_idx = first_key + j;
+        mutation mut(schema, dks.at(key_idx));
+        auto ck = clustering_key::make_empty();
+        if (key_idx % params.live_every == 0) {
+            // Live data. Also what keeps the sstable from being fully expired,
+            // which would take it out of the incremental path entirely.
+            auto live_cell = atomic_cell::make_live(*cdef.type, params.live_ts, serialized(params.live_value));
+            mut.set_clustered_cell(ck, cdef, std::move(live_cell));
+        } else {
+            auto expiration_time = (gc_clock::now() - 2s).time_since_epoch().count();
+            auto tombstone = atomic_cell::make_dead(params.tombstone_ts, gc_clock::time_point(gc_clock::duration(expiration_time)));
+            mut.set_clustered_cell(ck, cdef, std::move(tombstone));
+        }
+        mutations.push_back(std::move(mut));
+    }
+    auto sst = make_sstable_containing(env.make_sst_factory(schema), std::move(mutations));
+    sstables::test(sst).set_run_identifier(run_id);
+    column_family_test(cf).add_sstable(sst).get();
+    return sst;
+}
+
+// Reproducer for SCYLLADB-4014.
+//
+// An incremental compaction hands the garbage-collected (GC) sstables it
+// produces to the replacer in compaction_completion_desc::new_gc_sstables, and
+// sstable_list_updater::prepare() attaches them to the compaction's own group.
+// They stay in the table's sstable set until every overlapping input has been
+// exhausted, and are then released by the same compaction as old_sstables.
+//
+// While they are attached they must be announced through
+// compaction_task_executor::on_replacement::on_addition(), whose contract is
+// "the new sstables to be added to the table's sstable set", because that is
+// what registers them as compacting.  The compaction manager's replacer spells
+// out why right above the call: a regular compaction skips the sstables that
+// are being compacted, so an sstable sitting in the main set unregistered can
+// be picked up by another compaction and compacted away.  The owning
+// compaction then fails to remove it and aborts with
+// "Unable to remove input SSTable ... that belongs to group id N".
+//
+// The regular outputs are shielded twice over, because they also inherit the
+// descriptor's run identifier, which the running task advertises through
+// output_run_id() and get_candidates() filters on.  GC sstables get a run
+// identifier of their own, so on_addition() is the only thing protecting them.
+//
+// This test runs a real compaction through
+// compaction_task_executor::compact_sstables(), i.e. through the compaction
+// manager's own replacer, records everything the replacer announces, and
+// checks after every replacement that each GC sstable in the group's sstable
+// set has been announced.
+class gc_sstable_registration_task : public compaction::compaction_task_executor {
+public:
+    // Called after each replacement, with the sstables announced so far.
+    using check_fn = std::function<void(const std::unordered_set<shared_sstable>&)>;
+
+private:
+    compaction::compaction_descriptor _descriptor;
+    check_fn _check_after_replacement;
+    gate::holder _hold;
+
+    // Stands in for compacting_sstable_registration::update_me, which is
+    // private to compaction_manager.cc.  It is handed exactly what production
+    // hands the real one.
+    class announcement_recorder : public on_replacement {
+        std::unordered_set<shared_sstable> _announced;
+        check_fn& _check;
+    public:
+        explicit announcement_recorder(check_fn& check) noexcept : _check(check) {}
+
+        void on_addition(const std::vector<shared_sstable>& sstables) override {
+            _announced.insert(sstables.begin(), sstables.end());
+        }
+
+        void on_removal(const std::vector<shared_sstable>& sstables) override {
+            // The sstable set has been updated by now, so this is the state a
+            // concurrent compaction would observe.
+            _check(_announced);
+            for (auto& sst : sstables) {
+                _announced.erase(sst);
+            }
+        }
+    };
+
+public:
+    gc_sstable_registration_task(compaction::compaction_manager& cm, compaction::compaction_group_view& table_s,
+                                 compaction::compaction_descriptor descriptor, check_fn check)
+        : compaction::compaction_task_executor(cm, compaction::throw_if_stopping::no, &table_s,
+                compaction::compaction_type::Compaction, "GC sstable registration test")
+        , _descriptor(std::move(descriptor))
+        , _check_after_replacement(std::move(check))
+        , _hold(_compaction_state.gate.hold())
+    {}
+
+protected:
+    virtual future<compaction::compaction_manager::compaction_stats_opt> do_run() override {
+        // Advertises the output run identifier, so that the compaction behaves
+        // the way a regular compaction does.
+        setup_new_compaction(_descriptor.run_identifier);
+        announcement_recorder on_replace(_check_after_replacement);
+        co_await compact_sstables(std::move(_descriptor), _compaction_data, on_replace);
+        finish_compaction();
+        co_return std::nullopt;
+    }
+};
+
+SEASTAR_TEST_CASE(gc_sstables_are_announced_to_the_compacting_registration_test) {
+    return test_env::do_with_async([](test_env& env) {
+        auto schema = schema_builder("ks", "gc_sstable_registration_test")
+                .with_column("pk", utf8_type, column_kind::partition_key)
+                .with_column("data", utf8_type)
+                .with_tombstone_gc_options(tombstone_gc_options({ {"mode", "immediate"} }))
+                .build();
+
+        constexpr int num_sstables = 16;
+        constexpr int keys_per_sstable = 100;
+        constexpr api::timestamp_type ts = 100;
+
+        auto dks = tests::generate_partition_keys(num_sstables * keys_per_sstable, schema, local_shard_only::yes);
+
+        table_for_tests cf = env.make_table_for_tests(schema);
+        auto close_cf = deferred_stop(cf);
+
+        // Same shape as gc_sstable_incremental_release_test: 3/4 of the keys
+        // are expired tombstones, so the compaction produces GC sstables, and
+        // the inputs share a run identifier so that the incremental, and hence
+        // the garbage collecting, writer is enabled.
+        const auto run_id = sstables::run_id::create_random_id();
+        std::vector<shared_sstable> input_sstables;
+        for (int i = 0; i < num_sstables; i++) {
+            input_sstables.push_back(add_input_sstable(env, cf, schema, dks, i * keys_per_sstable, keys_per_sstable,
+                    run_id, {.live_ts = ts, .tombstone_ts = ts}));
+        }
+
+        auto& table_s = cf.as_compaction_group_view();
+
+        auto is_gc_sstable = [] (const shared_sstable& sst) {
+            return sst->get_origin() == "garbage_collection";
+        };
+
+        size_t max_attached_gc_sstables = 0;
+        std::unordered_set<shared_sstable> unannounced_gc_sstables;
+
+        auto check = [&] (const std::unordered_set<shared_sstable>& announced) {
+            auto main_set = table_s.main_sstable_set().get();
+            size_t attached = 0;
+            for (auto& sst : *main_set->all()) {
+                if (!is_gc_sstable(sst)) {
+                    continue;
+                }
+                ++attached;
+                if (!announced.contains(sst)) {
+                    unannounced_gc_sstables.insert(sst);
+                }
+            }
+            max_attached_gc_sstables = std::max(max_attached_gc_sstables, attached);
+        };
+
+        auto descriptor = compaction::compaction_descriptor(std::move(input_sstables), 1, 512);
+        auto& tcm = env.test_compaction_manager();
+        auto task = make_shared<gc_sstable_registration_task>(tcm.get_compaction_manager(), table_s,
+                std::move(descriptor), check);
+        tcm.perform_compaction(task).get();
+
+        // Guard against the test passing because no GC sstable was ever
+        // attached, which would make the check above vacuous.
+        BOOST_REQUIRE_GT(max_attached_gc_sstables, 0u);
+
+        BOOST_REQUIRE_MESSAGE(unannounced_gc_sstables.empty(),
+                seastar::format("{} GC sstable(s) were attached to the sstable set without being announced to "
+                        "the compacting registration, so a concurrent compaction could remove them: [{}]",
+                        unannounced_gc_sstables.size(), fmt::join(unannounced_gc_sstables, ", ")));
     });
 }
