@@ -32,6 +32,8 @@ enum are_equal { no, yes };
 
 // Calls the provided function on mutation pairs, equal and not equal. Is supposed
 // to exercise all potential ways two mutations may differ.
+// The label param is an optional human readable string describing the mutation pair.
+void for_each_mutation_pair(std::function<void(const mutation&, const mutation&, are_equal, std::string_view label)>);
 void for_each_mutation_pair(std::function<void(const mutation&, const mutation&, are_equal)>);
 
 // Calls the provided function on mutations. Is supposed to exercise as many differences as possible.
