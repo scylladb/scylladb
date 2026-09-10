@@ -522,7 +522,6 @@ bool hint_sender::send_one_file(const sstring& fname) {
     } catch (db::commitlog::segment_error& ex) {
         manager_logger.error("hint_sender[{}]:send_one_file: Segment error in {}: {}. Last not complete position={}",
                 _ep_key, fname, ex.what(), _last_not_complete_rp);
-        ctx_ptr->segment_replay_failed = false;
         corrupted_segment = true;
         ++this->shard_stats().corrupted_files;
     } catch  (const canceled_draining_exception&) {
@@ -536,21 +535,6 @@ bool hint_sender::send_one_file(const sstring& fname) {
     // wait till all background hints sending is complete
     ctx_ptr->file_send_gate.close().get();
 
-    // Hints are sent asynchronously, so the following scenario could happen:
-    //
-    // 1. N + 1 hints are dispatched to be sent.
-    // 2. N pass through the semaphore, while 1 waits on it. This suspends
-    //    the commitlog::read_log_file loop above.
-    // 3. Those N hints time out and the 1 remaining hint finally gets through.
-    //    The commitlog loop is unblocked. However, since
-    //    ctx_ptr->segment_replay_failed == true, the loop just browses the
-    //    rest of the commitlog, not sending anything. This is not throttled.
-    // 4. The commitlog loop encounters a corrupted entry and throws an exception.
-    //    The exception handler sets ctx_ptr->segment_replay_failed to false.
-    // 5. We block in closing the send gate. That eventually happens when the
-    //    last hint times out. But what it also does is set
-    //    ctx_ptr->segment_replay_failed to true again.
-    //
     // We must remove the segment, so we cannot return yet. The code below
     // assumes there was no corruption, so we embrace it with an if.
     // Refs: SCYLLADB-4294.
