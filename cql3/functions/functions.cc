@@ -113,6 +113,7 @@ functions::init() noexcept {
 
     declare(make_bm25_function());
     declare(make_bm25_score_function());
+    declare(make_bm25_rank_function());
 
     // also needed for smp:
 #if 0
