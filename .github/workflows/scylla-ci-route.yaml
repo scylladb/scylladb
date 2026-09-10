@@ -199,6 +199,19 @@ jobs:
             BASE_BRANCH=$(echo "$PR_JSON" | jq -r '.base.ref')
             PR_URL=$(echo "$PR_JSON" | jq -r '.html_url')
             PR_LABELS=$(echo "$PR_JSON" | jq -r '[.labels[].name] | join(",")')
+          elif [ "$EVENT_NAME" = "pull_request_target" ] && [ "$EVENT_ACTION" = "labeled" ]; then
+            # Re-fetch rather than trusting the labeled-event snapshot: the PR
+            # may have been marked ready for review between the label event
+            # being queued and this run starting, and a stale draft=true would
+            # wrongly grant a thin CI run to what is now a ready PR.
+            PR_NUMBER="$PR_NUMBER_FROM_EVENT"
+            PR_JSON=$(gh_api_retry "repos/$PR_REPO/pulls/$PR_NUMBER")
+            PR_SHA=$(echo "$PR_JSON" | jq -r '.head.sha')
+            PR_USER=$(echo "$PR_JSON" | jq -r '.user.login')
+            PR_DRAFT=$(echo "$PR_JSON" | jq -r '.draft')
+            BASE_BRANCH=$(echo "$PR_JSON" | jq -r '.base.ref')
+            PR_URL=$(echo "$PR_JSON" | jq -r '.html_url')
+            PR_LABELS=$(echo "$PR_JSON" | jq -r '[.labels[].name] | join(",")')
           else
             PR_NUMBER="$PR_NUMBER_FROM_EVENT"
             PR_SHA="$PR_SHA_FROM_EVENT"
