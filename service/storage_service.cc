@@ -7080,6 +7080,9 @@ void storage_service::init_messaging_service() {
         });
     });
     ser::storage_service_rpc_verbs::register_tablet_repair(&_messaging.local(), [this] (raft::server_id dst_id, locator::global_tablet_id tablet, rpc::optional<service::session_id> session_id, rpc::optional<tablet_repair_flush_info> flush) {
+        if (utils::get_local_injector().enter("tablet_repair_ignore_flush_mode")) {
+            flush = std::nullopt;
+        }
         return handle_raft_rpc(dst_id, [tablet, session_id = session_id.value_or(service::session_id::create_null_id()), flush] (auto& ss) -> future<service::tablet_operation_repair_result> {
             auto res = co_await ss.repair_tablet(tablet, session_id, flush);
             co_return res;
