@@ -1746,6 +1746,7 @@ deps['test/boost/combined_tests'] += [
     'test/boost/group0_cmd_merge_test.cc',
     'test/boost/group0_test.cc',
     'test/boost/group0_voter_calculator_test.cc',
+    'test/boost/hints_batchlog_flusher_test.cc',
     'test/boost/index_with_paging_test.cc',
     'test/boost/json_cql_query_test.cc',
     'test/boost/large_data_guardrail_test.cc',
