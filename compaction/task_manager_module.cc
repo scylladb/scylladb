@@ -603,25 +603,28 @@ tasks::is_user_task global_cleanup_compaction_task_impl::is_user_task() const no
     return tasks::is_user_task::yes;
 }
 
-future<> global_cleanup_compaction_task_impl::run() {
-    auto parent_info = info();
-    co_await _db.invoke_on_all([&] (replica::database& db) -> future<> {
-        co_await db.flush_all_tables();
+static future<> run_global_cleanup_compaction(sharded<replica::database>& db, tasks::task_info task_info) {
+    co_await db.invoke_on_all([&] (replica::database& local_db) -> future<> {
+        co_await local_db.flush_all_tables();
         // Local keyspaces do not require cleanup.
         // Keyspaces using tablets do not support cleanup.
-        const auto keyspaces = _db.local().get_non_local_vnode_based_strategy_keyspaces();
+        const auto keyspaces = db.local().get_non_local_vnode_based_strategy_keyspaces();
         co_await coroutine::parallel_for_each(keyspaces, [&] (const sstring& ks) -> future<> {
             std::vector<table_info> tables;
-            const auto& cf_meta_data = db.find_keyspace(ks).metadata().get()->cf_meta_data();
+            const auto& cf_meta_data = local_db.find_keyspace(ks).metadata().get()->cf_meta_data();
             for (auto& [name, schema] : cf_meta_data) {
                 tables.emplace_back(name, schema->id());
             }
-            auto& module = db.get_compaction_manager().get_task_manager_module();
+            auto& module = local_db.get_compaction_manager().get_task_manager_module();
             auto task = co_await module.make_and_start_task<shard_cleanup_keyspace_compaction_task_impl>(
-                parent_info, ks, _status.id, db, std::move(tables));
+                task_info, ks, task_info.get_id(), local_db, std::move(tables));
             co_await task->done();
         });
     });
+}
+
+future<> global_cleanup_compaction_task_impl::run() {
+    return run_global_cleanup_compaction(_db, info());
 }
 
 future<std::optional<double>> global_cleanup_compaction_task_impl::expected_total_workload() const {
