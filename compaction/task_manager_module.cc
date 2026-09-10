@@ -704,22 +704,26 @@ future<tasks::task_manager::task_ptr> task_manager_module::start_shard_cleanup_c
     });
 }
 
-future<> table_cleanup_keyspace_compaction_task_impl::run() {
-    co_await wait_for_your_turn(_cv, _current_task, _status.id);
+static future<> run_table_cleanup_compaction(replica::database& db, std::string keyspace, const table_info& ti, seastar::condition_variable& cv, current_task_type& current_task, tasks::task_info task_info) {
+    co_await wait_for_your_turn(cv, current_task, task_info.get_id());
     // Note that we do not hold an effective_replication_map_ptr throughout
     // the cleanup operation, so the topology might change.
     // Since clenaup is an admin operation required for vnodes,
     // it is the responsibility of the system operator to not
     // perform additional incompatible range movements during cleanup.
     auto get_owned_ranges = [&] (std::string_view ks_name) -> future<owned_ranges_ptr> {
-        const auto& erm = _db.find_keyspace(ks_name).get_static_effective_replication_map();
-        co_return compaction::make_owned_ranges_ptr(co_await _db.get_keyspace_local_ranges(erm));
+        const auto& erm = db.find_keyspace(ks_name).get_static_effective_replication_map();
+        co_return compaction::make_owned_ranges_ptr(co_await db.get_keyspace_local_ranges(erm));
     };
-    auto owned_ranges_ptr = co_await get_owned_ranges(_status.keyspace);
-    co_await run_on_table("force_keyspace_cleanup", _db, _status.keyspace, _ti, [&] (replica::table& t) {
+    auto owned_ranges_ptr = co_await get_owned_ranges(keyspace);
+    co_await run_on_table("force_keyspace_cleanup", db, keyspace, ti, [&] (replica::table& t) {
         // skip the flush, as the keyspace cleanup compaction task should have done this.
-        return t.perform_cleanup_compaction(owned_ranges_ptr, info(), replica::table::do_flush::no);
+        return t.perform_cleanup_compaction(owned_ranges_ptr, task_info, replica::table::do_flush::no);
     });
+}
+
+future<> table_cleanup_keyspace_compaction_task_impl::run() {
+    return run_table_cleanup_compaction(_db, _status.keyspace, _ti, _cv, _current_task, info());
 }
 
 future<std::optional<double>> table_cleanup_keyspace_compaction_task_impl::expected_total_workload() const {
