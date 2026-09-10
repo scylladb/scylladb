@@ -56,7 +56,6 @@ async def dead_entry_in_sstables(cql, view):
             and (r.pk, r.c1, r.c2, r.c3) == DEAD_ENTRY]
 
 
-@pytest.mark.xfail(reason="SCYLLADB-4337", strict=True)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_view_build_suspends_tombstone_gc(manager: ScyllaClusterManager):
     server = (await manager.servers_add(1, cmdline=['--tablets-initial-scale-factor', '1']))[0]
@@ -124,7 +123,6 @@ async def test_view_build_suspends_tombstone_gc(manager: ScyllaClusterManager):
         assert await index_entries(cql, view) == LIVE_ENTRIES
 
 
-@pytest.mark.xfail(reason="SCYLLADB-4337", strict=True)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_view_build_suspends_tombstone_gc_vnodes(manager: ScyllaClusterManager):
     """The same race with the vnodes view builder, which reports its progress per node."""
