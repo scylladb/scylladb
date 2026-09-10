@@ -808,7 +808,7 @@ rest_cleanup_all(http_context& ctx, sharded<service::storage_service>& ss, std::
         // fall back to the local cleanup if local cleanup is requested
         auto& db = ctx.db;
         auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
-        auto task = co_await compaction_module.make_and_start_task<compaction::global_cleanup_compaction_task_impl>(tasks::make_empty_task_info(), db);
+        auto task = co_await compaction_module.start_global_cleanup_compaction(db);
         co_await task->done();
 
         // Mark this node as clean
