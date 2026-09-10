@@ -152,6 +152,9 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
     const auto my_id = to_server_id(tm->get_my_id());
 
 
+    co_await utils::get_local_injector().inject("sc_start_raft_group_pause",
+            utils::wait_for_message(std::chrono::minutes(1)));
+
     auto* commitlog = _db.commitlog();
     SCYLLA_ASSERT(commitlog);
     auto storage = std::make_unique<raft_groups_storage>(_qp, group_id, my_id, this_shard_id(),
@@ -251,6 +254,9 @@ void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_
 
         co_await _raft_gr.abort_server(id);
         logger.debug("schedule_raft_group_deletion(): group id {}: server aborted", id);
+
+        co_await utils::get_local_injector().inject("sc_raft_group_deletion_pause",
+                utils::wait_for_message(std::chrono::minutes(1)));
 
         co_await std::move(gate_fut);
         logger.debug("schedule_raft_group_deletion(): group id {}: gate closed", id);

@@ -26,6 +26,8 @@
 #include "test/lib/simple_schema.hh"
 #include "test/lib/key_utils.hh"
 #include "test/lib/test_utils.hh"
+#include "test/lib/eventually.hh"
+#include "test/lib/error_injection.hh"
 #include "test/lib/topology_builder.hh"
 #include "db/config.hh"
 #include "cql3/util.hh"
@@ -49,6 +51,8 @@
 #include "service/topology_coordinator.hh"
 #include "service/topology_state_machine.hh"
 #include "service/migration_manager.hh"
+#include "service/strong_consistency/coordinator.hh"
+#include "service/strong_consistency/groups_manager.hh"
 
 #include <boost/regex.hpp>
 #include <atomic>
@@ -8354,6 +8358,144 @@ SEASTAR_THREAD_TEST_CASE(test_tablet_version_changes_after_tablet_migration) {
         // However, that's a highly unlikely scenario.
         BOOST_REQUIRE_MESSAGE(tv1 != tv2, "Tablet version was supposed to change after tablet migration");
     }, std::move(cfg)).get();
+}
+
+// A tablet leaving a shard deletes its raft group and destroys the raft server.
+// If the tablet comes back before the deletion finishes, the group keeps its
+// bookkeeping entry, whose server pointer still refers to the destroyed server
+// until the restarted group publishes a new one - which happens only after
+// several preemption points. Routing a request for the tablet reads that
+// pointer in the meantime, which crashes the node.
+//
+// Reproduces SCYLLADB-4378.
+SEASTAR_THREAD_TEST_CASE(test_tablet_version_during_raft_group_restart) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    testlog.info("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev,sanitize).");
+#else
+    cql_test_config cfg = tablet_cql_test_config();
+    cfg.db_config->experimental_features(
+        {db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES},
+        db::config::config_source::CommandLine
+    );
+
+    do_with_cql_env_thread([] (cql_test_env& e) {
+        // Locks the topology so that the balancer does not move the tablet
+        // behind our back.
+        topology_builder topo(e);
+
+        // The table is created while the local host is the only one, so its
+        // single tablet has to land here. CREATE TABLE waits for the raft group
+        // to start, so the server pointer this test races with is published.
+        const sstring ks = "ks_sc_restart";
+        e.execute_cql(format("create keyspace {} with replication = {{'class': 'NetworkTopologyStrategy',"
+                             " 'replication_factor': 1}} and tablets = {{'initial': 1}}"
+                             " and consistency = 'global'", ks)).get();
+        e.execute_cql(format("create table {}.tbl (pk int primary key, v int)", ks)).get();
+        // A second host in the same rack, so the tablet can be moved off this
+        // node and back without changing the replication factor.
+        topo.start_new_dc(e.local_db().get_token_metadata().get_topology().get_location());
+        const auto other_host = topo.add_node();
+
+        const auto table = e.local_db().find_schema(ks, "tbl")->id();
+        // The table has one tablet, so any token belongs to it.
+        const auto token = dht::token{0};
+        // The tablet map below is reached through this pointer, which therefore
+        // has to stay alive for as long as the map is used.
+        const auto tm = e.shared_token_metadata().local().get();
+        const auto& tmap = tm->tablets().get_tablet_map(table);
+        const auto tablet = tmap.get_tablet_id(token);
+        const auto& replicas = tmap.get_tablet_info(tablet).replicas;
+        BOOST_REQUIRE_EQUAL(replicas.size(), 1u);
+        const auto home = replicas[0];
+        const auto group_id = tmap.get_tablet_raft_info(tablet).group_id;
+        BOOST_REQUIRE_EQUAL(home.host, e.local_db().get_token_metadata().get_my_id());
+        testlog.info("Tablet lives on {}, moving it to {} and back", home, other_host);
+
+        const auto move_tablet_to = [&] (tablet_replica replica) {
+            mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+                auto tmap = tmeta.get_tablet_map(table).clone();
+                tmap.set_tablet(tablet, tablet_info{tablet_replica_set{{replica}}});
+                tmeta.set_tablet_map(table, std::move(tmap));
+                co_return;
+            });
+            auto aoe = abort_on_expiry(lowres_clock::now() + std::chrono::seconds(60));
+            auto guard = e.get_raft_group0_client().start_operation(aoe.abort_source()).get();
+            save_token_metadata(e, std::move(guard)).get();
+        };
+
+        // A block that already matches the version reads as "no routing info",
+        // so probe two of them at different nibbles: a group with a leader
+        // answers at least one, a group without a server answers neither.
+        // The version is read on the shard hosting the replica; a request to
+        // any other shard is redirected before the check.
+        const auto version_on_home = [&] {
+            return smp::submit_to(home.shard, [&e, ks, token] -> std::optional<tablet_version> {
+                const auto schema = e.local_db().find_schema(ks, "tbl");
+                const auto& [coordinator, holder] = e.local_qp().acquire_strongly_consistent_coordinator();
+                const auto& groups_manager = coordinator.get().get_groups_manager();
+                for (const auto block : {tablet_version_block{0x00}, tablet_version_block{0x01}}) {
+                    if (const auto info = groups_manager.check_tablet_version(schema->table(), token, block)) {
+                        return info->hash;
+                    }
+                }
+                return std::nullopt;
+            }).get();
+        };
+        auto& injector = utils::get_local_injector();
+        const auto entered = [&] (const char* injection) {
+            return eventually_true([&] { return injector.enter_count_on_all(injection).get() > 0; });
+        };
+        // Both pauses park a raft group fiber, which has to be released on
+        // every exit: a fiber left parked outlives the test and reports its
+        // injection timeout instead of the failure that aborted it.
+        std::optional<scoped_error_injection> deletion_pause, start_pause;
+
+        // The leader is elected asynchronously; without one there is no version
+        // to compute and the test would not reach the pointer at all.
+        BOOST_REQUIRE_MESSAGE(eventually_true([&] { return version_on_home().has_value(); }),
+            "Strongly consistent tablet version was not computed in time");
+
+        // Hold the deletion of the group on the home shard, then bring the
+        // tablet back: the restart is queued behind the paused deletion, so the
+        // group keeps its entry instead of being erased.
+        deletion_pause.emplace("sc_raft_group_deletion_pause");
+        move_tablet_to(tablet_replica{other_host, 0});
+        BOOST_REQUIRE_MESSAGE(entered("sc_raft_group_deletion_pause"),
+            "The raft group of the tablet was not deleted from its shard");
+
+        // Hold the restarted group before it publishes its new server, so the
+        // window stays open while we read.
+        start_pause.emplace("sc_start_raft_group_pause");
+        move_tablet_to(home);
+
+        // Let the deletion run to completion: it destroys the raft server and,
+        // because the restart already replaced the gate, keeps the entry.
+        injector.receive_message_on_all("sc_raft_group_deletion_pause").get();
+        deletion_pause.reset();
+        BOOST_REQUIRE_MESSAGE(entered("sc_start_raft_group_pause"),
+            "The raft group of the tablet was not restarted");
+
+        // The entry is now reachable and its server is gone, so there is no
+        // leader to derive the routing from. Reading it must not touch the
+        // destroyed server.
+        testlog.info("Reading the tablet version while the raft group is restarting");
+        BOOST_REQUIRE(!version_on_home().has_value());
+
+        // Rewriting the tablet map moves the tablet without cleaning up the
+        // group's persisted state, so its commit index outlives its log and the
+        // restarted server refuses to initialise. Drop it, so that the restart
+        // this test released can finish.
+        e.execute_cql(format("delete from system.raft_groups where shard = {} and group_id = {}",
+            home.shard, group_id)).get();
+        injector.receive_message_on_all("sc_start_raft_group_pause").get();
+        start_pause.reset();
+
+        // The restart repopulates the server pointer the fix cleared, so the
+        // group has to become routable again.
+        BOOST_REQUIRE_MESSAGE(eventually_true([&] { return version_on_home().has_value(); }),
+            "The restarted raft group did not become usable again");
+    }, std::move(cfg)).get();
+#endif
 }
 
 // Verifies that load_stats::operator+= correctly invalidates
