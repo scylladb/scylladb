@@ -455,6 +455,9 @@ future<> raft_group0::start_server_for_group0(raft::group_id group0_id, service:
     co_await with_scheduling_group(_sg, [this, &srv_for_group0, group0_id] (this auto self) -> future<> {
         _group0_sm = &dynamic_cast<group0_state_machine&>(srv_for_group0.state_machine);
         co_await _raft_gr.start_server_for_group(std::move(srv_for_group0));
+        if (utils::get_local_injector().is_enabled("group0_fail_before_emplace")) {
+            throw std::runtime_error("injection: group0_fail_before_emplace - simulated failure after server registration");
+        }
         // Set _group0 immediately after the server is registered in _raft_gr._servers.
         // This ensures abort_and_drain()/destroy() can find and clean up the server
         // even if enable_group0_state_machine() or later steps throw.
