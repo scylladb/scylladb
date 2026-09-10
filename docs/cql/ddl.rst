@@ -1146,6 +1146,8 @@ The following tombstone gc modes are available:
 The default tombstone-gc mode is ``repair`` for all tables that use ``NetworkTopologyStrategy`` or ``SimpleStrategy``, except for :term:`Colocated Tables <Colocated Table>`.
 Tables which have a single replica (RF=1) don't need repair (and cannot be repaired either). For such tables, tombstone-gc mode ``repair`` acts the same as ``immediate`` mode would: all tombstones are immediately collectible.
 
+Tombstone GC does not run on a materialized view or a secondary index, in any mode, until the view is built on every node. Its tombstones are kept until then, also while a node that has not finished its part of the build is down. Removing or :doc:`excluding </operating-scylla/nodetool-commands/excludenode>` such a node ends the wait. This includes a node that is joining the cluster. Adding a node suspends tombstone GC on views until they are built on the new node too. :doc:`nodetool viewbuildstatus </operating-scylla/nodetool-commands/viewbuildstatus>` shows the build progress per node.
+
 .. _cql-per-table-tablet-options:
 
 Per-table tablet options
