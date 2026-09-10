@@ -271,6 +271,50 @@ SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_create_large_object, local_gcs_wrappe
     co_await test_read_write_helper(*this, 32*1024*1024 + 357 + 1022*67);
 }
 
+// The download source is the path Data and Index reads take on a gs cluster:
+// object_storage_base::make_source() ignores the file it is handed and always
+// builds one of these.  Sized to need two ranged GETs, so a retried range also
+// has to land in the right place relative to the one after it.
+SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_download_source_truncated_body, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    testlog.debug("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+    co_return;
+#endif
+    auto& c = client();
+    auto name = make_name();
+    std::vector<temporary_buffer<char>> written;
+    constexpr size_t object_size = 8*1024*1024 + 1024;
+
+    objects_to_delete.emplace_back(name);
+    co_await create_object_of_size(c, bucket, name, object_size, &written);
+
+    testlog.info("One truncated range is retried, and the stream still delivers every byte");
+    utils::get_local_injector().enable("gcp_source_truncated_body", true); // one shot
+    co_await compare_object_data(*this, name, std::move(written));
+    BOOST_REQUIRE(!utils::get_local_injector().is_enabled("gcp_source_truncated_body"));
+
+    testlog.info("A range that keeps ending early fails once the retries run out");
+    utils::get_local_injector().enable("gcp_source_truncated_body");
+    try {
+        auto is = seastar::input_stream<char>(c.create_download_source(bucket, name));
+        while (true) {
+            auto buf = co_await is.read();
+            if (buf.empty()) {
+                break;
+            }
+        }
+        BOOST_ERROR("a range that always ends early should not have produced a complete stream");
+    } catch (const storage_io_error& e) {
+        // Expected once the retry budget is spent: send_with_retry() wraps whatever
+        // escapes it, so the caller sees the same error type it saw before this was
+        // made retryable. Check which error it is - a bare type check would also
+        // pass for a missing bucket or a refused credential.
+        BOOST_REQUIRE_EQUAL(e.code().value(), EIO);
+        BOOST_REQUIRE(std::string(e.what()).contains("ended early"));
+    }
+    utils::get_local_injector().disable("gcp_source_truncated_body");
+}
+
 // make_readable_file() is how the sstable layer opens every component it does
 // not stream -- TOC, Statistics, Summary, Filter, Scylla metadata -- and had no
 // coverage at all.
@@ -323,8 +367,7 @@ SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_readable_file_truncated_body, local_g
         BOOST_ERROR("a body that always ends early should not have produced a successful read");
     } catch (const storage_io_error& e) {
         // send_with_retry() wraps whatever escapes it, so the type the caller sees
-        // is unchanged by this becoming retryable. Check which error it is - a bare
-        // type check would also pass for a missing bucket or a refused credential.
+        // is unchanged by this becoming retryable.
         BOOST_REQUIRE_EQUAL(e.code().value(), EIO);
         BOOST_REQUIRE(std::string(e.what()).contains("ended early"));
     }
