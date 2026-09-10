@@ -47,6 +47,7 @@
 #include "utils/http.hh"
 #include "utils/error_injection.hh"
 #include "utils/rjson.hh"
+#include "utils/exceptions.hh"
 
 #include <seastar/core/metrics_api.hh>
 #include <seastar/testing/test_fixture.hh>
@@ -268,6 +269,68 @@ SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_create_small_object, local_gcs_wrappe
 
 SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_create_large_object, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
     co_await test_read_write_helper(*this, 32*1024*1024 + 357 + 1022*67);
+}
+
+// make_readable_file() is how the sstable layer opens every component it does
+// not stream -- TOC, Statistics, Summary, Filter, Scylla metadata -- and had no
+// coverage at all.
+SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_readable_file, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
+    auto& c = client();
+    auto name = make_name();
+    constexpr size_t object_size = 8192;
+
+    objects_to_delete.emplace_back(name);
+    co_await create_object_of_size(c, bucket, name, object_size);
+
+    auto f = c.make_readable_file(bucket, name);
+    BOOST_REQUIRE_EQUAL(co_await f.size(), object_size);
+
+    auto buf = temporary_buffer<char>::aligned(f.memory_dma_alignment(), 4096);
+    BOOST_REQUIRE_EQUAL(co_await f.dma_read(0, buf.get_write(), buf.size()), buf.size());
+
+    // A range running past the end of the object is answered short by design.
+    BOOST_REQUIRE_EQUAL(co_await f.dma_read(object_size - 100, buf.get_write(), buf.size()), 100);
+
+    co_await f.close();
+}
+
+// The retry itself needs the body to be truncated on demand, which only error
+// injection can do.
+SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_readable_file_truncated_body, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    testlog.debug("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+    co_return;
+#endif
+    auto& c = client();
+    auto name = make_name();
+    constexpr size_t object_size = 8192;
+
+    objects_to_delete.emplace_back(name);
+    co_await create_object_of_size(c, bucket, name, object_size);
+
+    auto f = c.make_readable_file(bucket, name);
+    auto buf = temporary_buffer<char>::aligned(f.memory_dma_alignment(), 4096);
+
+    testlog.info("One truncated body is retried, and the read still returns the data");
+    utils::get_local_injector().enable("gcp_client_truncated_body", true); // one shot
+    BOOST_REQUIRE_EQUAL(co_await f.dma_read(0, buf.get_write(), buf.size()), buf.size());
+    BOOST_REQUIRE(!utils::get_local_injector().is_enabled("gcp_client_truncated_body"));
+
+    testlog.info("A body that keeps ending early fails once the retries run out");
+    utils::get_local_injector().enable("gcp_client_truncated_body");
+    try {
+        co_await f.dma_read(0, buf.get_write(), buf.size());
+        BOOST_ERROR("a body that always ends early should not have produced a successful read");
+    } catch (const storage_io_error& e) {
+        // send_with_retry() wraps whatever escapes it, so the type the caller sees
+        // is unchanged by this becoming retryable. Check which error it is - a bare
+        // type check would also pass for a missing bucket or a refused credential.
+        BOOST_REQUIRE_EQUAL(e.code().value(), EIO);
+        BOOST_REQUIRE(std::string(e.what()).contains("ended early"));
+    }
+    utils::get_local_injector().disable("gcp_client_truncated_body");
+
+    co_await f.close();
 }
 
 // SCYLLADB-3889: a zero-length object must finalize the resumable upload with
