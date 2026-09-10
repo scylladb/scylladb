@@ -417,7 +417,7 @@ static sstring print_filtered_alternator_batch_query(const audit_info& audit_inf
                 ++it;
             }
         }
-        return operation + "|" + rjson::print(request);
+        return seastar::format("{}|{}", operation, rjson::print(request));
     } catch (...) {
         // Do not fall back to the unfiltered query: it may contain data for
         // tables that do not match this audit sink.

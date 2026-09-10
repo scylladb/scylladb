@@ -54,10 +54,9 @@ shared_ptr<key_provider> kms_key_provider_factory::get_provider(encryption_conte
     }
 
     auto host = ctxt.get_kms_host(*kms_host);
-    auto id = kms_host.value() 
-        + ":" + oov.master_key.value_or(host->options().master_key)
-        + ":" + oov.aws_assume_role_arn.value_or(host->options().aws_assume_role_arn)
-        ;
+    auto id = seastar::format("{}:{}:{}", kms_host.value(),
+        oov.master_key.value_or(host->options().master_key),
+        oov.aws_assume_role_arn.value_or(host->options().aws_assume_role_arn));
     auto provider = ctxt.get_cached_provider(id);
 
     if (!provider) {

@@ -136,7 +136,7 @@ future<std::optional<tasks::virtual_task_hint>> node_ops_virtual_task::contains(
     if (!entry || !std::holds_alternative<service::topology_request>(entry->request_type)) {
         co_return std::nullopt;
     }
-    auto hint = std::make_optional<tasks::virtual_task_hint>({});
+    auto hint = std::make_optional(tasks::virtual_task_hint{});
     if (entry->target_host) {
         hint->node_id = locator::host_id(*entry->target_host);
     } else {
