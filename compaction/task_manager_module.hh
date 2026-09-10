@@ -117,32 +117,6 @@ protected:
     virtual future<> run() override = 0;
 };
 
-class table_cleanup_keyspace_compaction_task_impl : public cleanup_compaction_task_impl {
-private:
-    replica::database& _db;
-    table_info _ti;
-    seastar::condition_variable& _cv;
-    current_task_type& _current_task;
-public:
-    table_cleanup_keyspace_compaction_task_impl(tasks::task_manager::module_ptr module,
-            std::string keyspace,
-            std::string table,
-            tasks::task_id parent_id,
-            replica::database& db,
-            table_info ti,
-            seastar::condition_variable& cv,
-            current_task_type& current_task) noexcept
-        : cleanup_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, "table", std::move(keyspace), std::move(table), "", parent_id)
-        , _db(db)
-        , _ti(std::move(ti))
-        , _cv(cv)
-        , _current_task(current_task)
-    {}
-protected:
-    virtual future<> run() override;
-    future<std::optional<double>> expected_total_workload() const override;
-};
-
 class offstrategy_compaction_task_impl : public compaction_task_impl {
 public:
     offstrategy_compaction_task_impl(tasks::task_manager::module_ptr module,
@@ -607,6 +581,9 @@ public:
 
     // Starts a cleanup compaction of the given tables of a keyspace on this shard.
     future<tasks::task_manager::task_ptr> start_shard_cleanup_compaction(replica::database& db, std::string keyspace, const std::vector<table_info>& table_infos, tasks::task_info parent_info);
+
+    // Starts a cleanup compaction of a single table on this shard, once the turn is taken by the created task.
+    future<tasks::task_manager::task_ptr> start_table_cleanup_compaction(replica::database& db, std::string keyspace, const table_info& info, compaction_turn& turn, tasks::task_info parent_info);
 };
 
 class regular_compaction_task_impl : public compaction_task_impl {
