@@ -396,14 +396,16 @@ future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
         future<> add_entry_result = co_await coroutine::as_future(
             op->raft_server.server().add_entry(std::move(raft_cmd),
                 raft::wait_type::committed,
-                &aoe.abort_source()));
+                &aoe.abort_source(),
+                ts_with_term->term));
 
         if (!add_entry_result.failed()) {
             co_return std::monostate{};
         }
 
         auto ex = std::move(add_entry_result).get_exception();
-        if (try_catch<raft::not_a_leader>(ex) || try_catch<raft::dropped_entry>(ex)) {
+        if (try_catch<raft::not_a_leader>(ex) || try_catch<raft::dropped_entry>(ex)
+                || try_catch<raft::term_changed>(ex)) {
             logger.debug("mutate(): add_entry, got retriable error {}, table {}.{}, {}",
                 ex, schema->ks_name(), schema->cf_name(), state_fmt);
 

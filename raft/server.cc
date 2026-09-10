@@ -698,6 +698,9 @@ future<> server_impl::wait_for_entry(entry_id eid, wait_type type, seastar::abor
 }
 
 future<entry_id> server_impl::add_entry_on_leader(command cmd, seastar::abort_source* as, std::optional<term_t> append_in_term) {
+    co_await utils::get_local_injector().inject("block_raft_add_entry_before_waiting_for_memory",
+            utils::wait_for_message(std::chrono::minutes(5)));
+
     // Wait for sufficient memory to become available
     semaphore_units<> memory_permit;
     while (true) {
