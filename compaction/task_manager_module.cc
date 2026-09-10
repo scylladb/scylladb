@@ -583,16 +583,19 @@ tasks::is_user_task cleanup_keyspace_compaction_task_impl::is_user_task() const 
     return _is_user_task;
 }
 
-future<> cleanup_keyspace_compaction_task_impl::run() {
-    auto parent_info = info();
-    co_await _db.invoke_on_all([&] (replica::database& db) -> future<> {
-        if (_flush_mode == flush_mode::all_tables) {
-            co_await db.flush_all_tables();
+static future<> run_cleanup_keyspace_compaction(sharded<replica::database>& db, std::string keyspace, const std::vector<table_info>& tables, flush_mode fm, tasks::task_info task_info) {
+    co_await db.invoke_on_all([&] (replica::database& local_db) -> future<> {
+        if (fm == flush_mode::all_tables) {
+            co_await local_db.flush_all_tables();
         }
-        auto& module = db.get_compaction_manager().get_task_manager_module();
-        auto task = co_await module.make_and_start_task<shard_cleanup_keyspace_compaction_task_impl>(parent_info, _status.keyspace, _status.id, db, _table_infos);
+        auto& module = local_db.get_compaction_manager().get_task_manager_module();
+        auto task = co_await module.make_and_start_task<shard_cleanup_keyspace_compaction_task_impl>(task_info, keyspace, task_info.get_id(), local_db, tables);
         co_await task->done();
     });
+}
+
+future<> cleanup_keyspace_compaction_task_impl::run() {
+    return run_cleanup_keyspace_compaction(_db, _status.keyspace, _table_infos, _flush_mode, info());
 }
 
 future<std::optional<double>> cleanup_keyspace_compaction_task_impl::expected_total_workload() const {
