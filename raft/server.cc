@@ -50,6 +50,11 @@ struct awaited_index {
 };
 
 struct awaited_conf_change {
+    // Index of the joint configuration entry whose non-joint successor is
+    // being waited for. Every committed configuration above it is either that
+    // joint one or something newer, which is what lets a snapshot's own
+    // configuration say whether the change went through.
+    index_t joint_idx;
     seastar::promise<> promise;
     optimized_optional<abort_source::subscription> abort;
 };
@@ -1198,6 +1203,38 @@ future<> server_impl::process_fsm_output(index_t& last_stable, fsm_output&& batc
             // commit waiters dropped in index order, which notify_waiters()
             // asserts.
             drop_waiters(_awaited_commits, &snp);
+            if (_non_joint_conf_commit_promise && !snp.config.is_joint() &&
+                    snp.idx > _non_joint_conf_commit_promise->joint_idx) {
+                // A configuration change is in progress here, and the
+                // snapshot says it has gone through. snp.config is the
+                // configuration committed as of snp.idx, and the joint entry
+                // this change appended is below that, so its own fate was
+                // decided by the drop above. Either it committed here, and
+                // then a non-joint configuration committed above it can only
+                // be the C_new entry the fsm appends when a joint
+                // configuration commits; or it was replaced, and
+                // set_configuration() is about to throw out of its first wait
+                // and discard the value set here.
+                //
+                // And this is the only sign of it we will get. That entry is
+                // gone with the log this snapshot replaced, so no committed
+                // batch will ever carry it (see fsm::get_output(), which
+                // reports from above the snapshot index), and set_configuration()
+                // would wait on its promise until the server was aborted.
+                //
+                // The index has to be compared: the promise is engaged before
+                // the joint entry is known committed, so a snapshot that does
+                // not reach it can arrive while the change is pending. The
+                // configuration committed at such a snapshot is the one the
+                // change is replacing, and says nothing about the change --
+                // whose joint entry went with the log the snapshot replaced,
+                // leaving its commit waiter to be failed once the index is
+                // committed by whoever took over.
+                logger.trace("[{}] io_fiber: snapshot {} at idx {} carries a non-joint configuration,"
+                        " completing the configuration change at idx {}",
+                        _tag, snp.id, snp.idx, _non_joint_conf_commit_promise->joint_idx);
+                std::exchange(_non_joint_conf_commit_promise, std::nullopt)->promise.set_value();
+            }
             co_await _apply_entries.push_eventually(std::move(snp));
         }
     }
@@ -1223,6 +1260,17 @@ future<> server_impl::process_fsm_output(index_t& last_stable, fsm_output&& batc
 
         last_stable = (*entries.crbegin())->idx;
         _stats.persisted_log_entries += entries.size();
+
+        // Lets a test hold the io fiber on the batch that appends the non-joint
+        // configuration entry, which the fsm produced together with the commit
+        // of the joint one. Held here the entry is persisted but not yet sent
+        // (the messages go out below), so it can never commit on this server,
+        // and neither can any successor of it -- which is the only way to reach
+        // the window where a snapshot is what carries the change through.
+        if (_non_joint_conf_commit_promise && last_stable > _non_joint_conf_commit_promise->joint_idx) {
+            co_await utils::get_local_injector().inject("block_raft_io_fiber_at_non_joint_conf",
+                    utils::wait_for_message(std::chrono::minutes(5)));
+        }
     }
 
     // Update RPC server address mappings. Add servers which are joining
@@ -1833,7 +1881,7 @@ future<> server_impl::set_configuration(config_member_set c_new, seastar::abort_
     // would be the one corresponding to our joint configuration,
     // no matter if the leader changed in the meantime.
 
-    auto f = _non_joint_conf_commit_promise.emplace().promise.get_future();
+    auto f = _non_joint_conf_commit_promise.emplace(awaited_conf_change{.joint_idx = e.idx}).promise.get_future();
     if (as) {
         _non_joint_conf_commit_promise->abort = as->subscribe([this, idx = e.idx, term = e.term] noexcept {
             // If we're inside this callback, the subscription wasn't destroyed yet.
@@ -1857,6 +1905,14 @@ future<> server_impl::set_configuration(config_member_set c_new, seastar::abort_
         });
         throw;
     }
+
+    // Lets a test hold the caller here: the joint configuration is committed
+    // and the non-joint one is still pending, which is the window in which a
+    // snapshot can be the only thing that carries the change through (see
+    // process_fsm_output()).
+    co_await utils::get_local_injector().inject("block_raft_set_configuration_before_non_joint",
+            utils::wait_for_message(std::chrono::minutes(5)));
+
     co_await std::move(f);
 }
 
