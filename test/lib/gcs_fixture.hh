@@ -48,6 +48,11 @@ public:
     const std::string& project() const;
     const std::string& bucket() const;
 
+    // True when uploads go through test/pylib/gcs_upload_validator.py, i.e. the
+    // endpoint is the local mock and GCP_STORAGE_SKIP_UPLOAD_VALIDATOR is unset.
+    // Only then can a test arm a fault over the validator's control path.
+    bool validating_uploads() const;
+
     void add_object_to_delete(const std::string&);
 
     seastar::future<> setup();
@@ -71,6 +76,8 @@ public:
     ~local_gcs_wrapper();
 
     utils::gcp::storage::client& client() const;
+    bool validating_uploads() const;
+
     std::string endpoint;
     std::string project;
     std::string bucket;
