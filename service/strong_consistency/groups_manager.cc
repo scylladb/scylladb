@@ -258,6 +258,7 @@ void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_
         co_await std::move(state.leader_info_updater);
 
         _raft_gr.destroy_server(id);
+        state.server = nullptr;
         logger.info("schedule_raft_group_deletion(): raft server for group id {} is destroyed", id);
 
         // We need to erase the raft group state only if we are still the last operation on it.
