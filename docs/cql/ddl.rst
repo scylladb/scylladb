@@ -613,7 +613,7 @@ modifiers:
 
 ``TTL``
     declares the column as being the expiration-time column for the
-    `per-row TTL <https://docs.scylladb.com/stable/cql/cql-extensions.html#per-row-ttl>`_
+    :ref:`Per-Row TTL <per-row-ttl>`
     feature.
 
 ``STATIC``
@@ -1283,7 +1283,7 @@ The ``ALTER TABLE`` statement can:
 - Change or add any of the ``Encryption options`` above.
 - Change or add any of the :ref:`CDC options <cdc-options>` above.
 - Change or add per-partition rate limits. See :ref:`Limiting the rate of requests per partition <ddl-per-parition-rate-limit>`.
-- Enable `per-row TTL <https://docs.scylladb.com/stable/cql/cql-extensions.html#per-row-ttl>`_
+- Enable :ref:`Per-Row TTL <per-row-ttl>`
   using the given column as the expiration-time column, or disable per-row
   TTL on this table. If per-row TTL is already enabled, to change the choice
   of expiration-time column you must first disable per-row TTL and then
