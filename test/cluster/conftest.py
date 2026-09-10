@@ -6,6 +6,8 @@
 # This file configures pytest for all tests in this directory, and also
 # defines common test fixtures for all of them to use
 
+from __future__ import annotations
+
 import asyncio
 import sys
 import tempfile
