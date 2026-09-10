@@ -836,11 +836,138 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
 
 future<> storage_service::topology_transition(state_change_hint hint) {
     SCYLLA_ASSERT(this_shard_id() == 0);
+    const bool tablets_changed = hint.tablets_hint.has_value();
     co_await topology_state_load(std::move(hint)); // reload new state
+    if (!tablets_changed) {
+        // A tablets change reloads the view building state, which recomputes this.
+        co_await update_built_views(co_await _sys_ks.local().get_view_build_status_map());
+    }
 
     _topology_state_machine.event.broadcast();
 }
 
+<<<<<<< HEAD
+||||||| parent of 2aedfc7da4 (storage_service: suspend tombstone GC on views until they are built everywhere)
+future<> storage_service::view_building_state_load() {
+    rtlogger.debug("reload view building state");
+
+    auto filter_vnode_keyspace = [this] (std::string_view ks_name) {
+        // If the keyspace doesn't exist, also filter it out.
+        // It should be entry from vnode view, which hasn't been cleaned up yet.
+        // Entries from tablet-views should be removed in the same batch as drop keyspace/view mutations.
+        return _db.local().has_keyspace(ks_name) && _db.local().find_keyspace(ks_name).uses_tablets();
+    };
+
+
+    auto vb_tasks = co_await _sys_ks.local().get_view_building_tasks();
+    auto processing_base_table = co_await _sys_ks.local().get_view_building_processing_base_id();
+
+    std::map<table_id, std::vector<table_id>> views_per_base;
+    auto views = _db.local().get_views()
+        | std::views::filter([&] (const view_ptr& v) { return filter_vnode_keyspace(v->ks_name()); })
+        | std::views::transform([] (const view_ptr& v) { return std::make_pair(v->view_info()->base_id(), v->id()); });
+    for (const auto& [base_id, view_id]: views) {
+        views_per_base[base_id].push_back(view_id);
+    }
+
+    auto status_map = co_await _sys_ks.local().get_view_build_status_map()
+        | std::views::filter([&] (const auto& e) { return filter_vnode_keyspace(e.first.first); })
+        | std::views::transform([this] (const auto& e) {        // convert (ks_name, view_name) to table_id
+            auto id = _db.local().find_schema(e.first.first, e.first.second)->id();
+            return std::make_pair(id, std::move(e.second));
+        })
+        | std::ranges::to<db::view::views_state::view_build_status_map>();
+
+    db::view::view_building_state building_state {std::move(vb_tasks), std::move(processing_base_table)};
+    db::view::views_state views_state {std::move(views_per_base), std::move(status_map)};
+
+    _view_building_state_machine.building_state = std::move(building_state);
+    _view_building_state_machine.views_state = std::move(views_state);
+    ++_view_building_state_machine.version;
+}
+
+future<> storage_service::view_building_transition() {
+    SCYLLA_ASSERT(this_shard_id() == 0);
+    co_await view_building_state_load();
+
+    _view_building_state_machine.event.broadcast();
+}
+
+=======
+future<> storage_service::update_built_views(const db::system_keyspace::view_build_status_map& statuses) {
+    const auto& topology = get_token_metadata().get_topology();
+    std::unordered_set<table_id> built_views;
+    for (const view_ptr& view : _db.local().get_views()) {
+        auto view_statuses = statuses.find({view->ks_name(), view->cf_name()});
+        bool built = view_statuses != statuses.end();
+        // A joining node counts from the start. The tablets coordinator gives it
+        // status rows only when it turns normal, so a bootstrap keeps the
+        // tombstones of every tablets view until it completes.
+        topology.for_each_node([&] (const locator::node& node) {
+            if (!built || node.is_excluded()) {
+                return;
+            }
+            auto it = view_statuses->second.find(node.host_id());
+            built = it != view_statuses->second.end() && it->second == db::view::build_status::SUCCESS;
+        });
+        if (built) {
+            built_views.insert(view->id());
+        }
+    }
+    rtlogger.debug("views built on every node, tombstone gc not suspended: {}", built_views);
+    co_await _db.invoke_on_all([&built_views] (replica::database& db) {
+        db.get_compaction_manager().get_shared_tombstone_gc_state().set_built_views(built_views);
+    });
+}
+
+future<> storage_service::view_building_state_load() {
+    rtlogger.debug("reload view building state");
+
+    auto filter_vnode_keyspace = [this] (std::string_view ks_name) {
+        // If the keyspace doesn't exist, also filter it out.
+        // It should be entry from vnode view, which hasn't been cleaned up yet.
+        // Entries from tablet-views should be removed in the same batch as drop keyspace/view mutations.
+        return _db.local().has_keyspace(ks_name) && _db.local().find_keyspace(ks_name).uses_tablets();
+    };
+
+
+    auto vb_tasks = co_await _sys_ks.local().get_view_building_tasks();
+    auto processing_base_table = co_await _sys_ks.local().get_view_building_processing_base_id();
+
+    std::map<table_id, std::vector<table_id>> views_per_base;
+    auto views = _db.local().get_views()
+        | std::views::filter([&] (const view_ptr& v) { return filter_vnode_keyspace(v->ks_name()); })
+        | std::views::transform([] (const view_ptr& v) { return std::make_pair(v->view_info()->base_id(), v->id()); });
+    for (const auto& [base_id, view_id]: views) {
+        views_per_base[base_id].push_back(view_id);
+    }
+
+    auto statuses = co_await _sys_ks.local().get_view_build_status_map();
+    co_await update_built_views(statuses);
+    auto status_map = statuses
+        | std::views::filter([&] (const auto& e) { return filter_vnode_keyspace(e.first.first); })
+        | std::views::transform([this] (const auto& e) {        // convert (ks_name, view_name) to table_id
+            auto id = _db.local().find_schema(e.first.first, e.first.second)->id();
+            return std::make_pair(id, std::move(e.second));
+        })
+        | std::ranges::to<db::view::views_state::view_build_status_map>();
+
+    db::view::view_building_state building_state {std::move(vb_tasks), std::move(processing_base_table)};
+    db::view::views_state views_state {std::move(views_per_base), std::move(status_map)};
+
+    _view_building_state_machine.building_state = std::move(building_state);
+    _view_building_state_machine.views_state = std::move(views_state);
+    ++_view_building_state_machine.version;
+}
+
+future<> storage_service::view_building_transition() {
+    SCYLLA_ASSERT(this_shard_id() == 0);
+    co_await view_building_state_load();
+
+    _view_building_state_machine.event.broadcast();
+}
+
+>>>>>>> 2aedfc7da4 (storage_service: suspend tombstone GC on views until they are built everywhere)
 future<> storage_service::reload_raft_topology_state(service::raft_group0_client& group0_client) {
     slogger.info("Waiting for group 0 read/apply mutex before reloading Raft topology state...");
     auto holder = co_await group0_client.hold_read_apply_mutex(_abort_source);
