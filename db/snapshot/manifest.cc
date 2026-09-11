@@ -159,6 +159,7 @@ manifest_json::sstable_info::sstable_info(const sstable_info& e) {
     tablet_id = e.tablet_id;
     repaired_at = e.repaired_at;
     node = e.node;
+    additional_nodes = e.additional_nodes;
 }
 
 manifest_json::sstable_info::sstable_info(sstable_info&& e) {
@@ -172,6 +173,7 @@ manifest_json::sstable_info::sstable_info(sstable_info&& e) {
     tablet_id = e.tablet_id;
     repaired_at = e.repaired_at;
     node = std::move(e.node);
+    additional_nodes = std::move(e.additional_nodes);
 }
 
 manifest_json::sstable_info::sstable_info(const db::snapshot_sstable_entry& e) {
@@ -197,6 +199,7 @@ manifest_json::sstable_info& manifest_json::sstable_info::operator=(sstable_info
     tablet_id = e.tablet_id;
     repaired_at = e.repaired_at;
     node = std::move(e.node);
+    additional_nodes = std::move(e.additional_nodes);
     return *this;
 }
 
@@ -210,6 +213,7 @@ void manifest_json::sstable_info::register_params() {
     add(&tablet_id, "tablet_id");
     add(&repaired_at, "repaired_at");
     add(&node, "node");
+    add(&additional_nodes, "additional_nodes");
 }
 
 manifest_json::tablet_info::tablet_info() {
