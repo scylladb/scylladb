@@ -4585,10 +4585,10 @@ future<executor::request_return_type> executor::list_tables(client_state& client
 
     auto tables = _proxy.data_dictionary().get_tables(); // hold on to temporary, table_names isn't a container, it's a view
     auto table_names = tables
-            | std::views::filter([this] (data_dictionary::table t) {
+            | std::views::filter([] (data_dictionary::table t) {
                         return t.schema()->ks_name().find(KEYSPACE_NAME_PREFIX) == 0 &&
                             !t.schema()->is_view() &&
-                            !cdc::is_log_for_some_table(_proxy.local_db(), t.schema()->ks_name(), t.schema()->cf_name()) &&
+                            !cdc::is_log_schema(*t.schema()) &&
                             !service::paxos::paxos_store::try_get_base_table(t.schema()->cf_name());
                     })
             | std::views::transform([] (data_dictionary::table t) {
