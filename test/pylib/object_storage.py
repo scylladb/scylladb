@@ -14,6 +14,8 @@ import asyncio
 import contextlib
 import logging
 import os
+import urllib.parse
+import urllib.request
 import re
 import sys
 import uuid
@@ -98,6 +100,10 @@ class S3Server:
             config=boto3.session.Config(signature_version='s3v4'),
             verify=False
         )
+
+    def put_object(self, key: str, body: bytes = b''):
+        """Create a single object in the test bucket."""
+        self.get_resource().Bucket(self.bucket_name).put_object(Key=key, Body=body)
 
     def create_test_bucket(self, test_name: str):
         """Create a unique per-test bucket using boto3."""
@@ -210,6 +216,15 @@ class GSFront:
             config=boto3.session.Config(signature_version='s3v4'),
             verify=False
         )
+
+    def put_object(self, key: str, body: bytes = b''):
+        """Create a single object in the test bucket via the native JSON
+        upload API: the S3-compatibility layer of fake-gcs-server rejects
+        boto3 uploads (it serves reads and deletes fine)."""
+        url = (f'{self.endpoint}/upload/storage/v1/b/{self.bucket_name}/o'
+               f'?uploadType=media&name={urllib.parse.quote(key, safe="")}')
+        with urllib.request.urlopen(urllib.request.Request(url, data=body, method='POST')) as resp:
+            assert resp.status == 200, f'upload of {key} failed: {resp.status}'
 
     def create_test_bucket(self, test_name: str):
         """Create a unique per-test bucket using boto3."""
