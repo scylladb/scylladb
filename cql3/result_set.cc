@@ -299,6 +299,14 @@ future<> do_print_query_results_text(OStream os, const cql3::result& result, boo
     }
 }
 
+// Whether a zero-length value of this type is a value in its own right, rather
+// than a malformed serialization of one. Only the string types and blob have
+// one; to_json_string() throws for the rest.
+static bool empty_value_is_serializable(const abstract_type& type) {
+    const auto& t = type.without_reversed();
+    return t.is_string() || t.get_kind() == abstract_type::kind::bytes || t.get_kind() == abstract_type::kind::empty;
+}
+
 template <typename OStream>
 future<> do_print_query_results_json(OStream os, const cql3::result& result) {
     const auto& metadata = result.get_metadata();
@@ -318,7 +326,12 @@ future<> do_print_query_results_json(OStream os, const cql3::result& result) {
                 co_await os(",");
             }
             co_await os("{}:", rjson::quote_json_string(column_metadata[i]->name->text()));
-            if (!row[i] || row[i]->empty()) {
+            // An absent cell is null. A present but zero-length one is a value,
+            // and is serialized as such - but only for the types that can
+            // actually hold one. to_json_string() rejects a zero-length value
+            // for everything else (an int of 0 bytes is a malformed int, not an
+            // empty one), and an empty cell is all we can report about those.
+            if (!row[i] || (row[i]->empty() && !empty_value_is_serializable(*column_metadata[i]->type))) {
                 co_await os("null");
                 continue;
             }
