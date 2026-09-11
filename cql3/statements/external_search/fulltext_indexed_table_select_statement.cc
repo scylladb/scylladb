@@ -69,6 +69,7 @@ std::optional<expr::expression> validate_bm25_where_restriction(const expr::bina
 void prepare_bm25_selectors(std::vector<selection::prepared_selector>& prepared_selectors, std::optional<bm25_ordering_info>& ordering_info,
         expr::temporary_allocator& temporaries_allocator, prepare_context& ctx) {
     for (auto& ps : prepared_selectors) {
+        const auto written = ps.expr;
         ps.expr = expr::search_and_replace(ps.expr, [&](const expr::expression& candidate) -> std::optional<expr::expression> {
             const auto* fc = expr::as_if<expr::function_call>(&candidate);
             if (!fc) {
@@ -107,6 +108,7 @@ void prepare_bm25_selectors(std::vector<selection::prepared_selector>& prepared_
 
             return external_search::replace_search_call(fun->value(), candidate, info.temporaries, temporaries_allocator);
         });
+        external_search::name_selector_as_written(ps, written);
     }
 }
 

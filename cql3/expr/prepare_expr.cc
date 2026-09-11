@@ -2355,7 +2355,7 @@ binary_operator prepare_binary_operator(binary_operator binop, data_dictionary::
         // An external function is a placeholder the statement has to deal with; what it needs
         // depends on its kind. Search decides which of its values a relation compares, before the
         // right-hand side is type-checked against it, and leaves anything else alone.
-        prepared_lhs = functions::prepare_external_search_relation_lhs(std::move(prepared_lhs));
+        prepared_lhs = functions::prepare_external_search_relation_lhs(std::move(prepared_lhs), db, table_schema);
     }
     lw_shared_ptr<column_specification> lhs_receiver = get_lhs_receiver(prepared_lhs, table_schema);
 
