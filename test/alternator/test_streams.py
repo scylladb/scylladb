@@ -2497,6 +2497,45 @@ def test_streams_multiple_items_one_partition(dynamodb, dynamodbstreams, scylla_
             return [['INSERT', {'p': p, 'c': cc}, None, {'p': p, 'c': cc, 'x': cc}] for cc in cs]
         do_test(stream, dynamodb, dynamodbstreams, do_updates, 'NEW_AND_OLD_IMAGES')
 
+# GetRecords must deliver every record in a shard regardless of the client's
+# Limit. Under always-LWT write isolation a BatchWriteItem lands all its items
+# in one CDC batch that shares a timestamp and a single end-of-batch row, and
+# the reader can only emit the batch once it has read that row. GetRecords
+# bounded the CDC row scan at Limit*mul rows, so a Limit smaller than the batch
+# cut the scan short: the batch was silently dropped, no NextShardIterator
+# advanced, and the shard stayed head-of-line blocked forever (SCYLLADB-4395).
+# Draining with a tiny Limit must still surface every item -- DynamoDB parcels
+# the batch out across calls, Alternator returns it whole. The defect is
+# storage-independent, so this overrides the module's vnodes/tablets fixture.
+@pytest.mark.parametrize('tags_param', [[{'Key': 'system:initial_tablets', 'Value': 'none'}]], indirect=True, ids=[''])
+def test_get_records_small_limit_delivers_whole_batch(dynamodb, dynamodbstreams):
+    tags = TAGS + [{'Key': 'system:write_isolation', 'Value': 'always'}]
+    with create_stream_test_table(dynamodb, StreamViewType='KEYS_ONLY', Tags=tags) as table:
+        (arn, label) = wait_for_active_stream(dynamodbstreams, table)
+        p = random_string()
+        cs = ['c0', 'c1', 'c2']
+        with table.batch_writer() as batch:
+            for c in cs:
+                batch.put_item(Item={'p': p, 'c': c})
+        iterators = [dynamodbstreams.get_shard_iterator(StreamArn=arn, ShardId=s,
+                        ShardIteratorType='TRIM_HORIZON')['ShardIterator']
+                     for s in list_shards(dynamodbstreams, arn)]
+        seen = set()
+        deadline = time.time() + 60
+        while time.time() < deadline and seen != set(cs):
+            next_iterators = []
+            for it in iterators:
+                response = dynamodbstreams.get_records(ShardIterator=it, Limit=1)
+                for record in response['Records']:
+                    seen.add(record['dynamodb']['Keys']['c']['S'])
+                if 'NextShardIterator' in response:
+                    next_iterators.append(response['NextShardIterator'])
+            iterators = next_iterators
+            if not iterators:
+                break
+            time.sleep(1)
+        assert seen == set(cs)
+
 # Test the CHILD_SHARDS shard filter. In a simple case where the table
 # hasn't been modified since the stream was created, there is just one
 # generation so asking for child shards of the only shard returns nothing.
