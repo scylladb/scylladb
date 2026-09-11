@@ -817,12 +817,15 @@ future<tasks::task_manager::task_ptr> task_manager_module::start_shard_offstrate
     });
 }
 
-future<> table_offstrategy_keyspace_compaction_task_impl::run() {
-    co_await wait_for_your_turn(_cv, _current_task, _status.id);
-    auto info = this->info();
-    co_await run_on_table("perform_keyspace_offstrategy_compaction", _db, _status.keyspace, _ti, [this, info] (replica::table& t) -> future<> {
-        _needed |= co_await t.perform_offstrategy_compaction(info);
+static future<> run_table_offstrategy_compaction(replica::database& db, std::string keyspace, const table_info& ti, seastar::condition_variable& cv, current_task_type& current_task, bool& needed, tasks::task_info task_info) {
+    co_await wait_for_your_turn(cv, current_task, task_info.get_id());
+    co_await run_on_table("perform_keyspace_offstrategy_compaction", db, keyspace, ti, [&needed, task_info] (replica::table& t) -> future<> {
+        needed |= co_await t.perform_offstrategy_compaction(task_info);
     });
+}
+
+future<> table_offstrategy_keyspace_compaction_task_impl::run() {
+    return run_table_offstrategy_compaction(_db, _status.keyspace, _ti, _cv, _current_task, _needed, info());
 }
 
 future<std::optional<double>> table_offstrategy_keyspace_compaction_task_impl::expected_total_workload() const {
