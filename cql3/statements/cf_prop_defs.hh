@@ -66,6 +66,7 @@ public:
 
     static const sstring KW_STORAGE_ENGINE;
     static const sstring KW_LARGE_DATA_GUARDRAILS_ENABLED;
+    static const sstring KW_AGGREGATED_METRICS;
 
     // FIXME: In origin the following consts are in CFMetaData.
     static constexpr int32_t DEFAULT_DEFAULT_TIME_TO_LIVE = 0;
@@ -112,6 +113,7 @@ public:
     std::optional<table_id> get_id() const;
     bool get_synchronous_updates_flag() const;
     std::optional<db::tablet_options::map_type> get_tablet_options() const;
+    std::optional<bool> get_aggregated_metrics() const;
 
     void apply_to_builder(schema_builder& builder, schema::extensions_map schema_extensions, const data_dictionary::database& db, sstring ks_name, bool supports_repair) const;
     void validate_minimum_int(const sstring& field, int32_t minimum_value, int32_t default_value) const;

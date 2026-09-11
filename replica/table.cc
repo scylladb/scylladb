@@ -2331,7 +2331,8 @@ void table::set_metrics() {
             });
         }
     } else {
-        if (_config.enable_node_aggregated_table_metrics && !is_internal_keyspace(_schema->ks_name())) {
+        bool aggregated_metrics_enabled = _schema->aggregated_metrics_override().value_or(_config.enable_node_aggregated_table_metrics);
+        if (aggregated_metrics_enabled && !is_internal_keyspace(_schema->ks_name())) {
             _metrics.add_group("column_family", {
                 ms::make_counter("memtable_switch", ms::description("Number of times flush has resulted in the memtable being switched out"), _stats.memtable_switch_count)(cf)(ks)(node_table_metrics).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
                 ms::make_counter("memtable_partition_writes", [this] () { return _stats.memtable_partition_insertions + _stats.memtable_partition_hits; }, ms::description("Number of write operations performed on partitions in memtables"))(cf)(ks)(node_table_metrics).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
@@ -4763,6 +4764,14 @@ void table::set_schema(schema_ptr s) {
     tlogger.debug("Changing schema version of {}.{} ({}) from {} to {}",
                 _schema->ks_name(), _schema->cf_name(), _schema->id(), _schema->version(), s->version());
 
+    // set_metrics() decides once (at construction) whether to register the
+    // node-aggregated metric group, based on the effective aggregated_metrics
+    // override. ALTER TABLE can change that override, so re-evaluate and
+    // re-register here; otherwise the change would be invisible until the
+    // table object is recreated (e.g. process restart).
+    bool old_aggregated_metrics = _schema->aggregated_metrics_override().value_or(_config.enable_node_aggregated_table_metrics);
+    bool new_aggregated_metrics = s->aggregated_metrics_override().value_or(_config.enable_node_aggregated_table_metrics);
+
     _flush_timer.cancel();
 
     for_each_compaction_group([&] (compaction_group& cg) {
@@ -4781,6 +4790,11 @@ void table::set_schema(schema_ptr s) {
     _schema = std::move(s);
     _large_data_guardrail = make_large_data_guardrail();
     _large_data_guardrail->rebuild(*get_sstables());
+
+    if (!_config.enable_metrics_reporting && old_aggregated_metrics != new_aggregated_metrics) {
+        deregister_metrics();
+        set_metrics();
+    }
 
     for (auto&& v : _views) {
         v->view_info()->reset_view_info();

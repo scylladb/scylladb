@@ -324,6 +324,12 @@ schema_ptr scylla_tables(schema_features features) {
         sb.with_column("storage_engine", utf8_type);
         sb.with_column("large_data_guardrails_enabled", boolean_type);
 
+        // Per-table override of enable_node_aggregated_table_metrics.
+        // Absent means "use the config default"; it is safe to add this
+        // column unconditionally since it is written to only after the
+        // PER_TABLE_AGGREGATED_METRICS cluster feature is enabled.
+        sb.with_column("aggregated_metrics", boolean_type);
+
         sb.with_hash_version();
         s = sb.build();
     }
@@ -1704,6 +1710,16 @@ mutation make_scylla_tables_mutation(schema_ptr table, api::timestamp_type times
         m.set_clustered_cell(ckey, guardrails_cdef,
                              atomic_cell::make_live(*boolean_type, timestamp, boolean_type->decompose(true)));
     }
+    // Write the aggregated_metrics column only when the table has an
+    // explicit override (true or false); when unset, omit the cell so old
+    // nodes that don't know this column can still read the row during a
+    // rolling upgrade or rollback. The CQL validation gate ensures the
+    // property can only be set once all nodes support the column.
+    if (auto aggregated_metrics = table->aggregated_metrics_override()) {
+        auto& aggregated_metrics_cdef = *scylla_tables()->get_column_definition("aggregated_metrics");
+        m.set_clustered_cell(ckey, aggregated_metrics_cdef,
+                             atomic_cell::make_live(*boolean_type, timestamp, boolean_type->decompose(*aggregated_metrics)));
+    }
     // In-memory tables are deprecated since scylla-2024.1.0
     // FIXME: delete the column when there's no live version supporting it anymore.
     // Writing it here breaks upgrade rollback to versions that do not support the in_memory schema_feature
@@ -1956,6 +1972,19 @@ utils::chunked_vector<mutation> make_update_table_mutations(service::storage_pro
         mutation m(scylla_tables(), pkey);
         auto& guardrails_cdef = *scylla_tables()->get_column_definition("large_data_guardrails_enabled");
         m.set_clustered_cell(ckey, guardrails_cdef, atomic_cell::make_dead(timestamp, gc_clock::now()));
+        mutations.emplace_back(std::move(m));
+    }
+
+    // Same reasoning as above: an explicit aggregated_metrics override going
+    // back to "unset" (fall back to config default) needs a tombstone, since
+    // make_scylla_tables_mutation only writes a live cell when engaged.
+    if (old_table->aggregated_metrics_override().has_value() && !new_table->aggregated_metrics_override().has_value()) {
+        schema_ptr s = tables();
+        auto pkey = partition_key::from_singular(*s, new_table->ks_name());
+        auto ckey = clustering_key::from_singular(*s, new_table->cf_name());
+        mutation m(scylla_tables(), pkey);
+        auto& aggregated_metrics_cdef = *scylla_tables()->get_column_definition("aggregated_metrics");
+        m.set_clustered_cell(ckey, aggregated_metrics_cdef, atomic_cell::make_dead(timestamp, gc_clock::now()));
         mutations.emplace_back(std::move(m));
     }
 
@@ -2221,6 +2250,8 @@ static void prepare_builder_from_scylla_tables_row(const schema_ctxt& ctxt, sche
     }
     auto guardrails_enabled = table_row.get<bool>("large_data_guardrails_enabled");
     builder.set_large_data_guardrails_enabled(guardrails_enabled.value_or(false));
+
+    builder.set_aggregated_metrics_override(table_row.get<bool>("aggregated_metrics"));
 }
 
 schema_ptr create_table_from_mutations(const schema_ctxt& ctxt, schema_mutations sm, const data_dictionary::user_types_storage& user_types, schema_ptr cdc_schema, std::optional<table_schema_version> version)

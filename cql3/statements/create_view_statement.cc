@@ -398,6 +398,9 @@ std::pair<view_ptr, cql3::cql_warnings_vec> create_view_statement::prepare_view(
     auto where_clause_text = util::relations_to_where_clause(_where_clause);
     builder.with_view_info(schema, included.empty(), std::move(where_clause_text));
 
+    // Materialized view inherits the base table's aggregated-metrics setting.
+    builder.set_aggregated_metrics_override(schema->aggregated_metrics_override());
+
     return std::make_pair(view_ptr(builder.build()), std::move(warnings));
 }
 

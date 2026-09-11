@@ -738,6 +738,10 @@ static schema_ptr create_log_schema(const schema& s, const replica::database& db
     } else {
         set_default_properties_log_table(b, s, db, ksm);
     }
+    // aggregated_metrics isn't part of user_properties, so set_properties() above
+    // doesn't carry it; keep the log table in sync with the base table on every call
+    // (this runs both at CDC-enable time and on every base-table schema update).
+    b.set_aggregated_metrics_override(s.aggregated_metrics_override());
 
     add_columns_to_cdc_log(b, s, timestamp, old);
 

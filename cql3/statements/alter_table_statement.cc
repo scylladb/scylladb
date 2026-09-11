@@ -455,6 +455,17 @@ std::pair<schema_ptr, std::vector<view_ptr>> alter_table_statement::prepare_sche
             }
 
             _properties->apply_to_builder(cfm, std::move(schema_extensions), db, keyspace(), !is_cdc_log_table);
+
+            // Propagate an explicit aggregated_metrics change to this table's existing
+            // views/indexes too (the CDC log table is handled separately, via
+            // cdc::create_log_schema() on every on_before_update_column_family call).
+            if (auto new_override = _properties->get_aggregated_metrics()) {
+                for (auto&& view : cf.views()) {
+                    schema_builder builder(view);
+                    builder.set_aggregated_metrics_override(new_override);
+                    view_updates.push_back(view_ptr(builder.build()));
+                }
+            }
         }
         break;
 
