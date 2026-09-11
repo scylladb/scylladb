@@ -613,7 +613,7 @@ future<> groups_manager::stop() {
 std::optional<locator::tablet_routing_info_v2> groups_manager::check_tablet_version(
         const replica::table& table,
         const dht::token& token,
-        const locator::tablet_version_block block) const
+        const locator::tablet_version_block block)
 {
     const auto& erm = table.get_effective_replication_map();
     const auto& tablet_map = erm->get_token_metadata().tablets().get_tablet_map(table.schema()->id());
@@ -621,7 +621,7 @@ std::optional<locator::tablet_routing_info_v2> groups_manager::check_tablet_vers
     const auto& raft_info = tablet_map.get_tablet_raft_info(tablet_id);
     const auto group_id = raft_info.group_id;
 
-    auto group_it = _raft_groups.find(group_id);
+    const auto group_it = _raft_groups.find(group_id);
     if (group_it == _raft_groups.end()) [[unlikely]] {
         return std::nullopt;
     }

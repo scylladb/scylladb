@@ -204,7 +204,7 @@ public:
     std::optional<locator::tablet_routing_info_v2> check_tablet_version(
         const replica::table&,
         const dht::token&,
-        const locator::tablet_version_block) const;
+        const locator::tablet_version_block);
 };
 
 /// A temporary, RAII-style handle to an active Raft group server instance,
