@@ -20,7 +20,7 @@ struct bm25_ordering_info {
     expr::expression search_term;
     // Temporary slot the score is delivered in, allocated on the first bm25()
     // occurrence in SELECT and filled per row by values_provider.
-    std::optional<size_t> temporary_index;
+    std::optional<size_t> score_temporary_index;
     // The SELECT occurrences' search terms that only execution can compare, a bind marker standing
     // where at least one of the two values will be.
     std::vector<expr::expression> deferred_select_terms;
