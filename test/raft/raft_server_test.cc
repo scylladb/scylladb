@@ -1,3 +1,4 @@
+#include <seastar/core/with_timeout.hh>
 #include <fmt/std.h>
 #include "raft/raft.hh"
 #include "replication.hh"
@@ -589,4 +590,302 @@ SEASTAR_THREAD_TEST_CASE(test_add_entry_preserves_submission_order) {
     for (int v = 0; v < n; ++v) {
         BOOST_REQUIRE_EQUAL((*applied)[v], v);
     }
+}
+
+// A configuration change completes even when the entry that completes it is
+// gone from the log before this server reports it committed.
+//
+// set_configuration() appends the joint configuration, waits for it to commit,
+// and then waits for the non-joint C_new entry the fsm appends once the joint
+// one is committed. That second wait is resolved from a committed batch and
+// from nowhere else, so if the C_new entry is replaced by a snapshot before
+// this server ever reports it -- which is what happens when the server loses
+// leadership before C_new commits and rejoins behind a snapshot that covers it
+// -- the caller waits for a batch that will never come. The snapshot's own
+// configuration is the sign that the change went through.
+// A snapshot that does not reach the joint configuration entry says nothing
+// about the configuration change waiting for it.
+//
+// set_configuration() engages the promise before it knows the joint entry is
+// committed, so a snapshot can arrive while that first wait is still pending.
+// Such a snapshot is accepted as long as its index is above the commit index,
+// which is still below the joint entry, and the configuration it carries is
+// the one committed at its own index -- the configuration the change is
+// replacing, not its result. Taking that for the change having gone through
+// would complete a change that never committed.
+SEASTAR_THREAD_TEST_CASE(test_conf_change_not_completed_by_an_earlier_snapshot) {
+    test_case test_config {
+        .nodes = 3,
+        // No forwarding, so that the change fails with the old leader instead
+        // of being retried against the new one, which would complete it for
+        // real and hide what is under test here.
+        .config = std::vector<raft::server::configuration>(3,
+                raft::server::configuration { .enable_forwarding = false })
+    };
+    auto cluster = raft_cluster<std::chrono::steady_clock>{
+        std::move(test_config),
+        ::apply_changes,
+        100,  // apply_entries
+        0,
+        0, false, tick_delay, rpc_config{}
+    };
+    cluster.start_all().get();
+    auto stop = defer([&cluster] noexcept { cluster.stop_all().get(); });
+
+    auto& leader = cluster.get_server(0);
+    cluster.get_server(1).wait_for_leader(nullptr).get();
+
+    // Cut the leader off first, so that everything it appends from here on
+    // stays uncommitted and the configuration change never gets past its
+    // first wait.
+    cluster.disconnect(0);
+
+    // Entries below the joint one, so that the snapshot the others take lands
+    // strictly between this server's commit index and the joint entry. They
+    // stay uncommitted: committing them would carry the commit index up to
+    // just below the joint entry and leave no index for such a snapshot.
+    constexpr int below = 4;
+    const auto base = leader.log_last_idx_term().first;
+    std::vector<future<>> orphaned;
+    for (int i = 0; i < below; ++i) {
+        orphaned.push_back(leader.add_entry(create_command(i), raft::wait_type::committed, nullptr));
+    }
+    auto observe = defer([&orphaned] noexcept {
+        for (auto& f : orphaned) {
+            (void)std::move(f).handle_exception([] (std::exception_ptr) {});
+        }
+    });
+    // add_entry() suspends before it appends, so wait for the entries to be in
+    // the log rather than assume the joint entry lands above them.
+    while (leader.log_last_idx_term().first < base + raft::index_t{below}) {
+        seastar::yield().get();
+    }
+
+    auto change = leader.modify_config({}, {to_raft_id(2)}, nullptr);
+
+    // The other two elect a leader between themselves, node 0 being isolated;
+    // which of them wins does not matter. Waited for rather than driven with
+    // elect_new_leader(), which reconnects the old leader for a moment so it
+    // can vote -- long enough for the entries above to escape.
+    const auto elect_deadline = std::chrono::steady_clock::now() + tick_delay * 400;
+    size_t new_leader_id = 0;
+    while (new_leader_id == 0) {
+        for (size_t n = 1; n < 3; ++n) {
+            if (cluster.get_server(n).is_leader()) {
+                new_leader_id = n;
+            }
+        }
+        BOOST_REQUIRE(std::chrono::steady_clock::now() < elect_deadline);
+        seastar::sleep(tick_delay).get();
+    }
+    auto& new_leader = cluster.get_server(new_leader_id);
+
+    // It snapshots at the dummy entry it appended on election, four indexes
+    // below the joint entry. Keeping no trailing entries puts the start of its
+    // log above the index where the old leader's log diverges, so the old
+    // leader has to be sent the snapshot rather than caught up with
+    // append_entries. Retried because the dummy has to be applied before there
+    // is anything to snapshot.
+    const auto snap_deadline = std::chrono::steady_clock::now() + tick_delay * 200;
+    while (!new_leader.trigger_snapshot(nullptr).get()) {
+        BOOST_REQUIRE(std::chrono::steady_clock::now() < snap_deadline);
+        seastar::sleep(tick_delay).get();
+    }
+    BOOST_REQUIRE(!new_leader.get_configuration().is_joint());
+
+    cluster.connect_all();
+
+    // Wait for the old leader to take the snapshot. Its commit index can only
+    // reach the snapshot index this way: the entry it holds there is its own,
+    // at a stale term, and the new leader cannot append over it because it is
+    // inside the snapshot it took. So the waiter for the entry at the snapshot
+    // index is resolved exactly when the snapshot is processed -- and by
+    // drop_commit_waiters(), which runs just ahead of the branch under test.
+    const auto deadline = std::chrono::steady_clock::now() + tick_delay * 200;
+    while (!orphaned[0].available()) {
+        BOOST_REQUIRE(std::chrono::steady_clock::now() < deadline);
+        seastar::yield().get();
+    }
+
+    // The change is still pending: the snapshot the old leader just took
+    // carries the configuration its own joint entry was meant to replace, and
+    // must not be read as the change having gone through.
+    BOOST_REQUIRE(!change.available());
+
+    // Now commit past the joint entry's index, so the change learns what
+    // became of it instead of waiting for a commit that never comes.
+    for (int i = 0; i < 6; ++i) {
+        new_leader.add_entry(create_command(100 + i), raft::wait_type::applied, nullptr).get();
+    }
+
+    // And it fails, its joint entry having been replaced. With forwarding
+    // disabled modify_config() reports whatever went wrong under the entry as
+    // not_a_leader, which by then it is.
+    try {
+        seastar::with_timeout(std::chrono::steady_clock::now() + tick_delay * 200, std::move(change)).get();
+        BOOST_ERROR("configuration change reported success");
+    } catch (const raft::not_a_leader&) {
+    } catch (...) {
+        BOOST_ERROR(fmt::format("unexpected exception: {}", std::current_exception()));
+    }
+}
+
+SEASTAR_THREAD_TEST_CASE(test_conf_change_completed_by_a_snapshot) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    std::cerr << "Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n";
+    return;
+#else
+    auto cluster = raft_cluster<std::chrono::steady_clock>{
+        // Five nodes, and the change drops one of them, so that a majority of
+        // C_new is three of {0,1,2,3} and the rest can carry the change through
+        // without node 0. Removing a node from a three-node cluster would leave
+        // C_new = {0,1}, whose majority needs node 0 itself, and cutting it off
+        // would stall the change rather than orphan it.
+        test_case { .nodes = 5 },
+        ::apply_changes,
+        100,  // apply_entries
+        0,
+        0, false, tick_delay, rpc_config{}
+    };
+    cluster.start_all().get();
+    auto stop = defer([&cluster] noexcept { cluster.stop_all().get(); });
+
+    auto& leader = cluster.get_server(0);
+    cluster.get_server(1).wait_for_leader(nullptr).get();
+    BOOST_REQUIRE(!leader.get_configuration().is_joint());
+
+    // Two hooks on node 0, which drive it into the window under test. A
+    // partition alone cannot: the joint entry commits under a majority of
+    // C_new as well, so whoever can commit the joint entry can commit its
+    // non-joint successor a round trip later, and node 0 would learn the
+    // change went through the ordinary way.
+    constexpr auto block_io_fiber = "block_raft_io_fiber_at_non_joint_conf";
+    constexpr auto block_before_non_joint = "block_raft_set_configuration_before_non_joint";
+    scoped_error_injection blocked_io{block_io_fiber};
+    scoped_error_injection blocked_caller{block_before_non_joint};
+
+    auto change = leader.modify_config({}, {to_raft_id(4)}, nullptr);
+
+    // The first hook stops node 0's io fiber on the batch that appends the
+    // non-joint entry, so that entry is never replicated and can never commit
+    // here. The batch also carries the joint entry's commit, so the caller is
+    // still on its first wait.
+    wait_for_injection_enter(block_io_fiber).get();
+
+    // Cut node 0 off and let the others finish the change and snapshot past
+    // it. trigger_snapshot() keeps no trailing entries, so node 0's log tail
+    // ends up below the new leader's first log index and it has to be sent the
+    // snapshot rather than caught up with append_entries.
+    cluster.disconnect(0);
+    cluster.elect_new_leader(1).get();
+    auto& new_leader = cluster.get_server(1);
+    new_leader.add_entry(create_command(42), raft::wait_type::applied, nullptr).get();
+    BOOST_REQUIRE(!new_leader.get_configuration().is_joint());
+    BOOST_REQUIRE(new_leader.trigger_snapshot(nullptr).get());
+
+    // Release the io fiber while node 0 is still isolated: it notifies the
+    // joint entry's commit, so the caller reaches the second hook, and sends
+    // the non-joint entry into the void. Waiting for that hook to be entered
+    // is what makes the ordering exact -- the commit waiter for the joint
+    // entry is resolved before the snapshot arrives, so the snapshot cannot
+    // drop it as commit_status_unknown instead.
+    utils::get_local_injector().receive_message(block_io_fiber);
+    wait_for_injection_enter(block_before_non_joint).get();
+
+    cluster.connect_all();
+    utils::get_local_injector().receive_message(block_before_non_joint);
+
+    // The snapshot node 0 is now sent carries a non-joint configuration, and
+    // that is the only thing left that can complete the change: the entry the
+    // caller would otherwise have waited for went with the log the snapshot
+    // replaced.
+    try {
+        seastar::with_timeout(std::chrono::steady_clock::now() + tick_delay * 200, std::move(change)).get();
+    } catch (...) {
+        BOOST_FAIL(fmt::format("configuration change did not complete: {}", std::current_exception()));
+    }
+#endif
+}
+
+// A committed entry that a snapshot replaces in the raft log before the
+// applier fiber gets to apply it still has its effect in the state machine
+// once that snapshot is loaded, so a waiter for it must be resolved
+// successfully rather than dropped.
+//
+// The applier fiber of node 0 is held inside apply(), so its io_fiber goes on
+// committing entries it cannot apply. A new leader is then elected, which
+// makes everything committed afterwards carry a higher term than the held
+// entries, and node 0 is disconnected while the new leader commits, applies
+// and snapshots past them. The snapshot's term therefore differs from the
+// held entries' term, so the snapshot term rule of drop_waiters() cannot
+// resolve their waiters; what does is op_status::committed, which io_fiber
+// recorded when it reported the entry committed and its term was still known.
+SEASTAR_THREAD_TEST_CASE(test_apply_waiter_resolved_when_snapshot_subsumes_committed_entry) {
+    // The default snapshot thresholds are high enough that the only snapshot
+    // in this test is the one triggered explicitly below, which is taken with
+    // no trailing entries and so drops the whole log.
+    // apply_entries must be greater than the number of entries added during
+    // the test, otherwise the state machine's done promise fires prematurely.
+    auto cluster = raft_cluster<std::chrono::steady_clock>{
+        test_case { .nodes = 3 },
+        ::apply_changes,
+        100,  // apply_entries
+        0,
+        0, false, tick_delay, rpc_config{}
+    };
+    cluster.start_all().get();
+    auto stop = defer([&cluster] noexcept { cluster.stop_all().get(); });
+
+    auto& server = cluster.get_server(0);
+
+    // Entries are added on node 0, the initial leader, so that they get their
+    // indexes here and in this order: a forwarded add_entry() would not tell
+    // us which entry ended up below which.
+    delay_apply = to_raft_id(0);
+    auto release_apply = defer([] noexcept {
+        // A failed check below may leave the applier fiber waiting here, and
+        // stop_all() would then wait for it forever.
+        delay_apply.reset();
+        if (apply_release.waiters()) {
+            apply_release.signal();
+        }
+    });
+    cluster.add_entries(1, 0).get();
+    apply_entered.wait().get();
+
+    // The waiter under test: committed while the applier fiber is held, so it
+    // is marked committed and left for that fiber to resolve.
+    auto fut = server.add_entry(create_command(42), raft::wait_type::applied, nullptr);
+    // Commit waiters are notified in index order, so this one returning means
+    // node 0 saw the entry above committed as well.
+    server.add_entry(create_command(43), raft::wait_type::committed, nullptr).get();
+
+    // From here on entries are committed with a higher term, so the snapshot
+    // taken below has a different term than the two entries above.
+    cluster.elect_new_leader(1).get();
+    auto& leader = cluster.get_server(1);
+
+    // Cut node 0 off, so the entries the new leader commits, applies and then
+    // snapshots away never reach it as log entries.
+    cluster.disconnect(0);
+    leader.add_entry(create_command(44), raft::wait_type::applied, nullptr).get();
+    BOOST_REQUIRE(leader.trigger_snapshot(nullptr).get());
+
+    // Reconnect node 0. Its log tail is below the leader's first log index by
+    // now, so the leader transfers the snapshot instead of appending entries.
+    notify_snapshot_received = to_raft_id(0);
+    auto clear_notify = defer([] noexcept { notify_snapshot_received.reset(); });
+    cluster.connect_all();
+
+    // Once node 0 has replied, its fsm has dropped the entries the waiter is
+    // for and its io_fiber has handed the snapshot to its applier fiber -- all
+    // while that fiber is still held inside apply(). This is what makes the
+    // test deterministic: released any earlier, the applier fiber would apply
+    // the entries normally and never exercise the path under test.
+    snapshot_received.wait().get();
+
+    apply_release.signal();
+
+    // The waiter is resolved successfully by loading the snapshot.
+    BOOST_CHECK_NO_THROW(fut.get());
 }

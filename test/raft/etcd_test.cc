@@ -196,7 +196,7 @@ BOOST_AUTO_TEST_CASE(test_progress_flow_control) {
     BOOST_CHECK(output.messages.size() == 5);
 
     size_t committed = 1;
-    BOOST_CHECK(output.committed.size() == 1);
+    BOOST_CHECK(output.committed.ids.size() == 1);
 
     for (size_t i = 0; i < output.messages.size(); ++i) {
         raft::append_request msg;
@@ -216,7 +216,7 @@ BOOST_AUTO_TEST_CASE(test_progress_flow_control) {
     output = fsm.get_output();
     // Check fsm outputs the remaining 10 entries
     committed = current_entry - committed;
-    BOOST_CHECK(output.committed.size() == committed);
+    BOOST_CHECK(output.committed.ids.size() == committed);
 }
 
 // TestUncommittedEntryLimit
@@ -373,7 +373,7 @@ BOOST_AUTO_TEST_CASE(test_log_replication_1) {
     output = fsm.get_output();
     BOOST_CHECK(output.log_entries.size() == 1);
     BOOST_CHECK(std::holds_alternative<raft::log_entry::dummy>(output.log_entries[0]->data));
-    BOOST_CHECK(output.committed.size() == 0);
+    BOOST_CHECK(output.committed.ids.size() == 0);
     BOOST_CHECK(output.messages.size() == 2);
     index_t dummy_idx{1};     // Nothing before it
     for (auto& [id, msg] : output.messages) {
@@ -389,7 +389,7 @@ BOOST_AUTO_TEST_CASE(test_log_replication_1) {
         fsm.step(id, raft::append_reply{areq.current_term, dummy_idx, raft::append_reply::accepted{dummy_idx}});
     }
     output = fsm.get_output();
-    BOOST_CHECK(output.committed.size() == 1);  // Dummy was committed
+    BOOST_CHECK(output.committed.ids.size() == 1);  // Dummy was committed
 
     // Add data entry
     raft::command cmd = create_command(1);
@@ -412,7 +412,7 @@ BOOST_AUTO_TEST_CASE(test_log_replication_1) {
         fsm.step(id, raft::append_reply{areq.current_term, lep->idx, raft::append_reply::accepted{idx}});
     }
     output = fsm.get_output();
-    BOOST_CHECK(output.committed.size() == 1);  // Entry was committed
+    BOOST_CHECK(output.committed.ids.size() == 1);  // Entry was committed
 }
 
 BOOST_AUTO_TEST_CASE(test_log_replication_2) {
@@ -441,7 +441,7 @@ BOOST_AUTO_TEST_CASE(test_log_replication_2) {
         fsm.step(id, raft::append_reply{areq.current_term, dummy_idx, raft::append_reply::accepted{dummy_idx}});
     }
     output = fsm.get_output();
-    BOOST_CHECK(output.committed.size() == 1);  // Dummy was committed
+    BOOST_CHECK(output.committed.ids.size() == 1);  // Dummy was committed
 
     // Add 1st data entry
     raft::command cmd = create_command(1);
@@ -452,7 +452,7 @@ BOOST_AUTO_TEST_CASE(test_log_replication_2) {
     // ACK 1st entry
     fsm.step(id2, raft::append_reply{current_term, index_t{2}, raft::append_reply::accepted{index_t{2}}});
     output = fsm.get_output();
-    BOOST_CHECK(output.committed.size() == 1);  // Entry 1 was committed
+    BOOST_CHECK(output.committed.ids.size() == 1);  // Entry 1 was committed
 
     // Add 2nd data entry
     cmd = create_command(2);
@@ -474,7 +474,7 @@ BOOST_AUTO_TEST_CASE(test_log_replication_2) {
         fsm.step(id, raft::append_reply{areq.current_term, second_idx, raft::append_reply::accepted{second_idx}});
     }
     output = fsm.get_output();
-    BOOST_CHECK(output.committed.size() == 1);  // Entry 2 was committed
+    BOOST_CHECK(output.committed.ids.size() == 1);  // Entry 2 was committed
 }
 
 // TestSingleNodeCommit
@@ -493,7 +493,7 @@ BOOST_AUTO_TEST_CASE(test_single_node_commit) {
     lep = output.log_entries.back();
     BOOST_REQUIRE_NO_THROW(std::get<raft::log_entry::dummy>(lep->data));
     output = fsm.get_output();
-    BOOST_CHECK(output.committed.size() == 1);  // Dummy was committed
+    BOOST_CHECK(output.committed.ids.size() == 1);  // Dummy was committed
 
     // Add 1st data entry
     raft::command cmd = create_command(1);
@@ -501,7 +501,7 @@ BOOST_AUTO_TEST_CASE(test_single_node_commit) {
     output = fsm.get_output();
     BOOST_CHECK(output.log_entries.size() == 1); // Entry added to local log
     output = fsm.get_output();
-    BOOST_CHECK(output.committed.size() == 1);  // Entry 1 was committed
+    BOOST_CHECK(output.committed.ids.size() == 1);  // Entry 1 was committed
 
     // Add 2nd data entry
     cmd = create_command(2);
@@ -509,7 +509,7 @@ BOOST_AUTO_TEST_CASE(test_single_node_commit) {
     output = fsm.get_output();
     BOOST_CHECK(output.log_entries.size() == 1); // Entry added to local log
     output = fsm.get_output();
-    BOOST_CHECK(output.committed.size() == 1);  // Entry 2 was committed  (3 total)
+    BOOST_CHECK(output.committed.ids.size() == 1);  // Entry 2 was committed  (3 total)
 }
 
 // TODO: rewrite with communicate and filter append message
@@ -774,7 +774,7 @@ void handle_proposal(unsigned nodes, std::vector<int> accepting_int) {
     output1 = fsm1.get_output();
     // Dummy can only be committed if there were quorum votes (fsm1 counts for quorum)
     auto commit_dummy = (accepting.size() + 1) >= (nodes/2 + 1);
-    BOOST_CHECK(output1.committed.size() == commit_dummy);
+    BOOST_CHECK(output1.committed.ids.size() == commit_dummy);
 
     // Add entry to leader fsm1
     raft::command cmd = create_command(1);
@@ -797,7 +797,7 @@ void handle_proposal(unsigned nodes, std::vector<int> accepting_int) {
     output1 = fsm1.get_output();
     // Entry can only be committed if there were quorum votes (fsm1 counts for quorum)
     auto commit_entry = (accepting.size() + 1) >= (nodes/2 + 1);
-    BOOST_CHECK(output1.committed.size() == commit_entry);
+    BOOST_CHECK(output1.committed.ids.size() == commit_entry);
 
     // TODO: using communicate_until() propagate log to followers an check it matches
 };

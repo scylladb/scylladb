@@ -364,7 +364,7 @@ void test_election_single_node_helper(raft::fsm_config fcfg) {
     if (output.log_entries.size()) {
         BOOST_CHECK(std::holds_alternative<raft::log_entry::dummy>(output.log_entries[0]->data));
     }
-    BOOST_CHECK(output.committed.empty());
+    BOOST_CHECK(output.committed.ids.empty());
     // The leader does not become candidate simply because
     // a timeout has elapsed, i.e. there are no spurious
     // elections.
@@ -375,9 +375,10 @@ void test_election_single_node_helper(raft::fsm_config fcfg) {
     BOOST_CHECK(output.messages.empty());
     BOOST_CHECK(output.log_entries.empty());
     // Dummy entry is now committed
-    BOOST_CHECK_EQUAL(output.committed.size(), 1);
-    if (output.committed.size()) {
-        BOOST_CHECK(std::holds_alternative<raft::log_entry::dummy>(output.committed[0]->data));
+    BOOST_CHECK_EQUAL(output.committed.ids.size(), 1);
+    if (output.committed.ids.size()) {
+        const auto& committed_entry = fsm.get_log()[output.committed.ids.first_idx().value()];
+        BOOST_CHECK(std::holds_alternative<raft::log_entry::dummy>(committed_entry->data));
     }
 }
 
@@ -753,7 +754,7 @@ BOOST_AUTO_TEST_CASE(test_confchange_add_node) {
     if (output.log_entries.size()) {
         BOOST_CHECK(std::holds_alternative<raft::log_entry::dummy>(output.log_entries[0]->data));
     }
-    BOOST_CHECK(output.committed.empty());
+    BOOST_CHECK(output.committed.ids.empty());
     // accept dummy entry, otherwise no more entries will be sent
     BOOST_CHECK_EQUAL(output.messages.size(), 1);
     auto msg = std::get<raft::append_request>(output.messages.back().second);
@@ -924,7 +925,7 @@ BOOST_AUTO_TEST_CASE(test_confchange_replace_node) {
     if (output.log_entries.size()) {
         BOOST_CHECK(std::holds_alternative<raft::log_entry::dummy>(output.log_entries[0]->data));
     }
-    BOOST_CHECK(output.committed.empty());
+    BOOST_CHECK(output.committed.ids.empty());
     // accept dummy entry, otherwise no more entries will be sent
     BOOST_CHECK_EQUAL(output.messages.size(), 2);
     auto msg = std::get<raft::append_request>(output.messages.back().second);
@@ -1962,6 +1963,12 @@ BOOST_AUTO_TEST_CASE(test_non_voter_confchange_in_snapshot) {
     A.apply_snapshot(A_snp, 0, 0, true);
     A.tick();
     communicate(A, B, C);
+    // C commits an entry and is sent the snapshot before communicate() polls
+    // it again, so C turns the snapshot down until it has reported that entry
+    // (see fsm::apply_snapshot()). The leader retries from tick(), which
+    // communicate() does not do on its own.
+    A.tick();
+    communicate(A, B, C);
     BOOST_CHECK(A.is_leader());
     BOOST_CHECK_EQUAL(A.get_current_term(), C.get_current_term());
     BOOST_CHECK_EQUAL(A.log_last_idx(), C.log_last_idx());
@@ -2266,6 +2273,68 @@ BOOST_AUTO_TEST_CASE(test_reject_outdated_remote_snapshot) {
     BOOST_CHECK(!B.apply_snapshot(snp, 0, 0, false));
     // But it should apply this snapshot if it's locally generated
     BOOST_CHECK(B.apply_snapshot(snp, 0, 0, true));
+}
+
+// A remote snapshot is rejected while there are committed entries get_output()
+// has not reported yet, and accepted once it has.
+//
+// Accepting it would truncate the log those entries' terms live in, and
+// get_output() reports from above the snapshot index, so they would never be
+// reported: their waiters would be told commit_status_unknown about entries
+// that did commit and whose effect the snapshot itself carries. The leader
+// retries, and by then the output has been consumed.
+//
+// Nothing polls B between the commit and the snapshot here, which is what a
+// server looks like while its io_fiber is busy elsewhere: deliver() steps the
+// target without draining it, unlike communicate().
+BOOST_AUTO_TEST_CASE(test_remote_snapshot_rejected_until_committed_entries_are_reported) {
+    server_id A_id = id(), B_id = id();
+    raft::configuration cfg = config_from_ids({A_id, B_id});
+    raft::log log(raft::snapshot_descriptor{.idx = index_t{0}, .config = cfg});
+    auto A = create_follower(A_id, log);
+    auto B = create_follower(B_id, log);
+    election_timeout(A);
+    communicate(A, B);
+    BOOST_CHECK(A.is_leader());
+
+    raft_routing_map routes{{A_id, &A}, {B_id, &B}};
+
+    // Get the entries onto B, then let B's reply bring A's commit index up.
+    A.add_entry(log_entry::dummy{});
+    A.add_entry(log_entry::dummy{});
+    deliver(routes, A_id, A.get_output().messages);
+    deliver(routes, B_id, B.get_output().messages);
+
+    // Everything B has committed so far has been reported: the get_output()
+    // above drained it.
+    const auto reported_commit_idx = B.commit_idx();
+    BOOST_REQUIRE(A.commit_idx() > reported_commit_idx);
+
+    // One more entry, so that A has something to replicate and carries its
+    // advanced commit index along with it. This is the last thing B is told;
+    // it is not polled again until further down.
+    A.add_entry(log_entry::dummy{});
+    deliver(routes, A_id, A.get_output().messages);
+
+    const auto committed_idx = B.commit_idx();
+    BOOST_REQUIRE(committed_idx > reported_commit_idx);
+
+    // A snapshot from the leader above everything B has committed. B has to
+    // turn it down: the entries it committed just now are still unreported.
+    const auto snp_idx = B.log_last_idx() + index_t{1};
+    auto snp = raft::snapshot_descriptor{.idx = snp_idx, .term = A.get_current_term(), .config = cfg};
+    BOOST_REQUIRE(!B.apply_snapshot(snp, 0, 0, false));
+    // Turned down, not applied: the entries are still there to be reported.
+    BOOST_CHECK(B.get_log().term_for(committed_idx));
+
+    // Which is what the next poll does, terms and all.
+    auto output = B.get_output();
+    BOOST_REQUIRE(!output.committed.ids.empty());
+    BOOST_CHECK_EQUAL(output.committed.ids.first_idx(), reported_commit_idx + index_t{1});
+    BOOST_CHECK_EQUAL(output.committed.ids.last_idx, committed_idx);
+
+    // The leader's retry now gets through.
+    BOOST_REQUIRE(B.apply_snapshot(snp, 0, 0, false));
 }
 
 // A server should sometimes become a candidate even though it is outside the current configuration,
@@ -2854,10 +2923,10 @@ BOOST_AUTO_TEST_CASE(test_leaseguard_deferred_commit) {
     // commit, but the commit is deferred while the deposed leader's lease (entry
     // 1) is still less than delta old.
     (void)fsm.get_output();
-    BOOST_CHECK(fsm.get_output().committed.empty());
+    BOOST_CHECK(fsm.get_output().committed.ids.empty());
     for (int i = 0; i < 5; i++) {
         fsm.tick();
-        BOOST_CHECK(fsm.get_output().committed.empty());
+        BOOST_CHECK(fsm.get_output().committed.ids.empty());
     }
 
     // Once the lease is more than delta old, a tick commits the deferred,
@@ -2865,7 +2934,7 @@ BOOST_AUTO_TEST_CASE(test_leaseguard_deferred_commit) {
     clock.set(lease_t0 + lease_delta + 1s, lease_err);
     fsm.tick();
     const auto output = fsm.get_output();
-    BOOST_CHECK(!output.committed.empty());
+    BOOST_CHECK(!output.committed.ids.empty());
     BOOST_CHECK(output.messages.empty());
 }
 
@@ -2892,7 +2961,7 @@ BOOST_AUTO_TEST_CASE(test_leaseguard_deferred_commit_unsynchronized) {
     (void)fsm.get_output();
     for (int i = 0; i < 5; i++) {
         fsm.tick();
-        BOOST_CHECK(fsm.get_output().committed.empty());
+        BOOST_CHECK(fsm.get_output().committed.ids.empty());
     }
 
     // Elapsed time just short of the threshold (delta plus the safety margin)
@@ -2900,13 +2969,13 @@ BOOST_AUTO_TEST_CASE(test_leaseguard_deferred_commit_unsynchronized) {
     clock.advance_monotonic(lease_mono_wait - 1ms);
     for (int i = 0; i < 5; i++) {
         fsm.tick();
-        BOOST_CHECK(fsm.get_output().committed.empty());
+        BOOST_CHECK(fsm.get_output().committed.ids.empty());
     }
 
     // Clock recovers and enough time has passed: commit proceeds.
     clock.set(lease_t0 + lease_delta + 1s, lease_err);
     fsm.tick();
-    BOOST_CHECK(!fsm.get_output().committed.empty());
+    BOOST_CHECK(!fsm.get_output().committed.ids.empty());
 }
 
 // A leader holding a valid lease serves reads locally, with no read_quorum
@@ -2987,21 +3056,21 @@ BOOST_AUTO_TEST_CASE(test_leaseguard_commits_after_delta_without_clock) {
     // No elapsed time yet: the commit is deferred, but the node keeps leading.
     for (int i = 0; i < 3 * 10; i++) {
         fsm1.tick();
-        BOOST_CHECK(fsm1.get_output().committed.empty());
+        BOOST_CHECK(fsm1.get_output().committed.ids.empty());
         BOOST_REQUIRE(fsm1.is_leader());
     }
 
     // One millisecond short of the threshold: still nothing.
     clock.advance_monotonic(lease_mono_wait - 1ms);
     fsm1.tick();
-    BOOST_CHECK(fsm1.get_output().committed.empty());
+    BOOST_CHECK(fsm1.get_output().committed.ids.empty());
     BOOST_REQUIRE(fsm1.is_leader());
 
     // Past it: the deferred, already-replicated entries commit, with the clock
     // still reporting nothing.
     clock.advance_monotonic(2ms);
     fsm1.tick();
-    BOOST_CHECK(!fsm1.get_output().committed.empty());
+    BOOST_CHECK(!fsm1.get_output().committed.ids.empty());
     BOOST_CHECK(fsm1.is_leader());
     BOOST_CHECK(!clock.interval_now());
 }
