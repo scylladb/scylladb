@@ -336,16 +336,34 @@ destroyed when it ends, so tests never share or reuse a cluster.
 
 ## Test metrics
 
-The parameter `--gather-metrics` is used to gather CPU/RAM usage during tests from the cgroup and system overall CPU/RAM
-usage.
+The parameter `--gather-metrics` is used to gather CPU/RAM usage during tests from the cgroup, system overall CPU/RAM
+usage, and the amount of IO the tested Scylla servers issued.
 For that, SQLite database is used to store the metrics in `testlog/sqlite_{HOST_ID}.db`.
+`HOST_ID` is taken from `$SCYLLA_TEST_HOST_ID`, or derived from the hostname and the current time when that is unset, so
+every `test.py` invocation writes its own database file.
 The database is created in the `testlog` directory and contains the following tables:
 
+- `host_info` - one row describing the machine: CPU model, physical core count and total RAM. Referenced by every other
+  table through `host_id`
 - `tests` - contains the list of tests that were executed with information about the test name, directory, architecture,
   and mode
-- `test_metrics` - contains the metrics for each test, such as memory peak usage, CPU usage, and duration
-- `system_resource_metrics` - contains system CPU and memory utilization in percents during the whole run
-- `cgroup_memory_metrics` - contains cgroup memory usage during the test run
+- `test_metrics` - contains the metrics for each test: memory peak usage, CPU usage, duration, outcome, and the IO the
+  test's Scylla servers issued (`seastar_read_bytes`, `seastar_read_ops`, `seastar_write_bytes`, `seastar_write_ops`)
+- `system_resource_metrics` - contains system CPU utilization in percent and memory figures in bytes, sampled during the
+  whole run
+- `cgroup_memory_metrics` - contains cgroup memory usage in bytes during the test run
+
+`host_info`, `tests` and the timing/outcome columns of `test_metrics` are written even with `--no-gather-metrics`, so
+every test is recorded; the flag only controls the cgroup, system and Scylla IO measurements.
+
+The `seastar_*` columns are the reactor's AIO counters (`scylla_reactor_aio_{reads,writes}` and
+`scylla_reactor_aio_bytes_{read,write}`), summed over every shard of every server still running at the end of the test.
+They count the IO Scylla submitted to its IO queue, which is what has to be measured here: tests run with
+`--kernel-page-cache 1 --unsafe-bypass-fsync 1`, so most of that IO never reaches a disk and does not show up in the
+kernel's own counters. Only tests using the `manager` fixture (`test/cluster`) have them; elsewhere they are NULL.
+
+For the full schema, the meaning and unit of each column, and example queries, see
+[test.py metrics database](https://scylladb.atlassian.net/wiki/spaces/RND/pages/466714724/test.py+metrics+database) on Confluence.
 
 ## Automation, CI, and Jenkins
 

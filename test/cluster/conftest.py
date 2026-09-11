@@ -23,7 +23,7 @@ from test.pylib.connect_options import add_cql_connection_options, add_s3_option
 from test.pylib.encryption_provider import KeyProvider, make_key_provider_factory
 from test.pylib.object_storage import Storage, StorageFactory, StorageKind, create_gs_server, create_s3_server
 from test.pylib.random_tables import RandomTables
-from test.pylib.runner import PHASE_REPORT_KEY, make_failed_test_dir
+from test.pylib.runner import PHASE_REPORT_KEY, SEASTAR_IO_KEY, make_failed_test_dir
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.scylla_server import ScyllaVersionDescription, get_scylla_2025_1_description, get_scylla_2026_1_description
 from test.pylib.skip_types import skip_env
@@ -191,7 +191,11 @@ async def manager(request: pytest.FixtureRequest,
             # pytest_runtest_makereport.
             try:
                 await mgr.gather_related_logs(failed_test_dir_path)
-            except Exception:
+            # pytest.fail.Exception derives from BaseException, so a bare
+            # `except Exception` misses it: log_browsing calls pytest.fail()
+            # when a server log is missing, which would otherwise replace the
+            # test's own verdict with a failure about the missing log.
+            except (Exception, pytest.fail.Exception):
                 logger.warning("Failed to gather logs for failed test %s", test_case_name, exc_info=True)
 
         # Close the driver before after_test(): nothing in after_test() needs
@@ -204,6 +208,7 @@ async def manager(request: pytest.FixtureRequest,
             logger.debug("after_test for %s (success: %s)", test_case_name, not failed)
             cluster_status = await mgr.after_test(success=not failed)
             logger.info("Cluster after test %s (success: %s): %s", test_case_name, not failed, cluster_status)
+            request.node.stash[SEASTAR_IO_KEY] = cluster_status.get("seastar_io")
 
         # Collect the teardown-detected failures and report them all at once,
         # so leaked tasks don't hide the found-errors report or vice versa.
@@ -255,7 +260,7 @@ async def manager(request: pytest.FixtureRequest,
                 failed_test_dir_path = make_failed_test_dir(request.config, mgr.cluster.mode, test_case_name)
                 try:
                     await mgr.gather_related_logs(failed_test_dir_path)
-                except Exception:
+                except (Exception, pytest.fail.Exception):
                     logger.warning("Failed to gather logs for failed test %s", test_case_name, exc_info=True)
             if not failed:
                 pytest.fail(f"\n{'\n'.join(teardown_failures)}")
