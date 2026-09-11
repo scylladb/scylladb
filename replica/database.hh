@@ -78,6 +78,7 @@
 #include "replica/tables_metadata_lock.hh"
 #include "service/topology_guard.hh"
 #include "utils/disk_space_monitor.hh"
+#include "utils/file_size_stats.hh"
 #include "db/large_data_handler.hh"
 
 class cell_locker;
@@ -406,8 +407,10 @@ struct table_stats {
     int64_t memtable_switch_count = 0;
     /** Estimated number of tasks pending for this column family */
     int64_t pending_flushes = 0;
-    sstables::file_size_stats live_disk_space_used;
-    sstables::file_size_stats total_disk_space_used;
+    /** Disk space used by the sstables of this table. Use table::live_disk_space_used() and
+     * table::total_disk_space_used() for all the storage of the table, logstor segments included. */
+    utils::file_size_stats sstables_live_disk_space_used;
+    utils::file_size_stats sstables_total_disk_space_used;
     int64_t live_sstable_count = 0;
     /** Estimated number of compactions pending for this column family */
     int64_t pending_compactions = 0;
@@ -1231,6 +1234,17 @@ public:
     table_stats& get_stats() const {
         return _stats;
     }
+
+    // Disk space used by the storage of this table on this shard.
+    utils::file_size_stats live_disk_space_used() const;
+    utils::file_size_stats total_disk_space_used() const;
+    // Space taken by the logstor segments this table owns. Zero for a table that doesn't use logstor.
+    uint64_t logstor_disk_space_used() const;
+    // Number of logstor segments this table owns.
+    uint64_t logstor_segment_count() const;
+    // Bytes of the live records of this table, which is less than the space its segments take by
+    // however much room those segments still have.
+    uint64_t logstor_live_record_bytes() const;
 
     locator::combined_load_stats table_load_stats() const;
 
@@ -2146,6 +2160,15 @@ public:
     future<> flush_logstor_separator(std::optional<logstor::segment_sequence> seq_num = std::nullopt);
     future<logstor::table_segment_stats> get_logstor_table_segment_stats(table_id table) const;
     size_t get_logstor_memory_usage() const;
+    // Space the logstor segments holding data take on this shard, which is less than the space of
+    // the files logstor has allocated to hold them. Zero when logstor is unused.
+    uint64_t get_logstor_disk_space_used() const;
+
+    // Space the storage of this shard takes on disk, which is what a node reports as its load: the
+    // sstables of all its tables plus the logstor segments holding their data. Slightly more than
+    // the sum of the disk space of the tables, which cannot account for the segments holding
+    // records no compaction group has taken yet.
+    uint64_t disk_space_used() const;
 
     static future<db_clock::time_point> get_all_tables_flushed_at(sharded<database>& sharded_db);
 

@@ -440,7 +440,7 @@ uint64_t removed_sstable_bytes(const sstable_set_t& previous, const sstable_set_
 
 uint64_t get_total_bytes_on_disk(sharded<replica::database>& db, const schema_ptr& s) {
     return db.map_reduce0([gs = global_schema_ptr(s)] (replica::database& db) -> uint64_t {
-        return db.find_column_family(gs).get_stats().total_disk_space_used.on_disk;
+        return db.find_column_family(gs).get_stats().sstables_total_disk_space_used.on_disk;
     }, uint64_t(0), std::plus<uint64_t>()).get();
 }
 

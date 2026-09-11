@@ -349,7 +349,8 @@ class test_compaction_group_handle final : public logstor_group {
     compaction_manager& _cm;
 public:
     test_compaction_group_handle(schema_ptr schema, logstor& ls)
-        : _table_id(schema->id())
+        : logstor_group(ls.get_segment_manager().get_segment_size())
+        , _table_id(schema->id())
         , _owned_index(ls.make_primary_index(schema, false))
         , _index(*_owned_index)
         , _cm(ls.get_compaction_manager()) {
@@ -359,7 +360,8 @@ public:
     // A group of a table that already has an index: the index is per table, and all the groups of
     // a table share it. This is what the groups of a split have.
     test_compaction_group_handle(schema_ptr schema, logstor& ls, primary_index& index)
-        : _table_id(schema->id())
+        : logstor_group(ls.get_segment_manager().get_segment_size())
+        , _table_id(schema->id())
         , _index(index)
         , _cm(ls.get_compaction_manager()) {
         _cm.add(*this);
@@ -883,6 +885,13 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_space_accounting) {
 
     primary_index index(schema, accounting);
 
+    // The index counts the bytes of the records it points at for the table it belongs to, which is
+    // the same number the subscriber accumulates, so the two must agree after every operation.
+    auto check_live_bytes = [&] (ssize_t expected) {
+        BOOST_REQUIRE_EQUAL(accounting.live_bytes, expected);
+        BOOST_REQUIRE_EQUAL(index.get_live_record_bytes(), uint64_t(expected));
+    };
+
     const auto pk0 = primary_index_key{make_kv_mutation(schema, "pk0", "v0").decorated_key()};
     const auto pk1 = primary_index_key{make_kv_mutation(schema, "pk1", "v1").decorated_key()};
     const auto pk2 = primary_index_key{make_kv_mutation(schema, "pk2", "v2").decorated_key()};
@@ -899,7 +908,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_space_accounting) {
     auto [inserted0, prev0] = index.insert(pk0, index_entry{.location = loc0, .timestamp = api::timestamp_type(10)});
     BOOST_REQUIRE(inserted0);
     BOOST_REQUIRE(!prev0);
-    BOOST_REQUIRE_EQUAL(accounting.live_bytes, ssize_t(loc0.size));
+    check_live_bytes(ssize_t(loc0.size));
     BOOST_REQUIRE_EQUAL(accounting.add_calls, 1u);
     BOOST_REQUIRE_EQUAL(accounting.free_calls, 0u);
     BOOST_REQUIRE_EQUAL(accounting.live_location_count(), 1);
@@ -911,7 +920,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_space_accounting) {
     BOOST_REQUIRE(prev_old);
     BOOST_REQUIRE(prev_old->location == loc0);
     BOOST_REQUIRE_EQUAL(prev_old->timestamp, api::timestamp_type(10));
-    BOOST_REQUIRE_EQUAL(accounting.live_bytes, ssize_t(loc0.size));
+    check_live_bytes(ssize_t(loc0.size));
     BOOST_REQUIRE_EQUAL(accounting.add_calls, 1u);
     BOOST_REQUIRE_EQUAL(accounting.free_calls, 0u);
     BOOST_REQUIRE_EQUAL(accounting.live_location_count(), 1);
@@ -923,7 +932,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_space_accounting) {
     BOOST_REQUIRE(prev1);
     BOOST_REQUIRE(prev1->location == loc0);
     BOOST_REQUIRE_EQUAL(prev1->timestamp, api::timestamp_type(10));
-    BOOST_REQUIRE_EQUAL(accounting.live_bytes, ssize_t(loc1.size));
+    check_live_bytes(ssize_t(loc1.size));
     BOOST_REQUIRE_EQUAL(accounting.add_calls, 2u);
     BOOST_REQUIRE_EQUAL(accounting.free_calls, 1u);
     BOOST_REQUIRE_EQUAL(accounting.live_location_count(), 1);
@@ -936,7 +945,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_space_accounting) {
     auto [inserted2, prev2] = index.insert(pk1, index_entry{.location = loc2, .timestamp = api::timestamp_type(7)});
     BOOST_REQUIRE(inserted2);
     BOOST_REQUIRE(!prev2);
-    BOOST_REQUIRE_EQUAL(accounting.live_bytes, ssize_t(loc1.size + loc2.size));
+    check_live_bytes(ssize_t(loc1.size + loc2.size));
     BOOST_REQUIRE_EQUAL(accounting.add_calls, 3u);
     BOOST_REQUIRE_EQUAL(accounting.free_calls, 1u);
     BOOST_REQUIRE_EQUAL(accounting.live_location_count(), 2);
@@ -945,14 +954,14 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_space_accounting) {
 
     // erase(pk1, loc1): location mismatch, returns false, no accounting change  →  {pk0: loc1, pk1: loc2}
     BOOST_REQUIRE(!index.erase(pk1, loc1));
-    BOOST_REQUIRE_EQUAL(accounting.live_bytes, ssize_t(loc1.size + loc2.size));
+    check_live_bytes(ssize_t(loc1.size + loc2.size));
     BOOST_REQUIRE_EQUAL(accounting.add_calls, 3u);
     BOOST_REQUIRE_EQUAL(accounting.free_calls, 1u);
     BOOST_REQUIRE_EQUAL(accounting.live_location_count(), 2);
 
     // update_record_location(pk0, loc1 -> loc3): old location matches, succeeds, frees loc1 adds loc3  →  {pk0: loc3, pk1: loc2}
     BOOST_REQUIRE(index.update_record_location(pk0, loc1, loc3));
-    BOOST_REQUIRE_EQUAL(accounting.live_bytes, ssize_t(loc2.size + loc3.size));
+    check_live_bytes(ssize_t(loc2.size + loc3.size));
     BOOST_REQUIRE_EQUAL(accounting.add_calls, 4u);
     BOOST_REQUIRE_EQUAL(accounting.free_calls, 2u);
     BOOST_REQUIRE_EQUAL(accounting.live_location_count(), 2);
@@ -964,14 +973,14 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_space_accounting) {
 
     // update_record_location(pk0, loc1 -> loc4): old location no longer current, fails, no accounting change  →  {pk0: loc3, pk1: loc2}
     BOOST_REQUIRE(!index.update_record_location(pk0, loc1, loc4));
-    BOOST_REQUIRE_EQUAL(accounting.live_bytes, ssize_t(loc2.size + loc3.size));
+    check_live_bytes(ssize_t(loc2.size + loc3.size));
     BOOST_REQUIRE_EQUAL(accounting.add_calls, 4u);
     BOOST_REQUIRE_EQUAL(accounting.free_calls, 2u);
     BOOST_REQUIRE_EQUAL(accounting.live_location_count(), 2);
 
     // erase(pk1, loc2): location matches, succeeds, frees loc2  →  {pk0: loc3}
     BOOST_REQUIRE(index.erase(pk1, loc2));
-    BOOST_REQUIRE_EQUAL(accounting.live_bytes, ssize_t(loc3.size));
+    check_live_bytes(ssize_t(loc3.size));
     BOOST_REQUIRE_EQUAL(accounting.add_calls, 4u);
     BOOST_REQUIRE_EQUAL(accounting.free_calls, 3u);
     BOOST_REQUIRE_EQUAL(accounting.live_location_count(), 1);
@@ -987,14 +996,14 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_space_accounting) {
     auto [inserted5, prev5] = index.insert(pk2, index_entry{.location = loc5, .timestamp = api::timestamp_type(13)});
     BOOST_REQUIRE(inserted5);
     BOOST_REQUIRE(!prev5);
-    BOOST_REQUIRE_EQUAL(accounting.live_bytes, ssize_t(loc3.size + loc4.size + loc5.size));
+    check_live_bytes(ssize_t(loc3.size + loc4.size + loc5.size));
     BOOST_REQUIRE_EQUAL(accounting.add_calls, 6u);
     BOOST_REQUIRE_EQUAL(accounting.free_calls, 3u);
     BOOST_REQUIRE_EQUAL(accounting.live_location_count(), 3);
 
     // range erase pk1: removes pk1 entry (loc4), frees via accounting  →  {pk0: loc3, pk2: loc5}
     index.erase(dht::partition_range::make_singular(pk1.dk)).get();
-    BOOST_REQUIRE_EQUAL(accounting.live_bytes, ssize_t(loc3.size + loc5.size));
+    check_live_bytes(ssize_t(loc3.size + loc5.size));
     BOOST_REQUIRE_EQUAL(accounting.add_calls, 6u);
     BOOST_REQUIRE_EQUAL(accounting.free_calls, 4u);
     BOOST_REQUIRE_EQUAL(accounting.live_location_count(), 2);
@@ -1006,7 +1015,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_space_accounting) {
     // clear(): removes all remaining entries (pk0->loc3, pk2->loc5), all freed  →  {}
     index.clear().get();
     BOOST_REQUIRE(index.empty());
-    BOOST_REQUIRE_EQUAL(accounting.live_bytes, 0);
+    check_live_bytes(0);
     BOOST_REQUIRE_EQUAL(accounting.add_calls, 6u);
     BOOST_REQUIRE_EQUAL(accounting.free_calls, 6u);
     BOOST_REQUIRE_EQUAL(accounting.live_location_count(), 0);
@@ -1035,6 +1044,11 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_range_erase_and_clear_space_
     } accounting;
 
     primary_index index(schema, accounting);
+
+    auto check_live_bytes = [&] (ssize_t expected) {
+        BOOST_REQUIRE_EQUAL(accounting.live_bytes, expected);
+        BOOST_REQUIRE_EQUAL(index.get_live_record_bytes(), uint64_t(expected));
+    };
 
     struct entry {
         primary_index_key key;
@@ -1067,7 +1081,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_range_erase_and_clear_space_
 
     BOOST_REQUIRE_EQUAL(accounting.add_calls, 5u);
     BOOST_REQUIRE_EQUAL(accounting.free_calls, 0u);
-    BOOST_REQUIRE_EQUAL(accounting.live_bytes, ssize_t(entries[0].loc.size + entries[1].loc.size + entries[2].loc.size + entries[3].loc.size + entries[4].loc.size));
+    check_live_bytes(ssize_t(entries[0].loc.size + entries[1].loc.size + entries[2].loc.size + entries[3].loc.size + entries[4].loc.size));
 
     index.erase(dht::partition_range(
             dht::partition_range::bound(entries[1].key.dk, true),
@@ -1075,7 +1089,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_range_erase_and_clear_space_
 
     BOOST_REQUIRE_EQUAL(accounting.add_calls, 5u);
     BOOST_REQUIRE_EQUAL(accounting.free_calls, 3u);
-    BOOST_REQUIRE_EQUAL(accounting.live_bytes, ssize_t(entries[0].loc.size + entries[4].loc.size));
+    check_live_bytes(ssize_t(entries[0].loc.size + entries[4].loc.size));
     BOOST_REQUIRE(index.find(entries[0].key.dk) != index.end());
     BOOST_REQUIRE(index.find(entries[1].key.dk) == index.end());
     BOOST_REQUIRE(index.find(entries[2].key.dk) == index.end());
@@ -1090,7 +1104,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_range_erase_and_clear_space_
     BOOST_REQUIRE(index.empty());
     BOOST_REQUIRE_EQUAL(accounting.add_calls, 5u);
     BOOST_REQUIRE_EQUAL(accounting.free_calls, 5u);
-    BOOST_REQUIRE_EQUAL(accounting.live_bytes, 0);
+    check_live_bytes(0);
     BOOST_REQUIRE_EQUAL(accounting.freed_locations.size(), 5u);
     BOOST_REQUIRE_EQUAL(std::count(accounting.freed_locations.begin(), accounting.freed_locations.end(), entries[0].loc), 1);
     BOOST_REQUIRE_EQUAL(std::count(accounting.freed_locations.begin(), accounting.freed_locations.end(), entries[4].loc), 1);
@@ -2333,6 +2347,53 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_compaction_candidate_score_ranks_by_effici
     BOOST_REQUIRE(four_in < all_dead);
 }
 
+// The live bytes of a segment set are maintained as segments are linked, freed from and unlinked,
+// rather than computed by walking it, so every one of those paths has to keep them in step with the
+// segments the set actually holds.
+SEASTAR_THREAD_TEST_CASE(test_logstor_segment_set_live_bytes) {
+    constexpr uint64_t segment_size = 128 * 1024;
+    constexpr size_t record_size = 1024;
+
+    // Descriptors are intrusively linked into the sets, so they must keep their addresses, and every
+    // set must be destroyed before them.
+    std::deque<segment_descriptor> descs;
+    segment_set segments{segment_size};
+
+    auto add_segment = [&] (segment_set& set, size_t live_records) -> segment_descriptor& {
+        auto& desc = descs.emplace_back();
+        desc.reset(segment_size);
+        desc.on_write(live_records * record_size, live_records);
+        set.add_segment(desc);
+        return desc;
+    };
+
+    // An empty set holds nothing.
+    BOOST_REQUIRE_EQUAL(segments.live_bytes(), 0);
+
+    // A segment joins with the records it already holds.
+    auto& sparse = add_segment(segments, 1);
+    auto& dense = add_segment(segments, 16);
+    BOOST_REQUIRE_EQUAL(segments.live_bytes(), 17 * record_size);
+
+    // Freeing records takes off exactly the space they gave back.
+    dense.on_free(6 * record_size, 6);
+    segments.update_segment(dense, 6 * record_size);
+    BOOST_REQUIRE_EQUAL(segments.live_bytes(), 11 * record_size);
+
+    // Merging hands the segments over together with their live bytes.
+    segment_set other{segment_size};
+    other.merge(segments).get();
+    BOOST_REQUIRE_EQUAL(segments.live_bytes(), 0);
+    BOOST_REQUIRE_EQUAL(other.live_bytes(), 11 * record_size);
+
+    // Removing a segment takes its bytes out of the set.
+    other.remove_segment(sparse);
+    BOOST_REQUIRE_EQUAL(other.live_bytes(), 10 * record_size);
+
+    other.clear();
+    BOOST_REQUIRE_EQUAL(other.live_bytes(), 0);
+}
+
 // Checks that compaction candidate selection chooses segments in ascending utilization order,
 // respects the batch cap, and the returned score accurately describes the selected segments.
 SEASTAR_THREAD_TEST_CASE(test_logstor_select_compaction_batch) {
@@ -2349,7 +2410,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_select_compaction_batch) {
     // Descriptors are intrusively linked into the sets, so they must keep their addresses, and every
     // set must be destroyed before them.
     std::deque<segment_descriptor> descs;
-    segment_set segments;
+    segment_set segments{segment_size};
     auto add_segment = [&] (segment_set& set, size_t live_records) {
         auto& desc = descs.emplace_back();
         desc.reset(segment_size);
@@ -2401,14 +2462,14 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_select_compaction_batch) {
 
     // A group whose segments are all nearly full has no batch with a net gain, which is the answer
     // for the whole group and not only for the prefix that happened to be scored.
-    segment_set dense;
+    segment_set dense{segment_size};
     for (size_t i = 0; i < min_segments_per_compaction; ++i) {
         add_segment(dense, dense_records);
     }
     BOOST_REQUIRE(!select_compaction_batch(dense, segment_size, min_segments_per_compaction));
 
     // An empty group has nothing to compact.
-    segment_set empty;
+    segment_set empty{segment_size};
     BOOST_REQUIRE(!select_compaction_batch(empty, segment_size, min_segments_per_compaction));
 }
 

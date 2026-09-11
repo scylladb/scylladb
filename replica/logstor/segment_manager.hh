@@ -59,6 +59,25 @@ struct segment_manager_config {
     seastar::scheduling_group split_compaction_sg;
 };
 
+// What the logstor of one shard is using. Every field is shard wide and covers every table, unlike
+// the statistics of the segments a compaction group owns. Kept in one struct, read through a single
+// accessor, so that the shard wide usage numbers stay in one place and another one can join them
+// without an accessor of its own.
+struct segment_manager_usage {
+    // Bytes of the files allocated for segments. This is the space logstor holds on disk, which is
+    // more than the space its data takes: it also covers the segments that are free, and files are
+    // never given back during normal operation, only retired on recovery.
+    uint64_t disk_usage{0};
+    // Bytes of the segments that hold records, which is the space the data of this shard takes:
+    // the segments the compaction groups own, the one being written and the ones a read still
+    // refers to. Less than disk_usage by the free segments and by the room in the files holding
+    // them, and the logstor part of the load a node reports.
+    uint64_t segment_bytes_in_use{0};
+    // Memory the segment manager holds for its own bookkeeping. The indexes of the tables are not
+    // part of it.
+    size_t memory_usage{0};
+};
+
 struct table_segment_histogram_bucket {
     size_t count;
     size_t max_data_size;
@@ -73,11 +92,13 @@ struct table_segment_histogram_bucket {
 struct table_segment_stats {
     size_t compaction_group_count{0};
     size_t segment_count{0};
+    uint64_t live_record_bytes{0};
     std::vector<table_segment_histogram_bucket> histogram;
 
     table_segment_stats& operator+=(table_segment_stats& other) {
         compaction_group_count += other.compaction_group_count;
         segment_count += other.segment_count;
+        live_record_bytes += other.live_record_bytes;
         histogram.resize(std::max(histogram.size(), other.histogram.size()));
         for (size_t i = 0; i < other.histogram.size(); i++) {
             histogram[i] += other.histogram[i];
@@ -146,7 +167,7 @@ public:
     // The index must be cleared first, so that no record of the group is reachable.
     future<> discard_segments(logstor_group&);
 
-    size_t get_memory_usage() const;
+    segment_manager_usage get_usage() const noexcept;
 
     future<> await_pending_writes();
 

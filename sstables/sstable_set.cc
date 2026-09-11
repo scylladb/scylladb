@@ -199,7 +199,7 @@ sstable_set::bytes_on_disk() const noexcept {
     return _impl->bytes_on_disk();
 }
 
-file_size_stats
+utils::file_size_stats
 sstable_set::get_file_size_stats() const noexcept {
     return _impl->get_file_size_stats();
 }
@@ -335,7 +335,7 @@ static std::unordered_map<run_id, shared_sstable_run> clone_runs(const std::unor
 }
 
 partitioned_sstable_set::partitioned_sstable_set(schema_ptr schema, const std::vector<shared_sstable>& unleveled_sstables, const interval_map_type& leveled_sstables,
-        const lw_shared_ptr<sstable_list>& all, const std::unordered_map<run_id, shared_sstable_run>& all_runs, dht::token_range token_range, file_size_stats bytes_on_disk)
+        const lw_shared_ptr<sstable_list>& all, const std::unordered_map<run_id, shared_sstable_run>& all_runs, dht::token_range token_range, utils::file_size_stats bytes_on_disk)
         : sstable_set_impl(bytes_on_disk)
         , _schema(schema)
         , _unleveled_sstables(unleveled_sstables)
@@ -1207,9 +1207,9 @@ compound_sstable_set::size() const noexcept {
     return std::ranges::fold_left(_sets | std::views::transform(std::mem_fn(&sstable_set::size)), size_t(0), std::plus{});
 }
 
-file_size_stats
+utils::file_size_stats
 compound_sstable_set::get_file_size_stats() const noexcept {
-    return std::ranges::fold_left(_sets | std::views::transform(std::mem_fn(&sstable_set::get_file_size_stats)), file_size_stats{}, std::plus{});
+    return std::ranges::fold_left(_sets | std::views::transform(std::mem_fn(&sstable_set::get_file_size_stats)), utils::file_size_stats{}, std::plus{});
 }
 
 class compound_sstable_set::incremental_selector : public incremental_selector_impl {
