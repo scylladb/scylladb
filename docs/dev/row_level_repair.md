@@ -281,3 +281,86 @@ rows repair master sent.
 
 - repair_stream_cmd::error
 Notifies an error has happened on the follower.
+
+## Repair of logstor tables
+
+Logstor tables (see `docs/dev/logstor.md`) are repaired with the same wire
+protocol and the same row level repair algorithm, with a few adjustments to the
+algorithm.
+
+### Why logstor is different
+
+- A logstor record holds a whole partition. Logstor tables have a partition key
+only, so a partition is one row at the empty clustering key, or a partition
+tombstone, or both.
+
+- A logstor write *replaces* the partition. The index keeps the record with the
+highest record timestamp, and two records of the same key are never merged.
+
+The LSM storage engine works the other way: a write only adds a new mutation, and
+the engine merges all the mutations of a partition at cell level, on every read
+and during compaction. Normal row level repair relies on this LSM merge. It sends
+only the differing rows, and the LSM merge combines them with the version already
+stored on the receiving node.
+
+Logstor has no such merge, so writing only the differing rows would replace the
+whole partition and lose the cells that exist only in the other version.
+
+So repair of a logstor table has to reconcile whole partitions before it writes
+or sends anything. This is the reason for all the adjustments below.
+
+### Sync boundaries are partition aligned
+
+Whole-partition reconciliation only works if all fragments of a partition land in
+the same sync window. A logstor partition can produce two repair rows: a
+`partition_start` carrying a partition tombstone, plus the row. A sync boundary
+between them would make the master merge a partial partition and drop the
+tombstone or the row, which can resurrect deleted data. Logstor sessions
+therefore align the sync windows to partitions.
+
+### Whole-partition convergence on the master
+
+After Step B the master's working row buffer holds every distinct version of
+every row from all replicas. For logstor tables the master then converges that
+buffer (`converge_working_row_buf_for_logstor()`):
+
+1. group the buffered rows by partition key (rows of a partition are contiguous)
+2. for every partition that repair touched, that is, one that has a row pulled
+from a follower and more than one version to merge, merge all its versions into a
+single `mutation`
+3. expand the merged mutation back into repair rows, mark them dirty so the
+master flushes and sends them, and recompute the combined hash
+
+This is the same cell level reconciliation the LSM merge does, with the same row
+marker, cell and tombstone rules. Repair does not rely on logstor's index level
+replacement
+rule, which compares record timestamps only: it computes the reconciled partition
+first and writes it as a single record.
+
+The rest of the pipeline is unchanged. The master flush writes the converged
+partition to the local logstor, replacing the stale version, and Step C computes
+`master - peer` over the converged rows.
+
+Step C has one adjustment. Instead of selecting the rows whose hash is in the set
+diff, `put_row_diff` uses
+`copy_partitions_from_working_row_buf_within_set_diff()`, which sends every row
+of a partition that has at least one row in the set diff. A follower must receive
+the complete converged partition; a partial partition would replace its record
+and lose data. The `needs_all_rows` case sends the whole row buffer as before, so
+it is whole-partition already.
+
+### Applying rows
+
+`make_repair_writer()` picks the writer by storage backend. Normal tables write
+streaming SSTables, which logstor does not have. Logstor tables get
+`logstor_repair_writer_impl`, which rebuilds logical mutations and applies them
+directly. The `repair_writer` interface and the repair protocol are unchanged,
+only the sink differs. The master's local flush uses the same writer.
+
+The sink consumes the fragment stream and, per partition:
+
+1. rebuilds one `mutation`
+2. computes the destination shards with `sharder.shard_for_writes(token)`
+3. sends the frozen mutation to every destination shard
+4. on the destination shard,  calls `table::apply()`, which routes to
+`logstor::write()`
