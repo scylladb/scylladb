@@ -15,19 +15,29 @@
 
 #include <string_view>
 
+class schema;
+
+namespace data_dictionary {
+class database;
+}
+
 namespace cql3 {
 namespace functions {
 
-// BM25_SCORE(c, t) returns the same score as BM25(c, t), and BM25_RANK(c, t) the position of the
-// row in the search's result, counted from 1. ANN_SCORE(c, v) and ANN_RANK(c, v) do the same for
-// ANN(c, v). All calls with the same arguments describe one search, so a query using several of
-// them makes one request.
+// BM25(c, t) returns a (score, rank) tuple: the score the index gave the row and the position of
+// the row in the search's result, counted from 1. BM25_SCORE(c, t) and BM25_RANK(c, t) return the
+// two elements on their own. ANN(c, v), ANN_SCORE(c, v) and ANN_RANK(c, v) are the same for a
+// vector search. All calls with the same arguments describe one search, so a query using several
+// of them makes one request.
 static const function_name BM25_FUNCTION_NAME = function_name::native_function("bm25");
 static const function_name BM25_SCORE_FUNCTION_NAME = function_name::native_function("bm25_score");
 static const function_name BM25_RANK_FUNCTION_NAME = function_name::native_function("bm25_rank");
 static const function_name ANN_FUNCTION_NAME = function_name::native_function("ann");
 static const function_name ANN_SCORE_FUNCTION_NAME = function_name::native_function("ann_score");
 static const function_name ANN_RANK_FUNCTION_NAME = function_name::native_function("ann_rank");
+
+/// The return type of BM25() and ANN(): tuple<float, int> holding (score, rank).
+data_type score_and_rank_type();
 
 /// Whether `name` is one of the ANN family, whose argument types are not fixed but inferred from
 /// the call site.
@@ -40,6 +50,8 @@ enum class search_family { ann, bm25 };
 
 /// Which value a search function returns.
 enum class search_value {
+    /// The (score, rank) tuple BM25() and ANN() return; see score_and_rank_type().
+    score_and_rank,
     /// The score the index gave the row.
     score,
     /// The position of the row in the index's result, counted from 1.
@@ -74,10 +86,11 @@ public:
 const external_search_function* as_external_search_function(const expr::function_call& fc);
 
 /// Prepares the left-hand side of a relation that is a call to an external search function, before
-/// the right-hand side is type-checked against it. "BM25(c, t) > 0" compares the score and is left
-/// alone, as is any other expression. A call whose value the relation cannot compare is rejected
-/// here, named, rather than left to fail as a type error on the right-hand side.
-expr::expression prepare_external_search_relation_lhs(expr::expression lhs);
+/// the right-hand side is type-checked against it. "BM25(c, t) > 0" compares the score, so a call
+/// returning the (score, rank) tuple becomes the score function and the 0 types as a float, as it
+/// always did. A call whose value the relation cannot compare is rejected here, named, rather than
+/// left to fail as a type error on the right-hand side. Any other expression is returned unchanged.
+expr::expression prepare_external_search_relation_lhs(expr::expression lhs, data_dictionary::database db, const schema& table_schema);
 
 shared_ptr<function> make_bm25_function();
 shared_ptr<function> make_bm25_score_function();

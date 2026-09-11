@@ -10,6 +10,7 @@
 
 #include "cql3/expr/expression.hh"
 #include "cql3/expr/temporary_allocator.hh"
+#include "cql3/selection/selector.hh"
 
 #include <optional>
 #include <string_view>
@@ -71,12 +72,20 @@ struct search_temporaries {
 };
 
 /// The expression that replaces `call`, a call to a search function returning `value`: a read of
-/// the temporary holding that value, allocated if this is the first call asking for it. Every call
-/// asking for one value reads the same temporary, so BM25() and BM25_SCORE() in one query share
-/// one. The temporary is typed by the function's declared return type, since that is what the
-/// selector reading it was typed by, and carries the call in replaced_expr, so an unaliased
-/// selector keeps its name.
+/// the temporary holding that value, allocated if this is the first call asking for it, or for the
+/// (score, rank) pair a tuple of the two reads. Every call asking for one value reads the same
+/// temporary, so BM25() and BM25_SCORE() in one query share the score's. A temporary is typed by
+/// the function's declared return type, since that is what the selector reading it was typed by.
+///
+/// A temporary that replaces a whole call carries the call in replaced_expr, so an unaliased
+/// selector still formats as the call. The two temporaries inside the tuple carry no call; see
+/// name_selector_as_written().
 expr::expression replace_search_call(functions::search_value value, const expr::expression& call, search_temporaries& temporaries,
         expr::temporary_allocator& allocator);
+
+/// Names an unaliased selector after `written`, the expression the user wrote, when what it was
+/// replaced with would not format as it. "SELECT BM25(c, t)" is replaced with a tuple of two
+/// temporaries, which would otherwise be named "(system.temporary(0), system.temporary(1))".
+void name_selector_as_written(selection::prepared_selector& selector, const expr::expression& written);
 
 } // namespace cql3::statements::external_search

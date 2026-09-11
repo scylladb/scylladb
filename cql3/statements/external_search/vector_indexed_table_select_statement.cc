@@ -122,6 +122,7 @@ void prepare_ann_selectors(std::vector<selection::prepared_selector>& prepared_s
         std::optional<ann_ordering_info>& ordering_info, expr::temporary_allocator& temporaries_allocator,
         data_dictionary::database db, const schema_ptr& schema, prepare_context& ctx) {
     for (auto& ps : prepared_selectors) {
+        const auto written = ps.expr;
         ps.expr = expr::search_and_replace(ps.expr, [&] (const expr::expression& candidate) -> std::optional<expr::expression> {
             const auto* fc = expr::as_if<expr::function_call>(&candidate);
             if (!fc) {
@@ -161,19 +162,14 @@ void prepare_ann_selectors(std::vector<selection::prepared_selector>& prepared_s
             }
 
             if (ordering_info->is_rescoring_enabled) {
-                if (fun->value() == functions::search_value::rank) {
+                if (fun->value() != functions::search_value::score) {
                     // A rescoring index reorders the rows by the recomputed similarity, so the
                     // Vector Store's rank no longer applies, and the rank in the new order is not
-                    // known until all rows are scored, which happens after the selectors.
+                    // known until all rows are scored, which happens after the selectors. ANN() is
+                    // rejected too, since its tuple contains the rank.
                     throw exceptions::invalid_request_exception(seastar::format(
                             "{}() is not supported with a rescoring vector index: the rank is not available after rescoring",
                             function_name));
-                }
-
-                // Name the selector by what the user wrote - ps.expr, untouched so far - or an
-                // unaliased ANN() would come back named similarity_cosine(...).
-                if (!ps.alias) {
-                    ps.alias = ::make_shared<column_identifier>(fmt::format("{:result_set_metadata}", ps.expr), true);
                 }
 
                 // Every occurrence computes the similarity again, the hidden ordering selector included.
@@ -182,6 +178,7 @@ void prepare_ann_selectors(std::vector<selection::prepared_selector>& prepared_s
 
             return external_search::replace_search_call(fun->value(), candidate, ordering_info->temporaries, temporaries_allocator);
         });
+        external_search::name_selector_as_written(ps, written);
     }
 }
 

@@ -27,7 +27,8 @@ struct deferred_select_term {
 struct bm25_ordering_info {
     secondary_index::index index;
     expr::expression search_term;
-    // Temporaries holding the score and the rank; see external_search::search_temporaries.
+    // Temporaries holding the score and the rank; see external_search::search_temporaries. BM25()
+    // is replaced with a tuple of the two, so it has no temporary of its own.
     external_search::search_temporaries temporaries;
     // The SELECT occurrences' search terms that only execution can compare, a bind marker standing
     // where at least one of the two values will be.
