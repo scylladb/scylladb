@@ -1,11 +1,11 @@
 import metric
 import os
 import random
-import collectd
 import logging
+import prometheus
 
 
-class FakeCollectd(object):
+class FakePrometheus(object):
     def __init__(self, socketName):
         pass
 
@@ -32,7 +32,7 @@ class FakeMetric(Metric):
         results = {}
 
         def _add_metric(metric, results):
-            m = FakeMetric(metric, None)
+            m = FakeMetric(metric, None, None)
             m.add_to_results(results)
 
         for cpu in range(4):
@@ -47,4 +47,4 @@ class FakeMetric(Metric):
 
 def fake():
     metric.Metric = FakeMetric
-    collectd.Collectd = FakeCollectd
+    prometheus.Prometheus = FakePrometheus
