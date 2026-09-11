@@ -59,7 +59,11 @@
 #include "types/list.hh"
 #include "types/user.hh"
 #include "utils/UUID_gen.hh"
+#include "utils/error_injection.hh"
 
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <cstdio>
 #include <filesystem>
 #include <cstdlib>
@@ -902,6 +906,184 @@ SEASTAR_THREAD_TEST_CASE(test_pq_static_rows_round_trip) {
         for (size_t i = 0; i < got.size(); ++i) {
             assert_that(got[i]).is_equal_to(expected[i]);
         }
+    }).get();
+}
+
+// A live cell whose value is the EMPTY byte string on a fixed-width column. Legal CQL --
+// `INSERT ... VALUES (blobAsInt(0x))` -- and what the random mutation generator behind
+// schema_changes_test produces; the row format stores it as a zero-length value. A fixed-width
+// Parquet leaf has no zero-length encoding, and decoding empty bytes as an int gives 0: a
+// *different* value, silently, which is how test_schema_changes_pq failed on its very first case.
+// The writer routes such cells through the `__empty_mask` channel instead (schema_mapping.hh).
+//
+// This holds pq to what mx reads back, cell for cell: a regular int, bigint and double, a static
+// bigint with a TTL, an empty text (which BYTE_ARRAY carries natively), and a map whose element
+// value is empty -- each with a real 0 beside it, so the two cannot be conflated, and with a dead
+// cell on the same row so the deletion and empty-value channels coexist.
+SEASTAR_THREAD_TEST_CASE(test_pq_empty_fixed_width_values_round_trip_like_mx) {
+    sstables::test_env::do_with_async([] (sstables::test_env& env) {
+        auto s = schema_builder(1, "ks", "pq_empty_values")
+            .with_column("pk", utf8_type, column_kind::partition_key)
+            .with_column("ck", int32_type, column_kind::clustering_key)
+            .with_column("sb", long_type, column_kind::static_column)
+            .with_column("vi", int32_type)
+            .with_column("vb", long_type)
+            .with_column("vd", double_type)
+            .with_column("vt", utf8_type)
+            .with_column("m", map_type_impl::get_instance(int32_type, int32_type, true))
+            .build();
+        const api::timestamp_type ts = 1700000000000000;
+        const bytes empty;
+        auto cdef = [&] (const char* n) -> const column_definition& {
+            return *s->get_column_definition(to_bytes(n));
+        };
+        auto ck = [&] (int32_t i) {
+            return clustering_key::from_single_value(*s, int32_type->decompose(i));
+        };
+        auto put = [&] (mutation& m, int32_t row, const char* col, const abstract_type& t,
+                        bytes_view v, api::timestamp_type cts) {
+            m.set_clustered_cell(ck(row), cdef(col), atomic_cell::make_live(t, cts, v));
+        };
+        auto make_map = [&] (bytes_view first_value) {
+            collection_mutation_writer w{tombstone{}};
+            auto k1 = int32_type->decompose(int32_t(1)), k2 = int32_type->decompose(int32_t(2));
+            w.push_back(managed_bytes_view(managed_bytes(k1)),
+                        atomic_cell::make_live(*int32_type, ts, first_value,
+                                               atomic_cell::collection_member::yes));
+            w.push_back(managed_bytes_view(managed_bytes(k2)),
+                        atomic_cell::make_live(*int32_type, ts, int32_type->decompose(int32_t(0)),
+                                               atomic_cell::collection_member::yes));
+            return atomic_cell_or_collection(std::move(w).finish());
+        };
+
+        utils::chunked_vector<mutation> muts;
+        for (int p = 0; p < 3; ++p) {
+            mutation m(s, partition_key::from_single_value(
+                    *s, utf8_type->decompose(sstring(format("k{}", p)))));
+            // The static: empty with a TTL on p=0, a real zero on p=1, absent on p=2.
+            if (p == 0) {
+                m.set_static_cell(cdef("sb"), atomic_cell::make_live(*long_type, ts, bytes_view(empty),
+                        gc_clock::time_point(gc_clock::duration(1800000000)),
+                        gc_clock::duration(600)));
+            } else if (p == 1) {
+                m.set_static_cell(cdef("sb"), atomic_cell::make_live(*long_type, ts,
+                        long_type->decompose(int64_t(0))));
+            }
+            // Row 0: every fixed-width column empty (one with a diverging timestamp), an empty
+            // text, a map with an empty element value, and a dead cell alongside.
+            put(m, 0, "vi", *int32_type, empty, ts);
+            put(m, 0, "vb", *long_type, empty, ts + 1);
+            put(m, 0, "vd", *double_type, empty, ts);
+            put(m, 0, "vt", *utf8_type, empty, ts);
+            m.set_clustered_cell(ck(0), cdef("m"), make_map(empty));
+            // Row 1: a real zero in every one of them.
+            put(m, 1, "vi", *int32_type, int32_type->decompose(int32_t(0)), ts);
+            put(m, 1, "vb", *long_type, long_type->decompose(int64_t(0)), ts);
+            put(m, 1, "vd", *double_type, double_type->decompose(0.0), ts);
+            put(m, 1, "vt", *utf8_type, utf8_type->decompose(sstring("0")), ts);
+            m.set_clustered_cell(ck(1), cdef("m"), make_map(int32_type->decompose(int32_t(0))));
+            // Row 2: ordinary values, an empty int beside a dead double.
+            put(m, 2, "vi", *int32_type, empty, ts);
+            put(m, 2, "vb", *long_type, long_type->decompose(int64_t(-1 - p)), ts);
+            m.set_clustered_cell(ck(2), cdef("vd"), atomic_cell::make_dead(ts,
+                    gc_clock::time_point(gc_clock::duration(1700000001))));
+            muts.push_back(std::move(m));
+        }
+        std::sort(muts.begin(), muts.end(), [] (const mutation& a, const mutation& b) {
+            return a.decorated_key().less_compare(*a.schema(), b.decorated_key());
+        });
+        const auto expected = muts;
+
+        auto ref = make_sstable_containing(env.make_sstable(s), muts).get();
+        auto sst = make_sstable_containing(
+                env.make_sstable(s, sstable_version_types::pq), std::move(muts)).get();
+        BOOST_REQUIRE(ref->get_version() != sstable_version_types::pq);
+
+        auto got_mx = read_all(ref, s, env.make_reader_permit());
+        auto got_pq = read_all(sst, s, env.make_reader_permit());
+        BOOST_REQUIRE_EQUAL(got_mx.size(), expected.size());
+        BOOST_REQUIRE_EQUAL(got_pq.size(), expected.size());
+        for (size_t i = 0; i < expected.size(); ++i) {
+            assert_that(got_mx[i]).is_equal_to(expected[i]);
+            assert_that(got_pq[i]).is_equal_to(expected[i]);
+            assert_that(got_pq[i]).is_equal_to(got_mx[i]);
+        }
+
+        // And the file says how it did it: the channel exists, and the int leaf is null for
+        // exactly the empty cells -- one per partition on row 0 and one on row 2 -- rather than
+        // holding a 0 the reader would then have to be told to ignore.
+        auto buf = sst->data_read(0, sst->ondisk_data_size(), env.make_reader_permit()).get();
+        std::vector<uint8_t> img(buf.get(), buf.get() + buf.size());
+        auto md = sstables::parquet::format::parse_footer(img);
+        bool has_mask = false;
+        for (size_t i = 1; i < md.schema.size(); ++i) {
+            if (md.schema[i].is_leaf() && md.schema[i].name == "__empty_mask") { has_mask = true; }
+        }
+        BOOST_REQUIRE(has_mask);
+        int64_t vi_nulls = 0, vi_values = 0;
+        for (const auto& rg : md.row_groups) {
+            for (const auto& cc : rg.columns) {
+                if (!cc.meta || cc.meta->path() != "vi") { continue; }
+                BOOST_REQUIRE(cc.meta->stats && cc.meta->stats->null_count);
+                vi_nulls += *cc.meta->stats->null_count;
+                vi_values += cc.meta->num_values;
+            }
+        }
+        BOOST_REQUIRE_EQUAL(vi_values, int64_t(9));
+        BOOST_REQUIRE_EQUAL(vi_nulls, int64_t(6));
+    }).get();
+}
+
+// A partition with no rows, no static row and no tombstone. mx writes partition_start and
+// partition_end for it and reads it back; the pq shredder's end_partition() used to record
+// nothing for it, so the partition vanished from the file and a pq sstable disagreed with an mx
+// one written from the same stream -- the other half of test_schema_changes_pq's first failure.
+// It now gets the __no_ck placeholder row a static-only partition gets, which the reader turns
+// into exactly the two boundary fragments, and which counts as the one storage row it is.
+SEASTAR_THREAD_TEST_CASE(test_pq_empty_partition_round_trips_like_mx) {
+    sstables::test_env::do_with_async([] (sstables::test_env& env) {
+        auto s = pq_schema();
+        const api::timestamp_type ts = 1700000000000000;
+        utils::chunked_vector<mutation> muts;
+        for (int p = 0; p < 5; ++p) {
+            mutation m(s, partition_key::from_single_value(
+                    *s, utf8_type->decompose(sstring(format("k{}", p)))));
+            // Odd partitions carry one row; even ones nothing at all.
+            if (p % 2) {
+                auto ck = clustering_key::from_single_value(*s, int32_type->decompose(int32_t(p)));
+                m.set_clustered_cell(ck, *s->get_column_definition(to_bytes("v_int")),
+                        atomic_cell::make_live(*int32_type, ts, int32_type->decompose(int32_t(p))));
+            }
+            muts.push_back(std::move(m));
+        }
+        std::sort(muts.begin(), muts.end(), [] (const mutation& a, const mutation& b) {
+            return a.decorated_key().less_compare(*a.schema(), b.decorated_key());
+        });
+        const auto expected = muts;
+
+        auto ref = make_sstable_containing(env.make_sstable(s), muts).get();
+        auto sst = make_sstable_containing(
+                env.make_sstable(s, sstable_version_types::pq), std::move(muts)).get();
+        BOOST_REQUIRE(ref->get_version() != sstable_version_types::pq);
+
+        auto got_mx = read_all(ref, s, env.make_reader_permit());
+        auto got_pq = read_all(sst, s, env.make_reader_permit());
+        BOOST_REQUIRE_EQUAL(got_mx.size(), expected.size());
+        BOOST_REQUIRE_EQUAL(got_pq.size(), expected.size());
+        for (size_t i = 0; i < expected.size(); ++i) {
+            assert_that(got_pq[i]).is_equal_to(expected[i]);
+            assert_that(got_pq[i]).is_equal_to(got_mx[i]);
+        }
+        // Fragment for fragment, too: the empty partitions are a partition_start followed
+        // directly by a partition_end, with no static row or clustering row invented between.
+        auto frags_mx = fragments_of(ref, s, env.make_reader_permit());
+        auto frags_pq = fragments_of(sst, s, env.make_reader_permit());
+        BOOST_REQUIRE_EQUAL(frags_pq.size(), frags_mx.size());
+        for (size_t i = 0; i < frags_pq.size(); ++i) {
+            BOOST_REQUIRE_EQUAL(frags_pq[i], frags_mx[i]);
+        }
+        // Two clustering rows and three placeholders: five storage rows.
+        BOOST_REQUIRE_EQUAL(sst->get_stats_metadata().rows_count, int64_t(5));
     }).get();
 }
 
@@ -4508,6 +4690,110 @@ SEASTAR_THREAD_TEST_CASE(test_pq_declares_the_counter_convention) {
     }).get();
 }
 
+// Size-tiered bucketing has to compare like with like across formats.
+//
+// `data_size()` is two different quantities: for a compressed native sstable it is the data
+// component's *uncompressed* length, and for a `pq` sstable -- which has no CompressionInfo,
+// because Parquet compresses internally -- it is the file size. Bucketing is built on ratios, so
+// inside an all-native set that inconsistency cancels out and is invisible. In a hybrid table it
+// does not: the converted file reports several times smaller than the native sstable holding the
+// same rows, buckets several tiers below its true peer, and compaction settles into repeatedly
+// rewriting the one format that is most expensive to rewrite.
+//
+// Nothing about that failure is loud -- no error, no log line, just compaction declining to group
+// the converted files -- so it needs a test. Both supported strategies are affected: ICS buckets
+// this way directly and TWCS falls back to it within a window.
+SEASTAR_THREAD_TEST_CASE(test_size_tiered_buckets_compare_one_unit_across_formats) {
+    sstables::test_env::do_with_async([] (sstables::test_env& env) {
+        // Compression has to be on for the two units to differ at all, and the data has to be
+        // genuinely compressible for them to differ by enough to matter.
+        //
+        // make_muts() will not do for this: its mixed ints, doubles and short strings are
+        // incompressible at a 4 KiB chunk length -- measured at 59 440 uncompressed against 67 172
+        // on disk, i.e. LZ4 *expanded* it by 13 %. So a payload built to compress instead, which is
+        // also the realistic case: the tables Parquet is aimed at are ones whose values repeat.
+        auto s = schema_builder(1, "ks", "hybrid_buckets")
+            .with_column("pk", utf8_type, column_kind::partition_key)
+            .with_column("ck", int32_type, column_kind::clustering_key)
+            .with_column("v_txt", utf8_type)
+            .set_compressor_params(compression_parameters(compression_parameters::algorithm::lz4))
+            .build();
+
+        const sstring filler(400, 'a');
+        auto make = [&] (sstable_version_types v, int n_part, int n_rows) {
+            utils::chunked_vector<mutation> muts;
+            for (int part = 0; part < n_part; ++part) {
+                auto pk = partition_key::from_single_value(
+                        *s, utf8_type->decompose(sstring(format("key{:05d}", part))));
+                mutation m(s, pk);
+                for (int r = 0; r < n_rows; ++r) {
+                    auto ck = clustering_key::from_single_value(*s, int32_type->decompose(r));
+                    auto& cdef = *s->get_column_definition(to_bytes("v_txt"));
+                    m.set_clustered_cell(ck, cdef, atomic_cell::make_live(
+                            *cdef.type, 1000 + part, utf8_type->decompose(filler)));
+                }
+                muts.push_back(std::move(m));
+            }
+            std::sort(muts.begin(), muts.end(), [] (const mutation& a, const mutation& b) {
+                return a.decorated_key().less_compare(*a.schema(), b.decorated_key());
+            });
+            return make_sstable_containing(env.make_sstable(s, v), std::move(muts)).get();
+        };
+
+        constexpr int n_part = 20;
+        constexpr int native_rows = 50;
+        std::vector<shared_sstable> native;
+        for (int i = 0; i < 3; ++i) {
+            native.push_back(make(sstable_version_types::me, n_part, native_rows));
+        }
+        const auto native_ondisk = native[0]->ondisk_data_size();
+
+        // The point of the fixture is a `pq` sstable that occupies *the same disk space* as the
+        // native ones. Two sstables of equal on-disk size belong in one bucket whatever wrote them,
+        // so if they split, the only possible cause is the unit -- which is precisely the defect.
+        //
+        // The row count has to be derived rather than hardcoded, because the two formats are not
+        // remotely comparable per row here: LZ4 gets ~39x on this payload and Parquet, which
+        // dictionary-encodes a column of one repeated value, gets over 400x. So probe for Parquet's
+        // bytes-per-row and scale up to match. Deriving it also means the fixture survives a change
+        // in either codec's effectiveness, which a hardcoded multiplier would not.
+        auto probe = make(sstable_version_types::pq, n_part, native_rows);
+        const double pq_bytes_per_row = double(probe->ondisk_data_size()) / (n_part * native_rows);
+        const int pq_rows = std::max(1, int(double(native_ondisk) / pq_bytes_per_row / n_part));
+        auto pq = make(sstable_version_types::pq, n_part, pq_rows);
+
+        // Fixture preconditions. Both must hold for the assertions below to mean anything, so they
+        // are checked rather than assumed: the units must genuinely diverge on the native side, must
+        // coincide on the pq side, and the two files must land within a bucket-width of each other
+        // on disk.
+        BOOST_REQUIRE_GT(native[0]->data_size(), native_ondisk * 2);
+        BOOST_REQUIRE_EQUAL(pq->data_size(), pq->ondisk_data_size());
+        const double ondisk_ratio = double(pq->ondisk_data_size()) / double(native_ondisk);
+        BOOST_REQUIRE_MESSAGE(ondisk_ratio > 0.6 && ondisk_ratio < 1.4,
+                seastar::format("fixture failed to match on-disk sizes: pq {} vs native {} ({:.2f}x)",
+                                pq->ondisk_data_size(), native_ondisk, ondisk_ratio));
+        // ... and on `data_size()` they must be far enough apart that the old behaviour splits
+        // them, or this would pass either way.
+        const double data_ratio = double(pq->data_size()) / double(native[0]->data_size());
+        BOOST_REQUIRE_MESSAGE(data_ratio < 0.5,
+                seastar::format("fixture would not discriminate: data_size ratio {:.3f}", data_ratio));
+
+        compaction::size_tiered_compaction_strategy_options opts;
+
+        // All-native: one bucket, and this path must keep using `data_size()` -- every existing
+        // cluster's bucketing depends on it and none of them has a `pq` sstable to trip over.
+        auto native_buckets = compaction::size_tiered_compaction_strategy::get_buckets(native, opts);
+        BOOST_REQUIRE_EQUAL(native_buckets.size(), 1u);
+
+        // Mixed: equal on disk, so one bucket.
+        auto mixed = native;
+        mixed.push_back(pq);
+        auto mixed_buckets = compaction::size_tiered_compaction_strategy::get_buckets(mixed, opts);
+        BOOST_REQUIRE_EQUAL(mixed_buckets.size(), 1u);
+        BOOST_REQUIRE_EQUAL(mixed_buckets[0].size(), mixed.size());
+    }).get();
+}
+
 // Under TWCS, 'hybrid' means the same thing as 'parquet': the whole table.
 //
 // Hybrid tiering exists to keep Parquet out of the levels that get rewritten, since re-encoding and
@@ -4961,6 +5247,608 @@ SEASTAR_THREAD_TEST_CASE(test_pq_page_extents_are_not_refetched) {
         for (size_t i : sample) { read_one(expected[i]); }
         BOOST_REQUIRE_GT(sstables::parquet::extent_cache_stats_local().populations,
                          before_cold.populations);
+    }).get();
+}
+
+// ---------------------------------------------------------------- read-cache concurrency
+//
+// The reader's caches -- page index, decompressed pages, compressed extents -- are shared between
+// every reader of an sstable and grown by whichever reader misses first. Everything below is about
+// what happens when two readers are in the miss path at once, or when the entry leaves the sstable
+// while a reader is still using it. None of it is reachable from a sequential test, so each case
+// parks a reader on an error-injection point inside the reader and does the other half while it is
+// parked.
+
+namespace {
+
+// pq_schema() at a page size small enough that a point read's run of pages is a *fraction* of the
+// chunk, so that two reads wanting different rows from the same page onwards ask for the same
+// offset with different lengths. At the shipping default a page is the whole chunk and the length
+// never varies -- which is exactly why the keying bug these tests pin was invisible at defaults.
+schema_ptr pq_paged_schema() {
+    return schema_builder(1, "ks", "pq_paged_tbl")
+        .with_column("pk", utf8_type, column_kind::partition_key)
+        .with_column("ck", int32_type, column_kind::clustering_key)
+        .with_column("v_int", int32_type)
+        .with_column("v_big", long_type)
+        .with_column("v_dbl", double_type)
+        .with_column("v_txt", utf8_type)
+        .set_parquet_options({{"page_rows", "128"}})
+        .build();
+}
+
+// make_muts() plus a row marker on every row, which is what lets projection_is_safe() say yes: a
+// projecting read is how a cache gets warmed for *some* of a row's leaves and not others.
+utils::chunked_vector<mutation> make_marked_muts(schema_ptr s, int n_part, int n_rows) {
+    auto muts = make_muts(s, n_part, n_rows);
+    for (auto& m : muts) {
+        for (int r = 0; r < n_rows; ++r) {
+            auto ck = clustering_key::from_single_value(*s, int32_type->decompose(r));
+            m.partition().clustered_row(*s, ck).apply(row_marker(1000));
+        }
+    }
+    return muts;
+}
+
+std::vector<mutation> read_range(shared_sstable sst, schema_ptr s, reader_permit permit,
+                                 const dht::partition_range& pr,
+                                 const query::partition_slice& slice) {
+    auto rd = sst->make_reader(s, std::move(permit), pr, slice);
+    auto close = deferred_close(rd);
+    std::vector<mutation> out;
+    while (auto m = read_mutation_from_mutation_reader(rd).get()) {
+        out.push_back(std::move(*m));
+    }
+    return out;
+}
+
+dht::partition_range singular_of(const mutation& m) {
+    return dht::partition_range::make_singular(m.decorated_key());
+}
+
+dht::partition_range span_of(const mutation& from, const mutation& to) {
+    return dht::partition_range::make(
+            dht::partition_range::bound(dht::ring_position(from.decorated_key()), true),
+            dht::partition_range::bound(dht::ring_position(to.decorated_key()), true));
+}
+
+// Parks until `n` fibers are suspended on the named injection. Must run in a seastar thread.
+void wait_for_parked(const char* injection, size_t n) {
+    REQUIRE_EVENTUALLY_EQUAL<size_t>(
+            [&] { return utils::get_local_injector().waiters(injection); }, n);
+}
+
+} // namespace
+
+// Two readers wanting different rows from the same page onwards ask the extent cache for the same
+// offset with different lengths -- and the one that hit must keep what it got.
+//
+// The cache was keyed by offset alone with the length stored beside the bytes, so a reader that had
+// hit on (offset, L1) and was holding a span into the cached vector across the fetch of its misses
+// saw that vector re-assigned when a reader wanting (offset, L2) published: the reallocation left
+// the span dangling, and the decode that followed read freed memory. Without a sanitizer that is
+// wrong values or an exception, not a clean crash, so the assertions are on the decoded rows and on
+// the accounting -- the replaced vector's bytes also stayed charged to the budget, which the
+// measured-versus-counted comparison at the end catches.
+//
+// Choreography. W warms P1's extents for a *subset* of leaves by projecting to one column. A then
+// reads P1 whole: hits on W's leaves, misses on the rest, and parks before fetching them, spans in
+// hand. B reads P1..P2 -- same first page as P1, more pages -- and runs to completion, publishing
+// (offset, L2) for every leaf. A is released and decodes.
+SEASTAR_THREAD_TEST_CASE(test_pq_extent_cache_is_keyed_by_offset_and_length) {
+    sstables::test_env::do_with_async([] (sstables::test_env& env) {
+        constexpr const char* pause = "pq_reader/extent_fetch_pause";
+        auto s = pq_paged_schema();
+        auto muts = make_marked_muts(s, 10, 300);
+        auto expected = muts;
+        auto sst = make_sstable_containing(
+                env.make_sstable(s, sstable_version_types::pq), std::move(muts)).get();
+        auto& inj = utils::get_local_injector();
+
+        sst->set_pq_footer_cache(nullptr);
+        const auto base_shard = sstables::parquet::read_cache_bytes_local().total();
+        const auto base_footer = sstables::parquet::footer_cache_stats_local().bytes;
+
+        // W: a projecting read of P1 warms P1's extents for the projected leaves only.
+        auto sl_proj = partition_slice_builder(*s).with_regular_column(to_bytes("v_int")).build();
+        sl_proj.options.set<query::partition_slice::option::may_project_columns>();
+        const auto proj_before = sstables::parquet::projection_stats_local();
+        {
+            auto w = read_range(sst, s, env.make_reader_permit(), singular_of(expected[1]), sl_proj);
+            BOOST_REQUIRE_EQUAL(w.size(), 1u);
+        }
+        // The premise, asserted: W did project, and did populate extents. Either failing would make
+        // the rest of the test a sequential read that proves nothing.
+        BOOST_REQUIRE_GT(sstables::parquet::projection_stats_local().groups_projected,
+                         proj_before.groups_projected);
+        const auto warm = sstables::parquet::extent_cache_stats_local();
+        BOOST_REQUIRE_GT(warm.populations, 0u);
+
+        // A: P1 whole, parked at its extent fetch with the hits' spans in hand.
+        inj.enable(pause, true /* one shot: B must not park too */);
+        // The reader keeps a pointer to its range, so the range has to outlive it: a temporary
+        // here is a dangling pointer by the time init() runs.
+        const auto pr_a = singular_of(expected[1]);
+        auto rd_a = sst->make_reader(s, env.make_reader_permit(), pr_a, s->full_slice());
+        auto close_a = deferred_close(rd_a);
+        auto fa = read_mutation_from_mutation_reader(rd_a);
+        // Declared after close_a so that it runs *before* it: a failed assertion must not leave A
+        // parked, or in flight, under a close that does not wait for it.
+        bool a_finished = false;
+        auto finish_a = defer([&] () noexcept {
+            if (a_finished) { return; }
+            inj.disable(pause);
+            try { fa.get(); } catch (...) {}
+        });
+        wait_for_parked(pause, 1);
+        const auto parked = sstables::parquet::extent_cache_stats_local();
+        BOOST_REQUIRE_GT(parked.hits, warm.hits);       // A hit on what W published...
+        BOOST_REQUIRE_GT(parked.misses, warm.misses);   // ...and missed on the rest
+
+        // B: P1..P2 whole. Same first page as A for every leaf, more pages -- so the same offset
+        // with another length -- and it runs to completion while A is parked.
+        auto got_b = read_range(sst, s, env.make_reader_permit(),
+                                span_of(expected[1], expected[2]), s->full_slice());
+        BOOST_REQUIRE_EQUAL(got_b.size(), 2u);
+        for (size_t i = 0; i < got_b.size(); ++i) {
+            assert_that(got_b[i]).is_equal_to(expected[1 + i]);
+        }
+        BOOST_REQUIRE_GT(sstables::parquet::extent_cache_stats_local().populations,
+                         parked.populations);
+        BOOST_REQUIRE_EQUAL(inj.waiters(pause), 1u);    // and A is still parked
+
+        // Release A. Its spans must still point at live bytes.
+        inj.receive_message(pause);
+        auto got_a = fa.get();
+        a_finished = true;
+        BOOST_REQUIRE(got_a);
+        assert_that(*got_a).is_equal_to(expected[1]);
+
+        // Accounting: what the shard budget says this sstable holds is what the entry actually
+        // holds, measured from its containers -- an overwrite that leaked the replaced bytes'
+        // charge would show here as counted > held.
+        auto cf = sst->pq_footer_cache();
+        BOOST_REQUIRE(cf);
+        BOOST_REQUIRE_EQUAL(sstables::parquet::read_cache_bytes_local().total() - base_shard,
+                            cf->read_cache_bytes_held());
+        BOOST_REQUIRE_EQUAL(sstables::parquet::footer_cache_stats_local().bytes - base_footer,
+                            cf->memory_size());
+        // And a second pass by both, fully warm, does no I/O for extents and changes nothing.
+        const auto before_warm_pass = sstables::parquet::extent_cache_stats_local();
+        {
+            auto a2 = read_range(sst, s, env.make_reader_permit(), singular_of(expected[1]),
+                                 s->full_slice());
+            BOOST_REQUIRE_EQUAL(a2.size(), 1u);
+            assert_that(a2[0]).is_equal_to(expected[1]);
+        }
+        BOOST_REQUIRE_EQUAL(sstables::parquet::extent_cache_stats_local().misses,
+                            before_warm_pass.misses);
+        BOOST_REQUIRE_EQUAL(sstables::parquet::read_cache_bytes_local().total() - base_shard,
+                            cf->read_cache_bytes_held());
+    }).get();
+}
+
+// An entry dropped while a reader is mid-read must stop growing, and must not grow its replacement.
+//
+// The reader keeps the dropped entry alive by shared_ptr -- that is what makes eviction safe -- but
+// used to go on publishing into it: pages, extents and the page index, each charged to the
+// shard-wide budget that on_dropped() had already released for this entry, and the growth handed to
+// sstable::grow_pq_footer_cache(), which checked only that *some* footer was installed and so
+// charged it to whatever entry had replaced the dropped one. The replacement's eventual drop returns
+// its own size, not the stranger's, so the manager's total drifted upwards once per such read and
+// the shard budget leaked once per such read.
+//
+// Pins, against a control run of the same read with no interference: the manager's reclaimable
+// total, the shard read-cache bytes, the replacement entry's size, and the read's answer.
+SEASTAR_THREAD_TEST_CASE(test_pq_footer_cache_dropped_mid_read_leaves_no_residue) {
+    sstables::test_env::do_with_async([] (sstables::test_env& env) {
+        constexpr const char* pause = "pq_reader/extent_fetch_pause";
+        auto s = pq_paged_schema();
+        auto muts = make_marked_muts(s, 10, 300);
+        auto expected = muts;
+        auto sst = make_sstable_containing(
+                env.make_sstable(s, sstable_version_types::pq), std::move(muts)).get();
+        auto& inj = utils::get_local_injector();
+        auto& mgr = env.manager();
+
+        auto shard_bytes = [] { return sstables::parquet::read_cache_bytes_local().total(); };
+        auto read_p1 = [&] {
+            auto got = read_range(sst, s, env.make_reader_permit(), singular_of(expected[1]),
+                                  s->full_slice());
+            BOOST_REQUIRE_EQUAL(got.size(), 1u);
+            assert_that(got[0]).is_equal_to(expected[1]);
+        };
+
+        // Control: one undisturbed point read, from cold. What it costs is what the disturbed
+        // sequence below must cost, no more.
+        sst->set_pq_footer_cache(nullptr);
+        const size_t mgr0 = mgr.get_total_reclaimable_memory();
+        const size_t shard0 = shard_bytes();
+        read_p1();
+        BOOST_REQUIRE(sst->pq_footer_cache());
+        const size_t ctl_entry = sst->pq_footer_cache()->memory_size();
+        const size_t ctl_shard = shard_bytes() - shard0;
+        BOOST_REQUIRE_GT(ctl_shard, 0u);              // the paged path was taken and cached
+        BOOST_REQUIRE_EQUAL(mgr.get_total_reclaimable_memory() - mgr0, ctl_entry);
+        sst->set_pq_footer_cache(nullptr);
+        BOOST_REQUIRE_EQUAL(shard_bytes(), shard0);
+        BOOST_REQUIRE_EQUAL(mgr.get_total_reclaimable_memory(), mgr0);
+
+        // A: the same read, from cold, parked at its extent fetch. By then it has published the
+        // footer and grown it by the page index, and is about to publish pages and extents.
+        inj.enable(pause, true);
+        const auto pr_a = singular_of(expected[1]);        // must outlive rd_a
+        auto rd_a = sst->make_reader(s, env.make_reader_permit(), pr_a, s->full_slice());
+        auto close_a = deferred_close(rd_a);
+        auto fa = read_mutation_from_mutation_reader(rd_a);
+        bool a_finished = false;
+        auto finish_a = defer([&] () noexcept {
+            if (a_finished) { return; }
+            inj.disable(pause);
+            try { fa.get(); } catch (...) {}
+        });
+        wait_for_parked(pause, 1);
+        auto held = sst->pq_footer_cache();
+        BOOST_REQUIRE(held);
+        BOOST_REQUIRE(!held->dropped());
+
+        // Drop it under A. The set helper is what every drop path ends in -- the reclaimer's,
+        // the operator's drop_caches() (pinned by its own test below), a replacement -- so the
+        // residue question is the same whichever of them did it.
+        sst->set_pq_footer_cache(nullptr);
+        BOOST_REQUIRE(!sst->pq_footer_cache());
+        BOOST_REQUIRE(held->dropped());
+        BOOST_REQUIRE_EQUAL(shard_bytes(), shard0);
+        BOOST_REQUIRE_EQUAL(mgr.get_total_reclaimable_memory(), mgr0);
+
+        // C: a fresh read installs a replacement entry while A still holds the dropped one.
+        read_p1();
+        auto replacement = sst->pq_footer_cache();
+        BOOST_REQUIRE(replacement);
+        BOOST_REQUIRE(replacement.get() != held.get());
+        BOOST_REQUIRE_EQUAL(replacement->memory_size(), ctl_entry);
+
+        // Release A. Whatever it publishes now must go nowhere that is accounted.
+        inj.receive_message(pause);
+        auto got_a = fa.get();
+        a_finished = true;
+        BOOST_REQUIRE(got_a);
+        assert_that(*got_a).is_equal_to(expected[1]);
+
+        BOOST_REQUIRE(sst->pq_footer_cache().get() == replacement.get());
+        BOOST_REQUIRE_EQUAL(replacement->memory_size(), ctl_entry);
+        BOOST_REQUIRE_EQUAL(mgr.get_total_reclaimable_memory() - mgr0, ctl_entry);
+        BOOST_REQUIRE_EQUAL(shard_bytes() - shard0, ctl_shard);
+        BOOST_REQUIRE_EQUAL(shard_bytes() - shard0, replacement->read_cache_bytes_held());
+        // The dropped entry did not grow after its drop either.
+        BOOST_REQUIRE_EQUAL(held->read_cache_bytes_held(), 0u);
+
+        // And dropping the replacement returns exactly to the baseline: nothing is stranded.
+        sst->set_pq_footer_cache(nullptr);
+        BOOST_REQUIRE_EQUAL(shard_bytes(), shard0);
+        BOOST_REQUIRE_EQUAL(mgr.get_total_reclaimable_memory(), mgr0);
+    }).get();
+}
+
+// drop_caches() is the operator's "drop everything this sstable caches", and the parsed pq footer
+// -- with the page index, pages and extents hanging off it -- is one of those things. It evicted the
+// index and row caches and left this one in place.
+SEASTAR_THREAD_TEST_CASE(test_pq_drop_caches_drops_the_footer_cache) {
+    sstables::test_env::do_with_async([] (sstables::test_env& env) {
+        auto s = pq_schema();
+        auto muts = make_muts(s, 16, 10);
+        auto expected = muts;
+        auto sst = make_sstable_containing(
+                env.make_sstable(s, sstable_version_types::pq), std::move(muts)).get();
+
+        // Warm, and check it is warm: a test that dropped nothing would pass vacuously.
+        sst->set_pq_footer_cache(nullptr);
+        auto got = read_all(sst, s, env.make_reader_permit());
+        BOOST_REQUIRE_EQUAL(got.size(), expected.size());
+        BOOST_REQUIRE(sst->pq_footer_cache());
+        const size_t entry_bytes = sst->pq_footer_cache()->memory_size();
+        BOOST_REQUIRE_GT(entry_bytes, 0u);
+        const auto before = sstables::parquet::footer_cache_stats_local();
+        const size_t mgr_before = env.manager().get_total_reclaimable_memory();
+
+        sst->drop_caches().get();
+
+        BOOST_REQUIRE(!sst->pq_footer_cache());
+        BOOST_REQUIRE_EQUAL(sstables::parquet::footer_cache_stats_local().bytes,
+                            before.bytes - entry_bytes);
+        // Through the accounting helper, so the manager saw it go.
+        BOOST_REQUIRE_EQUAL(env.manager().get_total_reclaimable_memory(), mgr_before - entry_bytes);
+        // Not an eviction: nothing was under memory pressure.
+        BOOST_REQUIRE_EQUAL(sstables::parquet::footer_cache_stats_local().evictions,
+                            before.evictions);
+
+        // And the sstable still reads correctly, re-populating from cold.
+        auto again = read_all(sst, s, env.make_reader_permit());
+        BOOST_REQUIRE_EQUAL(again.size(), expected.size());
+        for (size_t i = 0; i < again.size(); ++i) {
+            assert_that(again[i]).is_equal_to(expected[i]);
+        }
+        BOOST_REQUIRE(sst->pq_footer_cache());
+    }).get();
+}
+
+// Two readers that both miss the page index of the same row group must grow the entry once.
+//
+// load_offset_indexes() published with operator[] and added the slot's size unconditionally, so the
+// second of two concurrent misses replaced the first's vector -- under the first reader's
+// `_oi_view` -- and charged the entry, the footer-cache bytes metric and the manager a second copy
+// that was never held. Pins the entry's size against a control run of one reader.
+SEASTAR_THREAD_TEST_CASE(test_pq_concurrent_page_index_misses_grow_the_entry_once) {
+    sstables::test_env::do_with_async([] (sstables::test_env& env) {
+        constexpr const char* pause = "pq_reader/offset_index_fetch_pause";
+        auto s = pq_paged_schema();
+        auto muts = make_marked_muts(s, 10, 300);
+        auto expected = muts;
+        auto sst = make_sstable_containing(
+                env.make_sstable(s, sstable_version_types::pq), std::move(muts)).get();
+        auto& inj = utils::get_local_injector();
+        auto& mgr = env.manager();
+
+        // Both readers have to share one entry, so the footer is warmed first by a scan -- which
+        // streams whole row groups and so never touches the page index. Two readers starting from
+        // a cold *footer* would each publish their own entry and the second would replace the
+        // first, which is a different race from the one this pins.
+        auto warm_footer_only = [&] {
+            sst->set_pq_footer_cache(nullptr);
+            const auto before = sstables::parquet::offset_index_cache_stats_local();
+            auto all = read_all(sst, s, env.make_reader_permit());
+            BOOST_REQUIRE_EQUAL(all.size(), expected.size());
+            BOOST_REQUIRE(sst->pq_footer_cache());
+            BOOST_REQUIRE_EQUAL(sstables::parquet::offset_index_cache_stats_local().populations,
+                                before.populations);
+        };
+        auto shard_bytes = [] { return sstables::parquet::read_cache_bytes_local().total(); };
+
+        // Control: one point read against a footer-only entry.
+        warm_footer_only();
+        const size_t footer_only = sst->pq_footer_cache()->memory_size();
+        const size_t mgr0 = mgr.get_total_reclaimable_memory();
+        const size_t shard0 = shard_bytes();
+        {
+            auto got = read_range(sst, s, env.make_reader_permit(), singular_of(expected[1]),
+                                  s->full_slice());
+            BOOST_REQUIRE_EQUAL(got.size(), 1u);
+            assert_that(got[0]).is_equal_to(expected[1]);
+        }
+        const size_t ctl_entry = sst->pq_footer_cache()->memory_size();
+        BOOST_REQUIRE_GT(ctl_entry, footer_only);        // the page index was cached
+        const size_t ctl_shard = shard_bytes() - shard0;
+        BOOST_REQUIRE_EQUAL(mgr.get_total_reclaimable_memory() - mgr0, ctl_entry - footer_only);
+
+        // The race: A and B both miss the same group's page index and both park before fetching.
+        warm_footer_only();
+        BOOST_REQUIRE_EQUAL(sst->pq_footer_cache()->memory_size(), footer_only);
+        const size_t mgr1 = mgr.get_total_reclaimable_memory();
+        const size_t shard1 = shard_bytes();
+        const auto oi_before = sstables::parquet::offset_index_cache_stats_local();
+        inj.enable(pause);                                // not one-shot: both must park
+        const auto pr_p1 = singular_of(expected[1]);       // must outlive both readers
+        auto rd_a = sst->make_reader(s, env.make_reader_permit(), pr_p1, s->full_slice());
+        auto rd_b = sst->make_reader(s, env.make_reader_permit(), pr_p1, s->full_slice());
+        auto close_a = deferred_close(rd_a);
+        auto close_b = deferred_close(rd_b);
+        std::optional<future<mutation_opt>> fa, fb;
+        bool both_finished = false;
+        auto finish_both = defer([&] () noexcept {
+            if (both_finished) { return; }
+            // Diagnostics for a failure: say what each reader did instead of parking.
+            auto report = [&] (const char* who, std::optional<future<mutation_opt>>& f) noexcept {
+                if (!f) { return; }
+                try {
+                    if (!f->available()) {
+                        testlog.error("{}: still in flight when the test gave up", who);
+                    }
+                    auto m = f->get();
+                    testlog.error("{}: finished early with {}", who,
+                                  m ? "a mutation" : "end of stream");
+                } catch (...) {
+                    testlog.error("{}: finished early with exception: {}", who,
+                                  std::current_exception());
+                }
+            };
+            testlog.error("page index misses since the readers started: {}",
+                          sstables::parquet::offset_index_cache_stats_local().misses
+                                  - oi_before.misses);
+            inj.disable(pause);
+            report("A", fa);
+            report("B", fb);
+        });
+        // One after the other, each parked before the next starts. Both are in the miss path
+        // either way -- neither publishes until it is released -- and sequencing the starts makes
+        // the wait below unambiguous about which reader has arrived.
+        fa.emplace(read_mutation_from_mutation_reader(rd_a));
+        wait_for_parked(pause, 1);
+        fb.emplace(read_mutation_from_mutation_reader(rd_b));
+        wait_for_parked(pause, 2);
+        BOOST_REQUIRE_EQUAL(sstables::parquet::offset_index_cache_stats_local().misses,
+                            oi_before.misses + 2);
+        // One message wakes both (messages are shared between handlers by default).
+        inj.receive_message(pause);
+        auto got_a = fa->get();
+        auto got_b = fb->get();
+        both_finished = true;
+        BOOST_REQUIRE(got_a && got_b);
+        assert_that(*got_a).is_equal_to(expected[1]);
+        assert_that(*got_b).is_equal_to(expected[1]);
+
+        // Both missed; one populated; the entry grew by exactly what one reader grows it by.
+        BOOST_REQUIRE_EQUAL(sstables::parquet::offset_index_cache_stats_local().populations,
+                            oi_before.populations + 1);
+        auto cf = sst->pq_footer_cache();
+        BOOST_REQUIRE(cf);
+        BOOST_REQUIRE_EQUAL(cf->memory_size(), ctl_entry);
+        BOOST_REQUIRE_EQUAL(mgr.get_total_reclaimable_memory() - mgr1, ctl_entry - footer_only);
+        BOOST_REQUIRE_EQUAL(shard_bytes() - shard1, ctl_shard);
+        BOOST_REQUIRE_EQUAL(shard_bytes() - shard1, cf->read_cache_bytes_held());
+    }).get();
+}
+
+// A corrupt OffsetIndex must be refused, not obeyed.
+//
+// decode_paged() turns page locations into reads: offset and length straight from the index. The
+// index is Thrift the reader parses off the disk, and a parse that succeeds says nothing about the
+// geometry -- a PageLocation.offset that is negative, or points past the file, decoded fine and then
+// became a read the file cannot satisfy (or, with a negative offset cast to uint64_t, a request for
+// most of the address space). The format layer's validate(offset_index, column_metadata) checks
+// exactly that geometry; the reader now runs it and treats a chunk that fails like a chunk with no
+// index at all, which streams the row group.
+//
+// The corruption is made in the written file, byte-exactly: the zigzag varint of one PageLocation's
+// offset is edited in place, keeping its length, in the page the read actually lands on.
+namespace {
+
+// Byte offset, within an OffsetIndex Thrift blob, of the zigzag varint carrying
+// page_locations[target].offset. Walks the compact-protocol layout the writer emits: struct {
+// 1: list<struct { 1: i64 offset, 2: i32 compressed_page_size, 3: i64 first_row_index }> }.
+size_t locate_page_offset_varint(std::span<const uint8_t> blob, size_t target) {
+    size_t k = 0;
+    auto byte = [&] () -> unsigned {
+        BOOST_REQUIRE_LT(k, blob.size());
+        return blob[k++];
+    };
+    auto skip_varint = [&] { while (byte() & 0x80) {} };
+    BOOST_REQUIRE_EQUAL(byte(), 0x19u);                // field 1, type LIST
+    const unsigned lh = byte();
+    BOOST_REQUIRE_EQUAL(lh & 0x0F, 0x0Cu);             // element type STRUCT
+    if ((lh >> 4) == 0xF) { skip_varint(); }           // long-form element count
+    for (size_t i = 0; ; ++i) {
+        BOOST_REQUIRE_EQUAL(byte(), 0x16u);            // PageLocation field 1, type I64
+        if (i == target) { return k; }
+        skip_varint();                                 // offset
+        BOOST_REQUIRE_EQUAL(byte(), 0x15u);            // field 2, type I32
+        skip_varint();                                 // compressed_page_size
+        BOOST_REQUIRE_EQUAL(byte(), 0x16u);            // field 3, type I64
+        skip_varint();                                 // first_row_index
+        BOOST_REQUIRE_EQUAL(byte(), 0x00u);            // STOP
+    }
+}
+
+std::vector<uint8_t> slurp(const std::string& path) {
+    int fd = ::open(path.c_str(), O_RDONLY);
+    BOOST_REQUIRE_GE(fd, 0);
+    auto close = defer([fd] () noexcept { ::close(fd); });
+    struct stat st;
+    BOOST_REQUIRE_EQUAL(::fstat(fd, &st), 0);
+    std::vector<uint8_t> out(size_t(st.st_size));
+    size_t done = 0;
+    while (done < out.size()) {
+        ssize_t n = ::pread(fd, out.data() + done, out.size() - done, off_t(done));
+        BOOST_REQUIRE_GT(n, 0);
+        done += size_t(n);
+    }
+    return out;
+}
+
+void splice(const std::string& path, size_t at, std::span<const uint8_t> bytes) {
+    int fd = ::open(path.c_str(), O_WRONLY);
+    BOOST_REQUIRE_GE(fd, 0);
+    auto close = defer([fd] () noexcept { ::close(fd); });
+    size_t done = 0;
+    while (done < bytes.size()) {
+        ssize_t n = ::pwrite(fd, bytes.data() + done, bytes.size() - done, off_t(at + done));
+        BOOST_REQUIRE_GT(n, 0);
+        done += size_t(n);
+    }
+    BOOST_REQUIRE_EQUAL(::fsync(fd), 0);
+}
+
+} // namespace
+
+SEASTAR_THREAD_TEST_CASE(test_pq_corrupt_offset_index_is_refused) {
+    sstables::test_env::do_with_async([] (sstables::test_env& env) {
+        auto s = pq_paged_schema();
+        auto muts = make_muts(s, 10, 300);
+        auto expected = muts;
+        auto sst = make_sstable_containing(
+                env.make_sstable(s, sstable_version_types::pq), std::move(muts)).get();
+        const std::string path = fmt::to_string(sst->get_filename());
+
+        // The read under test: P1, whole. Its rows start at ordinal 300 (partitions are 300 rows
+        // and sorted the way the writer sorts them), so the page it lands on is the one to break.
+        constexpr int64_t p1_first_row = 300;
+        auto read_p1 = [&] {
+            auto got = read_range(sst, s, env.make_reader_permit(), singular_of(expected[1]),
+                                  s->full_slice());
+            BOOST_REQUIRE_EQUAL(got.size(), 1u);
+            assert_that(got[0]).is_equal_to(expected[1]);
+        };
+
+        const auto pristine = slurp(path);
+        auto fm = sstables::parquet::format::parse_footer(pristine);
+        BOOST_REQUIRE_EQUAL(fm.row_groups.size(), 1u);
+        BOOST_REQUIRE(!fm.row_groups[0].columns.empty());
+        // Leaf 0 is the partition key: REQUIRED, never elided, so the read always fetches it.
+        const auto& cc = fm.row_groups[0].columns[0];
+        BOOST_REQUIRE(cc.offset_index_offset && cc.offset_index_length && cc.meta);
+        // Where the chunk ends, which is what a page location is validated against.
+        const int64_t chunk_end = (cc.meta->dictionary_page_offset
+                                           ? *cc.meta->dictionary_page_offset
+                                           : cc.meta->data_page_offset)
+                                  + cc.meta->total_compressed_size;
+        const size_t oi_off = size_t(*cc.offset_index_offset);
+        const size_t oi_len = size_t(*cc.offset_index_length);
+        auto blob = std::vector<uint8_t>(pristine.begin() + oi_off,
+                                         pristine.begin() + oi_off + oi_len);
+        auto oi = sstables::parquet::format::parse_offset_index_blob(blob);
+        BOOST_REQUIRE_GT(oi.pages.size(), 2u);           // several pages: page_rows is small
+        const size_t target = oi.page_for_row(p1_first_row);
+        BOOST_REQUIRE_LT(target, oi.pages.size());
+        BOOST_REQUIRE_GT(target, 0u);                    // not the first page, which is what a
+                                                         // dictionary check would trip on instead
+        const size_t vpos = locate_page_offset_varint(blob, target);
+        BOOST_REQUIRE_LT(vpos, blob.size());
+
+        // Sanity: the pristine file reads, warm and cold.
+        sst->set_pq_footer_cache(nullptr);
+        read_p1();
+
+        auto corrupt_and_read = [&] (const char* what, auto&& mutate) {
+            auto bad = blob;
+            mutate(bad);
+            // The edit kept the varint's length, so the blob parses -- into a lie.
+            auto lie = sstables::parquet::format::parse_offset_index_blob(bad);
+            BOOST_REQUIRE_EQUAL(lie.pages.size(), oi.pages.size());
+            const int64_t bogus = lie.pages[target].offset;
+            // Either arm is a page the chunk cannot contain.
+            BOOST_REQUIRE(bogus < 0 || bogus > chunk_end - lie.pages[target].compressed_page_size);
+            testlog.info("corrupt offset index ({}): page {} offset {} -> {} (chunk ends at {}, "
+                         "file is {} bytes)", what, target, oi.pages[target].offset, bogus,
+                         chunk_end, pristine.size());
+            splice(path, oi_off, bad);
+            // Cold: the page index must be fetched again and refused. The refusal is visible as a
+            // miss that populates nothing, because only a complete, valid set is published.
+            sst->set_pq_footer_cache(nullptr);
+            const auto before = sstables::parquet::offset_index_cache_stats_local();
+            read_p1();                                   // correct rows, or the test fails here
+            const auto after = sstables::parquet::offset_index_cache_stats_local();
+            BOOST_REQUIRE_GT(after.misses, before.misses);
+            BOOST_REQUIRE_EQUAL(after.populations, before.populations);
+            // Restore for the next variant.
+            splice(path, oi_off, blob);
+        };
+
+        // Negative: flip the zigzag sign bit, so offset v becomes -v-1.
+        corrupt_and_read("negative", [&] (std::vector<uint8_t>& b) { b[vpos] ^= 0x01; });
+        // Past its chunk: saturate the payload bits of every byte of the varint, keeping the
+        // continuation bits, then clear the zigzag sign bit -- the largest *positive* value the
+        // encoding's byte length can carry, which is well past the chunk for a leaf this small.
+        corrupt_and_read("past its chunk", [&] (std::vector<uint8_t>& b) {
+            size_t k = vpos;
+            do { b[k] |= 0x7F; } while (b[k++] & 0x80);
+            b[vpos] &= uint8_t(~0x01);
+        });
+
+        // Restored file reads again, with a page index that is trusted again.
+        sst->set_pq_footer_cache(nullptr);
+        const auto before = sstables::parquet::offset_index_cache_stats_local();
+        read_p1();
+        BOOST_REQUIRE_GT(sstables::parquet::offset_index_cache_stats_local().populations,
+                         before.populations);
     }).get();
 }
 
@@ -5615,5 +6503,364 @@ SEASTAR_THREAD_TEST_CASE(test_pq_compaction_aborted_while_reading_does_not_fault
         auto rd_frags = fragments_in(after, s, env.make_reader_permit(),
                                      query::full_partition_range, s->full_slice());
         BOOST_REQUIRE_GT(rd_frags.size(), 0u);
+    }).get();
+}
+
+// ------------------------------------------------------------------ schema evolution (#31556)
+//
+// A pq sstable outlives the schema it was written with, exactly as an mx one does. The design doc
+// (section 7) says columns are matched by *name* on read, that a column added afterwards reads
+// back as absent, and that one dropped afterwards is skipped. Until #31556 the reader rebuilt the
+// leaf layout from the *current* schema and refused the file unless it matched the footer leaf for
+// leaf, so the first `ALTER TABLE ... ADD` made every existing Parquet sstable of the table
+// unreadable.
+//
+// The reference in every case below is the row format: the same mutations written as mx and read
+// through the same changed schema. Whatever mx answers -- cells kept, cells dropped, an exception --
+// is the answer pq has to give.
+namespace {
+
+schema_ptr evo_schema() {
+    return schema_builder(1, "ks", "pq_evo")
+        .with_column("pk", utf8_type, column_kind::partition_key)
+        .with_column("ck", int32_type, column_kind::clustering_key)
+        .with_column("st", int32_type, column_kind::static_column)
+        .with_column("a", int32_type)
+        .with_column("b", utf8_type)
+        .build();
+}
+
+// Timestamps all sit in [evo_ts_lo, evo_ts_hi], so a drop stamped after evo_ts_hi hides every cell
+// of the dropped column and one stamped before evo_ts_lo hides none of them.
+constexpr api::timestamp_type evo_ts_lo = 1000, evo_ts_hi = 1200;
+
+utils::chunked_vector<mutation> evo_muts(schema_ptr s) {
+    utils::chunked_vector<mutation> muts;
+    const auto& a  = *s->get_column_definition(to_bytes("a"));
+    const auto& b  = *s->get_column_definition(to_bytes("b"));
+    const auto& st = *s->get_column_definition(to_bytes("st"));
+    for (int p = 0; p < 12; ++p) {
+        auto pk = partition_key::from_single_value(*s, utf8_type->decompose(sstring(format("k{:03d}", p))));
+        mutation m(s, pk);
+        const api::timestamp_type ts = evo_ts_lo + p;
+        if (p % 3) {
+            m.set_static_cell(st, atomic_cell::make_live(*st.type, ts, int32_type->decompose(p)));
+        }
+        for (int r = 0; r < 6; ++r) {
+            auto ck = clustering_key::from_single_value(*s, int32_type->decompose(r));
+            // Rows 0 and 3 exist only through their cells; the rest have a marker too, so both
+            // ways a row can exist are present when a column disappears from under it.
+            if (r % 3) {
+                m.partition().clustered_row(*s, ck).apply(row_marker(ts));
+            }
+            if (r % 4 != 1) {
+                m.set_clustered_cell(ck, a, atomic_cell::make_live(*a.type, ts, int32_type->decompose(r * 11)));
+            }
+            if (r % 2) {
+                m.set_clustered_cell(ck, b, atomic_cell::make_live(*b.type, ts + 1,
+                        utf8_type->decompose(sstring(format("b{}", r)))));
+            } else if (r == 4) {
+                m.set_clustered_cell(ck, b, atomic_cell::make_dead(ts + 2,
+                        gc_clock::time_point(gc_clock::duration(evo_ts_hi))));
+            }
+        }
+        muts.push_back(std::move(m));
+    }
+    std::sort(muts.begin(), muts.end(), [] (const mutation& x, const mutation& y) {
+        return x.decorated_key().less_compare(*x.schema(), y.decorated_key());
+    });
+    return muts;
+}
+
+struct evo_pair {
+    shared_sstable pq, mx;
+};
+
+evo_pair evo_write(sstables::test_env& env, schema_ptr s) {
+    auto muts = evo_muts(s);
+    evo_pair out;
+    out.pq = make_sstable_containing(env.make_sstable(s, sstable_version_types::pq), muts).get();
+    out.mx = make_sstable_containing(env.make_sstable(s, sstables::get_highest_sstable_version()), muts).get();
+    BOOST_REQUIRE(out.pq->get_version() == sstable_version_types::pq);
+    BOOST_REQUIRE(out.mx->get_version() != sstable_version_types::pq);
+    return out;
+}
+
+// Fragment for fragment, over the whole file and then partition by partition: a full scan
+// streams whole row groups, a single-partition read goes through the paged path, and the two
+// decode through different code, so a mapping bug in either would show here.
+void evo_expect_same(sstables::test_env& env, const evo_pair& p, schema_ptr read_as) {
+    auto want = fragments_of(p.mx, read_as, env.make_reader_permit());
+    auto got  = fragments_of(p.pq, read_as, env.make_reader_permit());
+    BOOST_REQUIRE_GT(want.size(), 0u);
+    BOOST_REQUIRE_EQUAL(got.size(), want.size());
+    for (size_t i = 0; i < want.size(); ++i) {
+        BOOST_REQUIRE_EQUAL(got[i], want[i]);
+    }
+    auto want_m = read_all(p.mx, read_as, env.make_reader_permit());
+    auto got_m  = read_all(p.pq, read_as, env.make_reader_permit());
+    BOOST_REQUIRE_EQUAL(got_m.size(), want_m.size());
+    for (size_t i = 0; i < want_m.size(); ++i) {
+        assert_that(got_m[i]).is_equal_to(want_m[i]);
+        auto pr = dht::partition_range::make_singular(want_m[i].decorated_key());
+        auto one_want = fragments_in(p.mx, read_as, env.make_reader_permit(), pr, read_as->full_slice());
+        auto one_got  = fragments_in(p.pq, read_as, env.make_reader_permit(), pr, read_as->full_slice());
+        BOOST_REQUIRE_EQUAL(one_got.size(), one_want.size());
+        for (size_t j = 0; j < one_want.size(); ++j) {
+            BOOST_REQUIRE_EQUAL(one_got[j], one_want[j]);
+        }
+    }
+}
+
+// Both formats must refuse. The row format's answer is a malformed_sstable_exception; pq's wording
+// differs, so only the fact of the failure is asserted.
+void evo_expect_both_throw(sstables::test_env& env, const evo_pair& p, schema_ptr read_as) {
+    BOOST_REQUIRE_THROW(fragments_of(p.mx, read_as, env.make_reader_permit()), std::exception);
+    BOOST_REQUIRE_THROW(fragments_of(p.pq, read_as, env.make_reader_permit()), std::exception);
+}
+
+// Whether any fragment printed through `read_as` mentions a cell of `col`.
+bool evo_mentions(const std::vector<sstring>& frags, const char* col) {
+    for (const auto& f : frags) {
+        if (f.find(col) != sstring::npos) { return true; }
+    }
+    return false;
+}
+
+} // namespace
+
+// ALTER TABLE ... ADD c int: the file has no leaf for `c`, so every row reads back with `c` absent
+// and everything else exactly as written.
+SEASTAR_THREAD_TEST_CASE(test_pq_reads_file_written_before_a_regular_column_was_added) {
+    sstables::test_env::do_with_async([] (sstables::test_env& env) {
+        auto s = evo_schema();
+        auto p = evo_write(env, s);
+        auto s2 = schema_builder(s).with_column("c", int32_type).build();
+        evo_expect_same(env, p, s2);
+        BOOST_REQUIRE(!evo_mentions(fragments_of(p.pq, s2, env.make_reader_permit()), "c="));
+        // Still readable through the writing schema, of course.
+        evo_expect_same(env, p, s);
+    }).get();
+}
+
+// ALTER TABLE ... ADD st2 int STATIC. Statics ride in the file as `__s_<name>` value columns
+// appended after the regulars, so an added static shifts nothing in the file but does shift the
+// current schema's static ids -- exactly the case a positional mapping gets wrong.
+SEASTAR_THREAD_TEST_CASE(test_pq_reads_file_written_before_a_static_column_was_added) {
+    sstables::test_env::do_with_async([] (sstables::test_env& env) {
+        auto s = evo_schema();
+        auto p = evo_write(env, s);
+        // Sorts before `st`, so the existing static's id changes too.
+        auto s2 = schema_builder(s).with_column("s0", utf8_type, column_kind::static_column).build();
+        evo_expect_same(env, p, s2);
+        auto s3 = schema_builder(s).with_column("st2", int32_type, column_kind::static_column).build();
+        evo_expect_same(env, p, s3);
+    }).get();
+}
+
+// ALTER TABLE ... DROP b. The file still carries `b`; the reader decodes it and drops every cell
+// stamped at or before the drop, which is what mx does through the serialization header. The
+// rows themselves, their markers and the other columns are untouched.
+SEASTAR_THREAD_TEST_CASE(test_pq_reads_file_written_before_a_regular_column_was_dropped) {
+    sstables::test_env::do_with_async([] (sstables::test_env& env) {
+        auto s = evo_schema();
+        auto p = evo_write(env, s);
+        auto s2 = schema_builder(s).remove_column(to_bytes("b"), evo_ts_hi + 100).build();
+        evo_expect_same(env, p, s2);
+        BOOST_REQUIRE(!evo_mentions(fragments_of(p.pq, s2, env.make_reader_permit()), "b="));
+
+        // Dropping a static works the same way.
+        auto s3 = schema_builder(s).remove_column(to_bytes("st"), evo_ts_hi + 100).build();
+        evo_expect_same(env, p, s3);
+
+        // A drop stamped *before* the cells were written is a schema that cannot have produced
+        // this file: mx refuses with "Column b missing in current schema", and so does pq.
+        auto s4 = schema_builder(s).remove_column(to_bytes("b"), evo_ts_lo - 100).build();
+        evo_expect_both_throw(env, p, s4);
+    }).get();
+}
+
+// A column dropped and then re-added under the same name is a new column: cells written before the
+// drop belong to the old one and are hidden by `dropped_at`, whatever the new type is. That is also
+// the only way a type change that is not value-compatible can legitimately show up.
+SEASTAR_THREAD_TEST_CASE(test_pq_reads_file_after_a_column_was_dropped_and_re_added) {
+    sstables::test_env::do_with_async([] (sstables::test_env& env) {
+        auto s = evo_schema();
+        auto p = evo_write(env, s);
+        auto s2 = schema_builder(s)
+            .remove_column(to_bytes("a"), evo_ts_hi + 100)
+            .with_column("a", utf8_type)
+            .build();
+        evo_expect_same(env, p, s2);
+        BOOST_REQUIRE(!evo_mentions(fragments_of(p.pq, s2, env.make_reader_permit()), "a="));
+        // Re-added as a non-frozen collection: the file's scalar leaf against a multi-cell column.
+        auto s3 = schema_builder(s)
+            .remove_column(to_bytes("b"), evo_ts_hi + 100)
+            .with_column("b", map_type_impl::get_instance(int32_type, bytes_type, true))
+            .build();
+        evo_expect_same(env, p, s3);
+    }).get();
+}
+
+// Strictness where it matters. A type the file's cells cannot be read as is refused rather than
+// decoded into the wrong type, and so is a key layout the file does not have. Value-compatible
+// changes -- int to varint, text to blob -- go through, because the cell bytes are the same.
+SEASTAR_THREAD_TEST_CASE(test_pq_refuses_an_incompatible_schema_and_accepts_a_compatible_one) {
+    sstables::test_env::do_with_async([] (sstables::test_env& env) {
+        auto s = evo_schema();
+        auto p = evo_write(env, s);
+
+        // int -> text on a live column: not value-compatible.
+        auto bad_type = schema_builder(s).alter_column_type(to_bytes("a"), utf8_type).build();
+        evo_expect_both_throw(env, p, bad_type);
+        // int -> bigint: same story, different width.
+        auto bad_width = schema_builder(s).alter_column_type(to_bytes("a"), long_type).build();
+        evo_expect_both_throw(env, p, bad_width);
+        // A static altered the same way.
+        auto bad_static = schema_builder(s).alter_column_type(to_bytes("st"), utf8_type).build();
+        evo_expect_both_throw(env, p, bad_static);
+
+        // A key column the file does not have. Keys are matched by position -- CQL lets them be
+        // renamed -- so a different *count* is the one thing that cannot be reconciled.
+        auto extra_ck = schema_builder(1, "ks", "pq_evo")
+            .with_column("pk", utf8_type, column_kind::partition_key)
+            .with_column("ck", int32_type, column_kind::clustering_key)
+            .with_column("ck2", int32_type, column_kind::clustering_key)
+            .with_column("st", int32_type, column_kind::static_column)
+            .with_column("a", int32_type)
+            .with_column("b", utf8_type)
+            .build();
+        BOOST_REQUIRE_THROW(fragments_of(p.pq, extra_ck, env.make_reader_permit()), std::exception);
+
+        // Value-compatible changes are accepted, and agree with mx.
+        auto ok_types = schema_builder(s)
+            .alter_column_type(to_bytes("a"), varint_type)
+            .alter_column_type(to_bytes("b"), bytes_type)
+            .alter_column_type(to_bytes("st"), varint_type)
+            .build();
+        evo_expect_same(env, p, ok_types);
+
+        // ALTER TABLE ... RENAME on a key column: allowed by CQL, and a name the file has never
+        // heard of. Keys align by position, so it reads.
+        auto renamed = schema_builder(s).rename_column(to_bytes("ck"), to_bytes("ck_renamed")).build();
+        evo_expect_same(env, p, renamed);
+    }).get();
+}
+
+// Projection after evolution. may_project_columns speaks in the CURRENT schema's column ids, and an
+// ALTER ADD of a column that sorts before an existing one renumbers every id after it: `0c` pushes
+// `a` and `b` up by one, `s0` does the same to `st`. The file's leaves do not move. So the skip mask
+// has to be built through the name alignment, not from "id == offset into the value columns", which
+// is what the pre-#31556 code did and which would here project away `a` when asked for `b` and
+// keep `b` when asked for... nothing that exists in the file.
+//
+// Every row carries a marker, so projection_is_safe() holds for every row group and the mask is
+// actually applied rather than declined. The assertion is the one the projection contract allows:
+// the same rows, and the columns the query asked for identical to the row format's.
+SEASTAR_THREAD_TEST_CASE(test_pq_projection_after_columns_were_added) {
+    sstables::test_env::do_with_async([] (sstables::test_env& env) {
+        auto s = evo_schema();
+        const auto& a0  = *s->get_column_definition(to_bytes("a"));
+        const auto& b0  = *s->get_column_definition(to_bytes("b"));
+        const auto& st0 = *s->get_column_definition(to_bytes("st"));
+        utils::chunked_vector<mutation> muts;
+        for (int p = 0; p < 10; ++p) {
+            auto pk = partition_key::from_single_value(*s, utf8_type->decompose(sstring(format("k{:03d}", p))));
+            mutation m(s, pk);
+            const api::timestamp_type ts = evo_ts_lo + p;
+            m.set_static_cell(st0, atomic_cell::make_live(*st0.type, ts, int32_type->decompose(p * 7)));
+            for (int r = 0; r < 6; ++r) {
+                auto ck = clustering_key::from_single_value(*s, int32_type->decompose(r));
+                m.partition().clustered_row(*s, ck).apply(row_marker(ts));
+                if (r % 2) {
+                    m.set_clustered_cell(ck, a0, atomic_cell::make_live(*a0.type, ts, int32_type->decompose(r * 11)));
+                }
+                if (r % 3 != 1) {
+                    m.set_clustered_cell(ck, b0, atomic_cell::make_live(*b0.type, ts + 1,
+                            utf8_type->decompose(sstring(format("b{}_{}", p, r)))));
+                }
+            }
+            muts.push_back(std::move(m));
+        }
+        std::sort(muts.begin(), muts.end(), [] (const mutation& x, const mutation& y) {
+            return x.decorated_key().less_compare(*x.schema(), y.decorated_key());
+        });
+        auto pq = make_sstable_containing(env.make_sstable(s, sstable_version_types::pq), muts).get();
+        auto mx = make_sstable_containing(env.make_sstable(s, sstables::get_highest_sstable_version()), muts).get();
+
+        auto s2 = schema_builder(s)
+            .with_column("0c", int32_type)
+            .with_column("s0", utf8_type, column_kind::static_column)
+            .build();
+        const auto& b  = *s2->get_column_definition(to_bytes("b"));
+        const auto& st = *s2->get_column_definition(to_bytes("st"));
+        // The premise: the ids really did move.
+        BOOST_REQUIRE_EQUAL(b.id, b0.id + 1);
+        BOOST_REQUIRE_EQUAL(st.id, st0.id + 1);
+
+        auto slice_for = [&] (bool allow_projection) {
+            auto sl = partition_slice_builder(*s2)
+                    .with_regular_column(to_bytes("b"))
+                    .with_static_column(to_bytes("st"))
+                    .build();
+            if (allow_projection) {
+                sl.options.set<query::partition_slice::option::may_project_columns>();
+            }
+            return sl;
+        };
+
+        // Control: without the option pq must match the row format exactly, through the new schema.
+        {
+            auto fw = fragments_in(mx, s2, env.make_reader_permit(), query::full_partition_range, slice_for(false));
+            auto fg = fragments_in(pq, s2, env.make_reader_permit(), query::full_partition_range, slice_for(false));
+            BOOST_REQUIRE(!fg.empty());
+            BOOST_REQUIRE_EQUAL(fg.size(), fw.size());
+            for (size_t i = 0; i < fg.size(); ++i) {
+                BOOST_REQUIRE_EQUAL(fg[i], fw[i]);
+            }
+        }
+
+        auto read_all_muts = [&] (shared_sstable from, const query::partition_slice& sl) {
+            std::vector<mutation> out;
+            auto rd = from->make_reader(s2, env.make_reader_permit(), query::full_partition_range, sl);
+            auto close = deferred_close(rd);
+            while (auto m = read_mutation_from_mutation_reader(rd).get()) {
+                out.push_back(std::move(*m));
+            }
+            return out;
+        };
+        auto want = read_all_muts(mx, slice_for(false));
+        auto got  = read_all_muts(pq, slice_for(true));
+        BOOST_REQUIRE_EQUAL(got.size(), want.size());
+
+        auto same_cell = [] (const atomic_cell_or_collection* x, const atomic_cell_or_collection* y,
+                             const column_definition& def) {
+            BOOST_REQUIRE_EQUAL(bool(x), bool(y));
+            if (!x) { return false; }
+            BOOST_REQUIRE_EQUAL(x->as_atomic_cell(def).timestamp(), y->as_atomic_cell(def).timestamp());
+            BOOST_REQUIRE(x->as_atomic_cell(def).value() == y->as_atomic_cell(def).value());
+            return true;
+        };
+        size_t rows_compared = 0, statics_compared = 0;
+        for (size_t i = 0; i < got.size(); ++i) {
+            BOOST_REQUIRE(got[i].decorated_key().equal(*s2, want[i].decorated_key()));
+            if (same_cell(got[i].partition().static_row().get().find_cell(st.id),
+                          want[i].partition().static_row().get().find_cell(st.id), st)) {
+                ++statics_compared;
+            }
+            const auto& ga = got[i].partition().clustered_rows();
+            const auto& wa = want[i].partition().clustered_rows();
+            BOOST_REQUIRE_EQUAL(ga.calculate_size(), wa.calculate_size());
+            auto gi = ga.begin();
+            auto wi = wa.begin();
+            for (; gi != ga.end() && wi != wa.end(); ++gi, ++wi) {
+                BOOST_REQUIRE(gi->key().equal(*s2, wi->key()));
+                if (same_cell(gi->row().cells().find_cell(b.id), wi->row().cells().find_cell(b.id), b)) {
+                    ++rows_compared;
+                }
+            }
+        }
+        BOOST_REQUIRE_GT(rows_compared, 0u);
+        BOOST_REQUIRE_EQUAL(statics_compared, got.size());
     }).get();
 }

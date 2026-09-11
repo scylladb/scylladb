@@ -404,6 +404,83 @@ def test_scylla_sstable_dump_data(request, cql, test_keyspace, scylla_path, scyl
         assert json.loads(out)
 
 
+# `scylla sstable parquet-export` re-encodes sstables with the storage format's own shredder,
+# and its JSON summary is what the size numbers in docs/dev/parquet-storage-format.md are
+# produced with -- so its row accounting has to be right for the two kinds of partition that
+# hold no clustering row at all, and it has to merge several sstables rather than concatenate
+# them.
+#
+# Two sstables are written. The first holds, besides 50 ordinary rows, a partition with only
+# a static row, a partition with only a partition tombstone, and a partition with only a range
+# tombstone. The second overwrites the same 50 rows. The shredder emits one placeholder row
+# for a partition whose only content is a static row or a partition tombstone (see
+# fragment_shredder::end_partition), and carries a range tombstone as two rows -- its opening
+# and closing bound -- so the file for the first sstable holds 50 + 1 + 1 + 2 storage rows.
+# The tool used to drop the partition tombstone, drop range tombstones, and never close the
+# last partition, so all three special partitions vanished from the file while the summary
+# still looked plausible.
+def test_scylla_sstable_parquet_export_row_accounting(cql, test_keyspace, scylla_path, scylla_data_dir):
+    table = util.unique_name()
+    schema = (f"CREATE TABLE {test_keyspace}.{table} (pk int, ck int, s int STATIC, v int, PRIMARY KEY (pk, ck))"
+              " WITH compaction = {'class': 'NullCompactionStrategy'}")
+    cql.execute(schema)
+    schema_file = os.path.join(scylla_data_dir, "..", "test_tools_parquet_export_schema.cql")
+    with open(schema_file, "w") as f:
+        f.write(schema)
+    try:
+        # Static-only, partition-tombstone-only, range-tombstone-only: each is a partition
+        # without a single clustering row.
+        cql.execute(f"UPDATE {test_keyspace}.{table} SET s = 1 WHERE pk = 1")
+        cql.execute(f"DELETE FROM {test_keyspace}.{table} WHERE pk = 2")
+        cql.execute(f"DELETE FROM {test_keyspace}.{table} WHERE pk = 3 AND ck > 0 AND ck < 10")
+        for pk in range(10, 20):
+            for ck in range(5):
+                cql.execute(f"INSERT INTO {test_keyspace}.{table} (pk, ck, v) VALUES ({pk}, {ck}, {pk * ck})")
+        nodetool.flush(cql, f"{test_keyspace}.{table}")
+        first = set(get_sstables_for_table(scylla_data_dir, test_keyspace, table))
+        assert first
+
+        # The same 50 rows again, newer, so a merged stream has exactly one version of each.
+        for pk in range(10, 20):
+            for ck in range(5):
+                cql.execute(f"INSERT INTO {test_keyspace}.{table} (pk, ck, v) VALUES ({pk}, {ck}, {pk * ck + 1})")
+        nodetool.flush(cql, f"{test_keyspace}.{table}")
+        second = set(get_sstables_for_table(scylla_data_dir, test_keyspace, table)) - first
+        assert second
+
+        def export(sstables):
+            out = subprocess.check_output([scylla_path, "sstable", "parquet-export", "--schema-file", schema_file,
+                                           "--stats-only"] + sorted(sstables))
+            summary = json.loads(out)
+            assert summary["row_groups"] >= 1
+            assert summary["parquet_bytes"] > 0
+            return summary
+
+        # A flush writes one sstable per shard, so each "sstable" here is a set of files that
+        # together hold the flush; the counts are over the set.
+        a = export(first)
+        assert a["rows"] == 50
+        assert a["storage_rows"] == 50 + 1 + 1 + 2, a
+
+        b = export(second)
+        assert b["rows"] == 50
+        assert b["storage_rows"] == 50, b
+
+        # Both sets together: merged by default, so the overwritten rows appear once, and the
+        # special partitions -- present only in the first flush -- are still all there.
+        both = export(first | second)
+        assert both["rows"] == 50, both
+        assert both["storage_rows"] == a["storage_rows"], both
+
+        # --merge is not an option of this operation: merging is the only thing it does.
+        with pytest.raises(subprocess.CalledProcessError):
+            subprocess.check_output([scylla_path, "sstable", "parquet-export", "--schema-file", schema_file,
+                                     "--stats-only", "--merge"] + sorted(first), stderr=subprocess.STDOUT)
+    finally:
+        cql.execute(f"DROP TABLE {test_keyspace}.{table}")
+        os.unlink(schema_file)
+
+
 # Reproduces the tool side of scylladb/scylladb#13350: a snapshot's schema.cql describes a
 # table's dropped columns using "ALTER TABLE ... DROP ... USING TIMESTAMP" statements (and
 # "ALTER TABLE ... ADD" if a column was re-added). scylla-sstable must be able to load such a

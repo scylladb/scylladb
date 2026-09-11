@@ -9,10 +9,13 @@
  */
 
 #include "cql3/statements/cf_prop_defs.hh"
+#include "cql3/column_identifier.hh"
 #include "cql3/statements/property_definitions.hh"
 #include "cql3/statements/request_validations.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "db/extensions.hh"
+#include "sstables/parquet/writer_impl.hh"
+#include "sstables/parquet/encryption_keys.hh"
 #include "db/tags/extension.hh"
 #include "cdc/log.hh"
 #include "cdc/cdc_extension.hh"
@@ -60,6 +63,8 @@ const sstring cf_prop_defs::COMPACTION_ENABLED_KEY = "enabled";
 const sstring cf_prop_defs::KW_TABLETS = "tablets";
 
 const sstring cf_prop_defs::KW_STORAGE_ENGINE = "storage_engine";
+const sstring cf_prop_defs::KW_STORAGE_FORMAT = "storage_format";
+const sstring cf_prop_defs::KW_PARQUET = "parquet";
 const sstring cf_prop_defs::KW_LARGE_DATA_GUARDRAILS_ENABLED = "large_data_guardrails_enabled";
 
 schema::extensions_map cf_prop_defs::make_schema_extensions(const db::extensions& exts) const {
@@ -110,6 +115,8 @@ void cf_prop_defs::validate(const data_dictionary::database db, sstring ks_name,
         KW_COMPRESSION, KW_CRC_CHECK_CHANCE,  KW_ID, KW_PAXOSGRACESECONDS,
         KW_SYNCHRONOUS_UPDATES, KW_TABLETS,
         KW_STORAGE_ENGINE,
+        KW_STORAGE_FORMAT,
+        KW_PARQUET,
         KW_LARGE_DATA_GUARDRAILS_ENABLED,
     });
     static std::set<sstring> obsolete_keywords({
@@ -202,6 +209,56 @@ void cf_prop_defs::validate(const data_dictionary::database db, sstring ks_name,
         db::tablet_options::validate(*tablet_options_map, db.features());
     }
 
+    // Both Parquet properties land in schema cells (`parquet`, `storage_format`) that a node
+    // without the feature cannot read, so publishing either mid-upgrade splits the schema. That
+    // includes an explicit `storage_format = 'sstable'`: the value is the default, but the *cell*
+    // is not -- has_storage_format() makes make_scylla_tables_mutation() write it, and the digest
+    // moves with it. The map can be set without storage_format (options first, format later), so
+    // gating only the format property is not enough either; both are gated, unconditionally.
+    for (const auto& kw : {KW_PARQUET, KW_STORAGE_FORMAT}) {
+        if (has_property(kw) && !db.features().parquet_sstable_format) {
+            throw exceptions::configuration_exception(format(
+                "Cannot set '{}': requires all nodes to support the "
+                "PARQUET_SSTABLE_FORMAT cluster feature", kw));
+        }
+    }
+
+    // Constructing it is the validation: parquet_parameters rejects unknown sub-options,
+    // out-of-range values, and anything the writer cannot honour, so a bad value is a
+    // configuration error here rather than a surprise at write time. Names, values and ranges
+    // only: whether an `encoding.<column>` override *applies to that column's type* is checked in
+    // apply_to_builder(), which is the first point that knows the columns; validate() sees only
+    // the keyspace.
+    if (auto opts = get_map(KW_PARQUET)) {
+        const sstables::parquet::parquet_parameters pp{*opts};
+        // Parquet encryption and whole-component encryption at rest are mutually exclusive, and
+        // this is the only place both are visible at once.
+        //
+        // They are not merely redundant. `scylla_encryption_options` installs an sstable file-io
+        // extension that encrypts the entire Data component, so a pq table carrying it would be
+        // encrypted twice -- and, far worse, the outer layer makes the file opaque to every
+        // reader that is not Scylla. Being openable by an authorised external reader is the
+        // entire reason for encrypting *inside* the Parquet format rather than underneath it, so
+        // silently accepting both would take away the feature while appearing to add security.
+        // Both keys still come from the same providers; it is the property that has to be chosen.
+        if (pp.encryption_enabled() && schema_extensions.contains("scylla_encryption_options")) {
+            throw exceptions::configuration_exception(
+                    "A table cannot set both scylla_encryption_options and parquet = "
+                    "{'encryption': ...}: the first encrypts the whole sstable component, which "
+                    "would encrypt the Parquet file a second time and leave a file no external "
+                    "reader can open -- which is what encrypting inside the format exists to "
+                    "avoid. Pick one; both take their keys from the same key providers");
+        }
+    }
+
+    if (has_property(KW_STORAGE_FORMAT)) {
+        auto sf = get_string(KW_STORAGE_FORMAT, "");
+        if (sf != "sstable" && sf != "parquet" && sf != "hybrid") {
+            throw exceptions::configuration_exception(format(
+                "Invalid value '{}' for '{}'; expected one of: sstable, parquet, hybrid",
+                sf, KW_STORAGE_FORMAT));
+        }
+    }
     if (has_property(KW_STORAGE_ENGINE)) {
         auto storage_engine = get_string(KW_STORAGE_ENGINE, "");
         if (storage_engine == "logstor") {
@@ -404,6 +461,63 @@ void cf_prop_defs::apply_to_builder(schema_builder& builder, schema::extensions_
         builder.set_tablet_options(std::move(*tablet_options_opt));
     }
 
+    if (auto opts = get_map(KW_PARQUET)) {
+        // An `encoding.<column>` override names a column and an encoding, and only some encodings
+        // apply to a given type: DELTA_BINARY_PACKED on text, or BYTE_STREAM_SPLIT on anything but a
+        // double, cannot be honoured. Both failure modes are bad in different ways -- an encoding the
+        // writer silently ignores is a setting that lies, and one it fails on takes the table down
+        // long after the DDL was accepted -- so it is rejected here, where the columns are known.
+        //
+        // A misspelled column name is caught for the same reason: left alone it would be inert, and
+        // an inert performance setting is one nobody notices is doing nothing.
+        const sstables::parquet::parquet_parameters pp{*opts};
+        for (const auto& [col, enc] : pp.column_encodings()) {
+            const cql3::column_identifier id{col, true};
+            if (!builder.has_column(id)) {
+                throw exceptions::configuration_exception(seastar::format(
+                        "The 'parquet' option sets an encoding for column '{}', which this table does "
+                        "not have", col));
+            }
+            const auto& cdef = builder.find_column(id);
+            const auto ct = sstables::parquet::cql_type_of(*cdef.type);
+            if (!sstables::parquet::parquet_parameters::applies_to(enc, ct)) {
+                throw exceptions::configuration_exception(seastar::format(
+                        "Encoding '{}' does not apply to column '{}' of type {}",
+                        sstables::parquet::parquet_parameters::to_string(enc), col,
+                        cdef.type->name()));
+            }
+        }
+        // A per-column encryption key names a column too, and here the stakes are higher than for
+        // an encoding: an `encryption_key.<column>` that named nothing would leave the operator
+        // believing a column has its own key when it is in fact encrypted under the table's, which
+        // is a security claim that is simply false. So a bad name is an error, never inert.
+        for (const auto& [col, kopts] : pp.column_key_opts()) {
+            const cql3::column_identifier id{col, true};
+            if (!builder.has_column(id)) {
+                throw exceptions::configuration_exception(seastar::format(
+                        "The 'parquet' option sets an encryption key for column '{}', which this "
+                        "table does not have", col));
+            }
+            const auto& cdef = builder.find_column(id);
+            // The name-based restrictions are already checked in parquet_parameters (they hold
+            // wherever the property is parsed); this is the one that needs the column's type.
+            if (auto why = sstables::parquet::parquet_parameters::keyable_column_error(
+                        col, cdef.type->is_multi_cell())) {
+                throw exceptions::configuration_exception(seastar::format(
+                        "The 'parquet' option asks for a per-column encryption key, but {}", *why));
+            }
+        }
+        // The remaining encryption checks -- an algorithm the format cannot honour, provider
+        // options with encryption off -- are in parquet_parameters itself, above, because they
+        // must hold everywhere the property is parsed and not only where a DDL statement created
+        // it. Whether the provider can actually be *reached* is checked in validate(), which is
+        // allowed to block.
+        builder.set_parquet_options(*opts);
+    }
+    if (has_property(KW_STORAGE_FORMAT)) {
+        builder.set_storage_format(
+                sstring_to_storage_format_type(get_string(KW_STORAGE_FORMAT, "sstable")));
+    }
     if (has_property(KW_STORAGE_ENGINE)) {
         auto storage_engine = get_string(KW_STORAGE_ENGINE, "");
         if (storage_engine == "logstor") {

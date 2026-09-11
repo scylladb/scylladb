@@ -150,18 +150,6 @@ void incremental_compaction_strategy_options::validate(const std::map<sstring, s
     compaction_strategy_impl::validate_min_max_threshold(options, unchecked_options);
 }
 
-uint64_t incremental_compaction_strategy::avg_size(std::vector<sstables::frozen_sstable_run>& runs) const {
-    uint64_t n = 0;
-
-    if (runs.empty()) {
-        return 0;
-    }
-    for (auto& r : runs) {
-        n += r->data_size();
-    }
-    return n / runs.size();
-}
-
 bool incremental_compaction_strategy::is_bucket_interesting(const std::vector<sstables::frozen_sstable_run>& bucket, size_t min_threshold) {
     return bucket.size() >= min_threshold;
 }
@@ -172,16 +160,58 @@ bool incremental_compaction_strategy::is_any_bucket_interesting(const std::vecto
     });
 }
 
+// The run-level counterpart of the unit problem documented in size_tiered_compaction_strategy.cc:
+// `data_size()` means uncompressed bytes for a compressed native sstable and file bytes for a `pq`
+// one, so in a set holding both, a Parquet run reports a length 5-10x below its true peer and
+// buckets several tiers too low -- which schedules repeated rewrites of the format that is most
+// expensive to rewrite. All-native sets keep using `data_size()`, so no existing table's bucketing
+// moves; mixed sets compare what is on disk, which is one unit for both.
+static bool mixed_formats(const std::vector<sstables::frozen_sstable_run>& runs) {
+    bool any_pq = false, any_other = false;
+    for (auto& r_ptr : runs) {
+        for (auto& sst : r_ptr->all()) {
+            (sst->get_version() == sstables::sstable_version_types::pq ? any_pq : any_other) = true;
+        }
+    }
+    return any_pq && any_other;
+}
+
+static uint64_t bucketing_size(const sstables::sstable_run& r, bool use_ondisk) {
+    return use_ondisk ? r.ondisk_data_size() : r.data_size();
+}
+
+// Every size the strategy compares has to be taken in the one unit the set is measured in.
+// Bucketing already was; these two feed the tier *ranking* (find_two_largest_tiers) and the
+// space-amplification ratio, and measuring them in `data_size()` while the buckets were formed
+// in on-disk bytes ranked a Parquet tier 5-10x below its real place and computed an SA out of
+// two incomparable numbers.
+static uint64_t total_size(const std::vector<sstables::frozen_sstable_run>& runs, bool use_ondisk) {
+    uint64_t n = 0;
+    for (auto& r : runs) {
+        n += bucketing_size(*r, use_ondisk);
+    }
+    return n;
+}
+
+uint64_t incremental_compaction_strategy::avg_size(std::vector<sstables::frozen_sstable_run>& runs) const {
+    if (runs.empty()) {
+        return 0;
+    }
+    return total_size(runs, mixed_formats(runs)) / runs.size();
+}
+
 std::vector<sstable_run_and_length>
 incremental_compaction_strategy::create_run_and_length_pairs(const std::vector<sstables::frozen_sstable_run>& runs) {
 
     std::vector<sstable_run_and_length> run_length_pairs;
     run_length_pairs.reserve(runs.size());
 
+    const bool use_ondisk = mixed_formats(runs);
     for(auto& r_ptr : runs) {
         auto& r = *r_ptr;
-        assert(r.data_size() != 0);
-        run_length_pairs.emplace_back(r_ptr, r.data_size());
+        auto size = bucketing_size(r, use_ondisk);
+        assert(size != 0);
+        run_length_pairs.emplace_back(r_ptr, size);
     }
 
     return run_length_pairs;
@@ -190,6 +220,8 @@ incremental_compaction_strategy::create_run_and_length_pairs(const std::vector<s
 std::vector<std::vector<sstables::frozen_sstable_run>>
 incremental_compaction_strategy::get_buckets(const std::vector<sstables::frozen_sstable_run>& runs, const incremental_compaction_strategy_options& options) {
     auto sorted_runs = create_run_and_length_pairs(runs);
+    // The re-read below has to be in the same unit the pairs above were built in.
+    const bool use_ondisk = mixed_formats(runs);
 
     std::sort(sorted_runs.begin(), sorted_runs.end(), [] (sstable_run_and_length& i, sstable_run_and_length& j) {
         return i.second < j.second;
@@ -219,7 +251,7 @@ incremental_compaction_strategy::get_buckets(const std::vector<sstables::frozen_
                 auto& bucket = bucket_list.back();
                 auto total_size = bucket.size() * bucket_average_size;
                 auto new_average_size = (total_size + size) / (bucket.size() + 1);
-                auto smallest_run_in_bucket = bucket[0]->data_size();
+                auto smallest_run_in_bucket = bucketing_size(*bucket[0], use_ondisk);
 
                 // SSTables are added in increasing size order so the bucket's
                 // average might drift upwards.
@@ -356,12 +388,16 @@ incremental_compaction_strategy::get_sstables_for_compaction(compaction_group_vi
 
     if (is_any_bucket_interesting(buckets, min_threshold)) {
         std::vector<sstables::frozen_sstable_run> most_interesting = most_interesting_bucket(std::move(buckets), min_threshold, max_threshold);
-        co_return compaction_descriptor(runs_to_sstables(std::move(most_interesting)), 0, _fragment_size);
+        auto desc = compaction_descriptor(runs_to_sstables(std::move(most_interesting)), 0, _fragment_size);
+        desc.parquet_ctx.bottom_tier = inputs_are_bottom_tier(desc.sstables, runs_to_sstables(candidates));
+        co_return desc;
     }
     // If we are not enforcing min_threshold explicitly, try any pair of sstable runs in the same tier.
     if (!t.compaction_enforce_min_threshold() && is_any_bucket_interesting(buckets, 2)) {
         std::vector<sstables::frozen_sstable_run> most_interesting = most_interesting_bucket(std::move(buckets), 2, max_threshold);
-        co_return compaction_descriptor(runs_to_sstables(std::move(most_interesting)), 0, _fragment_size);
+        auto desc = compaction_descriptor(runs_to_sstables(std::move(most_interesting)), 0, _fragment_size);
+        desc.parquet_ctx.bottom_tier = inputs_are_bottom_tier(desc.sstables, runs_to_sstables(candidates));
+        co_return desc;
     }
 
     // The cross-tier behavior is only triggered once we're done with all the pending same-tier compaction to
@@ -372,6 +408,10 @@ incremental_compaction_strategy::get_sstables_for_compaction(compaction_group_vi
 
     auto desc = find_garbage_collection_job(t, buckets);
     if (!desc.sstables.empty()) {
+        // A GC job may or may not include the largest tier -- it starts from whichever tier
+        // has droppable tombstones -- so its position is derived the way the same-tier jobs
+        // above derive theirs, against everything the strategy was offered.
+        desc.parquet_ctx.bottom_tier = inputs_are_bottom_tier(desc.sstables, runs_to_sstables(candidates));
         co_return desc;
     }
 
@@ -386,12 +426,18 @@ incremental_compaction_strategy::get_sstables_for_compaction(compaction_group_vi
         // Don't try SAG if there's an ongoing compaction, because if largest tier is being compacted,
         // SA would be calculated incorrectly, which may result in an unneeded cross-tier compaction.
 
-        auto find_two_largest_tiers = [this] (std::vector<size_bucket_t>&& buckets) -> std::tuple<size_bucket_t, size_bucket_t> {
-            // avg_size() is O(bucket.size()); cache it per bucket instead of recomputing it on every comparison.
+        // Decided once over the whole candidate set, not per bucket: a bucket that happens to
+        // hold only native runs would otherwise be measured in a different unit from its
+        // neighbour, which is the comparison this exists to make consistent.
+        const bool use_ondisk = mixed_formats(candidates);
+
+        auto find_two_largest_tiers = [use_ondisk] (std::vector<size_bucket_t>&& buckets) -> std::tuple<size_bucket_t, size_bucket_t> {
+            // The average is O(bucket.size()); cache it per bucket instead of recomputing it on every comparison.
             std::vector<std::pair<uint64_t, size_bucket_t>> sized_buckets;
             sized_buckets.reserve(buckets.size());
             for (auto& b : buckets) {
-                sized_buckets.emplace_back(avg_size(b), std::move(b));
+                const uint64_t avg = b.empty() ? 0 : total_size(b, use_ondisk) / b.size();
+                sized_buckets.emplace_back(avg, std::move(b));
             }
             std::partial_sort(sized_buckets.begin(), sized_buckets.begin()+2, sized_buckets.end(), [] (auto& i, auto& j) {
                 return i.first > j.first; // descending order
@@ -399,12 +445,8 @@ incremental_compaction_strategy::get_sstables_for_compaction(compaction_group_vi
             return { std::move(sized_buckets[0].second), std::move(sized_buckets[1].second) };
         };
 
-        auto total_size = [] (const size_bucket_t& bucket) -> uint64_t {
-            return std::ranges::fold_left(bucket | std::views::transform(std::mem_fn(&sstables::sstable_run::data_size)), uint64_t(0), std::plus{});
-        };
-
         auto [s0, s1] = find_two_largest_tiers(std::move(buckets));
-        uint64_t s0_size = total_size(s0), s1_size = total_size(s1);
+        uint64_t s0_size = total_size(s0, use_ondisk), s1_size = total_size(s1, use_ondisk);
         double space_amplification = double(s0_size + s1_size) / s0_size;
 
         if (space_amplification > _space_amplification_goal) {
@@ -415,8 +457,14 @@ incremental_compaction_strategy::get_sstables_for_compaction(compaction_group_vi
             cross_tier_input.reserve(cross_tier_input.size() + s1.size());
             std::move(s1.begin(), s1.end(), std::back_inserter(cross_tier_input));
 
-            co_return compaction_descriptor(runs_to_sstables(std::move(cross_tier_input)),
-                                                   0, _fragment_size);
+            auto desc = compaction_descriptor(runs_to_sstables(std::move(cross_tier_input)),
+                                              0, _fragment_size);
+            // True by construction -- s0 is the largest tier, so nothing larger is ever going
+            // to absorb this output -- and it has to be *said*: a descriptor that leaves the
+            // flag at its default tells the tiering policy this output is not bottom-tier, and
+            // the one compaction that most deserves Parquet would be declined by C1.
+            desc.parquet_ctx.bottom_tier = true;
+            co_return desc;
         }
     }
 

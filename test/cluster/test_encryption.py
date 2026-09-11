@@ -6,6 +6,7 @@
 
 import asyncio
 import contextlib
+import functools
 import tempfile
 import time
 import glob
@@ -107,6 +108,7 @@ async def create_encrypted_cf(manager: ScyllaClusterManager, ks: str,
     secret_key_strength=None,
     compression=None,
     additional_options=None,
+    storage_format=None,
 ):
     """create test cf"""
     if additional_options is None:
@@ -125,8 +127,97 @@ async def create_encrypted_cf(manager: ScyllaClusterManager, ks: str,
 
     if compression is not None:
         extra = f"{extra} AND compression = {{ 'sstable_compression': '{compression}Compressor' }}"
+    if storage_format is not None:
+        extra = f"{extra} AND storage_format = '{storage_format}'"
 
     return new_test_table(manager, ks, columns, extra)
+
+
+# The key-provider sub-options the `parquet` table property forwards. A closed list on the
+# Scylla side (parquet_parameters::key_option_names in sstables/parquet/writer_impl.cc), so an
+# unknown name is a DDL error rather than an inert setting -- which is why the helper below
+# filters a provider's scylla_encryption_options through it instead of copying them verbatim.
+# The one name the two vocabularies do not share is the test replicated provider's `system_key`:
+# the provider itself never reads that spelling (it takes `system_key_file`, and defaults to
+# "system_key", the very value the test passes), so dropping it changes nothing but the DDL.
+PARQUET_KEY_OPTION_NAMES = frozenset({
+    "key_provider", "secret_key_provider_factory_class",
+    "cipher_algorithm", "secret_key_strength",
+    "secret_key_file", "system_key_file",
+    "kmip_host", "template_name", "key_namespace",
+    "kms_host", "aws_assume_role_arn",
+    "gcp_host", "gcp_credentials_file", "gcp_impersonate_service_account",
+    "gcp_iam_endpoint_override",
+    "azure_host",
+    "master_key",
+})
+
+
+async def create_parquet_encrypted_cf(manager: ScyllaClusterManager, ks: str,
+    columns: str=None,
+    cipher_algorithm=None,
+    secret_key_strength=None,
+    compression=None,
+    additional_options=None,
+    storage_format='parquet',
+):
+    """create test cf encrypted *inside* the Parquet format (Parquet Modular Encryption).
+
+    The counterpart of create_encrypted_cf for the other encryption mode. That one emits
+    `scylla_encryption_options`, which installs the sstable file-io extension and encrypts the
+    whole Data component whatever its format; this one emits `parquet = {'encryption':
+    'aes_gcm_v1', ...}`, which encrypts the Parquet modules under keys the writer obtains through
+    ent/encryption/parquet_key_source.cc. The two are mutually exclusive at DDL time, and only the
+    second is what an external Parquet reader with the key can open.
+
+    The key options are the provider's own, in `scylla_encryption_options`' vocabulary, minus
+    anything the `parquet` property does not forward (see PARQUET_KEY_OPTION_NAMES).
+    `cipher_algorithm` is left to the property's default when not given: the format permits only
+    AES-GCM, and the property defaults an absent algorithm to 'AES/GCM/NoPadding' while refusing
+    an explicit one that names any other mode.
+    """
+    if columns is None:
+        columns = "key text PRIMARY KEY, c1 text, c2 text"
+    options = {"encryption": "aes_gcm_v1"}
+    for name, value in (additional_options or {}).items():
+        if name in PARQUET_KEY_OPTION_NAMES:
+            options[name] = str(value)
+    if cipher_algorithm:
+        options["cipher_algorithm"] = cipher_algorithm
+    if secret_key_strength:
+        # map<text, text>: the property parses the number itself.
+        options["secret_key_strength"] = str(secret_key_strength)
+
+    extra = f"WITH parquet = {options} AND storage_format = '{storage_format}'"
+    if compression is not None:
+        extra = f"{extra} AND compression = {{ 'sstable_compression': '{compression}Compressor' }}"
+
+    return new_test_table(manager, ks, columns, extra)
+
+
+async def verify_parquet_footers_encrypted(manager: ScyllaClusterManager, servers: list[ServerInfo],
+                                           table_name: str):
+    """Every Data component of the table, on every server, is an encrypted-footer Parquet file.
+
+    The magic is the one observable that separates the two encryption modes on disk. A Parquet
+    file whose footer is encrypted starts with "PARE" (a plaintext footer says "PAR1"); a file
+    under `scylla_encryption_options` starts with ciphertext and carries neither, and a native
+    sstable carries neither either. So finding "PARE" at offset 0 of every Data.db is what
+    proves that the table was written as Parquet AND encrypted inside the format -- and not,
+    say, written as native and encrypted by the file-io extension, which is what the same
+    workload would silently produce if the `parquet` property were ignored.
+    """
+    keyspace, column_family = table_name.split(".")
+    checked = 0
+    for server in servers:
+        node_workdir = await manager.server_get_workdir(server.server_id)
+        for path in get_sstables(node_workdir, keyspace, column_family, 'Data'):
+            with open(path, "rb") as f:
+                magic = f.read(4)
+            assert magic == b"PARE", f"{path}: expected an encrypted-footer Parquet file (PARE), found {magic!r}"
+            checked += 1
+    assert checked > 0, f"{table_name}: no Data components found on {len(servers)} servers"
+
 
 async def prepare_write_workload(cql: CassandraSession, table_name, flush=True, n: int = None) -> list[str]:
     """write some data, returns list of written partition keys"""
@@ -161,9 +252,25 @@ async def _smoke_test(manager: ScyllaClusterManager, key_provider: KeyProviderFa
                       exception_handler: Callable[[Exception,str,str], None] = None,
                       options: dict = {},
                       num_servers: int = 1,
+                      storage_format: str = None,
+                      parquet_encryption: bool = False,
                       restart: Callable[[ScyllaClusterManager, list[ServerInfo], list[str]], Coroutine[None, None, None]] = None):
-    """helper to create cluster, cfs, data and verify it after restart"""
+    """helper to create cluster, cfs, data and verify it after restart
+
+    `parquet_encryption` picks the encryption mode: False is `scylla_encryption_options`, the
+    whole-component mode, on a table of whatever `storage_format` says; True is
+    `parquet = {'encryption': 'aes_gcm_v1', ...}`, encryption inside the Parquet format, and
+    `storage_format` must then be 'parquet' or 'hybrid'. In the second mode, and when the format
+    is 'parquet' so that every flush writes Parquet, the on-disk files are also checked to be
+    encrypted-footer Parquet files before the restart -- see verify_parquet_footers_encrypted.
+    """
     cfg = options | key_provider.configuration_parameters()
+    if parquet_encryption:
+        assert storage_format in ('parquet', 'hybrid'), \
+            f"parquet_encryption needs a Parquet-capable storage_format, got {storage_format!r}"
+        create_cf = functools.partial(create_parquet_encrypted_cf, storage_format=storage_format)
+    else:
+        create_cf = functools.partial(create_encrypted_cf, storage_format=storage_format)
 
     servers: list[ServerInfo] = await manager.servers_add(servers_num = num_servers, config=cfg, auto_rack_dc='dc1')
     cql = manager.cql
@@ -178,11 +285,11 @@ async def _smoke_test(manager: ScyllaClusterManager, key_provider: KeyProviderFa
                 try:
                     additional_options = key_provider.additional_cf_options()
                     table_name = await stack.enter_async_context(
-                        await create_encrypted_cf(manager, ks, cipher_algorithm=cipher_algorithm,
-                                                  secret_key_strength=secret_key_strength,
-                                                  compression=compression,
-                                                  additional_options=additional_options
-                                                  ))
+                        await create_cf(manager, ks, cipher_algorithm=cipher_algorithm,
+                                        secret_key_strength=secret_key_strength,
+                                        compression=compression,
+                                        additional_options=additional_options,
+                                        ))
                     keys = await prepare_write_workload(cql, table_name=table_name)
                     cfs.append((table_name, keys))
                 except Exception as e:
@@ -190,6 +297,13 @@ async def _smoke_test(manager: ScyllaClusterManager, key_provider: KeyProviderFa
                         exception_handler(e, cipher_algorithm, secret_key_strength)
                         continue
                     raise e
+            if parquet_encryption and storage_format == 'parquet':
+                # Before the restart, while the files are fresh from the flush: a table pinned
+                # to 'parquet' has nothing but Parquet on disk, so every one of them must carry
+                # the encrypted-footer magic. ('hybrid' flushes native and converts on compaction,
+                # so its files are not checked -- what it proves is the schema and write paths.)
+                for table_name, _ in cfs:
+                    await verify_parquet_footers_encrypted(manager, servers, table_name)
             # restart the cluster
             if restart:
                 await restart(manager, servers, [table_name for table_name, _ in cfs])
@@ -561,3 +675,75 @@ async def test_system_encryption_reboot(manager: ScyllaClusterManager, tmpdir):
                           ciphers={"AES/CBC/PKCS5Padding": [128]},
                           options=options,
                           restart=restart)
+
+
+async def test_encrypted_parquet_across_providers(manager, key_provider):
+    """Whole-component encryption at rest (`scylla_encryption_options`) over a `pq` table.
+
+    This is the OLD encryption mode applied to the NEW file format: the sstable file-io extension
+    encrypts the entire Data component, so the Parquet file underneath is written in the clear by
+    the Parquet writer and turned into ciphertext by the extension on its way to disk. Nothing
+    Parquet-specific is exercised in the key path -- ent/encryption/parquet_key_source.cc, the
+    `parquet = {'encryption': ...}` property and Parquet Modular Encryption are not involved at
+    all, and the resulting file is opaque to every external Parquet reader. What this pins is
+    that the file-io extension composes with a pq Data component the same way it does with a
+    native one: the extension sees a stream of bytes and must not care what format they are, and
+    the pq reader must read through it after a restart, when the key has to be re-resolved from
+    the provider by a process that did not write the file.
+
+    Parametrized over every KeyProvider, so the same table goes through local-file, replicated,
+    KMIP, KMS, Azure and GCP rather than one of them. For encryption *inside* the format -- the
+    mode this feature exists for -- see test_parquet_modular_encryption_across_providers.
+    """
+    await _smoke_test(manager, key_provider=key_provider,
+                      ciphers={"AES/CBC/PKCS5Padding": [128]},
+                      storage_format='parquet')
+
+
+async def test_encrypted_hybrid_across_providers(manager, key_provider):
+    """The same whole-component mode, over a `hybrid` table.
+
+    Worth having separately rather than folding into the parquet case: hybrid flushes native and
+    decides per compaction whether the output is Parquet, so the file-io extension has to wrap
+    both formats within one table, and a fault in the way either format's writer or reader
+    composes with it could show up in one and not the other. Like the test above, this does not
+    exercise Parquet Modular Encryption or parquet_key_source.cc.
+    """
+    await _smoke_test(manager, key_provider=key_provider,
+                      ciphers={"AES/CBC/PKCS5Padding": [128]},
+                      storage_format='hybrid')
+
+
+@pytest.mark.parametrize("storage_format", ["parquet", "hybrid"])
+async def test_parquet_modular_encryption_across_providers(manager, key_provider, storage_format):
+    """Parquet Modular Encryption, `parquet = {'encryption': 'aes_gcm_v1', ...}`, through a REAL
+    key provider, at the integration layer -- the gap the two tests above were once mistaken for
+    covering.
+
+    Whole-tree, the only place encryption inside the format met a key provider was
+    test/boost/encryption_at_rest_test.cc, and only the local-file provider. The unit tests in
+    test/boost/sstable_parquet_test.cc install a stub key source via
+    sstables::parquet::set_key_source, so ent/encryption/parquet_key_source.cc and every other
+    provider were out of the loop; they pinned the semaphore interaction, not the provider
+    integration. test/cqlpy, test/cluster and test/rest_api contained no in-format encryption
+    coverage at all, which is *why* the read-path deadlock (design doc section 10.17a) shipped.
+
+    The fixture is parametrized over every KeyProvider, so this runs the same table through
+    local-file, replicated, KMIP, KMS, Azure and GCP. The key options are each provider's own,
+    in `scylla_encryption_options`' vocabulary, carried in the `parquet` map instead; the cipher
+    is left to the property's default, since the format permits only AES-GCM and the property
+    refuses any explicit algorithm that is not.
+
+    _smoke_test writes, verifies that every Data component on disk is an encrypted-footer Parquet
+    file (for 'parquet'; 'hybrid' flushes native, so there it proves the schema and write paths),
+    does a rolling restart, and reads back -- the part that matters for a storage format, since
+    the key has to be re-resolved from the provider, by the id the writer recorded in the file's
+    key_metadata, after the process that wrote the file is gone.
+    """
+    # An empty algorithm means "do not name one": the property then defaults it to
+    # AES/GCM/NoPadding, the one thing the format accepts. Both AES key lengths the
+    # providers hand out for it.
+    await _smoke_test(manager, key_provider=key_provider,
+                      ciphers={"": [128, 256]},
+                      storage_format=storage_format,
+                      parquet_encryption=True)
