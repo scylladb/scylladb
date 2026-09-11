@@ -159,7 +159,7 @@ public:
     // Used ONLY to load staging sstables migrated during intra-node tablet migration.
     void load_sstables(table_id table_id, std::vector<sstables::shared_sstable> ssts);
     // Used in cleanup/cleanup-target tablet transition stage
-    void cleanup_staging_sstables(locator::effective_replication_map_ptr erm, table_id table_id, locator::tablet_id tid);
+    future<> cleanup_staging_sstables(locator::effective_replication_map_ptr erm, table_id table_id, locator::tablet_id tid);
 
 private:
     future<view_building_state> get_latest_view_building_state(raft::term_t term);
