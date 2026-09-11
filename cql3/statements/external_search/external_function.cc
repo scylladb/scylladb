@@ -8,11 +8,16 @@
 
 #include "cql3/statements/external_search/external_function.hh"
 
+#include "cql3/column_identifier.hh"
 #include "cql3/expr/expr-utils.hh"
+#include "cql3/functions/scoring_fcts.hh"
 #include "cql3/selection/selection.hh"
 #include "exceptions/exceptions.hh"
 #include "schema/schema.hh"
+#include "types/types.hh"
 #include "utils/assert.hh"
+
+#include <utility>
 
 namespace cql3::statements::external_search {
 
@@ -62,6 +67,41 @@ equality unevaluated_equality(const expr::expression& a, const expr::expression&
 void fetch_primary_key_columns(selection::selection& selection, const schema& schema) {
     for (const auto& cdef : schema.primary_key_columns()) {
         selection.add_column_for_post_processing(cdef);
+    }
+}
+
+expr::expression replace_search_call(functions::search_value value, const expr::expression& call, search_temporaries& temporaries,
+        expr::temporary_allocator& allocator) {
+    auto read = [&] (std::optional<size_t>& index, data_type type, std::optional<expr::expression> replaced) {
+        if (!index) {
+            index = allocator.allocate();
+        }
+        return expr::expression(expr::temporary{.index = *index, .type = std::move(type), .replaced_expr = std::move(replaced)});
+    };
+
+    switch (value) {
+    case functions::search_value::score:
+        return read(temporaries.score, float_type, call);
+    case functions::search_value::rank:
+        return read(temporaries.rank, int32_type, call);
+    case functions::search_value::fragment:
+        return read(temporaries.fragment, utf8_type, call);
+    case functions::search_value::score_and_rank:
+        return expr::expression(expr::tuple_constructor{
+                .elements = {read(temporaries.score, float_type, std::nullopt), read(temporaries.rank, int32_type, std::nullopt)},
+                .type = functions::score_and_rank_type(),
+        });
+    }
+    std::unreachable();
+}
+
+void name_selector_as_written(selection::prepared_selector& selector, const expr::expression& written) {
+    if (selector.alias) {
+        return;
+    }
+    auto name = fmt::format("{:result_set_metadata}", written);
+    if (fmt::format("{:result_set_metadata}", selector.expr) != name) {
+        selector.alias = ::make_shared<column_identifier>(std::move(name), true);
     }
 }
 

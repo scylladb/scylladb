@@ -9,7 +9,7 @@
 #pragma once
 
 #include "cql3/statements/select_statement.hh"
-#include "vector_search/vector_store_client.hh"
+#include "vector_search/hybrid_search.hh"
 
 namespace cql3::statements {
 
@@ -39,19 +39,23 @@ public:
             std::unique_ptr<cql3::attributes> attrs);
 
 protected:
-    lw_shared_ptr<query::read_command> prepare_command_for_base_query(query_processor& qp, service::query_state& state, const query_options& options, uint64_t fetch_limit) const;
+    /// Base-table rows read for the keys an external index returned, together with the command they
+    /// were read with. The command's slice is needed to walk the rows.
+    struct base_table_read {
+        foreign_ptr<lw_shared_ptr<query::result>> rows;
+        lw_shared_ptr<query::read_command> command;
+    };
 
-    future<::shared_ptr<cql_transport::messages::result_message>> query_base_table(query_processor& qp, service::query_state& state,
-            const query_options& options, const std::vector<vector_search::primary_key>& pkeys, lowres_clock::time_point timeout,
-            std::unique_ptr<cql3::selection::external_values_provider> provider = nullptr) const;
+    /// Reads a row for every candidate `pkeys` names, preserving their order.
+    future<coordinator_result<base_table_read>> query_base_table(query_processor& qp, service::query_state& state,
+            const query_options& options, lowres_clock::time_point timeout,
+            std::span<const vector_search::hybrid_candidate> candidates) const;
 
-    future<coordinator_result<foreign_ptr<lw_shared_ptr<query::result>>>> query_base_table(query_processor& qp, service::query_state& state,
-            const query_options& options, lw_shared_ptr<query::read_command> command, lowres_clock::time_point timeout,
-            const std::vector<vector_search::primary_key>& pkeys) const;
-
-    future<coordinator_result<foreign_ptr<lw_shared_ptr<query::result>>>> query_base_table(query_processor& qp, service::query_state& state,
-            const query_options& options, lw_shared_ptr<query::read_command> command, lowres_clock::time_point timeout,
-            std::vector<dht::partition_range> partition_ranges) const;
+    /// Turns rows already read into the result set the client is sent, injecting the values
+    /// `provider` supplies per row. Separate from the read so that a search can look at its rows first.
+    future<::shared_ptr<cql_transport::messages::result_message>> emit_result_set(
+            coordinator_result<base_table_read> table_results, const query_options& options,
+            const cql3::selection::external_values_provider* provider) const;
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_search(
             query_processor& qp, service::query_state& state, const query_options& options, uint64_t limit) const = 0;
@@ -66,6 +70,13 @@ protected:
     }
 
 private:
+    lw_shared_ptr<query::read_command> prepare_command_for_base_query(
+            query_processor& qp, service::query_state& state, const query_options& options, uint64_t fetch_limit) const;
+
+    future<coordinator_result<foreign_ptr<lw_shared_ptr<query::result>>>> query_partition_ranges(query_processor& qp, service::query_state& state,
+            const query_options& options, lw_shared_ptr<query::read_command> command, lowres_clock::time_point timeout,
+            std::vector<dht::partition_range> partition_ranges) const;
+
     virtual std::string_view index_search_type_name() const = 0;
 
     future<::shared_ptr<cql_transport::messages::result_message>> do_execute(

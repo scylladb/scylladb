@@ -157,8 +157,7 @@ protected:
 
         // Should not be reached: a selection that has no temporaries at all is
         // never paired with a provider - see select_statement::process_results().
-        virtual bool provide_external_values(const external_values_provider&, std::span<const bytes>, std::span<const bytes>,
-                const query::result_row_view&, const query::result_row_view*) override {
+        virtual bool provide_external_values(const external_values_provider&) override {
             on_internal_error(cql_logger, "simple_selectors::provide_external_values() called, but we have no temporaries");
         }
     };
@@ -441,10 +440,8 @@ protected:
             return !_sel._inner_loop.empty();
         }
 
-        virtual bool provide_external_values(const external_values_provider& provider, std::span<const bytes> partition_key,
-                std::span<const bytes> clustering_key, const query::result_row_view& static_row,
-                const query::result_row_view* row) override {
-            return provider.try_fill(_temporaries, partition_key, clustering_key, static_row, row);
+        virtual bool provide_external_values(const external_values_provider& provider) override {
+            return provider.try_fill(_temporaries);
         }
 
         virtual std::vector<managed_bytes_opt> transform_input_row(result_set_builder& rs) override {

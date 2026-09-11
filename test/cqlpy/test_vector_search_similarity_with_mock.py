@@ -360,7 +360,7 @@ def test_without_rescoring_ann_function_returns_vs_scores(cql, test_keyspace, ve
             extra_options={"rescoring": "false"}) as table:
         vector_store_mock.set_next_ann_response(200, reversed_ann_response(data))
         rows = list(cql.execute(
-            f"SELECT id, ANN(embedding, {ANN_QUERY_VECTOR_LITERAL}) AS similarity FROM {table} "
+            f"SELECT id, ANN_SCORE(embedding, {ANN_QUERY_VECTOR_LITERAL}) AS similarity FROM {table} "
             f"{ann_order_by} LIMIT 2"))
 
         # Without rescoring the mock's reversed order is preserved, and the scores
@@ -380,7 +380,7 @@ def test_without_rescoring_ann_function_alone_hides_pk_columns(cql, test_keyspac
             extra_options={"rescoring": "false"}) as table:
         vector_store_mock.set_next_ann_response(200, reversed_ann_response(data))
         rows = list(cql.execute(
-            f"SELECT ANN(embedding, {ANN_QUERY_VECTOR_LITERAL}) AS similarity FROM {table} "
+            f"SELECT ANN_SCORE(embedding, {ANN_QUERY_VECTOR_LITERAL}) AS similarity FROM {table} "
             f"ORDER BY ANN(embedding, {ANN_QUERY_VECTOR_LITERAL}) LIMIT 2"))
 
         assert rows[0]._fields == ("similarity",)
@@ -395,8 +395,9 @@ def test_without_rescoring_ann_function_repeated_and_nested(cql, test_keyspace, 
             extra_options={"rescoring": "false"}) as table:
         vector_store_mock.set_next_ann_response(200, reversed_ann_response(data))
         ann = f"ANN(embedding, {ANN_QUERY_VECTOR_LITERAL})"
+        score = f"ANN_SCORE(embedding, {ANN_QUERY_VECTOR_LITERAL})"
         rows = list(cql.execute(
-            f"SELECT id, {ann} AS s1, {ann} AS s2, CAST({ann} AS double) AS s3 FROM {table} "
+            f"SELECT id, {score} AS s1, {score} AS s2, CAST({score} AS double) AS s3 FROM {table} "
             f"ORDER BY {ann} LIMIT 2"))
 
         assert [row.id for row in rows] == [4, 3]
@@ -443,7 +444,7 @@ def test_without_rescoring_ann_function_with_clustering_key(cql, test_keyspace, 
         }))
 
         rows = list(cql.execute(
-            f"SELECT pk, ck, ANN(embedding, {ANN_QUERY_VECTOR_LITERAL}) AS similarity FROM {table} "
+            f"SELECT pk, ck, ANN_SCORE(embedding, {ANN_QUERY_VECTOR_LITERAL}) AS similarity FROM {table} "
             f"ORDER BY ANN(embedding, {ANN_QUERY_VECTOR_LITERAL}) LIMIT {len(response)}"))
 
         assert [(row.pk, row.ck) for row in rows] == [(pk, ck) for pk, ck, _ in expected]
@@ -462,7 +463,7 @@ def test_without_rescoring_ann_function_bind_marker(cql, test_keyspace, vector_s
             extra_options={"rescoring": "false"}) as table:
         # Case 1
         stmt = cql.prepare(
-            f"SELECT id, ANN(embedding, ?) AS similarity FROM {table} ORDER BY ANN(embedding, ?) LIMIT 2")
+            f"SELECT id, ANN_SCORE(embedding, ?) AS similarity FROM {table} ORDER BY ANN(embedding, ?) LIMIT 2")
 
         vector_store_mock.set_next_ann_response(200, reversed_ann_response(data))
         rows = list(cql.execute(stmt, [ANN_QUERY_VECTOR, ANN_QUERY_VECTOR]))
@@ -474,7 +475,7 @@ def test_without_rescoring_ann_function_bind_marker(cql, test_keyspace, vector_s
         # Case 2: the call the marker was written in is the one replaced with a temporary, so the
         # copy kept for this check is all that mentions it.
         stmt = cql.prepare(
-            f"SELECT id, ANN(embedding, ?) AS similarity FROM {table} "
+            f"SELECT id, ANN_SCORE(embedding, ?) AS similarity FROM {table} "
             f"ORDER BY ANN(embedding, {ANN_QUERY_VECTOR_LITERAL}) LIMIT 2")
 
         vector_store_mock.set_next_ann_response(200, reversed_ann_response(data))
@@ -485,7 +486,7 @@ def test_without_rescoring_ann_function_bind_marker(cql, test_keyspace, vector_s
 
         # Case 3: here the ordering's own expression is what mentions the marker.
         stmt = cql.prepare(
-            f"SELECT id, ANN(embedding, {ANN_QUERY_VECTOR_LITERAL}) AS similarity FROM {table} "
+            f"SELECT id, ANN_SCORE(embedding, {ANN_QUERY_VECTOR_LITERAL}) AS similarity FROM {table} "
             f"ORDER BY ANN(embedding, ?) LIMIT 2")
 
         vector_store_mock.set_next_ann_response(200, reversed_ann_response(data))
@@ -506,7 +507,7 @@ def test_with_rescoring_ann_function_returns_computed_scores(cql, test_keyspace,
                 extra_options={"similarity_function": func_name}) as table:
             vector_store_mock.set_next_ann_response(200, reversed_ann_response(data))
             rows = list(cql.execute(
-                f"SELECT id, ANN(embedding, {ANN_QUERY_VECTOR_LITERAL}) AS similarity FROM {table} "
+                f"SELECT id, ANN_SCORE(embedding, {ANN_QUERY_VECTOR_LITERAL}) AS similarity FROM {table} "
                 f"{ann_order_by} LIMIT 4"))
 
             # Rescoring reorders the mock's reversed response back into similarity order,
@@ -525,8 +526,9 @@ def test_with_rescoring_ann_function_repeated_and_nested(cql, test_keyspace, vec
     with rescoring_test_table(cql, test_keyspace, data) as table:
         vector_store_mock.set_next_ann_response(200, reversed_ann_response(data))
         ann = f"ANN(embedding, {ANN_QUERY_VECTOR_LITERAL})"
+        score = f"ANN_SCORE(embedding, {ANN_QUERY_VECTOR_LITERAL})"
         rows = list(cql.execute(
-            f"SELECT id, {ann} AS s1, {ann} AS s2, CAST({ann} AS double) AS s3 FROM {table} "
+            f"SELECT id, {score} AS s1, {score} AS s2, CAST({score} AS double) AS s3 FROM {table} "
             f"ORDER BY {ann} LIMIT 4"))
 
         assert [row.id for row in rows] == [d_row.id for d_row in data]
@@ -547,13 +549,13 @@ def test_ann_function_in_select_column_name_does_not_depend_on_rescoring(cql, te
                 extra_options={"rescoring": rescoring}) as table:
             vector_store_mock.set_next_ann_response(200, reversed_ann_response(data))
             res = cql.execute(
-                f"SELECT id, ANN(embedding, {ANN_QUERY_VECTOR_LITERAL}) FROM {table} "
+                f"SELECT id, ANN_SCORE(embedding, {ANN_QUERY_VECTOR_LITERAL}) FROM {table} "
                 f"ORDER BY ANN(embedding, {ANN_QUERY_VECTOR_LITERAL}) LIMIT 2")
             names[rescoring] = res.column_names
 
     assert names["true"] == names["false"], f"Column names differ with rescoring: {names}"
     # The name is the call the user wrote, not the similarity_*() the rescoring path lowers it to.
-    assert names["true"] == ["id", f"system.ann(embedding, {ANN_QUERY_VECTOR_LITERAL})"]
+    assert names["true"] == ["id", f"system.ann_score(embedding, {ANN_QUERY_VECTOR_LITERAL})"]
 
 
 # Verifies that with rescoring, where the query vector is carried by the computed similarity
@@ -566,7 +568,7 @@ def test_with_rescoring_ann_function_bind_marker(cql, test_keyspace, vector_stor
     with rescoring_test_table(cql, test_keyspace, data) as table:
         # Case 1
         stmt = cql.prepare(
-            f"SELECT id, ANN(embedding, ?) AS similarity FROM {table} ORDER BY ANN(embedding, ?) LIMIT 2")
+            f"SELECT id, ANN_SCORE(embedding, ?) AS similarity FROM {table} ORDER BY ANN(embedding, ?) LIMIT 2")
 
         vector_store_mock.set_next_ann_response(200, reversed_ann_response(data))
         rows = list(cql.execute(stmt, [ANN_QUERY_VECTOR, ANN_QUERY_VECTOR]))
@@ -579,7 +581,7 @@ def test_with_rescoring_ann_function_bind_marker(cql, test_keyspace, vector_stor
 
         # Case 2
         stmt = cql.prepare(
-            f"SELECT id, ANN(embedding, ?) AS similarity FROM {table} "
+            f"SELECT id, ANN_SCORE(embedding, ?) AS similarity FROM {table} "
             f"ORDER BY ANN(embedding, {ANN_QUERY_VECTOR_LITERAL}) LIMIT 2")
 
         vector_store_mock.set_next_ann_response(200, reversed_ann_response(data))
@@ -624,10 +626,84 @@ def test_rescoring_filters_and_orders_with_where_clause_ann_function(cql, test_k
         }))
         order_by = order_by_ann("embedding", ANN_QUERY_VECTOR_LITERAL, ann_syntax)
         rows = list(cql.execute(
-            f"SELECT id, ANN(embedding, {ANN_QUERY_VECTOR_LITERAL}) AS similarity "
+            f"SELECT id, ANN_SCORE(embedding, {ANN_QUERY_VECTOR_LITERAL}) AS similarity "
             f"FROM {table} WHERE id IN (1, 2, 3) {order_by} LIMIT 3"))
 
         assert [row.id for row in rows] == [1, 2, 3]
         for row, d_row in zip(rows, data[:3]):
             assert row.similarity == pytest.approx(d_row.expected_similarity, abs=0.01)
         assert len(rows[0]) == 2
+
+
+# ---------------------------------------------------------------------------
+# ANN() returns a (score, rank) tuple; ANN_SCORE() and ANN_RANK() return the two
+# values on their own.
+# ---------------------------------------------------------------------------
+#
+# A rescoring index reorders the rows by a recomputed similarity, so the Vector
+# Store's rank no longer applies, and ANN_RANK() and ANN() are rejected there.
+
+def test_without_rescoring_ann_returns_score_and_rank_tuple(cql, test_keyspace, vector_store_mock, skip_without_tablets):
+    """ANN() returns the Vector Store's score and the row's position in its response."""
+    data = TEST_DATA["cosine"]
+    with rescoring_test_table(cql, test_keyspace, data,
+            extra_options={"rescoring": "false"}) as table:
+        vector_store_mock.set_next_ann_response(200, reversed_ann_response(data))
+        rows = list(cql.execute(
+            f"SELECT id, ANN(embedding, {ANN_QUERY_VECTOR_LITERAL}) AS score_and_rank, "
+            f"ANN_SCORE(embedding, {ANN_QUERY_VECTOR_LITERAL}) AS s, "
+            f"ANN_RANK(embedding, {ANN_QUERY_VECTOR_LITERAL}) AS r FROM {table} "
+            f"ORDER BY ANN(embedding, {ANN_QUERY_VECTOR_LITERAL}) LIMIT 2"))
+
+        assert [row.s for row in rows] == pytest.approx([0.04, 0.03], abs=0.001)
+        # The rank is the position in the Vector Store's answer, counted from 1.
+        assert [row.r for row in rows] == [1, 2]
+        for row in rows:
+            assert row.score_and_rank[0] == pytest.approx(row.s, abs=0.001)
+            assert row.score_and_rank[1] == row.r
+
+
+def test_without_rescoring_every_function_costs_one_request(cql, test_keyspace, vector_store_mock, skip_without_tablets):
+    """ANN(), ANN_SCORE() and ANN_RANK() describe the one search the rows are ranked by, so they are served by one request."""
+    data = TEST_DATA["cosine"]
+    with rescoring_test_table(cql, test_keyspace, data,
+            extra_options={"rescoring": "false"}) as table:
+        vector_store_mock.set_next_ann_response(200, reversed_ann_response(data))
+        before = len(vector_store_mock.ann_requests)
+        list(cql.execute(
+            f"SELECT id, ANN(embedding, {ANN_QUERY_VECTOR_LITERAL}), "
+            f"ANN_SCORE(embedding, {ANN_QUERY_VECTOR_LITERAL}), "
+            f"ANN_RANK(embedding, {ANN_QUERY_VECTOR_LITERAL}) FROM {table} "
+            f"ORDER BY ANN(embedding, {ANN_QUERY_VECTOR_LITERAL}) LIMIT 2"))
+
+        assert len(vector_store_mock.ann_requests) - before == 1
+
+
+def test_with_rescoring_ann_rank_rejected(cql, test_keyspace, vector_store_mock, skip_without_tablets):
+    """A rescoring index reorders the rows by the recomputed similarity, so the Vector Store's rank
+    no longer applies and ANN_RANK() is rejected. So is ANN(), whose tuple contains the rank.
+    ANN_SCORE() and the ORDER BY itself still work."""
+    data = TEST_DATA["cosine"]
+    with rescoring_test_table(cql, test_keyspace, data) as table:
+        for call in ["ANN_RANK", "ANN"]:
+            with pytest.raises(InvalidRequest, match=rf"{call}\(\) is not supported with a rescoring vector index"):
+                cql.prepare(f"SELECT id, {call}(embedding, {ANN_QUERY_VECTOR_LITERAL}) FROM {table} "
+                            f"ORDER BY ANN(embedding, {ANN_QUERY_VECTOR_LITERAL}) LIMIT {len(data)}")
+
+        vector_store_mock.set_next_ann_response(200, reversed_ann_response(data))
+        rows = list(cql.execute(
+            f"SELECT id, ANN_SCORE(embedding, {ANN_QUERY_VECTOR_LITERAL}) AS s FROM {table} "
+            f"ORDER BY ANN(embedding, {ANN_QUERY_VECTOR_LITERAL}) LIMIT {len(data)}"))
+        assert [row.id for row in rows] == [d_row.id for d_row in data]
+        for row, d_row in zip(rows, data):
+            assert row.s == pytest.approx(d_row.expected_similarity, abs=0.01)
+
+
+def test_ann_rank_cannot_be_compared(cql, test_keyspace, vector_store_mock, skip_without_tablets):
+    """A rank cannot be used in a relation: a threshold on it would be a LIMIT, not a filter."""
+    data = TEST_DATA["cosine"]
+    with rescoring_test_table(cql, test_keyspace, data) as table:
+        with pytest.raises(InvalidRequest, match=r"ANN_RANK\(\) is not supported in the WHERE clause"):
+            cql.execute(f"SELECT id FROM {table} "
+                        f"WHERE ANN_RANK(embedding, {ANN_QUERY_VECTOR_LITERAL}) > 3 "
+                        f"ORDER BY ANN(embedding, {ANN_QUERY_VECTOR_LITERAL}) LIMIT 2")

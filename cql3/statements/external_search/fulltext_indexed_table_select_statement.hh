@@ -9,39 +9,34 @@
 #pragma once
 
 #include "external_index_select_statement.hh"
+#include "cql3/statements/external_search/external_function.hh"
 #include "cql3/expr/temporary_allocator.hh"
 
 #include <optional>
+#include <string_view>
 
 namespace cql3::statements {
+
+/// A search term written in a SELECT call that prepare could not prove equal to the ORDER BY term,
+/// because a bind marker is involved. Execution compares the bound values; `function_name` is the
+/// function the call was written with, for the error message.
+struct deferred_select_term {
+    expr::expression term;
+    sstring function_name;
+};
 
 struct bm25_ordering_info {
     secondary_index::index index;
     expr::expression search_term;
-    // Temporary slot the score is delivered in, allocated on the first bm25()
-    // occurrence in SELECT and filled per row by external_score_provider.
-    std::optional<size_t> temporary_index;
+    // Temporaries holding the score and the rank; see external_search::search_temporaries. BM25()
+    // is replaced with a tuple of the two, so it has no temporary of its own.
+    external_search::search_temporaries temporaries;
     // The SELECT occurrences' search terms that only execution can compare, a bind marker standing
     // where at least one of the two values will be.
-    std::vector<expr::expression> deferred_select_terms;
+    std::vector<deferred_select_term> deferred_select_terms;
     // The WHERE clause's term, likewise.
     std::optional<expr::expression> deferred_where_term;
 };
-
-/// Resolves BM25 ordering metadata from the query's prepared ORDER BY call.
-/// Returns std::nullopt if the call is not a native bm25() call, i.e. this is not an FTS query.
-std::optional<bm25_ordering_info> get_bm25_ordering_info(
-        data_dictionary::database db,
-        schema_ptr schema,
-        const expr::function_call& fc);
-
-/// Lowers every bm25() call in the SELECT clause, nested occurrences included, to the slot the
-/// row's score is delivered in, allocating it on the first one.  Rejects an occurrence with no
-/// BM25 ordering and WHERE clause to agree with, or one that disagrees with them on the column or
-/// the search term; a disagreement only execution can settle is recorded in ordering_info for it
-/// to check.
-void prepare_bm25_selectors(std::vector<selection::prepared_selector>& prepared_selectors, std::optional<bm25_ordering_info>& ordering_info,
-        expr::temporary_allocator& temporaries_allocator, prepare_context& ctx);
 
 class fulltext_indexed_table_select_statement : public external_index_select_statement {
     bm25_ordering_info _bm25_ordering_info;

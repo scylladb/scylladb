@@ -14,7 +14,7 @@ from .util import new_test_table, new_function, is_scylla
 from cassandra.protocol import InvalidRequest, SyntaxException
 
 ANN_REQUIRES_INDEX_MESSAGE = "ANN ordering by vector requires the column to be indexed"
-UNKNOWN_SCORING_FUNCTION_MESSAGE = "Only ANN() and BM25() are supported as scoring functions in ORDER BY"
+UNKNOWN_SCORING_FUNCTION_MESSAGE = "An ORDER BY expression must name at least one search, through ANN() or BM25()"
 # ANN()'s arguments are checked by ordinary function resolution, which runs before the vector
 # search claims the ORDER BY clause, so argument-count and argument-type diagnostics come from
 # the function layer and name the resolved function.
@@ -71,14 +71,14 @@ def test_quoted_ann_function_in_where_clause(cql, indexed_vector_table):
     # A quoted function name bypasses the keyword restriction and reaches the semantic
     # checks. With an ANN ordering the query is a vector search, which is what claims the
     # restriction - and rejects it, because threshold filtering is not implemented.
-    with pytest.raises(InvalidRequest, match=re.escape("ANN() is not supported in the WHERE clause")):
+    with pytest.raises(InvalidRequest, match="Filtering by ANN similarity in the WHERE clause is not supported"):
         cql.execute(f'SELECT * FROM {indexed_vector_table} WHERE "ann"(v, [0.1, 0.2, 0.3]) > 0 '
                     f'ORDER BY ANN(v, [0.1, 0.2, 0.3]) LIMIT 5')
 
 def test_quoted_ann_function_in_where_clause_without_ordering(cql, indexed_vector_table):
     # Without an ORDER BY nothing claims the restriction. It must not be silently dropped:
     # scoring restrictions never reach the filtering machinery.
-    with pytest.raises(InvalidRequest, match="requires a matching ORDER BY clause"):
+    with pytest.raises(InvalidRequest, match="names a search that the ORDER BY clause does not run"):
         cql.execute(f'SELECT * FROM {indexed_vector_table} WHERE "ann"(v, [0.1, 0.2, 0.3]) > 0 LIMIT 5')
 
 # ANN() selected reports the score the rows are ranked by, so it needs an ANN ordering to agree

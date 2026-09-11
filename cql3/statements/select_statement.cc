@@ -11,8 +11,7 @@
 #include "cql3/statements/strong_consistency/select_statement.hh"
 #include "cql3/statements/strong_consistency/statement_helpers.hh"
 #include "cql3/statements/select_statement.hh"
-#include "cql3/statements/external_search/vector_indexed_table_select_statement.hh"
-#include "cql3/statements/external_search/fulltext_indexed_table_select_statement.hh"
+#include "cql3/statements/external_search/external_search_plan.hh"
 #include "cql3/statements/index_latency.hh"
 #include "cql3/expr/expression.hh"
 #include "cql3/expr/evaluate.hh"
@@ -2110,40 +2109,27 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
 
     prepared_selectors = maybe_jsonize_select_clause(std::move(prepared_selectors), db, schema);
 
-    // A scoring ORDER BY is prepared here, once, and its resolved call is then offered to the
-    // resolvers. Preparing it in a resolver instead would mean preparing it once per resolver, and
-    // so registering its bind markers more than once.
-    std::optional<expr::expression> prepared_scoring_ordering;
+    // The external searches the statement runs. Their temporaries share one index space with every
+    // other temporary, so the allocator is owned here and handed to the selection once the
+    // selectors are final.
+    expr::temporary_allocator temporaries_allocator;
+    external_search_plan external_searches(db, schema, ctx, temporaries_allocator);
+
+    // A scoring ORDER BY is prepared, and its bind markers registered, before the plan looks at it.
     if (!_parameters->orderings().empty()) {
         if (const auto* scoring_ord = std::get_if<raw::select_statement::scoring_function_ordering>(&_parameters->orderings().front().second)) {
-            prepared_scoring_ordering = expr::prepare_expression(scoring_ord->func_expr, db, schema->ks_name(), schema.get(), nullptr);
-            expr::fill_prepare_context(*prepared_scoring_ordering, ctx);
+            auto prepared_ordering = expr::prepare_expression(scoring_ord->func_expr, db, schema->ks_name(), schema.get(), nullptr);
+            expr::fill_prepare_context(prepared_ordering, ctx);
+            external_searches.bind_ordering(prepared_ordering);
         }
     }
-    const expr::function_call* scoring_call = prepared_scoring_ordering
-            ? expr::as_if<expr::function_call>(&*prepared_scoring_ordering)
-            : nullptr;
 
-    std::optional<ann_ordering_info> ann_ordering_info_opt =
-            scoring_call ? get_ann_ordering_info(db, schema, *scoring_call) : std::nullopt;
-    bool is_ann_query = ann_ordering_info_opt.has_value();
-
-    std::optional<bm25_ordering_info> bm25_ordering_info_opt =
-            scoring_call ? get_bm25_ordering_info(db, schema, *scoring_call) : std::nullopt;
-    bool has_bm25_ordering = bm25_ordering_info_opt.has_value();
-
-    if (prepared_scoring_ordering && !is_ann_query && !has_bm25_ordering) {
-        // A function call in ORDER BY that no scoring-function resolver claimed. The
-        // regular-ordering path below skips scoring orderings, so reject it explicitly
-        // instead of silently ignoring the ORDER BY clause.
-        throw exceptions::invalid_request_exception("Only ANN() and BM25() are supported as scoring functions in ORDER BY");
-    }
-
-    if (prepared_selectors.empty() && (!_group_by_columns.empty() || (is_ann_query && ann_ordering_info_opt->is_rescoring_enabled))) {
-        // We have a "SELECT * GROUP BY" or "SELECT * ORDER BY ANN" with rescoring enabled. If we leave prepared_selectors
-        // empty, below we choose selection::wildcard() for SELECT *, and either:
+    if (prepared_selectors.empty() && (!_group_by_columns.empty() || external_searches.ordering_expr())) {
+        // We have a "SELECT * GROUP BY", or a "SELECT *" whose rows have to be ranked by a score
+        // computed here. If we leave prepared_selectors empty, below we choose selection::wildcard()
+        // for SELECT *, and either:
         //  - forget to do the "levellize" trick needed for the GROUP BY. See #16531.
-        //  - forget to add the similarity function needed for ORDER BY ANN with rescoring. See below.
+        //  - have nowhere to put the score selector the comparator reads. See below.
         // So we need to set prepared_selectors. 
         auto all_columns = selection::selection::wildcard_columns(schema);
         std::vector<::shared_ptr<selection::raw_selector>> select_all;
@@ -2156,13 +2142,9 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
         prepared_selectors = selection::raw_selector::to_prepared_selectors(select_all, *schema, db, keyspace());
     }
 
-    // Prepare BM25() calls in SELECT: reject when absent from ORDER BY, or replace
-    // with temporary nodes that an external_values_provider fills at execution time.
-    expr::temporary_allocator temporaries_allocator;
-    prepare_bm25_selectors(prepared_selectors, bm25_ordering_info_opt, temporaries_allocator, ctx);
-
-    // Likewise for ANN(), except that a rescoring index computes the score locally, filling no slot.
-    prepare_ann_selectors(prepared_selectors, ann_ordering_info_opt, temporaries_allocator, db, schema, ctx);
+    // Replace the external function calls in the SELECT clause with reads of the temporaries an
+    // external_search_provider fills per row, or with what the coordinator computes itself.
+    external_searches.bind_selectors(prepared_selectors);
 
     for (auto& ps : prepared_selectors) {
         expr::fill_prepare_context(ps.expr, ctx);
@@ -2173,8 +2155,12 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
 
     select_statement::ordering_comparator_type ordering_comparator;
     bool hide_last_column = false;
-    if (is_ann_query && ann_ordering_info_opt->is_rescoring_enabled) {
-        ordering_comparator = rescored_similarity_ordering(prepared_selectors, *ann_ordering_info_opt, db, schema);
+    if (const auto& score = external_searches.ordering_expr()) {
+        // The rows are sorted here rather than returned in the index's order. Sorting reads a
+        // column of the result row, so the score is appended as a trailing selector, hidden from
+        // the client below.
+        prepared_selectors.push_back(selection::prepared_selector{.expr = *score, .alias = nullptr});
+        ordering_comparator = descending_score_ordering_comparator(prepared_selectors.size() - 1);
         hide_last_column = true;
     }
 
@@ -2196,8 +2182,8 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
                      : selection::selection::from_selectors(db, schema, keyspace(), levellized_prepared_selectors,
                                                             std::move(temporaries_allocator));
 
-    if (is_ann_query && hide_last_column) {
-        // Hide the similarity selector from the client by reducing column_count
+    if (hide_last_column) {
+        // Hide the score selector from the client by reducing column_count
         selection->get_result_metadata()->hide_last_column();
     }
 
@@ -2208,27 +2194,14 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
         throw exceptions::invalid_request_exception("PER PARTITION LIMIT is not allowed with aggregate queries.");
     }
 
-    auto restrictions = prepare_restrictions(db, schema, ctx, selection, for_view, _parameters->allow_filtering() || is_ann_query || has_bm25_ordering,
-            restrictions::check_indexes(!_parameters->is_mutation_fragments()), _pinned_plan);
+    auto restrictions = prepare_restrictions(db, schema, ctx, selection, for_view,
+            _parameters->allow_filtering() || !external_searches.empty(),
+            restrictions::check_indexes(!_parameters->is_mutation_fragments()));
 
-    const auto& scoring_restrictions = restrictions->get_scoring_function_restrictions();
-
-    bool has_bm25_restriction = std::ranges::any_of(scoring_restrictions, [](const expr::binary_operator& binop) {
-        return expr::is_native_function_call(binop.lhs, functions::BM25_FUNCTION_NAME);
-    });
-    bool is_fts_query = has_bm25_restriction || has_bm25_ordering;
-
-    if (is_ann_query && is_fts_query) {
-        throw exceptions::invalid_request_exception("BM25 and ANN cannot be combined in the same query");
-    }
-
-    // Scoring restrictions are held out of the filtering machinery, to be interpreted by the
-    // external index that owns the scoring function.  If no such query type was selected,
-    // nothing will interpret them and they would be silently dropped rather than applied.
-    if (!scoring_restrictions.empty() && !is_fts_query && !is_ann_query) {
-        throw exceptions::invalid_request_exception(
-                "A scoring function in the WHERE clause requires a matching ORDER BY clause");
-    }
+    // Relations on external functions are held out of the filtering machinery for the search they
+    // refer to. Check that each has one.
+    external_searches.bind_restrictions(*restrictions);
+    const bool is_external_search = !external_searches.empty();
 
     if (_parameters->is_distinct()) {
         validate_distinct_selection(*schema, *selection, *restrictions);
@@ -2238,7 +2211,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
 
     auto orderings = _parameters->orderings();
 
-    if (!orderings.empty() && !is_ann_query && !is_fts_query) {
+    if (!orderings.empty() && !is_external_search) {
         std::visit([&](auto&& ordering) {
             using T = std::decay_t<decltype(ordering)>;
             if constexpr (!std::is_same_v<T, raw::select_statement::scoring_function_ordering>) {
@@ -2254,7 +2227,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     }
 
     std::vector<sstring> warnings;
-    if (!is_ann_query && !is_fts_query) {
+    if (!is_external_search) {
         check_needs_filtering(*restrictions, cfg.strict_allow_filtering(), warnings);
         ensure_filtering_columns_retrieval(db, *selection, *restrictions);
     }
@@ -2351,27 +2324,21 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
                 prepare_limit(db, ctx, _per_partition_limit),
                 stats,
                 std::move(prepared_attrs));
-    } else if (is_ann_query) {
-        stmt = vector_indexed_table_select_statement::prepare(db, schema, ctx.bound_variables_size(), _parameters, std::move(selection), std::move(restrictions),
-                std::move(group_by_cell_indices), is_reversed_, std::move(ordering_comparator),
-                prepare_limit(db, ctx, _limit), prepare_limit(db, ctx, _per_partition_limit), stats, std::move(*ann_ordering_info_opt),
-                std::move(prepared_attrs));
-    } else if (is_fts_query) {
-        stmt = fulltext_indexed_table_select_statement::prepare(
-            db,
-            schema,
-            ctx.bound_variables_size(),
-            _parameters,
-            std::move(selection),
-            std::move(restrictions),
-            std::move(group_by_cell_indices),
-            is_reversed_,
-            std::move(ordering_comparator),
-            prepare_limit(db, ctx, _limit),
-            prepare_limit(db, ctx, _per_partition_limit),
-            stats,
-            std::move(bm25_ordering_info_opt),
-            std::move(prepared_attrs));
+    } else if (is_external_search) {
+        stmt = external_searches.make_statement(external_statement_args{
+                .schema = schema,
+                .bound_terms = ctx.bound_variables_size(),
+                .parameters = _parameters,
+                .selection = std::move(selection),
+                .restrictions = std::move(restrictions),
+                .group_by_cell_indices = std::move(group_by_cell_indices),
+                .is_reversed = is_reversed_,
+                .ordering_comparator = std::move(ordering_comparator),
+                .limit = prepare_limit(db, ctx, _limit),
+                .per_partition_limit = prepare_limit(db, ctx, _per_partition_limit),
+                .stats = stats,
+                .attrs = std::move(prepared_attrs),
+        });
     } else if (restrictions->uses_secondary_indexing()) {
         stmt = view_indexed_table_select_statement::prepare(
                 db,
