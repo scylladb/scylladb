@@ -77,7 +77,7 @@ future<::shared_ptr<result_message>> select_statement::do_execute(query_processo
         // not be rejected. We don't send any routing information for
         // them, though.
         if (options.get_tablet_version_block().has_value()) {
-            const auto& groups_manager = coordinator.get().get_groups_manager();
+            auto& groups_manager = coordinator.get().get_groups_manager();
             const auto& table = _query_schema->table();
             const auto& token = key_ranges[0].start()->value().token();
 
