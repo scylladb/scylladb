@@ -25,7 +25,7 @@ from test.pylib.object_storage import Storage, StorageFactory, StorageKind, crea
 from test.pylib.random_tables import RandomTables
 from test.pylib.runner import PHASE_REPORT_KEY, make_failed_test_dir
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
-from test.pylib.scylla_server import ScyllaVersionDescription, get_scylla_2025_1_description
+from test.pylib.scylla_server import ScyllaVersionDescription, get_scylla_2025_1_description, get_scylla_2026_1_description
 from test.pylib.skip_types import skip_env
 from test.pylib.util import unique_name
 
@@ -289,6 +289,10 @@ def internet_dependency_enabled(request) -> None:
 @pytest.fixture(scope="function")
 async def scylla_2025_1(request, build_mode, internet_dependency_enabled) -> AsyncIterator[ScyllaVersionDescription]:
     yield await get_scylla_2025_1_description(build_mode)
+
+@pytest.fixture(scope="function")
+async def scylla_2026_1(request, build_mode, internet_dependency_enabled) -> AsyncIterator[ScyllaVersionDescription]:
+    yield await get_scylla_2026_1_description(build_mode)
 
 @pytest.fixture(scope="function", params=list(KeyProvider))
 async def key_provider(request, tmpdir, suite_log_dir, scylla_binary):

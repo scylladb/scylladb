@@ -840,6 +840,18 @@ future<schema_persisted_state> schema_applier::get_schema_persisted_state() {
 future<> schema_applier::prepare(utils::chunked_vector<mutation>& muts) {
     schema_ptr s = keyspaces();
     for (auto& mutation : muts) {
+        if (schema_tables::v3::is_cluster_config_table(mutation.schema()->ks_name(), mutation.schema()->cf_name())) {
+            _cluster_config_changed = true;
+            if (schema_tables::v3::is_node_oriented_config_table(mutation.schema()->cf_name())) {
+                // These four tables are not partition-keyed by keyspace_name, so the
+                // decode below would record a cluster/datacenter/rack name - or, for
+                // scylla_nodes, 16 raw host_id bytes - as a keyspace name and drive the
+                // per-keyspace schema reads with it. They carry no keyspace-scoped schema
+                // of their own; setting _cluster_config_changed above is all this pass
+                // needs from them.
+                continue;
+            }
+        }
         sstring keyspace_name = value_cast<sstring>(utf8_type->deserialize(mutation.key().get_component(*s, 0)));
 
         if (schema_tables_holding_schema_mutations().contains(mutation.schema()->id())) {
@@ -1182,6 +1194,17 @@ future<> schema_applier::post_commit() {
             } else {
                 co_await notifier.drop_function(func.name, func.arg_types);
             }
+        }
+
+        // The only listener overriding on_cluster_config_change() (cluster_config_manager)
+        // registers itself on shard 0 alone and coordinates the refresh from there, so fire
+        // the notification on shard 0's notifier only. Firing it inside invoke_on_all would
+        // otherwise invoke the no-op default on_cluster_config_change() of every other
+        // listener smp_count times per config-table merge. (A future listener that genuinely
+        // needs per-shard delivery must drop this guard and be idempotent under smp_count
+        // invocations per merge.)
+        if (_cluster_config_changed && this_shard_id() == 0) {
+            co_await notifier.cluster_config_change();
         }
     });
     co_return;

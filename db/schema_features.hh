@@ -38,6 +38,14 @@ enum class schema_feature {
     // the initial, the current, and the target replication factor,
     // which reflect the phases of the multi RF change.
     KEYSPACE_MULTI_RF_CHANGE,
+
+    // When enabled, the node-oriented cluster-config tables
+    // (scylla_clusters/scylla_datacenters/scylla_racks/scylla_nodes) participate
+    // in the schema. Gated so that a node which already supports cluster config
+    // but is in a cluster where the CLUSTER_CONFIG_REGISTRY_V0 cluster
+    // feature is not yet enabled does not perturb the schema digest relative to
+    // a node that predates cluster config. See #4457 and the cluster-config design.
+    CLUSTER_CONFIG_TABLES,
 };
 
 using schema_features = enum_set<super_enum<schema_feature,
@@ -49,7 +57,8 @@ using schema_features = enum_set<super_enum<schema_feature,
     schema_feature::GROUP0_SCHEMA_VERSIONING,
     schema_feature::IN_MEMORY_TABLES,
     schema_feature::TABLET_OPTIONS,
-    schema_feature::KEYSPACE_MULTI_RF_CHANGE
+    schema_feature::KEYSPACE_MULTI_RF_CHANGE,
+    schema_feature::CLUSTER_CONFIG_TABLES
     >>;
 
 }

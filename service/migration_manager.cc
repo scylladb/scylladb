@@ -429,6 +429,14 @@ future<> migration_notifier::drop_function(const db::functions::function_name& f
     });
 }
 
+future<> migration_notifier::cluster_config_change() {
+    co_await on_schema_change([] (migration_listener* listener) {
+        listener->on_cluster_config_change();
+    }, [] (std::exception_ptr ex) {
+        return fmt::format("Cluster config change notification failed: {}", ex);
+    });
+}
+
 future<> migration_notifier::drop_aggregate(const db::functions::function_name& fun_name, const std::vector<data_type>& arg_types) {
     auto&& ks_name = fun_name.keyspace;
     auto&& sig = auth::encode_signature(fun_name.name, arg_types);

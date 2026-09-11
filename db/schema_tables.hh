@@ -114,6 +114,10 @@ namespace v3 {
 static constexpr auto NAME = "system_schema";
 static constexpr auto KEYSPACES = "keyspaces";
 static constexpr auto SCYLLA_KEYSPACES = "scylla_keyspaces";
+static constexpr auto SCYLLA_CLUSTERS = "scylla_clusters";
+static constexpr auto SCYLLA_DATACENTERS = "scylla_datacenters";
+static constexpr auto SCYLLA_RACKS = "scylla_racks";
+static constexpr auto SCYLLA_NODES = "scylla_nodes";
 static constexpr auto TABLES = "tables";
 static constexpr auto SCYLLA_TABLES = "scylla_tables";
 static constexpr auto COLUMNS = "columns";
@@ -129,13 +133,36 @@ static constexpr auto VIEW_VIRTUAL_COLUMNS = "view_virtual_columns"; // Scylla s
 static constexpr auto COMPUTED_COLUMNS = "computed_columns"; // Scylla specific
 static constexpr auto SCYLLA_TABLE_SCHEMA_HISTORY = "scylla_table_schema_history"; // Scylla specific;
 
+// The scylla_clusters table holds cluster-scoped config as a single logical row. This is its
+// fixed partition-key value, decoupling cluster-scope config from the (operator-mutable)
+// cluster name so overrides can never drift onto a second row if the cluster name changes.
+static constexpr auto CLUSTER_CONFIG_SINGLETON_KEY = "cluster";
+
+// True for every schema table that can carry a cluster-config override, i.e. the four
+// node-oriented tables plus the two that hold a `configs` column. A schema merge touching
+// any of them must invalidate cluster_config_manager's cache.
+bool is_cluster_config_table(std::string_view ks_name, std::string_view table_name);
+
+// True for the four node-oriented cluster-config tables. Unlike every other table in
+// system_schema they are not partition-keyed by keyspace_name (they are keyed by cluster
+// name / datacenter / rack / host_id), so any code that treats a system_schema mutation's
+// first partition-key component as a keyspace name must skip them. `ks_name` is not part
+// of the signature because the callers already know they are looking at a system_schema
+// table.
+bool is_node_oriented_config_table(std::string_view table_name);
+
 schema_ptr keyspaces();
+schema_ptr scylla_keyspaces();
 schema_ptr columns();
 schema_ptr view_virtual_columns();
 schema_ptr dropped_columns();
 schema_ptr indexes();
 schema_ptr tables();
 schema_ptr scylla_tables(schema_features features = schema_features::full());
+schema_ptr scylla_clusters();
+schema_ptr scylla_datacenters();
+schema_ptr scylla_racks();
+schema_ptr scylla_nodes();
 schema_ptr views();
 schema_ptr types();
 schema_ptr functions();
@@ -168,6 +195,12 @@ struct qualified_name {
 };
 
 future<schema_mutations> read_table_mutations(sharded<service::storage_proxy>& proxy, const qualified_name& table, schema_ptr s);
+
+// Builds an incremental update of the scylla_tables `configs` map for one table: each
+// update with a value becomes a live map cell, each update without one a per-key
+// tombstone; keys not named are left untouched.
+mutation make_scylla_table_configs_mutation(const sstring& keyspace_name, const sstring& table_name,
+    const std::map<sstring, std::optional<sstring>>& config_updates, api::timestamp_type timestamp);
 
 using namespace v3;
 
