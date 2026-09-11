@@ -239,7 +239,8 @@ future<utils::chunked_vector<mutation>> prepare_keyspace_drop_announcement(stora
 class drop_views_tag;
 using drop_views = bool_class<drop_views_tag>;
 future<utils::chunked_vector<mutation>> prepare_column_family_drop_announcement(storage_proxy& sp,
-        const sstring& ks_name, const sstring& cf_name, api::timestamp_type ts, drop_views drop_views = drop_views::no);
+        const sstring& ks_name, const sstring& cf_name, api::timestamp_type ts, drop_views drop_views = drop_views::no,
+        bool in_notification = false);
 
 future<utils::chunked_vector<mutation>> prepare_type_drop_announcement(storage_proxy& sp, user_type dropped_type, api::timestamp_type ts);
 
