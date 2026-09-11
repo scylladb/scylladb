@@ -202,8 +202,8 @@ void task_manager::task::impl::set_virtual_parent() noexcept {
     });
 }
 
-void task_manager::task::impl::run_to_completion() {
-    (void)run().then([this] {
+future<> task_manager::task::impl::run_to_completion() {
+    return run().then([this] {
         _as.check();
         return finish();
     }).handle_exception([this] (std::exception_ptr ex) {
@@ -319,7 +319,7 @@ void task_manager::task::start() {
         });
         _impl->_as.check();
         _impl->_status.state = task_manager::task_state::running;
-        _impl->run_to_completion();
+        (void)_impl->run_to_completion().finally([impl = _impl] {});
     } catch (...) {
         (void)_impl->finish_failed(std::current_exception()).then([impl = _impl] {});
     }
