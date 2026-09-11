@@ -8,7 +8,7 @@
 
 import pytest
 from .util import new_test_table, new_materialized_view, unique_name
-from cassandra.protocol import ConfigurationException
+from cassandra.protocol import ConfigurationException, SyntaxException
 
 @pytest.fixture(scope="module")
 def table1(cql, test_keyspace):
@@ -48,6 +48,10 @@ def test_time_window_compaction_strategy_options(cql, table1):
 
 def test_leveled_compaction_strategy_options(cql, table1):
     assert_throws(cql, table1, r"sstable_size_in_mb value \(-5\) must be positive|sstable_size_in_mb must be larger than 0, but was -5", "ALTER TABLE %s WITH compaction = { 'class' : 'LeveledCompactionStrategy', 'sstable_size_in_mb' : -5 }")
+    # Refs SCYLLADB-4214. Scylla reports an unparsable integer as a syntax
+    # error, Cassandra as a configuration error.
+    with pytest.raises((ConfigurationException, SyntaxException), match=r"Invalid integer value 2147483648 for 'sstable_size_in_mb'|2147483648 is not a parsable int"):
+        cql.execute(f"ALTER TABLE {table1} WITH compaction = {{ 'class' : 'LeveledCompactionStrategy', 'sstable_size_in_mb' : 2147483648 }}")
 
 def test_incremental_compaction_strategy_options(cql, table1, scylla_only):
     assert_throws(cql, table1, r"min_sstable_size value \(-1\) must be non negative", "ALTER TABLE %s WITH compaction = { 'class' : 'IncrementalCompactionStrategy', 'min_sstable_size' : -1 }")
