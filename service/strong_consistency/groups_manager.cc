@@ -23,8 +23,10 @@
 #include "db/config.hh"
 #include "idl/strong_consistency/groups_manager.dist.hh"
 #include "utils/error_injection.hh"
+#include "utils/on_internal_error.hh"
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/maybe_yield.hh>
+#include <seastar/coroutine/as_future.hh>
 
 #include <seastar/core/abort_source.hh>
 
@@ -247,8 +249,7 @@ void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_
     auto gate_fut = state.gate->close();
     logger.debug("schedule_raft_group_deletion(): group id {}: gate close initiated", id);
 
-    state.server_control_op = futurize_invoke([this, &state, id, g = state.gate, gate_fut = std::move(gate_fut)](this auto) -> future<> {
-        co_await state.server_control_op.get_future();
+    chain_control_op(state, id, [this, &state, id, g = state.gate, gate_fut = std::move(gate_fut)] () mutable -> future<> {
         logger.debug("schedule_raft_group_deletion(): group id {}: starting", id);
 
         co_await _raft_gr.abort_server(id);
@@ -267,6 +268,18 @@ void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_
         // would have been assigned, and we should leave the state in the map.
         if (state.gate.get() == g.get() && _raft_groups.erase(id) != 1) {
             on_internal_error(logger, format("raft group {} is already deleted", id));
+        }
+    });
+}
+
+void groups_manager::chain_control_op(raft_group_state& state, raft::group_id id,
+        noncopyable_function<future<>()> op, std::source_location loc) {
+    state.server_control_op = futurize_invoke([&state, id, op = std::move(op), loc](this auto) -> future<> {
+        co_await state.server_control_op.get_future();
+        auto f = co_await coroutine::as_future(futurize_invoke(op));
+        if (f.failed()) {
+            utils::on_fatal_internal_error(format("{}({}:{}) `{}`: raft group {}: control operation failed: {}",
+                    loc.file_name(), loc.line(), loc.column(), loc.function_name(), id, f.get_exception()));
         }
     });
 }
@@ -451,8 +464,7 @@ void groups_manager::update(token_metadata_ptr new_tm) {
             logger.info("update(): starting raft server for tablet {}, group id {}", tablet, id);
             state.gate = make_lw_shared<gate>();
             _starting_groups.push_back(state);
-            state.server_control_op = futurize_invoke([&state, this, tablet, id, new_tm](this auto) -> future<> {
-                co_await state.server_control_op.get_future();
+            chain_control_op(state, id, [&state, this, tablet, id, new_tm] () mutable -> future<> {
                 co_await start_raft_group(tablet, id, std::move(new_tm));
                 state.server = &_raft_gr.get_server(id);
                 state.leader_info_updater = leader_info_updater(state, tablet, id);

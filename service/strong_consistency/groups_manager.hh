@@ -15,6 +15,10 @@
 #include "cql3/query_processor.hh"
 #include "db/commitlog/raft_commitlog_replay_buffer.hh"
 
+#include <seastar/util/noncopyable_function.hh>
+
+#include <source_location>
+
 namespace db {
 class system_keyspace;
 class raft_commitlog_replay_buffer;
@@ -115,12 +119,7 @@ class groups_manager : public peering_sharded_service<groups_manager> {
         bool has_tablet = false;
         lw_shared_ptr<gate> gate = nullptr;
         raft::server* server = nullptr;
-
-        // Serialized chain of raft::server control operations (start/stop).
-        // This serialization handles (rare) cases where a tablet is migrated out
-        // before the raft::server has finished initializing, or conversely,
-        // when a tablet is migrated back to this node before deinitialization completes.
-        // Subsequent operations wait for the previous one to complete.
+        // Chain of raft::server starts and deletions, see chain_control_op().
         shared_future<> server_control_op = make_ready_future<>();
 
         // Populated only when this node thinks it's a tablet raft group leader.
@@ -153,6 +152,19 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     void schedule_raft_group_deletion(raft::group_id group_id, raft_group_state& group_state);
 
     void schedule_raft_groups_deletion(bool all);
+
+    // Queues a start or deletion of the group's raft::server behind the
+    // previous one; at most one control operation runs per group. `op` is
+    // kept alive until it completes.
+    //
+    // Control operations must not fail; a failure aborts the node regardless
+    // of abort_on_internal_error, since the chain can't recover: a failed
+    // start can't be retried (the first attempt consumes the raft log entries
+    // replayed from the commitlog) and can't be left in place (every later
+    // operation would inherit the failure).
+    static void chain_control_op(raft_group_state& state, raft::group_id id,
+            noncopyable_function<future<>()> op,
+            std::source_location loc = std::source_location::current());
 
     future<> leader_info_updater(raft_group_state& state, locator::global_tablet_id tablet, raft::group_id gid);
 
