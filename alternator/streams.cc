@@ -1324,7 +1324,7 @@ future<executor::request_return_type> executor::get_records(client_state& client
         ++mul;
     }
     auto command = ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, _proxy.get_max_result_size(partition_slice),
-            query::tombstone_limit(_proxy.get_tombstone_limit()), query::row_limit(limit * mul));
+            query::tombstone_limit(_proxy.get_tombstone_limit()), query::row_limit(std::max<uint64_t>(limit, db.get_config().alternator_max_items_in_batch_write() + 1) * mul));
 
     service::storage_proxy::result<service::storage_proxy::coordinator_query_result> rqr =
             co_await _proxy.query_result(schema, std::move(command), std::move(partition_ranges), cl, service::storage_proxy::coordinator_query_options(default_timeout(), std::move(permit), client_state));
