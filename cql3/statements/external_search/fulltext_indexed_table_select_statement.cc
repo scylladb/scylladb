@@ -8,7 +8,7 @@
 
 #include "cql3/statements/external_search/fulltext_indexed_table_select_statement.hh"
 #include "cql3/statements/external_search/external_function.hh"
-#include "cql3/statements/external_search/external_score_provider.hh"
+#include "cql3/statements/external_search/external_search_provider.hh"
 #include "cql3/statements/raw/select_statement.hh"
 #include "cql3/expr/evaluate.hh"
 #include "cql3/expr/expression.hh"
@@ -32,8 +32,14 @@ namespace {
 
 std::optional<expr::expression> validate_bm25_where_restriction(const expr::binary_operator& binop,
         const bm25_ordering_info& ordering_info) {
+    // "WHERE BM25(c, t) > 0" arrives as BM25_SCORE(c, t) > 0 (see prepare_external_search_relation_lhs()),
+    // and a full-text query takes no other search function here, e.g. ANN().
     const auto& fc = expr::as<expr::function_call>(binop.lhs);
-    auto [col, where_term] = external_search::extract_call_arguments(fc, "BM25");
+    const auto* fun = functions::as_external_search_function(fc);
+    if (fun->family() != functions::search_family::bm25) {
+        throw exceptions::invalid_request_exception(seastar::format("{}() is not supported in the WHERE clause", fun->display_name()));
+    }
+    auto [col, where_term] = external_search::extract_call_arguments(fc, fun->display_name());
     if (col->name_as_text() != ordering_info.index.target_column()) {
         throw exceptions::invalid_request_exception("Full-text search queries must reference the same column in both WHERE and ORDER BY clauses");
     }
@@ -63,43 +69,46 @@ std::optional<expr::expression> validate_bm25_where_restriction(const expr::bina
 void prepare_bm25_selectors(std::vector<selection::prepared_selector>& prepared_selectors, std::optional<bm25_ordering_info>& ordering_info,
         expr::temporary_allocator& temporaries_allocator, prepare_context& ctx) {
     for (auto& ps : prepared_selectors) {
+        const auto written = ps.expr;
         ps.expr = expr::search_and_replace(ps.expr, [&](const expr::expression& candidate) -> std::optional<expr::expression> {
             const auto* fc = expr::as_if<expr::function_call>(&candidate);
-            if (!fc || !expr::is_native_function_call(*fc, functions::BM25_FUNCTION_NAME)) {
+            if (!fc) {
+                return std::nullopt;
+            }
+            const auto* fun = functions::as_external_search_function(*fc);
+            if (!fun || fun->family() != functions::search_family::bm25) {
                 return std::nullopt;
             }
 
+            const auto function_name = fun->display_name();
             if (!ordering_info) {
-                throw exceptions::invalid_request_exception("BM25() is not supported in the SELECT clause without matching ORDER BY and WHERE clauses");
+                throw exceptions::invalid_request_exception(seastar::format(
+                        "{}() is not supported in the SELECT clause without matching ORDER BY and WHERE clauses", function_name));
+            }
+            auto& info = *ordering_info;
+
+            // Every call describes the one search the rows are ranked by, so it has to name the
+            // column and the search term the other two clauses do.
+            auto [col, sel_term] = external_search::extract_call_arguments(*fc, function_name);
+            if (col->name_as_text() != info.index.target_column()) {
+                throw exceptions::invalid_request_exception(
+                        seastar::format("{}() in SELECT must reference the same column as BM25() in WHERE and ORDER BY", function_name));
             }
 
-            auto [col, sel_term] = external_search::extract_call_arguments(*fc, "BM25");
-            if (col->name_as_text() != ordering_info->index.target_column()) {
-                throw exceptions::invalid_request_exception("BM25() in SELECT must reference the same column as BM25() in WHERE and ORDER BY");
-            }
-
-            const auto terms_equal = external_search::unevaluated_equality(sel_term, ordering_info->search_term);
+            const auto terms_equal = external_search::unevaluated_equality(sel_term, info.search_term);
             if (terms_equal != external_search::equality::always) {
                 if (terms_equal == external_search::equality::never) {
                     throw exceptions::invalid_request_exception(
-                            "BM25() in SELECT must use the same search term as BM25() in WHERE and ORDER BY");
+                            seastar::format("{}() in SELECT must use the same search term as BM25() in WHERE and ORDER BY", function_name));
                 }
                 // Lifted out of the selector tree, so nothing else registers a bind marker in this term.
                 expr::fill_prepare_context(sel_term, ctx);
-                ordering_info->deferred_select_terms.push_back(std::move(sel_term));
+                info.deferred_select_terms.push_back({std::move(sel_term), sstring(function_name)});
             }
 
-            // Every bm25() in the SELECT reports the same score, so one slot serves them all.
-            if (!ordering_info->temporary_index) {
-                ordering_info->temporary_index = temporaries_allocator.allocate();
-            }
-
-            return expr::expression(expr::temporary{
-                    .index = *ordering_info->temporary_index,
-                    .type = float_type,
-                    .replaced_expr = candidate,
-            });
+            return external_search::replace_search_call(fun->value(), candidate, info.temporaries, temporaries_allocator);
         });
+        external_search::name_selector_as_written(ps, written);
     }
 }
 
@@ -169,7 +178,8 @@ std::optional<bm25_ordering_info> get_bm25_ordering_info(
                 "Full-text search queries do not support additional WHERE restrictions");
     }
 
-    if (ordering_info->temporary_index) {
+    // The score and the rank are matched to a row by primary key.
+    if (ordering_info->temporaries.any()) {
         external_search::fetch_primary_key_columns(*selection, *schema);
     }
 
@@ -225,9 +235,9 @@ future<shared_ptr<cql_transport::messages::result_message>> fulltext_indexed_tab
     }
 
     for (const auto& sel_term : _bm25_ordering_info.deferred_select_terms) {
-        if (expr::evaluate(sel_term, options) != search_term_val) {
-            co_await coroutine::return_exception(exceptions::invalid_request_exception(
-                    "BM25() in SELECT must use the same search term as BM25() in WHERE and ORDER BY"));
+        if (expr::evaluate(sel_term.term, options) != search_term_val) {
+            co_await coroutine::return_exception(exceptions::invalid_request_exception(seastar::format(
+                    "{}() in SELECT must use the same search term as BM25() in WHERE and ORDER BY", sel_term.function_name)));
         }
     }
 
@@ -242,10 +252,16 @@ future<shared_ptr<cql_transport::messages::result_message>> fulltext_indexed_tab
 
     throwing_assert(pkeys->size() <= limit);
 
-    auto provider = _bm25_ordering_info.temporary_index
-                            ? std::make_unique<external_score_provider>(pkeys.value(), *_bm25_ordering_info.temporary_index, *_schema)
-                            : nullptr;
-    co_return co_await query_base_table(qp, state, options, pkeys.value(), timeout, std::move(provider));
+    auto table_results = co_await query_base_table(qp, state, options, timeout, pkeys.value());
+
+    auto provider = std::optional<external_search::external_search_provider>{};
+    if (table_results && _bm25_ordering_info.temporaries.any()) {
+        const auto& read = table_results.value();
+        auto rows = external_search::join_table_results(*read.rows, read.command->slice, *_schema, *_selection, &pkeys.value());
+        external_search::drop_unscored_rows(rows, pkeys.value());
+        provider.emplace(external_search::search_values_of(_bm25_ordering_info.temporaries, rows, pkeys.value()), rows);
+    }
+    co_return co_await emit_result_set(std::move(table_results), options, provider ? &*provider : nullptr);
 }
 
 } // namespace cql3::statements
