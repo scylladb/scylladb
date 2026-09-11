@@ -76,7 +76,7 @@ void set_tasks_compaction_module(http_context& ctx, routes& r, sharded<replica::
     t::perform_keyspace_offstrategy_compaction_async.set(r, wrap_ks_cf(ctx, [&db] (http_context& ctx, std::unique_ptr<http::request> req, sstring keyspace, std::vector<table_info> table_infos) -> future<json::json_return_type> {
         apilog.info("perform_keyspace_offstrategy_compaction: keyspace={} tables={}", keyspace, table_infos);
         auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
-        auto task = co_await compaction_module.make_and_start_task<compaction::offstrategy_keyspace_compaction_task_impl>(tasks::make_empty_task_info(), std::move(keyspace), db, table_infos, nullptr);
+        auto task = co_await compaction_module.start_offstrategy_keyspace_compaction(db, std::move(keyspace), std::move(table_infos), nullptr);
 
         co_return json::json_return_type(task->get_status().id.to_sstring());
     }));
@@ -85,7 +85,7 @@ void set_tasks_compaction_module(http_context& ctx, routes& r, sharded<replica::
         apilog.info("perform_keyspace_offstrategy_compaction: keyspace={} tables={}", keyspace, table_infos);
         bool res = false;
         auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
-        auto task = co_await compaction_module.make_and_start_task<compaction::offstrategy_keyspace_compaction_task_impl>(tasks::make_empty_task_info(), std::move(keyspace), db, table_infos, &res);
+        auto task = co_await compaction_module.start_offstrategy_keyspace_compaction(db, std::move(keyspace), std::move(table_infos), &res);
         co_await task->done();
         co_return json::json_return_type(res);
     }));
