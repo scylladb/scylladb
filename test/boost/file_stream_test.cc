@@ -84,6 +84,7 @@ static cql_test_config make_object_storage_test_config(const data_dictionary::st
     cql_test_config cfg;
     cfg.db_config = make_shared<db::config>();
     cfg.db_config->object_storage_endpoints(sstables::make_storage_options_config(so));
+    cfg.keyspace_storage_options = so;
     return cfg;
 }
 

@@ -160,6 +160,17 @@ struct tablets_mode_t {
     static std::unordered_map<sstring, mode> map(); // for enum_option<>
 };
 
+struct keyspace_storage_mode_t {
+    // `unset` leaves the choice to whichever keyspaces the cluster already
+    // has, which is how a cluster behaves when the operator says nothing.
+    enum class mode : int8_t {
+        unset = -1,
+        local = 0,
+        object_storage = 1,
+    };
+    static std::unordered_map<sstring, mode> map(); // for enum_option<>
+};
+
 class config final : public utils::config_file {
 public:
     config();
@@ -635,6 +646,7 @@ public:
     named_value<double> topology_barrier_stall_detector_threshold_seconds;
     named_value<bool> enable_tablets;
     named_value<enum_option<tablets_mode_t>> tablets_mode_for_new_keyspaces;
+    named_value<enum_option<keyspace_storage_mode_t>> storage_mode_for_new_keyspaces;
     named_value<bool> auto_repair_enabled_default;
     named_value<int32_t> auto_repair_threshold_default_in_seconds;
 
@@ -778,6 +790,7 @@ extern template struct utils::config_file::named_value<enum_option<db::experimen
 extern template struct utils::config_file::named_value<enum_option<db::replication_strategy_restriction_t>>;
 extern template struct utils::config_file::named_value<enum_option<db::consistency_level_restriction_t>>;
 extern template struct utils::config_file::named_value<enum_option<db::tablets_mode_t>>;
+extern template struct utils::config_file::named_value<enum_option<db::keyspace_storage_mode_t>>;
 extern template struct utils::config_file::named_value<enum_option<netw::dict_training_loop::when>>;
 extern template struct utils::config_file::named_value<netw::advanced_rpc_compressor::tracker::algo_config>;
 extern template struct utils::config_file::named_value<std::vector<enum_option<db::experimental_features_t>>>;

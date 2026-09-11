@@ -326,6 +326,13 @@ const config_type& config_type_for<enum_option<db::tablets_mode_t>>() {
 }
 
 template <>
+const config_type& config_type_for<enum_option<db::keyspace_storage_mode_t>>() {
+    static config_type ct(
+        "keyspace storage mode", printable_to_json<enum_option<db::keyspace_storage_mode_t>>);
+    return ct;
+}
+
+template <>
 const config_type& config_type_for<db::config::hinted_handoff_enabled_type>() {
     static config_type ct("hinted handoff enabled", hinted_handoff_enabled_to_json);
     return ct;
@@ -519,6 +526,23 @@ template <>
 class convert<enum_option<db::tablets_mode_t>> {
 public:
     static bool decode(const Node& node, enum_option<db::tablets_mode_t>& rhs) {
+        std::string name;
+        if (!convert<std::string>::decode(node, name)) {
+            return false;
+        }
+        try {
+            std::istringstream(name) >> rhs;
+        } catch (boost::program_options::invalid_option_value&) {
+            return false;
+        }
+        return true;
+    }
+};
+
+template <>
+class convert<enum_option<db::keyspace_storage_mode_t>> {
+public:
+    static bool decode(const Node& node, enum_option<db::keyspace_storage_mode_t>& rhs) {
         std::string name;
         if (!convert<std::string>::decode(node, name)) {
             return false;
@@ -1797,6 +1821,10 @@ db::config::config(std::shared_ptr<db::extensions> exts)
             "\tdisabled: New keyspaces use vnodes by default, unless enabled by the tablets={'enabled':true} option\n"
             "\tenabled:  New keyspaces use tablets by default, unless disabled by the tablets={'enabled':false} option\n"
             "\tenforced: New keyspaces must use tablets. Tablets cannot be disabled using the CREATE KEYSPACE option")
+    , storage_mode_for_new_keyspaces(this, "storage_mode_for_new_keyspaces", liveness::MustRestart, value_status::Used, keyspace_storage_mode_t::mode::unset, "Which storage new keyspaces may use.  Can be set to the following values:\n"
+            "\tunset:          the keyspaces the cluster already has decide, and the first one created decides for an empty cluster\n"
+            "\tlocal:          keyspaces keep their data on local disks, and CREATE KEYSPACE with an object-storage STORAGE option is refused\n"
+            "\tobject_storage: keyspaces keep their data in object storage, and CREATE KEYSPACE without one is refused.  Alternator is not supported in this mode")
     , auto_repair_enabled_default(this, "auto_repair_enabled_default", liveness::LiveUpdate, value_status::Used, false, "Set true to enable auto repair for tablet tables by default. The value will be overridden by the per keyspace or per table configuration which is not implemented yet.")
     , auto_repair_threshold_default_in_seconds(this, "auto_repair_threshold_default_in_seconds", liveness::LiveUpdate, value_status::Used, 24 * 3600 , "Set the default time in seconds for the auto repair threshold for tablet tables. If the time since last repair is bigger than the configured time, the tablet is eligible for auto repair. The value will be overridden by the per keyspace or per table configuration which is not implemented yet.")
     , view_flow_control_delay_limit_in_ms(this, "view_flow_control_delay_limit_in_ms", liveness::LiveUpdate, value_status::Used, 1000,
@@ -2166,6 +2194,13 @@ std::unordered_map<sstring, db::tri_mode_restriction_t::mode> db::tri_mode_restr
             {"warn", db::tri_mode_restriction_t::mode::WARN}};
 }
 
+std::unordered_map<sstring, db::keyspace_storage_mode_t::mode> db::keyspace_storage_mode_t::map() {
+    return {{"unset", db::keyspace_storage_mode_t::mode::unset},
+            {"local", db::keyspace_storage_mode_t::mode::local},
+            {"object_storage", db::keyspace_storage_mode_t::mode::object_storage}
+            };
+}
+
 std::unordered_map<sstring, db::tablets_mode_t::mode> db::tablets_mode_t::map() {
     return {{"disabled", db::tablets_mode_t::mode::disabled},
             {"0", db::tablets_mode_t::mode::disabled},
@@ -2209,6 +2244,7 @@ template struct utils::config_file::named_value<enum_option<db::experimental_fea
 template struct utils::config_file::named_value<enum_option<db::replication_strategy_restriction_t>>;
 template struct utils::config_file::named_value<enum_option<db::consistency_level_restriction_t>>;
 template struct utils::config_file::named_value<enum_option<db::tablets_mode_t>>;
+template struct utils::config_file::named_value<enum_option<db::keyspace_storage_mode_t>>;
 template struct utils::config_file::named_value<enum_option<netw::dict_training_loop::when>>;
 template struct utils::config_file::named_value<netw::advanced_rpc_compressor::tracker::algo_config>;
 template struct utils::config_file::named_value<std::vector<enum_option<db::experimental_features_t>>>;
