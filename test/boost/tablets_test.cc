@@ -26,6 +26,8 @@
 #include "test/lib/simple_schema.hh"
 #include "test/lib/key_utils.hh"
 #include "test/lib/test_utils.hh"
+#include "test/lib/eventually.hh"
+#include "test/lib/error_injection.hh"
 #include "test/lib/topology_builder.hh"
 #include "db/config.hh"
 #include "cql3/util.hh"
@@ -49,6 +51,8 @@
 #include "service/topology_coordinator.hh"
 #include "service/topology_state_machine.hh"
 #include "service/migration_manager.hh"
+#include "service/strong_consistency/coordinator.hh"
+#include "service/strong_consistency/groups_manager.hh"
 
 #include <boost/regex.hpp>
 #include <atomic>
@@ -8338,6 +8342,106 @@ SEASTAR_THREAD_TEST_CASE(test_tablet_version_changes_after_tablet_migration) {
         // However, that's a highly unlikely scenario.
         BOOST_REQUIRE_MESSAGE(tv1 != tv2, "Tablet version was supposed to change after tablet migration");
     }, std::move(cfg)).get();
+}
+
+// A tablet leaving a shard has its raft group deleted. If it returns before
+// the deletion finishes, the group's entry survives, pointing at the server
+// the deletion is about to destroy until the restart publishes a new one.
+// Routing a request in that window must not touch the destroyed server.
+//
+// Reproduces SCYLLADB-4378.
+SEASTAR_THREAD_TEST_CASE(test_tablet_version_during_raft_group_restart) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    testlog.info("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev,sanitize).");
+#else
+    cql_test_config cfg = tablet_cql_test_config();
+    cfg.db_config->experimental_features(
+        {db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES},
+        db::config::config_source::CommandLine
+    );
+
+    do_with_cql_env_thread([] (cql_test_env& e) {
+        topology_builder topo(e);
+        // Single-node cluster, so the tablet lands on this host. CREATE TABLE
+        // waits for its raft group to start.
+        e.execute_cql("create keyspace sc_ks with replication = {'class': 'NetworkTopologyStrategy',"
+                      " 'replication_factor': 1} and tablets = {'initial': 1} and consistency = 'global'").get();
+        e.execute_cql("create table sc_ks.tbl (pk int primary key, v int)").get();
+        // Same rack as this node, so the tablet can move away and back at RF=1.
+        topo.start_new_dc(e.local_db().get_token_metadata().get_topology().get_location());
+        const auto other_host = topo.add_node();
+
+        const auto table = e.local_db().find_schema("sc_ks", "tbl")->id();
+        const auto tm = e.shared_token_metadata().local().get(); // keeps tmap alive
+        const auto& tmap = tm->tablets().get_tablet_map(table);
+        const auto tablet = tmap.first_tablet();
+        const auto home = tmap.get_tablet_info(tablet).replicas[0];
+        const auto group_id = tmap.get_tablet_raft_info(tablet).group_id;
+
+        const auto move_tablet_to = [&] (tablet_replica replica) {
+            mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+                auto tmap = tmeta.get_tablet_map(table).clone();
+                tmap.set_tablet(tablet, tablet_info{tablet_replica_set{{replica}}});
+                tmeta.set_tablet_map(table, std::move(tmap));
+                co_return;
+            });
+            auto aoe = abort_on_expiry(lowres_clock::now() + std::chrono::seconds(60));
+            auto guard = e.get_raft_group0_client().start_operation(aoe.abort_source()).get();
+            save_token_metadata(e, std::move(guard)).get();
+        };
+
+        // check_tablet_version() answers nullopt both for a matching block and
+        // for a group without a usable server; two blocks differing in the
+        // value nibble tell the cases apart.
+        const auto version_on_home = [&] {
+            return smp::submit_to(home.shard, [&e, table] -> std::optional<tablet_version> {
+                const auto& [coordinator, holder] = e.local_qp().acquire_strongly_consistent_coordinator();
+                auto& gm = coordinator.get().get_groups_manager();
+                const auto& t = e.local_db().find_column_family(table);
+                for (const auto block : {tablet_version_block{0x00}, tablet_version_block{0x01}}) {
+                    if (const auto info = gm.check_tablet_version(t, dht::token{0}, block)) {
+                        return info->hash;
+                    }
+                }
+                return std::nullopt;
+            }).get();
+        };
+        const auto entered = [] (const char* injection) {
+            return eventually_true([&] { return utils::get_local_injector().enter_count_on_all(injection).get() > 0; });
+        };
+        // Disabling an injection releases whoever is paused on it, so a failed
+        // assertion releases both pauses when these go out of scope.
+        std::optional<scoped_error_injection> deletion_pause, start_pause;
+
+        // No leader, no version: wait for the election.
+        BOOST_REQUIRE(eventually_true([&] { return version_on_home().has_value(); }));
+
+        // Pause the deletion, then bring the tablet back: the restart queues
+        // behind the deletion, so the group keeps its entry.
+        deletion_pause.emplace("sc_raft_group_deletion_pause");
+        move_tablet_to(tablet_replica{other_host, 0});
+        BOOST_REQUIRE(entered("sc_raft_group_deletion_pause"));
+        start_pause.emplace("sc_start_raft_group_pause");
+        move_tablet_to(home);
+
+        // Let the deletion destroy the server and reach the paused restart.
+        deletion_pause.reset();
+        BOOST_REQUIRE(entered("sc_start_raft_group_pause"));
+
+        // Must neither crash nor report a version.
+        BOOST_REQUIRE(!version_on_home().has_value());
+
+        // Moving the tablet by rewriting its map leaves the group's commit
+        // index in system.raft_groups, while its log died with the server;
+        // raft::server::start() rejects a commit index ahead of the log.
+        // Drop it so the restart can finish.
+        e.execute_cql(format("delete from system.raft_groups where shard = {} and group_id = {}",
+                home.shard, group_id)).get();
+        start_pause.reset();
+
+        BOOST_REQUIRE(eventually_true([&] { return version_on_home().has_value(); }));
+    }, std::move(cfg)).get();
+#endif
 }
 
 // Verifies that load_stats::operator+= correctly invalidates

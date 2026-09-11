@@ -163,6 +163,9 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
     const auto my_id = to_server_id(tm->get_my_id());
 
 
+    co_await utils::get_local_injector().inject("sc_start_raft_group_pause",
+            utils::wait_for_message(std::chrono::minutes(1)));
+
     auto* commitlog = _db.commitlog();
     SCYLLA_ASSERT(commitlog);
     auto storage = std::make_unique<raft_groups_storage>(_qp, group_id, my_id, this_shard_id(),
@@ -255,12 +258,16 @@ void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_
         co_await _raft_gr.abort_server(id);
         logger.debug("schedule_raft_group_deletion(): group id {}: server aborted", id);
 
+        co_await utils::get_local_injector().inject("sc_raft_group_deletion_pause",
+                utils::wait_for_message(std::chrono::minutes(1)));
+
         co_await std::move(gate_fut);
         logger.debug("schedule_raft_group_deletion(): group id {}: gate closed", id);
 
         co_await std::move(state.leader_info_updater);
 
         _raft_gr.destroy_server(id);
+        state.server = nullptr;
         logger.info("schedule_raft_group_deletion(): raft server for group id {} is destroyed", id);
 
         // We need to erase the raft group state only if we are still the last operation on it.
@@ -282,6 +289,16 @@ void groups_manager::chain_control_op(raft_group_state& state, raft::group_id id
                     loc.file_name(), loc.line(), loc.column(), loc.function_name(), id, f.get_exception()));
         }
     });
+}
+
+std::optional<raft_server> groups_manager::try_acquire_server(raft_group_state& state) {
+    // No preemption between the checks, see raft_group_state.
+    auto h = state.gate->try_hold();
+    if (!h || !state.server_control_op.available()) {
+        return std::nullopt;
+    }
+    SCYLLA_ASSERT(state.server);
+    return raft_server(state, std::move(*h));
 }
 
 void groups_manager::schedule_raft_groups_deletion(bool all) {
@@ -543,6 +560,8 @@ future<raft_server> groups_manager::acquire_server(table_id table_id, raft::grou
     if (!h) {
         on_internal_error(logger, format("acquire_server: gate closed for group {} while table {} exists", group_id, table_id));
     }
+    // Holder and future are taken atomically, so the future completes with the
+    // start that created this gate, whose server the holder protects.
     return state.server_control_op.get_future(as).then([&state, h = std::move(*h)] mutable {
         return raft_server(state, std::move(h));
     });
@@ -638,13 +657,13 @@ std::optional<locator::tablet_routing_info_v2> groups_manager::check_tablet_vers
         return std::nullopt;
     }
 
-    const raft_group_state& state = group_it->second;
-    if (!state.server) [[unlikely]] {
-        // We don't know who the leader is, so we cannot compute routing information.
+    const auto srv = try_acquire_server(group_it->second);
+    if (!srv) [[unlikely]] {
+        // Being deleted or (re)started: no server to ask for the leader.
         return std::nullopt;
     }
 
-    const raft::server_id group_leader = state.server->current_leader();
+    const raft::server_id group_leader = srv->server().current_leader();
     if (group_leader == raft::server_id{}) [[unlikely]] {
         // The leader hasn't been elected yet. We cannot compute the tablet version.
         return std::nullopt;
