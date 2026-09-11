@@ -1449,6 +1449,7 @@ future<executor::request_return_type> executor::get_records(client_state& client
             break;
         }
         if (eor) {
+            timestamp = ts;
             size_t index = 0;
             for (auto& [_, rec] : records_map) {
                 rjson::add(rec.record, "awsRegion", rjson::from_string(dc_name));
@@ -1461,7 +1462,6 @@ future<executor::request_return_type> executor::get_records(client_state& client
             }
 
             records_map.clear();
-            timestamp = ts;
             if (records.Size() >= limit) {
                 // Note: we might have more than limit rows here - BatchWriteItem will emit multiple items
                 // with the same timestamp and we have no way of resume iteration midway through those,
