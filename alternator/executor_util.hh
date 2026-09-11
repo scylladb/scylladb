@@ -22,6 +22,7 @@
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 #include <seastar/core/future.hh>
 #include <seastar/util/noncopyable_function.hh>
@@ -35,6 +36,8 @@
 #include "audit/audit.hh"
 #include "utils/managed_bytes.hh"
 #include "exceptions/coordinator_result.hh"
+
+class index_metadata;
 
 namespace query { class partition_slice; class result; }
 namespace cql3::selection { class selection; }
@@ -201,6 +204,31 @@ void describe_key_schema(rjson::value& parent, const schema&, std::unordered_map
 // clustering columns, if any, were added by Alternator for the materialized
 // view's sake and must not be reported to the user.
 uint8_t genuine_range_key_count(const schema&, const std::map<sstring, sstring>* tags);
+
+/// A parsed representation of the SearchSchema of a vector index, listing at
+/// most one HASH attribute and any number of INLINE_FILTER attributes, and
+/// mapping each of those attribute names to its declared AttributeType ("S",
+/// "N", or "B").
+struct search_schema_info {
+    std::optional<std::string> hash_attribute;
+    std::vector<std::string> inline_filter_attributes;
+    std::unordered_map<std::string, std::string> attribute_types;
+};
+
+/// Recover the SearchSchema information of a vector index from its stored
+/// index options ("target" and, if present, "alternator_attribute_types") which
+/// were written when the index was created, by build_vector_index_target()
+/// and build_vector_index_alternator_attribute_types().
+search_schema_info get_search_schema_info(const index_metadata& index);
+
+/// Recover a vector index's Projection.NonKeyAttributes from its stored
+/// "alternator_non_key_attributes" index option, which was written when the
+/// index was created by build_vector_index_non_key_attributes().
+/// Projection.ProjectionType can be recovered from the returned value too:
+///   * ProjectionType=KEYS_ONLY - when nullopt is returned.
+///   * ProjectionType=ALL - when an empty vector is returned.
+///   * ProjectionType=INCLUDE - when a non-empty vector is returned.
+std::optional<std::vector<std::string>> get_vector_index_non_key_attributes(const index_metadata& index);
 
 /// is_big() checks approximately if the given JSON value is "bigger" than
 /// the given big_size number of bytes. The goal is to *quickly* detect
