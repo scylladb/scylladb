@@ -1244,13 +1244,6 @@ future<> snapshot_table_helper::insert_snapshot_info(std::string_view snapshot_n
     , db::consistency_level cl
 )
 {
-    co_await insert_snapshot(db::snapshot_entry{
-        .name = std::string(snapshot_name),
-        .created_at = created,
-        .expires_at = expiry,
-        // TODO: namespace/manifest version?
-    }, cl);
-
     std::unordered_map<std::string, db::snapshot_keyspace_entry> keyspaces;
     std::vector<db::snapshot_table_entry> tables;
 
@@ -1302,6 +1295,15 @@ future<> snapshot_table_helper::insert_snapshot_info(std::string_view snapshot_n
 
     co_await insert_snapshot_keyspaces(keyspaces | std::views::values | std::ranges::to<std::vector>(), cl);
     co_await insert_snapshot_tables(tables, cl);
+
+    // The snapshots row is the commit marker for remote tables,
+    // the insert needs to happen last.
+    co_await insert_snapshot(db::snapshot_entry{
+        .name = std::string(snapshot_name),
+        .created_at = created,
+        .expires_at = expiry,
+        // TODO: namespace/manifest version?
+    }, cl);
 }
 
 
