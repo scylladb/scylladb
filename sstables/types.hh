@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "db_clock.hh"
 #include "disk_types.hh"
 #include <seastar/core/enum.hh>
 #include <seastar/core/weak_ptr.hh>
@@ -248,6 +249,7 @@ struct metadata {
     virtual ~metadata() {}
     virtual uint64_t serialized_size(sstable_version_types v) const = 0;
     virtual void write(sstable_version_types v, file_writer& write) const = 0;
+    virtual std::unique_ptr<metadata> clone() const = 0;
 };
 
 template <typename T>
@@ -266,6 +268,9 @@ public:
     }
     virtual void write(sstable_version_types v, file_writer& writer) const override {
         return sstables::write(v, writer, static_cast<const Component&>(*this));
+    }
+    virtual std::unique_ptr<metadata> clone() const final {
+        return std::make_unique<Component>(static_cast<const Component&>(*this));
     }
 };
 
@@ -557,6 +562,7 @@ enum class scylla_metadata_type : uint32_t {
     Schema = 11,
     ComponentsDigests = 12,
     LargeDataRecords = 13,
+    ScrubTime = 14,
 };
 
 // UUID is used for uniqueness across nodes, such that an imported sstable
@@ -675,6 +681,13 @@ struct sstable_schema_type {
     auto describe_type(sstable_version_types v, Describer f) { return f(id, version, keyspace_name, table_name, columns); }
 };
 
+struct scrub_time_type {
+    int64_t timestamp;
+
+    template <typename Describer>
+    auto describe_type(sstable_version_types v, Describer f) { return f(timestamp); }
+};
+
 struct scylla_metadata {
     using extension_attributes = disk_hash<uint32_t, disk_string<uint32_t>, disk_string<uint32_t>>;
     using large_data_stats = disk_hash<uint32_t, large_data_type, large_data_stats_entry>;
@@ -700,7 +713,8 @@ struct scylla_metadata {
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::SSTableIdentifier, sstable_identifier>,
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::Schema, sstable_schema>,
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::ComponentsDigests, components_digests>,
-            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::LargeDataRecords, large_data_records>
+            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::LargeDataRecords, large_data_records>,
+            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::ScrubTime, scrub_time_type>
             > data;
     std::optional<uint32_t> digest;
 
@@ -749,6 +763,17 @@ struct scylla_metadata {
     }
     const components_digests* get_components_digests() const {
         return data.get<scylla_metadata_type::ComponentsDigests, components_digests>();
+    }
+    std::optional<db_clock::time_point> get_scrub_time() const {
+        auto* ts = data.get<scylla_metadata_type::ScrubTime, scrub_time_type>();
+        if (!ts) {
+            return std::nullopt;
+        }
+        return db_clock::time_point(std::chrono::milliseconds(ts->timestamp));
+    }
+    void set_scrub_time(db_clock::time_point timestamp) {
+        std::chrono::milliseconds since_epoch = std::chrono::duration_cast<std::chrono::milliseconds>(timestamp.time_since_epoch());
+        data.set<scylla_metadata_type::ScrubTime>(scrub_time_type(since_epoch.count()));
     }
 };
 
@@ -814,6 +839,27 @@ inline int32_t adjusted_local_deletion_time(gc_clock::time_point local_deletion_
 struct statistics {
     disk_array<uint32_t, std::pair<metadata_type, uint32_t>> offsets; // ordered by metadata_type
     std::unordered_map<metadata_type, std::unique_ptr<metadata>> contents;
+private:
+    std::unordered_map<metadata_type, std::unique_ptr<metadata>> clone_contents() const {
+        std::unordered_map<metadata_type, std::unique_ptr<metadata>> result;
+        for (const auto& [type, md] : contents) {
+            result[type] = md->clone();
+        }
+        return result;
+    }
+public:
+    statistics() = default;
+    ~statistics() = default;
+    statistics(statistics&&) = default;
+    statistics(const statistics& other)
+        : offsets{other.offsets}
+        , contents{other.clone_contents()} {}
+    statistics& operator=(statistics&&) = default;
+    statistics& operator=(const statistics& other) {
+        offsets = other.offsets;
+        contents = other.clone_contents();
+        return *this;
+    }
 };
 
 enum class column_mask : uint8_t {

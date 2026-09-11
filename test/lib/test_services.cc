@@ -636,6 +636,36 @@ future<> test_env_compaction_manager::perform_compaction(shared_ptr<compaction::
     co_await task->run_compaction();
 }
 
+void test_env_compaction_manager::register_compacting(compaction::compaction_group_view &t, std::span<shared_sstable> ssts) {
+    _cm.register_compacting_sstables(ssts);
+}
+
+void test_env_compaction_manager::deregister_compacting(compaction::compaction_group_view &t, std::span<shared_sstable> ssts) {
+    _cm.deregister_compacting_sstables(ssts);
+}
+
+
+void test_env_compaction_manager::set_scrub_period(std::chrono::seconds period) {
+    _cm._scrub_period = period;
+    _cm.update_automatic_scrub_submission_timer();
+}
+
+void test_env_compaction_manager::trigger_auto_scrub_timer() {
+    _cm.automatic_scrub_submission_callback()();
+}
+
+std::optional<lowres_clock::time_point> test_env_compaction_manager::next_automatic_scrub() const {
+    auto& timer = _cm._automatic_scrub_submission_timer;
+    if (!timer.armed()) {
+        return std::nullopt;
+    }
+    return timer.get_timeout();
+}
+
+void test_env_compaction_manager::set_automatic_scrub_timer_expiration(lowres_clock::time_point timestamp) {
+    _cm._automatic_scrub_timer_expiration = timestamp;
+}
+
 }
 
 static std::pair<int, char**> rebuild_arg_list_without(int argc, char** argv, const char* filter_out, bool exclude_positional_arg = false) {

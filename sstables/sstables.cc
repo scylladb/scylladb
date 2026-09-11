@@ -1619,6 +1619,19 @@ std::optional<uint32_t> sstable::get_component_digest(component_type c) const {
     return it->second;
 }
 
+std::optional<db_clock::time_point> sstable::get_scrub_time() const {
+    auto& metadata = _components->scylla_metadata;
+    return metadata ? metadata->get_scrub_time() : std::nullopt;
+}
+
+void sstable::set_scrub_time(db_clock::time_point scrub_time) {
+    if (!has_scylla_component()) {
+        on_internal_error(sstlog, fmt::format("Cannot set scrub time for sstable {}, missing scylla-metadata component", shared_from_this()));
+    }
+    auto& metadata = _components->scylla_metadata;
+    metadata->set_scrub_time(scrub_time);
+}
+
 int64_t sstable::update_repaired_at(int64_t repaired_at) {
     const stats_metadata& old_stats = get_stats_metadata();
     auto old_repaired_at = old_stats.repaired_at;
@@ -1645,14 +1658,14 @@ bool sstable::should_update_repaired_at(int64_t repaired_at) const {
 // This efficiently creates a modified SSTable without copying all files.
 // 1. Create a new SSTable object with a new generation number
 //    - The creator function determines the new generation
-// 2. Hard-link all components EXCEPT the one being rewritten and Scylla metadata
+// 2. Copy in-memory Statistics, Digest and Checksum components from the source SSTable
+// 3. Hard-link all components EXCEPT the one being rewritten and Scylla metadata
 //    - The component being rewritten will be written fresh (not linked)
 //    - Scylla metadata must be rewritten to include the new component's digest
-// 3. Copy in-memory component metadata from the source SSTable
-//    - This doesn't deep copy _components, just copies the foreign_ptr
-// 4. Apply the modifier function to the new SSTable's components
-// 5. Re-read the Scylla metadata from disk
-//    - Ensures we have the latest on-disk metadata (not potentially modified in-memory state)
+// 4. Read the Scylla, Compression, Filter and Summary components from disk
+//    - This is done in order to have a deep copy of in-memory components, not just a shallow-copy of the _components pointer.
+//    - Reading the Scylla component form disk ensures we have the latest on-disk metadata (not potentially modified in-memory state)
+// 5. Apply the modifier function to the new SSTable's components
 // 6. If update_sstable_id is true, update the Scylla metadata's sstable identifier to a new value
 // 7. Write the component with updated Scylla metadata
 //    - Uses write_component_with_metadata() which handles digest calculation and metadata updates
@@ -1708,24 +1721,56 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
         new_sst->mark_created_by_component_rewrite();
 
         std::unordered_set<component_type> excluded_components = {component, component_type::Scylla};
+
+        new_sst->_recognized_components = _recognized_components;
+        new_sst->_features = _components->scylla_metadata ? _components->scylla_metadata->get_features() : sstable_enabled_features{};
+
+        if (new_sst->_marked_for_deletion == mark_for_deletion::none) {
+            new_sst->_marked_for_deletion = mark_for_deletion::implicit;
+        }
+
+        new_sst->_components->statistics = _components->statistics;
+        new_sst->_components->digest = _components->digest;
+        new_sst->_components->checksum = _components->checksum;
+
         _storage->link_with_excluded_components(*this, generation, excluded_components, *sid).get();
-        new_sst->copy_components(*this).get();
+
+        // FIXME: Optimize by re-reading metadata only if _components->scylla_metadata was modified after loading.
+        // If unchanged, reuse the existing _components->scylla_metadata instead.
+        new_sst->_components->scylla_metadata.emplace();
+        auto metadata_size = _metadata_size_on_disk;
+        std::exception_ptr ex;
+
+        try {
+            read_simple<component_type::Scylla>(*new_sst->_components->scylla_metadata).get();
+        } catch (...) {
+            ex = std::current_exception();
+        }
+
+        _metadata_size_on_disk = metadata_size;
+        if (ex) {
+            std::rethrow_exception(ex);
+        }
+
+        when_all_succeed(
+            [&] { return new_sst->read_compression(); },
+            [&] { return new_sst->read_filter(); },
+            [&] { return new_sst->read_summary(); }
+        ).get();
 
         new_sst->_metadata_size_on_disk = _metadata_size_on_disk;
         parallel_for_each(excluded_components, coroutine::lambda([this, new_sst] (component_type type) -> future<> {
             new_sst->_metadata_size_on_disk -= co_await component_filesize(type);
         })).get();
 
-        modifier(*new_sst);
-
-        // FIXME: Optimize by re-reading metadata only if _components->scylla_metadata was modified after loading.
-        // If unchanged, reuse the existing _components->scylla_metadata instead.
-        scylla_metadata metadata;
-        read_simple<component_type::Scylla>(metadata).get();
-
-        new_sst->write_component_with_metadata(component, std::move(metadata));
+        new_sst->write_component_with_metadata_and_modifier(component, std::move(modifier));
 
         new_sst->_shards = this->_shards;
+
+        utils::get_local_injector().inject("link_with_rewritten_component_fail", [] {
+            throw std::runtime_error{"link_with_rewritten_component_fail error injection"};
+        });
+
         new_sst->seal_sstable(false).get();
         new_sst->open_data().get();
 
@@ -1736,20 +1781,22 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
 
 // Rewrites a single SSTable component along with updated Scylla metadata.
 // This is used when modifying components (e.g., Statistics) without rewriting the entire SSTable.
-// 1. Write the component file (e.g., Statistics-*.db)
+// 1. Update Scylla metadata sstable identifier.
+// 2. Apply the modifier.
+// 3. Write the component file (e.g., Statistics-*.db)
 //    - This calculates and stores the component's digest in _components_digests.map[type]
-// 2. Update the Scylla metadata's ComponentsDigests map with the new component digest
-// 3. Calculate the Scylla metadata's own digest based on its updated data
-// 4. Write the Scylla metadata component file
-// 5. Set the in-memory Scylla metadata to the new metadata
-void sstable::write_component_with_metadata(component_type type, scylla_metadata metadata) {
+// 4. Update the Scylla metadata's ComponentsDigests map with the new component digest
+// 5. Calculate the Scylla metadata's own digest based on its updated data
+void sstable::write_component_with_metadata_and_modifier(component_type type, std::function<void(sstable&)> modifier) {
     if (!is_component_rewrite_supported(type)) {
-        on_internal_error(sstlog, "Only Statistics component can be rewritten.");
+        on_internal_error(sstlog, "Only Statistics and Scylla components can be rewritten.");
+    }
+    if (!_components->scylla_metadata) {
+        on_internal_error(sstlog, "SSTable must have Scylla component to rewrite Statistics component.");
     }
 
-    write_component(type);
+    auto& metadata = *_components->scylla_metadata;
 
-    metadata.get_or_create_components_digests().map[type] = _components_digests.map[type];
     // The sstable's identifier is authoritative: make sure the sstable_identifier
     // we store in scylla_metadata is the one the sstable is known by.  This must
     // happen before the digest below is computed over metadata.data.
@@ -1759,15 +1806,23 @@ void sstable::write_component_with_metadata(component_type type, scylla_metadata
                 get_filename(), component_name(*this, type)));
     }
     metadata.set_sstable_identifier(*sid);
+    metadata.digest = std::nullopt;
+
+    modifier(*this);
+
+    if (type != component_type::Scylla) {
+        write_component(type);
+        metadata.get_or_create_components_digests().map[type] = _components_digests.map[type];
+    }
+
     metadata.digest = serialized_checksum(_version, metadata.data);
 
     write_simple<component_type::Scylla>(metadata);
 
-    _components->scylla_metadata = std::move(metadata);
     // Keep the cached _features in sync with the metadata we just wrote,
     // mirroring read_scylla_metadata(). Otherwise a rewritten sstable would
     // report zeroed features (e.g. losing ShadowableTombstones).
-    _features = _components->scylla_metadata->get_features();
+    _features = metadata.get_features();
 }
 
 future<uint64_t> sstable::component_filesize(component_type type) const noexcept {
@@ -2159,6 +2214,7 @@ void sstable::disable_component_memory_reload() {
 bool sstable::is_component_rewrite_supported(component_type type) {
     switch (type) {
     case component_type::Statistics:
+    case component_type::Scylla:
         return true;
     default:
         return false;
@@ -2566,6 +2622,8 @@ sstable::write_scylla_metadata(shard_id shard, struct run_identifier identifier,
     }
     _components->scylla_metadata->data.set<scylla_metadata_type::Schema>(std::move(sstable_schema));
     _components->scylla_metadata->data.set<scylla_metadata_type::ComponentsDigests>(scylla_metadata::components_digests{_components_digests});
+
+    _components->scylla_metadata->set_scrub_time(db_clock::now());
 
     _components->scylla_metadata->digest = serialized_checksum(_version, _components->scylla_metadata->data);
 
@@ -4440,6 +4498,7 @@ future<std::vector<std::unique_ptr<sstable_stream_source>>> create_stream_source
 
                 co_await seastar::async([&] {
                     tmp.get_or_create_components_digests();
+                    tmp.set_scrub_time(db_clock::now());
                     tmp.digest = serialized_checksum(_sst->get_version(), tmp.data);
                     using buffer_data_sink_impl = seastar::util::basic_memory_data_sink<decltype(bufs), 128*1024>;
                     file_writer fw(data_sink(std::make_unique<buffer_data_sink_impl>(bufs)));

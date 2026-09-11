@@ -87,6 +87,18 @@ public:
         // Drop sstables that cannot be fixed.
         // Only applies to segregate-mode.
         drop_unfixable_sstables drop_unfixable = drop_unfixable_sstables::no;
+
+        using update_scrub_time = bool_class<class update_scrub_time_tag>;
+        // May update the scrub time by rewriting the scylla-metadata component.
+        // Only applies to validate-mode.
+        // Can only be used if sstables have the Scylla component.
+        update_scrub_time update_timestamp = update_scrub_time::no;
+
+        using is_automatic_scrub = bool_class<class is_automatic_tag>;
+        // Only applies to scrub in validate mode.
+        // Marks scrub as automatic, which reduces the log level of
+        // logged messages.
+        is_automatic_scrub is_automatic = is_automatic_scrub::no;
     };
     struct reshard {
         // If set, resharding compaction will apply the owned_ranges to segregate sstables in vnode boundaries.
@@ -138,8 +150,8 @@ public:
         return compaction_type_options(upgrade{});
     }
 
-    static compaction_type_options make_scrub(scrub::mode mode, scrub::quarantine_invalid_sstables quarantine_sstables = scrub::quarantine_invalid_sstables::yes, scrub::drop_unfixable_sstables drop_unfixable_sstables = scrub::drop_unfixable_sstables::no) {
-        return compaction_type_options(scrub{.operation_mode = mode, .quarantine_sstables = quarantine_sstables, .drop_unfixable = drop_unfixable_sstables});
+    static compaction_type_options make_scrub(scrub::mode mode, scrub::quarantine_invalid_sstables quarantine_sstables = scrub::quarantine_invalid_sstables::yes, scrub::drop_unfixable_sstables drop_unfixable_sstables = scrub::drop_unfixable_sstables::no, scrub::update_scrub_time update_timestamp = scrub::update_scrub_time::no, scrub::is_automatic_scrub is_automatic = scrub::is_automatic_scrub::no) {
+        return compaction_type_options(scrub{.operation_mode = mode, .quarantine_sstables = quarantine_sstables, .drop_unfixable = drop_unfixable_sstables, .update_timestamp = update_timestamp, .is_automatic = is_automatic});
     }
 
     static compaction_type_options make_component_rewrite(component_type component, std::function<void(sstables::sstable&)> modifier, sstables::update_sstable_id update_id = sstables::update_sstable_id::yes) {
