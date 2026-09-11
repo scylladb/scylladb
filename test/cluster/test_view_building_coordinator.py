@@ -1296,3 +1296,111 @@ async def test_staging_registration_race_with_tablet_migration(manager: ScyllaCl
         await assert_row_count_on_host(cql, s1_hosts[0], ks, "mv", rows)
         await manager.server_start(node3.server_id)
         await wait_for_cql_and_get_hosts(cql, [node3], time.time() + 30)
+
+# Incremental repair marks the sstables it wrote as repaired by rewriting their Statistics
+# component (table::perform_component_rewrite), which replaces the sstable object with a new
+# generation and unlinks the old files. Whoever registered the staging sstable for view building
+# still holds the old object. Variants:
+# - rewrite_before_processing: the view is under construction, so the staging sstable is managed by
+#   the view building worker. Its process_staging task cannot start before the repair finishes (the
+#   coordinator doesn't start tasks on a tablet under repair), so the worker used to pick up a
+#   reference to a no longer existing sstable and loop on ENOENT forever, never building the view.
+# - rewrite_during_processing: like above, but the worker is already processing the sstable when
+#   an incremental repair rewrites it (a non-incremental repair wrote it first, without marking).
+# - view_already_built: the staging sstable is registered directly with view_update_generator,
+#   which used to fail moving it out of staging and leave the rewritten one there until restart.
+# In every case the rewritten sstable has to leave staging and the view has to be complete.
+# Reproduces SCYLLADB-3372
+@pytest.mark.parametrize("scenario", ["rewrite_before_processing", "rewrite_during_processing", "view_already_built"])
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_incremental_repair_rewrites_staging_sstable(manager: ScyllaClusterManager, scenario: str):
+    node_count = 2
+    smp = 2
+    servers = await manager.servers_add(node_count, cmdline=cmdline_loggers + [f'--smp={smp}'], property_file=[
+        {"dc": "dc1", "rack": "r1"},
+        {"dc": "dc1", "rack": "r2"},
+    ])
+    cql, hosts = await manager.get_ready_cql(servers)
+    await manager.disable_tablet_balancing()
+    view_built = scenario == "view_already_built"
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v int, PRIMARY KEY (key))")
+        create_view = f"CREATE MATERIALIZED VIEW {ks}.mv AS SELECT * FROM {ks}.tab WHERE key IS NOT NULL AND c IS NOT NULL PRIMARY KEY (c, key)"
+
+        rows = 100
+        for i in range(rows):
+            await cql.run_async(f"INSERT INTO {ks}.tab (key, c, v) VALUES ({i}, {i}, 1)")
+        if view_built:
+            await cql.run_async(create_view)
+            await wait_for_view(cql, 'mv', node_count)
+
+        # Make node0 miss all the data, so the repair below has to write it there.
+        for table in ["tab", "mv"] if view_built else ["tab"]:
+            await manager.api.keyspace_flush(servers[0].ip_addr, ks, table)
+            await delete_table_sstables(manager, servers[0], ks, table)
+        await manager.server_stop_gracefully(servers[0].server_id)
+        await manager.server_start(servers[0].server_id)
+        await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+        s0_log = await manager.server_open_log(servers[0].server_id)
+        s0_mark = await s0_log.mark()
+
+        if not view_built:
+            # Hold the build_range tasks, so the view stays in STARTED state and the repair output
+            # goes to staging managed by the view building worker.
+            await pause_view_building_tasks(manager)
+            await cql.run_async(create_view)
+            await s0_log.wait_for("do_build_range: paused, waiting for message", from_mark=s0_mark, timeout=60)
+
+        vug_pause = "view_update_generator_pause_before_processing"
+        if scenario == "rewrite_before_processing":
+            await manager.api.tablet_repair(servers[0].ip_addr, ks, "tab", "all", incremental_mode='incremental')
+            await unpause_view_building_tasks(manager)
+        elif scenario == "rewrite_during_processing":
+            # The non-incremental repair writes the staging sstable without marking it. Then let the
+            # worker start processing it and hold it right before it generates view updates.
+            await manager.api.repair(servers[0].ip_addr, ks, "tab")
+            await s0_log.wait_for("Creating process staging task", from_mark=s0_mark, timeout=60)
+            await manager.api.enable_injection(servers[0].ip_addr, vug_pause, one_shot=True)
+            await unpause_view_building_tasks(manager)
+            await s0_log.wait_for(f"{vug_pause}: waiting for message", from_mark=s0_mark, timeout=120)
+            await manager.api.tablet_repair(servers[0].ip_addr, ks, "tab", "all", incremental_mode='incremental')
+            await manager.api.message_injection(servers[0].ip_addr, vug_pause)
+        else:
+            # Hold the generator right before it reads the sstable the repair is about to write.
+            await manager.api.enable_injection(servers[0].ip_addr, vug_pause, one_shot=True)
+            await manager.api.tablet_repair(servers[0].ip_addr, ks, "tab", "all", incremental_mode='incremental')
+            await s0_log.wait_for(f"{vug_pause}: waiting for message", from_mark=s0_mark, timeout=60)
+            await manager.api.message_injection(servers[0].ip_addr, vug_pause)
+        marked = await s0_log.grep(r"Marking sstable=.*/staging/.* for incremental repair", from_mark=s0_mark)
+        assert len(marked) > 0, "expected the repair to mark a staging sstable as repaired"
+
+        if view_built:
+            await s0_log.wait_for(f"Processed {ks}.tab", from_mark=s0_mark, timeout=60)
+        else:
+            await wait_for_view(cql, 'mv', node_count, timeout=180)
+
+        # The rewritten sstable has to leave staging, and without a retry.
+        staging_dir = os.path.join(await get_table_dir(manager, servers[0], ks, "tab"), "staging")
+        async def staging_empty():
+            return (not os.path.isdir(staging_dir) or not os.listdir(staging_dir)) or None
+        await wait_for(staging_empty, deadline=time.time() + 60)
+        failures = await s0_log.grep("Failed to move sstable|Moving some sstable from staging failed", from_mark=s0_mark)
+        assert len(failures) == 0, f"moving the staging sstable failed: {failures}"
+
+        # View updates generated from staging sstables are not awaited, so wait until the view update
+        # backlog drains before checking the view content.
+        async def view_updates_drained():
+            metrics = await manager.metrics.query(servers[0].ip_addr)
+            for shard in range(smp):
+                if metrics.get("scylla_database_view_update_backlog", {'shard': str(shard)}) > 0:
+                    return None
+            return True
+        await wait_for(view_updates_drained, deadline=time.time() + 60)
+
+        hosts = await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + 60)
+        await manager.server_stop_gracefully(servers[1].server_id)
+        await assert_row_count_on_host(cql, hosts[0], ks, "tab", rows)
+        await assert_row_count_on_host(cql, hosts[0], ks, "mv", rows)
+        await manager.server_start(servers[1].server_id)
