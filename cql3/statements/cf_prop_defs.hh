@@ -117,6 +117,17 @@ public:
     void validate_minimum_int(const sstring& field, int32_t minimum_value, int32_t default_value) const;
 };
 
+// SizeTieredCompactionStrategy is deprecated and is now merely an alias of
+// IncrementalCompactionStrategy: a table configured with it is compacted by
+// ICS either way. Naming it is still accepted, so that existing applications
+// and schema dumps keep working, but it returns a CQL warning, which this
+// function produces. When `allow` is off - the
+// allow_deprecated_size_tiered_compaction_strategy configuration option -
+// naming it is an error instead.
+//
+// Returns nothing if the statement didn't name the deprecated strategy.
+std::optional<sstring> check_deprecated_compaction_strategy(std::optional<compaction::compaction_strategy_type> strategy, bool allow);
+
 }
 
 }
