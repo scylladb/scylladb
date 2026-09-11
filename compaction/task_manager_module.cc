@@ -784,16 +784,19 @@ future<tasks::task_manager::task_ptr> task_manager_module::start_offstrategy_key
     });
 }
 
-future<> shard_offstrategy_keyspace_compaction_task_impl::run() {
+static future<> run_shard_offstrategy_compaction(tasks::task_manager::module_ptr module, replica::database& db, std::string keyspace, const std::vector<table_info>& tables, bool& needed, tasks::task_info task_info) {
     seastar::condition_variable cv;
     current_task_type current_task;
-    auto parent_info = info();
     std::vector<table_tasks_info> table_tasks;
-    for (auto& ti : _table_infos) {
-        table_tasks.emplace_back(co_await _module->make_and_start_task<table_offstrategy_keyspace_compaction_task_impl>(parent_info, _status.keyspace, ti.name, _status.id, _db, ti, cv, current_task, _needed), ti);
+    for (auto& ti : tables) {
+        table_tasks.emplace_back(co_await module->make_and_start_task<table_offstrategy_keyspace_compaction_task_impl>(task_info, keyspace, ti.name, task_info.get_id(), db, ti, cv, current_task, needed), ti);
     }
 
-    co_await run_table_tasks(_db, std::move(table_tasks), cv, current_task, false);
+    co_await run_table_tasks(db, std::move(table_tasks), cv, current_task, false);
+}
+
+future<> shard_offstrategy_keyspace_compaction_task_impl::run() {
+    return run_shard_offstrategy_compaction(_module, _db, _status.keyspace, _table_infos, _needed, info());
 }
 
 future<std::optional<double>> shard_offstrategy_keyspace_compaction_task_impl::expected_total_workload() const {
