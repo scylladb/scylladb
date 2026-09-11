@@ -3061,7 +3061,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
 
     future<> handle_snapshot_tables(group0_guard guard) {
         utils::chunked_vector<table_id> ids;
-        std::vector<lw_shared_ptr<replica::table>> tables;
         sstring tag;
         bool skip_flush;
         gc_clock::time_point t;
@@ -3081,7 +3080,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         throw std::invalid_argument(fmt::format("Cannot SNAPSHOT table with UUID {} because it does not exist.", id));
                     }
                     ids.emplace_back(id);
-                    tables.emplace_back(table);
                 }
                 rtlogger.info("Performing SNAPSHOT TABLES for {}", ids);
                 return *topology_requests_entry.snapshot_table_ids;
@@ -3089,16 +3087,64 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             , [&](locator::host_id host_id, const service::frozen_topology_guard& frozen_guard) {
                 return ser::storage_proxy_rpc_verbs::send_snapshot_with_tablets(&_messaging, host_id, ids, tag, t, skip_flush, expiry, frozen_guard);
             }
-            , [&] { 
+            , [&] {
                 return fmt::format("SNAPSHOT on tables {}", ids);
             }
             , "snapshot"
-            , [&]() -> future<> {
+            , [this]() -> future<> {
+                // Use the persisted request entry, not session locals: after
+                // a coordinator failover this step re-runs with an empty
+                // session, and a failed request also reaches it. Neither may
+                // write the marker, that would commit a snapshot that does
+                // not exist and make the tag unusable.
+                auto entry = co_await _sys_ks.get_topology_request_entry(_topo_sm._topology.global_request_id.value());
+                if (!entry.error.empty()) {
+                    rtlogger.warn("SNAPSHOT request {} failed ({}); not writing the snapshot commit marker", entry.id, entry.error);
+                    co_return;
+                }
+                if (!entry.snapshot_tag || !entry.snapshot_table_ids) {
+                    on_internal_error(rtlogger, fmt::format("SNAPSHOT request {} has no tag or table ids", entry.id));
+                }
+                std::vector<lw_shared_ptr<replica::table>> tables;
+                for (auto& id : *entry.snapshot_table_ids) {
+                    // A table dropped since the request was created is left
+                    // out of the snapshot's schema rows.
+                    if (auto table = _db.get_tables_metadata().get_table_if_exists(id)) {
+                        tables.emplace_back(std::move(table));
+                    }
+                }
+                // For object-storage tables we need QUORUM
+                auto cl = std::ranges::any_of(tables, [] (const auto& tbl) {
+                    return tbl->get_storage_options().is_object_storage_type();
+                }) ? db::consistency_level::QUORUM : db::consistency_level::LOCAL_QUORUM;
                 db::snapshot_table_helper sth(_sys_ks.query_processor());
-                co_await sth.insert_snapshot_info(tag
-                    , db_clock::from_time_t(gc_clock::to_time_t(t))
-                    , db_clock::from_time_t(gc_clock::to_time_t(expiry.value_or({})))
+                // rows whose first_token is not in the current tablet map are
+                // leftovers of a crashed attempt taken under an older tablet map.
+                for (auto& tbl : tables) {
+                    if (!tbl->uses_tablets()) {
+                        continue;
+                    }
+                    auto s = tbl->schema();
+                    auto erm = tbl->get_effective_replication_map();
+                    auto& tmap = erm->get_token_metadata().tablets().get_tablet_map(s->id());
+                    std::unordered_set<int64_t> current_tokens;
+                    for (auto tablet : tmap.tablet_ids()) {
+                        current_tokens.insert(dht::token::to_int64(tmap.get_first_token(tablet)));
+                    }
+                    for (const auto& dc : erm->get_token_metadata().get_topology().get_datacenters()) {
+                        auto rows = co_await sth.get_snapshot_tablets(*entry.snapshot_tag, s->ks_name(), s->cf_name(), dc);
+                        for (const auto& row : rows) {
+                            if (!current_tokens.contains(dht::token::to_int64(row.first_token))) {
+                                co_await sth.delete_snapshot_tablet_entry(*entry.snapshot_tag, s->ks_name(), s->cf_name(), dc, row.first_token);
+                            }
+                        }
+                    }
+                }
+                co_await sth.insert_snapshot_info(*entry.snapshot_tag
+                    , entry.start_time
+                    , entry.snapshot_expiry.value_or(db_clock::time_point{})
                     , tables
+                    , cl
                 );
             }
         );
