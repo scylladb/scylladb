@@ -21,6 +21,7 @@
 #include <seastar/util/closeable.hh>
 #include <seastar/util/short_streams.hh>
 #include <seastar/core/units.hh>
+#include <seastar/core/metrics_api.hh>
 #include "test/lib/scylla_test_case.hh"
 #include "test/lib/log.hh"
 #include "test/lib/random_utils.hh"
@@ -31,6 +32,9 @@
 #include "utils/s3/aws_error.hh"
 #include "utils/s3/client.hh"
 #include "utils/s3/creds.hh"
+#include "utils/s3/aws_throttling_controller.hh"
+#include "utils/s3/default_aws_retry_strategy.hh"
+#include "utils/s3/noop_throttling_controller.hh"
 #include "utils/s3/utils/manip_s3.hh"
 #include "utils/exceptions.hh"
 #include "utils/s3/credentials_providers/aws_credentials_provider_chain.hh"
@@ -88,7 +92,26 @@ static shared_ptr<s3::client> make_proxy_client() {
         .use_https = false,
         .region = ::getenv("AWS_DEFAULT_REGION") ? : "local",
     };
-    return s3::client::make(tests::getenv_safe("PROXY_S3_SERVER_HOST"), make_lw_shared<s3::endpoint_config>(std::move(cfg)), make_test_retry_strategy());
+    return s3::client::make(tests::getenv_safe("PROXY_S3_SERVER_HOST"), make_lw_shared<s3::endpoint_config>(std::move(cfg)), make_test_retry_strategy(),
+                            std::make_unique<s3::noop_throttling_controller>());
+}
+
+// Like make_proxy_client, but leaves both the throttling controller and the
+// retry strategy unset, so the client builds its production defaults: the
+// real AWS controller and the default AWS retry strategy wired to that
+// controller. Used by the
+// throttling metrics integration test, which relies on the proxy injecting
+// throttling errors to make the controller react. Injecting either would test a
+// configuration that never ships — and in particular a retry strategy that is
+// not default_aws_retry_strategy never reports throttling to the controller at
+// all, so nothing would be measured.
+static shared_ptr<s3::client> make_proxy_client_with_aws_throttling() {
+    s3::endpoint_config cfg = {
+        .port = std::stoul(tests::getenv_safe("PROXY_S3_SERVER_PORT")),
+        .use_https = false,
+        .region = ::getenv("AWS_DEFAULT_REGION") ? : "local",
+    };
+    return s3::client::make(tests::getenv_safe("PROXY_S3_SERVER_HOST"), make_lw_shared<s3::endpoint_config>(std::move(cfg)));
 }
 
 static shared_ptr<s3::client> make_minio_client() {
@@ -1081,4 +1104,150 @@ BOOST_AUTO_TEST_CASE(part_size_calculation_test) {
         BOOST_REQUIRE_EQUAL(parts, 1);
         BOOST_REQUIRE_EQUAL(size, 200_MiB);
     }
+}
+
+// ---------------------------------------------------------------------------
+// throttling_controller unit tests.
+//
+// The controller has one piece of behaviour: once the endpoint is refusing a
+// sustained share of requests it freezes sending for a few seconds.
+// ---------------------------------------------------------------------------
+
+SEASTAR_THREAD_TEST_CASE(test_throttling_controller_freeze_stops_admission_on_sustained_refusal) {
+    s3::aws_throttling_controller tc;
+    auto first = tc.acquire(nullptr);
+    BOOST_REQUIRE(first.available()); // nothing holds a request back before any refusal
+    first.get();
+
+    // One refusal is not evidence about the shard, and must not brake it.
+    tc.on_throttled();
+    BOOST_REQUIRE_EQUAL(tc.freezes(), 0u);
+
+    // Nor is a sample the endpoint answered nearly all of. Together with the refusal
+    // above this closes one full sample, at a share far below the threshold.
+    constexpr unsigned outcomes_per_sample = 50;
+    for (unsigned i = 1; i < outcomes_per_sample; ++i) {
+        tc.on_not_throttled();
+    }
+    BOOST_REQUIRE_EQUAL(tc.freezes(), 0u);
+
+    // A sample the endpoint refused outright must brake it, on the outcome that closes
+    // the sample rather than after any wall-clock interval.
+    const auto froze_at = seastar::lowres_clock::now();
+    for (unsigned i = 0; i < outcomes_per_sample; ++i) {
+        tc.on_throttled();
+    }
+    BOOST_REQUIRE_EQUAL(tc.freezes(), 1u);
+
+    // Outcomes arriving now answer requests sent before the freeze, so they must not
+    // feed the estimate: enough of them to close several samples must not re-arm it.
+    for (unsigned i = 0; i < 4 * outcomes_per_sample; ++i) {
+        tc.on_throttled();
+    }
+    BOOST_REQUIRE_EQUAL(tc.freezes(), 1u);
+
+    // The freeze must hold admission, and must not be ready synchronously.
+    seastar::abort_source as;
+    auto frozen = tc.acquire(&as);
+    BOOST_REQUIRE(!frozen.available());
+
+    // It must lift on its own, well inside this deadline.
+    const auto deadline = seastar::lowres_clock::now() + 10s;
+    while (!frozen.available() && seastar::lowres_clock::now() < deadline) {
+        seastar::sleep(100ms).get();
+    }
+
+    // Report only once acquire() is done with the controller. Failing while it is
+    // still sleeping would destroy the controller it holds a reference to.
+    const bool resumed = frozen.available();
+    if (!resumed) {
+        as.request_abort();
+    }
+    frozen.handle_exception([](std::exception_ptr) {}).get();
+
+    BOOST_REQUIRE_MESSAGE(resumed, "acquire() never resumed after the throttling freeze");
+
+    // A freeze that lifted immediately would satisfy everything above, so pin the
+    // length: admission has to have been held for the freeze, not just deferred.
+    const auto held = seastar::lowres_clock::now() - froze_at;
+    BOOST_REQUIRE_GE(std::chrono::duration_cast<std::chrono::milliseconds>(held).count(), 3500);
+}
+
+// Read a single S3 metric value out of the seastar metrics registry, matching on
+// the "operation" label only. The other label the client attaches is "endpoint",
+// which depends on the test host, so we iterate the family rather than hardcode it.
+//
+// Returns std::nullopt if the family has no matching series, which is what a
+// client that never registered these metrics looks like.
+static std::optional<double> read_s3_metric(const sstring& metric_name, const sstring& operation) {
+    const auto& value_map = seastar::metrics::impl::get_value_map();
+    auto fam_it = value_map.find(metric_name);
+    if (fam_it == value_map.end()) {
+        return std::nullopt;
+    }
+    for (const auto& [holder, reg] : fam_it->second) {
+        if (!reg || !reg->is_enabled()) {
+            continue;
+        }
+        const auto& labels = reg->get_id().labels();
+        auto op_it = labels.find("operation");
+        if (op_it != labels.end() && op_it->second.value() == operation) {
+            return (*reg)().d();
+        }
+    }
+    return std::nullopt;
+}
+
+// Integration test: drive a real upload through the fuzzing S3 proxy with the
+// actual AWS throttling controller wired in, and verify the
+// throttling machinery is exercised end-to-end by watching its metrics.
+//
+// The proxy injects retryable errors (including 503 SlowDown), which makes the
+// controller engage: it records throttles and freezes sending. The
+// no-op controller used by other proxy tests would leave these metrics
+// untouched, so a change here proves the real controller is on the request
+// path and reacting to S3 pushback.
+SEASTAR_THREAD_TEST_CASE(test_throttling_controller_metrics_change_on_upload_proxy) {
+    tmpdir tmp;
+    const auto file_path = tmp.path() / "test";
+    const size_t total_size = 4 * 5_MiB;
+    create_file(file_path, total_size).get();
+
+    s3_test_fixture guard(make_proxy_client_with_aws_throttling);
+    auto client = guard.client();
+
+    // The proxy injects retryable errors probabilistically (random seed), so a
+    // single upload does not deterministically hit a throttling-class error. We
+    // upload repeatedly until the controller records at least one throttle, up
+    // to a generous bound. In practice this converges within the first few
+    // iterations; the bound only guards against an infinite loop if the proxy
+    // ever stops injecting errors.
+    std::optional<double> throttles;
+    constexpr int max_uploads = 50;
+    for (int i = 0; i < max_uploads; ++i) {
+        const auto object_name = guard.object_path(format("throttling-metrics-test-{}", i));
+        client->upload_file(file_path, object_name).get();
+        throttles = read_s3_metric("s3_throttles", "request");
+        if (throttles.has_value() && *throttles > 0.0) {
+            break;
+        }
+        client->delete_object(object_name).get();
+    }
+
+    // The proxy injects throttling errors, so the controller must have seen at
+    // least one and reacted. throttles > 0 is the primary signal that the real
+    // controller was engaged on the write path rather than the no-op stub.
+    BOOST_REQUIRE_MESSAGE(throttles.has_value(), "s3_throttles{operation=request} metric not registered - controller was not exercised");
+    BOOST_REQUIRE_GT(*throttles, 0.0);
+
+    // Whether the brake actually engages depends on the share of requests the proxy
+    // refuses crossing the threshold, and the proxy injects at random, so the freeze
+    // count is not asserted here. throttles above already separates the real
+    // controller from the no-op stub, which reports zero for all three.
+    auto freezes = read_s3_metric("s3_send_freezes", "request");
+    BOOST_REQUIRE_MESSAGE(freezes.has_value(), "s3_send_freezes{operation=request} metric not registered");
+    auto refused = read_s3_metric("s3_refused_request_ratio", "request");
+    BOOST_REQUIRE_MESSAGE(refused.has_value(), "s3_refused_request_ratio{operation=request} metric not registered");
+    BOOST_REQUIRE_GE(*refused, 0.0);
+    BOOST_REQUIRE_LE(*refused, 1.0);
 }
