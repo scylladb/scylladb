@@ -256,6 +256,17 @@ class storage_proxy::remote {
     netw::connection_drop_registration_t _condrop_registration;
 
     bool _stopped{false};
+    // Memoizes `stop()` so that it can be called (and waited for with a
+    // timeout) more than once, see `storage_proxy::drain_remote_verbs()`.
+    std::optional<shared_future<>> _stop_done;
+
+    future<> do_stop() {
+        _group0_as.request_abort();
+        co_await _truncate_gate.close();
+        co_await _snapshot_gate.close();
+        co_await ser::storage_proxy_rpc_verbs::unregister(&_ms);
+        _stopped = true;
+    }
 
 public:
     remote(storage_proxy& sp, netw::messaging_service& ms, gms::gossiper& g, migration_manager& mm, sharded<db::system_keyspace>& sys_ks,
@@ -289,12 +300,17 @@ public:
     }
 
     // Must call before destroying the `remote` object.
-    future<> stop() {
-        _group0_as.request_abort();
-        co_await _truncate_gate.close();
-        co_await _snapshot_gate.close();
-        co_await ser::storage_proxy_rpc_verbs::unregister(&_ms);
-        _stopped = true;
+    //
+    // May be called more than once; every call joins the same underlying
+    // stop operation. `timeout`, if given, bounds how long the caller waits
+    // for it - the stop itself keeps running in the background and a later
+    // call without a timeout waits for it to finish.
+    future<> stop(std::optional<lowres_clock::duration> timeout = std::nullopt) {
+        if (!_stop_done) {
+            _stop_done.emplace(do_stop());
+        }
+        return timeout ? _stop_done->get_future(lowres_clock::now() + *timeout)
+                       : _stop_done->get_future();
     }
 
     const gms::gossiper& gossiper() const {
@@ -7334,6 +7350,10 @@ void storage_proxy::start_remote(netw::messaging_service& ms, gms::gossiper& g, 
 }
 
 future<> storage_proxy::stop_remote() {
+    if (!_remote) {
+        co_return;
+    }
+
     co_await cancel_nonlocal_write_response_handlers();
     co_await _hints_resource_manager.stop();
 
@@ -7342,11 +7362,29 @@ future<> storage_proxy::stop_remote() {
     // raft log persistence through internal CQL, need their local write
     // handler to complete normally during shutdown; canceling all write
     // handlers before unregistering RPC verbs can turn those local writes
-    // into spurious timeouts. After _remote->stop() finishes, no RPC
+    // into spurious timeouts. After the RPC verbs are unregistered, no RPC
     // handler can start or continue storage-proxy work through _remote.
+    // This joins a drain possibly left running by drain_remote_verbs().
     co_await _remote->stop();
     co_await cancel_all_write_response_handlers();
     _remote = nullptr;
+}
+
+future<> storage_proxy::drain_remote_verbs(lowres_clock::duration timeout) {
+    if (!_remote) {
+        co_return;
+    }
+
+    try {
+        co_await _remote->stop(timeout);
+    } catch (const timed_out_error&) {
+        // The drain keeps running in the background and is joined by
+        // stop_remote(). Replies of the handlers that did not make it in
+        // time may be lost once messaging is shut down - the same outcome
+        // as before draining was introduced.
+        slogger.warn("Timed out after {} waiting for storage proxy RPC handlers to drain",
+                std::chrono::duration_cast<std::chrono::seconds>(timeout));
+    }
 }
 
 future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>>
