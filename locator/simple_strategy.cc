@@ -79,7 +79,7 @@ void simple_strategy::validate_options(const gms::feature_service&, const locato
     }
 }
 
-sstring simple_strategy::sanity_check_read_replicas(const effective_replication_map& erm, const host_id_vector_replica_set& read_replicas) const {
+sstring simple_strategy::sanity_check_read_replicas(const effective_replication_map& erm, const host_id_vector_replica_set& read_replicas, dht::token token) const {
     if (read_replicas.size() > _replication_factor) {
         return seastar::format("ERM inconsistency, the read replica set for simple strategy has higher count of"
                                " read replicas [{}] than its replication factor [{}]",
