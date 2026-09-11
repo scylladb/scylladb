@@ -163,6 +163,12 @@ public:
             std::string_view dc, std::string_view rack,
             db::consistency_level cl = db::consistency_level::LOCAL_QUORUM) const;
 
+    /* Deletes a single snapshot_tablets row. Only for the coordinator's
+     * commit step, which runs after all node RPCs. */
+    future<> delete_snapshot_tablet_entry(std::string_view snapshot_name, std::string_view ks, std::string_view table,
+            std::string_view dc, dht::token first_token,
+            db::consistency_level cl = db::consistency_level::LOCAL_QUORUM);
+
     /* Deletes a single snapshot_sstables row, tombstone pinned at the row's
      * observed write timestamp, thus deleting exactly the observed write and
      * it cannot shadow a later re-insert by a snapshot retry. */
