@@ -27,16 +27,19 @@ logging::logger logger{"load_sys_tablets"};
 tools::tablets_t do_load_system_tablets(const db::config& dbcfg,
                                         std::filesystem::path scylla_data_path,
                                         table_id table,
-                                        reader_permit permit) {
+                                        reader_permit permit,
+                                        std::optional<std::filesystem::path> tablets_directory) {
     sharded<sstable_manager_service> sst_man;
     auto scf = make_sstable_compressor_factory_for_tests_in_thread();
     sst_man.start(std::ref(dbcfg), std::ref(*scf)).get();
     auto stop_sst_man_service = deferred_stop(sst_man);
 
     auto schema = db::system_keyspace::tablets();
-    auto tablets_table_directory = get_table_directory(scylla_data_path,
-                                                       db::system_keyspace::NAME,
-                                                       schema->cf_name()).get();
+    auto tablets_table_directory = tablets_directory
+            ? *tablets_directory
+            : get_table_directory(scylla_data_path,
+                                  db::system_keyspace::NAME,
+                                  schema->cf_name()).get();
     auto mut = read_mutation_from_table_offline(sst_man,
                                                 permit,
                                                 tablets_table_directory,
@@ -61,6 +64,69 @@ tools::tablets_t do_load_system_tablets(const db::config& dbcfg,
     return tablets;
 }
 
+std::optional<tools::local_node_info> do_load_local_node_info(const db::config& dbcfg,
+                                        std::filesystem::path scylla_data_path,
+                                        reader_permit permit) {
+    sharded<sstable_manager_service> sst_man;
+    auto scf = make_sstable_compressor_factory_for_tests_in_thread();
+    sst_man.start(std::ref(dbcfg), std::ref(*scf)).get();
+    auto stop_sst_man_service = deferred_stop(sst_man);
+
+    auto local_table_directory = get_table_directory(scylla_data_path,
+                                                     db::system_keyspace::NAME,
+                                                     db::system_keyspace::LOCAL).get();
+    auto mut = read_mutation_from_table_offline(sst_man,
+                                                permit,
+                                                local_table_directory,
+                                                db::system_keyspace::NAME,
+                                                db::system_keyspace::local,
+                                                data_value(sstring(db::system_keyspace::LOCAL)),
+                                                {});
+    if (!mut) {
+        return std::nullopt;
+    }
+    query::result_set result_set{*mut};
+    if (result_set.empty()) {
+        return std::nullopt;
+    }
+    const auto& row = result_set.row(0);
+    auto host_id = row.get<utils::UUID>("host_id");
+    if (!host_id) {
+        return std::nullopt;
+    }
+    tools::local_node_info info{.host_id = locator::host_id(*host_id)};
+
+    // The sharding parameters of the node live in "system.topology", in the row
+    // of its host id. The "scylla_nr_shards" and "scylla_msb_ignore" columns of
+    // "system.local" are not an alternative: they are dropped columns, so
+    // nothing has written them for a long time.
+    auto topology_table_directory = get_table_directory(scylla_data_path,
+                                                        db::system_keyspace::NAME,
+                                                        db::system_keyspace::TOPOLOGY).get();
+    auto topology_mut = read_mutation_from_table_offline(sst_man,
+                                                permit,
+                                                topology_table_directory,
+                                                db::system_keyspace::NAME,
+                                                db::system_keyspace::topology,
+                                                data_value(sstring(db::system_keyspace::TOPOLOGY)),
+                                                data_value(*host_id));
+    if (!topology_mut) {
+        return info;
+    }
+    query::result_set topology_result_set{*topology_mut};
+    if (topology_result_set.empty()) {
+        return info;
+    }
+    const auto& topology_row = topology_result_set.row(0);
+    if (auto shard_count = topology_row.get<int32_t>("shard_count")) {
+        info.shard_count = unsigned(*shard_count);
+    }
+    if (auto ignore_msb_bits = topology_row.get<int32_t>("ignore_msb")) {
+        info.ignore_msb_bits = unsigned(*ignore_msb_bits);
+    }
+    return info;
+}
+
 } // anonymous namespace
 
 namespace tools {
@@ -68,9 +134,18 @@ namespace tools {
 future<tablets_t> load_system_tablets(const db::config &dbcfg,
                                       std::filesystem::path scylla_data_path,
                                       table_id table,
+                                      reader_permit permit,
+                                      std::optional<std::filesystem::path> tablets_directory) {
+    return async([=, &dbcfg] {
+        return do_load_system_tablets(dbcfg, scylla_data_path, table, permit, tablets_directory);
+    });
+}
+
+future<std::optional<local_node_info>> load_local_node_info(const db::config& dbcfg,
+                                      std::filesystem::path scylla_data_path,
                                       reader_permit permit) {
     return async([=, &dbcfg] {
-        return do_load_system_tablets(dbcfg, scylla_data_path, table, permit);
+        return do_load_local_node_info(dbcfg, scylla_data_path, permit);
     });
 }
 

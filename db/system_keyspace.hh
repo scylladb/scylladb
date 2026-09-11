@@ -126,7 +126,6 @@ class system_keyspace : public seastar::peering_sharded_service<system_keyspace>
     bool _shutdown = false;
 
     static schema_ptr raft_snapshot_config();
-    static schema_ptr local();
     static schema_ptr truncated();
     static schema_ptr commitlog_cleanups();
     static schema_ptr peers();
@@ -261,6 +260,7 @@ public:
     static schema_ptr cdc_streams_state();
     static schema_ptr cdc_streams_history();
     static schema_ptr tablets();
+    static schema_ptr local();
     static schema_ptr service_levels_v2();
     static schema_ptr view_build_status_v2();
     static schema_ptr dicts();

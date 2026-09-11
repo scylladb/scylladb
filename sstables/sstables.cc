@@ -136,6 +136,14 @@ bool abort_on_malformed_sstable_error() noexcept {
     throw_malformed_sstable_exception(format("{} in sstable {}", msg, filename));
 }
 
+[[noreturn]] void throw_missing_sstable_component_exception(component_name filename) {
+    if (_abort_on_malformed_sstable_error.load(std::memory_order_relaxed)) {
+        sstlog.error("malformed sstable error (aborting): {}: file not found", filename);
+        std::abort();
+    }
+    throw missing_sstable_component_exception(std::move(filename));
+}
+
 [[noreturn]] void throw_bufsize_mismatch_exception(size_t size, size_t expected) {
     throw_malformed_sstable_exception(format("Buffer improperly sized to hold requested data. Got: {:d}. Expected: {:d}", size, expected));
 }
@@ -952,7 +960,7 @@ future<> sstable::read_toc(sstable_open_config cfg) noexcept {
         });
     } catch (std::system_error& e) {
         if (e.code() == std::error_code(ENOENT, std::system_category())) {
-            throw_malformed_sstable_exception(fmt::format("{}: file not found", toc_filename()));
+            throw_missing_sstable_component_exception(toc_filename());
         }
         throw;
     }
@@ -1119,7 +1127,7 @@ future<> sstable::do_read_simple(component_type type,
         _metadata_size_on_disk += size;
     }  catch (std::system_error& e) {
         if (e.code() == std::error_code(ENOENT, std::system_category())) {
-            throw_malformed_sstable_exception(fmt::format("{}: file not found", component_name));
+            throw_missing_sstable_component_exception(component_name);
         }
         throw;
     } catch (malformed_sstable_exception& e) {
