@@ -77,6 +77,14 @@ distributed_loader::process_sstable_dir(sharded<sstables::sstable_directory>& di
         co_await d.prepare(flags);
     });
 
+    // The directory listing must complete on all shards before any shard starts
+    // processing what it found. process_sstable_dir() creates and removes files in
+    // the very directory being listed -- e.g. when mutating the SSTable level, which
+    // hard-links the SSTable into a new generation -- and a shard that lists another
+    // shard's in-flight SSTable takes ownership of it and schedules its components
+    // for removal.
+    co_await dir.invoke_on_all(&sstables::sstable_directory::scan_sstable_dir);
+
     co_await dir.invoke_on_all([&dir, flags] (sstables::sstable_directory& d) -> future<> {
         // Supposed to be called with the node either down or on behalf of maintenance tasks
         // like nodetool refresh
