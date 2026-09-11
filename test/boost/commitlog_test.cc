@@ -2462,6 +2462,86 @@ SEASTAR_TEST_CASE(test_commitlog_release_large_mutation_segments) {
     });
 }
 
+// Test SCYLLADB-4443
+SEASTAR_TEST_CASE(test_commitlog_large_mutation_timeout) {
+    commitlog::config cfg;
+
+    constexpr uint64_t max_size_mb = 2;
+
+    cfg.commitlog_segment_size_in_mb = max_size_mb;
+    cfg.commitlog_total_space_in_mb = 4 * max_size_mb * this_smp_shard_count();
+    cfg.allow_going_over_size_limit = false;
+    cfg.allow_fragmented_entries = true;
+    cfg.use_o_dsync = false; 
+
+    return cl_test(cfg, [](commitlog& log) -> future<> {
+        auto uuid = make_table_id();
+        {
+            db::rp_set handles;
+            auto size = log.max_record_size();
+            size_t tot = 0;
+
+            // Fill commitlog (partially) with normal allocations.
+            for (;;) {
+                auto h = co_await log.add_mutation(uuid, size, db::commitlog::force_sync::no, [&](db::commitlog::output& dst) {
+                    for (size_t i = 0; i < size; ++i) {
+                        dst.write("A", 1);
+                    }
+                });
+                tot += size;
+                handles.put(std::move(h));
+                if (tot > (max_size_mb * 1024 * 1024)) {
+                    break;
+                }
+                BOOST_TEST_MESSAGE(fmt::format("Wrote {} bytes", tot));
+            }
+
+            BOOST_TEST_MESSAGE("Provoke timeout failure");
+
+            // Now make a large allocation that is legal, but which cannot 
+            // finish due to us holding available space.
+            // This will time out. (Regardless, so use very low timeout)
+            BOOST_REQUIRE_THROW(
+                size = 2 * max_size_mb * 1024 * 1024;
+                auto h = co_await log.add_mutation(uuid, size, db::timeout_clock::now() + 100ms, db::commitlog::force_sync::no, [&](db::commitlog::output& dst) {
+                    for (size_t i = 0; i < size; ++i) {
+                        dst.write("A", 1);
+                    }
+                });
+            , timed_out_error);
+
+            BOOST_TEST_MESSAGE("Release allocated space");
+            // Now clear out data we previously allocated
+            log.discard_completed_segments(uuid, std::exchange(handles, {}));
+            co_await log.delete_segments({}); // will sync the recycling
+            // Get the segments we held deleted
+            co_await log.wait_for_pending_deletes();
+
+            // This is not 100% predictable, we cannot sync with the
+            // abandoned future. But should be good enough.
+            co_await seastar::sleep(1s); // give timed out future time to finish
+
+            BOOST_TEST_MESSAGE("Do large allocation with space available");
+            // should work now. will time out otherwise.
+            auto h = co_await log.add_mutation(uuid, size, db::timeout_clock::now() + 10s, db::commitlog::force_sync::no, [&](db::commitlog::output& dst) {
+                for (size_t i = 0; i < size; ++i) {
+                    dst.write("A", 1);
+                }
+            });
+
+            log.discard_completed_segments(uuid);
+
+            co_await log.force_new_active_segment();
+            co_await log.wait_for_pending_deletes();
+            auto n = log.get_num_active_segments();
+
+            BOOST_REQUIRE_LE(n, 1);
+
+
+        }
+    });
+}
+
 // Test for #24346. Writing last entry, of last chunk at exactly segment EOF boundary
 SEASTAR_TEST_CASE(test_segment_end_on_entry_end) {
     static auto replay_segment = [] (sstring path) -> future<> {

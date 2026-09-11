@@ -2529,6 +2529,15 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
     }
 
     auto s = co_await _reserve_segments.pop_eventually();
+    if (!_segments.empty() && _segments.back()->is_still_allocating()) {
+        // SCYLLADB-4443
+        // If this new_segment was abandoned (timeout), we could finish
+        // after someone else actually added/restored an allocating last
+        // segment. In that case, just return this to the reserve and
+        // silently return.
+        co_await _reserve_segments.push_eventually(std::move(s));
+        co_return sseg_ptr{};
+    }
     _segments.push_back(s);
     _segments.back()->reset_sync_time();
     co_return s;
