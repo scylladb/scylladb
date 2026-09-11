@@ -87,6 +87,16 @@ In the ``WHERE`` clause, ``>`` is the only supported operator and the right-hand
 side must be the literal ``0``. Operators such as ``>=``, ``=``, ``<``, ``<=``,
 and ``!=`` are rejected, as is any non-zero threshold.
 
+``BM25()`` may also be selected, to return the relevance score of each row::
+
+    SELECT id, BM25(v, 'search term') AS score FROM ks.t
+        WHERE BM25(v, 'search term') > 0
+        ORDER BY BM25(v, 'search term')
+        LIMIT 10;
+
+It is the score the rows are ranked by, so it needs the two clauses above and has to reference the
+same column and the same search term they do.
+
 Filtering support
 ~~~~~~~~~~~~~~~~~
 
@@ -104,9 +114,10 @@ The query term can be supplied with a bind marker in prepared statements::
         ORDER BY BM25(v, ?)
         LIMIT 10;
 
-Both bind markers are checked at execution time and must be given the same
-value; binding different values for the ``WHERE`` and ``ORDER BY`` markers
-causes the query to be rejected.
+All the search-term bind markers are checked at execution time and must be
+given the same value; binding different values for the ``WHERE`` and
+``ORDER BY`` clauses or for a selected ``BM25()`` causes the query to be
+rejected.
 
 Disambiguating from a user-defined function
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -150,9 +161,11 @@ FTS queries enforce the following rules:
    * - Fulltext index required
      - The queried column must have a ``fulltext_index``. A regular secondary
        index does not satisfy this requirement.
-   * - ``BM25()`` cannot appear in ``SELECT``
-     - ``BM25()`` is only valid in ``WHERE`` and ``ORDER BY`` clauses, not
-       as a selector.
+   * - ``BM25()`` in ``SELECT`` needs the other two clauses
+     - ``BM25()`` may be used as a selector, to return each row's relevance
+       score, but only in a query that already has the required ``WHERE`` and
+       ``ORDER BY`` clauses. Every occurrence must reference the same column
+       and the same search term.
    * - Single ordering only
      - ``ORDER BY BM25()`` cannot be combined with other ``ORDER BY`` columns,
        a second ``BM25()`` ordering, or with ``ANN`` ordering.
