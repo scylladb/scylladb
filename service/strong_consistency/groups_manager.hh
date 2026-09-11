@@ -115,11 +115,24 @@ class groups_manager : public peering_sharded_service<groups_manager> {
         api::timestamp_type last_timestamp;
     };
 
+    // A group can be deleted and started again while its entry exists (the
+    // tablet leaves the shard and returns before the deletion finishes), so
+    // the fields may describe different incarnations of the raft::server:
+    //  - `gate` is replaced by every start. A holder only defers the deletion
+    //    that closed that very gate, i.e. the destruction of that incarnation.
+    //  - `server` is the last started server until its deletion resets it.
+    //    Once a restart is queued behind a pending deletion, `gate` is already
+    //    the new incarnation's while `server` is still the old one's.
+    //  - `server_control_op` chains starts and deletions (chain_control_op()).
+    //    If it is available, the last operation was a start: a finished
+    //    deletion either erased the entry or has a start queued behind it.
+    // So `server` is the live server of the current `gate` iff
+    // `server_control_op` is available. Dereference it only via
+    // try_acquire_server(), acquire_server(), or from a control operation.
     struct raft_group_state : public boost::intrusive::list_base_hook<boost::intrusive::link_mode<boost::intrusive::auto_unlink>> {
         bool has_tablet = false;
         lw_shared_ptr<gate> gate = nullptr;
         raft::server* server = nullptr;
-        // Chain of raft::server starts and deletions, see chain_control_op().
         shared_future<> server_control_op = make_ready_future<>();
 
         // Populated only when this node thinks it's a tablet raft group leader.
@@ -161,10 +174,15 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     // of abort_on_internal_error, since the chain can't recover: a failed
     // start can't be retried (the first attempt consumes the raft log entries
     // replayed from the commitlog) and can't be left in place (every later
-    // operation would inherit the failure).
+    // operation would inherit the failure). Readers rely on this: an
+    // available `server_control_op` means "started".
     static void chain_control_op(raft_group_state& state, raft::group_id id,
             noncopyable_function<future<>()> op,
             std::source_location loc = std::source_location::current());
+
+    // Handle to the group's server, or nullopt if the group is being deleted
+    // or (re)started. Unlike acquire_server(), doesn't wait for a start.
+    static std::optional<raft_server> try_acquire_server(raft_group_state& state);
 
     future<> leader_info_updater(raft_group_state& state, locator::global_tablet_id tablet, raft::group_id gid);
 
@@ -222,11 +240,11 @@ public:
 /// A temporary, RAII-style handle to an active Raft group server instance,
 /// used to safely submit commands or perform consistency barriers.
 ///
-/// The holder guarantees that the underlying raft::server and its associated state
-/// managed by groups_manager cannot be stopped or destroyed while this raft_server object is alive.
-/// It ensures that even if a topology change triggers the deletion of the Raft group,
-/// the shutdown sequence will wait until this handle is destroyed, preventing use-after-free
-/// errors during ongoing operations.
+/// Holds the gate of the server's incarnation: its deletion waits for the
+/// handle before destroying the raft::server. The server may still be aborted
+/// meanwhile; operations then fail with raft::stopped_error.
+///
+/// Obtain via groups_manager::acquire_server() or try_acquire_server().
 class raft_server {
 private:
     groups_manager::raft_group_state& _state;
@@ -235,7 +253,7 @@ private:
 public:
     raft_server(groups_manager::raft_group_state& state, gate::holder holder);
 
-    raft::server& server() {
+    raft::server& server() const {
         return *_state.server;
     }
 
