@@ -452,21 +452,22 @@ static std::string fqn_type(const std::string& fqn) {
     return fqn.substr(0, i) | std::views::transform(&toupper) | std::ranges::to<std::string>();
 }
 
-storage_options make_object_storage_options(const std::string& endpoint, const std::string& fqn, abort_source* as) {
+storage_options make_object_storage_options(const std::string& endpoint, const std::string& fqn, abort_source* as, storage_options::object_storage_layout layout) {
     std::string bucket;
     std::string object;
     auto type = fqn_type(fqn);
     object_storage_fqn_to_parts(fqn, type, bucket, object);
     object = std::filesystem::path(object).parent_path().string(); // remove the filename and trailing separator from the path
-    return make_object_storage_options(endpoint, type, bucket, object, as);
+    return make_object_storage_options(endpoint, type, bucket, object, as, layout);
 }
 
-storage_options make_object_storage_options(const std::string& endpoint, const std::string& type, const std::string& bucket, const std::string& prefix, abort_source* as) {
+storage_options make_object_storage_options(const std::string& endpoint, const std::string& type, const std::string& bucket, const std::string& prefix, abort_source* as, storage_options::object_storage_layout layout) {
     storage_options so;
     storage_options::object_storage os{
         .bucket = std::move(bucket), .endpoint = endpoint, .location = std::move(prefix),
         .abort_source = as,
-        .type = type | std::views::transform(&toupper) | std::ranges::to<std::string>()
+        .type = type | std::views::transform(&toupper) | std::ranges::to<std::string>(),
+        .layout = layout
     };
     so.value = std::move(os);
     return so;

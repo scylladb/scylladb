@@ -29,6 +29,22 @@ struct storage_options {
         std::string_view name() const;
         bool operator==(const local&) const = default;
     };
+    // How the component objects of an sstable are named under `location`.
+    //
+    // The two layouts are not interchangeable: a `live` component name carries
+    // no descriptor, so the version and format have to come from elsewhere,
+    // while a `foreign` one carries them and can be parsed.  Which one applies
+    // is decided once, where the options are built, and is fixed for the
+    // lifetime of the storage object.
+    enum class object_storage_layout {
+        // {prefix}/{sstable_id}/{component}, as written by a live table.
+        live,
+        // The layout of an externally supplied prefix, as used by backup and
+        // restore: the component names carry the version, generation and
+        // format.
+        foreign,
+    };
+
     struct object_storage {
         std::string bucket;
         std::string endpoint;
@@ -36,6 +52,7 @@ struct storage_options {
         seastar::abort_source* abort_source = nullptr;
 
         std::string type;
+        object_storage_layout layout = object_storage_layout::live;
 
         std::map<sstring, sstring> to_map() const;
         std::string_view name() const;
@@ -70,8 +87,12 @@ struct storage_options {
 };
 
 storage_options make_local_options(std::filesystem::path dir);
-storage_options make_object_storage_options(const std::string& endpoint, const std::string& fqn, abort_source* = nullptr);
-storage_options make_object_storage_options(const std::string& endpoint, const std::string& type, const std::string& bucket, const std::string& prefix, abort_source* = nullptr);
+// Both take an explicit prefix, so they default to the foreign layout; a caller
+// that wants live component names under that prefix has to say so.
+storage_options make_object_storage_options(const std::string& endpoint, const std::string& fqn, abort_source* = nullptr,
+        storage_options::object_storage_layout layout = storage_options::object_storage_layout::foreign);
+storage_options make_object_storage_options(const std::string& endpoint, const std::string& type, const std::string& bucket, const std::string& prefix, abort_source* = nullptr,
+        storage_options::object_storage_layout layout = storage_options::object_storage_layout::foreign);
 
 bool is_object_storage_fqn(const std::filesystem::path& fqn, std::string_view type);
 bool object_storage_fqn_to_parts(const std::filesystem::path& fqn, std::string_view type, std::string& bucket_name, std::string& object_name);

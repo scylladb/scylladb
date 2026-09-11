@@ -23,14 +23,47 @@ The command syntax is as follows:
 
 You can specify more than one SSTable.
 
-Additionally, the path to SSTable can point to an S3 fully qualified path in
-the form of s3://bucket-name/prefix/of/your/sstable/sstable-TOC.txt. To use
-this feature, you need to have AWS credentials set up in your environment.
-For more information, see :ref:`Configuring Object Storage <object-storage-configuration>`.
+Additionally, the path to SSTable can point to an object storage fully qualified
+path in the form of ``s3://bucket-name/prefix/of/your/sstable/sstable-TOC.txt``
+or ``gs://bucket-name/prefix/of/your/sstable/sstable-TOC.txt``. This also
+supports live object-storage SSTables; see `SSTables on Object Storage`_.
+To use this feature, you need to have object-storage credentials set up in your
+environment. For more information, see :ref:`Configuring Object Storage <object-storage-configuration>`.
 
 Additionally, you must ensure the tool is able to load the correct scylla.yaml
 file, which can be done using the ``--scylla-yaml-file`` parameter or by
 placing the YAML file in one of the default locations the tool checks.
+
+SSTables on Object Storage
+--------------------------
+
+``scylla sstable`` can read SSTables from S3 and Google Cloud Storage using
+fully qualified paths with the ``s3://`` or ``gs://`` scheme.
+
+Snapshot and backup layouts use regular SSTable component names that include
+the SSTable version, generation, and format, for example
+``me-3gqe_1lnj_4sbpc2ezoscu9hhtor-big-Data.db``. For these layouts, point the
+tool at any component path in that SSTable.
+
+Live object-storage keyspaces use a different layout. SSTable components are
+stored under ``sstables/<sstable-id>/`` and the component object names do not
+include the version, generation, or format:
+
+.. code-block:: text
+
+   s3://bucket/sstables/<sstable-id>/Data.db
+   s3://bucket/sstables/<sstable-id>/Index.db
+   s3://bucket/sstables/<sstable-id>/TOC.txt
+
+The same layout is used with ``gs://`` paths. In this layout, Scylla stores the
+SSTable version and format as object attributes named ``version`` and
+``format`` on the ``TOC.txt`` object. ``scylla sstable`` uses these attributes
+to open the SSTable because the component name itself only contains the
+component suffix.
+
+The tool reads live object-storage SSTables in place; it does not download the
+full SSTable first. The ``--scylla-yaml-file`` configuration must contain a
+matching object-storage endpoint for the path scheme.
 
 .. _scylla-sstable-schema:
 
