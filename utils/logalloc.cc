@@ -1425,6 +1425,16 @@ segment_pool::segment_pool(tracker::impl& tracker)
 }
 
 void segment_pool::prime(size_t available_memory, size_t min_free_memory) {
+#ifdef SEASTAR_DEFAULT_ALLOCATOR
+    // Occupying the top part of memory only means something with seastar's
+    // allocator, where segments come out of the shard's preallocated arena and
+    // claiming them costs nothing. With the standard allocator every segment is
+    // a separate allocation from the system, so priming would really take
+    // _std_memory_available (1G) per shard and hold it for the lifetime of the
+    // process. Let segments be allocated on demand instead. The emergency
+    // reserve is refilled by allocating_section::reserve() when needed.
+    return;
+#endif
     auto old_emergency_reserve = std::exchange(_emergency_reserve_max, std::numeric_limits<size_t>::max());
     try {
         // Allocate all of memory so that we occupy the top part. Afterwards, we'll start
