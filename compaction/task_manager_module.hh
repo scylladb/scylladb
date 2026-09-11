@@ -115,6 +115,8 @@ protected:
     virtual future<> run() override = 0;
 };
 
+inline constexpr auto offstrategy_compaction_task_type = "offstrategy compaction";
+
 class offstrategy_compaction_task_impl : public compaction_task_impl {
 public:
     offstrategy_compaction_task_impl(tasks::task_manager::module_ptr module,
@@ -129,33 +131,10 @@ public:
     {}
 
     virtual std::string type() const override {
-        return "offstrategy compaction";
+        return offstrategy_compaction_task_type;
     }
 protected:
     virtual future<> run() override = 0;
-};
-
-class offstrategy_keyspace_compaction_task_impl : public offstrategy_compaction_task_impl {
-private:
-    sharded<replica::database>& _db;
-    std::vector<table_info> _table_infos;
-    bool* _needed;
-public:
-    offstrategy_keyspace_compaction_task_impl(tasks::task_manager::module_ptr module,
-            std::string keyspace,
-            sharded<replica::database>& db,
-            std::vector<table_info> table_infos,
-            bool* needed) noexcept
-        : offstrategy_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), "keyspace", std::move(keyspace), "", "", tasks::task_id::create_null_id())
-        , _db(db)
-        , _table_infos(std::move(table_infos))
-        , _needed(needed)
-    {}
-
-    tasks::is_user_task is_user_task() const noexcept override;
-protected:
-    virtual future<> run() override;
-    virtual future<std::optional<double>> expected_total_workload() const override;
 };
 
 class shard_offstrategy_keyspace_compaction_task_impl : public offstrategy_compaction_task_impl {
@@ -582,6 +561,10 @@ public:
 
     // Starts a cleanup compaction of a single table on this shard, once the turn is taken by the created task.
     future<tasks::task_manager::task_ptr> start_table_cleanup_compaction(replica::database& db, std::string keyspace, const table_info& info, compaction_turn& turn, tasks::task_info parent_info);
+
+    // Starts an offstrategy compaction of the given tables of a keyspace on all the shards.
+    // If needed is set, it receives whether any table had sstables to compact.
+    future<tasks::task_manager::task_ptr> start_offstrategy_keyspace_compaction(sharded<replica::database>& db, std::string keyspace, std::vector<table_info> table_infos, bool* needed);
 };
 
 class regular_compaction_task_impl : public compaction_task_impl {
