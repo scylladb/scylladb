@@ -46,9 +46,20 @@ public:
           }
 
           if (auto* r = dynamic_cast<sstables::index_reader*>(_r.get())) {
+            // A null cursor means this partition has no promoted index, which is a
+            // normal return -- index_reader itself handles it that way. It happens
+            // for partitions too small to earn one, and always for `pq`, whose
+            // writer emits a zero-size promoted index because Parquet's ColumnIndex
+            // already provides intra-partition seeking. There is nothing to check,
+            // and dereferencing it here used to segfault, taking down every case
+            // after this one in the same binary.
             sstables::clustered_index_cursor* cur = r->current_clustered_cursor();
             std::optional<sstables::promoted_index_block_position> prev_end;
-            while (auto ei_opt = cur->next_entry().get()) {
+            while (cur) {
+                auto ei_opt = cur->next_entry().get();
+                if (!ei_opt) {
+                    break;
+                }
                 sstables::clustered_index_cursor::entry_info& ei = *ei_opt;
                 if (prev_end && pos_cmp(ei.start, sstables::to_view(*prev_end))) {
                     BOOST_FAIL(seastar::format("Index blocks are not monotonic: {} > {}", *prev_end, ei.start));

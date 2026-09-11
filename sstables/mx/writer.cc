@@ -381,6 +381,14 @@ struct sstable_schema {
 };
 
 static
+sstable_schema make_sstable_schema(const schema& s, const encoding_stats& enc_stats, const sstable_writer_config& cfg);
+
+serialization_header make_serialization_header(const schema& s, const encoding_stats& enc_stats,
+        const sstable_writer_config& cfg) {
+    return make_sstable_schema(s, enc_stats, cfg).header;
+}
+
+static
 sstable_schema make_sstable_schema(const schema& s, const encoding_stats& enc_stats, const sstable_writer_config& cfg) {
     sstable_schema sst_sch;
     serialization_header& header = sst_sch.header;

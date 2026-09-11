@@ -322,6 +322,8 @@ schema_ptr scylla_tables(schema_features features) {
         sb.with_column("tablets", map_type_impl::get_instance(utf8_type, utf8_type, false));
 
         sb.with_column("storage_engine", utf8_type);
+        sb.with_column("storage_format", utf8_type);
+        sb.with_column("parquet", map_type_impl::get_instance(utf8_type, utf8_type, false));
         sb.with_column("large_data_guardrails_enabled", boolean_type);
 
         sb.with_hash_version();
@@ -1693,6 +1695,30 @@ mutation make_scylla_tables_mutation(schema_ptr table, api::timestamp_type times
     if (table->logstor_enabled()) {
         m.set_clustered_cell(ckey, "storage_engine", "logstor", timestamp);
     }
+    // Both Parquet properties follow the `tablets` column above: written whenever the
+    // property was explicitly set, and only then, so a table that never mentioned it
+    // writes no cell at all and existing schemas keep their digest. Either can only be
+    // set once PARQUET_SSTABLE_FORMAT is enabled (see cf_prop_defs::validate).
+    //
+    // For the map, "explicitly set" includes `parquet = {}`. Clearing the options must
+    // actually clear them: without a tombstone the previously-stored collection survives
+    // and is restored on reload. This used to be gated on has_storage_format(), which
+    // left a table that set `parquet = {...}` but never `storage_format` unable to clear
+    // its options -- the ALTER succeeded and the old map came back with the schema.
+    if (table->has_parquet_options()) {
+        if (table->parquet_options().empty()) {
+            auto& cdef = *scylla_tables()->get_column_definition("parquet");
+            m.set_clustered_cell(ckey, cdef, atomic_cell::make_dead(timestamp, gc_clock::now()));
+        } else {
+            store_map(m, ckey, "parquet", timestamp, table->parquet_options());
+        }
+    }
+    // storage_format is written even when set back to 'sstable', so that reverting
+    // actually takes effect rather than leaving the previous value in place.
+    if (table->has_storage_format()) {
+        m.set_clustered_cell(ckey, "storage_format",
+                storage_format_type_to_sstring(table->storage_format()), timestamp);
+    }
     // Write the large_data_guardrails_enabled column only when enabled.
     // When disabled (the default), omit the cell entirely so that old nodes
     // that don't know this column can still read the SSTable during rolling
@@ -2211,6 +2237,12 @@ static void prepare_builder_from_scylla_tables_row(const schema_ctxt& ctxt, sche
     if (auto opt_map = get_map<sstring, sstring>(table_row, "tablets")) {
         auto tablet_options = db::tablet_options(*opt_map);
         builder.set_tablet_options(tablet_options.to_map());
+    }
+    if (auto map = get_map<sstring, sstring>(table_row, "parquet")) {
+        builder.set_parquet_options(*map);
+    }
+    if (auto storage_format = table_row.get<sstring>("storage_format")) {
+        builder.set_storage_format(sstring_to_storage_format_type(*storage_format));
     }
     if (auto storage_engine = table_row.get<sstring>("storage_engine")) {
         if (*storage_engine == "logstor") {

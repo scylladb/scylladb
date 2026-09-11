@@ -209,6 +209,18 @@ public:
         // timestamps and expiries to support WRITETIME(col[key])/TTL(col[key])
         // and WRITETIME(col.field)/TTL(col.field) selectors.
         send_collection_timestamps,
+        // The consumer of this read projects to `regular_columns` itself, so a storage engine that
+        // can cheaply skip the other columns is permitted to.
+        //
+        // Deliberately *not* implied by bypass_cache, which is what it looks like it should be.
+        // bypass_cache means "do not use the row cache" and is set by
+        // table::stream_view_replica_updates() and replica/mutation_dump.cc as well as by a client
+        // `BYPASS CACHE` -- and a view update computed from a partially-read base row produces wrong
+        // view rows. The two questions are unrelated, so they get separate flags.
+        //
+        // Storage engines are free to ignore it; the row format does, reading every regular column
+        // and projecting afterwards.
+        may_project_columns,
     };
     using option_set = enum_set<super_enum<option,
         option::send_clustering_key,
@@ -225,7 +237,8 @@ public:
         option::always_return_static_content,
         option::range_scan_data_variant,
         option::allow_mutation_read_page_without_live_row,
-        option::send_collection_timestamps>>;
+        option::send_collection_timestamps,
+        option::may_project_columns>>;
     clustering_row_ranges _row_ranges;
 public:
     column_id_vector static_columns; // TODO: consider using bitmap
