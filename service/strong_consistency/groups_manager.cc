@@ -480,7 +480,10 @@ void groups_manager::update(token_metadata_ptr new_tm) {
 
             logger.info("update(): starting raft server for tablet {}, group id {}", tablet, id);
             state.gate = make_lw_shared<gate>();
-            _starting_groups.push_back(state);
+            // Still linked if the previous start hasn't finished yet.
+            if (!state.is_linked()) {
+                _starting_groups.push_back(state);
+            }
             chain_control_op(state, id, [&state, this, tablet, id, new_tm, g = state.gate] () mutable -> future<> {
                 co_await start_raft_group(tablet, id, std::move(new_tm));
                 state.server = &_raft_gr.get_server(id);
@@ -513,7 +516,11 @@ void groups_manager::update(token_metadata_ptr new_tm) {
                     }
                 }
 
-                _starting_groups.erase(_starting_groups.iterator_to(state));
+                // If a restart is already queued behind us, the group isn't
+                // started yet; that start will unlink the state.
+                if (state.gate.get() == g.get()) {
+                    _starting_groups.erase(_starting_groups.iterator_to(state));
+                }
 
                 logger.info("update(): raft server for tablet {} and group id {} is started", tablet, id);
             });
