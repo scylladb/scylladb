@@ -8,6 +8,7 @@
 
 #include "scoring_fcts.hh"
 #include "cql3/expr/expr-utils.hh"
+#include "exceptions/exceptions.hh"
 #include "utils/log.hh"
 #include <seastar/core/on_internal_error.hh>
 
@@ -38,6 +39,15 @@ const external_search_function* as_external_search_function(const expr::function
     }
     // function is a virtual base, so the downcast has to be a dynamic_cast.
     return dynamic_cast<const external_search_function*>(std::get<shared_ptr<function>>(fc.func).get());
+}
+
+expr::expression prepare_external_search_relation_lhs(expr::expression lhs) {
+    const auto* fc = expr::as_if<expr::function_call>(&lhs);
+    const auto* fun = fc ? as_external_search_function(*fc) : nullptr;
+    if (fun && fun->value() == search_value::rank) {
+        throw exceptions::invalid_request_exception(format("{}() is not supported in the WHERE clause", fun->display_name()));
+    }
+    return lhs;
 }
 
 namespace {

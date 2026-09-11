@@ -2214,7 +2214,8 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     const auto& scoring_restrictions = restrictions->get_scoring_function_restrictions();
 
     bool has_bm25_restriction = std::ranges::any_of(scoring_restrictions, [](const expr::binary_operator& binop) {
-        return expr::is_native_function_call(binop.lhs, functions::BM25_FUNCTION_NAME);
+        const auto* fun = functions::as_external_search_function(expr::as<expr::function_call>(binop.lhs));
+        return fun && fun->family() == functions::search_family::bm25;
     });
     bool is_fts_query = has_bm25_restriction || has_bm25_ordering;
 

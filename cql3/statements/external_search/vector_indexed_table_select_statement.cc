@@ -208,13 +208,11 @@ select_statement::ordering_comparator_type rescored_similarity_ordering(
         ordering_comparator_type ordering_comparator, std::optional<expr::expression> limit,
         std::optional<expr::expression> per_partition_limit, cql_stats& stats, ann_ordering_info ordering_info, std::unique_ptr<attributes> attrs) {
 
-    // Threshold filtering - WHERE ANN_SCORE(column, query_vector) > score - is not implemented
-    // yet, and a rank is not a filter ("ANN_RANK(c, v) < 3" would be a LIMIT), so the ANN-family
-    // restrictions claimed for this query have nothing to interpret them.
-    if (const auto& scoring = restrictions->get_scoring_function_restrictions(); !scoring.empty()) {
-        const auto* fun = functions::as_external_search_function(expr::as<expr::function_call>(scoring.front().lhs));
-        throwing_assert(fun); // statement_restrictions holds out exactly the relations on external functions
-        throw exceptions::invalid_request_exception(seastar::format("{}() is not supported in the WHERE clause", fun->display_name()));
+    // Filtering by similarity - WHERE ANN(column, query_vector) > score - is not implemented yet.
+    // The message names no function: the user's ANN() arrives here as ANN_SCORE() (see
+    // prepare_external_search_relation_lhs()).
+    if (!restrictions->get_scoring_function_restrictions().empty()) {
+        throw exceptions::invalid_request_exception("Filtering by ANN similarity in the WHERE clause is not supported");
     }
 
     // The score and the rank are matched to a row by primary key.

@@ -73,6 +73,14 @@ public:
 /// function, which is what is_external() says.
 const external_search_function* as_external_search_function(const expr::function_call& fc);
 
+/// Prepares the left-hand side of a relation that is a call to an external search function, before
+/// the right-hand side is type-checked against it. A rank cannot be compared
+/// ("BM25_RANK(c, t) < 3" would be a LIMIT, not a filter), so BM25_RANK() and ANN_RANK() are
+/// rejected here, with a message naming the function rather than the type error the right-hand side
+/// would produce. "BM25(c, t) > 0" compares the score and is left alone, as is any other
+/// expression.
+expr::expression prepare_external_search_relation_lhs(expr::expression lhs);
+
 shared_ptr<function> make_bm25_function();
 shared_ptr<function> make_bm25_score_function();
 shared_ptr<function> make_bm25_rank_function();

@@ -486,6 +486,13 @@ def test_bm25_like_operator_rejected(cql, fulltext_table):
         cql.execute(f"SELECT * FROM {fulltext_table} WHERE BM25(content, 'hello') LIKE 'x' LIMIT 1")
 
 
+def test_bm25_bind_marker_as_threshold_rejected(cql, fulltext_table):
+    """The right-hand side must be the literal 0; a bind marker there is rejected with that message."""
+    with pytest.raises(InvalidRequest, match="BM25 function comparison value must be the literal 0"):
+        cql.prepare(f"SELECT * FROM {fulltext_table} WHERE BM25(content, 'hello') > ? "
+                    f"ORDER BY BM25(content, 'hello') LIMIT 1")
+
+
 def test_bm25_aggregation_rejected(cql, fulltext_table):
     """SELECT with aggregate functions must be rejected for full-text search queries."""
     with pytest.raises(InvalidRequest, match="cannot be run with aggregation"):

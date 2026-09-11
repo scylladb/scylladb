@@ -10,6 +10,7 @@
 #include "expr-utils.hh"
 #include "evaluate.hh"
 #include "cql3/functions/functions.hh"
+#include "cql3/functions/scoring_fcts.hh"
 #include "cql3/functions/aggregate_fcts.hh"
 #include "cql3/functions/castas_fcts.hh"
 #include "cql3/functions/scalar_function.hh"
@@ -2350,6 +2351,11 @@ binary_operator prepare_binary_operator(binary_operator binop, data_dictionary::
         throw exceptions::invalid_request_exception(fmt::format("Could not infer type of {}", binop.lhs));
     }
     auto& prepared_lhs = *prepared_lhs_opt;
+    if (const auto* fc = as_if<function_call>(&prepared_lhs); fc && is_external_function_call(*fc)) {
+        // A search function (BM25(), ANN(), ...) decides which of its values a relation compares,
+        // before the right-hand side is type-checked against it.
+        prepared_lhs = functions::prepare_external_search_relation_lhs(std::move(prepared_lhs));
+    }
     lw_shared_ptr<column_specification> lhs_receiver = get_lhs_receiver(prepared_lhs, table_schema);
 
     if (type_of(prepared_lhs)->references_duration() && is_slice(binop.op)) {

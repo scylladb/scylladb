@@ -32,13 +32,11 @@ namespace {
 
 std::optional<expr::expression> validate_bm25_where_restriction(const expr::binary_operator& binop,
         const bm25_ordering_info& ordering_info) {
-    // The relation is on the score, and a full-text query takes no other WHERE relation, so any
-    // other function here is unsupported: BM25_RANK(), whose value is a position and not a filter
-    // ("BM25_RANK(c, t) < 3" would be a LIMIT), or a function of another search, like ANN().
+    // "WHERE BM25(c, t) > 0" arrives as BM25_SCORE(c, t) > 0 (see prepare_external_search_relation_lhs()),
+    // and a full-text query takes no other search function here, e.g. ANN().
     const auto& fc = expr::as<expr::function_call>(binop.lhs);
     const auto* fun = functions::as_external_search_function(fc);
-    throwing_assert(fun); // statement_restrictions holds out exactly the relations on external functions
-    if (fun->family() != functions::search_family::bm25 || fun->value() != functions::search_value::score) {
+    if (fun->family() != functions::search_family::bm25) {
         throw exceptions::invalid_request_exception(seastar::format("{}() is not supported in the WHERE clause", fun->display_name()));
     }
     auto [col, where_term] = external_search::extract_call_arguments(fc, fun->display_name());
