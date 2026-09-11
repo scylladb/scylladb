@@ -17,6 +17,7 @@
 #include <vector>
 #include <stddef.h>
 #include "cql3/expr/expression.hh"
+#include "cql3/dialect.hh"
 
 class schema;
 
@@ -56,6 +57,13 @@ private:
     // the function call results.
     bool _processing_pk_restrictions = false;
 
+    // The dialect the statement is parsed and prepared under. Captured when the
+    // request starts being processed, so that everything the prepare step decides
+    // is decided under a single value, even if the node configuration changes
+    // while the statement is being prepared. There is no default: preparing under
+    // a dialect nobody chose is worse than not preparing at all.
+    std::optional<dialect> _dialect;
+
 public:
 
     prepare_context() = default;
@@ -70,7 +78,12 @@ public:
 
     void add_variable_specification(int32_t bind_index, lw_shared_ptr<column_specification> spec);
 
-    void set_bound_variables(const std::vector<shared_ptr<column_identifier>>& bind_variable_names);
+    // Hands over what the parser knows and the prepare step needs. The dialect is
+    // part of it, so that a statement built rather than parsed cannot reach the
+    // prepare step without having said which dialect it is prepared under.
+    void set_bound_variables(const std::vector<shared_ptr<column_identifier>>& bind_variable_names, dialect d);
+
+    const dialect& get_dialect() const;
 
     void clear_pk_function_calls_cache();
 

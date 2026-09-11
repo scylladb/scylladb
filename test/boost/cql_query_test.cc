@@ -5732,6 +5732,41 @@ SEASTAR_TEST_CASE(test_bind_variable_type_checking_disabled) {
     }, cql_test_config{db_config});
 }
 
+static sstring prepared_variable_names(cql_test_env& e, const sstring& query) {
+    const auto prepared = e.local_qp().get_prepared(e.prepare(query).get());
+    BOOST_REQUIRE(prepared);
+    sstring names;
+    for (const auto& spec : prepared->bound_names) {
+        if (!names.empty()) {
+            names += ", ";
+        }
+        names += spec->name->text();
+    }
+    return names;
+}
+
+SEASTAR_TEST_CASE(test_in_bind_variable_name) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("CREATE TABLE tab (p int, c int, v int, PRIMARY KEY (p, c))").get();
+
+        BOOST_REQUIRE_EQUAL(prepared_variable_names(e, "SELECT * FROM tab WHERE p = ? AND c IN ?"), "p, IN(c)");
+        // The IF condition of an LWT statement is prepared as an expression rather than
+        // as a restriction, so the name is reached along a different path.
+        BOOST_REQUIRE_EQUAL(prepared_variable_names(e, "UPDATE tab SET v = 1 WHERE p = 0 AND c = 0 IF v IN ?"), "IN(v)");
+    });
+}
+
+SEASTAR_TEST_CASE(test_in_bind_variable_name_lowercase_operator) {
+    auto db_config = make_shared<db::config>();
+    db_config->cql_in_bind_variable_name_uses_uppercase_operator(false);
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("CREATE TABLE tab (p int, c int, v int, PRIMARY KEY (p, c))").get();
+
+        BOOST_REQUIRE_EQUAL(prepared_variable_names(e, "SELECT * FROM tab WHERE p = ? AND c IN ?"), "p, in(c)");
+        BOOST_REQUIRE_EQUAL(prepared_variable_names(e, "UPDATE tab SET v = 1 WHERE p = 0 AND c = 0 IF v IN ?"), "in(v)");
+    }, cql_test_config{db_config});
+}
+
 SEASTAR_TEST_CASE(test_setting_synchronous_updates_property) {
     return do_with_cql_env_thread([](cql_test_env& e) {
         e.execute_cql("create table base (k int, v int, primary key (k));").get();

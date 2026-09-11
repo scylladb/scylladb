@@ -10,6 +10,7 @@
 #include "interval.hh"
 #include "cql3/expr/restrictions.hh"
 #include "cql3/assignment_testable.hh"
+#include "cql3/dialect.hh"
 #include "cql3/statements/bound.hh"
 
 namespace cql3 {
@@ -179,12 +180,20 @@ expression adjust_for_collection_as_maps(const expression& e);
 extern expression prepare_expression(const expression& expr, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver);
 std::optional<expression> try_prepare_expression(const expression& expr, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver);
 
+// Like prepare_expression, but for a position where a relation is allowed, like the IF
+// condition of an LWT statement. A relation is named after the dialect it is prepared
+// under, so the dialect the statement was parsed under has to be passed along, and the
+// functions above, which cannot receive one, reject a relation instead of naming it under
+// a made up dialect. The dialect of a parsed statement is available as
+// prepare_context::get_dialect().
+extern expression prepare_expression_allowing_relations(const expression& expr, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver, dialect d);
+
 // Check that a prepared expression has no aggregate functions. Throws on error.
 void verify_no_aggregate_functions(const expression& expr, std::string_view context_for_errors);
 
 // Prepares a binary operator received from the parser.
 // Does some basic type checks but no advanced validation.
-extern binary_operator prepare_binary_operator(binary_operator binop, data_dictionary::database db, const schema& table_schema);
+extern binary_operator prepare_binary_operator(binary_operator binop, data_dictionary::database db, const schema& table_schema, const dialect& d);
 
 // Pre-compile any constant LIKE patterns and return equivalent expression
 expression optimize_like(const expression& e);

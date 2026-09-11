@@ -182,7 +182,7 @@ binary_operator validate_and_prepare_new_restriction(const binary_operator& rest
     preliminary_binop_vaidation_checks(restriction);
 
     // Prepare the restriction
-    binary_operator prepared_binop = prepare_binary_operator(restriction, db, *schema);
+    binary_operator prepared_binop = prepare_binary_operator(restriction, db, *schema, ctx.get_dialect());
     expr::verify_no_aggregate_functions(prepared_binop, "WHERE clause");
 
     // Fill prepare context

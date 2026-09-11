@@ -239,6 +239,7 @@ future<> controller::do_start_server() {
               .allow_shard_aware_drivers = cfg.enable_shard_aware_drivers(),
               .bounce_request_smp_service_group = bounce_request_smp_service_group,
               .max_relations_in_where_clause = cfg.max_relations_in_where_clause,
+              .cql_in_bind_variable_name_uses_uppercase_operator = cfg.cql_in_bind_variable_name_uses_uppercase_operator,
               .request_timeout_on_shutdown_in_seconds = cfg.request_timeout_on_shutdown_in_seconds
             };
         });
