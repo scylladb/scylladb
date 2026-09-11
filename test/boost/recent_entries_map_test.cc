@@ -161,8 +161,8 @@ SEASTAR_THREAD_TEST_CASE(test_update_and_remove_least_recent_entries) {
     // uuid3 10 min old
     // uuid1 20 min old
 
-    // get the uuid1 key and try to pass new key
-    BOOST_CHECK_NE(map.try_get_recent_entry(uuid1, foo), bar);
+    // the key `uuid1` is already present in the map. return `foo`
+    BOOST_CHECK_EQUAL(map.try_get_recent_entry(uuid1, bar), foo);
     BOOST_CHECK_EQUAL(map.size(), 3);
     // uuid1 0  min old
     // uuid2 5  min old
@@ -194,5 +194,73 @@ SEASTAR_THREAD_TEST_CASE(test_update_and_remove_least_recent_entries) {
 
     // remove the entry with the uuid2 key
     map.remove_least_recent_entries(10min);
+    BOOST_CHECK_EQUAL(map.size(), 0);
+}
+
+// The entries to remove are a suffix of the LRU list: a touched entry moves to the
+// front, so it survives a sweep that collects the ones behind it.
+SEASTAR_THREAD_TEST_CASE(test_remove_least_recent_entries_stops_at_first_young_entry) {
+    using namespace std::chrono_literals;
+
+    utils::recent_entries_map<utils::UUID, non_copyable_value, seastar::manual_clock> map;
+
+    const utils::UUID uuid1(0, 1);
+    const utils::UUID uuid2(0, 2);
+    const utils::UUID uuid3(0, 3);
+
+    const std::string foo("foo");
+    const std::string bar("bar");
+    const std::string foobar("foobar");
+
+    map.try_get_recent_entry(uuid1, foo);
+    seastar::manual_clock::advance(10min);
+    map.try_get_recent_entry(uuid2, bar);
+    seastar::manual_clock::advance(10min);
+    map.try_get_recent_entry(uuid3, foobar);
+    BOOST_CHECK_EQUAL(map.size(), 3);
+    // uuid3 0 min old, uuid2 10 min old, uuid1 20 min old
+
+    // touch the oldest entry: it becomes the youngest
+    BOOST_CHECK_EQUAL(map.try_get_recent_entry(uuid1, bar), foo);
+    // uuid1 0 min old, uuid3 0 min old, uuid2 10 min old
+
+    seastar::manual_clock::advance(5min);
+    // uuid1 5 min old, uuid3 5 min old, uuid2 15 min old
+
+    map.remove_least_recent_entries(15min);
+    BOOST_CHECK_EQUAL(map.size(), 2);
+
+    // uuid1 and uuid3 are still there, so they answer with their stored values
+    BOOST_CHECK_EQUAL(map.try_get_recent_entry(uuid1, foobar), foo);
+    BOOST_CHECK_EQUAL(map.try_get_recent_entry(uuid3, bar), foobar);
+    BOOST_CHECK_EQUAL(map.size(), 2);
+
+    // uuid2 was collected, so it is inserted again with the passed value
+    BOOST_CHECK_EQUAL(map.try_get_recent_entry(uuid2, foobar), foobar);
+    BOOST_CHECK_EQUAL(map.size(), 3);
+}
+
+// Sweeping an empty map, or with an interval no entry reaches, is a no-op.
+SEASTAR_THREAD_TEST_CASE(test_remove_least_recent_entries_noop_cases) {
+    using namespace std::chrono_literals;
+
+    utils::recent_entries_map<utils::UUID, non_copyable_value, seastar::manual_clock> map;
+
+    // empty map
+    map.remove_least_recent_entries(1min);
+    BOOST_CHECK_EQUAL(map.size(), 0);
+
+    const utils::UUID uuid1(0, 1);
+    const std::string foo("foo");
+
+    map.try_get_recent_entry(uuid1, foo);
+    seastar::manual_clock::advance(1min);
+
+    // interval not reached
+    map.remove_least_recent_entries(2min);
+    BOOST_CHECK_EQUAL(map.size(), 1);
+
+    // exactly at the interval: the entry is "not younger than" it, so it goes
+    map.remove_least_recent_entries(1min);
     BOOST_CHECK_EQUAL(map.size(), 0);
 }
