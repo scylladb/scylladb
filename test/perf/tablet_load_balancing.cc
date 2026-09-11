@@ -95,25 +95,30 @@ size_t get_tablet_count(const tablet_metadata& tm) {
 }
 
 static
-future<> apply_resize_plan(token_metadata& tm, const migration_plan& plan) {
+future<std::unordered_set<table_id>> apply_resize_plan(token_metadata& tm, const migration_plan& plan) {
+    std::unordered_set<table_id> affected_tables;
     for (auto [table_id, resize_decision] : plan.resize_plan().resize) {
         co_await tm.tablets().mutate_tablet_map_async(table_id, [&resize_decision] (tablet_map& tmap) {
             resize_decision.sequence_number = tmap.resize_decision().sequence_number + 1;
             tmap.set_resize_decision(resize_decision);
             return make_ready_future();
         });
+        affected_tables.insert(table_id);
     }
     for (auto table_id : plan.resize_plan().finalize_resize) {
         auto& old_tmap = tm.tablets().get_tablet_map(table_id);
         testlog.info("Setting new tablet map of size {}", old_tmap.tablet_count() * 2);
         tablet_map tmap(old_tmap.tablet_count() * 2);
         tm.tablets().set_tablet_map(table_id, std::move(tmap));
+        affected_tables.insert(table_id);
     }
+    co_return affected_tables;
 }
 
 // Reflects the plan in a given token metadata as if the migrations were fully executed.
 static
-future<> apply_plan(token_metadata& tm, const migration_plan& plan, locator::load_stats& load_stats) {
+future<std::unordered_set<table_id>> apply_plan(token_metadata& tm, const migration_plan& plan, locator::load_stats& load_stats) {
+    std::unordered_set<table_id> affected_tables;
     for (auto&& mig : plan.migrations()) {
         co_await tm.tablets().mutate_tablet_map_async(mig.tablet.table, [&mig] (tablet_map& tmap) {
             auto tinfo = tmap.get_tablet_info(mig.tablet.tablet);
@@ -121,6 +126,7 @@ future<> apply_plan(token_metadata& tm, const migration_plan& plan, locator::loa
             tmap.set_tablet(mig.tablet.tablet, tinfo);
             return make_ready_future();
         });
+        affected_tables.insert(mig.tablet.table);
         // Move tablet size in load_stats to account for the migration
         if (mig.src && mig.dst && mig.src->host != mig.dst->host) {
             auto& tmap = tm.tablets().get_tablet_map(mig.tablet.table);
@@ -134,7 +140,9 @@ future<> apply_plan(token_metadata& tm, const migration_plan& plan, locator::loa
             }
         }
     }
-    co_await apply_resize_plan(tm, plan);
+    auto resize_affected = co_await apply_resize_plan(tm, plan);
+    affected_tables.merge(resize_affected);
+    co_return affected_tables;
 }
 
 using seconds_double = std::chrono::duration<double>;
@@ -164,6 +172,8 @@ rebalance_stats rebalance_tablets(cql_test_env& e, locator::load_stats& load_sta
     // Sanity limit to avoid infinite loops.
     // The x10 factor is arbitrary, it's there to account for more complex schedules than direct migration.
     auto max_iterations = 1 + get_tablet_count(stm.get()->tablets()) * 10;
+
+    std::unordered_set<table_id> affected_tables;
 
     for (size_t i = 0; i < max_iterations; ++i) {
         auto prev_lb_stats = *talloc.stats().for_dc(dc);
@@ -198,13 +208,20 @@ rebalance_stats rebalance_tablets(cql_test_env& e, locator::load_stats& load_sta
             // as that may violate invariants and cause failures in later operations
             // causing test flakiness.
             save_tablet_metadata(e.local_db(), stm.get()->tablets(), guard.write_timestamp()).get();
-            e.get_storage_service().local().update_tablet_metadata({}).get();
+
+            locator::tablet_metadata_change_hint hint;
+            for (auto tid : affected_tables) {
+                hint.tables.emplace(tid, locator::tablet_metadata_change_hint::table_hint{.table_id = tid});
+            }
+            e.get_storage_service().local().update_tablet_metadata(hint).get();
 
             testlog.info("Rebalance took {:.3f} [s] after {} iteration(s)", stats.elapsed_time.count(), i + 1);
             return stats;
         }
         stm.mutate_token_metadata([&] (token_metadata& tm) {
-            return apply_plan(tm, plan, load_stats);
+            return apply_plan(tm, plan, load_stats).then([&affected_tables] (std::unordered_set<table_id> tables) {
+                affected_tables.merge(tables);
+            });
         }).get();
     }
     throw std::runtime_error("rebalance_tablets(): convergence not reached within limit");
