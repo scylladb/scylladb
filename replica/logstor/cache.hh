@@ -33,18 +33,20 @@ class cached_entry_slot;
 // standard-heap B+tree and is therefore stable across LSA compaction.
 class cached_mutation_entry final : public evictable {
     schema_ptr _schema;
+    partition_key _key;
     mutation_partition _partition;
     entangled _slot_link; // Paired with the primary_index_entry's cached_entry_slot::_entry_link
 
 public:
     // Note: constructed inside the LSA region.
-    cached_mutation_entry(schema_ptr schema, const mutation_partition& partition, cached_entry_slot& slot);
+    cached_mutation_entry(schema_ptr schema, const partition_key& key, const mutation_partition& partition, cached_entry_slot& slot);
 
     // LSA compaction moves cached entries between addresses, so the owning
     // primary_index_entry::_cached_entry pointer must be rebound to the new object.
     cached_mutation_entry(cached_mutation_entry&& other) noexcept
             : evictable(std::move(other))
             , _schema(std::move(other._schema))
+            , _key(std::move(other._key))
             , _partition(std::move(other._partition))
             , _slot_link(std::move(other._slot_link))
     {
@@ -57,6 +59,10 @@ public:
 
     const schema_ptr& schema() const noexcept {
         return _schema;
+    }
+
+    const partition_key& key() const noexcept {
+        return _key;
     }
 
     const mutation_partition& partition() const noexcept {
