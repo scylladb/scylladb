@@ -73,6 +73,12 @@ public:
 /// function, which is what is_external() says.
 const external_search_function* as_external_search_function(const expr::function_call& fc);
 
+/// Prepares the left-hand side of a relation that is a call to an external search function, before
+/// the right-hand side is type-checked against it. "BM25(c, t) > 0" compares the score and is left
+/// alone, as is any other expression. A call whose value the relation cannot compare is rejected
+/// here, named, rather than left to fail as a type error on the right-hand side.
+expr::expression prepare_external_search_relation_lhs(expr::expression lhs);
+
 shared_ptr<function> make_bm25_function();
 shared_ptr<function> make_bm25_score_function();
 shared_ptr<function> make_bm25_rank_function();
