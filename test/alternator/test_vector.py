@@ -13,14 +13,14 @@ import json
 import struct
 import decimal
 from decimal import Decimal
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from functools import cache
 
 from botocore.exceptions import ClientError
 import boto3.dynamodb.types
 
 from test.pylib.skip_types import skip_env
-from .util import random_string, new_test_table, unique_table_name, scylla_config_read, scylla_config_write, client_no_transform, is_aws, manual_request
+from .util import random_string, new_test_table, precreated_keyspace, tablets_option, unique_table_name, scylla_config_read, scylla_config_write, client_no_transform, is_aws, manual_request
 
 # Monkey-patch the boto3 library to stop doing its own error-checking on
 # numbers. This works around a bug https://github.com/boto/boto3/issues/2500
@@ -380,6 +380,33 @@ def test_createtable_vectorindexes_vnodes_forbidden(vs):
                 }]
             ) as table:
             pass
+
+# The same restriction has to be checked on a keyspace which the user
+# pre-created with CQL, because that is the keyspace the table lands in - the
+# "system:initial_tablets" tag, which asks for the opposite here, only
+# configures a keyspace that Alternator creates itself.
+# When we finally remove vnode support from the code, this test should be
+# deleted.
+@pytest.mark.parametrize('tablets', [False, True])
+def test_createtable_vectorindexes_precreated_keyspace(vs, cql, tablets):
+    if not tablets and scylla_config_read(vs, 'tablets_mode_for_new_keyspaces') == '"enforced"':
+        skip_env('Cannot pre-create a keyspace with vnodes when tablets are enforced')
+    name = unique_table_name()
+    with precreated_keyspace(cql, name, tablets_option(tablets)):
+        expected = nullcontext() if tablets else pytest.raises(
+                ClientError, match='ValidationException.*vnodes')
+        with expected:
+            # Ask, via the tag, for the opposite of what the keyspace was pre-created with.
+            with new_test_table(vs, name=name,
+                Tags=[{'Key': 'system:initial_tablets', 'Value': 'none' if tablets else '0'}],
+                KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }],
+                AttributeDefinitions=[{ 'AttributeName': 'p', 'AttributeType': 'S' }],
+                VectorIndexes=[
+                    {   'IndexName': 'hello',
+                        'VectorAttribute': {'AttributeName': 'x', 'Dimensions': 7}
+                    }]
+                ) as table:
+                pass
 
 # Verify that a vector index's IndexName follows the same naming rules as
 # table names - name length from 3 up to 192 (max_table_name_length) and

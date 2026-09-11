@@ -176,6 +176,27 @@ def new_test_table(dynamodb, **kwargs):
         print(f"Deleting table {table.name}")
         table.delete()
 
+# A user may pre-create with CQL the keyspace "alternator_{name}" which
+# Alternator uses for a table named {name}, to configure it differently from
+# what Alternator would have picked. This context manager creates such a
+# keyspace, with the given extra CREATE KEYSPACE "options", for a table
+# created inside the "with" to re-use.
+@contextmanager
+def precreated_keyspace(cql, name, options=''):
+    cql.execute(f'CREATE KEYSPACE "alternator_{name}" WITH REPLICATION = '
+        "{'class': 'NetworkTopologyStrategy', 'replication_factor': 1} " + options)
+    try:
+        yield
+    finally:
+        # DeleteTable drops the keyspace, so this only matters if the table
+        # was never created.
+        cql.execute(f'DROP KEYSPACE IF EXISTS "alternator_{name}"')
+
+# A CREATE KEYSPACE option asking for tablets or for vnodes, to pass to
+# precreated_keyspace().
+def tablets_option(enabled):
+    return "AND TABLETS = {'enabled': %s}" % str(enabled).lower()
+
 # DynamoDB's ListTables request returns up to a single page of table names
 # (e.g., up to 100) and it is up to the caller to call it again and again
 # to get the next page. This is a utility function which calls it repeatedly
