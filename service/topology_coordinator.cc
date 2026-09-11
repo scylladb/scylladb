@@ -1372,9 +1372,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
 
                     // Find the migration direction (tablets or rollback to vnodes).
                     // Nodes that haven't set their intended mode are treated as vnodes (the default).
-                    std::optional<intended_storage_mode> global_intended_mode;
+                    std::optional<storage_mode> global_intended_mode;
                     for (const auto& [server_id, replica_state] : _topo_sm._topology.normal_nodes) {
-                        auto replica_intended_mode = replica_state.storage_mode ? *replica_state.storage_mode : intended_storage_mode::vnodes;
+                        auto replica_intended_mode = replica_state.intended_storage_mode ? *replica_state.intended_storage_mode : storage_mode::vnodes;
                         if (!global_intended_mode) {
                             global_intended_mode = replica_intended_mode;
                         } else if (replica_intended_mode != *global_intended_mode) {
@@ -1387,7 +1387,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         on_internal_error(rtlogger, fmt::format(
                             "finalize_migration: no normal nodes found while finalizing migration for keyspace '{}'", ks_name));
                     }
-                    bool rollback = *global_intended_mode == intended_storage_mode::vnodes;
+                    bool rollback = *global_intended_mode == storage_mode::vnodes;
 
                     rtlogger.info("Finalizing migration for keyspace '{}': direction={}",
                         ks_name, rollback ? "rollback to vnodes" : "forward to tablets");
@@ -1396,7 +1396,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
 
                     // Verify that the actual storage mode matches the intended mode for all normal nodes.
                     // A node that has migrated a table's storage to tablets will report it in its load_stats.
-                    for (const auto& [node_id, _] : _topo_sm._topology.normal_nodes) {
+                    for (const auto& [node_id, node_rs] : _topo_sm._topology.normal_nodes) {
                         auto host_id = to_host_id(node_id);
                         auto it = _load_stats_per_node.find(host_id);
                         if (!rollback) { // forward path (vnodes to tablets)
@@ -1422,6 +1422,20 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                                             host_id, ks_name, schema->cf_name()));
                                     }
                                 }
+                            }
+                        }
+
+                        // The load stats are the physical evidence; the status API answers
+                        // from current_storage_mode. Require the two to agree, or
+                        // finalization succeeds behind a status reporting no progress.
+                        if (_feature_service.topology_current_storage_mode) {
+                            auto reported = node_rs.current_storage_mode.value_or(storage_mode::vnodes);
+                            auto expected = rollback ? storage_mode::vnodes : storage_mode::tablets;
+                            if (reported != expected) {
+                                throw std::runtime_error(fmt::format(
+                                    "Node {} reports storage mode {} while its tablets for keyspace '{}'"
+                                    " say {}. Restart the node so that it publishes the mode it runs in.",
+                                    host_id, reported, ks_name, expected));
                             }
                         }
                     }
@@ -1470,7 +1484,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     .drop_first_global_topology_request_id(_topo_sm._topology.global_requests_queue, req_id);
 
             if (error.empty()) {
-                // Only clear intended_storage_mode if no other keyspace is still under migration.
+                // Only clear the storage mode columns if no other keyspace is still under
+                // migration.
                 auto tmptr = get_token_metadata_ptr();
                 const auto& tmd = tmptr->tablets();
                 bool has_other_migrating_ks = false;
@@ -1492,7 +1507,13 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 }
                 if (!has_other_migrating_ks) {
                     for (const auto& [node_id, _] : _topo_sm._topology.normal_nodes) {
-                        tbuilder.with_node(node_id).del("intended_storage_mode");
+                        // current_storage_mode goes with it: the mode is meaningful only
+                        // while a migration is in progress, and a value left behind would
+                        // make every node look already switched in the next migration,
+                        // before any of them restarted.
+                        tbuilder.with_node(node_id)
+                                .del("intended_storage_mode")
+                                .del("current_storage_mode");
                     }
                 }
             }

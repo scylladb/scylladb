@@ -480,7 +480,7 @@ future<> table_populator::populate_subdir(sharded<sstables::sstable_directory>& 
 
 future<> distributed_loader::populate_keyspace(sharded<replica::database>& db,
         sharded<db::system_keyspace>& sys_ks, keyspace& ks, sstring ks_name,
-        std::optional<service::intended_storage_mode> storage_mode)
+        std::optional<service::storage_mode> storage_mode)
 {
     dblog.info("Populating Keyspace {}", ks_name);
 
@@ -497,7 +497,7 @@ future<> distributed_loader::populate_keyspace(sharded<replica::database>& db,
         auto direction = [&]() {
             if (ks.uses_tablets()) { return md::none; }
             if (cf.uses_tablets()) { return md::forward; }
-            if (tablet_metadata.has_tablet_map(uuid) && storage_mode == service::intended_storage_mode::vnodes) { return md::rollback; }
+            if (tablet_metadata.has_tablet_map(uuid) && storage_mode == service::storage_mode::vnodes) { return md::rollback; }
             return md::none;
         }();
         if (direction != md::none) {
@@ -598,7 +598,7 @@ future<> distributed_loader::init_non_system_keyspaces(sharded<replica::database
         auto topology = sys_ks.local().load_topology_state({}).get();
         auto host_id = db.local().get_token_metadata().get_my_id();
         auto node = topology.normal_nodes.find(raft::server_id{host_id.uuid()});
-        std::optional<service::intended_storage_mode> storage_mode = node != topology.normal_nodes.end() ? node->second.storage_mode : std::nullopt;
+        std::optional<service::storage_mode> storage_mode = node != topology.normal_nodes.end() ? node->second.intended_storage_mode : std::nullopt;
 
         db.invoke_on_all([&proxy, &sys_ks, &storage_mode] (replica::database& db) {
             return db.parse_system_tables(proxy, sys_ks, storage_mode);

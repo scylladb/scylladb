@@ -778,6 +778,7 @@ The schema of the table is:
 CREATE TABLE system.topology (
     key text,
     host_id uuid,
+    current_storage_mode text,
     datacenter text,
     ignore_msb int,
     intended_storage_mode text,
@@ -823,6 +824,7 @@ Each node has a clustering row in the table where its `host_id` is the clusterin
 - `rack`               -  a name of the rack the node belongs to
 - `ignore_msb`         -  the value of the node's `murmur3_partitioner_ignore_msb_bits` parameter
 - `intended_storage_mode` - if set, it indicates the intended storage mode for tables under vnodes-to-tablets migration
+- `current_storage_mode` - if set, it indicates the storage mode the node is currently running in for tables under vnodes-to-tablets migration; the node writes it after it restarted and resharded, and only while `intended_storage_mode` is set for it. Requires the `TOPOLOGY_CURRENT_STORAGE_MODE` cluster feature
 - `shard_count`        -  the node's `smp::count`
 - `release_version`    -  the node's `version::current()` (corresponding to a Cassandra version, used by drivers)
 - `node_state`         -  current state of the node (as described earlier)
