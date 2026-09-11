@@ -90,12 +90,12 @@ void prepare_bm25_selectors(std::vector<selection::prepared_selector>& prepared_
             }
 
             // Every bm25() in the SELECT reports the same score, so one slot serves them all.
-            if (!ordering_info->temporary_index) {
-                ordering_info->temporary_index = temporaries_allocator.allocate();
+            if (!ordering_info->score_temporary_index) {
+                ordering_info->score_temporary_index = temporaries_allocator.allocate();
             }
 
             return expr::expression(expr::temporary{
-                    .index = *ordering_info->temporary_index,
+                    .index = *ordering_info->score_temporary_index,
                     .type = float_type,
                     .replaced_expr = candidate,
             });
@@ -169,7 +169,7 @@ std::optional<bm25_ordering_info> get_bm25_ordering_info(
                 "Full-text search queries do not support additional WHERE restrictions");
     }
 
-    if (ordering_info->temporary_index) {
+    if (ordering_info->score_temporary_index) {
         external_search::fetch_primary_key_columns(*selection, *schema);
     }
 
@@ -245,13 +245,13 @@ future<shared_ptr<cql_transport::messages::result_message>> fulltext_indexed_tab
     auto table_results = co_await query_base_table(qp, state, options, timeout, pkeys.value());
 
     auto provider = std::optional<external_search::external_search_provider>{};
-    if (table_results && _bm25_ordering_info.temporary_index) {
+    if (table_results && _bm25_ordering_info.score_temporary_index) {
         const auto& read = table_results.value();
         auto rows = external_search::join_table_results(*read.rows, read.command->slice, *_schema, *_selection, &pkeys.value());
         external_search::drop_unscored_rows(rows, pkeys.value());
         auto similarities = external_search::similarities_of(rows, pkeys.value());
         provider.emplace(
-                std::vector{external_search::external_values{.temporary_index = *_bm25_ordering_info.temporary_index, .values = std::move(similarities)}},
+                std::vector{external_search::external_values{.temporary_index = *_bm25_ordering_info.score_temporary_index, .values = std::move(similarities)}},
                 rows);
     }
     co_return co_await emit_result_set(std::move(table_results), options, provider ? &*provider : nullptr);
