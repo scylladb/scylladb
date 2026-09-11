@@ -16,30 +16,53 @@ namespace functions {
 
 extern logging::logger log;
 
+namespace {
+
+/// A native scalar function whose value comes from an external search system rather than from
+/// evaluating its arguments. Preparing the statement either replaces the call with the value the
+/// search system returns or rejects the statement, so execute() is never reached. Non-pure, so that
+/// a call with constant arguments is not constant-folded, and executed, before that.
+class external_scalar_function : public native_scalar_function {
+public:
+    external_scalar_function(sstring name, data_type return_type, std::vector<data_type> arg_types)
+        : native_scalar_function(std::move(name), std::move(return_type), std::move(arg_types)) {
+    }
+
+    bool is_pure() const override {
+        return false;
+    }
+
+    bool is_external() const override {
+        return true;
+    }
+
+    bytes_opt execute(std::span<const bytes_opt>) override {
+        on_internal_error(log, format("{}() reached scalar evaluation; prepare-time handling should have prevented this", name()));
+    }
+};
+
+} // anonymous namespace
+
 shared_ptr<function> make_bm25_function() {
     // BM25 fulltext scoring function: bm25(column, query) -> float
     // Registered with utf8_type args; ascii is implicitly coerced to utf8 by the type system.
     //
     // BM25 scores depend on document statistics, so the result is not determined by the visible arguments alone.
-    // Marked as non-pure (false) to prevent the expression evaluator from constant-folding BM25(literal, literal)
-    // at prepare time, which is both semantically correct and avoids a spurious crash path.
-    return make_native_scalar_function<false>(BM25_FUNCTION_NAME.name, float_type, {utf8_type, utf8_type},
-        [] (std::span<const bytes_opt>) -> bytes_opt {
-            // A BM25() call is always resolved at prepare time, so this body is never reached.
-            on_internal_error(log, "BM25() reached scalar evaluation; prepare-time handling should have prevented this");
-        });
+    return ::make_shared<external_scalar_function>(BM25_FUNCTION_NAME.name, float_type, std::vector<data_type>{utf8_type, utf8_type});
+}
+
+shared_ptr<function> make_bm25_highlight_function() {
+    // Full-text search highlighting function: bm25_highlight(column, query) -> text
+    //
+    // Only the full-text index can pick the fragment, because it needs the analyzer and the
+    // corpus statistics. The index may find no fragment, for example when the query consists only
+    // of stop words; the value is then null.
+    return ::make_shared<external_scalar_function>(BM25_HIGHLIGHT_FUNCTION_NAME.name, utf8_type, std::vector<data_type>{utf8_type, utf8_type});
 }
 
 shared_ptr<function> make_ann_function(const std::vector<data_type>& arg_types) {
     // ANN vector ordering function: ann(column, query_vector) -> float
-    //
-    // Marked as non-pure (false) for the same reason as BM25(): it must not be constant-folded
-    // when both arguments happen to be literals.
-    return make_native_scalar_function<false>(ANN_FUNCTION_NAME.name, float_type, arg_types,
-        [] (std::span<const bytes_opt>) -> bytes_opt {
-            // An ANN() call is always resolved at prepare time, so this body is never reached.
-            on_internal_error(log, "ANN() reached scalar evaluation; prepare-time handling should have prevented this");
-        });
+    return ::make_shared<external_scalar_function>(ANN_FUNCTION_NAME.name, float_type, arg_types);
 }
 
 } // namespace functions
