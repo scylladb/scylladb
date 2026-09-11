@@ -558,6 +558,7 @@ scylla_tests = set([
     'test/boost/compound_test',
     'test/boost/compress_test',
     'test/boost/config_test',
+    'test/boost/object_storage_config_test',
     'test/boost/continuous_data_consumer_test',
     'test/boost/counter_test',
     'test/boost/cql_auth_syntax_test',
