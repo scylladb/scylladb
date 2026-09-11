@@ -26,25 +26,31 @@ def test_table(cql, test_keyspace):
     # Use a very low bloom_filter_fp_chance.
     #
     # These tests check which mutation sources (memtable, row-cache, sstable) a
-    # partition is found in. In particular, some tests expect a freshly written
-    # partition to be present in the row-cache after a flush. Whether the flush
-    # populates the cache for a partition depends on row_cache::update(), which
-    # consults the underlying sstables' bloom filters (via the partition
-    # presence checker): if the checker says the partition "maybe exists" in the
-    # sstables, the flush conservatively skips populating the cache (the cached
-    # data might be incomplete).
-    #
-    # With NullCompactionStrategy each flush leaves a separate, never-merged
-    # sstable, so bloom filters accumulate quickly. At the default
-    # bloom_filter_fp_chance (0.01) a brand-new partition key can deterministically
-    # hit a false positive against those accumulated filters, causing the flush to
-    # skip the cache and the "row-cache" mutation source to be (legitimately)
-    # absent -- which flaked test_ck_in_query. Lowering the false-positive chance
-    # makes such collisions vanishingly unlikely for the handful of partitions
-    # these tests write.
+    # partition is found in, and some of them expect a freshly written partition
+    # to be in the row-cache after a flush. With NullCompactionStrategy each flush
+    # leaves a separate, never-merged sstable, so bloom filters accumulate
+    # quickly, and at the default bloom_filter_fp_chance (0.01) a false positive
+    # against them makes a flush skip the cache - see read_into_cache() below,
+    # which is what those tests rely on. A low false-positive chance is not enough
+    # on its own, but it keeps the rest of the module away from the problem.
     with util.new_test_table(cql, test_keyspace, 'pk1 int, pk2 int, ck1 int, ck2 int, v text, s text static, PRIMARY KEY ((pk1, pk2), ck1, ck2)',
                              "WITH compaction = {'class':'NullCompactionStrategy'} AND tombstone_gc = {'mode': 'disabled'} AND bloom_filter_fp_chance = 0.00008") as table:
         yield table
+
+
+def read_into_cache(cql, table, pk_restriction):
+    """ Read a partition, so that the row-cache has an entry for it.
+
+    Tests which expect a flush to put a partition into the row-cache need this.
+    row_cache::update() merges a flushed partition into the cache only if the
+    cache already has an entry for it, if the cache is still continuous over its
+    range, or if the sstables' bloom filters say the partition cannot be in an
+    sstable. A table's cache starts out continuous, but tests in this module drop
+    the caches, and from then on a bloom filter false positive is enough to make
+    the flush skip the cache, leaving the "row-cache" mutation source absent.
+    Reading the partition first takes that decision away from the bloom filters.
+    """
+    cql.execute(f"SELECT * FROM {table} WHERE {pk_restriction}")
 
 
 @pytest.mark.parametrize("test_keyspace", ["tablets", "vnodes"], indirect=True)
@@ -126,6 +132,8 @@ def test_mutation_source(cql, test_table, scylla_only):
 
     cql.execute(f"INSERT INTO {test_table} (pk1, pk2, ck1, ck2, v) VALUES ({pk1}, {pk2}, 0, 0, 'vv')")
     expect_sources('memtable')
+
+    read_into_cache(cql, test_table, f"pk1 = {pk1} AND pk2 = {pk2}")
 
     nodetool.flush(cql, f"{test_table}")
     expect_sources('row-cache', 'sstable')
@@ -497,6 +505,8 @@ def test_slicing_range_tombstone_changes(cql, test_table, scylla_only):
 def test_ck_in_query(cql, test_table, scylla_only):
     pk1 = util.unique_key_int()
     pk2 = util.unique_key_int()
+
+    read_into_cache(cql, test_table, f"pk1 = {pk1} AND pk2 = {pk2}")
 
     cql.execute(f"INSERT INTO {test_table} (pk1, pk2, ck1, ck2, v) VALUES ({pk1}, {pk2}, 0, 0, 'vv')")
     cql.execute(f"INSERT INTO {test_table} (pk1, pk2, ck1, ck2, v) VALUES ({pk1}, {pk2}, 1, 1, 'vv')")
