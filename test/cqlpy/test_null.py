@@ -274,3 +274,106 @@ def test_filtering_null_comparison_no_filtering(cql, table1):
 def test_map_subscript_null(cql, table1, cassandra_bug):
     assert list(cql.execute(f"SELECT p FROM {table1} WHERE m[null] = 3 ALLOW FILTERING")) == []
     assert list(cql.execute(cql.prepare(f"SELECT p FROM {table1} WHERE m[?] = 3 ALLOW FILTERING"), [None])) == []
+<<<<<<< HEAD
+||||||| parent of a73496b3cc (test/cqlpy: cover tracing a null collection element)
+
+# This fixture skips the test when running with the Datastax Python driver,
+# which has a bug (PYTHON-1355) where None in a collection is sent as an empty
+# value (length 0) instead of null (length -1), making null-in-collection
+# rejection untestable. This was noted in issue #5825 and was fixed in the
+# Scylla driver in https://github.com/scylladb/python-driver/issues/201 but is
+# still open in the Datastax driver in https://datastax-oss.atlassian.net/browse/PYTHON-1355.
+@pytest.fixture(scope="function")
+def scylla_driver_only():
+    if 'Scylla' not in DRIVER_NAME:
+        skip_env('Test requires the Scylla Python driver (Datastax driver has PYTHON-1355)')
+
+# Null values are not allowed inside collections, this test verifies this
+# for both unprepared and prepared statements. See issue #5825.
+# The test is marked "cassandra_bug" because Cassandra 5 fails the prepared-
+# statement case with a NoHostAvailable "java.lang.NullPointerException: Cannot
+# invoke "java.nio.ByteBuffer.remaining()" because "value" is null"
+def test_null_string_in_collection(scylla_driver_only, cql, test_keyspace, cassandra_bug):
+    schema = 'p int primary key, v list<text>'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        p = unique_key_int()
+        with pytest.raises(InvalidRequest, match='null|NULL'):
+            cql.execute(f"INSERT INTO {table} (p,v) VALUES ({p}, ['hi', null])")
+        # Prepared-statement version of the same test.
+        p = unique_key_int()
+        stmt = cql.prepare(f"INSERT INTO {table} (p,v) VALUES ({p}, ?)")
+        with pytest.raises(InvalidRequest, match='null|NULL'):
+            cql.execute(stmt, [['hello',None]])
+
+# Same as the above test_null_string_in_collection, just with a null int
+# instead of null string.
+# Marked cassandra_bug for the same reason as the above test.
+def test_null_int_in_collection(scylla_driver_only, cql, test_keyspace, cassandra_bug):
+    schema = 'p int primary key, v list<int>'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        p = unique_key_int()
+        with pytest.raises(InvalidRequest, match='null|NULL'):
+            cql.execute(f"INSERT INTO {table} (p,v) VALUES ({p}, [1, null])")
+        # Prepared-statement version of the same test.
+        p = unique_key_int()
+        stmt = cql.prepare(f"INSERT INTO {table} (p,v) VALUES ({p}, ?)")
+        with pytest.raises(InvalidRequest, match='null|NULL'):
+            cql.execute(stmt, [[2,None]])
+=======
+
+# This fixture skips the test when running with the Datastax Python driver,
+# which has a bug (PYTHON-1355) where None in a collection is sent as an empty
+# value (length 0) instead of null (length -1), making null-in-collection
+# rejection untestable. This was noted in issue #5825 and was fixed in the
+# Scylla driver in https://github.com/scylladb/python-driver/issues/201 but is
+# still open in the Datastax driver in https://datastax-oss.atlassian.net/browse/PYTHON-1355.
+@pytest.fixture(scope="function")
+def scylla_driver_only():
+    if 'Scylla' not in DRIVER_NAME:
+        skip_env('Test requires the Scylla Python driver (Datastax driver has PYTHON-1355)')
+
+# Null values are not allowed inside collections, this test verifies this
+# for both unprepared and prepared statements. See issue #5825.
+# The test is marked "cassandra_bug" because Cassandra 5 fails the prepared-
+# statement case with a NoHostAvailable "java.lang.NullPointerException: Cannot
+# invoke "java.nio.ByteBuffer.remaining()" because "value" is null"
+def test_null_string_in_collection(scylla_driver_only, cql, test_keyspace, cassandra_bug):
+    schema = 'p int primary key, v list<text>'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        p = unique_key_int()
+        with pytest.raises(InvalidRequest, match='null|NULL'):
+            cql.execute(f"INSERT INTO {table} (p,v) VALUES ({p}, ['hi', null])")
+        # Prepared-statement version of the same test.
+        p = unique_key_int()
+        stmt = cql.prepare(f"INSERT INTO {table} (p,v) VALUES ({p}, ?)")
+        with pytest.raises(InvalidRequest, match='null|NULL'):
+            cql.execute(stmt, [['hello',None]])
+
+# Same as the above test_null_string_in_collection, just with a null int
+# instead of null string.
+# Marked cassandra_bug for the same reason as the above test.
+def test_null_int_in_collection(scylla_driver_only, cql, test_keyspace, cassandra_bug):
+    schema = 'p int primary key, v list<int>'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        p = unique_key_int()
+        with pytest.raises(InvalidRequest, match='null|NULL'):
+            cql.execute(f"INSERT INTO {table} (p,v) VALUES ({p}, [1, null])")
+        # Prepared-statement version of the same test.
+        p = unique_key_int()
+        stmt = cql.prepare(f"INSERT INTO {table} (p,v) VALUES ({p}, ?)")
+        with pytest.raises(InvalidRequest, match='null|NULL'):
+            cql.execute(stmt, [[2,None]])
+
+def test_traced_null_int_in_collection(scylla_driver_only, cql, test_keyspace, cassandra_bug):
+    '''Tracing formats a request's bound values, so a null element in a bound
+    collection must render as "null" - not crash the node, and not render as
+    nothing, which an empty element also does. Reproduces SCYLLADB-3883.'''
+    schema = 'p int primary key, v list<int>'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        p = unique_key_int()
+        stmt = cql.prepare(f"INSERT INTO {table} (p,v) VALUES ({p}, ?)")
+        fut = cql.execute_async(stmt, [[41, None, 42]], trace=True)
+        with pytest.raises(InvalidRequest, match='null|NULL'):
+            fut.result()
+        assert '41, null, 42' in fut.get_query_trace(max_wait=60).parameters.values()
+>>>>>>> a73496b3cc (test/cqlpy: cover tracing a null collection element)
