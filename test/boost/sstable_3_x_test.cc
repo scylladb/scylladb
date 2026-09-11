@@ -5836,6 +5836,69 @@ SEASTAR_TEST_CASE(test_legacy_udt_in_collection_table) {
   });
 }
 
+namespace {
+
+struct malformed_read_consumer {
+    stop_iteration consume(static_row sr) { return stop_iteration::no; }
+    stop_iteration consume(clustering_row cr) { return stop_iteration::no; }
+    stop_iteration consume(range_tombstone_change rt) { return stop_iteration::no; }
+    stop_iteration consume(tombstone tomb) { return stop_iteration::no; }
+    void consume_end_of_stream() {}
+    void consume_new_partition(const dht::decorated_key& dk) {}
+    stop_iteration consume_end_of_partition() { return stop_iteration::no; }
+};
+
+} // namespace
+
+// A non-frozen UDT is stored as a multi-cell (complex) column; each cell's
+// path is the 2-byte, big-endian field index. The sstable writer stores the
+// cell path as-is, so a malformed path can be crafted at the mutation level
+// and is only caught by the reader's validation in consume_column() (the
+// visit() reworked by this series). Cover both malformed cases: a cell path
+// that is not 2 bytes long, and a field index out of range for the UDT.
+SEASTAR_TEST_CASE(test_malformed_udt_field_index_mx) {
+  return test_env::do_with_async([] (test_env& env) {
+    sstables::scoped_no_abort_on_malformed_sstable_error no_abort;
+    auto ut = user_type_impl::get_instance("ks", to_bytes("ut"),
+            {to_bytes("a"), to_bytes("b")},
+            {int32_type, int32_type}, true);
+    auto s = schema_builder(this_smp_shard_count(), "ks", "t")
+        .with_column("pk", int32_type, column_kind::partition_key)
+        .with_column("u", ut)
+        .set_compressor_params(compression_parameters::no_compression())
+        .build();
+    auto u_cdef = s->get_column_definition(to_bytes("u"));
+    BOOST_REQUIRE(u_cdef);
+
+    auto write_and_read_malformed = [&] (bytes cell_path, const sstring& expected_msg) {
+        mutation mut{s, partition_key::from_deeply_exploded(*s, {0})};
+        auto ckey = clustering_key::make_empty();
+        {
+            collection_mutation_writer w({});
+            w.push_back(bytes_view(cell_path),
+                atomic_cell::make_live(*int32_type, write_timestamp, int32_type->decompose(0), atomic_cell::collection_member::yes));
+            mut.set_clustered_cell(ckey, *u_cdef, std::move(w).finish());
+        }
+        auto sst = make_sstable_containing(env.make_sstable(s, sstable_version_types::mc), {std::move(mut)}, validate::no).get();
+        auto r = sst->make_reader(s, env.make_reader_permit(), query::full_partition_range, s->full_slice());
+        auto close_r = deferred_close(r);
+        try {
+            r.consume(malformed_read_consumer{}).get();
+            BOOST_FAIL("expecting malformed_sstable_exception");
+        } catch (const malformed_sstable_exception& e) {
+            BOOST_REQUIRE(sstring(e.what()).find(expected_msg) != sstring::npos);
+        }
+    };
+
+    // Cell path is not a 2-byte field index.
+    write_and_read_malformed(bytes(4, '\0'), "wrong size of field index");
+    // Field index (big-endian 2-byte) out of range: ut has only fields 0 and 1.
+    auto oob_path = bytes(2, '\0');
+    oob_path[1] = 5;
+    write_and_read_malformed(std::move(oob_path), "field index too big");
+  });
+}
+
 SEASTAR_TEST_CASE(test_compression_premature_eof) {
     return test_env::do_with_async([] (test_env& env) {
         sstables::scoped_no_abort_on_malformed_sstable_error no_abort;
