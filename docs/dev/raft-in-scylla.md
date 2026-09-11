@@ -283,3 +283,15 @@ the provided version instead of calculating a hash.
 When performing schema changes in Raft Recovery mode we're writing a tombstone
 for the `system.scylla_local` entry and we write `committed_by_group0 == false`
 for the `system_schema.scylla_tables` entries, forcing the old behavior.
+
+`migration_manager::ensure_committed_by_group0()` re-stamps `committed_by_group0`
+for such tables once the cluster is back to normal operation, but skips its scan
+on boot once a `system.scylla_local` marker (`ensure_committed_by_group0_done`)
+says no table is missing the flag. The recovery procedure above must also run
+
+```cql
+DELETE FROM system.scylla_local WHERE key = 'ensure_committed_by_group0_done';
+```
+
+on every node being recovered, or the fixup won't run again after recovery and
+the tables just marked `committed_by_group0 == false` will stay that way.
