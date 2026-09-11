@@ -3073,8 +3073,26 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         gc_clock::time_point t;
         std::optional<gc_clock::time_point> expiry;
 
+        // The API-layer checks cannot see  a request that has not committed yet,
+        // so two requests with the same tag can both pass it and queue up;
+        // the second would then mix its rows into the committed snapshot.
+        bool tag_already_committed = false;
+        const auto topo_entry = co_await _sys_ks.get_topology_request_entry(_topo_sm._topology.global_request_id.value());
+        const bool object_storage_table = topo_entry.snapshot_table_ids && std::ranges::any_of(*topo_entry.snapshot_table_ids, [this] (const table_id& id) {
+            auto table = _db.get_tables_metadata().get_table_if_exists(id);
+            return table && table->get_storage_options().is_object_storage_type();
+        });
+        if (object_storage_table && topo_entry.snapshot_tag && topo_entry.error.empty()) {
+            db::snapshot_table_helper sth(_sys_ks.query_processor());
+            tag_already_committed = (co_await sth.get_snapshot(*topo_entry.snapshot_tag, db::consistency_level::QUORUM)).has_value();
+        }
+
         co_await handle_topology_ordered_op(std::move(guard)
             , [&](const db::system_keyspace::topology_requests_entry& topology_requests_entry) {
+                if (tag_already_committed) {
+                    throw std::invalid_argument(fmt::format("Cannot take snapshot '{}': a snapshot with this tag already exists in the snapshot catalog",
+                            *topology_requests_entry.snapshot_tag));
+                }
                 tag = *topology_requests_entry.snapshot_tag;
                 skip_flush = topology_requests_entry.snapshot_skip_flush;
                 t = gc_clock::from_time_t(db_clock::to_time_t(topology_requests_entry.start_time));
