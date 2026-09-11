@@ -36,12 +36,6 @@ future<shared_ptr<result_message>> modification_statement::execute(query_process
             .then(cql_transport::messages::propagate_exception_as_future<shared_ptr<result_message>>);
 }
 
-static void validate_consistency_level(const db::consistency_level& cl) {
-    if (cl != db::consistency_level::QUORUM && cl != db::consistency_level::LOCAL_QUORUM) {
-        throw exceptions::invalid_request_exception("Strongly consistent writes must use QUORUM/LOCAL_QUORUM consistency level");
-    }
-}
-
 mutation modification_statement::get_mutation(const query_options& options, api::timestamp_type ts,
         base_statement::json_cache_opt& json_cache, const std::vector<dht::partition_range>& keys) const {
     const auto prefetch_data = update_parameters::prefetch_data(_statement->s);
@@ -60,7 +54,8 @@ future<shared_ptr<result_message>> modification_statement::execute_without_check
         query_processor& qp, service::query_state& qs, const query_options& options,
         std::optional<service::group0_guard> guard) const
 {
-    validate_consistency_level(options.get_consistency());
+    validate_write_consistency_level(options.get_consistency());
+    _statement->restrictions().validate_primary_key(options);
 
     auto timeout = db::timeout_clock::now() + _statement->get_timeout(qs.get_client_state(), options);
     auto json_cache = _statement->maybe_prepare_json_cache(options);
