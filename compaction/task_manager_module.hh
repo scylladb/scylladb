@@ -139,28 +139,6 @@ protected:
     virtual future<> run() override = 0;
 };
 
-class shard_offstrategy_keyspace_compaction_task_impl : public offstrategy_compaction_task_impl {
-private:
-    replica::database& _db;
-    std::vector<table_info> _table_infos;
-    bool& _needed;
-public:
-    shard_offstrategy_keyspace_compaction_task_impl(tasks::task_manager::module_ptr module,
-            std::string keyspace,
-            tasks::task_id parent_id,
-            replica::database& db,
-            std::vector<table_info> table_infos,
-            bool& needed) noexcept
-        : offstrategy_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, "shard", std::move(keyspace), "", "", parent_id)
-        , _db(db)
-        , _table_infos(std::move(table_infos))
-        , _needed(needed)
-    {}
-protected:
-    virtual future<> run() override;
-    virtual future<std::optional<double>> expected_total_workload() const override;
-};
-
 class table_offstrategy_keyspace_compaction_task_impl : public offstrategy_compaction_task_impl {
 private:
     replica::database& _db;
@@ -567,6 +545,10 @@ public:
     // Starts an offstrategy compaction of the given tables of a keyspace on all the shards.
     // If needed is set, it receives whether any table had sstables to compact.
     future<tasks::task_manager::task_ptr> start_offstrategy_keyspace_compaction(sharded<replica::database>& db, std::string keyspace, std::vector<table_info> table_infos, bool* needed);
+
+    // Starts an offstrategy compaction of the given tables of a keyspace on this shard.
+    // needed is set if any table had sstables to compact.
+    future<tasks::task_manager::task_ptr> start_shard_offstrategy_compaction(replica::database& db, std::string keyspace, const std::vector<table_info>& table_infos, bool& needed, tasks::task_info parent_info);
 };
 
 class regular_compaction_task_impl : public compaction_task_impl {

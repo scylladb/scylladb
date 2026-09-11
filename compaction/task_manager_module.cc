@@ -750,7 +750,7 @@ static future<> run_offstrategy_keyspace_compaction(sharded<replica::database>& 
     bool res = co_await db.map_reduce0([&] (replica::database& local_db) -> future<bool> {
         bool shard_needed = false;
         auto& module = local_db.get_compaction_manager().get_task_manager_module();
-        auto task = co_await module.make_and_start_task<shard_offstrategy_keyspace_compaction_task_impl>(task_info, keyspace, task_info.get_id(), local_db, *tables, shard_needed);
+        auto task = co_await module.start_shard_offstrategy_compaction(local_db, keyspace, *tables, shard_needed, task_info);
         co_await task->done();
         co_return shard_needed;
     }, false, std::plus<bool>());
@@ -784,23 +784,37 @@ future<tasks::task_manager::task_ptr> task_manager_module::start_offstrategy_key
     });
 }
 
-static future<> run_shard_offstrategy_compaction(tasks::task_manager::module_ptr module, replica::database& db, std::string keyspace, const std::vector<table_info>& tables, bool& needed, tasks::task_info task_info) {
+static future<> run_shard_offstrategy_compaction(tasks::task_manager::module_ptr module, replica::database& db, std::string keyspace, lw_shared_ptr<std::vector<table_info>> tables, bool& needed, tasks::task_info task_info) {
     seastar::condition_variable cv;
     current_task_type current_task;
     std::vector<table_tasks_info> table_tasks;
-    for (auto& ti : tables) {
+    for (auto& ti : *tables) {
         table_tasks.emplace_back(co_await module->make_and_start_task<table_offstrategy_keyspace_compaction_task_impl>(task_info, keyspace, ti.name, task_info.get_id(), db, ti, cv, current_task, needed), ti);
     }
 
     co_await run_table_tasks(db, std::move(table_tasks), cv, current_task, false);
 }
 
-future<> shard_offstrategy_keyspace_compaction_task_impl::run() {
-    return run_shard_offstrategy_compaction(_module, _db, _status.keyspace, _table_infos, _needed, info());
+static future<std::optional<double>> get_shard_offstrategy_compaction_workload(replica::database& db, std::string keyspace, lw_shared_ptr<std::vector<table_info>> tables, lw_shared_ptr<uint64_t> workload) {
+    if (*workload) {
+        co_return *workload;
+    }
+    co_return *workload = co_await get_shard_task_workload(db, keyspace, *tables);
 }
 
-future<std::optional<double>> shard_offstrategy_keyspace_compaction_task_impl::expected_total_workload() const {
-    co_return _expected_workload = _expected_workload ? _expected_workload : co_await get_shard_task_workload(_db, _status.keyspace, _table_infos);
+future<tasks::task_manager::task_ptr> task_manager_module::start_shard_offstrategy_compaction(replica::database& db, std::string keyspace, const std::vector<table_info>& table_infos, bool& needed, tasks::task_info parent_info) {
+    auto tables = make_lw_shared<std::vector<table_info>>(table_infos);
+    tasks::task_manager::task_builder task_builder{shared_from_this(), offstrategy_compaction_task_type};
+    task_builder.set_scope("shard")
+                .set_keyspace(keyspace)
+                .set_progress_units("bytes")
+                .set_parent_info(parent_info)
+                .set_workload_fn([&db, keyspace, tables, workload = make_lw_shared<uint64_t>(0)] () {
+                    return get_shard_offstrategy_compaction_workload(db, keyspace, tables, workload);
+                });
+    return std::move(task_builder).build([module = shared_from_this(), &db, keyspace = std::move(keyspace), tables, &needed] (tasks::task_manager::task::impl& self) {
+        return run_shard_offstrategy_compaction(module, db, keyspace, tables, needed, self.info());
+    });
 }
 
 future<> table_offstrategy_keyspace_compaction_task_impl::run() {
