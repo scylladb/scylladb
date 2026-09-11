@@ -832,7 +832,10 @@ class clients_table : public streaming_virtual_table {
             auto& clients = cd_map[dip.ip];
 
             std::ranges::sort(clients, [] (const foreign_ptr<std::unique_ptr<client_data>>& a, const foreign_ptr<std::unique_ptr<client_data>>& b) {
-                return a->port < b->port || a->client_type_str() < b->client_type_str();
+                if (a->port != b->port) {
+                    return a->port < b->port;
+                }
+                return a->client_type_str() < b->client_type_str();
             });
 
             for (const auto& cd : clients) {
