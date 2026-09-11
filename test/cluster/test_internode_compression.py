@@ -122,51 +122,56 @@ async def do_test_internode_compression_between_datacenters(manager: ManagerClie
 
     # now create our proxies and start them
     proxies = [Proxy(addr, s.ip_addr) for s,addr in servers]
-    for p in proxies:
-        await p.start()
+    proxy_futs = []
+    try:
+        for p in proxies:
+            await p.start()
 
-    proxy_futs = [p.run() for p in proxies]
+        proxy_futs = [p.run() for p in proxies]
 
-    # Now we can start servers
-    await asyncio.gather(*[manager.server_start(s.server_id, seeds=seeds, connect_driver=True) for s,_ in servers])
-    # And connect the driver.
-    await manager.driver_connect(servers[0][0])
+        # Now we can start servers
+        await asyncio.gather(*[manager.server_start(s.server_id, seeds=seeds, connect_driver=True) for s,_ in servers])
+        # And connect the driver.
+        await manager.driver_connect(servers[0][0])
 
-    cql = manager.get_cql()
+        cql = manager.get_cql()
 
-    async with new_test_keyspace(manager, "with replication = {'class': 'NetworkTopologyStrategy', 'dc1': 2, 'dc2': 1 }") as ks:
-        async with new_test_table(manager, ks, "key int PRIMARY KEY, val TEXT") as table:
+        async with new_test_keyspace(manager, "with replication = {'class': 'NetworkTopologyStrategy', 'dc1': 2, 'dc2': 1 }") as ks:
+            async with new_test_table(manager, ks, "key int PRIMARY KEY, val TEXT") as table:
 
-            msg_size = 8192
-            insert_stmt = cql.prepare(f"insert into {table} (key, val) values (?, ?)")
-            insert_stmt.consistency_level = ConsistencyLevel.ALL
+                msg_size = 8192
+                insert_stmt = cql.prepare(f"insert into {table} (key, val) values (?, ?)")
+                insert_stmt.consistency_level = ConsistencyLevel.ALL
 
-            # reset all stats. only want IO metrics for the actual insert
-            for p in proxies:
-                p.reset()
+                # reset all stats. only want IO metrics for the actual insert
+                for p in proxies:
+                    p.reset()
 
-            # insert a compressible row of size ~8 kiB
-            def insert_once():
-                cql.execute(insert_stmt, [1, "1" * msg_size])
+                # insert a compressible row of size ~8 kiB
+                def insert_once():
+                    cql.execute(insert_stmt, [1, "1" * msg_size])
 
-            # need to do non-blocking
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, insert_once)
+                # need to do non-blocking
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(None, insert_once)
 
-            node1_proxy = proxies[0]
-            node2_proxy = proxies[1]
-            node3_proxy = proxies[2]
+                node1_proxy = proxies[0]
+                node2_proxy = proxies[1]
+                node3_proxy = proxies[2]
 
-            verifier(msg_size, node1_proxy, node2_proxy, node3_proxy)
+                verifier(msg_size, node1_proxy, node2_proxy, node3_proxy)
 
-    await asyncio.gather(*[manager.server_stop(s.server_id) for s,_ in servers])
-    await asyncio.gather(*[p.stop() for p in proxies])
-    # these will all except, because we just stopped them above
-    for coro in proxy_futs:
-        try:
-            await coro
-        except:
-            pass
+    try:
+        await asyncio.gather(*[manager.server_stop(s.server_id) for s,_ in servers])
+    finally:
+        await asyncio.gather(*[p.stop() for p in proxies])
+        for coro in proxy_futs:
+            try:
+                await coro
+            except:
+                pass
+        for addr, _, _ in proxy_addrs:
+            await HostRegistry().release_host(addr)
 
 async def test_internode_compression_compress_packets_between_nodes(request, manager: ManagerClient) -> None:
     def check_expected(msg_size, node1_proxy, node2_proxy, node3_proxy):
