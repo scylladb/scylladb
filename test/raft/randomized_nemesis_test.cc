@@ -2382,9 +2382,16 @@ SEASTAR_TEST_CASE(test_frequent_snapshotting) {
         auto id2 = co_await env.new_server(false, server_config);
         auto id3 = co_await env.new_server(false, server_config);
 
-        env.for_each_server([](raft::server_id, raft_server<ExReg>* srv) {
-            srv->get_server()->set_applier_queue_max_size(1);
-        });
+        // The snapshot leak this test guards against requires the applier
+        // fiber to take a second snapshot before io_fiber has consumed the
+        // fsm output holding the first one: the second replaces the first in
+        // the output, and the first must still reach drop_snapshot(). Nothing
+        // forces that ordering. The fibers run independently, and a run where
+        // io_fiber consumes the output after every single snapshot never hits
+        // the leak. snapshot_threshold = 1 makes the applier fiber snapshot
+        // after every batch it applies, so over the several hundred snapshots
+        // taken here it is very unlikely that io_fiber keeps up after each
+        // one, but the test is probabilistic, not deterministic.
 
         tlogger.debug("Started 2 more servers, changing configuration");
 
