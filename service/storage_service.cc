@@ -1299,14 +1299,16 @@ public:
         });
         auto result = co_await ser::join_node_rpc_verbs::send_join_node_request(
                 &_ss._messaging.local(), netw::msg_addr(g0_info.ip_addr), g0_info.id, _req);
+        if (utils::get_local_injector().is_enabled("pre_server_start_drop_expiring")) {
+            co_await utils::get_local_injector().inject("pre_server_start_drop_expiring",
+                    utils::wait_for_message(5min));
+            _ss._gossiper.get_mutable_address_map().force_drop_expiring_entries();
+        }
+
         std::visit(overloaded_functor {
             [this] (const join_node_request_result::ok&) {
                 rtlogger.info("join: request to join placed, waiting"
                              " for the response from the topology coordinator");
-
-                if (utils::get_local_injector().enter("pre_server_start_drop_expiring")) {
-                    _ss._gossiper.get_mutable_address_map().force_drop_expiring_entries();
-                }
 
                 _ss._join_node_request_done.set_value();
             },

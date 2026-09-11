@@ -188,6 +188,11 @@ future<> gossiper::handle_syn_msg(locator::host_id from, gossip_digest_syn syn_m
         co_return;
     }
 
+    if (utils::get_local_injector().is_enabled("gossiper_ignore_incoming_syn")) {
+        logger.info("gossiper_ignore_incoming_syn: ignoring gossip syn msg from node {}", from);
+        co_return;
+    }
+
     /* If the message is from a different cluster throw it away. */
     if (syn_msg.cluster_id() != get_cluster_name()) {
         logger.warn("ClusterName mismatch from {} {}!={}", from, syn_msg.cluster_id(), get_cluster_name());
@@ -519,13 +524,19 @@ future<rpc::no_wait_type> gossiper::background_msg(sstring type, noncopyable_fun
 void gossiper::init_messaging_service_handler() {
     ser::gossip_rpc_verbs::register_gossip_digest_syn(&_messaging, [this] (const rpc::client_info& cinfo, gossip_digest_syn syn_msg) {
         auto from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
-        return background_msg("GOSSIP_DIGEST_SYN", [from, syn_msg = std::move(syn_msg)] (gms::gossiper& gossiper) mutable {
+        auto from_addr = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
+        return background_msg("GOSSIP_DIGEST_SYN", [from, from_addr, syn_msg = std::move(syn_msg)] (gms::gossiper& gossiper) mutable {
+            // The address may be missing during bootstrap, after the expiring entry from CLIENT_ID is gone.
+            gossiper._address_map.opt_add_entry(from, from_addr);
             return gossiper.handle_syn_msg(from, std::move(syn_msg));
         });
     });
      ser::gossip_rpc_verbs::register_gossip_digest_ack(&_messaging, [this] (const rpc::client_info& cinfo, gossip_digest_ack msg) {
         auto from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
-        return background_msg("GOSSIP_DIGEST_ACK", [from, msg = std::move(msg)] (gms::gossiper& gossiper) mutable {
+        auto from_addr = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
+        return background_msg("GOSSIP_DIGEST_ACK", [from, from_addr, msg = std::move(msg)] (gms::gossiper& gossiper) mutable {
+            // The address may be missing during bootstrap, after the expiring entry from CLIENT_ID is gone.
+            gossiper._address_map.opt_add_entry(from, from_addr);
             return gossiper.handle_ack_msg(from, std::move(msg));
         });
     });

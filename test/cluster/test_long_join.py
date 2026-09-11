@@ -36,8 +36,11 @@ async def test_long_join_drop_entries_on_bootstrapping(manager: ScyllaClusterMan
     servers = await manager.servers_add(2)
     inj = 'topology_coordinator_pause_before_processing_backlog'
     await asyncio.gather(*(manager.api.enable_injection(s.ip_addr, inj, one_shot=True) for s in servers))
+    # gossiper_ignore_incoming_syn ensures the joining node doesn't make the other
+    # nodes' entries non-expiring before the test drops those entries.
     s = await manager.server_add(start=False,  config={
-        'error_injections_at_startup': ['pre_server_start_drop_expiring']
+        'error_injections_at_startup': ['pre_server_start_drop_expiring',
+                                        'gossiper_ignore_incoming_syn']
     })
     task = asyncio.create_task(manager.server_start(s.server_id))
     log = await manager.server_open_log(s.server_id)
@@ -57,8 +60,16 @@ async def test_long_join_drop_entries_on_bootstrapping(manager: ScyllaClusterMan
 
     await wait_for(gossiper_api_ready, time.time() + 60)
 
+    # The pre-existing nodes see the joining node only once they have sent it their
+    # CLIENT_IDs, so by then it holds their addresses as expiring entries. Drop the
+    # entries at that point and let the joining node gossip again.
+    await asyncio.gather(*(manager.server_sees_other_server(e.ip_addr, s.ip_addr)
+                           for e in servers))
+    await manager.api.message_injection(s.ip_addr, 'pre_server_start_drop_expiring')
+    await manager.api.disable_injection(s.ip_addr, 'gossiper_ignore_incoming_syn')
+
     servers.append(s)
-    await manager.servers_see_each_other(servers, interval=300)
+    await manager.servers_see_each_other(servers)
     await manager.api.enable_injection(s.ip_addr, 'join_node_response_drop_expiring', one_shot=True)
     await asyncio.gather(*(manager.api.message_injection(s.ip_addr, inj) for s in servers[:-1]))
     await asyncio.gather(task)
