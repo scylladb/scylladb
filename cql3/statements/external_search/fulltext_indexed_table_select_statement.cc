@@ -242,11 +242,19 @@ future<shared_ptr<cql_transport::messages::result_message>> fulltext_indexed_tab
 
     throwing_assert(pkeys->size() <= limit);
 
-    auto provider = _bm25_ordering_info.temporary_index
-                            ? std::make_unique<external_search::external_search_provider>(pkeys.value(), *_bm25_ordering_info.temporary_index, *_schema)
-                            : nullptr;
     auto table_results = co_await query_base_table(qp, state, options, timeout, pkeys.value());
-    co_return co_await emit_result_set(std::move(table_results), options, provider.get());
+
+    auto provider = std::optional<external_search::external_search_provider>{};
+    if (table_results && _bm25_ordering_info.temporary_index) {
+        const auto& read = table_results.value();
+        auto rows = external_search::join_table_results(*read.rows, read.command->slice, *_schema, *_selection, &pkeys.value());
+        external_search::drop_unscored_rows(rows, pkeys.value());
+        auto similarities = external_search::similarities_of(rows, pkeys.value());
+        provider.emplace(
+                std::vector{external_search::external_values{.temporary_index = *_bm25_ordering_info.temporary_index, .values = std::move(similarities)}},
+                rows);
+    }
+    co_return co_await emit_result_set(std::move(table_results), options, provider ? &*provider : nullptr);
 }
 
 } // namespace cql3::statements

@@ -18,6 +18,8 @@
 //
 // join_table_results() is tested here because a CQL test can only observe the outcome of a
 // mismatch, a score or a fragment on the wrong row, and not which step of the matching went wrong.
+// drop_unscored_rows() and similarities_of() are tested beside it: they decide which joined rows
+// have a score to report, and read it.
 
 #include <boost/test/unit_test.hpp>
 
@@ -49,9 +51,11 @@ using namespace cql3;
 using namespace cql3::expr;
 using namespace cql3::expr::test_utils;
 
+using cql3::statements::external_search::drop_unscored_rows;
 using cql3::statements::external_search::equality;
 using cql3::statements::external_search::join_table_results;
 using cql3::statements::external_search::joined_row;
+using cql3::statements::external_search::similarities_of;
 using cql3::statements::external_search::unevaluated_equality;
 
 using primary_keys = vector_search::vector_store_client::primary_keys;
@@ -194,10 +198,22 @@ size_t emitted_rows(schema_ptr s, const query::partition_slice& slice, const que
     return query::result_set::from_raw_result(s, slice, rows).rows().size();
 }
 
-/// The joined rows of `table_results`.
+float score_of(std::span<const cql3::raw_value> values, size_t row) {
+    const auto& value = values[row];
+    BOOST_REQUIRE(!value.is_null());
+    return value.view().deserialize<float>(*float_type);
+}
+
+/// The joined rows of `table_results`, matched to `external_results`.
 std::vector<joined_row> join(schema_ptr s, const query::partition_slice& slice, const query::result& table_results,
         const primary_keys& external_results) {
     return join_table_results(table_results, slice, *s, *cql3::selection::selection::wildcard(s), &external_results);
+}
+
+/// An external result as similarities_of() sees it: it reads only the score, the join having settled
+/// which result belongs to which row, so the keys need not be real.
+vector_search::primary_key scored(float similarity) {
+    return {dht::decorated_key{dht::token(), partition_key::make_empty()}, clustering_key_prefix::make_empty(), similarity};
 }
 
 /// The external result each joined row was matched to, in the order the rows are emitted.
@@ -314,6 +330,41 @@ SEASTAR_THREAD_TEST_CASE(test_matching_without_a_clustering_key) {
     };
     auto expected = std::vector<std::optional<size_t>>{0, 1};
     BOOST_REQUIRE(external_results_of(join(s, slice, rows, results)) == expected);
+}
+
+// What the index said about a row becomes that row's value, or drops it: a row it no longer names has
+// no relevance to report, and neither does one it scored with something that is not a number.
+BOOST_AUTO_TEST_CASE(test_similarities_are_read_off_the_joined_rows) {
+    auto results = primary_keys{scored(0.5f), scored(std::numeric_limits<float>::quiet_NaN()), scored(0.75f)};
+    auto rows = std::vector<joined_row>{{0}, {1}, {std::nullopt}, {2}};
+
+    drop_unscored_rows(rows, results);
+    auto similarities = similarities_of(rows, results);
+
+    BOOST_REQUIRE_EQUAL(similarities.size(), 4u);
+    BOOST_REQUIRE(!rows[0].dropped);
+    BOOST_REQUIRE(rows[1].dropped); // not a number
+    BOOST_REQUIRE(rows[2].dropped); // no external result
+    BOOST_REQUIRE(!rows[3].dropped);
+    BOOST_REQUIRE_EQUAL(score_of(similarities, 0), 0.5f);
+    BOOST_REQUIRE_EQUAL(score_of(similarities, 3), 0.75f);
+    BOOST_REQUIRE(similarities[1].is_null());
+    BOOST_REQUIRE(similarities[2].is_null());
+}
+
+// Drops accumulate: a row another search already dropped is passed over and given no value of its
+// own, so several searches can fill their temporaries against the same rows.
+BOOST_AUTO_TEST_CASE(test_a_row_already_dropped_stays_dropped) {
+    auto results = primary_keys{scored(0.5f), scored(0.75f)};
+    auto rows = std::vector<joined_row>{{.external_result = 0, .dropped = true}, {.external_result = 1}};
+
+    drop_unscored_rows(rows, results);
+    auto similarities = similarities_of(rows, results);
+
+    BOOST_REQUIRE(rows[0].dropped);
+    BOOST_REQUIRE(!rows[1].dropped);
+    BOOST_REQUIRE(similarities[0].is_null());
+    BOOST_REQUIRE_EQUAL(score_of(similarities, 1), 0.75f);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -91,53 +91,66 @@ std::vector<joined_row> join_table_results(const query::result& table_results, c
     return rows;
 }
 
-external_search_provider::external_search_provider(const vector_search::vector_store_client::primary_keys& results, size_t score_slot,
-        const schema& schema)
-    : _results(results)
-    , _next_result(0)
-    , _score_slot(score_slot)
-    , _schema(schema) {
+namespace {
+
+// The score of the external result that names `row`, or nothing if `row` has no usable score.
+// That is the case in two situations: no external result names the row (its key was not in the
+// search's reply), or the result's score is NaN or infinite. Vector Store cannot send Inf over
+// JSON and should not send NaN, so the second case is a malformed reply.
+std::optional<float> similarity_of(const joined_row& row, const vector_search::vector_store_client::primary_keys& external_results) {
+    if (!row.external_result) {
+        return std::nullopt;
+    }
+    const auto similarity = external_results[*row.external_result].similarity;
+    return std::isfinite(similarity) ? std::optional(similarity) : std::nullopt;
 }
 
-bool external_search_provider::try_fill(std::vector<cql3::raw_value>& temporaries, std::span<const bytes> partition_key,
-        std::span<const bytes> clustering_key, const query::result_row_view&, const query::result_row_view*) const {
-    const auto row_pk = ::partition_key::from_range(partition_key);
-    const auto row_ck = (_schema.clustering_key_size() > 0) ? ::clustering_key_prefix::from_range(clustering_key) : ::clustering_key_prefix{};
+} // anonymous namespace
 
-    // Base-table results are merged in Vector Store primary-key order by
-    // external_index_select_statement. Consume the matching score in that order,
-    // passing over results with no matching row - the index may be stale and
-    // return keys of rows that are no longer in the base table.
-    while (_next_result < _results.size()) {
-        const auto& vs_result = _results[_next_result];
-
-        if (!vs_result.partition.key().equal(_schema, row_pk)) {
-            ++_next_result;
-            continue;
+void drop_unscored_rows(std::span<joined_row> rows, const vector_search::vector_store_client::primary_keys& external_results) {
+    for (auto& row : rows) {
+        if (!similarity_of(row, external_results)) {
+            row.dropped = true;
         }
+    }
+}
 
-        if (_schema.clustering_key_size() > 0) {
-            if (!vs_result.clustering.equal(_schema, row_ck)) {
-                ++_next_result;
-                continue;
-            }
-        }
+std::vector<cql3::raw_value> similarities_of(
+        std::span<const joined_row> rows, const vector_search::vector_store_client::primary_keys& external_results) {
+    auto values = std::vector<cql3::raw_value>{};
+    values.reserve(rows.size());
+    for (const auto& row : rows) {
+        const auto similarity = row.dropped ? std::nullopt : similarity_of(row, external_results);
+        values.push_back(similarity ? cql3::raw_value::make_value(float_type->decompose(*similarity)) : cql3::raw_value::make_null());
+    }
+    return values;
+}
 
-        float score = vs_result.similarity;
-        ++_next_result;
+external_search_provider::external_search_provider(std::vector<external_values> values, std::span<const joined_row> rows)
+    : _values(std::move(values)) {
+    _dropped.reserve(rows.size());
+    for (const auto& row : rows) {
+        _dropped.push_back(row.dropped);
+    }
+}
 
-        // Vector store can't return Inf over JSON API.
-        // It also shouldn't return NaN (null in JSON),
-        // but if it does, we treat it as an error and skip the row.
-        if (!std::isfinite(score)) {
-            return false;
-        }
+bool external_search_provider::try_fill(std::vector<cql3::raw_value>& temporaries, std::span<const bytes>, std::span<const bytes>,
+        const query::result_row_view&, const query::result_row_view*) const {
+    // Advanced for every row offered, dropped ones included: the values were computed for the
+    // same rows in the same order.
+    const auto row = _next_row++;
+    throwing_assert(row < _dropped.size());
 
-        temporaries[_score_slot] = cql3::raw_value::make_value(float_type->decompose(score));
-        return true;
+    if (_dropped[row]) {
+        return false;
     }
 
-    return false;
+    for (const auto& [temporary_index, values] : _values) {
+        throwing_assert(row < values.size());
+        // Nothing clears a temporary between rows, so every row is given an explicit value.
+        temporaries[temporary_index] = values[row];
+    }
+    return true;
 }
 
 } // namespace cql3::statements::external_search

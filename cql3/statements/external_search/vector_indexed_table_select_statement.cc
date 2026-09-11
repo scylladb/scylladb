@@ -281,11 +281,21 @@ future<shared_ptr<cql_transport::messages::result_message>> vector_indexed_table
         pkeys->erase(pkeys->begin() + limit, pkeys->end());
     }
 
-    auto provider = _ann_ordering_info.temporary_index
-                            ? std::make_unique<external_search::external_search_provider>(pkeys.value(), *_ann_ordering_info.temporary_index, *_schema)
-                            : nullptr;
     auto table_results = co_await query_base_table(qp, state, options, timeout, pkeys.value());
-    co_return co_await emit_result_set(std::move(table_results), options, provider.get());
+
+    auto provider = std::optional<external_search::external_search_provider>{};
+    if (table_results && _ann_ordering_info.temporary_index) {
+        // A rescoring index allocates no temporary: there the similarity is computed from the row's
+        // own vector instead.
+        const auto& read = table_results.value();
+        auto rows = external_search::join_table_results(*read.rows, read.command->slice, *_schema, *_selection, &pkeys.value());
+        external_search::drop_unscored_rows(rows, pkeys.value());
+        auto similarities = external_search::similarities_of(rows, pkeys.value());
+        provider.emplace(
+                std::vector{external_search::external_values{.temporary_index = *_ann_ordering_info.temporary_index, .values = std::move(similarities)}},
+                rows);
+    }
+    co_return co_await emit_result_set(std::move(table_results), options, provider ? &*provider : nullptr);
 }
 
 } // namespace statements
