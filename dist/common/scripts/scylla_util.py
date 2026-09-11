@@ -183,6 +183,60 @@ def hex2list(hex_str):
     return ",".join(cpu_list)
 
 
+def parse_cpu_list(cpu_list):
+    """Expand a cpu list like '0,2-7,17-24' into a set of CPU ids."""
+    cpus = set()
+    for group in cpu_list.split(','):
+        group = group.strip()
+        if not group:
+            continue
+        if '-' in group:
+            beg, end = group.split('-', 1)
+            cpus.update(range(int(beg), int(end) + 1))
+        else:
+            cpus.add(int(group))
+    return cpus
+
+def cpu_list_to_str(cpus):
+    """Collapse a set of CPU ids into a range list like '0,2-7,17-24'."""
+    groups = []
+    for cpu in sorted(cpus):
+        if groups and groups[-1][1] == cpu - 1:
+            groups[-1][1] = cpu
+        else:
+            groups.append([cpu, cpu])
+    return ','.join(str(beg) if beg == end else '{}-{}'.format(beg, end) for beg, end in groups)
+
+# Matches CPUSET="--cpuset 0 --smp 1", CPUSET="--cpuset 2-23,26-47 " and so on;
+# both options are optional. _nocomment skips commented-out lines.
+_nocomment = r"^\s*(?!#)"
+_scyllaeq = r"(?:\s*|=)"
+_cpuset_re = r"(?:\s*--cpuset" + _scyllaeq + r"(?P<cpuset>\d+(?:[-,]\d+)*))?"
+_smp_re = r"(?:\s*--smp" + _scyllaeq + r"(?P<smp>\d+))?"
+_cpuset_conf_pattern = re.compile(
+    _nocomment + r"CPUSET=\s*\"" + _cpuset_re + _smp_re + r"\s*\"")
+
+def parse_cpuset_conf(conf_file):
+    """Parse cpuset.conf into {'cpuset': set of CPU ids or None, 'smp': int or None}.
+
+    A None cpuset means the file is absent or holds no live CPUSET line (the
+    shipped one only has a commented-out example), i.e. Scylla is not pinned.
+    """
+    d = {"cpuset": None, "smp": None}
+    path = Path(conf_file)
+    if not path.exists():
+        return d
+    # The file may hold several CPUSET lines; the last one wins.
+    matches = [m for m in (_cpuset_conf_pattern.match(x) for x in path.read_text().splitlines()) if m]
+    if matches:
+        d = matches[-1].groupdict()
+    if d["cpuset"]:
+        d["cpuset"] = parse_cpu_list(d["cpuset"])
+    if d["smp"]:
+        d["smp"] = int(d["smp"])
+    return d
+
+
 SYSTEM_PARTITION_UUIDS = [
         '21686148-6449-6e6f-744e-656564454649', # BIOS boot partition
         'c12a7328-f81f-11d2-ba4b-00a0c93ec93b', # EFI system partition

@@ -5,6 +5,10 @@ set -e
 case "$1" in
     purge|remove)
         rm -rf /etc/systemd/system/scylla-helper.slice.d/
+        # Only our own drop-in: the directory may hold drop-ins from the distro.
+        rm -f /etc/systemd/system/systemd-journald.service.d/scylla-helper-slice.conf
+        rmdir --ignore-fail-on-non-empty /etc/systemd/system/systemd-journald.service.d/ 2>/dev/null || true
+        JOURNALD_MOVED=1
         # We need to keep dependencies.conf and sysconfdir.conf on 'remove',
         # otherwise it will be missing after rollback.
         if [ "$1" = "purge" ]; then
@@ -17,6 +21,10 @@ esac
 
 if [ -d /run/systemd/system ]; then
     systemctl --system daemon-reload >/dev/null || true
+    if [ -n "$JOURNALD_MOVED" ]; then
+        # scylla-helper.slice is gone, so move journald back out of it.
+        systemctl --system try-restart systemd-journald.service >/dev/null || true
+    fi
 fi
 
 #DEBHELPER#
