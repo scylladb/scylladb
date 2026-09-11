@@ -596,22 +596,16 @@ future<> groups_manager::stepdown_leaders() {
         _raft_groups.size());
 
     co_await coroutine::parallel_for_each(_raft_groups, [&] (auto& entry) -> future<> {
-        const auto& [gid, state] = entry;
+        auto& [gid, state] = entry;
 
-        auto holder = state.gate->try_hold();
-        if (!holder) {
-            // A closed gate means the group is being deleted.
-            co_return;
-        }
-        // The holder also keeps state alive across the stepdown below: a reference
-        // into the map survives a rehash, and the erase cannot run before we let go.
-
-        if (!state.server || !state.server->is_leader()) {
+        // The handle also pins the entry: its erase waits for the gate.
+        const auto srv = try_acquire_server(state);
+        if (!srv || !srv->server().is_leader()) {
             co_return;
         }
 
         try {
-            co_await state.server->stepdown(raft::logical_clock::duration(stepdown_timeout_ticks));
+            co_await srv->server().stepdown(raft::logical_clock::duration(stepdown_timeout_ticks));
             ++transferred;
             logger.debug("stepdown_leaders(): group id {}: leadership transferred", gid);
         } catch (...) {
