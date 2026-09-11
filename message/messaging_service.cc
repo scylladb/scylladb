@@ -306,6 +306,15 @@ future<> messaging_service::start() {
     if (_credentials_builder && !_credentials) {
         if (this_shard_id() == 0) {
             _credentials = co_await _credentials_builder->build_reloadable_server_credentials([this](const tls::credentials_builder& b, const std::unordered_set<sstring>& files, std::exception_ptr ep) -> future<> {
+                // A reload can fire while the service is being shut down, and there
+                // is nothing left to reload into then. Holding the gate keeps this
+                // instance and its peers on the other shards alive for the duration
+                // of the reload - sharded<> destroys the instances only once stop()
+                // completed on all of them, and stop() waits for the gate.
+                if (_reload_gate.is_closed()) {
+                    co_return;
+                }
+                auto holder = _reload_gate.hold();
                 if (ep) {
                     mlogger.warn("Exception loading {}: {}", files, ep);
                 } else {
@@ -666,6 +675,7 @@ future<> messaging_service::shutdown() {
 }
 
 future<> messaging_service::stop() {
+    co_await _reload_gate.close();
     if (!_shutting_down) {
         co_await shutdown();
     }
