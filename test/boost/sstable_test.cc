@@ -495,6 +495,71 @@ SEASTAR_TEST_CASE(test_link_with_rewritten_component_bytes_on_disk) {
     return test_env::do_with_async(do_test_link_with_rewritten_component_size);
 }
 
+static void do_test_link_with_rewritten_component(test_env& env, sstable_version_types version) {
+    auto random_spec = tests::make_random_schema_specification(
+        "ks",
+        std::uniform_int_distribution<size_t>(1, 4),
+        std::uniform_int_distribution<size_t>(2, 4),
+        std::uniform_int_distribution<size_t>(2, 8),
+        std::uniform_int_distribution<size_t>(2, 8));
+    auto random_schema = tests::random_schema{tests::random::get_int<uint32_t>(), *random_spec};
+    auto schema = random_schema.schema();
+
+    const auto muts = tests::generate_random_mutations(random_schema, 2).get();
+    auto sst = make_sstable_containing(env.make_sstable(schema, version), muts).get();
+
+    const auto orig_components = sst->all_components();
+    const auto orig_offsets = sstables::test(sst)._statistics().offsets.elements;
+    const auto orig_features = sst->features().enabled_features;
+    const auto orig_run_id = sst->run_identifier();
+    const auto orig_sid = sst->sstable_identifier();
+    const auto orig_shards = sst->get_shards_for_this_sstable();
+    const auto orig_has_summary = bool{sst->get_summary()};
+    const auto orig_generation = sst->generation();
+
+    auto new_sst = mutate_sstable(env, sst, std::identity{}).get();
+
+    BOOST_REQUIRE(new_sst->get_version() == version);
+    BOOST_REQUIRE(new_sst->generation() != orig_generation);
+    BOOST_REQUIRE(new_sst->sstable_identifier() == orig_sid);
+    BOOST_REQUIRE(new_sst->all_components() == orig_components);
+    BOOST_REQUIRE(new_sst->features().enabled_features == orig_features);
+    BOOST_REQUIRE(new_sst->run_identifier() == orig_run_id);
+    BOOST_REQUIRE(new_sst->get_shards_for_this_sstable() == orig_shards);
+    BOOST_REQUIRE(sstables::test(new_sst)._statistics().offsets.elements == orig_offsets);
+    BOOST_REQUIRE(orig_has_summary == bool{new_sst->get_summary()});
+}
+
+SEASTAR_TEST_CASE(test_link_with_rewritten_component_mt) {
+    return test_env::do_with_async([] (test_env& env) {
+        do_test_link_with_rewritten_component(env, sstable_version_types::mt);
+    });
+}
+
+SEASTAR_TEST_CASE(test_link_with_rewritten_component_ms) {
+    return test_env::do_with_async([] (test_env& env) {
+        do_test_link_with_rewritten_component(env, sstable_version_types::ms);
+    });
+}
+
+SEASTAR_TEST_CASE(test_link_with_rewritten_component_me) {
+    return test_env::do_with_async([] (test_env& env) {
+        do_test_link_with_rewritten_component(env, sstable_version_types::me);
+    });
+}
+
+SEASTAR_TEST_CASE(test_link_with_rewritten_component_md) {
+    return test_env::do_with_async([] (test_env& env) {
+        do_test_link_with_rewritten_component(env, sstable_version_types::md);
+    });
+}
+
+SEASTAR_TEST_CASE(test_link_with_rewritten_component_mc) {
+    return test_env::do_with_async([] (test_env& env) {
+        do_test_link_with_rewritten_component(env, sstable_version_types::mc);
+    });
+}
+
 // Tests for reading a large partition for which the index contains a
 // "promoted index", i.e., a sample of the column names inside the partition,
 // with which we can avoid reading the entire partition when we look only
