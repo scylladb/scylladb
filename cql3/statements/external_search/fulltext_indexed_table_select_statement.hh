@@ -13,6 +13,7 @@
 #include "cql3/expr/temporary_allocator.hh"
 
 #include <optional>
+#include <string_view>
 
 namespace cql3::statements {
 
@@ -44,7 +45,7 @@ std::optional<bm25_ordering_info> get_bm25_ordering_info(
         schema_ptr schema,
         const expr::function_call& fc);
 
-/// Replaces every BM25(), BM25_SCORE() and BM25_RANK() call in the SELECT clause, nested
+/// Replaces every BM25(), BM25_SCORE(), BM25_RANK() and BM25_HIGHLIGHT() call in the SELECT clause, nested
 /// occurrences included, with a read of the temporary holding that value, allocating the temporary
 /// on the first occurrence of each. Rejects an occurrence with no BM25 ordering and WHERE clause to
 /// agree with, or one that disagrees with them on the column or the search term; a disagreement

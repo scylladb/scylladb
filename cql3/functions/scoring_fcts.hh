@@ -32,6 +32,7 @@ namespace functions {
 static const function_name BM25_FUNCTION_NAME = function_name::native_function("bm25");
 static const function_name BM25_SCORE_FUNCTION_NAME = function_name::native_function("bm25_score");
 static const function_name BM25_RANK_FUNCTION_NAME = function_name::native_function("bm25_rank");
+static const function_name BM25_HIGHLIGHT_FUNCTION_NAME = function_name::native_function("bm25_highlight");
 static const function_name ANN_FUNCTION_NAME = function_name::native_function("ann");
 static const function_name ANN_SCORE_FUNCTION_NAME = function_name::native_function("ann_score");
 static const function_name ANN_RANK_FUNCTION_NAME = function_name::native_function("ann_rank");
@@ -56,6 +57,8 @@ enum class search_value {
     score,
     /// The position of the row in the index's result, counted from 1.
     rank,
+    /// An excerpt of the searched text with the matched terms marked. Full-text search only.
+    fragment,
 };
 
 /// A function whose value comes from an external search index rather than from evaluating its
@@ -97,6 +100,10 @@ expr::expression prepare_external_search_relation_lhs(expr::expression lhs, data
 shared_ptr<function> make_bm25_function();
 shared_ptr<function> make_bm25_score_function();
 shared_ptr<function> make_bm25_rank_function();
+
+/// Creates the full-text search highlighting function, reporting a fragment of the searched
+/// column's text with the matched terms marked, or null where the index finds none.
+shared_ptr<function> make_bm25_highlight_function();
 
 /// Creates the ANN-family function `name`. The argument types are not fixed: they are inferred
 /// from the call site and must be float vectors of the same dimension.

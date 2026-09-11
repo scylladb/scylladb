@@ -84,6 +84,8 @@ expr::expression replace_search_call(functions::search_value value, const expr::
         return read(temporaries.score, float_type, call);
     case functions::search_value::rank:
         return read(temporaries.rank, int32_type, call);
+    case functions::search_value::fragment:
+        return read(temporaries.fragment, utf8_type, call);
     case functions::search_value::score_and_rank:
         return expr::expression(expr::tuple_constructor{
                 .elements = {read(temporaries.score, float_type, std::nullopt), read(temporaries.rank, int32_type, std::nullopt)},

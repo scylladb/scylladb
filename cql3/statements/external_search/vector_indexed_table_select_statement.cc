@@ -292,7 +292,7 @@ future<shared_ptr<cql_transport::messages::result_message>> vector_indexed_table
     auto provider = std::optional<external_search::external_search_provider>{};
     if (table_results && _ann_ordering_info.temporaries.any()) {
         const auto& read = table_results.value();
-        auto rows = external_search::join_table_results(*read.rows, read.command->slice, *_schema, *_selection, &pkeys.value());
+        auto rows = external_search::join_table_results(*read.rows, read.command->slice, *_schema, *_selection, &pkeys.value(), {});
         external_search::drop_unscored_rows(rows, pkeys.value());
         provider.emplace(external_search::search_values_of(_ann_ordering_info.temporaries, rows, pkeys.value()), rows);
     }

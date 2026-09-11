@@ -11,6 +11,7 @@
 #include "cql3/selection/selection.hh"
 #include "cql3/statements/external_search/external_function.hh"
 #include "cql3/values.hh"
+#include "utils/managed_bytes.hh"
 #include "vector_search/vector_store_client.hh"
 
 #include <optional>
@@ -18,6 +19,7 @@
 #include <vector>
 
 class schema;
+class column_definition;
 
 namespace query {
 class result;
@@ -32,13 +34,15 @@ struct joined_row {
     std::optional<size_t> external_result;
     /// True if the row is left out of the result set; see drop_unscored_rows().
     bool dropped = false;
+    /// The values of the columns the join was asked to read out of the row, in the order asked.
+    std::vector<managed_bytes_opt> columns;
 };
 
-/// Walks the rows just read from the base table, one joined_row per row, matching each row to the
-/// external result that names it when `external_results` is given. The rows are walked with
-/// result_set_builder::visitor, the same visitor the result set is later built with, so the joined
-/// rows are exactly the rows of the result set, in order; `slice` must be the slice `table_results`
-/// were read with.
+/// Walks the rows just read from the base table, one joined_row per row, reading `columns` out of
+/// every row and, when `external_results` is given, matching each row to the external result that
+/// names it. The rows are walked with result_set_builder::visitor, the same visitor the result set
+/// is later built with, so the joined rows are exactly the rows of the result set, in order;
+/// `slice` must be the slice `table_results` were read with.
 ///
 /// The rows were read in the order of `external_results`, so matching walks both lists forward at
 /// once, comparing primary keys. An external result skipped on the way is one whose row is no
@@ -48,7 +52,8 @@ struct joined_row {
 /// Matching compares primary keys, so it only works if `slice` includes the key columns. Pass
 /// `external_results` as nullptr to skip matching when the selection does not read the key columns.
 std::vector<joined_row> join_table_results(const query::result& table_results, const query::partition_slice& slice, const schema& schema,
-        const selection::selection& selection, const vector_search::vector_store_client::primary_keys* external_results);
+        const selection::selection& selection, const vector_search::vector_store_client::primary_keys* external_results,
+        std::span<const column_definition* const> columns);
 
 /// Marks dropped every row that has no similarity to report: one no external result names, or one
 /// scored with something that is not a number.

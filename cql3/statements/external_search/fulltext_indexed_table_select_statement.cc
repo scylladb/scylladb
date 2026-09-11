@@ -30,6 +30,13 @@ namespace cql3::statements {
 
 namespace {
 
+/// The column the index is built on: the one the rows are ranked by and a fragment is generated from.
+const column_definition& ranked_column(const schema& schema, const secondary_index::index& index) {
+    const auto* cdef = schema.get_column_definition(to_bytes(index.target_column()));
+    throwing_assert(cdef);
+    return *cdef;
+}
+
 std::optional<expr::expression> validate_bm25_where_restriction(const expr::binary_operator& binop,
         const bm25_ordering_info& ordering_info) {
     // "WHERE BM25(c, t) > 0" arrives as BM25_SCORE(c, t) > 0 (see prepare_external_search_relation_lhs()),
@@ -62,6 +69,42 @@ std::optional<expr::expression> validate_bm25_where_restriction(const expr::bina
         return std::move(where_term);
     }
     return std::nullopt;
+}
+
+/// Asks the full-text index for a highlighted fragment of every row's text, and returns the
+/// fragments as the values of the highlight temporary: one per row in `rows`, in the same order.
+///
+/// The text of each row is `row.columns[text_column]`. All the texts are sent in one request, and
+/// the reply is an array of the same length: reply[i] is the fragment of rows[i]. A row with no text
+/// is sent as an empty string, so that the positions still line up. A row the index found no
+/// fragment in gets a null value and is not dropped. If the request fails, the query fails.
+future<std::vector<cql3::raw_value>> highlights_of(vector_search::vector_store_client& client, const schema& schema,
+        const secondary_index::index& index, const sstring& search_term, std::span<const external_search::joined_row> rows, size_t text_column,
+        abort_source& as) {
+    const auto& type = *ranked_column(schema, index).type;
+    auto documents = std::vector<sstring>{};
+    documents.reserve(rows.size());
+    for (const auto& row : rows) {
+        const auto& text = row.columns.at(text_column);
+        documents.push_back(text ? value_cast<sstring>(type.deserialize(managed_bytes_view(*text))) : sstring());
+    }
+
+    if (documents.empty()) {
+        co_return std::vector<cql3::raw_value>{};
+    }
+
+    auto fragments = co_await client.highlight(schema.ks_name(), index.metadata().name(), search_term, std::move(documents), as);
+    if (!fragments.has_value()) {
+        co_await coroutine::return_exception(
+                exceptions::invalid_request_exception(std::visit(vector_search::vector_store_client::fts_error_visitor{}, fragments.error())));
+    }
+
+    auto values = std::vector<cql3::raw_value>{};
+    values.reserve(fragments->size());
+    for (const auto& fragment : *fragments) {
+        values.push_back(fragment ? cql3::raw_value::make_value(utf8_type->decompose(*fragment)) : cql3::raw_value::make_null());
+    }
+    co_return values;
 }
 
 } // anonymous namespace
@@ -179,8 +222,14 @@ std::optional<bm25_ordering_info> get_bm25_ordering_info(
     }
 
     // The score and the rank are matched to a row by primary key.
-    if (ordering_info->temporaries.any()) {
+    if (ordering_info->temporaries.score || ordering_info->temporaries.rank) {
         external_search::fetch_primary_key_columns(*selection, *schema);
+    }
+
+    // The index stores none of the text a fragment is generated from, so it has to be read from
+    // every row even when the query does not select the column.
+    if (ordering_info->temporaries.fragment) {
+        selection->add_column_for_post_processing(ranked_column(*schema, ordering_info->index));
     }
 
     return ::make_shared<cql3::statements::fulltext_indexed_table_select_statement>(
@@ -254,12 +303,36 @@ future<shared_ptr<cql_transport::messages::result_message>> fulltext_indexed_tab
 
     auto table_results = co_await query_base_table(qp, state, options, timeout, pkeys.value());
 
+    const auto& temporaries = _bm25_ordering_info.temporaries;
+
     auto provider = std::optional<external_search::external_search_provider>{};
-    if (table_results && _bm25_ordering_info.temporaries.any()) {
+    if (table_results && temporaries.any()) {
+        // A fragment does not exist until the index has been sent the rows' text.
+        auto columns = std::vector<const column_definition*>{};
+        auto text_column = std::optional<size_t>{};
+        if (temporaries.fragment) {
+            text_column = columns.size();
+            columns.push_back(&ranked_column(*_schema, _bm25_ordering_info.index));
+        }
+        // Only the score and the rank are matched to a row by key; a fragment is matched by
+        // position, and the key columns are read only when one of those is selected.
+        const bool matched = temporaries.score.has_value() || temporaries.rank.has_value();
         const auto& read = table_results.value();
-        auto rows = external_search::join_table_results(*read.rows, read.command->slice, *_schema, *_selection, &pkeys.value());
-        external_search::drop_unscored_rows(rows, pkeys.value());
-        provider.emplace(external_search::search_values_of(_bm25_ordering_info.temporaries, rows, pkeys.value()), rows);
+        auto rows = external_search::join_table_results(*read.rows, read.command->slice, *_schema, *_selection,
+                matched ? &pkeys.value() : nullptr, columns);
+
+        auto filled = std::vector<external_search::external_values>{};
+        if (matched) {
+            external_search::drop_unscored_rows(rows, pkeys.value());
+            filled = external_search::search_values_of(temporaries, rows, pkeys.value());
+        }
+        if (temporaries.fragment) {
+            auto fragments = co_await highlights_of(qp.vector_store_client(), *_schema, _index, search_term_text, rows,
+                    *text_column, aoe.abort_source());
+            filled.push_back(external_search::external_values{
+                    .temporary_index = *temporaries.fragment, .values = std::move(fragments)});
+        }
+        provider.emplace(std::move(filled), rows);
     }
     co_return co_await emit_result_set(std::move(table_results), options, provider ? &*provider : nullptr);
 }

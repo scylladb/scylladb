@@ -116,6 +116,37 @@ The rank is the position in the index's result, not in the result set. If the in
 that is no longer in the base table, that row's rank is missing from the result and the ranks after
 it are not renumbered.
 
+.. _fulltext-highlighting:
+
+Highlighting
+~~~~~~~~~~~~
+
+``BM25_HIGHLIGHT()`` returns an excerpt of the searched text with the matched
+terms marked, for showing the reader why a row was returned::
+
+    SELECT id, BM25_HIGHLIGHT(v, 'search term') AS excerpt FROM ks.t
+        WHERE BM25(v, 'search term') > 0
+        ORDER BY BM25(v, 'search term')
+        LIMIT 10;
+
+It is accepted only in the ``SELECT`` clause, under the same rules as ``BM25()``
+there: the query must have the ``WHERE`` and ``ORDER BY`` clauses above, and
+the call must reference the same column and the same search term they do.
+
+The result is a single fragment of type ``text``, with the matched terms wrapped
+in ``<b>`` and ``</b>``. The markers are returned as they are; escaping the
+excerpt for the surrounding document is the client application's responsibility.
+
+The value is ``null`` for a row in which no fragment could be found, as happens
+when the query consists only of stop words. Such a row is still returned. An
+empty string is not a substitute for ``null``: it means the index returned an
+empty fragment.
+
+A query that asks for an excerpt costs one additional round trip to the
+full-text index, made after the matching rows have been read, carrying the text
+of the highlighted column of those rows. Queries that do not ask for an excerpt
+are unaffected.
+
 Filtering support
 ~~~~~~~~~~~~~~~~~
 
@@ -185,6 +216,10 @@ FTS queries enforce the following rules:
        score, but only in a query that already has the required ``WHERE`` and
        ``ORDER BY`` clauses. Every occurrence must reference the same column
        and the same search term.
+   * - ``BM25_HIGHLIGHT()`` is a selector only
+     - ``BM25_HIGHLIGHT()`` is accepted in the ``SELECT`` clause under the same
+       rules as ``BM25()``, and rejected in every other clause. See
+       :ref:`Highlighting <fulltext-highlighting>`.
    * - Single ordering only
      - ``ORDER BY BM25()`` cannot be combined with other ``ORDER BY`` columns,
        a second ``BM25()`` ordering, or with ``ANN`` ordering.
