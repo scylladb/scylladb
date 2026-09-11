@@ -206,7 +206,7 @@ def test_bm25_in_select_returns_scores(cql, fts_table, vector_store_mock):
         [id for id, _ in mock_data], scores=[s for _, s in mock_data]))
 
     rows = list(cql.execute(
-        f"SELECT id, BM25(content, 'hello') AS score FROM {table} "
+        f"SELECT id, BM25_SCORE(content, 'hello') AS score FROM {table} "
         f"WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT {len(mock_data)}"))
 
     assert len(rows) == len(expected)
@@ -232,7 +232,7 @@ def test_bm25_in_select_skips_multiple_stale_keys(cql, fts_table, vector_store_m
         [id for id, _ in mock_data], scores=[s for _, s in mock_data]))
 
     rows = list(cql.execute(
-        f"SELECT id, BM25(content, 'hello') AS score FROM {table} "
+        f"SELECT id, BM25_SCORE(content, 'hello') AS score FROM {table} "
         f"WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT {len(mock_data)}"))
 
     assert len(rows) == len(expected)
@@ -260,7 +260,7 @@ def test_bm25_in_select_returns_correct_scores_with_clustering_key(cql, test_key
         }))
 
         rows = list(cql.execute(
-            f"SELECT pk, ck, BM25(content, 'hello') AS score FROM {table} "
+            f"SELECT pk, ck, BM25_SCORE(content, 'hello') AS score FROM {table} "
             f"WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT {len(mock_data)}"))
 
         assert len(rows) == len(expected)
@@ -275,7 +275,7 @@ def test_bm25_in_select_bind_marker_mismatch_raises(cql, fts_setup_with_mock, ve
     table, _ = fts_setup_with_mock
 
     stmt = cql.prepare(
-        f"SELECT id, BM25(content, ?) AS score FROM {table} "
+        f"SELECT id, BM25_SCORE(content, ?) AS score FROM {table} "
         f"WHERE BM25(content, ?) > 0 ORDER BY BM25(content, ?) LIMIT {NUM_ROWS}")
     # All three markers with the same value: OK
     vector_store_mock.set_next_bm25_response(200, bm25_response(RESPONSE_PK_REVERSED))
@@ -303,7 +303,7 @@ def test_bm25_in_select_nested_unaliased_column_name(cql, fts_setup_with_mock):
     table, _ = fts_setup_with_mock
 
     rows = list(cql.execute(
-        f"SELECT CAST(BM25(content, 'hello') AS double) FROM {table} "
+        f"SELECT CAST(BM25_SCORE(content, 'hello') AS double) FROM {table} "
         f"WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT {NUM_ROWS}"))
     assert len(rows) == NUM_ROWS
     col_names = rows[0]._fields
@@ -330,7 +330,7 @@ def test_bm25_hidden_pk_columns_not_leaked(cql, test_keyspace, vector_store_mock
         # PK/CK are added internally to match BM25 scores to rows, regardless of column
         # order or which other columns are selected. They must never leak into the
         # client-visible result, and each score must stay attached to the right row.
-        bm25_col = "BM25(content, 'hello') AS score"
+        bm25_col = "BM25_SCORE(content, 'hello') AS score"
         select_columns_variants = [
             [bm25_col],
             ["pk", bm25_col],

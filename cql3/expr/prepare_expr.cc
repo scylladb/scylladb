@@ -2354,7 +2354,7 @@ binary_operator prepare_binary_operator(binary_operator binop, data_dictionary::
     if (const auto* fc = as_if<function_call>(&prepared_lhs); fc && is_external_function_call(*fc)) {
         // A search function (BM25(), ANN(), ...) decides which of its values a relation compares,
         // before the right-hand side is type-checked against it.
-        prepared_lhs = functions::prepare_external_search_relation_lhs(std::move(prepared_lhs));
+        prepared_lhs = functions::prepare_external_search_relation_lhs(std::move(prepared_lhs), db, table_schema);
     }
     lw_shared_ptr<column_specification> lhs_receiver = get_lhs_receiver(prepared_lhs, table_schema);
 

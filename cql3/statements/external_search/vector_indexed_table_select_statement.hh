@@ -23,8 +23,9 @@ struct ann_ordering_info {
     raw::select_statement::prepared_ann_ordering_type prepared_ann_ordering;
     bool is_rescoring_enabled;
     /// Temporaries holding the Vector Store's score and rank; see
-    /// external_search::search_temporaries. A rescoring index allocates neither: there the
-    /// similarity is computed from the row's own vector instead.
+    /// external_search::search_temporaries. ANN() is replaced with a tuple of the two, so it has no
+    /// temporary of its own. A rescoring index allocates neither: it recomputes the score locally
+    /// and reports no rank.
     external_search::search_temporaries temporaries;
     /// The SELECT occurrences' query vectors that only execution can compare, a bind marker
     /// standing where at least one of the two values will be.
@@ -41,8 +42,8 @@ std::optional<ann_ordering_info> get_ann_ordering_info(
 /// Replaces every ANN(), ANN_SCORE() and ANN_RANK() call in the SELECT clause, nested occurrences
 /// included, with a read of the temporary holding the Vector Store's score or rank. When the index
 /// rescores, the score is instead the similarity the coordinator recomputes, and there is no rank:
-/// ANN_RANK() is rejected. Also rejects an occurrence with no ANN ordering to agree with, or one
-/// that disagrees with it on the column or the query vector; a disagreement only
+/// ANN_RANK() and ANN() are rejected. Also rejects an occurrence with no ANN ordering to agree
+/// with, or one that disagrees with it on the column or the query vector; a disagreement only
 /// execution can settle is recorded in ordering_info for it to check.
 void prepare_ann_selectors(std::vector<selection::prepared_selector>& prepared_selectors,
         std::optional<ann_ordering_info>& ordering_info, expr::temporary_allocator& temporaries_allocator,
