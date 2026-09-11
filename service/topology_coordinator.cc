@@ -2608,10 +2608,18 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         rtlogger.info("Restoring tablet={} on {}", gid, replicas);
                         co_await coroutine::parallel_for_each(replicas, [this, gid] (locator::tablet_replica r) -> future<> {
                             auto dst = raft::server_id(r.host.uuid());
-                            if (!is_excluded(dst)) {
-                                co_await ser::sstables_loader_rpc_verbs::send_restore_tablet(&_messaging, r.host, dst, gid);
-                                rtlogger.debug("Tablet {} restored on {}", gid, r.host);
+                            if (is_excluded(dst)) {
+                                co_return;
                             }
+                            // Only a tablet's own replicas can download its sstables, so a replica
+                            // which is down has nobody to fall back to. A crashed host neither
+                            // refuses nor closes connections, so the RPC would never be answered;
+                            // fail instead, the request is retryable once the node is back.
+                            if (!_gossiper.is_alive(r.host)) {
+                                throw std::runtime_error(fmt::format("Cannot restore tablet {} because host {} is down", gid, r.host));
+                            }
+                            co_await ser::sstables_loader_rpc_verbs::send_restore_tablet(&_messaging, r.host, _as, dst, gid);
+                            rtlogger.debug("Tablet {} restored on {}", gid, r.host);
                         });
                     })) {
                         rtlogger.debug("Clearing restore transition for {}", gid);

@@ -1234,6 +1234,57 @@ async def test_restore_tablets_node_loss_resiliency(build_mode: str, manager: Sc
             await asyncio.wait_for(manager.api.wait_task(servers[1].ip_addr, tid), timeout=60)
 
 
+@pytest.mark.parametrize("target", ['replica', 'coordinator'])
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_restore_tablets_lost_only_replica(build_mode: str, manager: ScyllaClusterManager, object_storage, target):
+    '''With rf=1 a node that stops answering takes the only replica of its tablets with it, so
+    their restore can never succeed. Check that a restore fails instead of staying in flight
+    forever, both the one in progress when the node goes away and the one retried afterwards.
+
+    The node is paused rather than stopped: a host which crashed neither refuses nor closes
+    connections, so an RPC sent to it after it went down is never answered.'''
+
+    topology = topo(rf = 1, nodes = 3, racks = 1, dcs = 1)
+    servers, host_ids = await create_cluster(topology, manager, logger, object_storage)
+    log = await manager.server_open_log(servers[0].server_id)
+    await log.wait_for("raft_topology - start topology coordinator fiber", timeout=10)
+
+    await manager.disable_tablet_balancing()
+    cql = manager.get_cql()
+
+    tablet_count = 4
+    # servers[0] drives the topology coordinator, so losing it also exercises coordinator failover.
+    victim = servers[0] if target == 'coordinator' else servers[2]
+    survivors = [s for s in servers if s != victim]
+    api = servers[1]
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}") as ks:
+        snap_name, manifests = await populate_and_backup(manager, cql, servers, object_storage, ks, 'test',
+                                                         f"WITH tablets = {{'min_tablet_count': {tablet_count}}}", 12)
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test ( pk text primary key, value int ) WITH tablets = {{'min_tablet_count': {tablet_count}, 'max_tablet_count': {tablet_count}}};")
+
+        await manager.api.enable_injection(victim.ip_addr, "pause_tablet_restore", one_shot=True)
+        tid = await manager.api.restore_tablets(api.ip_addr, ks, 'test', snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests)
+        await manager.api.wait_for_injection_enter(victim.ip_addr, "pause_tablet_restore")
+
+        await manager.server_pause(victim.server_id)
+        # Skip the failure detector's delay, the same way server_stop(convict=True) does.
+        await asyncio.gather(*(manager.api.convict(s.ip_addr, host_ids[victim.server_id]) for s in survivors))
+
+        status = await asyncio.wait_for(manager.api.wait_task(api.ip_addr, tid), timeout=120)
+        assert status['state'] == 'failed', f"restore should have failed after losing the only replica of a tablet: {status}"
+
+        # The tablets of the paused node still have it as their only replica, so this restore
+        # fails too. What matters is that it fails rather than waiting for an answer forever.
+        tid = await manager.api.restore_tablets(api.ip_addr, ks, 'test', snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests)
+        status = await asyncio.wait_for(manager.api.wait_task(api.ip_addr, tid), timeout=120)
+        assert status['state'] == 'failed', f"restore of a tablet whose only replica is down should have failed: {status}"
+
+        await manager.server_unpause(victim.server_id)
+
+
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_restore_tablets_duplicate_after_failed_api_node(build_mode: str, manager: ScyllaClusterManager, object_storage):
     '''Check that a new restore request does not hang after a previous restore failed due to API node loss,
