@@ -76,7 +76,7 @@ public:
     std::optional<sstring> get_replication_strategy_class() const;
     void set_default_replication_strategy_class_option();
     std::optional<unsigned> get_initial_tablets(std::optional<unsigned> default_value, bool enforce_tablets = false) const;
-    std::optional<data_dictionary::consistency_config_option> get_consistency_option() const;
+    std::optional<data_dictionary::consistency_config> get_consistency_option() const;
     data_dictionary::storage_options get_storage_options() const;
     bool get_durable_writes() const;
     lw_shared_ptr<data_dictionary::keyspace_metadata> as_ks_metadata(sstring ks_name, const locator::token_metadata&, const gms::feature_service&, const db::config&);
