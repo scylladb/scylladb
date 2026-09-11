@@ -12,9 +12,11 @@
 
 #pragma once
 
+#include <unordered_map>
 #include <vector>
 
 #include <seastar/core/sharded.hh>
+#include <seastar/util/bool_class.hh>
 #include <seastar/core/future.hh>
 #include "replica/database_fwd.hh"
 #include "tasks/task_manager.hh"
@@ -196,6 +198,13 @@ private:
     future<> do_take_snapshot(sstring tag, std::vector<sstring> keyspace_names, snapshot_options opts = {}  );
     future<> do_take_column_family_snapshot(sstring ks_name, std::vector<sstring> tables, sstring tag, snapshot_options opts = {});
     future<> do_take_cluster_column_family_snapshot(std::vector<sstring> ks_names, std::vector<sstring> tables, sstring tag, snapshot_options opts = {});
+    // Validates the tag and options when the snapshot involves object-storage
+    // tables, and rejects a tag already committed in the snapshot catalog.
+    // Must happen before the topology request starts: per-node handlers
+    // cannot reject, the coordinator retries their failures forever.
+    using reject_committed_snapshot = bool_class<class reject_committed_snapshot_tag>;
+    future<> check_object_storage_snapshot_preconditions(const std::unordered_multimap<sstring, sstring>& ks_tables, const sstring& tag,
+            const snapshot_options& opts, reject_committed_snapshot reject_committed);
 
     future<> delete_expired_snapshots();
     future<> backup_sstables(table_id, std::string, std::string, std::string, std::string, dht::token, dht::token, utils::chunked_vector<sstables::sstable_id>, bool);
