@@ -304,6 +304,18 @@ public:
     // Exception safe.
     std::vector<replica::shared_memtable> clear_and_add();
 
+    // Builds a fresh, empty replacement list, to be installed by the overload below.
+    // This is the only part of the swap that allocates.
+    std::vector<replica::shared_memtable> make_replacement();
+
+    // Installs a replacement and returns the old memtables.
+    // Allocates nothing and cannot fail, so a caller that has to swap the lists of
+    // several memtable_lists without letting a reader see a half-done swap can build
+    // all of the replacements first and then install them one after another.
+    std::vector<replica::shared_memtable> clear_and_add(std::vector<replica::shared_memtable> replacement) noexcept {
+        return std::exchange(_memtables, std::move(replacement));
+    }
+
     size_t size() const noexcept {
         return _memtables.size();
     }
@@ -1063,6 +1075,16 @@ public:
     future<> cleanup_tablet(database&, db::system_keyspace&, locator::tablet_id);
     // For tests only.
     future<> cleanup_tablet_without_deallocation(database& db, db::system_keyspace& sys_ks, locator::tablet_id tid);
+    // Drops all data of the tablet on this shard: memtables are discarded without
+    // being flushed, sstables are deleted, the row cache is invalidated for the
+    // tablet's token range. The storage group stays allocated and writable, so the
+    // tablet keeps accepting writes right after the call.
+    //
+    // Meant for truncating a strongly consistent tablet from its Raft state machine,
+    // where the position of the truncate in the Raft log decides which writes survive.
+    // Hence no truncation or commitlog cleanup record is written:
+    // the commitlog is filtered by Raft index during replay, not by replay position
+    future<> truncate_tablet_locally(database& db, locator::tablet_id tid);
     future<const_mutation_partition_ptr> find_partition(schema_ptr, reader_permit permit, const dht::decorated_key& key) const;
     future<const_row_ptr> find_row(schema_ptr, reader_permit permit, const dht::decorated_key& partition_key, clustering_key clustering_key) const;
     shard_id shard_for_reads(dht::token t) const;

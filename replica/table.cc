@@ -5801,6 +5801,191 @@ future<> table::cleanup_tablet_without_deallocation(database& db, db::system_key
     co_await cleanup_compaction_groups(db, sys_ks, tid, sg);
 }
 
+// Retires the memtables of every compaction group of the tablet. The replacements are
+// built first so that the swapping loop cannot throw: while a split or a merge is in
+// progress a partition has data in more than one group, and a half-done swap would leave
+// an older version of a row visible after the newer one was dropped.
+static std::vector<shared_memtable> retire_memtables(const utils::small_vector<compaction_group_ptr, 3>& cgs) {
+    std::vector<std::vector<shared_memtable>> replacements;
+    replacements.reserve(cgs.size());
+    size_t retired_count = 0;
+    for (auto& cg : cgs) {
+        replacements.push_back(cg->memtables()->make_replacement());
+        retired_count += cg->memtables()->size();
+    }
+
+    std::vector<shared_memtable> retired;
+    retired.reserve(retired_count);
+    for (size_t i = 0; i < cgs.size(); ++i) {
+        auto old = cgs[i]->memtables()->clear_and_add(std::move(replacements[i]));
+        for (auto& mt : old) {
+            // Keeps flush_when_needed() off the retired region, as seal_active_memtable() does.
+            mt->region().ground_evictable_occupancy();
+            retired.push_back(std::move(mt));
+        }
+    }
+    return retired;
+}
+
+future<> table::truncate_tablet_locally(database& db, locator::tablet_id tid) {
+    auto holder = async_gate().hold();
+    auto& sg = storage_group_for_id(tid.value());
+    auto sg_holder = sg.async_gate().hold();
+    auto cgs = sg.compaction_groups_immediate();
+
+    // Compaction stays disabled until the reenablers go out of scope, so no compaction
+    // output lands in the sstable sets between capturing and swapping them. Every view has
+    // to be disabled before the first preemption point, hence parallel_for_each: otherwise
+    // set_split_mode() slips in and creates groups that cgs does not cover.
+    std::vector<compaction::compaction_group_view*> views;
+    for (auto& cg : cgs) {
+        for (auto* view : cg->all_views()) {
+            views.push_back(view);
+        }
+    }
+    std::vector<compaction::compaction_reenabler> cres;
+    cres.reserve(views.size());
+    co_await coroutine::parallel_for_each(views, [&] (compaction::compaction_group_view* view) -> future<> {
+        cres.push_back(co_await _compaction_manager.stop_and_disable_compaction("truncate", *view));
+    });
+
+    // Releases the memtables and the unlinked files that parked reads would otherwise pin.
+    // A read that parks later resumes on the memtables and the sstable set it captured,
+    // returning the pre-truncate value of its partition, which is a legal answer while the truncate runs.
+    co_await clear_inactive_reads_for_tablet(db, sg);
+
+    // Told apart because only the main sstables are charged to the backlog tracker below.
+    struct captured_sstables {
+        std::vector<sstables::shared_sstable> main;
+        std::vector<sstables::shared_sstable> maintenance;
+    };
+
+    // Swaps the sstable sets of all the groups in one step, for the same reason
+    // retire_memtables() swaps all the memtable lists in one.
+    class tablet_truncater : public row_cache::external_updater_impl {
+        table& _t;
+        const utils::small_vector<compaction_group_ptr, 3>& _cgs;
+        std::vector<captured_sstables>& _captured;
+        std::vector<lw_shared_ptr<sstables::sstable_set>> _empty_main_sets;
+        std::vector<lw_shared_ptr<sstables::sstable_set>> _empty_maintenance_sets;
+    public:
+        tablet_truncater(table& t, const utils::small_vector<compaction_group_ptr, 3>& cgs,
+                std::vector<captured_sstables>& captured)
+                : _t(t)
+                , _cgs(cgs)
+                , _captured(captured)
+        {
+            _empty_main_sets.reserve(_cgs.size());
+            _empty_maintenance_sets.reserve(_cgs.size());
+            for (auto& cg : _cgs) {
+                _empty_main_sets.push_back(make_lw_shared<sstables::sstable_set>(cg->make_main_sstable_set()));
+                _empty_maintenance_sets.push_back(cg->make_maintenance_sstable_set());
+            }
+        }
+        virtual future<> prepare() override {
+            // The sets cannot change before execute() swaps them out: compaction is
+            // disabled and the sstable list permit is held. Captured aside so a throw here
+            // records no live sstable as pending deletion; the transfer capacity is
+            // reserved here too, where throwing is still safe.
+            _captured.reserve(_cgs.size());
+            auto capture = [] (const lw_shared_ptr<sstables::sstable_set>& set, std::vector<sstables::shared_sstable>& out) {
+                out.reserve(set->size());
+                set->for_each_sstable([&] (const sstables::shared_sstable& sst) {
+                    out.push_back(sst);
+                });
+            };
+            for (auto& cg : _cgs) {
+                captured_sstables c;
+                capture(cg->main_sstables(), c.main);
+                capture(cg->maintenance_sstables(), c.maintenance);
+                auto& pending = cg->_sstables_compacted_but_not_deleted;
+                pending.reserve(pending.size() + c.main.size() + c.maintenance.size());
+                _captured.push_back(std::move(c));
+            }
+            return make_ready_future<>();
+        }
+        virtual void execute() override {
+            for (size_t i = 0; i < _cgs.size(); ++i) {
+                auto& cg = _cgs[i];
+                auto& pending = cg->_sstables_compacted_but_not_deleted;
+                // Copied, not moved: _captured is used again below. Reserved in prepare().
+                pending.insert(pending.end(), _captured[i].main.begin(), _captured[i].main.end());
+                pending.insert(pending.end(), _captured[i].maintenance.begin(), _captured[i].maintenance.end());
+                cg->set_main_sstables(std::move(_empty_main_sets[i]));
+                cg->set_maintenance_sstables(std::move(_empty_maintenance_sets[i]));
+            }
+            _t.refresh_compound_sstable_set();
+        }
+    };
+
+    std::vector<captured_sstables> captured;
+    std::vector<shared_memtable> old_memtables;
+    auto p_range = to_partition_range(sg.token_range());
+    {
+        // Flush permits first: a flush in progress holds one and may be waiting for the
+        // sstable list permit in update_cache(). Held until the memtables are retired, so
+        // no in-flight flush turns a memtable we are about to drop into an sstable.
+        std::optional<flush_permit> flush_permits = co_await _config.dirty_memory_manager->get_all_flush_permits();
+        auto list_permit = co_await get_sstable_list_permit();
+
+        co_await _cache.invalidate(row_cache::external_updater(
+                std::make_unique<tablet_truncater>(*this, cgs, captured)), p_range);
+
+        // Retired only now, after invalidate() returned. Its cache walk is preemptible,
+        // and until it passes a partition the cache still serves that partition from an
+        // entry holding pre-swap sstable content. Retiring the memtables any earlier would
+        // let such a read return the value they were shadowing, which is neither the state
+        // before the truncate nor the state after it.
+        old_memtables = retire_memtables(cgs);
+        // In the same non-throwing stretch as the retiring: rp_set::put() already released
+        // the handles, so a later failure would pin these segments for the process lifetime.
+        for (auto& mt : old_memtables) {
+            if (commitlog()) {
+                commitlog()->discard_completed_segments(schema()->id(), mt->get_and_discard_rp_set());
+            }
+        }
+        // No flush can resurrect the retired data any more.
+        flush_permits.reset();
+        rebuild_statistics();
+
+        // The swap changed the sstable sets and nothing else. The backlog tracker and the
+        // cleanup state learn about removals only from here, and unlike in
+        // compaction_group::cleanup() the group is not stopped afterwards.
+        for (size_t i = 0; i < cgs.size(); ++i) {
+            auto& cg = cgs[i];
+            cg->backlog_tracker_adjust_charges(captured[i].main, {});
+            for (auto& sst : captured[i].main) {
+                erase_sstable_cleanup_state(sst);
+            }
+            for (auto& sst : captured[i].maintenance) {
+                erase_sstable_cleanup_state(sst);
+            }
+        }
+
+        for (auto& cg : cgs) {
+            if (cg->_sstables_compacted_but_not_deleted.empty()) {
+                continue;
+            }
+            auto gh = _sstable_deletion_gate.hold();
+            auto deletion = make_atomic_deletion(cg->_sstables_compacted_but_not_deleted);
+            co_await deletion.commit();
+            cg->_sstables_compacted_but_not_deleted.clear();
+            co_await deletion.execute();
+        }
+        rebuild_statistics();
+    }
+
+    // Safe under a read still using one of these: iterator_reader re-derives its iterators,
+    // and invalidate() left the cache with nothing pre-truncate to pair them with. A read
+    // bypassing the cache can still see a shadowed value, as on the regular truncate path.
+    for (auto& mt : old_memtables) {
+        co_await mt->clear_gently();
+    }
+
+    tlogger.debug("Truncated tablet {} of table {}.{} locally, range {}",
+            tid, schema()->ks_name(), schema()->cf_name(), sg.token_range());
+}
+
 shard_id table::shard_for_reads(dht::token t) const {
     return _erm ? _erm->shard_for_reads(*_schema, t)
                 : dht::static_shard_of(*_schema, t); // for tests.
