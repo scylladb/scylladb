@@ -1756,6 +1756,10 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
 
         new_sst->_shards = this->_shards;
 
+        utils::get_local_injector().inject("link_with_rewritten_component_fail", [] {
+            throw std::runtime_error{"link_with_rewritten_component_fail error injection"};
+        });
+
         ex = nullptr;
         try {
             new_sst->seal_sstable(false).get();
