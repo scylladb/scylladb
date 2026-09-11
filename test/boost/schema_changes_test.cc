@@ -19,12 +19,13 @@
 using namespace sstables;
 using namespace std::chrono_literals;
 
-constexpr std::array<sstable_version_types, 5> expected_writable_sstable_versions = {
+constexpr std::array<sstable_version_types, 6> expected_writable_sstable_versions = {
 sstable_version_types::mc,
 sstable_version_types::md,
 sstable_version_types::me,
 sstable_version_types::ms,
 sstable_version_types::mt,
+sstable_version_types::pq,
 };
 
 // Add/remove test cases if writable_sstable_versions changes
@@ -34,9 +35,10 @@ static_assert(writable_sstable_versions[1] == expected_writable_sstable_versions
 static_assert(writable_sstable_versions[2] == expected_writable_sstable_versions[2], "writable_sstable_versions changed");
 static_assert(writable_sstable_versions[3] == expected_writable_sstable_versions[3], "writable_sstable_versions changed");
 static_assert(writable_sstable_versions[4] == expected_writable_sstable_versions[4], "writable_sstable_versions changed");
+static_assert(writable_sstable_versions[5] == expected_writable_sstable_versions[5], "writable_sstable_versions changed");
 
 future <> test_schema_changes_int(sstable_version_types sstable_vtype) {
-  return sstables::test_env::do_with_async([] (sstables::test_env& env) {
+  return sstables::test_env::do_with_async([sstable_vtype] (sstables::test_env& env) {
     std::map<schema_ptr, shared_sstable> cache;
     for_each_schema_change([&] (schema_ptr base, const utils::chunked_vector<mutation>& base_mutations,
                                 schema_ptr changed, const utils::chunked_vector<mutation>& changed_mutations) {
@@ -45,7 +47,11 @@ future <> test_schema_changes_int(sstable_version_types sstable_vtype) {
         shared_sstable created_with_base_schema;
         shared_sstable created_with_changed_schema;
         if (it == cache.end()) {
-            created_with_base_schema = make_sstable_containing(env.make_sstable(base), base_mutations).get();
+            // The version under test, explicitly. This used to call env.make_sstable(base), whose
+            // default is get_highest_sstable_version() -- which deliberately skips `pq` -- so every
+            // case in this file wrote the newest *row* format whatever the test's name said, and
+            // test_schema_changes_pq never exercised a Parquet file at all (#31556).
+            created_with_base_schema = make_sstable_containing(env.make_sstable(base, sstable_vtype), base_mutations).get();
             cache.emplace(base, created_with_base_schema);
         } else {
             created_with_base_schema = it->second;
@@ -90,6 +96,25 @@ SEASTAR_TEST_CASE(test_schema_changes_ms) {
 
 SEASTAR_TEST_CASE(test_schema_changes_mt) {
     return test_schema_changes_int(sstable_version_types::mt);
+}
+
+// `pq` was added to writable_sstable_versions without updating the guard above, so this file has
+// not compiled -- and therefore this suite has not run -- since. Schema evolution over a Parquet
+// file is worth covering rather than excluding: the reader reconstructs a row from leaves selected
+// by the *writing* schema, so a column added or dropped afterwards exercises exactly the
+// leaf-to-column mapping that a row-oriented format gets for free.
+//
+// #31556: until the pq reader recovered the leaf layout from the file's own footer rather than
+// from the schema it was handed, every one of these cases failed to open the sstable with
+// "recovered N leaves but file has M" the moment a column had been added or dropped.
+//
+// Beyond the leaf mapping, the generator also exercises two things the pq *writer* has to
+// round-trip faithfully and once did not: a live cell whose value is empty on a fixed-width column
+// (`bytes()` in an `int`, which came back as 0 -- now carried by the `__empty_mask` channel), and a
+// partition that is entirely empty when written (which mx keeps and end_partition() dropped -- now
+// given the same placeholder row a static-only partition gets).
+SEASTAR_TEST_CASE(test_schema_changes_pq) {
+    return test_schema_changes_int(sstable_version_types::pq);
 }
 
 // Changing only a parquet option must change both schema equality and the digest.

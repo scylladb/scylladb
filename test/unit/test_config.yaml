@@ -12,6 +12,20 @@ custom_args:
         - '-c1 -m100M --count 10 --standard-object-size 3000000'
         - '-c1 -m100M --count 24000 --standard-object-size 2048'
         - '-c1 -m1G --count 4000000 --standard-object-size 128'
+    # One case per subcommand of the shred/reassemble losslessness matrix. These are
+    # subcommand names, not seastar flags: the test dispatches on the first argument it
+    # recognises, so the DEFAULT_SCYLLA_ARGS that the harness prepends are ignored.
+    #
+    # `cost` is deliberately absent. It prints a CSV and returns 0 unconditionally, so a
+    # case for it could never go red -- coverage in appearance only. It stays in
+    # sstables/parquet/run_tests.sh (suite 7), which is where its numbers get read.
+    parquet_shred_test:
+        - 'roundtrip'
+        - 'filetrip'
+        - 'logical'
+        - 'recovery'
+        - 'legacy'
+        - 'collections'
     row_cache_alloc_stress_test:
         - '-c1 -m2G'
     row_cache_stress_test:
