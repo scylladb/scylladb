@@ -481,20 +481,21 @@ void groups_manager::update(token_metadata_ptr new_tm) {
             logger.info("update(): starting raft server for tablet {}, group id {}", tablet, id);
             state.gate = make_lw_shared<gate>();
             _starting_groups.push_back(state);
-            chain_control_op(state, id, [&state, this, tablet, id, new_tm] () mutable -> future<> {
+            chain_control_op(state, id, [&state, this, tablet, id, new_tm, g = state.gate] () mutable -> future<> {
                 co_await start_raft_group(tablet, id, std::move(new_tm));
                 state.server = &_raft_gr.get_server(id);
                 state.leader_info_updater = leader_info_updater(state, tablet, id);
 
                 // We want to make sure the server is ready to serve requests before
                 // we report it as started in wait_for_groups_to_start().
+                //
+                // The server can't be destroyed under us: a deletion runs only
+                // after this operation. Probing `g`, the gate of this
+                // incarnation, just stops the wait once a deletion is queued;
+                // state.gate may already be a later incarnation's open gate.
                 abort_on_expiry aoe(lowres_clock::now() + std::chrono::seconds(60));
                 while (true) {
-                    // Use try_hold() rather than hold(): a concurrent
-                    // schedule_raft_group_deletion() may have closed the gate
-                    // while we were waiting for a leader below. In that case the
-                    // group is being deleted, so stop trying to make it ready.
-                    auto holder = state.gate->try_hold();
+                    auto holder = g->try_hold();
                     if (!holder) {
                         break;
                     }
