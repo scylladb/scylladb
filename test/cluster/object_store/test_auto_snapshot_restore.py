@@ -125,6 +125,7 @@ async def add_server(manager: ScyllaClusterManager, s3_storage):
     return await manager.server_add(config=config)
 
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.parametrize("load_method", LOAD_METHODS)
 async def test_auto_snapshot_restore_table(manager: ScyllaClusterManager, s3_storage, load_method: str):
     """
@@ -155,6 +156,7 @@ async def test_auto_snapshot_restore_table(manager: ScyllaClusterManager, s3_sto
         assert rows[1].c1 == "c1-1"
 
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.parametrize("load_method", LOAD_METHODS)
 async def test_auto_snapshot_restore_table_with_dropped_column(manager: ScyllaClusterManager, s3_storage, load_method: str):
     """
@@ -198,6 +200,7 @@ async def test_auto_snapshot_restore_table_with_dropped_column(manager: ScyllaCl
             await cql.run_async(f"SELECT c2 FROM {ks}.{cf}")
 
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.parametrize("load_method", LOAD_METHODS)
 async def test_auto_snapshot_restore_table_with_dropped_and_readded_column(manager: ScyllaClusterManager, s3_storage, load_method: str):
     """

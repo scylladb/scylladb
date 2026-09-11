@@ -16,6 +16,7 @@ from test.pylib.rest_client import inject_error_one_shot
 
 logger = logging.getLogger(__name__)
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_raft_snapshot_truncation(manager: ScyllaClusterManager):
     """

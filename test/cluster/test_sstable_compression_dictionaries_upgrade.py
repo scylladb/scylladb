@@ -26,6 +26,7 @@ from cassandra.query import SimpleStatement
 logger = logging.getLogger(__name__)
 
 
+@pytest.mark.max_running_shards(4)
 async def test_upgrade_and_rollback(manager: ScyllaClusterManager, scylla_2025_1: ScyllaVersionDescription, scylla_binary: pathlib.Path):
 
     logger.info("Bootstrapping cluster")

@@ -245,6 +245,7 @@ class TestScrubIndexes(TestHelper):
         assert len(ret) == 8, "Invalid number of records in table 'users'"
         return ret
 
+    @pytest.mark.max_running_shards(2)
     def test_scrub_static_table(self):
         cluster = self.cluster
         cluster.set_configuration_options(
@@ -287,6 +288,7 @@ class TestScrubIndexes(TestHelper):
         users = self.query_users(session)
         assert initial_users == users, "List of users before and after scrub are different"
 
+    @pytest.mark.max_running_shards(2)
     def test_standalone_scrub(self):
         cluster = self.cluster
         cluster.populate(1).start()
@@ -313,6 +315,7 @@ class TestScrubIndexes(TestHelper):
         users = self.query_users(session)
         assert initial_users == users, "List of users before and after scrub are different"
 
+    @pytest.mark.max_running_shards(2)
     def test_scrub_collections_table_without_indexes(self):
         cluster = self.cluster
         cluster.set_configuration_options(
@@ -383,6 +386,7 @@ class TestScrub(TestHelper):
         assert len(ret) == 5, "Amount of users is different"
         return ret
 
+    @pytest.mark.max_running_shards(2)
     def test_nodetool_scrub(self):
         cluster = self.cluster
         cluster.set_configuration_options(
@@ -425,6 +429,7 @@ class TestScrub(TestHelper):
         users = self.query_users(session)
         assert initial_users == users, "List of users before and after scrub are different"
 
+    @pytest.mark.max_running_shards(2)
     def test_standalone_scrub(self):
         cluster = self.cluster
         cluster.populate(1).start()
@@ -451,6 +456,7 @@ class TestScrub(TestHelper):
         users = self.query_users(session)
         assert initial_users == users, "List of users before and after scrub are different"
 
+    @pytest.mark.max_running_shards(2)
     def test_standalone_scrub_essential_files_only(self):
         cluster = self.cluster
         cluster.populate(1).start()
@@ -479,6 +485,7 @@ class TestScrub(TestHelper):
         users = self.query_users(session)
         assert initial_users == users, "List of users before and after scrub are different"
 
+    @pytest.mark.max_running_shards(2)
     def test_scrub_with_udt(self):
         """
         @jira_ticket CASSANDRA-7665

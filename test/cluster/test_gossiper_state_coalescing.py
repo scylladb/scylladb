@@ -51,6 +51,7 @@ async def endpoint_states(manager: ScyllaClusterManager, node_ip: str) -> dict[s
     }
 
 
+@pytest.mark.max_running_shards(8)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.asyncio
 async def test_gossiper_coalescing_does_not_lose_application_states(manager: ScyllaClusterManager) -> None:

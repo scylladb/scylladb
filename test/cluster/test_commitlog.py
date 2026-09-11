@@ -16,6 +16,7 @@ from test.pylib.random_tables import Column, TextType
 
 logger = logging.getLogger(__name__)
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_reboot(request, manager: ScyllaClusterManager):
     # Check that commitlog provides durability in case of a node reboot.

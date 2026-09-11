@@ -45,6 +45,7 @@ class TestAuth(Tester):
             r"Can\'t send migration request: node.*is down",
         ]
 
+    @pytest.mark.max_running_shards(2)
     @pytest.mark.single_node
     def test_login(self):
         """
@@ -79,6 +80,7 @@ class TestAuth(Tester):
             # https://github.com/scylladb/scylla/issues/2274
             # assert 'Password must not be null' in str(list(e.errors.values())[0])
 
+    @pytest.mark.max_running_shards(2)
     @pytest.mark.single_node
     def test_anonymous(self):
         """
@@ -114,6 +116,7 @@ class TestAuth(Tester):
         self.assert_unauthorized("You have to be logged in and not anonymous to perform this request", session, "LIST USERS")
         self.assert_unauthorized("You have to be logged in and not anonymous to perform this request", session, "GRANT SELECT ON ALL KEYSPACES TO anonymous")
 
+    @pytest.mark.max_running_shards(2)
     @pytest.mark.single_node
     def test_create_user_permissions(self):
         """
@@ -130,6 +133,7 @@ class TestAuth(Tester):
         jackob = self.get_session(user="jackob", password="12345")
         self.assert_unauthorized("User jackob has no CREATE permission on <all roles> or any of its parents", jackob, "CREATE USER james WITH PASSWORD '54321' NOSUPERUSER")
 
+    @pytest.mark.max_running_shards(2)
     @pytest.mark.single_node
     def test_cant_create_existing_user(self):
         """
@@ -144,6 +148,7 @@ class TestAuth(Tester):
         session.execute("CREATE USER 'james@example.com' WITH PASSWORD '12345' NOSUPERUSER")
         assert_invalid(session, "CREATE USER 'james@example.com' WITH PASSWORD '12345' NOSUPERUSER", "james@example.com already exists")
 
+    @pytest.mark.max_running_shards(2)
     @pytest.mark.single_node
     def test_list_users(self):
         """
@@ -171,6 +176,7 @@ class TestAuth(Tester):
         assert not users["cathy"]
         assert users["dave"]
 
+    @pytest.mark.max_running_shards(2)
     @pytest.mark.single_node
     def test_user_cant_drop_themselves(self):
         """
@@ -185,6 +191,7 @@ class TestAuth(Tester):
         # handle different error messages between versions pre and post 2.2.0
         assert_invalid(session, "DROP USER cassandra", "(Users aren't allowed to DROP themselves|Cannot DROP primary role for current login)")
 
+    @pytest.mark.max_running_shards(2)
     @pytest.mark.single_node
     def test_dropping_nonexistent_user_throws_exception(self):
         """
@@ -198,6 +205,7 @@ class TestAuth(Tester):
         session = self.get_session(user="cassandra", password="cassandra")
         assert_invalid(session, "DROP USER nonexistent", "nonexistent doesn't exist")
 
+    @pytest.mark.max_running_shards(2)
     @pytest.mark.single_node
     def test_drop_user_case_sensitive(self):
         """
@@ -238,6 +246,7 @@ class TestAuth(Tester):
         assert_invalid(cassandra, "DROP USER TEST")
         assert_invalid(cassandra, "DROP USER Test")
 
+    @pytest.mark.max_running_shards(2)
     @pytest.mark.single_node
     def test_drop_user_revoke_all(self):
         """
@@ -285,6 +294,7 @@ class TestAuth(Tester):
         self.assert_unauthorized("User test has no SELECT permission on <table ks.cf> or any of its parents", session, "SELECT * FROM ks.cf")
         self.assert_unauthorized("User test has no AUTHORIZE permission on <table ks.cf> or any of its parents", session, "GRANT SELECT ON ks.cf TO test2")
 
+    @pytest.mark.max_running_shards(2)
     @pytest.mark.single_node
     def test_alter_user_case_sensitive(self):
         """
@@ -306,6 +316,7 @@ class TestAuth(Tester):
         assert_invalid(cassandra, "ALTER USER TEST WITH PASSWORD '12345'")
         cassandra.execute("ALTER USER test WITH PASSWORD '54321'")
 
+    @pytest.mark.max_running_shards(2)
     @pytest.mark.single_node
     def test_regular_users_can_alter_their_passwords_only(self):
         """
@@ -325,6 +336,7 @@ class TestAuth(Tester):
         cathy = self.get_session(user="cathy", password="54321")
         self.assert_unauthorized("User cathy has no ALTER permission on <role bob> or any of its parents", cathy, "ALTER USER bob WITH PASSWORD 'cantchangeit'")
 
+    @pytest.mark.max_running_shards(2)
     @pytest.mark.single_node
     def test_users_cant_alter_their_superuser_status(self):
         """
@@ -338,6 +350,7 @@ class TestAuth(Tester):
         session = self.get_session(user="cassandra", password="cassandra")
         self.assert_unauthorized("You aren't allowed to alter your own superuser status", session, "ALTER USER cassandra NOSUPERUSER")
 
+    @pytest.mark.max_running_shards(2)
     @pytest.mark.single_node
     def test_only_superuser_alters_superuser_status(self):
         """
@@ -356,6 +369,7 @@ class TestAuth(Tester):
 
         cassandra.execute("ALTER USER cathy SUPERUSER")
 
+    @pytest.mark.max_running_shards(2)
     @pytest.mark.single_node
     def test_altering_nonexistent_user_throws_exception(self):
         """
@@ -369,6 +383,7 @@ class TestAuth(Tester):
         session = self.get_session(user="cassandra", password="cassandra")
         assert_invalid(session, "ALTER USER nonexistent WITH PASSWORD 'doesn''tmatter'", "nonexistent doesn't exist")
 
+    @pytest.mark.max_running_shards(2)
     @pytest.mark.single_node
     def test_conditional_create_drop_user(self):
         """
@@ -395,6 +410,7 @@ class TestAuth(Tester):
         users = list(session.execute("LIST USERS"))
         assert 1 == len(users)  # cassandra
 
+    @pytest.mark.max_running_shards(2)
     @pytest.mark.single_node
     def test_create_ks_auth(self):
         """
@@ -414,6 +430,7 @@ class TestAuth(Tester):
         cassandra.execute("GRANT CREATE ON ALL KEYSPACES TO cathy")
         cathy.execute("""CREATE KEYSPACE ks WITH replication = {'class':'NetworkTopologyStrategy', 'replication_factor':1}""")
 
+    @pytest.mark.max_running_shards(2)
     @pytest.mark.single_node
     def test_create_cf_auth(self):
         """
@@ -434,6 +451,7 @@ class TestAuth(Tester):
         cassandra.execute("GRANT CREATE ON KEYSPACE ks TO cathy")
         cathy.execute("CREATE TABLE ks.cf (id int primary key)")
 
+    @pytest.mark.max_running_shards(4)
     @pytest.mark.single_node
     def test_alter_ks_auth(self):
         """
@@ -462,6 +480,7 @@ class TestAuth(Tester):
         cassandra.execute("GRANT ALTER ON KEYSPACE ks TO cathy")
         cathy.execute(f"ALTER KEYSPACE ks WITH replication = {{'class':'{replication_strategy}', '{rf_type}':2}}")
 
+    @pytest.mark.max_running_shards(2)
     @pytest.mark.single_node
     def test_alter_cf_auth(self):
         """
@@ -538,6 +557,7 @@ class TestAuth(Tester):
         cassandra.execute("GRANT ALTER ON ks.cf TO cathy")
         cathy.execute("ALTER TABLE ks.cf DROP val2")
 
+    @pytest.mark.max_running_shards(2)
     @pytest.mark.single_node
     def test_materialized_views_auth(self):
         """
@@ -578,6 +598,7 @@ class TestAuth(Tester):
         cassandra.execute("GRANT ALTER ON ks.cf TO cathy")
         cathy.execute("DROP MATERIALIZED VIEW mv1")
 
+    @pytest.mark.max_running_shards(2)
     @pytest.mark.single_node
     def test_drop_ks_auth(self):
         """
@@ -598,6 +619,7 @@ class TestAuth(Tester):
         cassandra.execute("GRANT DROP ON KEYSPACE ks TO cathy")
         cathy.execute("DROP KEYSPACE ks")
 
+    @pytest.mark.max_running_shards(2)
     @pytest.mark.single_node
     def test_drop_cf_auth(self):
         """
@@ -619,6 +641,7 @@ class TestAuth(Tester):
         cassandra.execute("GRANT DROP ON ks.cf TO cathy")
         cathy.execute("DROP TABLE ks.cf")
 
+    @pytest.mark.max_running_shards(2)
     @pytest.mark.single_node
     def test_modify_and_select_auth(self):
         """
@@ -664,6 +687,7 @@ class TestAuth(Tester):
 
         assert 0 == len(rows)
 
+    @pytest.mark.max_running_shards(2)
     @pytest.mark.single_node
     def test_grant_revoke_without_ks_specified(self):
         """
@@ -697,6 +721,7 @@ class TestAuth(Tester):
         cathy.execute("GRANT SELECT ON cf TO bob")
         bob.execute("SELECT * FROM ks.cf")
 
+    @pytest.mark.max_running_shards(2)
     @pytest.mark.single_node
     def test_grant_revoke_auth(self):
         """
@@ -725,6 +750,7 @@ class TestAuth(Tester):
         # should succeed now with both SELECT and AUTHORIZE
         cathy.execute("GRANT SELECT ON ALL KEYSPACES TO bob")
 
+    @pytest.mark.max_running_shards(2)
     @pytest.mark.single_node
     def test_grant_revoke_validation(self):
         """
@@ -747,6 +773,7 @@ class TestAuth(Tester):
 
         assert_invalid(cassandra, "REVOKE ALL ON KEYSPACE ks FROM nonexistent", "(User|Role) nonexistent doesn't exist")
 
+    @pytest.mark.max_running_shards(2)
     @pytest.mark.single_node
     def test_grant_revoke_cleanup(self):
         """
@@ -791,6 +818,7 @@ class TestAuth(Tester):
 
         self.assert_unauthorized("User cathy has no SELECT permission on <table ks.cf> or any of its parents", cathy, "SELECT * FROM ks.cf")
 
+    @pytest.mark.max_running_shards(2)
     @pytest.mark.single_node
     def test_type_auth(self):
         """
@@ -849,6 +877,7 @@ class TestAuth(Tester):
         if not (expect_rf_err or expect_auth_err or expect_invalid_req):
             logger.info("Good: session is available as expected")
 
+    @pytest.mark.max_running_shards(2)
     @pytest.mark.single_node
     def test_drop_keyspace_system_auth_1_node(self):
         """
@@ -870,6 +899,7 @@ class TestAuth(Tester):
         except Unauthorized as e:
             assert str(e) == 'Error from server: code=2100 [Unauthorized] message="Cannot DROP <keyspace system_auth>"'
 
+    @pytest.mark.max_running_shards(2)
     @pytest.mark.single_node
     def test_change_setting_to_noauth_after_system_auth_was_lost(self):
         """
@@ -889,6 +919,7 @@ class TestAuth(Tester):
             with pytest.raises(Unauthorized, match=r'Error from server: code=2100 \[Unauthorized\] message="You have to be logged in and not ' 'anonymous to perform this request"'):
                 session.execute("LIST USERS")
 
+    @pytest.mark.max_running_shards(2)
     @pytest.mark.single_node
     def test_restart_node_doesnt_lose_auth_data(self):
         """
@@ -923,6 +954,7 @@ class TestAuth(Tester):
 
         philip.execute("SELECT * FROM ks.cf")
 
+    @pytest.mark.max_running_shards(2)
     @pytest.mark.single_node
     def test_system_keyspace_sensitive(self):
         """
@@ -957,6 +989,7 @@ class TestAuth(Tester):
             except InvalidRequest as e:
                 self.assertEquals(str(e), 'Cannot DROP <keyspace %s>' % name.lower())"""
 
+    @pytest.mark.max_running_shards(2)
     @pytest.mark.single_node
     def test_all_authorization_operations(self):
         """
@@ -1034,6 +1067,7 @@ class TestAuth(Tester):
 
         self.assert_unauthorized("You are not authorized to view cathy's permissions", bob, "LIST ALL PERMISSIONS OF cathy")
 
+    @pytest.mark.max_running_shards(4)
     def test_authentication_enabled_only_in_one_node(self):
         """
         **Description:** Authentication is enabled only in one node while disabled in others -
@@ -1084,6 +1118,7 @@ class TestAuth(Tester):
         except Exception as e:  # noqa: BLE001
             assert str(e) == 'Error from server: code=2100 [Unauthorized] message="You have to be logged in and not anonymous to perform this request"'
 
+    @pytest.mark.max_running_shards(4)
     def test_transitional_auth_betweenness_from_default(self):
         """
         Start cluster with default Auth, test user permission during rolling upgrade of enable Transitional Auth.
@@ -1116,6 +1151,7 @@ class TestAuth(Tester):
         session = self.get_session(node_idx=1, user="normal", password="123456")
         self.assert_unauthorized("You have to be logged in and not anonymous to perform this request", session, "LIST USERS")
 
+    @pytest.mark.max_running_shards(4)
     def test_transitional_auth_betweenness_from_pwdauth(self):
         """
         Start cluster with strict Auth, test user permission during rolling upgrade of enable Transitional Auth.

@@ -31,6 +31,7 @@ async def get_number_of_voters(manager: ScyllaClusterManager, srv: ServerInfo):
 # Make sure the algorithm works with different cluster sizes.
 # (3, 1, 1) specifically checks that the largest DC doesn't get 2+ voters
 # and keep half or more of all voters, which would make losing that DC unsafe.
+@pytest.mark.max_running_shards(24)
 @pytest.mark.parametrize('dc1_nodes,dc2_nodes,dc3_nodes', [
     pytest.param(3, 1, 1),
     pytest.param(6, 3, 3,
@@ -107,6 +108,7 @@ async def test_raft_voters_multidc_kill_dc(
     await read_barrier(manager.api, dc_servers[1][0].ip_addr)
 
 
+@pytest.mark.max_running_shards(14)
 async def test_raft_limited_voters_retain_coordinator(manager: ScyllaClusterManager):
     """
     Test that the topology coordinator is retained as a voter when possible.
@@ -163,6 +165,7 @@ async def test_raft_limited_voters_retain_coordinator(manager: ScyllaClusterMana
         f"The coordinator {coordinator_id} should be a voter (but is not)"
 
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_raft_voters_stop_leader_keeps_quorum(manager: ScyllaClusterManager, build_mode: str):
     """

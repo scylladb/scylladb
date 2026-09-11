@@ -16,6 +16,7 @@ from test.cluster.util import new_test_keyspace, new_test_table
 from test.pylib.async_cql import _wrap_future
 from test.pylib.internal_types import ServerInfo
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
+import pytest
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,7 @@ async def assert_binding_by_name_works_across_nodes(manager: ScyllaClusterManage
         cluster.shutdown()
 
 
+@pytest.mark.max_running_shards(4)
 async def test_in_bind_variable_name_mixed_config(manager: ScyllaClusterManager):
     """
     cql_in_bind_variable_name_uses_uppercase_operator decides whether the
@@ -87,6 +89,7 @@ async def test_in_bind_variable_name_mixed_config(manager: ScyllaClusterManager)
             await assert_binding_by_name_works_across_nodes(manager, uppercase_server, lowercase_server, query, 'IN(c)', 1)
 
 
+@pytest.mark.max_running_shards(1)
 async def test_in_bind_variable_name_of_a_cached_statement(manager: ScyllaClusterManager):
     """
     The name is picked when the statement is prepared, and the item is part of

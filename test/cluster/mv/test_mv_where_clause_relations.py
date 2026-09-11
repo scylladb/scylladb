@@ -8,6 +8,7 @@ import logging
 from test.cluster.util import new_materialized_view, new_test_keyspace, new_test_table
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for_view
+import pytest
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,7 @@ def prepare_insert(cql, table, key_columns):
 
 
 # Regression test for SCYLLADB-3583.
+@pytest.mark.max_running_shards(2)
 async def test_view_where_clause_above_default_relation_limit(manager: ScyllaClusterManager):
     """A view whose WHERE clause has more relations than the default limit is
     usable, no matter what the limit was when it was created. Scylla reparses
@@ -57,6 +59,7 @@ async def test_view_where_clause_above_default_relation_limit(manager: ScyllaClu
 
 
 # Regression test for SCYLLADB-3583.
+@pytest.mark.max_running_shards(2)
 async def test_rename_base_column_of_view_above_default_relation_limit(manager: ScyllaClusterManager):
     """Renaming a base column rewrites the stored WHERE clause of every view
     referring to it, which means reparsing that clause. Just like the reparse

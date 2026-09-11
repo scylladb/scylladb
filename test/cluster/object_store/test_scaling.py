@@ -21,6 +21,7 @@ from cassandra.query import SimpleStatement, ConsistencyLevel
 
 logger = logging.getLogger(__name__)
 
+@pytest.mark.max_running_shards(12)
 async def test_scaling(manager: ScyllaClusterManager, object_storage):
     """Test cluster scaling (add/remove nodes) with tablets on object storage.
 

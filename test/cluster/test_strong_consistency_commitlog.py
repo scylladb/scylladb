@@ -10,6 +10,7 @@ from test.cluster.util import new_test_keyspace
 import pytest
 
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.asyncio
 async def test_data_survives_crash(manager: ScyllaClusterManager):
     """Verify that SC table data survives a non-graceful crash and is recovered
@@ -58,6 +59,7 @@ async def test_data_survives_crash(manager: ScyllaClusterManager):
     await manager.server_stop_gracefully(server.server_id)
 
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.asyncio
 async def test_schema_upgrade_during_replay(manager: ScyllaClusterManager):
     """Verify that SC table data survives a crash even when the schema was altered
@@ -112,6 +114,7 @@ async def test_schema_upgrade_during_replay(manager: ScyllaClusterManager):
     await manager.server_stop_gracefully(server.server_id)
 
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.asyncio
 async def test_double_crash_recovery(manager: ScyllaClusterManager):
     """Verify that SC table data survives two consecutive crashes.
@@ -164,6 +167,7 @@ async def test_double_crash_recovery(manager: ScyllaClusterManager):
     await manager.server_stop_gracefully(server.server_id)
 
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.asyncio
 async def test_crash_with_multiple_commitlog_segments(manager: ScyllaClusterManager):
     """Verify crash recovery when data spans multiple commitlog segments.
@@ -211,6 +215,7 @@ async def test_crash_with_multiple_commitlog_segments(manager: ScyllaClusterMana
     await manager.server_stop_gracefully(server.server_id)
 
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.asyncio
 async def test_crash_recovery_multi_tablet(manager: ScyllaClusterManager):
     """Verify crash recovery with multiple tablets (independent raft groups).
@@ -254,6 +259,7 @@ async def test_crash_recovery_multi_tablet(manager: ScyllaClusterManager):
     await manager.server_stop_gracefully(server.server_id)
 
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.asyncio
 async def test_crash_recovery_after_flush(manager: ScyllaClusterManager):
     """Verify crash recovery when some data was flushed to sstables before the crash.

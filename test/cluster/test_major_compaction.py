@@ -21,6 +21,7 @@ async def disable_autocompaction_across_keyspaces(manager: ScyllaClusterManager,
     for ks in (*keyspace_list, "system", "system_schema"):
         await manager.api.disable_autocompaction(server_ip_addr, ks)
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.parametrize("consider_only_existing_data", [True, False])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_major_compaction_consider_only_existing_data(manager: ScyllaClusterManager, consider_only_existing_data):
@@ -89,6 +90,7 @@ async def test_major_compaction_consider_only_existing_data(manager: ScyllaClust
         for k in range(10):
             assert len(await cql.run_async(f"SELECT * FROM {ks}.{cf} WHERE pk = {k}")) == expected_count
 
+@pytest.mark.max_running_shards(1)
 @pytest.mark.parametrize("compaction_flush_all_tables_before_major_seconds", [0, 2, 10])
 async def test_major_compaction_flush_all_tables(manager: ScyllaClusterManager, compaction_flush_all_tables_before_major_seconds):
     """
@@ -140,6 +142,7 @@ async def test_major_compaction_flush_all_tables(manager: ScyllaClusterManager, 
         await check_all_table_flush_in_major_compaction(compaction_flush_all_tables_before_major_seconds == 2)
 
 # Testcase for https://github.com/scylladb/scylladb/issues/20197
+@pytest.mark.max_running_shards(1)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_shutdown_drain_during_compaction(manager: ScyllaClusterManager):
     """
@@ -194,6 +197,7 @@ async def test_shutdown_drain_during_compaction(manager: ScyllaClusterManager):
         await manager.server_start(server.server_id)
         await reconnect_driver(manager)
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_alter_compaction_strategy_during_compaction(manager: ScyllaClusterManager):
     """
@@ -237,6 +241,7 @@ async def test_alter_compaction_strategy_during_compaction(manager: ScyllaCluste
         await compaction_task
 
 # Testcase for https://github.com/scylladb/scylladb/issues/24501
+@pytest.mark.max_running_shards(2)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_disable_autocompaction_during_major_compaction(manager: ScyllaClusterManager):
     """

@@ -20,6 +20,7 @@ import asyncio
 logger = logging.getLogger(__name__)
 
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.parametrize("feature_config", feature_configs(FeatureConfigurations.EVENTUAL_CONSISTENCY,
                                                            FeatureConfigurations.LOGSTOR_EVENTUAL_CONSISTENCY))
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
@@ -76,6 +77,7 @@ async def get_raft_leader_and_log(manager: ScyllaClusterManager, servers):
     return (raft_leader, raft_leader_log)
 
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_truncate_with_concurrent_drop(manager: ScyllaClusterManager):
 
@@ -126,6 +128,7 @@ async def test_truncate_with_concurrent_drop(manager: ScyllaClusterManager):
             await trunc_future
 
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.parametrize("feature_config", feature_configs(FeatureConfigurations.EVENTUAL_CONSISTENCY,
                                                            FeatureConfigurations.LOGSTOR_EVENTUAL_CONSISTENCY,
                                                            FeatureConfigurations.STRONG_CONSISTENCY,
@@ -180,6 +183,7 @@ async def test_truncate_while_node_restart(manager: ScyllaClusterManager, featur
                                 query_template="SELECT COUNT(*) FROM {ks}.{table}", ks=ks, table='test', keys=keys, partition_key='pk') == 0
 
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_truncate_with_coordinator_crash(manager: ScyllaClusterManager):
 
@@ -225,6 +229,7 @@ async def test_truncate_with_coordinator_crash(manager: ScyllaClusterManager):
         assert row[0].count == 0
 
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.parametrize("feature_config", feature_configs(FeatureConfigurations.EVENTUAL_CONSISTENCY,
                                                            FeatureConfigurations.LOGSTOR_EVENTUAL_CONSISTENCY))
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
@@ -278,6 +283,7 @@ async def test_truncate_while_truncate_already_waiting(manager: ScyllaClusterMan
                                 query_template="SELECT COUNT(*) FROM {ks}.{table}", ks=ks, table='test', keys=keys, partition_key='pk') == 0
 
 # Reproduces https://github.com/scylladb/scylladb/issues/23771.
+@pytest.mark.max_running_shards(1)
 @pytest.mark.parametrize("feature_config", feature_configs(FeatureConfigurations.EVENTUAL_CONSISTENCY,
                                                            FeatureConfigurations.LOGSTOR_EVENTUAL_CONSISTENCY,
                                                            FeatureConfigurations.STRONG_CONSISTENCY,
@@ -319,6 +325,7 @@ async def test_replay_position_check_during_truncate(manager, feature_config: Fe
         await truncate_task
 
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.parametrize("feature_config", feature_configs(FeatureConfigurations.EVENTUAL_CONSISTENCY,
                                                            FeatureConfigurations.LOGSTOR_EVENTUAL_CONSISTENCY))
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
@@ -369,6 +376,7 @@ async def test_parallel_truncate(manager: ScyllaClusterManager, feature_config: 
         assert await count_rows(cql, feature_config,
                                 query_template="SELECT COUNT(*) FROM {ks}.{table}", ks=ks, table='test1', keys=keys, partition_key='pk') == 0
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_split_emitted_during_truncate(manager: ScyllaClusterManager):
     """Tests that truncation handles new compaction groups introduced by tablet
@@ -444,6 +452,7 @@ async def test_split_emitted_during_truncate(manager: ScyllaClusterManager):
         await wait_for(finished_splitting, time.time() + 120)
 
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_truncate_by_stale_coordinator_with_foreign_session(manager: ScyllaClusterManager):
     """A coordinator which loses leadership while parked in handle_topology_ordered_op()

@@ -23,6 +23,7 @@ from typing import TypeAlias
 
 logger = logging.getLogger(__name__)
 
+@pytest.mark.max_running_shards(6)
 async def test_maintenance_mode(manager: ScyllaClusterManager):
     """
     The test checks that in maintenance mode server A is not available for other nodes and for clients.

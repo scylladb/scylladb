@@ -387,6 +387,8 @@ class ScyllaClusterManager:
             "cluster_str": str(self.cluster),
             "tasks_leaked": bool(tasks_leaked),
             "message": tasks_leaked,
+            "max_running_shards": self.cluster.shard_usage.high_water_mark,
+            "claim": self.cluster.shard_usage.claim,
         }
 
     @manager_op

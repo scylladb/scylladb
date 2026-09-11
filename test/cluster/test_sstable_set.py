@@ -13,6 +13,7 @@ from test.cluster.util import create_new_test_keyspace
 
 logger = logging.getLogger(__name__)
 
+@pytest.mark.max_running_shards(1)
 @pytest.mark.parametrize("mode", ['vnode', 'tablet'])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_partitioned_sstable_set(manager: ScyllaClusterManager, mode):

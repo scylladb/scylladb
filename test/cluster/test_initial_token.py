@@ -13,6 +13,7 @@ from test.cluster.util import BANNED_NOTIFICATION
 
 logger = logging.getLogger(__name__)
 
+@pytest.mark.max_running_shards(6)
 async def test_initial_token(manager: ScyllaClusterManager) -> None:
     tokens = ["-9223372036854775808", "-4611686018427387904", "0", "4611686018427387904"]
     cfg1 = {'initial_token': f"{tokens[0]}, {tokens[1]}"}

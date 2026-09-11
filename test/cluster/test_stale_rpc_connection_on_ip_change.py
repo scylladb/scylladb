@@ -57,6 +57,7 @@ class BlackholeServer:
             await srv.wait_closed()
         logger.info(f"Blackhole server on {self.ip} stopped")
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.asyncio
 async def test_stale_client_id_evicted(manager: ScyllaClusterManager):
@@ -131,6 +132,7 @@ async def test_stale_client_id_evicted(manager: ScyllaClusterManager):
     logger.info("Stale CLIENT_ID eviction of IP_A confirmed!")
 
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.asyncio
 async def test_direct_fd_recovers_after_ip_change(manager: ScyllaClusterManager):
     """Reproduces SCYLLADB-2127: when a node restarts with a new IP (e.g. K8s

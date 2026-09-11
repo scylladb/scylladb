@@ -62,6 +62,7 @@ async def change_support_for_test_feature_and_restart(manager: ScyllaClusterMana
     await asyncio.gather(*(manager.server_start(srv.server_id, expected_error) for srv in srvs))
 
 
+@pytest.mark.max_running_shards(6)
 async def test_rolling_upgrade_happy_path(manager: ScyllaClusterManager) -> None:
     """Simulates an upgrade of a cluster by doing a rolling restart
        and marking the test-only feature as supported on restarted nodes.
@@ -94,6 +95,7 @@ async def test_rolling_upgrade_happy_path(manager: ScyllaClusterManager) -> None
     await asyncio.gather(*(wait_for_feature(TEST_FEATURE_NAME, cql, h, time.time() + 60) for h in hosts))
 
 
+@pytest.mark.max_running_shards(6)
 async def test_downgrade_after_partial_upgrade(manager: ScyllaClusterManager) -> None:
     """Simulates a partial upgrade of a cluster by enabling the test features
        in all nodes but one, then downgrading the upgraded nodes.
@@ -121,6 +123,7 @@ async def test_downgrade_after_partial_upgrade(manager: ScyllaClusterManager) ->
         assert TEST_FEATURE_NAME not in await get_supported_features(cql, host)
 
 
+@pytest.mark.max_running_shards(8)
 async def test_joining_old_node_fails(manager: ScyllaClusterManager) -> None:
     """Upgrades the cluster to enable a new feature. Then, it first tries to
        add a new node without the feature, and then replace an existing node
@@ -154,6 +157,7 @@ async def test_joining_old_node_fails(manager: ScyllaClusterManager) -> None:
     await manager.server_start(new_server_info.server_id, expected_error="Feature check failed|received notification of being banned from the cluster from")
 
 
+@pytest.mark.max_running_shards(6)
 async def test_downgrade_after_successful_upgrade_fails(manager: ScyllaClusterManager) -> None:
     """Upgrades the cluster to enable the test feature. Then, shuts down all nodes,
        disables support for the feature, then restarts all nodes. All nodes

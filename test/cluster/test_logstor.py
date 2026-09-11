@@ -25,6 +25,7 @@ async def count_logstor_data_files(manager: ScyllaClusterManager, server_id: int
     workdir = await manager.server_get_workdir(server_id)
     return len(list((Path(workdir) / "logstor").glob(f"ls_{shard}-*-Data.db")))
 
+@pytest.mark.max_running_shards(2)
 async def test_config_option_consistency(manager: ScyllaClusterManager):
     """
     Test that logstor storage engine requires the experimental 'logstor' feature to be enabled.
@@ -41,6 +42,7 @@ async def test_config_option_consistency(manager: ScyllaClusterManager):
         with pytest.raises(ConfigurationException, match="The experimental feature 'logstor' must be enabled"):
             await cql.run_async(f"CREATE TABLE {ks}.t_logstor (pk int PRIMARY KEY, v int) WITH storage_engine = 'logstor'")
 
+@pytest.mark.max_running_shards(2)
 async def test_parallel_writes(manager: ScyllaClusterManager):
     cmdline = ['--logger-log-level', 'logstor=debug']
     cfg = {'experimental_features': ['logstor']}
@@ -59,6 +61,7 @@ async def test_parallel_writes(manager: ScyllaClusterManager):
             assert rows[0].pk == i
             assert rows[0].v == i + 1
 
+@pytest.mark.max_running_shards(1)
 async def test_parallel_big_writes(manager: ScyllaClusterManager):
     """
     Perform multiple writes in parallel with large values and validate to test segment switching.
@@ -84,6 +87,7 @@ async def test_parallel_big_writes(manager: ScyllaClusterManager):
             assert rows[0].pk == i
             assert rows[0].v == f"{i}-{large_value}"
 
+@pytest.mark.max_running_shards(1)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_write_failure_retires_active_segment(manager: ScyllaClusterManager):
     """
@@ -151,6 +155,7 @@ async def test_write_failure_retires_active_segment(manager: ScyllaClusterManage
             assert len(rows) == 1, f"Key {pk} not found after recovery"
             assert rows[0].v == expected_v, f"Key {pk} has wrong value after recovery"
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.parametrize("fail_separator_flush", [False, True], ids=["normal", "fail_separator_flush"])
 async def test_recovery_basic(manager: ScyllaClusterManager, fail_separator_flush: bool):
@@ -237,6 +242,7 @@ async def test_recovery_basic(manager: ScyllaClusterManager, fail_separator_flus
             assert rows[0].pk == pk, f"Key {pk} has wrong pk value"
             assert rows[0].v == expected_v, f"Key {pk} has wrong value after additional writes"
 
+@pytest.mark.max_running_shards(1)
 async def test_recovery_with_segment_reuse(manager: ScyllaClusterManager):
     """
     Test recovery after segments have been compacted and reused.
@@ -305,6 +311,7 @@ async def test_recovery_with_segment_reuse(manager: ScyllaClusterManager):
             assert len(rows) == 1, f"Key {pk} not found after recovery"
             assert rows[0].v == expected_v, f"Key {pk} value mismatch after recovery"
 
+@pytest.mark.max_running_shards(1)
 async def test_grow_logstor_disk_size(manager: ScyllaClusterManager):
     """
     Test that increasing the configured logstor disk size works correctly.
@@ -350,6 +357,7 @@ async def test_grow_logstor_disk_size(manager: ScyllaClusterManager):
         assert new_free_segments >= old_free_segments + ((new_disk_size_mb - old_disk_size_mb) * 1024 * 1024) // segment_size, \
             "Free segments should increase after growing disk size"
 
+@pytest.mark.max_running_shards(1)
 async def test_shrink_logstor_disk_size_no_data(manager: ScyllaClusterManager):
     """
     Test that shrinking the configured logstor disk size works correctly when
@@ -393,6 +401,7 @@ async def test_shrink_logstor_disk_size_no_data(manager: ScyllaClusterManager):
         assert free_segments <= new_disk_size_mb * 1024 * 1024 // segment_size, "Free segments should not exceed total segments after shrinking disk size"
 
 
+@pytest.mark.max_running_shards(1)
 async def test_shrink_logstor_disk_size_dead_data(manager: ScyllaClusterManager):
     """
     Test that shrinking the configured logstor disk size can remove a file when
@@ -456,6 +465,7 @@ async def test_shrink_logstor_disk_size_dead_data(manager: ScyllaClusterManager)
             f"Expected at most one active segment after shrink with dead data, got {segments_in_use}"
 
 
+@pytest.mark.max_running_shards(1)
 async def test_shrink_logstor_disk_size_live_data(manager: ScyllaClusterManager):
     """
     Test that shrinking the configured logstor disk size preserves files that
@@ -511,6 +521,7 @@ async def test_shrink_logstor_disk_size_live_data(manager: ScyllaClusterManager)
             assert rows[0].v == value, f"Wrong value for key {i} after attempted shrink with live data"
 
 
+@pytest.mark.max_running_shards(1)
 async def test_space_accounting_metrics(manager: ScyllaClusterManager):
     """
     Verify the space accounting metrics scylla_logstor_sm_live_record_bytes and
@@ -618,6 +629,7 @@ async def test_space_accounting_metrics(manager: ScyllaClusterManager):
             f"got {final_live_record_count_after_drop}"
         )
 
+@pytest.mark.max_running_shards(1)
 async def test_compaction(manager: ScyllaClusterManager):
     """
     Test log compaction by creating dead data and verifying space reclamation.
@@ -660,6 +672,7 @@ async def test_compaction(manager: ScyllaClusterManager):
             await manager.api.logstor_compaction(servers[0].ip_addr)
         await wait_for(segments_compacted, time.time() + 60)
 
+@pytest.mark.max_running_shards(2)
 async def test_drop_table(manager: ScyllaClusterManager):
     """
     Test that DROP TABLE works properly with logstor tables.
@@ -722,6 +735,7 @@ async def test_drop_table(manager: ScyllaClusterManager):
             assert len(rows) == 1, f"Expected 1 row for key {i} in test2 after all operations, but got {len(rows)}"
             assert rows[0].v == value, f"Expected value of size {value_size} for key {i} in test2 after all operations, but got {len(rows[0].v)}"
 
+@pytest.mark.max_running_shards(1)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.parametrize("operation", ["drop", "truncate"])
 async def test_table_removal_during_logstor_compaction(manager: ScyllaClusterManager, operation: str):
@@ -791,6 +805,7 @@ async def test_table_removal_during_logstor_compaction(manager: ScyllaClusterMan
             rows = await cql.run_async(f"SELECT pk FROM {ks}.test")
             assert len(rows) == 0
 
+@pytest.mark.max_running_shards(1)
 async def test_trigger_separator_flush(manager: ScyllaClusterManager):
     """
     Write to 2 tablets, one slower than the other.
@@ -830,6 +845,7 @@ async def test_trigger_separator_flush(manager: ScyllaClusterManager):
             value = f"value_{i}_" + ('x' * (value_size - 20))
             await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({pk}, '{value}')")
 
+@pytest.mark.max_running_shards(1)
 async def test_tablet_split_trigger_by_size(manager: ScyllaClusterManager):
     """
     Test that a logstor table automatically splits tablets when the data size
@@ -881,6 +897,7 @@ async def test_tablet_split_trigger_by_size(manager: ScyllaClusterManager):
             assert len(rows) == 1, f"Key {i} not found after tablet split"
             assert rows[0].v == value, f"Wrong value for key {i} after tablet split"
 
+@pytest.mark.max_running_shards(1)
 async def test_tablet_split_and_merge(manager: ScyllaClusterManager):
     logger.info("Bootstrapping cluster")
     cmdline = [
@@ -943,6 +960,7 @@ async def test_tablet_split_and_merge(manager: ScyllaClusterManager):
 
         await check()
 
+@pytest.mark.max_running_shards(2)
 async def test_tablet_migration(manager: ScyllaClusterManager):
     """
     Test tablet migration
@@ -978,6 +996,7 @@ async def test_tablet_migration(manager: ScyllaClusterManager):
             assert len(rows) == 1, f"Expected 1 row for key {i} after tablet migration, but got {len(rows)}"
             assert rows[0].v == f"{i}_{value}", f"Expected value '{i}_{value}' for key {i} after tablet migration, but got {rows[0].v}"
 
+@pytest.mark.max_running_shards(2)
 async def test_tablet_intranode_migration(manager: ScyllaClusterManager):
     """
     Test tablet intranode migration
@@ -1012,6 +1031,7 @@ async def test_tablet_intranode_migration(manager: ScyllaClusterManager):
             assert len(rows) == 1, f"Expected 1 row for key {i} after tablet migration, but got {len(rows)}"
             assert rows[0].v == f"{i}_{value}", f"Expected value '{i}_{value}' for key {i} after tablet migration, but got {rows[0].v}"
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_migration_with_compaction(manager: ScyllaClusterManager):
     """
@@ -1104,6 +1124,7 @@ async def test_tablet_migration_with_compaction(manager: ScyllaClusterManager):
             assert len(rows) == 1, f"Key {pk} not found after migration with concurrent compaction"
             assert rows[0].v == expected_v, f"Key {pk} has wrong value after migration with concurrent compaction"
 
+@pytest.mark.max_running_shards(1)
 @pytest.mark.asyncio
 async def test_cache(manager: ScyllaClusterManager):
     """

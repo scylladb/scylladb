@@ -17,6 +17,7 @@ from test.cluster.util import disable_schema_agreement_wait, parse_replication_o
 logger = logging.getLogger(__name__)
 
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_alter_dropped_tablets_keyspace(manager: ScyllaClusterManager) -> None:
     config = {
@@ -67,6 +68,7 @@ async def test_alter_dropped_tablets_keyspace(manager: ScyllaClusterManager) -> 
     with pytest.raises(InvalidRequest, match=f"Can't ALTER keyspace {ks}, keyspace doesn't exist|Can't find a keyspace {ks}") as e:
         await task
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_alter_tablets_keyspace_concurrent_modification(manager: ScyllaClusterManager) -> None:
     config = {

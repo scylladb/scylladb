@@ -43,6 +43,7 @@ class TestSchemaManagement(Tester):
         return cluster
 
 
+    @pytest.mark.max_running_shards(6)
     def test_prepared_statements_work_after_node_restart_after_altering_schema_without_changing_columns(self):
         cluster = self.prepare(racks_num=3)
 
@@ -89,6 +90,7 @@ class TestSchemaManagement(Tester):
             expected = [i, "A", "B"]
             assert list(res[i]) == expected, f"Expected {expected}, got {res[i]}"
 
+    @pytest.mark.max_running_shards(2)
     def test_dropping_keyspace_with_many_columns(self):
         """
         Exploits https://github.com/scylladb/scylla/issues/1484
@@ -108,6 +110,7 @@ class TestSchemaManagement(Tester):
             s.execute("CREATE KEYSPACE testxyz WITH replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }")
             s.execute("drop keyspace testxyz")
 
+    @pytest.mark.max_running_shards(6)
     def test_multiple_create_table_in_parallel(self):
         """
         Run multiple create table statements via different nodes
@@ -153,6 +156,7 @@ class TestSchemaManagement(Tester):
         rows = sessions[0].execute(SimpleStatement(f"SELECT * FROM {ks}.{step3_table}", consistency_level=ConsistencyLevel.ALL))
         assert len(rows_to_list(rows)) == 1, f"Expected 1 row but got rows:{rows} instead"
 
+    @pytest.mark.max_running_shards(6)
     @pytest.mark.parametrize("case", ("write", "read", "mixed"))
     def test_alter_table_in_parallel_to_read_and_write(self, case):
         """
@@ -250,6 +254,7 @@ class TestSchemaManagement(Tester):
         """
         raise NotImplementedError
 
+    @pytest.mark.max_running_shards(6)
     @pytest.mark.parametrize("case", ("create_table", "alter_table", "drop_table"))
     def test_update_schema_while_node_is_killed(self, case):
         """
@@ -340,6 +345,7 @@ class TestSchemaManagement(Tester):
         logger.debug("verify that commitlog has been replayed and that all data is restored")
         expected_case_result_map[case]()
 
+    @pytest.mark.max_running_shards(6)
     @pytest.mark.parametrize("is_gently_stop", [True, False])
     def test_nodes_rejoining_a_cluster_synch_on_schema(self, is_gently_stop):
         """
@@ -390,6 +396,7 @@ class TestSchemaManagement(Tester):
         for key in range(10):
             query_c1c2(session=session, key=key, consistency=ConsistencyLevel.ALL)
 
+    @pytest.mark.max_running_shards(6)
     def test_reads_schema_recreated_while_node_down(self):
         cluster = self.prepare(racks_num=3)
 
@@ -419,6 +426,7 @@ class TestSchemaManagement(Tester):
         rows = session.execute(SimpleStatement("SELECT * FROM cf", consistency_level=ConsistencyLevel.ALL))
         assert rows_to_list(rows) == [], f"Expected an empty result set, got {rows}"
 
+    @pytest.mark.max_running_shards(6)
     def test_writes_schema_recreated_while_node_down(self):
         cluster = self.prepare(racks_num=3)
 
@@ -551,6 +559,7 @@ class TestLargePartitionAlterSchema(Tester):
         logger.debug(f"Drop {column_name} column")
         session.execute(f"ALTER TABLE lp_table DROP {column_name}")
 
+    @pytest.mark.max_running_shards(2)
     def test_large_partition_with_add_column(self):
         cluster_topology = generate_cluster_topology()
         session = self.prepare(cluster_topology, rf=1)
@@ -594,6 +603,7 @@ class TestLargePartitionAlterSchema(Tester):
 
         assert_all(session, f"select pk, ck1, val1, val2, new_clmn from lp_table", data, ignore_order=True, print_result_on_failure=False)
 
+    @pytest.mark.max_running_shards(2)
     def test_large_partition_with_drop_column(self):
         cluster_topology = generate_cluster_topology()
         session = self.prepare(cluster_topology, rf=1)
@@ -732,6 +742,7 @@ class TestSchemaHistory(Tester):
         self.session = self.patient_cql_connection(self.cluster.nodelist()[0], row_factory=dict_factory)
         create_ks(self.session, "lwt_load_ks", rf)
 
+    @pytest.mark.max_running_shards(6)
     def test_schema_history_alter_table(self):
         """test schema history changes following alter table cql commands"""
         self.prepare()

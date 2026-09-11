@@ -12,6 +12,7 @@ from test.cluster.util import get_coordinator_host
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_gossiper_race_on_decommission(manager: ScyllaClusterManager):
     """
@@ -104,6 +105,7 @@ async def test_gossiper_race_on_decommission(manager: ScyllaClusterManager):
     assert coordinator.server_id in [s.server_id for s in running_servers]
 
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_gossiper_no_resurrection_on_decommission(manager: ScyllaClusterManager):
     """

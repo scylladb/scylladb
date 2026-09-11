@@ -16,6 +16,7 @@ from test.cluster.util import reconnect_driver, trigger_snapshot, get_topology_c
 
 logger = logging.getLogger(__name__)
 
+@pytest.mark.max_running_shards(6)
 async def test_raft_snapshot_request(manager: ScyllaClusterManager):
     cmdline = [
         '--logger-log-level', 'raft=trace',

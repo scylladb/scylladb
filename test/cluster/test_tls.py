@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 pytestmark = pytest.mark.prepare_3_racks_cluster
 
 
+@pytest.mark.max_running_shards(6)
 async def test_upgrade_to_ssl(manager: ScyllaClusterManager) -> None:
     """Tests rolling upgrade/downgrade from non-SSL to SSL and back
     """

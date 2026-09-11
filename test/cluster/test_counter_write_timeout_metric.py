@@ -23,6 +23,7 @@ from .util import new_test_keyspace, new_test_table
 COORDINATOR_WRITE_TIMEOUTS_METRIC = "scylla_storage_proxy_coordinator_write_timeouts"
 
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
 async def test_counter_write_timeout_updates_coordinator_metric(manager: ScyllaClusterManager):
     """

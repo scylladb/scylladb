@@ -9,6 +9,7 @@ from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 import pytest
 
 
+@pytest.mark.max_running_shards(4)
 async def test_different_group0_ids(manager: ScyllaClusterManager):
     """
     The test starts two single-node clusters (with different group0_ids). Node B (the

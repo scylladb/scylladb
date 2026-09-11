@@ -8,6 +8,7 @@ import pytest
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_stop_before_starting_compaction_manager(manager: ScyllaClusterManager) -> None:
     """Test that Scylla doesn't crash when stopped during boot after constructing compaction manager (and thus

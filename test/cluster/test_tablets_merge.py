@@ -34,6 +34,7 @@ async def disable_injection_on(manager, error_name, servers):
     await asyncio.gather(*errs)
 
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_merge_simple(manager: ScyllaClusterManager):
     logger.info("Bootstrapping cluster")
@@ -175,6 +176,7 @@ async def test_tablet_merge_simple(manager: ScyllaClusterManager):
         await check()
 
 # Multiple cycles of split and merge, with topology changes in parallel and RF > 1.
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_split_and_merge_with_concurrent_topology_changes(manager: ScyllaClusterManager):
     logger.info("Bootstrapping cluster")
@@ -317,6 +319,7 @@ async def test_tablet_split_and_merge_with_concurrent_topology_changes(manager: 
                 await manager.api.keyspace_compaction(server.ip_addr, ks)
             await check()
 
+@pytest.mark.max_running_shards(18)
 @pytest.mark.parametrize("racks", [2, 3])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_merge_cross_rack_migrations(manager: ScyllaClusterManager, racks):
@@ -367,6 +370,7 @@ async def test_tablet_merge_cross_rack_migrations(manager: ScyllaClusterManager,
     await wait_for(finished_merging, time.time() + 120)
 
 # Reproduces #23284
+@pytest.mark.max_running_shards(24)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_split_merge_with_many_tables(build_mode: str, manager: ScyllaClusterManager, racks = 2):
     cmdline = ['--smp', '4', '-m', '2G', '--target-tablet-size-in-bytes', '30000', '--max-task-backlog', '200', '--logger-log-level', 'load_balancer=debug']
@@ -430,6 +434,7 @@ async def test_tablet_split_merge_with_many_tables(build_mode: str, manager: Scy
     await check_logs("after merge completion")
 
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.parametrize("feature_config", feature_configs(FeatureConfigurations.EVENTUAL_CONSISTENCY,
     FeatureConfigurations.LOGSTOR_EVENTUAL_CONSISTENCY))
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
@@ -497,6 +502,7 @@ async def test_missing_data(manager: ScyllaClusterManager, feature_config: Featu
             pks), f"received {rec_count} records instead of {len(pks)} while querying server {server.server_id}"
 
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.parametrize("feature_config", feature_configs(FeatureConfigurations.EVENTUAL_CONSISTENCY,
     FeatureConfigurations.LOGSTOR_EVENTUAL_CONSISTENCY))
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
@@ -569,6 +575,7 @@ async def test_merge_with_drop(manager: ScyllaClusterManager, feature_config: Fe
         await drop_table_fut
 
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.parametrize("feature_config", feature_configs(FeatureConfigurations.EVENTUAL_CONSISTENCY,
     FeatureConfigurations.LOGSTOR_EVENTUAL_CONSISTENCY))
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
@@ -646,6 +653,7 @@ async def test_background_merge_deadlock(manager: ScyllaClusterManager, feature_
     await manager.server_stop(servers[0].server_id, convict=False)
 
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_gc_sstable_release_during_tablet_merge(manager: ScyllaClusterManager):
     """

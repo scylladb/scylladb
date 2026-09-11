@@ -22,6 +22,7 @@ from test.cluster.util import check_system_topology_and_cdc_generations_v3_consi
         reconnect_driver, start_writes, wait_for_cdc_generations_publishing
 
 
+@pytest.mark.max_running_shards(14)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.parametrize("remove_dead_nodes_with", ["remove", "replace"])
 async def test_raft_recovery_user_data(manager: ScyllaClusterManager, remove_dead_nodes_with: str):

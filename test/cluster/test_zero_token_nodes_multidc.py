@@ -15,6 +15,7 @@ from test.pylib.util import unique_name
 from test.cluster.util import create_new_test_keyspace
 
 
+@pytest.mark.max_running_shards(8)
 @pytest.mark.parametrize('zero_token_nodes', [1, 2])
 @pytest.mark.parametrize('rf_rack_valid_keyspaces', [False, True])
 async def test_zero_token_nodes_multidc_basic(manager: ScyllaClusterManager, zero_token_nodes: int, rf_rack_valid_keyspaces: bool):

@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 # While the writes are in progress, we add then decommission a node in the cluster.
 # The test verifies that no node crashes as a result of the topology change combined
 # with the writes.
+@pytest.mark.max_running_shards(8)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_mv_topology_change(manager: ScyllaClusterManager):
     cfg = {'tablets_mode_for_new_keyspaces': 'disabled',
@@ -94,6 +95,7 @@ async def test_mv_topology_change(manager: ScyllaClusterManager):
 # 5) verify node 2 did not build view updates
 # With the parameter intranode=True it's the same except the tablet
 # is migrating between two shards on the same node.
+@pytest.mark.max_running_shards(4)
 @pytest.mark.parametrize("intranode", [True, False])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_mv_update_on_pending_replica(manager: ScyllaClusterManager, intranode):
@@ -175,6 +177,7 @@ async def test_mv_update_on_pending_replica(manager: ScyllaClusterManager, intra
 # If the MV write handler is not completed after storing the hint, as in
 # issue #19529, it remains active until it timeouts, preventing topology changes
 # during this time.
+@pytest.mark.max_running_shards(8)
 @pytest.mark.skip_mode(mode='debug', reason='the test requires a short timeout for remove_node, but it is unpredictably slow in debug')
 async def test_mv_write_to_dead_node(manager: ScyllaClusterManager):
     servers = await manager.servers_add(4, property_file=[
@@ -201,6 +204,7 @@ async def test_mv_write_to_dead_node(manager: ScyllaClusterManager):
         # Otherwise, it is expected to complete in short time.
         await manager.remove_node(servers[0].server_id, servers[-1].server_id, timeout=180)
 
+@pytest.mark.max_running_shards(6)
 async def test_mv_pairing_during_replace(manager: ScyllaClusterManager):
     servers = await manager.servers_add(3, property_file=[
         {"dc": "dc1", "rack": "r1"},
@@ -325,6 +329,7 @@ async def test_mv_rf_change(manager: ScyllaClusterManager, delayed_replica: str,
     assert len(res) == 2
 
 # The same scenario as in the test above, but the RF change affects the first replica in a DC
+@pytest.mark.max_running_shards(2)
 @pytest.mark.parametrize("delayed_replica", ["base", "mv"])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_mv_first_replica_in_dc(manager: ScyllaClusterManager, delayed_replica: str):
@@ -388,6 +393,7 @@ async def test_mv_first_replica_in_dc(manager: ScyllaClusterManager, delayed_rep
 # verify all expected rows appear in the MV eventually.
 # Checks for issues of view update generation during migration.
 # Reproduces #24292
+@pytest.mark.max_running_shards(8)
 @pytest.mark.parametrize("migration_type", ["tablets_internode", "tablets_intranode", "vnodes"])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_mv_write_during_migration(manager: ScyllaClusterManager, migration_type: str):
@@ -480,6 +486,7 @@ async def test_mv_write_during_migration(manager: ScyllaClusterManager, migratio
 # on the topology coordinator, but the joining node is delayed in applying the group0 state.
 # The joining node receives base mutations from the other nodes to apply as the new replica,
 # and it also should generate view updates for them while in a joining state.
+@pytest.mark.max_running_shards(4)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_mv_write_during_node_join(manager: ScyllaClusterManager):
     cmdline = ['--logger-log-level', 'storage_service=debug', '--logger-log-level', 'raft_topology=debug']
@@ -520,6 +527,7 @@ async def test_mv_write_during_node_join(manager: ScyllaClusterManager):
 # while we're already shutting down. This code should not reference any objects destroyed
 # earlier in the shutdown sequence. The test passes if the server doesn't crash during shutdown.
 # Reproduces issue SCYLLADB-2301
+@pytest.mark.max_running_shards(4)
 @pytest.mark.skip_mode(mode='release', reason="error injections aren't enabled in release mode")
 async def test_no_crash_on_shutdown_with_pending_remote_view_update(manager: ScyllaClusterManager) -> None:
     node_count = 2
@@ -554,6 +562,7 @@ async def test_no_crash_on_shutdown_with_pending_remote_view_update(manager: Scy
         await manager.server_start(servers[0].server_id)
 
 
+@pytest.mark.max_running_shards(8)
 @pytest.mark.parametrize(
     ("tablets_enabled", "enable_repair_based_node_ops"),
     [

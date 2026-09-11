@@ -81,6 +81,7 @@ async def _test_impl(
     cpp_exceptions = get_metric_count(metrics_after, CPP_EXCEPTIONS_METRIC_NAME) - get_metric_count(metrics_before, CPP_EXCEPTIONS_METRIC_NAME)
     assert cpp_exceptions <= measurement.cpp_exception_threshold
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_replica_do_apply_rate_limit_no_cpp_exceptions(manager: ScyllaClusterManager):
     measurement = (m := Measurement())._replace(
@@ -103,6 +104,7 @@ async def test_replica_do_apply_rate_limit_no_cpp_exceptions(manager: ScyllaClus
         injection=injection
     )
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_replica_query_rate_limit_no_cpp_exceptions(manager: ScyllaClusterManager):
     measurement = (m := Measurement())._replace(
@@ -125,6 +127,7 @@ async def test_replica_query_rate_limit_no_cpp_exceptions(manager: ScyllaCluster
         injection=injection
     )
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_replica_writes_apply_counter_update_timeout(manager: ScyllaClusterManager):
     measurement = (m := Measurement())._replace(
@@ -148,6 +151,7 @@ async def test_replica_writes_apply_counter_update_timeout(manager: ScyllaCluste
         injection=injection
     )
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_replica_writes_do_apply_counter_update_timeout(manager: ScyllaClusterManager):
     config = { "counter_write_request_timeout_in_ms": 50 }
@@ -173,6 +177,7 @@ async def test_replica_writes_do_apply_counter_update_timeout(manager: ScyllaClu
         injection=injection
     )
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_replica_database_apply_timeout(manager: ScyllaClusterManager):
     measurement = (m := Measurement())._replace(

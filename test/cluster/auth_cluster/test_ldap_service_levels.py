@@ -16,6 +16,7 @@ from test.pylib.driver_utils import safe_driver_shutdown
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.skip_types import skip_env
 from test.pylib.util import unique_name, wait_for, wait_for_cql_and_get_hosts
+import pytest
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +105,7 @@ def connect_as(manager: ScyllaClusterManager, server, username, password):
     return cluster, cluster.connect()
 
 
+@pytest.mark.max_running_shards(2)
 async def test_ldap_attach_service_level(manager: ScyllaClusterManager):
     """ATTACH, LIST and DROP SERVICE LEVEL for a user whose roles come from
     LDAP."""
@@ -149,6 +151,7 @@ async def test_ldap_attach_service_level(manager: ScyllaClusterManager):
         safe_driver_shutdown(cluster)
 
 
+@pytest.mark.max_running_shards(2)
 async def test_ldap_granted_role_service_level(manager: ScyllaClusterManager):
     """A service level attached to a group role reaches the group's members.
     jdoe is a member of role3 in the LDAP directory only. No GRANT statement

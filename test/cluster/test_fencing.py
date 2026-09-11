@@ -57,6 +57,7 @@ def all_hints_metrics(metrics: ScyllaMetrics) -> list[str]:
     return metrics.lines_by_prefix('scylla_hints_manager_')
 
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.parametrize("tablets_enabled", [True, False])
 async def test_fence_writes(request, manager: ScyllaClusterManager, tablets_enabled: bool):
     cfg = {'tablets_mode_for_new_keyspaces' : 'enabled' if tablets_enabled else 'disabled'}
@@ -124,6 +125,7 @@ async def test_fence_writes(request, manager: ScyllaClusterManager, tablets_enab
     random_tables.drop_all()
 
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_fence_hints(request, manager: ScyllaClusterManager):
     logger.info("Bootstrapping cluster with three nodes")
@@ -214,6 +216,7 @@ async def test_fence_hints(request, manager: ScyllaClusterManager):
     random_tables.drop_all()
 
 
+@pytest.mark.max_running_shards(8)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_fence_lwt_during_bootstap(manager: ScyllaClusterManager):
     """
@@ -349,6 +352,7 @@ async def test_fence_lwt_during_bootstap(manager: ScyllaClusterManager):
         assert row.c == 2
 
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='dev mode is enough for this test')
 @pytest.mark.skip_mode(mode='debug', reason='dev mode is enough for this test')
 async def test_lwt_fencing_upgrade(manager: ScyllaClusterManager, scylla_2025_1: ScyllaVersionDescription, scylla_binary: Path):

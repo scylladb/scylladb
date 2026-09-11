@@ -17,6 +17,7 @@ from test.pylib.util import wait_for_cql_and_get_hosts
 logger = logging.getLogger(__name__)
 
 
+@pytest.mark.max_running_shards(4)
 async def test_no_removed_node_event_on_ip_change(manager: ScyllaClusterManager, caplog: pytest.LogCaptureFixture):
     logger.info("starting the first node (leader)")
     servers = [await manager.server_add()]

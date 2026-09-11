@@ -5,12 +5,14 @@
 #
 
 from dtest_class import Tester, create_ks
+import pytest
 
 
 MY_NODE = 0
 
 
 class TestExample(Tester):
+    @pytest.mark.max_running_shards(6)
     def test_some(self, nodes=3, rf=3, jvm_args=None):
         cluster = self.cluster
         cluster.populate(nodes).start(wait_for_binary_proto=True)

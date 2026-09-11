@@ -16,6 +16,7 @@ from test.pylib.internal_types import ServerInfo
 logger = logging.getLogger(__name__)
 
 
+@pytest.mark.max_running_shards(8)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_crashed_node_substitution(manager: ScyllaClusterManager):
     """Test that a node which crashed after starting gossip but before joining group0

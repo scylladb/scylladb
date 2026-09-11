@@ -14,6 +14,7 @@ import pytest
 
 logger = logging.getLogger(__name__)
 
+@pytest.mark.max_running_shards(2)
 async def test_truncation_on_drop(manager: ScyllaClusterManager):
     await manager.server_add()
     cql = manager.get_cql()
@@ -38,6 +39,7 @@ async def test_truncation_on_drop(manager: ScyllaClusterManager):
         row = await cql.run_async(SimpleStatement(f'SELECT COUNT(*) FROM system.truncated where table_uuid={table_id}'))
         assert row[0].count == 0
 
+@pytest.mark.max_running_shards(2)
 async def test_truncation_records_pruned_on_dirty_restart(manager: ScyllaClusterManager):
     server = await manager.server_add()
     cql = manager.get_cql()

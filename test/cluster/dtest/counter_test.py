@@ -59,6 +59,7 @@ class TestCounters(Tester):
             r"raft - apply_snapshot\[[0-9a-f-]+\] failed with std::runtime_error \(Snapshot application aborted\)",
         ]
 
+    @pytest.mark.max_running_shards(6)
     def test_simple_increment(self):
         """Simple incrementation test (Created for #3465, that wasn't a bug)"""
         cluster = self.cluster
@@ -91,6 +92,7 @@ class TestCounters(Tester):
                 assert len(res[c]) == 2, "Expecting key and counter for counter%i, got %s" % (c, str(res[c]))
                 assert res[c][1] == i + 1, "Expecting counter%i = %i, got %i" % (c, i + 1, res[c][1])
 
+    @pytest.mark.max_running_shards(4)
     def test_upgrade(self):
         """Test for bug of #4436"""
 
@@ -159,6 +161,7 @@ class TestCounters(Tester):
 
         check(3)
 
+    @pytest.mark.max_running_shards(6)
     def test_counter_consistency(self):
         """
         Do a bunch of writes with ONE, read back with ALL and check results.
@@ -258,6 +261,7 @@ class TestCounters(Tester):
             assert counter_one_actual == counter_dict[counter_id]["counter_one"]
             assert counter_two_actual == counter_dict[counter_id]["counter_two"]
 
+    @pytest.mark.max_running_shards(6)
     def test_multi_counter_update(self):
         """
         Test for singlular update statements that will affect multiple counters.
@@ -310,6 +314,7 @@ class TestCounters(Tester):
             assert count and len(count[0]), f"Expected counter_one={v} for myuuid={k}, got: {count}"
             assert v == count[0][0]
 
+    @pytest.mark.max_running_shards(2)
     @pytest.mark.single_node
     def test_validate_empty_column_name(self):
         cluster = self.cluster
@@ -344,6 +349,7 @@ class TestCounters(Tester):
 
         assert_one(session, "SELECT pk, ck, value FROM compact_counter_table", [0, "ck", 3])
 
+    @pytest.mark.max_running_shards(2)
     @pytest.mark.single_node
     def test_drop_counter_column(self):
         """Test for CASSANDRA-7831"""
@@ -368,6 +374,7 @@ class TestCounters(Tester):
 
         assert_invalid(session, "ALTER TABLE counter_bug add c counter", "Cannot re-add previously dropped counter column c")
 
+    @pytest.mark.max_running_shards(6)
     def test_increment_counters_in_threads(self):
         """
         3 nodes in test
@@ -426,6 +433,7 @@ class TestCounters(Tester):
             assert len(res[c]) == 2, "Expecting key and counter for counter%i, got %s" % (c, str(res[c]))
             assert res[c][1] == expected_counters, "Expecting counter%i = %i, got %i" % (c, expected_counters, res[c][1])
 
+    @pytest.mark.max_running_shards(6)
     def test_increment_decrement_counters_in_threads(self):
         """
         3 nodes in test
@@ -495,6 +503,7 @@ class TestCounters(Tester):
             assert len(res[c]) == 2, "Expecting key and counter for counter%i, got %s" % (c, str(res[c]))
             assert res[c][1] == expected_counters, "Expecting counter%i = %i, got %i" % (c, expected_counters, res[c][1])
 
+    @pytest.mark.max_running_shards(2)
     @pytest.mark.single_node
     def test_update_counter_with_ttl_and_timestamp_negative(self):
         """
@@ -512,6 +521,7 @@ class TestCounters(Tester):
             with pytest.raises(InvalidRequest):
                 session.execute(f"UPDATE counters USING {option} SET c = c + 1 where t = 1")
 
+    @pytest.mark.max_running_shards(2)
     @pytest.mark.single_node
     def test_prepare_statement(self):
         """
@@ -577,6 +587,7 @@ class TestCounters(Tester):
             session.execute(query)
         assert re.search(message, str(cm)), f"Expected '{message}', but got '{cm.typename}'"
 
+    @pytest.mark.max_running_shards(2)
     @pytest.mark.single_node
     def test_static_counter_column(self):
         """
@@ -624,6 +635,7 @@ class TestCounters(Tester):
             assert rows[i - 1][0] == 200
             assert rows[i - 1][1] == i + 1
 
+    @pytest.mark.max_running_shards(6)
     def test_compact_counter_cluster(self):
         """
         @jira_ticket CASSANDRA-12219
@@ -759,6 +771,7 @@ class TestCountersOnMultipleNodes(Tester):
         for node in (self.node1, self.node2):
             node.start(wait_other_notice=True)
 
+    @pytest.mark.max_running_shards(6)
     def test_counter_consistency_node_replace(self):
         """
         Cluster: 3 nodes, keyspace RF=2
@@ -774,6 +787,7 @@ class TestCountersOnMultipleNodes(Tester):
         logger.debug("Start the new node")
         node4.start(replace_node_host_id=self.node3.hostid(), wait_for_binary_proto=True)
 
+    @pytest.mark.max_running_shards(6)
     def test_counter_consistency_node_remove(self):
         """
         Cluster: 3 nodes, keyspace RF=2
@@ -788,6 +802,7 @@ class TestCountersOnMultipleNodes(Tester):
         self.node2.stop(wait_other_notice=True)
         self.node1.nodetool("removenode %s" % node2_hostid)
 
+    @pytest.mark.max_running_shards(8)
     def test_counter_consistency_node_add(self):
         """
         Cluster: 3 nodes, keyspace RF=2
@@ -801,6 +816,7 @@ class TestCountersOnMultipleNodes(Tester):
         node4 = new_node(self.cluster, bootstrap=True, data_center=self.node3.data_center, rack=self.node3.rack)
         node4.start(wait_for_binary_proto=True)
 
+    @pytest.mark.max_running_shards(6)
     def test_counter_consistency_node_decommission(self):
         """
         Cluster: 3 nodes, keyspace RF=1
@@ -814,6 +830,7 @@ class TestCountersOnMultipleNodes(Tester):
         self.node2.decommission()
         self.node2.stop()
 
+    @pytest.mark.max_running_shards(6)
     def test_counter_consistency_node_repair(self):
         """
         Cluster: 3 nodes, keyspace RF=3
@@ -843,6 +860,7 @@ class TestCountersOnMultipleNodes(Tester):
         logger.debug("Verify new data is present on node3")
         self._verify_data_repair(self._extra_row_cnt)
 
+    @pytest.mark.max_running_shards(6)
     def test_counter_consistency_node_rebuild(self):
         """
         Cluster: 3 nodes, keyspace RF=3
