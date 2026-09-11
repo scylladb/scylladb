@@ -456,7 +456,14 @@ tasks::is_user_task task_manager::generic_task_impl::is_user_task() const noexce
 }
 
 void task_manager::generic_task_impl::abort() noexcept {
-    _abort_fn ? _abort_fn(_as) : task::impl::abort();
+    if (!_as.abort_requested()) {
+        _as.request_abort();
+
+        if (_abort_fn) {
+            _abort_fn(_as);
+        }
+        (void)abort_children(_module, _status.id);
+    }
 }
 
 future<> task_manager::generic_task_impl::release_resources() noexcept {
