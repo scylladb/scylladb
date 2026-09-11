@@ -174,6 +174,22 @@ def test_canonization_middle_whitespace(dynamodb, test_table):
     response = requests.post(req.url, headers=req.headers, data=req.body, verify=False)
     assert response.ok
 
+# Canonizing several short header values must keep all normalized values alive
+# while calculating the signature. This reproduces issue #31293.
+def test_canonization_middle_whitespace_multiple_headers(dynamodb, test_table):
+    payload = '{"TableName": "' + test_table.name + '", "Item": {"p": {"S": "x"}, "c": {"S": "x"}}}'
+    custom_headers = {
+        'Meerkat': 'one two',
+        'Capybara': 'three four',
+        'Wombat': 'five six',
+    }
+    req = get_signed_request(dynamodb, 'PutItem', payload, custom_headers)
+    for name in custom_headers:
+        assert name.lower() in req.headers['Authorization']
+        req.headers[name] = req.headers[name].replace(' ', '   ', 1)
+    response = requests.post(req.url, headers=req.headers, data=req.body, verify=False)
+    assert response.ok
+
 # Test that the case of the header name is canonized before signing
 def test_canonization_header_name_capitalization(dynamodb, test_table):
     payload = '{"TableName": "' + test_table.name + '", "Item": {"p": {"S": "x"}, "c": {"S": "x"}}}'
