@@ -1,0 +1,212 @@
+{
+   "apiVersion":"0.0.1",
+   "swaggerVersion":"1.2",
+   "basePath":"{{Protocol}}://{{Host}}",
+   "resourcePath":"/error_injection",
+   "produces":[
+      "application/json"
+   ],
+   "apis":[
+      {
+         "path":"/v2/error_injection/injection/{injection}",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Activate an injection that triggers an error in code",
+               "type":"void",
+               "nickname":"enable_injection",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"injection",
+                     "description":"injection name, should correspond to an injection added in code",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  },
+                  {
+                     "name":"one_shot",
+                     "description":"boolean flag indicating whether the injection should be enabled to trigger only once",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"boolean",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"parameters",
+                     "description":"dict of parameters to pass to the injection (json format)",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"dict",
+                     "paramType":"body"
+                  }
+               ]
+            },
+            {
+               "method":"DELETE",
+               "summary":"Deactivate an injection previously activated by the API",
+               "type":"void",
+               "nickname":"disable_injection",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"injection",
+                     "description":"injection name",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            },
+            {
+               "method":"GET",
+               "summary":"Read the state of an injection from all shards",
+               "type":"array",
+               "items":{
+                  "type":"error_injection_info"
+               },
+               "nickname":"read_injection",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"injection",
+                     "description":"injection name",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/v2/error_injection/injection/{injection}/message",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Send message to trigger an event in injection's code",
+               "type":"void",
+               "nickname":"message_injection",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"injection",
+                     "description":"injection name, should correspond to an injection added in code",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/v2/error_injection/disconnect/{ip}",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Drop connection to a given IP",
+               "type":"void",
+               "nickname":"inject_disconnect",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"ip",
+                     "description":"IP address to disconnect from",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/v2/error_injection/injection",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"List all enabled injections on all shards, i.e. injections that will trigger an error in the code",
+               "type":"array",
+               "items":{
+                  "type":"string"
+               },
+               "nickname":"get_enabled_injections_on_all",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[]
+            },
+            {
+               "method":"DELETE",
+               "summary":"Deactivate all injections previously activated on all shards by the API",
+               "type":"void",
+               "nickname":"disable_on_all",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[]
+            }
+         ]
+      }
+   ],
+   "components":{
+      "schemas": {
+         "dict": {
+            "type": "object",
+            "additionalProperties": {
+               "type": "string"
+            }
+         }
+      }
+   },
+   "models":{
+      "mapper":{
+         "id":"mapper",
+         "description":"A key value mapping",
+         "properties":{
+            "key":{
+               "type":"string",
+               "description":"The key"
+            },
+            "value":{
+               "type":"string",
+               "description":"The value"
+            }
+         }
+      },
+       "error_injection_info":{
+         "id":"error_injection_info",
+         "description":"Information about an error injection",
+         "properties":{
+            "enabled":{
+               "type":"boolean",
+               "description":"Is the error injection enabled"
+            },
+            "parameters":{
+               "type":"array",
+               "items":{
+                  "type":"mapper"
+               },
+               "description":"The parameter values"
+            }
+         },
+         "required":["enabled"]
+      }
+   }
+}

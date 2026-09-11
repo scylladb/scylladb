@@ -1,0 +1,202 @@
+{
+   "apiVersion":"0.0.1",
+   "swaggerVersion":"1.2",
+   "basePath":"{{Protocol}}://{{Host}}",
+   "resourcePath":"/collectd",
+   "produces":[
+      "application/json"
+   ],
+   "apis":[
+      {
+         "path":"/collectd/{pluginid}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get a collectd value",
+               "type":"array",
+               "items":{
+                  "type":"collectd_value"
+               },
+               "nickname":"get_collectd",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"pluginid",
+                     "description":"The plugin ID",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  },
+                  {
+                     "name":"instance",
+                     "description":"The plugin instance",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"type",
+                     "description":"The plugin type",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"type_instance",
+                     "description":"The plugin type instance",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            },
+            {
+               "method":"POST",
+               "summary":"Start reporting on one or more collectd metric",
+               "type":"void",
+               "nickname":"enable_collectd",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"pluginid",
+                     "description":"The plugin ID, describe the component the metric belongs to. Examples are cache, thrift, etc'. Regex are supported.The plugin ID, describe the component the metric belong to. Examples are: cache, thrift etc'. regex are supported",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  },
+                  {
+                     "name":"instance",
+                     "description":"The plugin instance typically #CPU indicating per CPU metric. Regex are supported. Omit for all",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"type",
+                     "description":"The plugin type, the type of the information. Examples are total_operations, bytes, total_operations, etc'. Regex are supported. Omit for all",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"type_instance",
+                     "description":"The plugin type instance, the specific metric. Exampls are total_writes, total_size, zones, etc'. Regex are supported, Omit for all",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"enable",
+                     "description":"set to true to enable all, anything else or omit to disable",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"boolean",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/collectd/",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get a list of all collectd metrics and their status",
+               "type":"array",
+               "items":{
+                  "type":"collectd_metric_status"
+               },
+               "nickname":"get_collectd_items",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            },
+            {
+               "method":"POST",
+               "summary":"Enable or disable all collectd metrics",
+               "type":"void",
+               "nickname":"enable_all_collectd",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"enable",
+                     "description":"set to true to enable all, anything else or omit to disable",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"boolean",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      }
+   ],
+   "models":{
+      "type_instance_id":{
+         "id":"type_instance_id",
+         "description":"A type instance ID",
+         "properties":{
+            "plugin":{
+               "type":"string",
+               "description":"The plugin ID"
+            },
+            "plugin_instance":{
+               "type":"string",
+               "description":"The plugin instance"
+            },
+            "type":{
+               "type":"string",
+               "description":"The plugin type"
+            },
+            "type_instance":{
+               "type":"string",
+               "description":"The plugin type instance"
+            }
+         }
+      },
+      "collectd_value":{
+         "id":"collectd_value",
+         "description":"Holds a collectd value",
+         "properties":{
+            "values":{
+               "description":"An array of values",
+               "type":"array",
+               "items":{
+                  "type":"double"
+               }
+            }
+         }
+      },
+      "collectd_metric_status":{
+         "id":"collectd_metric_status",
+         "description":"Holds a collectd id and an enable flag",
+         "properties":{
+            "id":{
+               "description":"The metric ID",
+               "type":"type_instance_id"
+            },
+            "enable":{
+               "description":"Is the metric enabled",
+               "type":"boolean"
+            }
+         }
+      }
+   }
+}
