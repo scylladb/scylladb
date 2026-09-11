@@ -209,7 +209,9 @@ class direct_fd_pinger : public seastar::peering_sharded_service<direct_fd_pinge
     netw::messaging_service& _ms;
 
     using rate_limits = utils::recent_entries_map<direct_failure_detector::pinger::endpoint_id, logger::rate_limit>;
-    rate_limits _rate_limits;
+    // Separate per failure kind, so one kind's warnings can't suppress the other's.
+    rate_limits _timeout_rate_limits;
+    rate_limits _unknown_address_rate_limits;
 
 public:
     direct_fd_pinger(netw::messaging_service& ms)

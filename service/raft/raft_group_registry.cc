@@ -572,6 +572,12 @@ future<> raft_server_with_timeouts::read_barrier(seastar::abort_source* as, std:
 future<bool> direct_fd_pinger::ping(direct_failure_detector::pinger::endpoint_id id, direct_failure_detector::clock::timepoint_t timeout, abort_source& as, direct_failure_detector::clock& c) {
     auto dst_id = raft::server_id{id};
 
+    // Collect entries left by endpoints that are no longer pinged, e.g. after they
+    // left the configuration. The sweep covers the whole map, so it also collects
+    // what other endpoints left behind.
+    _timeout_rate_limits.remove_least_recent_entries(std::chrono::minutes(30));
+    _unknown_address_rate_limits.remove_least_recent_entries(std::chrono::minutes(30));
+
     try {
         std::chrono::milliseconds timeout_ms = c.to_milliseconds(timeout);
         netw::messaging_service::clock_type::time_point deadline = netw::messaging_service::clock_type::now() + timeout_ms;
@@ -589,6 +595,20 @@ future<bool> direct_fd_pinger::ping(direct_failure_detector::pinger::endpoint_id
             co_return info->group0_alive;
         }
     } catch (seastar::rpc::closed_error&) {
+        co_return false;
+    } catch (seastar::rpc::timeout_error&) {
+        // Log every timeout at DEBUG, and at most once per 5 minutes per endpoint at WARN.
+        rslog.debug("ping(id = {}): timed out", dst_id);
+        auto& rate_limit = _timeout_rate_limits.try_get_recent_entry(id, std::chrono::minutes(5));
+        rslog.log(log_level::warn, rate_limit, "ping(id = {}): timed out", dst_id);
+        co_return false;
+    } catch (netw::unknown_address&) {
+        // The address lookup fails locally, without waiting for the network, so this
+        // repeats on every ping until the mapping shows up. Warn at most once per
+        // 5 minutes per endpoint.
+        auto& rate_limit = _unknown_address_rate_limits.try_get_recent_entry(id, std::chrono::minutes(5));
+        rslog.log(log_level::warn, rate_limit,
+                "ping(id = {}): node has no IP address mapping, should be transient", dst_id);
         co_return false;
     }
     co_return true;
