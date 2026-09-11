@@ -33,6 +33,7 @@
 #include "sstables/integrity_checked_file_impl.hh"
 #include "sstables/writer.hh"
 #include "utils/assert.hh"
+#include "utils/error_injection.hh"
 #include "utils/lister.hh"
 #include "utils/overloaded_functor.hh"
 #include "utils/memory_data_sink.hh"
@@ -93,6 +94,7 @@ public:
     virtual future<> seal(const sstable& sst) override;
     virtual future<> snapshot(const sstable& sst, sstring name) const override;
     virtual future<entry_descriptor> clone(sstable& sst, generation_type gen, bool leave_unsealed, bool may_use_reference_sharing = false) const override;
+    virtual future<entry_descriptor> clone_from(sstable& src, generation_type gen, bool may_use_reference_sharing) const override;
     virtual future<> change_state(const sstable& sst, sstable_state state, generation_type generation, delayed_commit_changes* delay) override;
     // runs in async context
     virtual void open(sstable& sst) override;
@@ -469,6 +471,12 @@ future<entry_descriptor> filesystem_storage::clone(sstable& sst, generation_type
     co_return desc;
 }
 
+future<entry_descriptor> filesystem_storage::clone_from(sstable& src, generation_type, bool) const {
+    // A backup sstable is never in the same filesystem as the table being
+    // restored, so there is nothing to clone from. Restore streams the components.
+    on_internal_error(sstlog, fmt::format("Cannot clone {} into filesystem storage {}", src.get_filename(), _dir.path().native()));
+}
+
 future<> filesystem_storage::move(const sstable& sst, sstring new_dir, generation_type new_generation, delayed_commit_changes* delay_commit) {
     co_await touch_directory(new_dir);
     sstring old_dir = _dir.native();
@@ -693,6 +701,10 @@ protected:
         return _layout == data_dictionary::storage_options::object_storage_layout::foreign;
     }
 
+    // Tells whether the components of `src` are already stored as the objects this
+    // storage names for `sid`. Then restore does not have to copy them.
+    future<bool> components_in_place(const sstable& src, sstable_id sid, seastar::abort_source* as) const;
+
     table_id owner() const {
         if (uses_foreign_layout()) {
             on_internal_error(sstlog, format("Storage holds '{}' prefix, but registry owner is expected", prefix()));
@@ -718,6 +730,7 @@ public:
     future<> seal(const sstable& sst) override;
     future<> snapshot(const sstable& sst, sstring name) const override;
     future<entry_descriptor> clone(sstable& sst, generation_type gen, bool leave_unsealed, bool may_use_reference_sharing = false) const override;
+    future<entry_descriptor> clone_from(sstable& src, generation_type gen, bool may_use_reference_sharing) const override;
     future<> change_state(const sstable& sst, sstable_state state, generation_type generation, delayed_commit_changes* delay) override;
     // runs in async context
     void open(sstable& sst) override;
@@ -1237,6 +1250,85 @@ future<entry_descriptor> object_storage_base::clone(sstable& sst, generation_typ
     }
 
     sstlog.debug("clone sst: {} generation={}: done", sst.get_filename(), gen);
+    co_return desc;
+}
+
+future<bool> object_storage_base::components_in_place(const sstable& src, sstable_id sid, seastar::abort_source* as) const {
+    // True for a backup which uses the layout of a live table in this bucket, and
+    // also for a backup of an sstable this bucket still holds. Check the TOC first,
+    // so that a backup with nothing in this bucket costs one request per sstable
+    // instead of one per component.
+    if (!co_await _client->object_exists(object_name(_bucket, prefix(), sid, sstable_version_constants::TOC_SUFFIX), as)) {
+        co_return false;
+    }
+    for (const auto& [type, component] : src.all_components()) {
+        if (type == component_type::TOC) {
+            continue;
+        }
+        if (!co_await _client->object_exists(object_name(_bucket, prefix(), sid, component), as)) {
+            sstlog.debug("Cannot share components of {} under sstable_id={}: {} is missing", src.get_filename(), sid, component);
+            co_return false;
+        }
+    }
+    co_return true;
+}
+
+future<entry_descriptor> object_storage_base::clone_from(sstable& src, generation_type gen, bool may_use_reference_sharing) const {
+    auto* src_storage = dynamic_cast<const object_storage_base*>(&src.get_storage());
+    if (!src_storage) {
+        on_internal_error(sstlog, fmt::format("Cannot clone {} into {} storage: the source is not on object storage", src.get_filename(), _type));
+    }
+    // An object storage copies an object within one endpoint. Two endpoints have
+    // two clients and there is no way to copy between them, so the caller has to
+    // reject such a restore before we get here.
+    if (src_storage->_client.get() != _client.get()) {
+        on_internal_error(sstlog, fmt::format("Cannot clone {} into {} storage: the source uses another endpoint", src.get_filename(), _type));
+    }
+    // A copy can take long, so it has to be abortable. The abort source of the
+    // operation is the one the source was opened with; the storage options of a
+    // table carry none.
+    auto* as = src_storage->abort_source();
+
+    auto src_sid = src_storage->get_sstable_identifier(src);
+    auto share_components = may_use_reference_sharing && co_await components_in_place(src, src_sid, as);
+    // Sharing keeps the identifier of the source; this is what makes the clone
+    // point at the objects already in place. A copy needs its own identifier,
+    // because the identifier is the prefix of the component object names. With
+    // the source's one, copies which different replicas make of the same backup
+    // sstable would overwrite each other, and would overwrite the objects of the
+    // table the backup was taken from, if it still uses the bucket.
+    auto sid = share_components ? src_sid : sstable_id(gen.as_uuid());
+    sstlog.debug("Cloning {} sstable_id={} generation={} into {}/{}: new_generation={} new_sstable_id={} share_components={}",
+            src.get_filename(), src_sid, src.generation(), _bucket, prefix(), gen, sid, share_components);
+
+    entry_descriptor desc(gen, sid, src.get_version(), src.get_format(), component_type::TOC);
+    // The source is opened in the upload state. The clone belongs to the table
+    // being restored, so it has to be in the normal state to be found on next boot.
+    desc.state = sstable_state::normal;
+    auto node_owner = src.manager().get_local_host_id();
+    co_await src.manager().sstables_registry().create_entry(owner(), node_owner, status_creating, *desc.state, desc);
+    co_await create_reference(sid, gen, node_owner);
+
+    if (!share_components) {
+        utils::get_local_injector().inject("fail_clone_from_before_copy", [] { throw std::runtime_error("Failing sstable clone"); });
+        co_await coroutine::parallel_for_each(src.all_components(), [this, &src, src_storage, sid, as] (const std::pair<component_type, sstring>& p) -> future<> {
+            if (p.first == component_type::Scylla) {
+                co_return;
+            }
+            co_await _client->copy_object(src_storage->make_object_name(src, p.second, src.generation()),
+                    object_name(_bucket, prefix(), sid, p.second), make_sstable_object_attributes(p.first, src), as);
+        });
+        // The Scylla component keeps the sstable identifier, so it cannot be copied
+        // as it is: the clone would not be found under the identifier its objects
+        // are named by. Write it again with the new identifier.
+        auto scylla_metadata = co_await src.copy_scylla_metadata();
+        scylla_metadata->set_sstable_identifier(sid);
+        auto scylla_metadata_bufs = co_await src.serialize_scylla_metadata(std::move(*scylla_metadata));
+        co_await _client->put_object(object_name(_bucket, prefix(), sid, sstable_version_constants::get_component_map(src.get_version()).at(component_type::Scylla)),
+                std::move(*scylla_metadata_bufs), object_storage_attributes{}, as);
+    }
+
+    sstlog.debug("clone_from sst: {} new_generation={}: done", src.get_filename(), gen);
     co_return desc;
 }
 
