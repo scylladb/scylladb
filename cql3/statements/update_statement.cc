@@ -140,9 +140,9 @@ utils::chunked_vector<mutation> update_statement::apply_updates(
         const update_parameters& params,
         const json_cache_opt& json_cache) const {
     auto mutations = make_mutations(keys);
+    auto rows = restrictions::update_restrictions::clustering_rows(ranges);
     for (auto& m : mutations) {
-        for (auto&& range : ranges) {
-            auto prefix = row_key(range);
+        for (const clustering_key_prefix& prefix : rows) {
             open_row(*s, type, !_column_operations.empty(), m, prefix, params);
             execute_operations_for_key(m, prefix, params, json_cache);
         }
