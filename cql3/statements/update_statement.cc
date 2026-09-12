@@ -152,11 +152,19 @@ void update_statement::execute_operations_for_key(mutation& m, const clustering_
     apply_column_operations(_column_operations, m, prefix, params);
 }
 
-void update_statement::add_update_for_key(mutation& m, const query::clustering_range& range, const update_parameters& params, const json_cache_opt& json_cache) const {
-    auto prefix = row_key(range);
-    open_row(*s, type, !_column_operations.empty(), m, prefix, params);
-
-    execute_operations_for_key(m, prefix, params, json_cache);
+utils::chunked_vector<mutation> update_statement::apply_updates(
+        const std::vector<dht::partition_range>& keys,
+        const std::vector<query::clustering_range>& ranges,
+        const update_parameters& params,
+        const json_cache_opt& json_cache) const {
+    auto mutations = make_mutations(keys);
+    for (auto& m : mutations) {
+        for (auto&& range : ranges) {
+            auto prefix = row_key(range);
+            open_row(*s, type, !_column_operations.empty(), m, prefix, params);
+            execute_operations_for_key(m, prefix, params, json_cache);
+        }
+    }
 
     warn(unimplemented::cause::INDEXES);
 #if 0
@@ -176,6 +184,8 @@ void update_statement::add_update_for_key(mutation& m, const query::clustering_r
         }
     }
 #endif
+
+    return mutations;
 }
 
 modification_statement::json_cache_opt insert_prepared_json_statement::maybe_prepare_json_cache(const query_options& options) const {

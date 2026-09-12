@@ -30,7 +30,14 @@ public:
 
     virtual bool allow_clustering_key_slices() const override;
 
-    virtual void add_update_for_key(mutation& m, const query::clustering_range& range, const update_parameters& params, const json_cache_opt& json_cache) const override;
+    virtual utils::chunked_vector<mutation> apply_updates(
+            const std::vector<dht::partition_range>& keys,
+            const std::vector<query::clustering_range>& ranges,
+            const update_parameters& params,
+            const json_cache_opt& json_cache) const override;
+
+private:
+    void delete_row_range(mutation& m, const query::clustering_range& range, const update_parameters& params) const;
 };
 
 }

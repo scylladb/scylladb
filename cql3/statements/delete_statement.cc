@@ -35,7 +35,21 @@ bool delete_statement::allow_clustering_key_slices() const {
     return true;
 }
 
-void delete_statement::add_update_for_key(mutation& m, const query::clustering_range& range, const update_parameters& params, const json_cache_opt& json_cache) const {
+utils::chunked_vector<mutation> delete_statement::apply_updates(
+        const std::vector<dht::partition_range>& keys,
+        const std::vector<query::clustering_range>& ranges,
+        const update_parameters& params,
+        const json_cache_opt& json_cache) const {
+    auto mutations = make_mutations(keys);
+    for (auto& m : mutations) {
+        for (auto&& range : ranges) {
+            delete_row_range(m, range, params);
+        }
+    }
+    return mutations;
+}
+
+void delete_statement::delete_row_range(mutation& m, const query::clustering_range& range, const update_parameters& params) const {
     if (_column_operations.empty()) {
         if (s->clustering_key_size() == 0 || range.is_full()) {
             m.partition().apply(params.make_tombstone());

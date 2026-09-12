@@ -52,19 +52,24 @@ public:
             schema_ptr s,
             std::unique_ptr<attributes> attrs,
             cql_stats& stats);
+public:
+    virtual utils::chunked_vector<mutation> apply_updates(
+            const std::vector<dht::partition_range>& keys,
+            const std::vector<query::clustering_range>& ranges,
+            const update_parameters& params,
+            const json_cache_opt& json_cache) const override;
+
 private:
     virtual bool require_full_clustering_key() const override;
 
     virtual bool allow_clustering_key_slices() const override;
-
-    virtual void add_update_for_key(mutation& m, const query::clustering_range& range, const update_parameters& params, const json_cache_opt& json_cache) const override;
 
     virtual void execute_operations_for_key(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params, const json_cache_opt& json_cache) const;
 };
 
 /*
  * Update statement specification that has specifically one bound name - a JSON string.
- * Overridden add_update_for_key uses this parsed JSON to look up values for columns.
+ * Overridden execute_operations_for_key uses this parsed JSON to look up values for columns.
  */
 class insert_prepared_json_statement : public update_statement {
     expr::expression _value;
