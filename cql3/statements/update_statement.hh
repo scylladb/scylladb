@@ -19,6 +19,23 @@ namespace cql3 {
 
 namespace statements {
 
+// Writing a row: the part of applying a mutation that an UPDATE and an INSERT
+// do identically, given the row's clustering key.
+
+/// The clustering key a range names.  A range with no start bound names the
+/// static row, whose key is the empty prefix.
+clustering_key_prefix row_key(const query::clustering_range& range);
+
+/// Prepares the row for the column operations that follow: validates what a
+/// COMPACT STORAGE table requires, and writes the row marker an INSERT into a
+/// CQL3 table leaves behind even when it sets no regular column.
+void open_row(const schema& s, statement_type type, bool has_column_operations,
+        mutation& m, const clustering_key_prefix& prefix, const update_parameters& params);
+
+/// Applies the statement's column operations to the row.
+void apply_column_operations(const std::vector<std::unique_ptr<operation>>& ops,
+        mutation& m, const clustering_key_prefix& prefix, const update_parameters& params);
+
 /**
  * An <code>UPDATE</code> statement parsed from a CQL query statement.
  */
