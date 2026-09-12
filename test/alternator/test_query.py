@@ -318,6 +318,18 @@ def test_query_limit(test_table_sn):
     with pytest.raises(ClientError, match='ValidationException.*[lL]imit'):
         test_table_sn.query(ConsistentRead=True, KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}}, Limit=0)
 
+# Query's Limit used to be read directly with GetUint64() with no preceding
+# IsUint64() check, so a Limit too large to fit (boto3 enforces a minimum of
+# 1 but no maximum, so e.g. 2**64 reaches the server unmodified) got an
+# internal, non-communicative error instead of a clean ValidationException.
+def test_query_invalid_limit_type(test_table):
+    with pytest.raises(ClientError) as err:
+        test_table.query(Limit=2**64)
+    code = err.value.response['Error']['Code']
+    message = err.value.response['Error'].get('Message', '')
+    assert code in ('ValidationException', 'SerializationException'), \
+        f'Unexpected error code {code} for oversized Limit: {message}'
+
 # In test_query_limit we tested just that Limit allows to stop the result
 # after right right number of items. Here we test that such a stopped result
 # can be resumed, via the LastEvaluatedKey/ExclusiveStartKey paging mechanism.

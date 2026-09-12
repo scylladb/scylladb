@@ -55,6 +55,12 @@ using body_writer = noncopyable_function<future<>(output_stream<char>&&)>;
 /// api_error is thrown.
 std::optional<int> get_int_attribute(const rjson::value& value, std::string_view attribute_name);
 
+/// Get the value of a 64-bit non-negative integer attribute, or an empty
+/// optional if it is missing. If the attribute exists, but isn't a
+/// non-negative integer that fits in 64 bits, a descriptive api_error is
+/// thrown.
+std::optional<uint64_t> get_uint64_attribute(const rjson::value& value, std::string_view attribute_name);
+
 /// Get the value of a string attribute, or a default value if it is missing.
 /// If the attribute exists, but is not a string, a descriptive api_error is
 /// thrown.
