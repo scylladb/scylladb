@@ -14,6 +14,12 @@
 #include <assert.h>
 #include <sstream>
 #include <initializer_list>
+#include <span>
+#include <ranges>
+#include <algorithm>
+#include <forward_list>
+#include <map>
+#include <unordered_map>
 
 #include "utils/serialization.hh"
 #include "types/types.hh"
@@ -324,3 +330,49 @@ BOOST_AUTO_TEST_CASE(vector_deserializer) {
     test_vector_deserializer(opt_bool_vect);
     test_reverse_vector_deserializer(opt_bool_vect);
 }
+
+// ser::serializer<R>'s generic range specialization (serializer_impl.hh) is only ever
+// instantiated for a range with no dedicated serializer<T> of its own (std::vector<T>
+// and friends keep their own, more specialized, container serializers) -- std::span and
+// a std::ranges::subrange over std::forward_list's (non-const-caching) forward iterators
+// are used here specifically because neither has one, so these actually exercise the
+// generic path, unlike a std::vector<int32_t> would. (A view adaptor like filter_view
+// won't work here, or through any serializer<T> in this file: the whole serialize()
+// chain takes its argument by const&, and filter_view's begin() isn't const.)
+BOOST_AUTO_TEST_CASE(range_of_serializer_sized_range) {
+    std::vector<int32_t> backing = { 3, 1, 4, 1, 5 };
+    std::span<const int32_t> sp(backing);
+    static_assert(std::ranges::sized_range<std::span<const int32_t>>);
+
+    auto buf = ser::serialize_to_buffer<bytes>(sp);
+    auto expected_buf = ser::serialize_to_buffer<bytes>(backing);
+    BOOST_CHECK(buf == expected_buf);
+
+    auto round_tripped = ser::deserialize_from_buffer(buf, std::type_identity<std::vector<int32_t>>());
+    BOOST_CHECK(round_tripped == backing);
+}
+
+BOOST_AUTO_TEST_CASE(range_of_serializer_non_sized_range) {
+    std::forward_list<int32_t> backing = { 3, 1, 4, 1, 5 };
+    auto view = std::ranges::subrange(backing.begin(), backing.end());
+    static_assert(!std::ranges::sized_range<decltype(view)>);
+
+    std::vector<int32_t> expected(backing.begin(), backing.end());
+
+    auto buf = ser::serialize_to_buffer<bytes>(view);
+    auto expected_buf = ser::serialize_to_buffer<bytes>(expected);
+    BOOST_CHECK(buf == expected_buf);
+
+    auto round_tripped = ser::deserialize_from_buffer(buf, std::type_identity<std::vector<int32_t>>());
+    BOOST_CHECK(round_tripped == expected);
+}
+
+// std::map has its own dedicated serializer<std::map<K, V>> specialization (key/value wire
+// format); guards against the generic range serializer's `requires` clause loosening back up
+// and silently hijacking it into the plain vector-of-T wire format instead. Routed through a
+// template so the compound-requirement below is substitution-failure-friendly (a non-dependent
+// requires-expression on a concrete type is a hard error, not SFINAE).
+template<typename T>
+constexpr bool is_generic_range_serializer_v = requires { ser::serializer<T>::is_generic_range_serializer; };
+static_assert(!is_generic_range_serializer_v<std::map<int32_t, int32_t>>);
+static_assert(!is_generic_range_serializer_v<std::unordered_map<int32_t, int32_t>>);
