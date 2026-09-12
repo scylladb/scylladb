@@ -7,6 +7,7 @@
  */
 
 #include <seastar/core/abort_source.hh>
+#include <seastar/util/defer.hh>
 #include <seastar/core/shard_id.hh>
 #include <seastar/core/on_internal_error.hh>
 #include "state_machine.hh"
@@ -57,10 +58,23 @@ public:
 
     future<> apply(raft::log_entry_ptr_list command) override {
         static thread_local logging::logger::rate_limit rate_limit(std::chrono::seconds(10));
+        // Handing a replay position handle to a memtable makes the memtable the
+        // owner of the commitlog segment holding the entry. Handles we don't
+        // hand over must be released, not destroyed: destroying them lets the
+        // commitlog reclaim segments which still hold committed entries that
+        // have to be replayed after a restart. Releasing keeps those segments.
+        std::vector<index_and_replay_position> replay_positions;
+        auto release_unapplied = defer([&replay_positions] () noexcept {
+            for (auto& rp : replay_positions) {
+                if (rp.replay_position_handle) {
+                    rp.replay_position_handle.release();
+                }
+            }
+        });
         try {
             co_await utils::get_local_injector().inject("strong_consistency_state_machine_wait_before_apply", utils::wait_for_message(20min));
             // Get replay positions for the commands.
-            auto replay_positions = _persistence.acquire_replay_position_handles_for(command);
+            replay_positions = _persistence.acquire_replay_position_handles_for(command);
             // Make sure we got replay positions for all commands.
             throwing_assert(replay_positions.size() == command.size());
             // One store for the whole batch, so that commands written with the same
@@ -89,6 +103,8 @@ public:
             // because the state machine is created only after the table is created
             // (see `schema_applier::commit_on_shard()` and `storage_service::commit_token_metadata_change()`).
             // In this case, we should just ignore mutations without throwing an error.
+            // The entries are discarded on purpose, so let their segments be reclaimed.
+            release_unapplied.cancel();
             logger.log(log_level::warn, rate_limit, "apply(): table {} was already dropped, ignoring mutations", _tablet.table);
         } catch (replica::no_such_keyspace&) {
             // Thrown when DROP KEYSPACE races with the raft applier fiber.
@@ -101,6 +117,7 @@ public:
             // if the keyspace was concurrently dropped.
             // Safe to ignore: the table's raft group is about to be destroyed
             // by schedule_raft_group_deletion() anyway.
+            release_unapplied.cancel();
             logger.log(log_level::warn, rate_limit, "apply(): keyspace for table {} was already dropped, ignoring mutations", _tablet.table);
         } catch (const abort_requested_exception& ex) {
             // The exception can be thrown by schema_store::resolve_and_upgrade.
