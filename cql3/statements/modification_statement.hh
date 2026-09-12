@@ -166,6 +166,11 @@ public:
 
     void process_where_clause(data_dictionary::database db, expr::expression where_clause, prepare_context& ctx);
 
+    /// Decides whether an IF EXISTS / IF NOT EXISTS condition is about the static
+    /// row or about a clustering row.  Must run before the checks that read
+    /// applies_only_to_static_columns(), which this can change.
+    void classify_exists_condition(bool restricts_clustering_columns);
+
     /// Checks that the primary key the statement names has no null values, throwing
     /// invalid_request_exception otherwise.
     virtual void validate_primary_key(const query_options& options) const;
