@@ -37,7 +37,7 @@ static std::string get_address() {
     return tests::getenv_safe("MOCK_S3_SERVER_HOST");
 }
 
-static s3::endpoint_config_ptr make_minio_config() {
+static s3::endpoint_config_ptr make_mock_config() {
     s3::endpoint_config cfg = {
         .port = get_port(),
         .use_https = false,
@@ -75,7 +75,7 @@ void test_client_upload_file(std::string_view test_name, failure_policy policy, 
     const auto object_name = fmt::format("/{}/{}-{}", "test", test_name, ::getpid());
     register_policy(object_name, policy);
 
-    auto client = s3::client::make(get_address(), make_minio_config());
+    auto client = s3::client::make(get_address(), make_mock_config());
     auto client_shutdown = deferred_close(*client);
     client->upload_file(file_path, object_name).get();
 }
@@ -119,7 +119,7 @@ void do_test_client_multipart_upload(failure_policy policy, bool is_jumbo = fals
 
     register_policy(name, policy);
     testlog.info("Make client");
-    auto cln = s3::client::make(get_address(), make_minio_config());
+    auto cln = s3::client::make(get_address(), make_mock_config());
     auto close_client = deferred_close(*cln);
 
     testlog.info("Upload object");

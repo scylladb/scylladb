@@ -9,6 +9,7 @@
 #include <seastar/core/sharded.hh>
 #include "sstables/sstables.hh"
 #include "test/lib/scylla_test_case.hh"
+#include "test/lib/s3_fixture.hh"
 #include <seastar/testing/test_fixture.hh>
 #include "schema/schema.hh"
 #include "replica/database.hh"
@@ -147,7 +148,8 @@ SEASTAR_TEST_CASE(sstable_resharding_test) {
     });
 }
 
-SEASTAR_TEST_CASE(sstable_resharding_over_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(sstable_resharding_over_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return sstables::test_env::do_with_async([] (auto& env) {
         run_sstable_resharding_test(env);
     }, test_env_config{

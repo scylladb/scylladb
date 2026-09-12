@@ -45,7 +45,6 @@ jobs:
           # do not install java dependencies, which is not only not used here
           sed -i.orig \
             -e '/tools\/.*\/install-dependencies.sh/d' \
-            -e 's/(minio_download_jobs)/(true)/' \
             ./install-dependencies.sh
           sudo ./install-dependencies.sh
           sudo dnf -y install lld

@@ -1571,6 +1571,7 @@ scylla_tests_dependencies = scylla_core + alternator + idls + scylla_tests_gener
     'test/lib/key_utils.cc',
     'test/lib/proc_utils.cc',
     'test/lib/gcs_fixture.cc',
+    'test/lib/s3_fixture.cc',
     'test/lib/aws_kms_fixture.cc',
     'test/lib/gcp_kms_fixture.cc',
     'test/lib/azure_kms_fixture.cc',

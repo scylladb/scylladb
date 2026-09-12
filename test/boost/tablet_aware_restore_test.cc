@@ -9,6 +9,7 @@
 
 
 #include "test/lib/cql_test_env.hh"
+#include "test/lib/s3_fixture.hh"
 #include "utils/assert.hh"
 #include <seastar/core/sstring.hh>
 #include <fmt/ranges.h>
@@ -355,7 +356,8 @@ future<> check_snapshot_sstables(cql_test_env& env, std::function<void(const db:
     }
 }
 
-SEASTAR_TEST_CASE(test_populate_snapshot_sstables_from_manifests, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(test_populate_snapshot_sstables_from_manifests, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     using namespace sstables;
 
     auto db_cfg_ptr = make_shared<db::config>();
