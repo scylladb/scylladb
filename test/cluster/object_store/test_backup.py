@@ -1888,6 +1888,19 @@ async def test_aborted_decommision_reenables_snapshot(manager: ScyllaClusterMana
 
         async def abort_decommission():
             tm = TaskManagerClient(manager.api)
+            # Task-list polling alone can observe the decommission after the coordinator
+            # already passed the leave breakpoint and finished (SCYLLADB-2055 race).
+            waiters = [asyncio.create_task(manager.api.wait_for_injection_enter(s.ip_addr, "topology_coordinator_before_leave"))
+                       for s in servers]
+            done, pending = await asyncio.wait(waiters, timeout=30, return_when=asyncio.FIRST_COMPLETED)
+            for p in pending:
+                p.cancel()
+            assert done, "no server entered topology_coordinator_before_leave within 30s"
+            # asyncio.wait() puts a task in `done` whether it succeeded or raised,
+            # so surface any exception instead of silently treating it as success.
+            for d in done:
+                d.result()
+
             while True:
                 logger.info("Listing tasks in %s", servers[1])
                 tasks = await tm.list_tasks(servers[1].ip_addr, "node_ops")
