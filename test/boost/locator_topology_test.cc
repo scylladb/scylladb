@@ -310,6 +310,87 @@ SEASTAR_THREAD_TEST_CASE(test_load_sketch) {
     }
 }
 
+SEASTAR_THREAD_TEST_CASE(test_apply_group0_leader_shard_ratio) {
+    // ratio=100 (default) and single-shard nodes are no-ops.
+    for (unsigned shard = 0; shard < 4; ++shard) {
+        BOOST_REQUIRE_EQUAL(apply_group0_leader_shard_ratio(100, shard, 4, 100), 100u);
+    }
+    BOOST_REQUIRE_EQUAL(apply_group0_leader_shard_ratio(100, 0, 1, 0), 100u);
+
+    // Unknown node capacity (0) is left alone rather than divided.
+    BOOST_REQUIRE_EQUAL(apply_group0_leader_shard_ratio(0, 0, 4, 0), 0u);
+
+    // ratio=50: shard 0 gets half the uniform share; the other 3 shards evenly absorb the rest.
+    BOOST_REQUIRE_EQUAL(apply_group0_leader_shard_ratio(100, 0, 4, 50), 50u);
+    BOOST_REQUIRE_EQUAL(apply_group0_leader_shard_ratio(100, 1, 4, 50), 116u);
+    BOOST_REQUIRE_EQUAL(apply_group0_leader_shard_ratio(100, 2, 4, 50), 116u);
+    BOOST_REQUIRE_EQUAL(apply_group0_leader_shard_ratio(100, 3, 4, 50), 116u);
+
+    // ratio=0: shard 0 is clamped to 1 (never exactly 0, see comment on the function),
+    // not literally excluded; the rest absorb almost all of its share.
+    BOOST_REQUIRE_EQUAL(apply_group0_leader_shard_ratio(100, 0, 4, 0), 1u);
+    BOOST_REQUIRE_EQUAL(apply_group0_leader_shard_ratio(100, 1, 4, 0), 133u);
+    BOOST_REQUIRE_EQUAL(apply_group0_leader_shard_ratio(100, 2, 4, 0), 133u);
+    BOOST_REQUIRE_EQUAL(apply_group0_leader_shard_ratio(100, 3, 4, 0), 133u);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_load_sketch_group0_leader_shard_ratio) {
+    inet_address ip1("192.168.0.1");
+    inet_address ip2("192.168.0.2");
+
+    // host1 is the local node (this_host_id), i.e. the simulated group0 leader.
+    auto host1 = host_id(utils::make_random_uuid());
+    auto host2 = host_id(utils::make_random_uuid());
+
+    unsigned shard_count = 4;
+
+    semaphore sem(1);
+    shared_token_metadata stm([&sem] () noexcept { return get_units(sem, 1); }, locator::token_metadata::config{
+        topology::config{
+            .this_endpoint = ip1,
+            .this_host_id = host1,
+            .local_dc_rack = locator::endpoint_dc_rack::default_location
+        }
+    });
+    auto stop_stm = deferred_stop(stm);
+
+    stm.mutate_token_metadata([&] (token_metadata& tm) {
+        tm.update_topology(host1, locator::endpoint_dc_rack::default_location, node::state::normal, shard_count);
+        tm.update_topology(host2, locator::endpoint_dc_rack::default_location, node::state::normal, shard_count);
+        return make_ready_future<>();
+    }).get();
+
+    auto tm = stm.get();
+    load_sketch load(tm);
+    load.set_group0_leader_shard_ratio(0);
+    load.populate().get();
+
+    std::vector<unsigned> host1_shards(shard_count, 0);
+    std::vector<unsigned> host2_shards(shard_count, 0);
+
+    // host1 gets one extra allocation: the cold-start pick that lands on shard 0
+    // before its deweighted capacity excludes it from further consideration.
+    for (unsigned i = 0; i < shard_count * 3 + 1; ++i) {
+        host1_shards[load.next_shard(host1, 1, service::default_target_tablet_size)] += 1;
+    }
+    for (unsigned i = 0; i < shard_count * 3; ++i) {
+        host2_shards[load.next_shard(host2, 1, service::default_target_tablet_size)] += 1;
+    }
+
+    // host1 is the local (group0-leader) node: its shard 0 is deweighted to a ratio of 0,
+    // so it can only ever pick up the very first, cold-start allocation before its
+    // (near-zero) capacity makes it look permanently overloaded.
+    BOOST_REQUIRE_LE(host1_shards[0], 1u);
+    for (unsigned i = 2; i < shard_count; ++i) {
+        BOOST_REQUIRE_EQUAL(host1_shards[i], host1_shards[1]);
+    }
+
+    // host2 is not the local node, so the ratio has no effect on it: allocation stays uniform.
+    for (unsigned i = 1; i < shard_count; ++i) {
+        BOOST_REQUIRE_EQUAL(host2_shards[i], host2_shards[0]);
+    }
+}
+
 SEASTAR_THREAD_TEST_CASE(test_left_node_is_kept_outside_dc) {
     auto id1 = host_id::create_random_id();
     auto ep1 = gms::inet_address("127.0.0.1");
