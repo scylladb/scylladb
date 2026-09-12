@@ -287,14 +287,10 @@ public:
 
     public:
 
-        // max-keys bounds key *count*, not response bytes: S3 keys run up to 1024 UTF-8
-        // bytes each, and read_entire_stream_contiguous() has no size cap, so the page
-        // size must be chosen from the worst case, not a typical one. Per <Contents>
-        // entry: up to 1024 bytes of key plus ~200 bytes of surrounding XML
-        // (LastModified/ETag/Size/StorageClass tags) = ~1224 bytes worst case. 100
-        // entries is ~120KB, safely under Seastar's 128KiB large-alloc threshold even
-        // if every key in the page hits the S3 max -- and ~36% fewer round trips
-        // than the old 64.
+        // max-keys bounds key count, not bytes, and start_listing() reads the whole
+        // reply contiguously: at the S3 worst case (~1224B per <Contents>) 100 entries
+        // is ~120KB, just under the 128KiB large-alloc threshold, ~36% fewer round
+        // trips than 64.
         bucket_lister(shared_ptr<client> client, sstring bucket, sstring prefix = "", size_t objects_per_page = 100, size_t entries_batch = 512 / sizeof(std::optional<directory_entry>));
         bucket_lister(shared_ptr<client> client, sstring bucket, sstring prefix, lister::filter_type filter, size_t objects_per_page = 100, size_t entries_batch = 512 / sizeof(std::optional<directory_entry>));
 
