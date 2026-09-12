@@ -95,7 +95,7 @@ future<shared_ptr<result_message>> modification_statement::execute_without_check
         // not be rejected. We don't send any routing information for
         // them, though.
         if (options.get_tablet_version_block().has_value()) {
-            const auto& groups_manager = coordinator.get().get_groups_manager();
+            auto& groups_manager = coordinator.get().get_groups_manager();
             const auto& table = _statement->s->table();
 
             auto maybe_routing_info_v2 = groups_manager.check_tablet_version(table, token, *options.get_tablet_version_block());
