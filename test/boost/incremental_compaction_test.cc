@@ -8,15 +8,20 @@
 #include <boost/range/iterator_range_core.hpp>
 #include <memory>
 #include <utility>
+#include <chrono>
+#include <cmath>
+#include <fmt/format.h>
 
 #include <seastar/core/sstring.hh>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/do_with.hh>
 #include <seastar/core/sharded.hh>
+#include <seastar/core/memory.hh>
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include "sstables/sstables.hh"
 #include "compaction/incremental_compaction_strategy.hh"
+#include "compaction/incremental_backlog_tracker.hh"
 #include "schema/schema.hh"
 #include "replica/database.hh"
 #include "compaction/compaction_manager.hh"
@@ -233,16 +238,9 @@ SEASTAR_THREAD_TEST_CASE(incremental_compaction_sag_test) {
             return double(total) / data_set_size;
         }
 
-        shared_sstable make_sstable_with_size(size_t sstable_data_size) {
-            auto sst = _env.make_sstable(_cf->schema(), "/nowhere/in/particular", _env.new_generation(), sstable_version_types::md, big);
-            auto keys = tests::generate_partition_keys(2, _cf->schema(), local_shard_only::yes);
-            sstables::test(sst).set_values(keys[0].key(), keys[1].key(), stats_metadata{}, sstable_data_size);
-            return sst;
-        }
-
         void populate(double target_space_amplification) {
             auto add_sstable = [this] (unsigned sst_data_size) {
-                auto sst = make_sstable_with_size(sst_data_size);
+                auto sst = make_sstable_with_fake_data_size(_env, _cf->schema(), sst_data_size);
                 column_family_test(_cf).add_sstable(sst).get();
             };
 
@@ -262,7 +260,7 @@ SEASTAR_THREAD_TEST_CASE(incremental_compaction_sag_test) {
                     break;
                 }
                 auto total = std::ranges::fold_left(desc.sstables | std::views::transform(std::mem_fn(&sstable::data_size)), uint64_t(0), std::plus{});
-                std::vector<shared_sstable> new_ssts = { make_sstable_with_size(std::min(total, data_set_size)) };
+                std::vector<shared_sstable> new_ssts = { make_sstable_with_fake_data_size(_env, _cf->schema(), std::min(total, data_set_size)) };
                 column_family_test(_cf).rebuild_sstable_list(table_s, new_ssts, desc.sstables).get();
             }
         }
@@ -742,4 +740,140 @@ SEASTAR_TEST_CASE(gc_sstable_no_premature_release_with_overlapping_inputs_test) 
         // released at the very end (or not incrementally at all).
         BOOST_CHECK_MESSAGE(!premature_gc_release, "GC sstable was released while overlapping input sstables were still alive");
     });
+}
+// ----------------------------------------------------------------------------
+// replace_sstables() used to copy the entire _all map on every call, making
+// backlog updates O(N^2) over N replacements. The fix mutates _all in place,
+// O(K log R) in the batch size. Timing is unreliable under CI/ASAN/debug
+// builds, so this counts allocations instead: growth is linear when fixed,
+// quadratic when not.
+// ----------------------------------------------------------------------------
+SEASTAR_THREAD_TEST_CASE(ics_backlog_tracker_replace_sstables_scale_test) {
+#ifndef SEASTAR_DEFAULT_ALLOCATOR // needs seastar::memory::stats().mallocs()
+    auto builder = schema_builder(this_smp_shard_count(), "tests", "ics_replace_scale")
+        .with_column("id", utf8_type, column_kind::partition_key)
+        .with_column("value", int32_type);
+    auto s = builder.build();
+
+    test_env::do_with_async([&] (test_env& env) {
+        // Each sstable below gets its own random run id, so none of them
+        // overlap-check against one another; they can all share one key range.
+        auto keys = tests::generate_partition_keys(2, s, local_shard_only::yes);
+        std::pair<partition_key, partition_key> key_range{keys[0].key(), keys[1].key()};
+
+        auto build_runs = [&] (size_t n_runs) {
+            std::vector<sstables::shared_sstable> ssts;
+            ssts.reserve(n_runs);
+            for (size_t i = 0; i < n_runs; i++) {
+                ssts.push_back(make_sstable_with_fake_data_size(env, s, 1024, key_range));
+            }
+            return ssts;
+        };
+
+        // Count allocations made only by the replace_sstables() loop itself,
+        // reusing one single-element vector so the signal is the tracker
+        // update cost, not sstable construction or vector temporaries.
+        auto allocs_for_replace = [&] (const std::vector<sstables::shared_sstable>& ssts) -> uint64_t {
+            compaction::incremental_compaction_strategy ics(std::map<sstring, sstring>{});
+            auto tracker = ics.make_backlog_tracker();
+            std::vector<sstables::shared_sstable> one(1);
+            const auto mallocs_before = seastar::memory::stats().mallocs();
+            for (auto& sst : ssts) {
+                one[0] = sst;
+                tracker->replace_sstables({}, one);
+            }
+            return seastar::memory::stats().mallocs() - mallocs_before;
+        };
+
+        auto small = build_runs(500);
+        const auto allocs_small = allocs_for_replace(small);
+        small.clear();
+        auto large = build_runs(5'000);
+        const auto allocs_large = allocs_for_replace(large);
+        testlog.info("ICS replace_sstables: 500 runs = {} mallocs, 5k runs = {} mallocs (ratio {:.1f}x)",
+                     allocs_small, allocs_large, double(allocs_large) / std::max<uint64_t>(allocs_small, 1));
+        // Fixed (incremental) -> allocations grow linearly with n, tracking the
+        // 10x run-count ratio. Buggy (full _all copy per call) -> quadratic,
+        // ~100x. 40x sits safely between the two, and unlike a timing bound is
+        // not affected by machine speed or CI load.
+        BOOST_REQUIRE_LT(allocs_large, allocs_small * 40);
+    }).get();
+#endif
+}
+
+// ----------------------------------------------------------------------------
+// replace_sstables must keep total_bytes() consistent with the inserted/removed
+// sstables across add / remove / combined batches, and exercise both branches of
+// the empty-run cleanup. Note: _all is private and has no accessor, so this test
+// does not inspect it directly. The only structural check is indirect -- calling
+// backlog({}, {}) must not trip the SCYLLA_ASSERT(r.data_size() != 0) in
+// incremental_compaction_strategy.cc, which would fire if _all were corrupted.
+// ----------------------------------------------------------------------------
+SEASTAR_THREAD_TEST_CASE(ics_backlog_tracker_replace_sstables_contents_test) {
+    auto builder = schema_builder(this_smp_shard_count(), "tests", "ics_replace_contents")
+        .with_column("id", utf8_type, column_kind::partition_key)
+        .with_column("value", int32_type);
+    auto s = builder.build();
+
+    test_env::do_with_async([&] (test_env& env) {
+        compaction::incremental_compaction_strategy ics(std::map<sstring, sstring>{});
+        auto tracker_impl = ics.make_backlog_tracker();
+        // total_bytes() is specific to incremental_backlog_tracker, not part of
+        // the polymorphic impl interface.
+        auto& tracker = static_cast<compaction::incremental_backlog_tracker&>(*tracker_impl);
+
+        const int64_t one_mib = 1 << 20;
+        // All sstables share one run id, so the run holds multiple sstables --
+        // this covers both branches of the empty-run cleanup: removing some
+        // but not all sstables of a run keeps the run; removing the last one
+        // erases it. insert() rejects overlapping fragments, so a/b/c need
+        // disjoint ranges: slice non-overlapping [first, last) pairs out of one
+        // sorted batch of keys instead of generating 3 independently.
+        auto shared_rid = sstables::run_id::create_random_id();
+        auto keys = tests::generate_partition_keys(6, s, local_shard_only::yes);
+        auto mk = [&] (int64_t data_size, size_t key_idx) {
+            return make_sstable_with_fake_data_size(env, s, data_size,
+                    std::pair{keys[key_idx].key(), keys[key_idx + 1].key()}, shared_rid);
+        };
+
+        auto a = mk(one_mib, 0);
+        auto b = mk(one_mib, 2);
+        auto c = mk(one_mib, 4);
+        tracker.replace_sstables({}, {a, b, c});
+        BOOST_REQUIRE_EQUAL(tracker.total_bytes(), 3 * one_mib);
+
+        // Remove one sstable: the run still has two, so it is NOT erased (the
+        // empty-run cleanup branch is not taken).
+        tracker.replace_sstables({a}, {});
+        BOOST_REQUIRE_EQUAL(tracker.total_bytes(), 2 * one_mib);
+
+        // Remove a second: the run still has one, still not erased.
+        tracker.replace_sstables({b}, {});
+        BOOST_REQUIRE_EQUAL(tracker.total_bytes(), 1 * one_mib);
+
+        // Remove the last sstable of the run: the run is now empty and must be
+        // erased (the empty-run cleanup branch is taken).
+        tracker.replace_sstables({c}, {});
+        BOOST_REQUIRE_EQUAL(tracker.total_bytes(), 0);
+
+        // Removing an sstable of an untracked run (it == _all.end()) must not
+        // change total_bytes and must not crash.
+        auto d = make_sstable_with_fake_data_size(env, s, one_mib);
+        tracker.replace_sstables({d}, {});
+        BOOST_REQUIRE_EQUAL(tracker.total_bytes(), 0);
+
+        // A sstable with data_size() == 0 is skipped by replace_sstables, so it
+        // neither adds to nor removes from the total.
+        auto zero = make_sstable_with_fake_data_size(env, s, 0);
+        tracker.replace_sstables({}, {zero});
+        BOOST_REQUIRE_EQUAL(tracker.total_bytes(), 0);
+
+        // Backlog must remain sane (finite, non-negative) after all updates.
+        // This is the only direct structural check: it must not trip
+        // SCYLLA_ASSERT(r.data_size() != 0) in incremental_compaction_strategy.cc.
+        double backlog = tracker.backlog({}, {});
+        BOOST_TEST_MESSAGE(fmt::format("ICS backlog() after add/remove churn = {:.3f}", backlog));
+        BOOST_REQUIRE(std::isfinite(backlog));
+        BOOST_REQUIRE(backlog >= 0.0);
+    }).get();
 }

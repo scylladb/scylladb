@@ -286,6 +286,13 @@ shared_sstable make_sstable_easy(test_env& env, mutation_reader rd, sstable_writ
 shared_sstable make_sstable_easy(test_env& env, lw_shared_ptr<replica::memtable> mt, sstable_writer_config cfg,
         sstables::generation_type gen, const sstable::version_types v = sstables::get_highest_sstable_version(), int estimated_partitions = 1, db_clock::time_point = db_clock::now());
 
+// Makes a sstable with a fake data_size(), for tests that need sstables of a specific
+// size without writing real data. If key_range is not given, a fresh disjoint pair of
+// keys is generated for it.
+shared_sstable make_sstable_with_fake_data_size(test_env& env, schema_ptr schema, uint64_t data_size,
+        std::optional<std::pair<partition_key, partition_key>> key_range = std::nullopt,
+        sstables::run_id run = sstables::run_id::create_random_id());
+
 
 inline shared_sstable make_sstable_easy(test_env& env, mutation_reader rd, sstable_writer_config cfg,
         const sstable::version_types version = sstables::get_highest_sstable_version(), int expected_partition = 1) {
