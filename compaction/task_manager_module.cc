@@ -160,7 +160,16 @@ future<> reshard(sstables::sstable_directory& dir, sstables::sstable_directory::
     // There is a semaphore inside the compaction manager in run_resharding_jobs. So we
     // parallel_for_each so the statistics about pending jobs are updated to reflect all
     // jobs. But only one will run in parallel at a time
-    auto& t = table.try_get_compaction_group_view_with_static_sharding();
+    //
+    // The compaction group view is used here only for job registration and gate-holding;
+    // resharding never reads or writes the group's own SSTables. With static (vnode)
+    // sharding there is exactly one group per shard; with tablets there may be many.
+    // In either case, any registered group suffices.
+    auto* cg = table.get_any_compaction_group();
+    if (!cg) {
+        on_internal_error(tasks::tmlogger, format("No compaction group found for table {}.{}", table.schema()->ks_name(), table.schema()->cf_name()));
+    }
+    auto& t = cg->view_for_unrepaired_data();
     // Resharding is mandatory for SSTable loading — if it cannot proceed (e.g. due to
     // out-of-space prevention disabling compaction), we must fail loudly rather than
     // silently skipping and leaving SSTables orphaned.
