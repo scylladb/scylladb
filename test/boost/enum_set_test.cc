@@ -42,6 +42,12 @@ std::ostream& boost_test_print_type(std::ostream& os, const std::unordered_set<f
 
 using fruit_enum = super_enum<fruit, fruit::apple, fruit::pear, fruit::banana>;
 
+// Fits in a uint8_t mask_type, to exercise from_mask() narrowing checks.
+enum class byte_flag { a = 0, b = 3, c = 7 };
+using byte_flag_enum = super_enum<byte_flag, byte_flag::a, byte_flag::b, byte_flag::c>;
+using byte_flag_set = enum_set<byte_flag_enum>;
+static_assert(std::is_same_v<byte_flag_set::mask_type, uint8_t>);
+
 //
 // `super_enum`
 //
@@ -88,6 +94,19 @@ BOOST_AUTO_TEST_CASE(set_from_mask) {
     BOOST_REQUIRE_EQUAL(fs.mask(), fruit_set::from_mask(fs.mask()).mask());
 
     BOOST_REQUIRE_THROW(fruit_set::from_mask(0xdead), bad_enum_set_mask);
+
+    // A wide overflowing value must throw, not silently truncate.
+    const uint64_t wide_valid = fs.mask();
+    BOOST_REQUIRE_EQUAL(fs.mask(), fruit_set::from_mask(wide_valid).mask());
+    const uint64_t wide_overflow = (uint64_t(1) << 40) | fs.mask();
+    BOOST_REQUIRE_THROW(fruit_set::from_mask(wide_overflow), bad_enum_set_mask);
+}
+
+BOOST_AUTO_TEST_CASE(set_from_mask_rejects_narrowing) {
+    // 0x100 is an int; with a uint8_t mask_type it must not narrow to 0 before validation.
+    BOOST_REQUIRE_THROW(byte_flag_set::from_mask(0x100), bad_enum_set_mask);
+    // Negative values must be rejected, not silently reinterpreted.
+    BOOST_REQUIRE_THROW(byte_flag_set::from_mask(-1), bad_enum_set_mask);
 }
 
 BOOST_AUTO_TEST_CASE(set_enable) {
