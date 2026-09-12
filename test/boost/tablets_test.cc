@@ -2074,9 +2074,9 @@ future<> handle_resize_finalize(cql_test_env& e, group0_guard& guard, const migr
 
         if (load_stats) {
             auto new_tm = stm.get();
-            auto reconciled_stats = load_stats->stats.reconcile_tablets_resize(plan.resize_plan().finalize_resize, *old_tm, *new_tm);
+            auto reconciled_stats = co_await load_stats->stats.reconcile_tablets_resize(plan.resize_plan().finalize_resize, *old_tm, *new_tm);
             if (reconciled_stats) {
-                load_stats->stats = *reconciled_stats;
+                load_stats->stats = std::move(*reconciled_stats);
             }
         }
 
@@ -2106,11 +2106,11 @@ static future<> apply_repair_transitions(token_metadata& tm, const migration_pla
 static
 future<> apply_plan(token_metadata& tm, const migration_plan& plan, service::topology& topology, shared_load_stats* load_stats) {
     for (auto&& mig : plan.migrations()) {
-        co_await tm.tablets().mutate_tablet_map_async(mig.tablet.table, [&] (tablet_map& tmap) {
+        co_await tm.tablets().mutate_tablet_map_async(mig.tablet.table, [&] (tablet_map& tmap) -> future<> {
             if (load_stats && mig.src && mig.dst) {
                 global_tablet_id gid {mig.tablet.table, mig.tablet.tablet};
                 dht::token_range trange {tmap.get_token_range(mig.tablet.tablet)};
-                auto new_stats = load_stats->stats.migrate_tablet_size(mig.src->host, mig.dst->host, gid, trange);
+                auto new_stats = co_await load_stats->stats.migrate_tablet_size(mig.src->host, mig.dst->host, gid, trange);
                 if (new_stats) {
                     load_stats->stats = std::move(*new_stats);
                 }
@@ -2119,7 +2119,6 @@ future<> apply_plan(token_metadata& tm, const migration_plan& plan, service::top
             testlog.trace("Replacing tablet {} replica from {} to {}", mig.tablet.tablet, mig.src, mig.dst);
             tinfo.replicas = replace_replica(tinfo.replicas, mig.src, mig.dst);
             tmap.set_tablet(mig.tablet.tablet, tinfo);
-            return make_ready_future();
         });
     }
     co_await apply_resize_plan(tm, plan);
@@ -3595,7 +3594,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_sketch_uses_correct_disk_capacity) {
 
         // Check that load_sketch throws when it didn't get the node capacity from load_stats
         {
-            load_sketch load(stm.get(), make_lw_shared(stats));
+            load_sketch load(stm.get(), make_lw_shared(stats.clone_gently().get()));
             load.populate().get();
             BOOST_REQUIRE_THROW(load.get_load(local_host), std::runtime_error);
         }
@@ -3603,7 +3602,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_sketch_uses_correct_disk_capacity) {
         // Check that load_sketch falls back to the gross capacity when effective_capacity is not present
         {
             stats.capacity[local_host] = 10;
-            load_sketch load(stm.get(), make_lw_shared(stats));
+            load_sketch load(stm.get(), make_lw_shared(stats.clone_gently().get()));
             load.populate().get();
             BOOST_REQUIRE_EQUAL(load.get_capacity(local_host), 10);
         }
@@ -3612,7 +3611,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_sketch_uses_correct_disk_capacity) {
         {
             stats.capacity[local_host] = 10;
             stats.tablet_stats[local_host].effective_capacity = 20;
-            load_sketch load(stm.get(), make_lw_shared(stats));
+            load_sketch load(stm.get(), make_lw_shared(stats.clone_gently().get()));
             load.populate().get();
             BOOST_REQUIRE_EQUAL(load.get_capacity(local_host), 20);
         }
@@ -3622,7 +3621,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_sketch_uses_correct_disk_capacity) {
             stats.capacity[host1] = 5;
             stats.capacity[local_host] = 10;
             stats.tablet_stats[local_host].effective_capacity = 20;
-            load_sketch load(stm.get(), make_lw_shared(stats));
+            load_sketch load(stm.get(), make_lw_shared(stats.clone_gently().get()));
             load.set_force_capacity_based_load(true);
             load.populate().get();
             BOOST_REQUIRE_EQUAL(load.get_capacity(local_host), 10);
@@ -5601,7 +5600,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_stats_tablet_reconcile) {
             size_t tablet_count_after_merge = tablet_count / 2;
             set_tablet_count(tablet_count_after_merge);
 
-            auto reconciled_stats_ptr = stats.reconcile_tablets_resize({ table }, *old_tmptr, *stm.get());
+            auto reconciled_stats_ptr = stats.reconcile_tablets_resize({ table }, *old_tmptr, *stm.get()).get();
             BOOST_REQUIRE(reconciled_stats_ptr);
             locator::tablet_load_stats& reconciled_tls = reconciled_stats_ptr->tablet_stats[host];
 
@@ -5631,7 +5630,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_stats_tablet_reconcile) {
             size_t tablet_count_after_split = tablet_count * 2;
             set_tablet_count(tablet_count_after_split);
 
-            auto reconciled_stats_ptr = stats.reconcile_tablets_resize({ table }, *old_tmptr, *stm.get());
+            auto reconciled_stats_ptr = stats.reconcile_tablets_resize({ table }, *old_tmptr, *stm.get()).get();
             BOOST_REQUIRE(reconciled_stats_ptr);
             locator::tablet_load_stats& reconciled_tls = reconciled_stats_ptr->tablet_stats[host];
 
@@ -5687,12 +5686,12 @@ SEASTAR_THREAD_TEST_CASE(test_load_stats_tablet_reconcile_tablet_not_found) {
 
         // Test if merge reconcile detects a missing sibling tablet in load_stats
         set_tablet_count(tablet_count / 2);
-        auto reconciled_stats_ptr = stats.reconcile_tablets_resize({ table }, *old_tm, *stm.get());
+        auto reconciled_stats_ptr = stats.reconcile_tablets_resize({ table }, *old_tm, *stm.get()).get();
         BOOST_REQUIRE_EQUAL(reconciled_stats_ptr.get(), nullptr);
 
         // Test if split reconcile detects a missing tablet in load_stats
         set_tablet_count(tablet_count * 2);
-        reconciled_stats_ptr = stats.reconcile_tablets_resize({ table }, *old_tm, *stm.get());
+        reconciled_stats_ptr = stats.reconcile_tablets_resize({ table }, *old_tm, *stm.get()).get();
         BOOST_REQUIRE_EQUAL(reconciled_stats_ptr.get(), nullptr);
     }, cfg).get();
 }
@@ -5715,7 +5714,7 @@ SEASTAR_TEST_CASE(test_load_stats_migrate_tablet_size) {
         stats.tablet_stats[host1].tablet_sizes[table][rb_tid.range] = tablet_size;
         stats.tablet_stats[host2] = {};
 
-        auto new_load_stats = stats.migrate_tablet_size(host1, host2, gid, rb_tid.range);
+        auto new_load_stats = co_await stats.migrate_tablet_size(host1, host2, gid, rb_tid.range);
         BOOST_REQUIRE(new_load_stats);
 
         // Check tablet size is on host2
@@ -5737,7 +5736,7 @@ SEASTAR_TEST_CASE(test_load_stats_migrate_tablet_size) {
         stats.tablet_stats[host1] = {};
         stats.tablet_stats[host2] = {};
 
-        auto new_load_stats = stats.migrate_tablet_size(host1, host2, gid, rb_tid.range);
+        auto new_load_stats = co_await stats.migrate_tablet_size(host1, host2, gid, rb_tid.range);
         BOOST_REQUIRE(!new_load_stats);
     }
 
@@ -5747,7 +5746,7 @@ SEASTAR_TEST_CASE(test_load_stats_migrate_tablet_size) {
         stats.tablet_stats[host1].tablet_sizes[table][rb_tid.range] = tablet_size;
         stats.tablet_stats[host2].tablet_sizes[table][rb_tid.range] = tablet_size;
 
-        auto new_load_stats = stats.migrate_tablet_size(host1, host2, gid, rb_tid.range);
+        auto new_load_stats = co_await stats.migrate_tablet_size(host1, host2, gid, rb_tid.range);
         BOOST_REQUIRE(!new_load_stats);
     }
 
@@ -5757,7 +5756,7 @@ SEASTAR_TEST_CASE(test_load_stats_migrate_tablet_size) {
         stats.tablet_stats[host1].tablet_sizes[table][rb_tid.range] = tablet_size;
         stats.tablet_stats[host2] = {};
 
-        auto new_load_stats = stats.migrate_tablet_size(host1, host1, gid, rb_tid.range);
+        auto new_load_stats = co_await stats.migrate_tablet_size(host1, host1, gid, rb_tid.range);
         BOOST_REQUIRE(!new_load_stats);
     }
 
@@ -5766,11 +5765,10 @@ SEASTAR_TEST_CASE(test_load_stats_migrate_tablet_size) {
         load_stats stats;
         stats.tablet_stats[host1].tablet_sizes[table][rb_tid.range] = tablet_size;
 
-        auto new_load_stats = stats.migrate_tablet_size(host1, host2, gid, rb_tid.range);
+        auto new_load_stats = co_await stats.migrate_tablet_size(host1, host2, gid, rb_tid.range);
         BOOST_REQUIRE(!new_load_stats);
     }
 
-    return make_ready_future<>();
 }
 
 // We want to generate the same uniform boundaries if tablet count is a power-of-two as

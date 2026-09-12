@@ -606,7 +606,24 @@ struct load_stats {
     // reported by other nodes.
     bool _aggregated = false;
 
+    load_stats() = default;
+    // Built field by field by the IDL deserializer, which knows nothing about
+    // _aggregated. Keep the parameters in sync with idl/storage_service.idl.hh.
+    load_stats(std::unordered_map<table_id, table_load_stats> tables,
+               std::unordered_map<host_id, uint64_t> capacity,
+               std::unordered_map<locator::host_id, bool> critical_disk_utilization,
+               tablet_load_stats_map tablet_stats);
+
+    // Copying walks every tablet replica in the cluster. Use clone_gently().
+    load_stats(const load_stats&) = delete;
+    load_stats& operator=(const load_stats&) = delete;
+    load_stats(load_stats&&) = default;
+    load_stats& operator=(load_stats&&) = default;
+
     static load_stats from_v1(load_stats_v1&&);
+
+    // Preemptible deep copy.
+    future<load_stats> clone_gently() const;
 
     // Applies s on top of *this. Preemptible.
     //
@@ -630,8 +647,9 @@ struct load_stats {
     // Modifies the tablet sizes in load_stats for the given table after a split or merge. The old_tm argument has
     // to contain the token_metadata pre-resize. The function returns load_stats with tablet token ranges
     // corresponding to the post-resize tablet_map.
-    // In case any pre-resize tablet replica is not found, the function returns nullptr
-    lw_shared_ptr<load_stats> reconcile_tablets_resize(const std::unordered_set<table_id>& tables, const token_metadata& old_tm, const token_metadata& new_tm) const;
+    // In case any pre-resize tablet replica is not found, the function returns nullptr.
+    // Preemptible; *this and both token_metadata must outlive the returned future.
+    future<lw_shared_ptr<load_stats>> reconcile_tablets_resize(const std::unordered_set<table_id>& tables, const token_metadata& old_tm, const token_metadata& new_tm) const;
 
     // Modifies the tablet sizes in load_stats by moving the size of a tablet from leaving to pending host.
     // The function returns modified load_stats if the tablet size was successfully migrated.
@@ -640,7 +658,8 @@ struct load_stats {
     // - tablet was found on the pending host
     // - pending and leaving hosts are equal (in case of intranode migration)
     // - pending host is not found in load_stats.tablet_stats
-    lw_shared_ptr<load_stats> migrate_tablet_size(locator::host_id leaving, locator::host_id pending, locator::global_tablet_id gid, const dht::token_range trange) const;
+    // Preemptible; *this must outlive the returned future.
+    future<lw_shared_ptr<load_stats>> migrate_tablet_size(locator::host_id leaving, locator::host_id pending, locator::global_tablet_id gid, const dht::token_range trange) const;
 };
 
 using load_stats_v2 = load_stats;

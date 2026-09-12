@@ -125,7 +125,7 @@ future<> apply_plan(token_metadata& tm, const migration_plan& plan, locator::loa
         if (mig.src && mig.dst && mig.src->host != mig.dst->host) {
             auto& tmap = tm.tablets().get_tablet_map(mig.tablet.table);
             const dht::token_range trange = tmap.get_token_range(mig.tablet.tablet);
-            lw_shared_ptr<locator::load_stats> new_stats = load_stats.migrate_tablet_size(mig.src->host, mig.dst->host, mig.tablet, trange);
+            lw_shared_ptr<locator::load_stats> new_stats = co_await load_stats.migrate_tablet_size(mig.src->host, mig.dst->host, mig.tablet, trange);
 
             if (new_stats) {
                 load_stats = std::move(*new_stats);
@@ -167,7 +167,7 @@ rebalance_stats rebalance_tablets(cql_test_env& e, locator::load_stats& load_sta
 
     for (size_t i = 0; i < max_iterations; ++i) {
         auto prev_lb_stats = *talloc.stats().for_dc(dc);
-        auto load_stats_p = make_lw_shared<locator::load_stats>(load_stats);
+        auto load_stats_p = make_lw_shared<locator::load_stats>(load_stats.clone_gently().get());
         auto start_time = std::chrono::steady_clock::now();
 
         auto plan = talloc.balance_tablets(stm.get(), nullptr, nullptr, load_stats_p, skiplist).get();
@@ -444,7 +444,7 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
 
                 // Allocate tablet sizes to nodes
                 for (auto& [table, tablet_sizes]: tablet_sizes_in_rack.at(rack)) {
-                    load_sketch load(e.local_token_metadata_ptr(), make_lw_shared<locator::load_stats>(stats));
+                    load_sketch load(e.local_token_metadata_ptr(), make_lw_shared<locator::load_stats>(stats.clone_gently().get()));
 
                     // Add nodes to load_sketch and to the nodes_used heap
                     std::vector<node_used_size> nodes_used;
@@ -487,7 +487,7 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
 
             compute_best_overcommit();
 
-            auto load_stats_p = make_lw_shared<locator::load_stats>(stats);
+            auto load_stats_p = make_lw_shared<locator::load_stats>(stats.clone_gently().get());
             int table_index = 0;
             for (auto s : {s1, s2}) {
                 auto table = s->id();

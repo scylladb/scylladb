@@ -1757,7 +1757,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         return true;
     }
 
-    future<> for_each_tablet_group_transition(std::function<void(const locator::tablet_map&,
+    future<> for_each_tablet_group_transition(std::function<future<>(const locator::tablet_map&,
                                                            table_id,
                                                            const locator::table_group_set&,
                                                            locator::tablet_id,
@@ -1768,7 +1768,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             const auto& tmap = tm->tablets().get_tablet_map(base_table);
             for (auto&& [tablet, trinfo]: tmap.transitions()) {
                 co_await coroutine::maybe_yield();
-                func(tmap, base_table, tables, tablet, trinfo);
+                co_await func(tmap, base_table, tables, tablet, trinfo);
             }
         }
     }
@@ -2143,7 +2143,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                                                  table_id base_table,
                                                  const locator::table_group_set& tables,
                                                  locator::tablet_id tid,
-                                                 const locator::tablet_transition_info& trinfo) {
+                                                 const locator::tablet_transition_info& trinfo) -> future<> {
             // we have `gid` which is the tablet id of the base table of the tablet group, which we use as a
             // representative of the group for some of the operations - such as logging, and as the key in the _tablets
             // map where we store the migration state.
@@ -2460,7 +2460,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     break;
                 case locator::tablet_transition_stage::end_migration: {
                     // Update load_stats after a migration or rebuild
-                    update_load_stats_on_end_migration(gid, tmap, trinfo);
+                    co_await update_load_stats_on_end_migration(gid, tmap, trinfo);
 
                     // Need a separate stage and a barrier after cleanup RPC to cut off stale RPCs.
                     // See do_tablet_operation() doc.
@@ -2766,7 +2766,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
 
     // Migrates tablet size from leaving to pending host after migration,
     // or creates a new tablet size on pending host after a rebuild
-    void update_load_stats_on_end_migration(locator::global_tablet_id gid, const locator::tablet_map& tmap, const locator::tablet_transition_info& trinfo) {
+    future<> update_load_stats_on_end_migration(locator::global_tablet_id gid, const locator::tablet_map& tmap, const locator::tablet_transition_info& trinfo) {
         if (auto old_load_stats = _tablet_allocator.get_load_stats()) {
             lw_shared_ptr<locator::load_stats> new_load_stats;
             auto& tinfo = tmap.get_tablet_info(gid.tablet);
@@ -2776,7 +2776,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             switch (trinfo.transition) {
             case locator::tablet_transition_kind::migration:
                 // Handle tablet migration
-                new_load_stats = old_load_stats->migrate_tablet_size(leaving->host, pending->host, gid, trange);
+                new_load_stats = co_await old_load_stats->migrate_tablet_size(leaving->host, pending->host, gid, trange);
                 break;
             case locator::tablet_transition_kind::rebuild:
                 [[fallthrough]];
@@ -2800,7 +2800,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     }
 
                     if (!incomplete) {
-                        new_load_stats = make_lw_shared<locator::load_stats>(*old_load_stats);
+                        new_load_stats = make_lw_shared<locator::load_stats>(co_await old_load_stats->clone_gently());
                         auto size = replica_count ? tablet_size_sum / replica_count : 0;
                         new_load_stats->tablet_stats.at(pending->host).tablet_sizes[gid.table][trange] = size;
                     }
@@ -2888,7 +2888,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         if (auto old_load_stats = _tablet_allocator.get_load_stats()) {
             guard = co_await start_operation();
             auto new_tm = get_token_metadata_ptr();
-            auto reconciled_stats = old_load_stats->reconcile_tablets_resize(plan.resize_plan().finalize_resize, *tm, *new_tm);
+            auto reconciled_stats = co_await old_load_stats->reconcile_tablets_resize(plan.resize_plan().finalize_resize, *tm, *new_tm);
             if (reconciled_stats) {
                 _tablet_allocator.set_load_stats(reconciled_stats);
             }
