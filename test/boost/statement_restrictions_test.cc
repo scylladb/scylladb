@@ -510,7 +510,7 @@ SEASTAR_TEST_CASE(index_selection) {
 // loop would lose that space on every rejection, megabytes over 32768
 // combinations; do not inline this into the loop.
 [[gnu::noinline]]
-static shared_ptr<const restrictions::statement_restrictions> try_analyze_restrictions(
+static shared_ptr<const restrictions::select_restrictions> try_analyze_restrictions(
         cql_test_env& e, schema_ptr schema, const expr::expression& where_expr, prepare_context& ctx) {
     try {
         return restrictions::analyze_select_restrictions(
@@ -1155,7 +1155,7 @@ SEASTAR_TEST_CASE(combinatorial_restrictions) {
 }
 
 /// Helper to get statement_restrictions from a parsed WHERE clause string.
-static shared_ptr<const restrictions::statement_restrictions> make_restrictions(
+static shared_ptr<const restrictions::select_restrictions> make_restrictions(
         std::string_view where_clause, cql_test_env& env,
         const sstring& table_name = "t", const sstring& keyspace_name = "ks") {
     prepare_context ctx;

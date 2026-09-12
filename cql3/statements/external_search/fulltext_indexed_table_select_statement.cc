@@ -127,7 +127,7 @@ std::optional<bm25_ordering_info> get_bm25_ordering_info(
 
 ::shared_ptr<cql3::statements::select_statement> fulltext_indexed_table_select_statement::prepare(data_dictionary::database db,
         schema_ptr schema, uint32_t bound_terms, lw_shared_ptr<const parameters> parameters,
-        ::shared_ptr<selection::selection> selection, ::shared_ptr<const restrictions::statement_restrictions> restrictions,
+        ::shared_ptr<selection::selection> selection, ::shared_ptr<const restrictions::select_restrictions> restrictions,
         ::shared_ptr<std::vector<size_t>> group_by_cell_indices, bool is_reversed,
         ordering_comparator_type ordering_comparator, std::optional<expr::expression> limit,
         std::optional<expr::expression> per_partition_limit, cql_stats& stats,
@@ -191,7 +191,7 @@ std::optional<bm25_ordering_info> get_bm25_ordering_info(
 
 fulltext_indexed_table_select_statement::fulltext_indexed_table_select_statement(schema_ptr schema, uint32_t bound_terms,
         lw_shared_ptr<const parameters> parameters, ::shared_ptr<selection::selection> selection,
-        ::shared_ptr<const restrictions::statement_restrictions> restrictions,
+        ::shared_ptr<const restrictions::select_restrictions> restrictions,
         ::shared_ptr<std::vector<size_t>> group_by_cell_indices, bool is_reversed,
         ordering_comparator_type ordering_comparator, std::optional<expr::expression> limit,
         std::optional<expr::expression> per_partition_limit, cql_stats& stats,
