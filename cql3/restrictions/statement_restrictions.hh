@@ -15,7 +15,6 @@
 #include "cql3/expr/restrictions.hh"
 #include "cql3/prepare_context.hh"
 #include "cql3/restrictions/where_clause_analysis.hh"
-#include "cql3/statements/statement_type.hh"
 #include "query/query-request.hh"
 #include "schema/schema_fwd.hh"
 #include "service/pager/query_plan.hh"
@@ -34,51 +33,94 @@ using check_indexes = bool_class<class check_indexes_tag>;
 /// std::nullopt plans normally. See #18992.
 using pinned_plan_opt = std::optional<service::pager::query_plan>;
 
+// A mutation's WHERE clause has to name the rows it writes, so every restriction
+// in it has to translate to a partition or clustering range.  There is no index
+// to read and nothing to filter, and none of that machinery is reachable from
+// either of the classes below.
+
 /**
- * What an UPDATE, DELETE or INSERT statement's WHERE clause says about the rows
- * it writes.
+ * What an UPDATE statement's WHERE clause says about the rows it writes.
  *
- * A mutation's WHERE clause has to name those rows, so every restriction has to
- * translate to a partition or clustering range.  There is no index to read and
- * nothing to filter, and none of that machinery is reachable from here.
+ * An UPDATE writes whole rows, so its WHERE clause names whole rows: it may not
+ * slice the clustering key, and must name all of it.
  *
- * Built by the analyze_{update,delete,insert}_restrictions() functions below.
+ * Built by analyze_update_restrictions() below.
  */
-class modification_restrictions {
+class update_restrictions {
     where_clause_analysis _analysis;
 public:
     // Marks the constructor as internal: a constructed object says nothing until
     // it is analyzed, so go through the analyze_*_restrictions() factories below.
     struct private_tag { explicit private_tag() = default; };
 
-    modification_restrictions(private_tag, schema_ptr schema);
+    update_restrictions(private_tag, schema_ptr schema);
 
-    modification_restrictions(const modification_restrictions&) = delete;
-    modification_restrictions& operator=(const modification_restrictions&) = delete;
+    update_restrictions(const update_restrictions&) = delete;
+    update_restrictions& operator=(const update_restrictions&) = delete;
 
-    /// Reads the WHERE clause of a mutation and applies the rules that hold for
-    /// one: it has to name the rows to write, so it may not use token(), may not
-    /// restrict a non-primary-key column, and - unless it is a DELETE, the only
-    /// mutation that names a range of rows - may not slice the clustering key.
-    ///
-    /// The type picks the wording of the errors this may throw, and whether the
-    /// clustering slice is allowed.
-    void analyze_mutation(
+    void analyze_update(
             data_dictionary::database db,
-            statements::statement_type type,
             const expr::expression& where_clause,
             prepare_context& ctx,
             bool applies_only_to_static_columns);
 
-    /// Rejects a WHERE clause that does not name the whole clustering key.  A
-    /// DELETE names a range of rows and does not call this.
+    /// Rejects a WHERE clause that does not name the whole clustering key.
     ///
     /// Takes the flag rather than remembering it: an IF [NOT] EXISTS condition
     /// is classified after the analysis and can change it.
     void reject_incomplete_clustering_key(bool applies_only_to_static_columns) const;
 
+    /// Rejects a WHERE clause that does not name the whole partition key.
+    void reject_incomplete_partition_key() const;
+
+    bool key_is_in_relation() const { return _analysis.key_is_in_relation(); }
+    bool clustering_key_restrictions_has_IN() const { return _analysis.clustering_key_restrictions_has_IN(); }
+    bool has_clustering_columns_restriction() const { return _analysis.has_clustering_columns_restriction(); }
+
+    dht::partition_range_vector get_partition_key_ranges(const query_options& options) const {
+        return _analysis.get_partition_key_ranges(options);
+    }
+    std::vector<query::clustering_range> clustering_ranges(const query_options& options) const {
+        return _analysis.get_clustering_bounds(options);
+    }
+
+    /// Checks that the primary key restrictions don't contain null values, throws
+    /// invalid_request_exception otherwise.
+    void validate_primary_key(const query_options& options) const { _analysis.validate_primary_key(options); }
+};
+
+/**
+ * What a DELETE statement's WHERE clause says about the rows it deletes.
+ *
+ * A DELETE is the only mutation that names a range of rows: it may slice the
+ * clustering key, and need not name all of it.  What it may not then do is
+ * delete a particular regular column of those rows.
+ *
+ * Built by analyze_delete_restrictions() below.
+ */
+class delete_restrictions {
+    where_clause_analysis _analysis;
+public:
+    // Marks the constructor as internal: a constructed object says nothing until
+    // it is analyzed, so go through the analyze_*_restrictions() factories below.
+    struct private_tag { explicit private_tag() = default; };
+
+    delete_restrictions(private_tag, schema_ptr schema);
+
+    delete_restrictions(const delete_restrictions&) = delete;
+    delete_restrictions& operator=(const delete_restrictions&) = delete;
+
+    void analyze_delete(
+            data_dictionary::database db,
+            const expr::expression& where_clause,
+            prepare_context& ctx,
+            bool applies_only_to_static_columns);
+
     /// The clustering column the WHERE clause leaves unnamed while the statement
-    /// may still write regular columns; nullptr if it is free to do so.
+    /// may still delete regular columns; nullptr if it is free to do so.
+    ///
+    /// Takes the flag rather than remembering it: an IF [NOT] EXISTS condition
+    /// is classified after the analysis and can change it.
     const column_definition* clustering_column_required_for_regular_columns(
             bool applies_only_to_static_columns) const;
 
@@ -86,7 +128,6 @@ public:
     void reject_incomplete_partition_key() const;
 
     /// True if the WHERE clause names a range of rows rather than whole rows.
-    /// Only a DELETE can.
     bool deletes_a_range() const;
 
     /// True if the WHERE clause names exact rows: the whole clustering key, by
@@ -100,20 +141,13 @@ public:
     dht::partition_range_vector get_partition_key_ranges(const query_options& options) const {
         return _analysis.get_partition_key_ranges(options);
     }
-    std::vector<query::clustering_range> get_clustering_bounds(const query_options& options) const {
+    std::vector<query::clustering_range> clustering_ranges(const query_options& options) const {
         return _analysis.get_clustering_bounds(options);
     }
 
     /// Checks that the primary key restrictions don't contain null values, throws
     /// invalid_request_exception otherwise.
     void validate_primary_key(const query_options& options) const { _analysis.validate_primary_key(options); }
-
-private:
-    void reject_clustering_restrictions(statements::statement_type type) const;
-    void reject_token_restrictions() const;
-    void reject_non_primary_key_restrictions() const;
-    void reject_clustering_slice() const;
-    const column_definition* unnamed_clustering_column(bool applies_only_to_static_columns) const;
 };
 
 /**
@@ -434,7 +468,7 @@ shared_ptr<const select_restrictions> analyze_view_restrictions(
         check_indexes do_check_indexes);
 
 /// Analyzes the WHERE clause of an UPDATE statement.
-shared_ptr<const modification_restrictions> analyze_update_restrictions(
+shared_ptr<const update_restrictions> analyze_update_restrictions(
         data_dictionary::database db,
         schema_ptr schema,
         const expr::expression& where_clause,
@@ -442,7 +476,7 @@ shared_ptr<const modification_restrictions> analyze_update_restrictions(
         bool applies_only_to_static_columns);
 
 /// Analyzes the WHERE clause of a DELETE statement.
-shared_ptr<const modification_restrictions> analyze_delete_restrictions(
+shared_ptr<const delete_restrictions> analyze_delete_restrictions(
         data_dictionary::database db,
         schema_ptr schema,
         const expr::expression& where_clause,

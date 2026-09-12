@@ -39,7 +39,7 @@ delete_statement::build_partition_keys(const query_options& options, const json_
 
 query::clustering_row_ranges
 delete_statement::create_clustering_ranges(const query_options& options, const json_cache_opt& json_cache) const {
-    return _restrictions->get_clustering_bounds(options);
+    return _restrictions->clustering_ranges(options);
 }
 
 void delete_statement::validate_primary_key(const query_options& options) const {
