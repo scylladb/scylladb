@@ -20,6 +20,7 @@
 #include <seastar/core/shared_future.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/as_future.hh>
+#include <seastar/coroutine/exception.hh>
 #include <seastar/core/pipe.hh>
 #include <seastar/core/metrics.hh>
 #include <seastar/rpc/rpc_types.hh>
@@ -1720,6 +1721,17 @@ void server_impl::handle_background_error(const char* fiber_name) {
 }
 
 future<> server_impl::abort(sstring reason) {
+    // Every step below has to run even if an earlier one failed: the server is
+    // destroyed as soon as abort() resolves, so whatever is left running would
+    // use freed memory. Report the first error once everything is stopped.
+    std::exception_ptr first_error;
+    const auto note_error = [this, &first_error] (std::exception_ptr e, const std::string_view step) {
+        logger.error("[{}] abort: {} failed: {}", _tag, step, e);
+        if (!first_error) {
+            first_error = std::move(e);
+        }
+    };
+
     _is_alive = false;
     _aborted = std::move(reason);
     logger.trace("[{}]: abort() called", _tag);
@@ -1732,7 +1744,12 @@ future<> server_impl::abort(sstring reason) {
     // IO and applier fibers may update waiters and start new snapshot
     // transfers, so abort them first
     _apply_entries.abort(std::make_exception_ptr(stop_apply_fiber()));
-    co_await seastar::when_all_succeed(std::move(_io_status), std::move(_applier_status)).discard_result();
+
+    auto io_applied_future = co_await coroutine::as_future(seastar::when_all_succeed(
+            std::move(_io_status), std::move(_applier_status)).discard_result());
+    if (io_applied_future.failed()) {
+        note_error(io_applied_future.get_exception(), "waiting for the io and applier fibers");
+    }
 
     // Start RPC abort before aborting snapshot applications or destroying entry waiters.
     // After calling `_rpc->abort()` no new snapshot applications should be started or new waiters created
@@ -1774,7 +1791,12 @@ future<> server_impl::abort(sstring reason) {
     }
     _awaited_indexes.clear();
 
-    co_await seastar::when_all_succeed(std::move(abort_rpc), std::move(abort_sm), std::move(abort_persistence)).discard_result();
+    auto rpc_sm_persistence_future = co_await coroutine::as_future(seastar::when_all_succeed(
+            std::move(abort_rpc), std::move(abort_sm), std::move(abort_persistence)).discard_result());
+    if (rpc_sm_persistence_future.failed()) {
+        note_error(rpc_sm_persistence_future.get_exception(),
+                "aborting the rpc, the state machine and the persistence");
+    }
 
     if (_leader_promise) {
         _leader_promise->set_exception(stopped_error(*_aborted));
@@ -1799,7 +1821,15 @@ future<> server_impl::abort(sstring reason) {
 
     auto all_futures = boost::range::join(append_futures, gates);
 
-    co_await seastar::when_all_succeed(all_futures.begin(), all_futures.end()).discard_result();
+    auto all_futs = co_await coroutine::as_future(seastar::when_all_succeed(
+            all_futures.begin(), all_futures.end()).discard_result());
+    if (all_futs.failed()) {
+        note_error(all_futs.get_exception(), "waiting for in-flight requests");
+    }
+
+    if (first_error) {
+        co_await coroutine::return_exception_ptr(std::move(first_error));
+    }
 }
 
 bool server_impl::is_alive() const {
