@@ -2593,10 +2593,10 @@ static future<> repair_get_full_row_hashes_with_rpc_stream_handler(
         uint32_t repair_meta_id,
         rpc::sink<repair_hash_with_cmd> sink,
         rpc::source<repair_stream_cmd> source) {
+    bool error = false;
     std::exception_ptr outer_exception;
     try {
         while (std::optional<std::tuple<repair_stream_cmd>> status_opt = co_await source()) {
-            bool error = false;
             std::exception_ptr ep;
             try {
                 if (error) {
