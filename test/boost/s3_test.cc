@@ -945,6 +945,216 @@ SEASTAR_THREAD_TEST_CASE(test_creds) {
     BOOST_REQUIRE_EQUAL(creds.session_token, "");
 }
 
+namespace {
+
+// Always fails, and counts how many times it was invoked.
+class always_failing_provider final : public aws::aws_credentials_provider {
+    unsigned& _calls;
+
+public:
+    explicit always_failing_provider(unsigned& calls) : _calls(calls) {}
+    const char* get_name() const override { return "always_failing_provider"; }
+
+protected:
+    future<> reload() override {
+        ++_calls;
+        throw std::runtime_error("simulated total credential-provider failure");
+    }
+};
+
+// Fails the first `fail_times` calls, then succeeds and keeps succeeding.
+class fail_then_succeed_provider final : public aws::aws_credentials_provider {
+    unsigned& _calls;
+    unsigned _fail_times;
+
+public:
+    fail_then_succeed_provider(unsigned& calls, unsigned fail_times) : _calls(calls), _fail_times(fail_times) {}
+    const char* get_name() const override { return "fail_then_succeed_provider"; }
+
+protected:
+    future<> reload() override {
+        ++_calls;
+        if (_calls <= _fail_times) {
+            throw std::runtime_error("simulated transient credential-provider failure");
+        }
+        creds = s3::aws_credentials{
+            .access_key_id = "REFRESHED_ACCESS_KEY",
+            .secret_access_key = "REFRESHED_SECRET_KEY",
+            .expires_at = seastar::lowres_clock::now() + 1h,
+        };
+        return make_ready_future<>();
+    }
+};
+
+} // anonymous namespace
+
+// Documents aws_credentials_provider_chain::get_aws_credentials()'s contract: on total
+// failure it returns falsy credentials instead of throwing (never caches or backs off).
+// client::update_credentials_and_rearm() relies on this to tell "never tried" from "tried
+// and failed" and avoid clobbering still-valid credentials on a transient refresh failure;
+// that method is private and hardcoded to real AWS/IMDS hosts, so it isn't exercised here.
+SEASTAR_THREAD_TEST_CASE(test_credentials_chain_returns_falsy_on_total_failure) {
+    unsigned calls = 0;
+    aws::aws_credentials_provider_chain provider_chain;
+    provider_chain.add_credentials_provider(std::make_unique<always_failing_provider>(calls));
+
+    constexpr unsigned attempts = 5;
+    s3::aws_credentials credentials{
+        .access_key_id = "STILL_VALID_ACCESS_KEY",
+        .secret_access_key = "STILL_VALID_SECRET_KEY",
+    };
+    for (unsigned i = 0; i < attempts; i++) {
+        auto new_creds = provider_chain.get_aws_credentials().get();
+        BOOST_REQUIRE(!new_creds); // total failure -> falsy creds, not an exception
+        if (new_creds) {
+            credentials = std::move(new_creds);
+        }
+    }
+    BOOST_REQUIRE_EQUAL(calls, attempts);
+    BOOST_REQUIRE_EQUAL(credentials.access_key_id, "STILL_VALID_ACCESS_KEY");
+    BOOST_REQUIRE_EQUAL(credentials.secret_access_key, "STILL_VALID_SECRET_KEY");
+}
+
+// Test seam (befriended by s3::client) exposing what test_client_refresh_keeps_credentials_on_failure
+// needs: swap in a failing provider chain and invoke the real, private update_credentials_and_rearm().
+// Must live in namespace s3: the friend declaration in client.hh is unqualified, so it names
+// s3::client_test_helper, not a global type of the same name.
+namespace s3 {
+struct client_test_helper {
+    static void set_provider_chain(s3::client& c, aws::aws_credentials_provider_chain chain) {
+        c._creds_provider_chain = std::move(chain);
+    }
+    static void set_credentials(s3::client& c, s3::aws_credentials creds) {
+        c._credentials = std::move(creds);
+    }
+    static const s3::aws_credentials& credentials(const s3::client& c) {
+        return c._credentials;
+    }
+    // Disarm the real background creds-update/invalidation timers: they fire against the
+    // real provider chain on the next reactor tick, before the test can swap it out.
+    static void cancel_timers(s3::client& c) {
+        c._creds_invalidation_timer.cancel();
+        c._creds_update_timer.cancel();
+    }
+    static future<> refresh(s3::client& c) {
+        return c.update_credentials_and_rearm();
+    }
+    static bool update_timer_armed(const s3::client& c) {
+        return c._creds_update_timer.armed();
+    }
+    static unsigned consecutive_failures(const s3::client& c) {
+        return c._creds_consecutive_failures;
+    }
+};
+} // namespace s3
+
+// Exercises the real client::update_credentials_and_rearm(), not a mirrored copy: with the
+// provider chain replaced by always_failing_provider, a failed refresh must leave still-valid
+// credentials in place (client.cc:186-193's "don't clobber" fix).
+SEASTAR_THREAD_TEST_CASE(test_client_refresh_keeps_credentials_on_failure) {
+    unsigned calls = 0;
+    s3::endpoint_config cfg = {
+        .port = 0,
+        .use_https = false,
+        .region = "local",
+    };
+    auto client = s3::client::make("0.0.0.0", make_lw_shared<s3::endpoint_config>(std::move(cfg)), make_test_retry_strategy());
+    s3::client_test_helper::cancel_timers(*client);
+
+    aws::aws_credentials_provider_chain chain;
+    chain.add_credentials_provider(std::make_unique<always_failing_provider>(calls));
+    s3::client_test_helper::set_provider_chain(*client, std::move(chain));
+    s3::client_test_helper::set_credentials(*client, s3::aws_credentials{
+        .access_key_id = "STILL_VALID_ACCESS_KEY",
+        .secret_access_key = "STILL_VALID_SECRET_KEY",
+    });
+
+    s3::client_test_helper::refresh(*client).get();
+
+    BOOST_REQUIRE_EQUAL(calls, 1u);
+    BOOST_REQUIRE_EQUAL(s3::client_test_helper::credentials(*client).access_key_id, "STILL_VALID_ACCESS_KEY");
+    BOOST_REQUIRE_EQUAL(s3::client_test_helper::credentials(*client).secret_access_key, "STILL_VALID_SECRET_KEY");
+    // client.cc:194's fix: a failed refresh must still re-arm the update timer, or
+    // credentials silently go stale once the (untouched) expiration timer fires later.
+    BOOST_REQUIRE(s3::client_test_helper::update_timer_armed(*client));
+    client->close().get();
+}
+
+// A failure followed by a successful retry must both keep serving the still-valid
+// credentials throughout, and actually refresh them once the retry succeeds.
+SEASTAR_THREAD_TEST_CASE(test_client_refresh_retries_after_failure_and_recovers) {
+    unsigned calls = 0;
+    s3::endpoint_config cfg = {
+        .port = 0,
+        .use_https = false,
+        .region = "local",
+    };
+    auto client = s3::client::make("0.0.0.0", make_lw_shared<s3::endpoint_config>(std::move(cfg)), make_test_retry_strategy());
+    s3::client_test_helper::cancel_timers(*client);
+
+    aws::aws_credentials_provider_chain chain;
+    chain.add_credentials_provider(std::make_unique<fail_then_succeed_provider>(calls, 1));
+    s3::client_test_helper::set_provider_chain(*client, std::move(chain));
+    s3::client_test_helper::set_credentials(*client, s3::aws_credentials{
+        .access_key_id = "STILL_VALID_ACCESS_KEY",
+        .secret_access_key = "STILL_VALID_SECRET_KEY",
+    });
+
+    // first attempt fails: still-valid credentials are kept, and a retry gets scheduled.
+    s3::client_test_helper::refresh(*client).get();
+    BOOST_REQUIRE_EQUAL(calls, 1u);
+    BOOST_REQUIRE_EQUAL(s3::client_test_helper::credentials(*client).access_key_id, "STILL_VALID_ACCESS_KEY");
+    BOOST_REQUIRE(s3::client_test_helper::update_timer_armed(*client));
+
+    // simulate that scheduled retry firing: it succeeds and installs fresh credentials.
+    s3::client_test_helper::refresh(*client).get();
+    BOOST_REQUIRE_EQUAL(calls, 2u);
+    BOOST_REQUIRE_EQUAL(s3::client_test_helper::credentials(*client).access_key_id, "REFRESHED_ACCESS_KEY");
+    BOOST_REQUIRE_EQUAL(s3::client_test_helper::credentials(*client).secret_access_key, "REFRESHED_SECRET_KEY");
+    client->close().get();
+}
+
+// xemul's objection to a flat retry period: it doesn't adapt to a sustained outage, so
+// credentials could go unrefreshed until the (separate) expiration timer wipes them anyway.
+// The backoff must grow across consecutive failures, cap out, and reset on the next success.
+SEASTAR_THREAD_TEST_CASE(test_client_refresh_backoff_grows_and_resets) {
+    unsigned calls = 0;
+    s3::endpoint_config cfg = {
+        .port = 0,
+        .use_https = false,
+        .region = "local",
+    };
+    auto client = s3::client::make("0.0.0.0", make_lw_shared<s3::endpoint_config>(std::move(cfg)), make_test_retry_strategy());
+    s3::client_test_helper::cancel_timers(*client);
+
+    aws::aws_credentials_provider_chain chain;
+    chain.add_credentials_provider(std::make_unique<always_failing_provider>(calls));
+    s3::client_test_helper::set_provider_chain(*client, std::move(chain));
+    s3::client_test_helper::set_credentials(*client, s3::aws_credentials{
+        .access_key_id = "STILL_VALID_ACCESS_KEY",
+        .secret_access_key = "STILL_VALID_SECRET_KEY",
+    });
+
+    unsigned prev = 0;
+    for (unsigned i = 0; i < 4; i++) {
+        s3::client_test_helper::refresh(*client).get();
+        auto failures = s3::client_test_helper::consecutive_failures(*client);
+        BOOST_REQUIRE_GT(failures, prev);
+        prev = failures;
+    }
+
+    // succeed now: the failure counter (and thus the backoff) resets.
+    s3::client_test_helper::set_provider_chain(*client, [&calls] {
+        aws::aws_credentials_provider_chain c;
+        c.add_credentials_provider(std::make_unique<fail_then_succeed_provider>(calls, 0));
+        return c;
+    }());
+    s3::client_test_helper::refresh(*client).get();
+    BOOST_REQUIRE_EQUAL(s3::client_test_helper::consecutive_failures(*client), 0u);
+    BOOST_REQUIRE_EQUAL(s3::client_test_helper::credentials(*client).access_key_id, "REFRESHED_ACCESS_KEY");
+    client->close().get();
+}
+
 BOOST_AUTO_TEST_CASE(s3_fqn_manipulation) {
     std::string bucket_name, object_name;
     // Empty input

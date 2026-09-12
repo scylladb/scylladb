@@ -115,6 +115,7 @@ future<> ignore_reply(const http::reply& rep, input_stream<char>&& in_);
 [[noreturn]] void map_s3_client_exception(std::exception_ptr ex);
 
 class client : public enable_shared_from_this<client> {
+    friend struct client_test_helper; // grants tests access to the credentials-refresh internals
     class multipart_upload;
     class copy_s3_object;
     class upload_sink_base;
@@ -131,6 +132,7 @@ class client : public enable_shared_from_this<client> {
     semaphore _buffered_dl_sem{max_client_buffered_downloads_in_flight};
     timer<seastar::lowres_clock> _creds_invalidation_timer;
     timer<seastar::lowres_clock> _creds_update_timer;
+    unsigned _creds_consecutive_failures = 0;
     aws_credentials _credentials;
     aws::aws_credentials_provider_chain _creds_provider_chain;
     seastar::gate _config_update_gate;
@@ -164,6 +166,7 @@ class client : public enable_shared_from_this<client> {
     struct private_tag {};
 
     future<> update_credentials_and_rearm();
+    void rearm_creds_retry();
     future<> authorize(http::request&);
     future<group_client&> find_or_create_client();
     future<group_client&> find_or_create_client_slow();
