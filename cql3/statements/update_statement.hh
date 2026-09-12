@@ -11,6 +11,7 @@
 #pragma once
 
 #include "cql3/statements/modification_statement.hh"
+#include "cql3/restrictions/statement_restrictions.hh"
 #include "cql3/attributes.hh"
 
 #include "data_dictionary/data_dictionary.hh"
@@ -40,6 +41,7 @@ void apply_column_operations(const std::vector<std::unique_ptr<operation>>& ops,
  * An <code>UPDATE</code> statement parsed from a CQL query statement.
  */
 class update_statement : public modification_statement {
+    shared_ptr<const restrictions::modification_restrictions> _restrictions;
 public:
 #if 0
     private static final Constants.Value EMPTY = new Constants.Value(ByteBufferUtil.EMPTY_BYTE_BUFFER);
@@ -52,7 +54,22 @@ public:
             schema_ptr s,
             std::unique_ptr<attributes> attrs,
             cql_stats& stats);
+
 public:
+    /// Reads an UPDATE's WHERE clause, and checks that what it says agrees with what
+    /// the statement writes.
+    void process_where_clause(data_dictionary::database db, expr::expression where_clause, prepare_context& ctx);
+
+    virtual dht::partition_range_vector build_partition_keys(const query_options& options, const json_cache_opt& json_cache) const override;
+
+    virtual query::clustering_row_ranges create_clustering_ranges(const query_options& options, const json_cache_opt& json_cache) const override;
+
+    virtual void validate_primary_key(const query_options& options) const override;
+
+    const restrictions::modification_restrictions& restrictions() const {
+        return *_restrictions;
+    }
+
     virtual utils::chunked_vector<mutation> apply_updates(
             const std::vector<dht::partition_range>& keys,
             const std::vector<query::clustering_range>& ranges,
@@ -60,6 +77,8 @@ public:
             const json_cache_opt& json_cache) const override;
 
 private:
+    void validate_where_clause_for_conditions() const;
+
     virtual void execute_operations_for_key(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params, const json_cache_opt& json_cache) const;
 };
 
