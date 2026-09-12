@@ -24,7 +24,7 @@ namespace statements {
 * A <code>DELETE</code> parsed from a CQL query statement.
 */
 class delete_statement : public modification_statement {
-    shared_ptr<const restrictions::modification_restrictions> _restrictions;
+    shared_ptr<const restrictions::delete_restrictions> _restrictions;
 public:
     delete_statement(audit::audit_info_ptr&& audit_info, statement_type type, uint32_t bound_terms, schema_ptr s, std::unique_ptr<attributes> attrs, cql_stats& stats);
 
@@ -39,7 +39,7 @@ public:
 
     virtual void validate_primary_key(const query_options& options) const override;
 
-    const restrictions::modification_restrictions& restrictions() const {
+    const restrictions::delete_restrictions& restrictions() const {
         return *_restrictions;
     }
 

@@ -41,7 +41,7 @@ void apply_column_operations(const std::vector<std::unique_ptr<operation>>& ops,
  * An <code>UPDATE</code> statement parsed from a CQL query statement.
  */
 class update_statement : public modification_statement {
-    shared_ptr<const restrictions::modification_restrictions> _restrictions;
+    shared_ptr<const restrictions::update_restrictions> _restrictions;
 public:
 #if 0
     private static final Constants.Value EMPTY = new Constants.Value(ByteBufferUtil.EMPTY_BYTE_BUFFER);
@@ -66,7 +66,7 @@ public:
 
     virtual void validate_primary_key(const query_options& options) const override;
 
-    const restrictions::modification_restrictions& restrictions() const {
+    const restrictions::update_restrictions& restrictions() const {
         return *_restrictions;
     }
 
