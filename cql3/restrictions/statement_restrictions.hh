@@ -242,7 +242,12 @@ private:
     bool _pk_has_slice_or_needs_filtering = false; ///< True iff any PK restriction has a slice or needs-filtering operator.
 
 
-    check_indexes _check_indexes = check_indexes::yes;
+    /// True if the statement may read rows it does not need and drop them.  When
+    /// it may not, every restriction has to translate to a partition or
+    /// clustering range, which rules out slices no key order can express.
+    bool _allow_filtering;
+
+    check_indexes _check_indexes;
     /// Columns that appear on the LHS of an EQ restriction (not IN).
     /// For multi-column EQ like (ck1, ck2) = (1, 2), all columns in the tuple are included.
     std::unordered_set<const column_definition*> _columns_with_eq;
@@ -257,29 +262,51 @@ private:
     get_clustering_bounds_fn_t _get_local_index_clustering_ranges_fn;
     get_singleton_value_fn_t _value_for_index_partition_key_fn;
 public:
-    /**
-     * Creates a new empty <code>StatementRestrictions</code>.
-     *
-     * @param cfm the column family meta data
-     * @return a new empty <code>StatementRestrictions</code>.
-     */
-    statement_restrictions(private_tag, schema_ptr schema, bool allow_filtering);
+    statement_restrictions(private_tag, schema_ptr schema, bool allow_filtering, check_indexes do_check_indexes);
 
-public:
     // Important: objects of this class captures `this` extensively and so must remain non-copyable.
     statement_restrictions(const statement_restrictions&) = delete;
     statement_restrictions& operator=(const statement_restrictions&) = delete;
-    statement_restrictions(private_tag,
+
+    // Each statement type runs the analysis steps that apply to it, and no
+    // others.  The analyze_*_restrictions() functions at the bottom of this file
+    // are the way in.
+
+    /// Reads the WHERE clause of a SELECT statement and plans the query.
+    void analyze_select(
         data_dictionary::database db,
-        schema_ptr schema,
-        statements::statement_type type,
         const expr::expression& where_clause,
         prepare_context& ctx,
         bool selects_only_static_columns,
-        bool for_view,
-        bool allow_filtering,
-        check_indexes do_check_indexes,
         pinned_plan_opt pinned_plan);
+
+    /// Reads the WHERE clause of the SELECT statement defining a materialized
+    /// view and plans the query the view is refreshed by.
+    void analyze_view_definition(
+        data_dictionary::database db,
+        const expr::expression& where_clause,
+        prepare_context& ctx,
+        bool selects_only_static_columns);
+
+    /// Reads the WHERE clause of a mutation.  The type only picks the wording of
+    /// the errors this may throw.
+    void analyze_mutation(
+        data_dictionary::database db,
+        statements::statement_type type,
+        const expr::expression& where_clause,
+        prepare_context& ctx);
+
+    /// Rejects a WHERE clause that restricts clustering columns although the
+    /// statement writes only static columns: the clustering key names a row the
+    /// statement then does not write, which is never what the user meant.
+    ///
+    /// Does not apply to an INSERT, which creates the row it names.
+    void reject_clustering_restrictions(statements::statement_type type) const;
+
+    /// Initializes the object for a statement that does not work out the rows it
+    /// addresses from a WHERE clause: every partition, every row.
+    void no_restrictions();
+
 public:
 
     /**
@@ -406,20 +433,25 @@ private:
     /// clustering prefix and the partition range they address.
     column_predicates classify_predicates(std::vector<predicate> predicates, bool allow_filtering);
 
+    /// The part of the analysis a view definition shares with an ordinary
+    /// SELECT, starting from an already prepared WHERE clause.
+    void analyze_read(
+            data_dictionary::database db,
+            where_clause_predicates where,
+            bool selects_only_static_columns,
+            pinned_plan_opt pinned_plan);
+
     /// Decides which index, if any, this query reads, and what it has to filter.
+    /// Only a SELECT can read an index or filter, so only a SELECT runs this.
     void plan_query(
             data_dictionary::database db,
             const column_predicates& preds,
-            statements::statement_type type,
             bool selects_only_static_columns,
-            bool allow_filtering,
             pinned_plan_opt pinned_plan);
 
     void detect_queriable_indexes(
             data_dictionary::database db,
             const column_predicates& preds,
-            statements::statement_type type,
-            bool allow_filtering,
             bool force_base_plan,
             const std::optional<sstring>& pinned_index_name);
 
@@ -432,18 +464,25 @@ private:
     /// Builds the functions computing the ranges to read from an index table.
     void build_index_fns();
 
-    void process_partition_key_restrictions(bool allow_filtering, statements::statement_type type);
+    void process_partition_key_restrictions();
 
     /**
      * Processes the clustering column restrictions.
      *
      * @throws InvalidRequestException if the request is invalid
      */
-    void process_clustering_columns_restrictions(bool allow_filtering);
+    void process_clustering_columns_restrictions();
 
     /// Throws unless every restricted clustering column, in order, forms a
     /// prefix of the clustering key.
     void validate_clustering_columns_form_a_prefix() const;
+
+    /// Rejects clustering-column restrictions that cannot be turned into a
+    /// clustering slice.  For a statement with no index and no way to filter,
+    /// this is the whole of the clustering-restriction validation.
+    void validate_clustering_restrictions_are_a_slice() const;
+
+    [[noreturn]] static void throw_collection_restriction_needs_index_or_filtering();
 
     /**
      * Returns the <code>Restrictions</code> for the specified type of columns.
@@ -599,11 +638,18 @@ shared_ptr<const statement_restrictions> analyze_view_restrictions(
         bool selects_only_static_columns,
         check_indexes do_check_indexes);
 
-/// Analyzes the WHERE clause of an UPDATE or DELETE statement.
-shared_ptr<const statement_restrictions> analyze_modification_restrictions(
+/// Analyzes the WHERE clause of an UPDATE statement.
+shared_ptr<const statement_restrictions> analyze_update_restrictions(
         data_dictionary::database db,
         schema_ptr schema,
-        statements::statement_type type,
+        const expr::expression& where_clause,
+        prepare_context& ctx,
+        bool applies_only_to_static_columns);
+
+/// Analyzes the WHERE clause of a DELETE statement.
+shared_ptr<const statement_restrictions> analyze_delete_restrictions(
+        data_dictionary::database db,
+        schema_ptr schema,
         const expr::expression& where_clause,
         prepare_context& ctx,
         bool applies_only_to_static_columns);
@@ -613,8 +659,7 @@ shared_ptr<const statement_restrictions> analyze_insert_restrictions(
         data_dictionary::database db,
         schema_ptr schema,
         const expr::expression& where_clause,
-        prepare_context& ctx,
-        bool applies_only_to_static_columns);
+        prepare_context& ctx);
 
 /// Restrictions that restrict nothing, for a statement that does not work out
 /// the rows it addresses from a WHERE clause.

@@ -860,10 +860,17 @@ bool is_empty_restriction(const expression& e) {
     return !contains_non_conjunction;
 }
 
-statement_restrictions::statement_restrictions(private_tag, schema_ptr schema, bool allow_filtering)
-    : _schema(schema)
+statement_restrictions::statement_restrictions(private_tag, schema_ptr schema, bool allow_filtering,
+        check_indexes do_check_indexes)
+    : _schema(std::move(schema))
     , _partition_range_is_simple(true)
+    , _allow_filtering(allow_filtering)
+    , _check_indexes(do_check_indexes)
 { }
+
+void statement_restrictions::no_restrictions() {
+    build_key_range_fns();
+}
 
 // A mutation's WHERE clause has to name the rows to write, and IS [NOT] NULL
 // cannot name one: it tests whether a column has a value instead of saying
@@ -926,40 +933,69 @@ static void drop_tautological_not_null_restrictions(std::vector<predicate>& pred
     });
 }
 
-statement_restrictions::statement_restrictions(private_tag,
+void statement_restrictions::analyze_mutation(
         data_dictionary::database db,
-        schema_ptr schema,
         statements::statement_type type,
+        const expr::expression& where_clause,
+        prepare_context& ctx) {
+    auto where = prepare_where_clause(db, where_clause, ctx);
+    if (!where.scoring_functions.empty()) {
+        throw exceptions::invalid_request_exception("Scoring functions are only supported in SELECT statements");
+    }
+    reject_identity_restrictions(where.predicates, type);
+    // A mutation cannot filter, so every restriction has to translate to a
+    // partition or clustering range.
+    classify_predicates(std::move(where.predicates), _allow_filtering);
+    validate_clustering_restrictions_are_a_slice();
+    build_key_range_fns();
+}
+
+void statement_restrictions::reject_clustering_restrictions(statements::statement_type type) const {
+    // If the only updated/deleted columns are static, then we don't need
+    // clustering columns, and providing them suggests something unintended.
+    // For instance, given:
+    //   CREATE TABLE t (k int, v int, s int static, PRIMARY KEY (k, v))
+    // both
+    //   UPDATE t SET s = 3 WHERE k = 0 AND v = 1
+    //   DELETE s FROM t WHERE k = 0 AND v = 1
+    // sound like you don't really understand what you are doing.  An INSERT is
+    // different - it creates the row it names - and does not call this.
+    if (has_clustering_columns_restriction()) {
+        throw exceptions::invalid_request_exception(format(
+                "Invalid restrictions on clustering columns since the {} statement modifies only static columns",
+                type));
+    }
+}
+
+void statement_restrictions::analyze_select(
+        data_dictionary::database db,
         const expr::expression& where_clause,
         prepare_context& ctx,
         bool selects_only_static_columns,
-        bool for_view,
-        bool allow_filtering,
-        check_indexes do_check_indexes,
-        pinned_plan_opt pinned_plan)
-    : statement_restrictions(private_tag{}, schema, allow_filtering)
-{
-    _check_indexes = do_check_indexes;
+        pinned_plan_opt pinned_plan) {
+    analyze_read(db, prepare_where_clause(db, where_clause, ctx), selects_only_static_columns,
+            std::move(pinned_plan));
+}
 
+void statement_restrictions::analyze_view_definition(
+        data_dictionary::database db,
+        const expr::expression& where_clause,
+        prepare_context& ctx,
+        bool selects_only_static_columns) {
     auto where = prepare_where_clause(db, where_clause, ctx);
+    _not_null_columns = extract_view_key_columns(where.predicates);
+    analyze_read(db, std::move(where), selects_only_static_columns, std::nullopt);
+}
 
-    if (!where.scoring_functions.empty() && !type.is_select()) {
-        throw exceptions::invalid_request_exception("Scoring functions are only supported in SELECT statements");
-    }
+void statement_restrictions::analyze_read(
+        data_dictionary::database db,
+        where_clause_predicates where,
+        bool selects_only_static_columns,
+        pinned_plan_opt pinned_plan) {
     _scoring_function_restrictions = std::move(where.scoring_functions);
-
-    if (type.is_update() || type.is_delete()) {
-        reject_identity_restrictions(where.predicates, type);
-    }
-    if (for_view) {
-        _not_null_columns = extract_view_key_columns(where.predicates);
-    }
     drop_tautological_not_null_restrictions(where.predicates);
-
-    auto preds = classify_predicates(std::move(where.predicates), allow_filtering);
-
-    plan_query(db, preds, type, selects_only_static_columns, allow_filtering, std::move(pinned_plan));
-
+    auto preds = classify_predicates(std::move(where.predicates), _allow_filtering);
+    plan_query(db, preds, selects_only_static_columns, std::move(pinned_plan));
     build_key_range_fns();
     build_index_fns();
 }
@@ -1268,8 +1304,6 @@ statement_restrictions::classify_predicates(std::vector<predicate> predicates, b
 void statement_restrictions::detect_queriable_indexes(
         data_dictionary::database db,
         const column_predicates& preds,
-        statements::statement_type type,
-        bool allow_filtering,
         bool force_base_plan,
         const std::optional<sstring>& pinned_index_name) {
     if (!_check_indexes) {
@@ -1289,8 +1323,7 @@ void statement_restrictions::detect_queriable_indexes(
         // Only regular-column restrictions are looked at: a query needing an
         // index on a key column is rejected a few steps down by the ordinary
         // filtering validation instead, and reported as that.
-        if (!allow_filtering && !type.is_delete() && !type.is_update()
-                && !is_empty_restriction(_nonprimary_key_restrictions)) {
+        if (!_allow_filtering && !is_empty_restriction(_nonprimary_key_restrictions)) {
             throw_pinned_plan_foreign();
         }
         return;
@@ -1301,26 +1334,20 @@ void statement_restrictions::detect_queriable_indexes(
             !has_partition_key_unrestricted_components()
             && partition_key_restrictions_is_all_eq());
     if (!_has_multi_column) {
-        _has_queriable_ck_index = index_supports_some_column(preds.clustering_key, sim, allow_local, pinned_index_name)
-                && !type.is_delete();
+        _has_queriable_ck_index = index_supports_some_column(preds.clustering_key, sim, allow_local, pinned_index_name);
     } else {
         _has_queriable_ck_index = multi_column_predicates_have_supporting_index(
-                        _clustering_prefix_restrictions, sim, allow_local, pinned_index_name)
-                && !type.is_delete();
+                _clustering_prefix_restrictions, sim, allow_local, pinned_index_name);
     }
     _has_queriable_pk_index = !has_token_restrictions()
-            && index_supports_some_column(preds.partition_key, sim, allow_local, pinned_index_name)
-            && !type.is_delete();
-    _has_queriable_regular_index = index_supports_some_column(preds.other, sim, allow_local, pinned_index_name)
-            && !type.is_delete();
+            && index_supports_some_column(preds.partition_key, sim, allow_local, pinned_index_name);
+    _has_queriable_regular_index = index_supports_some_column(preds.other, sim, allow_local, pinned_index_name);
 }
 
 void statement_restrictions::plan_query(
         data_dictionary::database db,
         const column_predicates& preds,
-        statements::statement_type type,
         bool selects_only_static_columns,
-        bool allow_filtering,
         pinned_plan_opt pinned_plan) {
     std::optional<sstring> pinned_index_name;
     bool force_base_plan = false;
@@ -1352,7 +1379,7 @@ void statement_restrictions::plan_query(
         throw_pinned_plan_foreign();
     }
 
-    detect_queriable_indexes(db, preds, type, allow_filtering, force_base_plan, pinned_index_name);
+    detect_queriable_indexes(db, preds, force_base_plan, pinned_index_name);
 
     // The pinned index cannot serve this query, so the state came from
     // another one. Caught here, before ALLOW FILTERING is complained about.
@@ -1362,7 +1389,7 @@ void statement_restrictions::plan_query(
     }
 
     // At this point, the select statement if fully constructed, but we still have a few things to validate
-    process_partition_key_restrictions(allow_filtering, type);
+    process_partition_key_restrictions();
 
     // Some but not all of the partition key columns have been specified;
     // hence we need turn these restrictions into index expressions.
@@ -1371,28 +1398,14 @@ void statement_restrictions::plan_query(
         search_groups.push_back({preds.partition_key, _partition_key_restrictions});
     }
 
-    // If the only updated/deleted columns are static, then we don't need clustering columns.
-    // And in fact, unless it is an INSERT, we reject if clustering columns are provided as that
-    // suggest something unintended. For instance, given:
-    //   CREATE TABLE t (k int, v int, s int static, PRIMARY KEY (k, v))
-    // it can make sense to do:
-    //   INSERT INTO t(k, v, s) VALUES (0, 1, 2)
-    // but both
-    //   UPDATE t SET s = 3 WHERE k = 0 AND v = 1
-    //   DELETE s FROM t WHERE k = 0 AND v = 1
-    // sounds like you don't really understand what your are doing.
+    // A clustering key names a row that the query then does not read, which is
+    // never what the user meant.
     if (selects_only_static_columns && has_clustering_columns_restriction()) {
-        if (type.is_update() || type.is_delete()) {
-            throw exceptions::invalid_request_exception(format("Invalid restrictions on clustering columns since the {} statement modifies only static columns", type));
-        }
-
-        if (type.is_select()) {
-            throw exceptions::invalid_request_exception(
-                "Cannot restrict clustering columns when selecting only static columns");
-        }
+        throw exceptions::invalid_request_exception(
+            "Cannot restrict clustering columns when selecting only static columns");
     }
 
-    process_clustering_columns_restrictions(allow_filtering);
+    process_clustering_columns_restrictions();
 
     // Covers indexes on the first clustering column (among others).
     if (_is_key_range && _has_queriable_ck_index && !_has_multi_column) {
@@ -1408,7 +1421,7 @@ void statement_restrictions::plan_query(
     if (!is_empty_restriction(_nonprimary_key_restrictions)) {
         if (_has_queriable_regular_index && _partition_range_is_simple) {
             _uses_secondary_indexing = true;
-        } else if (!allow_filtering && !type.is_delete() && !type.is_update()) {
+        } else if (!_allow_filtering) {
             throw exceptions::invalid_request_exception("Cannot execute this query as it might involve data filtering and "
                 "thus may have unpredictable performance. If you want to execute "
                 "this query despite the performance unpredictability, use ALLOW FILTERING");
@@ -1416,7 +1429,7 @@ void statement_restrictions::plan_query(
         search_groups.push_back({preds.other, _nonprimary_key_restrictions});
     }
 
-    if (_uses_secondary_indexing && !allow_filtering) {
+    if (_uses_secondary_indexing && !_allow_filtering) {
         validate_secondary_index_selections();
     }
 
@@ -1734,7 +1747,7 @@ void statement_restrictions::calculate_column_defs_for_filtering_and_erase_restr
     _column_defs_for_filtering = std::move(column_defs_for_filtering);
 }
 
-void statement_restrictions::process_partition_key_restrictions(bool allow_filtering, statements::statement_type type) {
+void statement_restrictions::process_partition_key_restrictions() {
     // If there is a queryable index, no special condition are required on the other restrictions.
     // But we still need to know 2 things:
     // - If we don't have a queryable index, is the query ok
@@ -1749,7 +1762,7 @@ void statement_restrictions::process_partition_key_restrictions(bool allow_filte
     }
 
     if (pk_restrictions_need_filtering()) {
-        if (!allow_filtering && !_has_queriable_pk_index && !type.is_delete() && !type.is_update()) {
+        if (!_allow_filtering && !_has_queriable_pk_index) {
             throw exceptions::invalid_request_exception("Cannot execute this query as it might involve data filtering and "
                 "thus may have unpredictable performance. If you want to execute "
                 "this query despite the performance unpredictability, use ALLOW FILTERING");
@@ -1825,21 +1838,38 @@ void statement_restrictions::validate_clustering_columns_form_a_prefix() const {
     }
 }
 
-void statement_restrictions::process_clustering_columns_restrictions(bool allow_filtering) {
+void statement_restrictions::throw_collection_restriction_needs_index_or_filtering() {
+    throw exceptions::invalid_request_exception(
+        "Cannot restrict clustering columns by a CONTAINS relation without a secondary index or filtering");
+}
+
+void statement_restrictions::validate_clustering_restrictions_are_a_slice() const {
     if (!has_clustering_columns_restriction()) {
         return;
     }
 
-    if (_ck_is_on_collection
-        && !_has_queriable_ck_index && !allow_filtering) {
-        throw exceptions::invalid_request_exception(
-            "Cannot restrict clustering columns by a CONTAINS relation without a secondary index or filtering");
+    if (_ck_is_on_collection) {
+        throw_collection_restriction_needs_index_or_filtering();
+    }
+
+    if (clustering_key_restrictions_need_filtering()) {
+        validate_clustering_columns_form_a_prefix();
+    }
+}
+
+void statement_restrictions::process_clustering_columns_restrictions() {
+    if (!has_clustering_columns_restriction()) {
+        return;
+    }
+
+    if (_ck_is_on_collection && !_has_queriable_ck_index && !_allow_filtering) {
+        throw_collection_restriction_needs_index_or_filtering();
     }
 
     if (clustering_key_restrictions_need_filtering()) {
         if (_has_queriable_ck_index) {
             _uses_secondary_indexing = true;
-        } else if (!allow_filtering) {
+        } else if (!_allow_filtering) {
             validate_clustering_columns_form_a_prefix();
         }
     }
@@ -2999,10 +3029,10 @@ analyze_select_restrictions(
         bool allow_filtering,
         check_indexes do_check_indexes,
         pinned_plan_opt pinned_plan) {
-    return seastar::make_shared<statement_restrictions>(statement_restrictions::private_tag{}, db,
-            std::move(schema), statements::statement_type::SELECT, where_clause, ctx,
-            selects_only_static_columns, /*for_view=*/false, allow_filtering, do_check_indexes,
-            std::move(pinned_plan));
+    auto restrictions = seastar::make_shared<statement_restrictions>(
+            statement_restrictions::private_tag{}, std::move(schema), allow_filtering, do_check_indexes);
+    restrictions->analyze_select(db, where_clause, ctx, selects_only_static_columns, std::move(pinned_plan));
+    return restrictions;
 }
 
 shared_ptr<const statement_restrictions>
@@ -3016,23 +3046,42 @@ analyze_view_restrictions(
     // A view definition is not run on behalf of a client, so it is never asked
     // to spell out ALLOW FILTERING: whatever the key order cannot express is
     // filtered when the view is refreshed, and that is the user's stated intent.
-    return seastar::make_shared<statement_restrictions>(statement_restrictions::private_tag{}, db,
-            std::move(schema), statements::statement_type::SELECT, where_clause, ctx,
-            selects_only_static_columns, /*for_view=*/true, /*allow_filtering=*/true, do_check_indexes,
-            std::nullopt);
+    auto restrictions = seastar::make_shared<statement_restrictions>(
+            statement_restrictions::private_tag{}, std::move(schema), /*allow_filtering=*/true, do_check_indexes);
+    restrictions->analyze_view_definition(db, where_clause, ctx, selects_only_static_columns);
+    return restrictions;
 }
 
 shared_ptr<const statement_restrictions>
-analyze_modification_restrictions(
+analyze_update_restrictions(
         data_dictionary::database db,
         schema_ptr schema,
-        statements::statement_type type,
         const expr::expression& where_clause,
         prepare_context& ctx,
         bool applies_only_to_static_columns) {
-    return seastar::make_shared<statement_restrictions>(statement_restrictions::private_tag{}, db,
-            std::move(schema), type, where_clause, ctx, applies_only_to_static_columns,
-            /*for_view=*/false, /*allow_filtering=*/false, check_indexes::no, std::nullopt);
+    auto restrictions = seastar::make_shared<statement_restrictions>(
+            statement_restrictions::private_tag{}, std::move(schema), /*allow_filtering=*/false, check_indexes::no);
+    restrictions->analyze_mutation(db, statements::statement_type::UPDATE, where_clause, ctx);
+    if (applies_only_to_static_columns) {
+        restrictions->reject_clustering_restrictions(statements::statement_type::UPDATE);
+    }
+    return restrictions;
+}
+
+shared_ptr<const statement_restrictions>
+analyze_delete_restrictions(
+        data_dictionary::database db,
+        schema_ptr schema,
+        const expr::expression& where_clause,
+        prepare_context& ctx,
+        bool applies_only_to_static_columns) {
+    auto restrictions = seastar::make_shared<statement_restrictions>(
+            statement_restrictions::private_tag{}, std::move(schema), /*allow_filtering=*/false, check_indexes::no);
+    restrictions->analyze_mutation(db, statements::statement_type::DELETE, where_clause, ctx);
+    if (applies_only_to_static_columns) {
+        restrictions->reject_clustering_restrictions(statements::statement_type::DELETE);
+    }
+    return restrictions;
 }
 
 shared_ptr<const statement_restrictions>
@@ -3040,22 +3089,31 @@ analyze_insert_restrictions(
         data_dictionary::database db,
         schema_ptr schema,
         const expr::expression& where_clause,
-        prepare_context& ctx,
-        bool applies_only_to_static_columns) {
-    return seastar::make_shared<statement_restrictions>(statement_restrictions::private_tag{}, db,
-            std::move(schema), statements::statement_type::INSERT, where_clause, ctx,
-            applies_only_to_static_columns, /*for_view=*/false, /*allow_filtering=*/false,
-            check_indexes::no, std::nullopt);
+        prepare_context& ctx) {
+    // No reject_clustering_restrictions() here: an INSERT creates the row it
+    // names, so
+    //   INSERT INTO t (k, v, s) VALUES (0, 1, 2)
+    // is a perfectly sensible way to set only a static column.
+    auto restrictions = seastar::make_shared<statement_restrictions>(
+            statement_restrictions::private_tag{}, std::move(schema), /*allow_filtering=*/false, check_indexes::no);
+    restrictions->analyze_mutation(db, statements::statement_type::INSERT, where_clause, ctx);
+    return restrictions;
 }
 
 shared_ptr<const statement_restrictions>
 make_empty_select_restrictions(schema_ptr schema) {
-    return make_shared<statement_restrictions>(statement_restrictions::private_tag{}, std::move(schema), true);
+    auto restrictions = seastar::make_shared<statement_restrictions>(
+            statement_restrictions::private_tag{}, std::move(schema), /*allow_filtering=*/true, check_indexes::no);
+    restrictions->no_restrictions();
+    return restrictions;
 }
 
 shared_ptr<const statement_restrictions>
 make_empty_insert_restrictions(schema_ptr schema) {
-    return make_shared<statement_restrictions>(statement_restrictions::private_tag{}, std::move(schema), false);
+    auto restrictions = seastar::make_shared<statement_restrictions>(
+            statement_restrictions::private_tag{}, std::move(schema), /*allow_filtering=*/false, check_indexes::no);
+    restrictions->no_restrictions();
+    return restrictions;
 }
 
 } // namespace restrictions
