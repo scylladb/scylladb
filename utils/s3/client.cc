@@ -570,6 +570,17 @@ http::client::reply_handler client::wrap_handler(http::request& request,
     };
 }
 
+// should_retry() takes no abort_source, so bind one into a request-scoped copy of the
+// strategy; strategies that cannot carry one are used as they are.
+static std::optional<aws::default_aws_retry_strategy> retry_strategy_for_abort_source(const http::retry_strategy& rs, seastar::abort_source* as) {
+    if (as) {
+        if (auto* drs = dynamic_cast<const aws::default_aws_retry_strategy*>(&rs)) {
+            return aws::default_aws_retry_strategy(drs->max_retries(), drs->controller(), as);
+        }
+    }
+    return std::nullopt;
+}
+
 future<> client::make_request(http::request req,
                               http::client::reply_handler handle,
                               std::optional<http::reply::status_type> expected,
@@ -601,7 +612,8 @@ future<> client::make_request(http::request req,
     // dispatch fresh; a stale one there is caught by the REQUEST_TIME_TOO_SKEWED path.
     co_await authorize(request);
 
-    co_await gc.http.make_request(request, handler, rs, std::nullopt, as).handle_exception([err_handler = std::move(err_handler)](auto ex) {
+    auto abortable_rs = retry_strategy_for_abort_source(rs, as);
+    co_await gc.http.make_request(request, handler, abortable_rs ? *abortable_rs : rs, std::nullopt, as).handle_exception([err_handler = std::move(err_handler)](auto ex) {
         err_handler(std::move(ex));
     });
 }
