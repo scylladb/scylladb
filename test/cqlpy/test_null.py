@@ -152,19 +152,22 @@ def test_delete_with_list_column_and_missing_clustering_key_part(cql, table2):
 
 # The same as test_insert_with_list_column_and_missing_clustering_key_part but
 # for partition key. A partition key has no prefix concept, so any missing
-# component (whether id1 or id2) makes the restrictions incomplete; the
-# analysis then rejects the statement with the generic data-filtering error,
-# rather than modification_statement's "Missing mandatory PRIMARY KEY part".
-# As above, this used to reach the nicer message only by accident (via a list
-# column being misrouted into the for_view flag). The "Some partition key
-# parts are missing" alternative is kept for Cassandra compatibility.
+# component (whether id1 or id2) leaves the restrictions incomplete, and
+# modification_statement reports which part is missing.
+#
+# This used to say "use ALLOW FILTERING" instead: a mutation ran the whole
+# query-planning pass, and an incomplete partition key means a query that would
+# have to scan and filter. A mutation cannot filter, so that advice was never
+# actionable; now that a mutation does not run that pass, the statement's own
+# check reports the missing column. The "Some partition key parts are missing"
+# alternative is kept for Cassandra compatibility.
 def test_insert_with_list_column_and_missing_partition_key_part(cql, table3):
     key = unique_key_string()
     with pytest.raises(InvalidRequest,
-                       match='use ALLOW FILTERING|Some partition key parts are missing: id1'):
+                       match='Missing mandatory PRIMARY KEY part id1|Some partition key parts are missing: id1'):
         cql.execute(cql.prepare(f"INSERT INTO {table3} (id2,a,c) VALUES ('{key}',1,[1])"))
     with pytest.raises(InvalidRequest,
-                       match='use ALLOW FILTERING|Some partition key parts are missing: id2'):
+                       match='Missing mandatory PRIMARY KEY part id2|Some partition key parts are missing: id2'):
         cql.execute(cql.prepare(f"INSERT INTO {table3} (id1,a,c) VALUES ('{key}',1,[1])"))
 
 # Tests handling of "key_column in ?" where ? is bound to null.
