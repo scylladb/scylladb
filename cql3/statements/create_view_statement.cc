@@ -73,7 +73,7 @@ static bool validate_primary_key(
         const column_definition* def,
         const std::unordered_set<const column_definition*>& base_pk,
         bool has_non_pk_column,
-        const restrictions::statement_restrictions& restrictions) {
+        const restrictions::select_restrictions& restrictions) {
 
     if (def->type->is_multi_cell()) {
         throw exceptions::invalid_request_exception(format("Cannot use MultiCell column '{}' in PRIMARY KEY of materialized view", def->name_as_text()));

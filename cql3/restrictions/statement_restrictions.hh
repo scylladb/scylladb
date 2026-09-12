@@ -35,16 +35,97 @@ using check_indexes = bool_class<class check_indexes_tag>;
 using pinned_plan_opt = std::optional<service::pager::query_plan>;
 
 /**
- * The restrictions corresponding to the relations specified on the where-clause of CQL query.
+ * What an UPDATE, DELETE or INSERT statement's WHERE clause says about the rows
+ * it writes.
  *
- * What the WHERE clause says lives in the where_clause_analysis this holds; on
- * top of it a SELECT keeps the query plan it worked out - the index to read, if
- * any, and the filters to apply to what comes back.
+ * A mutation's WHERE clause has to name those rows, so every restriction has to
+ * translate to a partition or clustering range.  There is no index to read and
+ * nothing to filter, and none of that machinery is reachable from here.
  *
- * Built by the analyze_*_restrictions() functions at the bottom of this file,
- * one per statement type.
+ * Built by the analyze_{update,delete,insert}_restrictions() functions below.
  */
-class statement_restrictions {
+class modification_restrictions {
+    where_clause_analysis _analysis;
+public:
+    // Marks the constructor as internal: a constructed object says nothing until
+    // it is analyzed, so go through the analyze_*_restrictions() factories below.
+    struct private_tag { explicit private_tag() = default; };
+
+    modification_restrictions(private_tag, schema_ptr schema);
+
+    modification_restrictions(const modification_restrictions&) = delete;
+    modification_restrictions& operator=(const modification_restrictions&) = delete;
+
+    /// Reads the WHERE clause of a mutation.  The type only picks the wording of
+    /// the errors this may throw.
+    void analyze_mutation(
+            data_dictionary::database db,
+            statements::statement_type type,
+            const expr::expression& where_clause,
+            prepare_context& ctx);
+
+    /// Rejects a WHERE clause that restricts clustering columns although the
+    /// statement writes only static columns: the clustering key names a row the
+    /// statement then does not write, which is never what the user meant.
+    ///
+    /// Does not apply to an INSERT, which creates the row it names.
+    void reject_clustering_restrictions(statements::statement_type type) const;
+
+    /// Initializes the object for a statement that does not work out the rows it
+    /// writes from a WHERE clause: INSERT ... JSON gets its primary key from the
+    /// JSON document at execution time, and computes the keys itself.
+    void no_restrictions();
+
+    const expr::expression& get_partition_key_restrictions() const {
+        return _analysis.partition_key_restrictions;
+    }
+
+    const expr::expression& get_clustering_columns_restrictions() const {
+        return _analysis.clustering_columns_restrictions;
+    }
+
+    /// The restrictions on non-primary-key columns, which a mutation rejects.
+    const expr::single_column_restrictions_map& get_non_pk_restriction() const {
+        return _analysis.single_column_nonprimary_key_restrictions;
+    }
+
+    bool key_is_in_relation() const { return _analysis.key_is_in_relation(); }
+    bool clustering_key_restrictions_has_IN() const { return _analysis.clustering_key_restrictions_has_IN(); }
+    bool clustering_key_restrictions_has_only_eq() const { return _analysis.ck_is_all_eq; }
+    bool has_token_restrictions() const { return _analysis.has_token_restrictions(); }
+    bool has_partition_key_unrestricted_components() const {
+        return _analysis.has_partition_key_unrestricted_components();
+    }
+    bool has_clustering_columns_restriction() const { return _analysis.has_clustering_columns_restriction(); }
+    bool has_unrestricted_clustering_columns() const { return _analysis.has_unrestricted_clustering_columns(); }
+    const column_definition& unrestricted_column(column_kind kind) const {
+        return _analysis.unrestricted_column(kind);
+    }
+    bool is_empty() const { return _analysis.is_empty(); }
+
+    dht::partition_range_vector get_partition_key_ranges(const query_options& options) const {
+        return _analysis.get_partition_key_ranges(options);
+    }
+    std::vector<query::clustering_range> get_clustering_bounds(const query_options& options) const {
+        return _analysis.get_clustering_bounds(options);
+    }
+
+    /// Checks that the primary key restrictions don't contain null values, throws
+    /// invalid_request_exception otherwise.
+    void validate_primary_key(const query_options& options) const { _analysis.validate_primary_key(options); }
+};
+
+/**
+ * What a SELECT statement's WHERE clause says about the rows it reads.
+ *
+ * A SELECT can read a secondary index and filter the rows it reads, so on top
+ * of the restrictions themselves this holds the query plan: the index to read,
+ * if any, and the filters to apply to what comes back.
+ *
+ * Built by analyze_select_restrictions(), or - for the SELECT defining a
+ * materialized view - analyze_view_restrictions().
+ */
+class select_restrictions {
     where_clause_analysis _analysis;
 
     /// True if the statement carries ALLOW FILTERING, so restrictions that no
@@ -102,14 +183,10 @@ public:
     // it is analyzed, so go through the analyze_*_restrictions() factories below.
     struct private_tag { explicit private_tag() = default; };
 
-    statement_restrictions(private_tag, schema_ptr schema, bool allow_filtering, check_indexes do_check_indexes);
+    select_restrictions(private_tag, schema_ptr schema, bool allow_filtering, check_indexes do_check_indexes);
 
-    statement_restrictions(const statement_restrictions&) = delete;
-    statement_restrictions& operator=(const statement_restrictions&) = delete;
-
-    // Each statement type runs the analysis steps that apply to it, and no
-    // others.  The analyze_*_restrictions() functions at the bottom of this file
-    // are the way in.
+    select_restrictions(const select_restrictions&) = delete;
+    select_restrictions& operator=(const select_restrictions&) = delete;
 
     /// Reads the WHERE clause of a SELECT statement and plans the query.
     void analyze_select(
@@ -127,24 +204,8 @@ public:
             prepare_context& ctx,
             bool selects_only_static_columns);
 
-    /// Reads the WHERE clause of a mutation.  The type only picks the wording of
-    /// the errors this may throw.
-    void analyze_mutation(
-            data_dictionary::database db,
-            statements::statement_type type,
-            const expr::expression& where_clause,
-            prepare_context& ctx);
-
-    /// Rejects a WHERE clause that restricts clustering columns although the
-    /// statement writes only static columns: the clustering key names a row the
-    /// statement then does not write, which is never what the user meant.
-    ///
-    /// Does not apply to an INSERT, which creates the row it names.
-    void reject_clustering_restrictions(statements::statement_type type) const;
-
-    /// Initializes the object for a statement that does not work out the rows it
-    /// addresses from a WHERE clause: every partition, every row, nothing to
-    /// filter.
+    /// Initializes the object for a statement with no WHERE clause: every
+    /// partition, every row, nothing to filter.
     void no_restrictions();
 
     const expr::expression& get_partition_key_restrictions() const {
@@ -194,10 +255,6 @@ public:
     }
     bool is_restricted(const column_definition* cdef) const { return _analysis.is_restricted(cdef); }
     bool is_empty() const { return _analysis.is_empty(); }
-
-    /// Checks that the primary key restrictions don't contain null values, throws
-    /// invalid_request_exception otherwise.
-    void validate_primary_key(const query_options& options) const { _analysis.validate_primary_key(options); }
 
     dht::partition_range_vector get_partition_key_ranges(const query_options& options) const {
         return _analysis.get_partition_key_ranges(options);
@@ -356,7 +413,7 @@ private:
 // rules its statement plays by.
 
 /// Analyzes the WHERE clause of a SELECT statement.
-shared_ptr<const statement_restrictions> analyze_select_restrictions(
+shared_ptr<const select_restrictions> analyze_select_restrictions(
         data_dictionary::database db,
         schema_ptr schema,
         const expr::expression& where_clause,
@@ -367,7 +424,7 @@ shared_ptr<const statement_restrictions> analyze_select_restrictions(
         pinned_plan_opt pinned_plan = std::nullopt);
 
 /// Analyzes the WHERE clause of the SELECT statement defining a materialized view.
-shared_ptr<const statement_restrictions> analyze_view_restrictions(
+shared_ptr<const select_restrictions> analyze_view_restrictions(
         data_dictionary::database db,
         schema_ptr schema,
         const expr::expression& where_clause,
@@ -376,7 +433,7 @@ shared_ptr<const statement_restrictions> analyze_view_restrictions(
         check_indexes do_check_indexes);
 
 /// Analyzes the WHERE clause of an UPDATE statement.
-shared_ptr<const statement_restrictions> analyze_update_restrictions(
+shared_ptr<const modification_restrictions> analyze_update_restrictions(
         data_dictionary::database db,
         schema_ptr schema,
         const expr::expression& where_clause,
@@ -384,7 +441,7 @@ shared_ptr<const statement_restrictions> analyze_update_restrictions(
         bool applies_only_to_static_columns);
 
 /// Analyzes the WHERE clause of a DELETE statement.
-shared_ptr<const statement_restrictions> analyze_delete_restrictions(
+shared_ptr<const modification_restrictions> analyze_delete_restrictions(
         data_dictionary::database db,
         schema_ptr schema,
         const expr::expression& where_clause,
@@ -392,7 +449,7 @@ shared_ptr<const statement_restrictions> analyze_delete_restrictions(
         bool applies_only_to_static_columns);
 
 /// Analyzes the primary-key equalities an INSERT statement names.
-shared_ptr<const statement_restrictions> analyze_insert_restrictions(
+shared_ptr<const modification_restrictions> analyze_insert_restrictions(
         data_dictionary::database db,
         schema_ptr schema,
         const expr::expression& where_clause,
@@ -403,10 +460,10 @@ shared_ptr<const statement_restrictions> analyze_insert_restrictions(
 ///
 /// The pager asks for these to put a query on the filtering path - which
 /// re-applies the per-partition limit on every page - with no filter of its own.
-shared_ptr<const statement_restrictions> make_empty_select_restrictions(schema_ptr schema);
+shared_ptr<const select_restrictions> make_empty_select_restrictions(schema_ptr schema);
 /// INSERT ... JSON takes its primary key from the JSON document at execution
 /// time, and computes the keys to write itself.
-shared_ptr<const statement_restrictions> make_empty_insert_restrictions(schema_ptr schema);
+shared_ptr<const modification_restrictions> make_empty_insert_restrictions(schema_ptr schema);
 
 
 // Checks whether this expression is empty - doesn't restrict anything

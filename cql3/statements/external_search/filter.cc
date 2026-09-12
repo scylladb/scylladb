@@ -202,7 +202,7 @@ rjson::value prepared_filter::to_json(const query_options& options) const {
     return restrictions_to_json(_restrictions, _allow_filtering, options);
 }
 
-prepared_filter prepare_filter(const restrictions::statement_restrictions& restrictions, bool allow_filtering) {
+prepared_filter prepare_filter(const restrictions::select_restrictions& restrictions, bool allow_filtering) {
     if (restrictions.is_empty()) {
         return prepared_filter({}, allow_filtering);
     }
