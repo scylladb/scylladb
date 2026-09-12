@@ -35,7 +35,6 @@ class ScyllaSetup:
         self._memory = arguments.memory
         self._reserveMemory = arguments.reserveMemory
         self._overprovisioned = arguments.overprovisioned
-        self._housekeeping = not arguments.disable_housekeeping
         self._experimental_features = arguments.experimental_features
         self._authenticator = arguments.authenticator
         self._authorizer = arguments.authorizer
@@ -95,14 +94,6 @@ class ScyllaSetup:
         self._run(["mkdir", "-p",  "%s/.cassandra" % home])
         with open("%s/.cassandra/cqlshrc" % home, "w") as cqlshrc:
             cqlshrc.write("[connection]\nhostname = %s\n" % hostname)
-
-    def set_housekeeping(self):
-        with open("/etc/scylla.d/housekeeping.cfg", "w") as f:
-            f.write("[housekeeping]\ncheck-version: ")
-            if self._housekeeping:
-                f.write("True\n")
-            else:
-                f.write("False\n")
 
     def write_rackdc_properties(self):
         if self._dc is None and self._rack is None:

@@ -9,6 +9,8 @@ case "$1" in
         # otherwise it will be missing after rollback.
         if [ "$1" = "purge" ]; then
             rm -rf /etc/systemd/system/scylla-server.service.d/
+            # legacy cleanup: housekeeping is no longer shipped, but older
+            # installs left these drop-in dirs behind.
             rm -rf /etc/systemd/system/scylla-housekeeping-daily.service.d/
             rm -rf /etc/systemd/system/scylla-housekeeping-restart.service.d/
         fi

@@ -83,7 +83,6 @@ packages=(
 bcp "${packages[@]}" packages/
 
 bcp dist/docker/etc etc/
-bcp dist/docker/scylla-housekeeping-service.sh /scylla-housekeeping-service.sh
 
 bcp dist/docker/scyllasetup.py /scyllasetup.py
 bcp dist/docker/commandlineparser.py /commandlineparser.py
