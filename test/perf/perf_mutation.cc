@@ -13,6 +13,8 @@
 #include <seastar/core/app-template.hh>
 #include <seastar/core/reactor.hh>
 
+#include <seastar/testing/linux_perf_event.hh>
+
 static atomic_cell make_atomic_cell(data_type dt, bytes value) {
     return atomic_cell::make_live(*dt, 0, value);
 };
@@ -43,12 +45,30 @@ int main(int argc, char* argv[]) {
         auto c_key = clustering_key::from_exploded(*s, {int32_type->decompose(2)});
         bytes value = int32_type->decompose(3);
 
+        size_t total_ops = 0;
+        auto instructions_retired_counter = linux_perf_event::user_instructions_retired();
+        auto cpu_cycles_retired_counter = linux_perf_event::user_cpu_cycles_retired();
+
+        instructions_retired_counter.enable();
+        cpu_cycles_retired_counter.enable();
         time_it([&] {
             mutation m(s, key);
             const column_definition& col = *s->get_column_definition(to_bytes(cnames[std::rand() % column_count]));
             m.set_clustered_cell(c_key, col, make_atomic_cell(col.type, value));
             mt.apply(std::move(m));
+            total_ops++;
         });
+
+        instructions_retired_counter.disable();
+        cpu_cycles_retired_counter.disable();
+        uint64_t insns = instructions_retired_counter.read();
+        uint64_t cycles = cpu_cycles_retired_counter.read();
+        auto fmt_per_op = [&] (uint64_t v) {
+            return v ? format("{:.1f}", double(v) / total_ops) : sstring("N/A");
+        };
+        std::cout << format("{} total ops, {} insns/op, {} cycles/op\n",
+                total_ops, fmt_per_op(insns), fmt_per_op(cycles));
+
         engine().exit(0);
     });
 }
