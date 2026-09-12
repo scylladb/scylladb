@@ -114,6 +114,9 @@ public:
     bool ms_listen = false;
     bool clean_data_dir_before_test = true;
     bool strongly_consistent_tables = false;
+    // Clear to get the raw `bounce` result back instead, for tests that want to
+    // observe or follow the bounce themselves.
+    bool follow_shard_bounces = true;
 
     std::optional<db_clock::duration> batchlog_replay_timeout;
     std::chrono::milliseconds batchlog_delay = std::chrono::milliseconds(0);
