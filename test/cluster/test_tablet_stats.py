@@ -7,9 +7,12 @@ from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.cluster.util import get_topology_coordinator, trigger_stepdown, new_test_keyspace, new_test_table
 
 import pytest
+import asyncio
 import logging
+import time
 
 from test.pylib.rest_client import read_barrier
+from test.pylib.util import wait_for_cql_and_get_hosts
 
 logger = logging.getLogger(__name__)
 
@@ -152,3 +155,77 @@ async def test_load_stats_refresh_during_shutdown(manager: ScyllaClusterManager)
 
             # If the bug is present, the node crashed. read_barrier will fail.
             await read_barrier(manager.api, coord_server.ip_addr)
+
+
+async def test_tablet_sizes_redirect_paged(manager: ScyllaClusterManager):
+    """Reproduces the "redirect_to_leader() buffers the whole result in one
+    RPC" bug reported against system.tablet_sizes: querying it from a
+    non-leader node used to send a single unbounded read_mutation_data RPC to
+    the group0 leader. With a small max_memory_for_unlimited_query, that RPC
+    would fail before returning any row. Here the redirect must page instead,
+    so the query succeeds and returns every tablet exactly once.
+    """
+    cfg = {'tablet_load_stats_refresh_interval_in_seconds': 1}
+    servers = await manager.servers_add(3, config=cfg, auto_rack_dc="dc1")
+    cql = manager.get_cql()
+    driver_hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    driver_host_by_ip = {h.address: h for h in driver_hosts}
+
+    async with new_test_keyspace(manager,
+            "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} "
+            "AND tablets = {'initial': 32}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        table_id = await manager.get_table_or_view_id(ks, 'test')
+
+        coord_host_id = await get_topology_coordinator(manager)
+        coord = await manager.find_server_by_host_id(servers, coord_host_id)
+        non_coord = next(s for s in servers if s.server_id != coord.server_id)
+
+        async def get_tablet_sizes(server):
+            return await cql.run_async(f"SELECT * FROM system.tablet_sizes WHERE table_id = {table_id}",
+                                        host=driver_host_by_ip[server.ip_addr])
+
+        # Wait until load_stats has been refreshed for all 32 tablets.
+        started = time.time()
+        while True:
+            rows = await get_tablet_sizes(coord)
+            if len(rows) == 32 and all(len(r.missing_replicas) == 0 for r in rows):
+                break
+            assert time.time() - started < 120, "Timed out waiting for tablet_sizes to be populated"
+            await asyncio.sleep(0.2)
+
+        # Now that the cluster is up and tablet_sizes is populated, shrink the
+        # non-leader's own query page size: redirect_to_leader() derives the
+        # read_mutation_data page size from its own permit (i.e. this node's
+        # config), so this forces the RPC to the leader to split into several
+        # pages instead of materializing the whole table_sizes result in one
+        # response. (allow_short_read makes get_page_size(), not the hard
+        # limit, the actual per-page cutoff -- see check_local_limit().)
+        await manager.server_update_config(non_coord.server_id,
+                                            config_options={
+                                                'query_page_size_in_bytes': 4096,
+                                            })
+
+        async def mutation_data_reads() -> float:
+            metrics = await manager.metrics.query(coord.ip_addr)
+            return metrics.get('scylla_storage_proxy_replica_reads', {'op_type': 'mutation_data'}) or 0
+
+        reads_before = await mutation_data_reads()
+
+        # Query through the non-leader: this exercises redirect_to_leader()'s
+        # multi-page RPC loop against the leader.
+        rows = await get_tablet_sizes(non_coord)
+
+        reads_after = await mutation_data_reads()
+
+        last_tokens = [r.last_token for r in rows]
+        assert len(last_tokens) == 32, f"Expected 32 tablets, got {len(last_tokens)}"
+        assert len(set(last_tokens)) == 32, "Duplicate tablets returned by redirected read"
+        assert last_tokens == sorted(last_tokens), "Tablets not returned in last_token clustering order"
+
+        # With the leader's own page size forced down to 4KB, a table with 32
+        # tablets cannot possibly fit in a single read_mutation_data response,
+        # so a correct redirect must issue more than one RPC to the leader.
+        # (An unpaged redirect ignores the config and always does exactly one.)
+        assert reads_after - reads_before > 1, \
+            "redirect_to_leader() did not page: only one read_mutation_data RPC was issued to the leader"
