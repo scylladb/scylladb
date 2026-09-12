@@ -1050,8 +1050,8 @@ private:
 /// Implementations need to override execute_on_leader(), which will be executed
 /// on shard0 of current group0 leader.
 ///
-/// Current implementation is suitable for tables which are relatively small as all
-/// data is materialized in memory and queried in one page.
+/// execute_on_leader() streams rows out as they are produced, but the redirect
+/// path still materializes the leader's whole result in one RPC response.
 class group0_virtual_table : public streaming_virtual_table {
 private:
     sharded<service::raft_group_registry>& _raft_gr;
