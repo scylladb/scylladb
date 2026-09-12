@@ -76,6 +76,7 @@ target_sources(cql3
     statements/cas_request.cc
     statements/raw/parsed_statement.cc
     statements/property_definitions.cc
+    statements/insert_statement.cc
     statements/update_statement.cc
     statements/delete_statement.cc
     statements/prune_materialized_view_statement.cc
