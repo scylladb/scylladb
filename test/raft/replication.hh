@@ -30,6 +30,7 @@
 #include "serializer.hh"
 #include "serializer_impl.hh"
 #include "utils/assert.hh"
+#include "utils/error_injection.hh"
 #include "utils/xx_hasher.hh"
 #include "utils/to_string.hh"
 #include "test/raft/helpers.hh"
@@ -507,7 +508,12 @@ public:
         }
         co_return;
     };
-    future<> abort() override { return make_ready_future<>(); }
+    future<> abort() override {
+        if (utils::get_local_injector().enter("raft_test_state_machine_abort_failure")) {
+            return make_exception_future<>(std::runtime_error("raft_test_state_machine_abort_failure"));
+        }
+        return make_ready_future<>();
+    }
 
     future<> done() {
         return _done.get_future();

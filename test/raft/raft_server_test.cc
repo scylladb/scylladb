@@ -131,6 +131,54 @@ SEASTAR_THREAD_TEST_CASE(test_aborting_wait_for_state_change) {
     BOOST_CHECK_THROW((void) fut_default_ex.get(), raft::request_aborted);
 }
 
+// If a step of raft::server::abort() fails, the remaining steps must still run
+// because the caller destroys the server as soon as the future resolves.
+// The failed future must still carry the original error.
+//
+// We make the state machine's abort() fail on a follower and check that a pending
+// wait_for_leader(), which is only resolved by a later step, is completed with
+// raft::stopped_error.
+//
+// Reproducer of SCYLLADB-5085.
+SEASTAR_THREAD_TEST_CASE(test_abort_completes_teardown_if_step_fails) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    std::cerr << "Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n";
+#else
+    constexpr size_t node_count = 3;
+
+    auto cluster = get_default_cluster(test_case{ .nodes = node_count });
+    cluster.start_all().get();
+    auto stop = defer([&cluster] noexcept {
+        for (size_t i = 0; i < node_count; ++i) {
+            if (cluster.get_server(i).is_alive()) {
+                cluster.stop_server(i).get();
+            }
+        }
+    });
+
+    auto& follower = cluster.get_server(1);
+    follower.wait_for_leader(nullptr).get();
+
+    // Cut the follower off so that no leader can make contact, and make it
+    // forget the leader. Nothing yields until the server is aborted below, and
+    // stop_server() cancels the ticker first, so the wait cannot be satisfied.
+    cluster.disconnect(1);
+    auto wait = follower.wait_for_leader(nullptr, true);
+    BOOST_REQUIRE(!wait.available());
+
+    constexpr std::string_view injection_name = "raft_test_state_machine_abort_failure";
+    scoped_error_injection injection{injection_name};
+
+    BOOST_CHECK_EXCEPTION(cluster.stop_server(1, "test abort").get(), std::runtime_error,
+            [&] (const std::runtime_error& e) {
+        return std::string_view(e.what()) == injection_name;
+    });
+
+    BOOST_REQUIRE(eventually_true([&wait] { return wait.available(); }));
+    BOOST_CHECK_THROW(wait.get(), raft::stopped_error);
+#endif
+}
+
 static void test_func_on_aborted_server_aux(
     std::function<future<>(raft::server&, abort_source*)> func,
     const raft::server::configuration& config = raft::server::configuration{})
