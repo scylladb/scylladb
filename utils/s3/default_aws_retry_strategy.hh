@@ -32,7 +32,9 @@ public:
     // ask whether it has one.
     static s3::throttling_controller& no_throttling();
 
-    default_aws_retry_strategy(unsigned max_retries = default_max_retries, s3::throttling_controller& controller = no_throttling(), seastar::abort_source* as = nullptr);
+    default_aws_retry_strategy(unsigned max_retries = default_max_retries,
+            s3::throttling_controller& controller = no_throttling(),
+            seastar::abort_source* as = nullptr);
 
     // Request-scoped copy that also observes `as`.
     default_aws_retry_strategy(const default_aws_retry_strategy& other, seastar::abort_source* as);
