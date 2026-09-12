@@ -1214,10 +1214,11 @@ row::find_cell(column_id id) const {
     return c_a_h ? &c_a_h->cell : nullptr;
 }
 
-size_t row::external_memory_usage(const schema& s, column_kind kind) const {
-    return _cells.memory_usage([&] (column_id id, const cell_and_hash& cah) noexcept {
-            auto& cdef = s.column_at(kind, id);
-            return cah.cell.external_memory_usage(*cdef.type);
+// The schema and kind are unused, but kept for a uniform signature across
+// fragment types (see mutation_fragment_v2::external_memory_usage()).
+size_t row::external_memory_usage(const schema&, column_kind) const {
+    return _cells.memory_usage([] (column_id, const cell_and_hash& cah) noexcept {
+            return cah.cell.external_memory_usage();
     });
 }
 
