@@ -387,6 +387,14 @@ void client::register_client_metrics() {
     _client_metrics.add_group("s3", defs);
 }
 
+uint64_t client::total_get_requests() const noexcept {
+    uint64_t ops = 0;
+    for (const auto& [sg, gc] : _https) {
+        ops += gc.http.get_stats()[httpd::GET].ops;
+    }
+    return ops;
+}
+
 future<client::group_client&> client::find_or_create_client() {
     auto sg = current_scheduling_group();
     if (const auto it = _https.find(sg); it != _https.end()) [[likely]] {

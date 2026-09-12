@@ -210,6 +210,10 @@ public:
                                   std::unique_ptr<throttling_controller> tc, global_factory gf = {});
     static shared_ptr<client> make(std::string url, std::string region, std::string iam_role_arn, global_factory gf = {}, unsigned connections_per_shard = endpoint_config::default_connections_per_shard);
 
+    // Total completed GET requests across all scheduling groups; reuses the
+    // existing per-method http::client stats. For tests/diagnostics.
+    uint64_t total_get_requests() const noexcept;
+
     future<uint64_t> get_object_size(sstring object_name, seastar::abort_source* = nullptr);
     future<stats> get_object_stats(sstring object_name, seastar::abort_source* = nullptr);
     future<object_info> get_object_info(sstring object_name, seastar::abort_source* = nullptr);
@@ -283,8 +287,12 @@ public:
 
     public:
 
-        bucket_lister(shared_ptr<client> client, sstring bucket, sstring prefix = "", size_t objects_per_page = 64, size_t entries_batch = 512 / sizeof(std::optional<directory_entry>));
-        bucket_lister(shared_ptr<client> client, sstring bucket, sstring prefix, lister::filter_type filter, size_t objects_per_page = 64, size_t entries_batch = 512 / sizeof(std::optional<directory_entry>));
+        // max-keys bounds key count, not bytes, and start_listing() reads the whole
+        // reply contiguously: at the S3 worst case (~1224B per <Contents>) 100 entries
+        // is ~120KB, just under the 128KiB large-alloc threshold, ~36% fewer round
+        // trips than 64.
+        bucket_lister(shared_ptr<client> client, sstring bucket, sstring prefix = "", size_t objects_per_page = 100, size_t entries_batch = 512 / sizeof(std::optional<directory_entry>));
+        bucket_lister(shared_ptr<client> client, sstring bucket, sstring prefix, lister::filter_type filter, size_t objects_per_page = 100, size_t entries_batch = 512 / sizeof(std::optional<directory_entry>));
 
         future<std::optional<directory_entry>> get() override;
         future<> close() noexcept override;
