@@ -1208,8 +1208,12 @@ def testInsertWithCompactStorageAndTwoClusteringColumns(cql, test_keyspace, forc
                    row(0, 0, 0, 0),
                    row(0, 0, 1, 1))
 
-        # Invalid Null values for the clustering key or the regular column
-        assertInvalidMessage(cql, table, "PRIMARY KEY column \"clustering_2\" cannot be restricted as preceding column \"clustering_1\" is not restricted",
+        # Invalid Null values for the clustering key or the regular column.
+        # An INSERT names the row it creates, so the clustering columns it names
+        # have to form a prefix of the clustering key. Scylla complains about
+        # the first clustering column left out, Cassandra about the first one
+        # given after it.
+        assertInvalidMessageRE(cql, table, 'Missing mandatory PRIMARY KEY part clustering_1|preceding column "clustering_1" is not restricted',
                              "INSERT INTO %s (partitionKey, clustering_2, value) VALUES (0, 0, 0)")
         assertInvalidMessage(cql, table, "Column value is mandatory for this COMPACT STORAGE table",
                              "INSERT INTO %s (partitionKey, clustering_1, clustering_2) VALUES (0, 0, 0)")
@@ -1217,7 +1221,7 @@ def testInsertWithCompactStorageAndTwoClusteringColumns(cql, test_keyspace, forc
         # Missing primary key columns
         assertInvalidMessage(cql, table, "partitionkey",
                              "INSERT INTO %s (clustering_1, clustering_2, value) VALUES (0, 0, 1)")
-        assertInvalidMessage(cql, table, "PRIMARY KEY column \"clustering_2\" cannot be restricted as preceding column \"clustering_1\" is not restricted",
+        assertInvalidMessageRE(cql, table, 'Missing mandatory PRIMARY KEY part clustering_1|preceding column "clustering_1" is not restricted',
                              "INSERT INTO %s (partitionKey, clustering_2, value) VALUES (0, 0, 2)")
 
         # multiple time the same value

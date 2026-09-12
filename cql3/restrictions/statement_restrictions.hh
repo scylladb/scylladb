@@ -93,11 +93,6 @@ public:
     /// equality.
     bool addresses_exact_rows() const;
 
-    /// Initializes the object for a statement that does not work out the rows it
-    /// writes from a WHERE clause: INSERT ... JSON gets its primary key from the
-    /// JSON document at execution time, and computes the keys itself.
-    void no_restrictions();
-
     bool key_is_in_relation() const { return _analysis.key_is_in_relation(); }
     bool clustering_key_restrictions_has_IN() const { return _analysis.clustering_key_restrictions_has_IN(); }
     bool has_clustering_columns_restriction() const { return _analysis.has_clustering_columns_restriction(); }
@@ -454,22 +449,12 @@ shared_ptr<const modification_restrictions> analyze_delete_restrictions(
         prepare_context& ctx,
         bool applies_only_to_static_columns);
 
-/// Analyzes the primary-key equalities an INSERT statement names.
-shared_ptr<const modification_restrictions> analyze_insert_restrictions(
-        data_dictionary::database db,
-        schema_ptr schema,
-        const expr::expression& where_clause,
-        prepare_context& ctx);
-
 /// Restrictions that restrict nothing, for a statement that does not work out
 /// the rows it addresses from a WHERE clause.
 ///
 /// The pager asks for these to put a query on the filtering path - which
 /// re-applies the per-partition limit on every page - with no filter of its own.
 shared_ptr<const select_restrictions> make_empty_select_restrictions(schema_ptr schema);
-/// INSERT ... JSON takes its primary key from the JSON document at execution
-/// time, and computes the keys to write itself.
-shared_ptr<const modification_restrictions> make_empty_insert_restrictions(schema_ptr schema);
 
 
 // Checks whether this expression is empty - doesn't restrict anything

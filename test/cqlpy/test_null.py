@@ -106,28 +106,21 @@ def test_insert_null_key_in_batch(cql, table1):
     with pytest.raises(InvalidRequest, match='null value'):
         cql.execute(stmt, [None, s])
 
-# INSERT statements must specify all components of the primary key.
-# When a non-last clustering-key component is missing while a later one is
-# given (here "b" is given but "a" is missing),
-# statement_restrictions::process_clustering_columns_restrictions rejects the
-# statement during restriction analysis with a "preceding column ... is not
-# restricted" error. When only the trailing component is missing (here "b"),
-# the analysis passes and modification_statement instead reports the clearer
-# "Missing mandatory PRIMARY KEY part" error.
+# INSERT statements must specify all components of the primary key, and report
+# the first one they leave out - whether it is a trailing component (here "b")
+# or one in the middle (here "a" is missing while the later "b" is given).
 #
-# This error message used to depend, by accident, on whether the statement
-# mentioned a list column: a list column set modification_statement's
-# _selects_a_collection, which was mistakenly passed as the restrictions'
-# for_view flag and relaxed the completeness check - so only statements that
-# happened to mention a list column reached the "Missing mandatory PRIMARY KEY
-# part" message. That misuse has been fixed, so list and non-list statements
-# now behave identically and the gap case surfaces the statement_restrictions
-# error. The "Some clustering keys are missing" alternative is kept for
+# The gap case used to be reported differently: an INSERT's key columns were
+# turned into a synthesized WHERE clause, and a gap in it made the clustering
+# restrictions fail to form a prefix, so the analysis rejected the statement
+# with a "preceding column ... is not restricted" error instead. Now that an
+# INSERT computes its keys from the columns it names, both cases give the same
+# message. The "Some clustering keys are missing" alternative is kept for
 # Cassandra compatibility. See also #12046 (the reported column must be real).
 def test_insert_with_list_column_and_missing_clustering_key_part(cql, table2):
     key = unique_key_string()
     with pytest.raises(InvalidRequest,
-                       match='PRIMARY KEY column "b" cannot be restricted as preceding column "a" is not restricted|Some clustering keys are missing: a'):
+                       match='Missing mandatory PRIMARY KEY part a|Some clustering keys are missing: a'):
         cql.execute(cql.prepare(f"INSERT INTO {table2} (id,b,c) VALUES ('{key}',1,null)"))
     with pytest.raises(InvalidRequest,
                        match='Missing mandatory PRIMARY KEY part b|Some clustering keys are missing: b'):
