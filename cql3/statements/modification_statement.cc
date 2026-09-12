@@ -199,6 +199,10 @@ bool modification_statement::applies_to(const selection::selection* selection,
     return expr::evaluate(_condition, inputs) == true_value;
 }
 
+void modification_statement::validate_primary_key(const query_options& options) const {
+    _restrictions->validate_primary_key(options);
+}
+
 utils::chunked_vector<mutation> modification_statement::make_mutations(
         const std::vector<dht::partition_range>& keys) const {
 
@@ -282,7 +286,7 @@ modification_statement::do_execute(query_processor& qp, service::query_state& qs
                                "set in the configuration.", cl, cl))));
     }
 
-    _restrictions->validate_primary_key(options);
+    validate_primary_key(options);
 
     if (has_conditions()) {
         auto result = co_await execute_with_condition(qp, qs, options);
