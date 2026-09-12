@@ -1820,6 +1820,7 @@ deps['test/boost/estimated_histogram_test'] = ['test/boost/estimated_histogram_t
 deps['test/boost/summary_test'] = ['test/boost/summary_test.cc']
 deps['test/boost/anchorless_list_test'] = ['test/boost/anchorless_list_test.cc']
 deps['test/perf/perf_canonical_mutation'] += ['seastar/tests/perf/linux_perf_event.cc']
+deps['test/perf/perf_mutation'] += ['seastar/tests/perf/linux_perf_event.cc']
 deps['test/perf/perf_commitlog'] += ['test/perf/perf.cc', 'seastar/tests/perf/linux_perf_event.cc']
 deps['test/perf/perf_row_cache_reads'] += ['test/perf/perf.cc', 'seastar/tests/perf/linux_perf_event.cc']
 deps['test/boost/reusable_buffer_test'] = [
