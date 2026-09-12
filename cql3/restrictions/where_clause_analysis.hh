@@ -260,7 +260,8 @@ public:
 
     bool key_is_in_relation() const;
     bool clustering_key_restrictions_has_IN() const;
-    bool clustering_key_restrictions_has_only_eq() const;
+    /// True if the clustering restrictions name a range of rows rather than whole rows.
+    bool clustering_key_restrictions_have_slice() const;
     bool has_token_restrictions() const;
     bool has_eq_restriction_on_column(const column_definition&) const;
     bool has_partition_key_unrestricted_components() const;
