@@ -16,7 +16,9 @@
 #include "utils/utf8.hh"
 #include "replica/database_fwd.hh"
 #include "schema/schema_fwd.hh"
+#include "utils/range_of.hh"
 #include <compare>
+#include <ranges>
 #include <span>
 
 //
@@ -103,13 +105,11 @@ public:
         return end();
     }
 
-    // Returns a range of managed_bytes_view
-    auto components() const {
+    utils::range_of<managed_bytes_view> auto components() const {
         return TopLevelView::compound::element_type::components(representation());
     }
 
-    // Returns a range of managed_bytes_view
-    auto components(const schema& s) const {
+    utils::range_of<managed_bytes_view> auto components(const schema& s) const {
         return components();
     }
 
@@ -306,13 +306,11 @@ public:
         return is_empty();
     }
 
-    // Returns a range of managed_bytes_view
-    auto components() const {
+    utils::range_of<managed_bytes_view> auto components() const {
         return TopLevelView::compound::element_type::components(representation());
     }
 
-    // Returns a range of managed_bytes_view
-    auto components(const schema& s) const {
+    utils::range_of<managed_bytes_view> auto components(const schema& s) const {
         return components();
     }
 
@@ -510,6 +508,14 @@ public:
     };
 };
 
+// Accepts whatever components() returns (managed_bytes_view elements) or what the read side
+// reconstructs a key from (bytes_view, or a FragmentedView over the wire buffer) -- excluded
+// rather than enumerated, so this header doesn't need to name serializer-internal view types.
+template<typename R>
+concept range_of_key_components = std::ranges::range<R>
+    && !std::same_as<std::ranges::range_value_t<R>, bytes>
+    && !std::same_as<std::ranges::range_value_t<R>, managed_bytes>;
+
 class partition_key_view : public compound_view_wrapper<partition_key_view> {
 public:
     using c_type = compound_type<allow_prefixes::no>;
@@ -595,7 +601,12 @@ public:
     partition_key(std::vector<bytes> v)
         : compound_wrapper(managed_bytes(c_type::serialize_value(std::move(v))))
     { }
-    partition_key(std::initializer_list<bytes> v) : partition_key(std::vector(v)) {}    
+    // accepts whatever components() returns, or the view-based range the read side reconstructs
+    // a key from -- rebuilds without materializing an intermediate owned std::vector
+    partition_key(range_of_key_components auto&& v)
+        : compound_wrapper(managed_bytes(c_type::serialize_value(std::forward<decltype(v)>(v))))
+    { }
+    partition_key(std::initializer_list<bytes> v) : partition_key(std::vector(v)) {}
 
     partition_key(partition_key&& v) = default;
     partition_key(const partition_key& v) = default;
@@ -755,6 +766,11 @@ public:
     { }
     clustering_key_prefix(std::vector<managed_bytes> v)
         : prefix_compound_wrapper(compound::element_type::serialize_value(std::move(v)))
+    { }
+    // accepts whatever components() returns, or the view-based range the read side reconstructs
+    // a key from -- rebuilds without materializing an intermediate owned std::vector
+    clustering_key_prefix(range_of_key_components auto&& v)
+        : prefix_compound_wrapper(compound::element_type::serialize_value(std::forward<decltype(v)>(v)))
     { }
     clustering_key_prefix(std::initializer_list<bytes> v) : clustering_key_prefix(std::vector(v)) {}
 

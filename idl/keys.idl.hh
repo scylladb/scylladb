@@ -7,9 +7,9 @@
  */
 
 class clustering_key_prefix {
-    std::vector<bytes> explode();
+    utils::range_of<managed_bytes_view> auto components() [[reconstruct_as=deserialized_view_range<decltype(in)>]];
 };
 
 class partition_key {
-    std::vector<bytes> explode();
+    utils::range_of<managed_bytes_view> auto components() [[reconstruct_as=deserialized_view_range<decltype(in)>]];
 };
