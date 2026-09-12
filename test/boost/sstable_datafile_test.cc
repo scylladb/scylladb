@@ -57,6 +57,7 @@
 #include "readers/from_fragments.hh"
 #include "readers/combined.hh"
 #include "test/lib/random_schema.hh"
+#include "test/lib/key_utils.hh"
 #include "test/lib/exception_utils.hh"
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/gcs_fixture.hh"
@@ -1094,7 +1095,9 @@ SEASTAR_TEST_CASE(sstable_tombstone_metadata_check) {
                     .with_column("r1", int32_type)
                     .build();
             auto sst_gen = env.make_sst_factory(s, version);
-            auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
+            // Keys owned by this shard, unlike hardcoded ones.
+            auto pkeys = tests::generate_partition_keys(2, s);
+            auto key = pkeys[0].key();
             auto c_key = clustering_key_prefix::from_exploded(*s, {to_bytes("c1")});
             const column_definition& r1_col = *s->get_column_definition("r1");
 
@@ -1130,7 +1133,7 @@ SEASTAR_TEST_CASE(sstable_tombstone_metadata_check) {
                 tombstone tomb(api::new_timestamp(), gc_clock::now());
                 m.partition().apply_delete(*s, c_key, tomb);
 
-                auto key2 = partition_key::from_exploded(*s, {to_bytes("key2")});
+                auto key2 = pkeys[1].key();
                 mutation m2(s, key2);
                 m2.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type, int32_type->decompose(1)));
 
@@ -1262,7 +1265,9 @@ SEASTAR_TEST_CASE(sstable_composite_tombstone_metadata_check) {
                     .with_column("r1", int32_type)
                     .build();
             auto sst_gen = env.make_sst_factory(s, version);
-            auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
+            // Keys owned by this shard, unlike hardcoded ones.
+            auto pkeys = tests::generate_partition_keys(2, s);
+            auto key = pkeys[0].key();
             auto c_key = clustering_key_prefix::from_exploded(*s, {to_bytes("c1"), to_bytes("c2")});
             const column_definition& r1_col = *s->get_column_definition("r1");
 
@@ -1298,7 +1303,7 @@ SEASTAR_TEST_CASE(sstable_composite_tombstone_metadata_check) {
                 tombstone tomb(api::new_timestamp(), gc_clock::now());
                 m.partition().apply_delete(*s, c_key, tomb);
 
-                auto key2 = partition_key::from_exploded(*s, {to_bytes("key2")});
+                auto key2 = pkeys[1].key();
                 mutation m2(s, key2);
                 m2.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type, int32_type->decompose(1)));
 
@@ -1422,7 +1427,9 @@ SEASTAR_TEST_CASE(sstable_composite_reverse_tombstone_metadata_check) {
                     .with_column("r1", int32_type)
                     .build();
             auto sst_gen = env.make_sst_factory(s, version);
-            auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
+            // Keys owned by this shard, unlike hardcoded ones.
+            auto pkeys = tests::generate_partition_keys(2, s);
+            auto key = pkeys[0].key();
             auto c_key = clustering_key_prefix::from_exploded(*s, {to_bytes("c1"), to_bytes("c2")});
             const column_definition& r1_col = *s->get_column_definition("r1");
 
@@ -1458,7 +1465,7 @@ SEASTAR_TEST_CASE(sstable_composite_reverse_tombstone_metadata_check) {
                 tombstone tomb(api::new_timestamp(), gc_clock::now());
                 m.partition().apply_delete(*s, c_key, tomb);
 
-                auto key2 = partition_key::from_exploded(*s, {to_bytes("key2")});
+                auto key2 = pkeys[1].key();
                 mutation m2(s, key2);
                 m2.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type, int32_type->decompose(1)));
 
@@ -1983,10 +1990,10 @@ SEASTAR_TEST_CASE(sstable_tombstone_histogram_test) {
                 return m;
             };
 
+            // Keys owned by this shard, unlike hardcoded ones.
             utils::chunked_vector<mutation> mutations;
-            for (auto i = 0; i < sstables::TOMBSTONE_HISTOGRAM_BIN_SIZE * 2; i++) {
-                auto key = partition_key::from_exploded(*s, {to_bytes("key" + to_sstring(i))});
-                mutations.push_back(make_delete(key));
+            for (auto& pk : tests::generate_partition_keys(sstables::TOMBSTONE_HISTOGRAM_BIN_SIZE * 2, s)) {
+                mutations.push_back(make_delete(pk.key()));
                 forward_jump_clocks(std::chrono::seconds(1));
             }
             auto sst = make_sstable_containing(env.make_sstable(s, version), mutations).get();
@@ -2041,7 +2048,10 @@ SEASTAR_TEST_CASE(sstable_owner_shards) {
                 auto sst = env.make_sstable(std::move(schema));
                 return sst;
             };
-            auto sst = make_sstable_containing(sst_gen, std::move(muts)).get();
+            // The mutations are keyed under a simulated smp_count-shard scheme, unrelated
+            // to the real runtime shard count; the writer schema above has exactly one
+            // shard, so shard 0 always owns the whole write.
+            auto sst = make_sstable_containing(sst_gen, std::move(muts), validate::yes, shard_id(0)).get();
             auto schema = schema_builder(s).with_sharder(smp_count, ignore_msb).build();
             sst = env.reusable_sst(std::move(schema), sst).get();
             return sst;
@@ -2086,12 +2096,12 @@ SEASTAR_TEST_CASE(test_summary_entry_spanning_more_keys_than_min_interval) {
                     .with_column("r1", int32_type)
                     .build();
         const column_definition& r1_col = *s->get_column_definition("r1");
+        // Keys owned by this shard, unlike hardcoded ones.
         utils::chunked_vector<mutation> mutations;
         auto keys_written = 0;
-        for (auto i = 0; i < s->min_index_interval()*1.5; i++) {
-            auto key = partition_key::from_exploded(*s, {int32_type->decompose(i)});
+        for (auto& pk : tests::generate_partition_keys(static_cast<size_t>(s->min_index_interval()*1.5), s)) {
             auto c_key = clustering_key::from_exploded(*s, {to_bytes("abc")});
-            mutation m(s, key);
+            mutation m(s, pk);
             m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type, int32_type->decompose(1)));
             mutations.push_back(std::move(m));
             keys_written++;
@@ -2299,10 +2309,10 @@ SEASTAR_TEST_CASE(summary_rebuild_sanity) {
             return m;
         };
 
+        // Keys owned by this shard, unlike hardcoded ones.
         utils::chunked_vector<mutation> mutations;
-        for (auto i = 0; i < s->min_index_interval()*2; i++) {
-            auto key = to_bytes("key" + to_sstring(i));
-            mutations.push_back(make_insert(partition_key::from_exploded(*s, {std::move(key)})));
+        for (auto& pk : tests::generate_partition_keys(s->min_index_interval()*2, s)) {
+            mutations.push_back(make_insert(pk.key()));
         }
 
         auto version = sstable_version_types::me;
@@ -2350,10 +2360,10 @@ SEASTAR_TEST_CASE(sstable_partition_estimation_sanity_test) {
         {
             auto total_partitions = s->min_index_interval()*2;
 
+            // Keys owned by this shard, unlike hardcoded ones.
             utils::chunked_vector<mutation> mutations;
-            for (auto i = 0; i < total_partitions; i++) {
-                auto key = to_bytes("key" + to_sstring(i));
-                mutations.push_back(make_large_partition(partition_key::from_exploded(*s, {std::move(key)})));
+            for (auto& pk : tests::generate_partition_keys(total_partitions, s)) {
+                mutations.push_back(make_large_partition(pk.key()));
             }
             auto sst = make_sstable_containing(env.make_sstable(s), mutations).get();
 
@@ -2363,10 +2373,10 @@ SEASTAR_TEST_CASE(sstable_partition_estimation_sanity_test) {
         {
             auto total_partitions = s->min_index_interval()*2;
 
+            // Keys owned by this shard, unlike hardcoded ones.
             utils::chunked_vector<mutation> mutations;
-            for (auto i = 0; i < total_partitions; i++) {
-                auto key = to_bytes("key" + to_sstring(i));
-                mutations.push_back(make_small_partition(partition_key::from_exploded(*s, {std::move(key)})));
+            for (auto& pk : tests::generate_partition_keys(total_partitions, s)) {
+                mutations.push_back(make_small_partition(pk.key()));
             }
             auto sst = make_sstable_containing(env.make_sstable(s), mutations).get();
 
@@ -2391,10 +2401,10 @@ SEASTAR_TEST_CASE(sstable_summary_max_partitions_per_page_test) {
         builder.set_compressor_params(compression_parameters::no_compression());
         auto s = builder.build(schema_builder::compact_storage::no);
 
+        // Keys owned by this shard, unlike hardcoded ones.
         utils::chunked_vector<mutation> mutations;
-        for (int i = 0; i < total_partitions; i++) {
-            auto key = to_bytes("key" + to_sstring(i));
-            mutation m(s, partition_key::from_exploded(*s, {std::move(key)}));
+        for (auto& pk : tests::generate_partition_keys(total_partitions, s)) {
+            mutation m(s, pk);
             mutations.push_back(std::move(m));
         }
         // The summary/index pair only exists in the legacy ("me") format; the
@@ -2412,7 +2422,6 @@ SEASTAR_TEST_CASE(sstable_summary_max_partitions_per_page_test) {
 }
 
 SEASTAR_TEST_CASE(sstable_timestamp_metadata_correcness_with_negative) {
-    BOOST_REQUIRE(this_smp_shard_count() == 1);
     return test_env::do_with_async([] (test_env& env) {
         for (auto version : writable_sstable_versions) {
             auto s = schema_builder(this_smp_shard_count(), "tests", "ts_correcness_test")
@@ -2425,11 +2434,11 @@ SEASTAR_TEST_CASE(sstable_timestamp_metadata_correcness_with_negative) {
                 return m;
             };
 
-            auto alpha = partition_key::from_exploded(*s, {to_bytes("alpha")});
-            auto beta = partition_key::from_exploded(*s, {to_bytes("beta")});
+            // Keys owned by this shard, unlike hardcoded ones.
+            auto pkeys = tests::generate_partition_keys(2, s);
 
-            auto mut1 = make_insert(alpha, -50);
-            auto mut2 = make_insert(beta, 5);
+            auto mut1 = make_insert(pkeys[0].key(), -50);
+            auto mut2 = make_insert(pkeys[1].key(), 5);
 
             auto sst = make_sstable_containing(env.make_sstable(s, version), {mut1, mut2}).get();
 
@@ -2440,7 +2449,6 @@ SEASTAR_TEST_CASE(sstable_timestamp_metadata_correcness_with_negative) {
 }
 
 SEASTAR_TEST_CASE(sstable_run_identifier_correctness) {
-    BOOST_REQUIRE(this_smp_shard_count() == 1);
     return test_env::do_with_async([] (test_env& env) {
         auto s = schema_builder(this_smp_shard_count(), "tests", "ts_correcness_test")
                 .with_column("id", utf8_type, column_kind::partition_key)
@@ -3081,7 +3089,7 @@ SEASTAR_TEST_CASE(test_full_scan_reader_random_schema_random_mutations) {
 
         testlog.info("Random schema:\n{}", random_schema.cql());
 
-        const auto muts = tests::generate_random_mutations(random_schema, 20).get();
+        const auto muts = tests::generate_random_mutations(random_schema, 20, this_shard_id()).get();
 
         auto sst = make_sstable_containing(env.make_sstable(schema), muts).get();
 
@@ -3194,7 +3202,7 @@ future<> test_sstable_bytes_correctness(sstring tname, test_env_config cfg) {
 
         testlog.info("Random schema:\n{}", random_schema.cql());
 
-        const auto muts = tests::generate_random_mutations(random_schema, 20).get();
+        const auto muts = tests::generate_random_mutations(random_schema, 20, this_shard_id()).get();
 
         auto sst = make_sstable_containing(env.make_sstable(schema), muts).get();
 
@@ -3245,7 +3253,7 @@ SEASTAR_TEST_CASE(test_sstable_set_predicate) {
 
         testlog.info("Random schema:\n{}", random_schema.cql());
 
-        const auto muts = tests::generate_random_mutations(random_schema, 20).get();
+        const auto muts = tests::generate_random_mutations(random_schema, 20, this_shard_id()).get();
 
         auto sst = make_sstable_containing(env.make_sstable(s), muts).get();
 
@@ -3317,7 +3325,6 @@ SEASTAR_TEST_CASE(test_sstable_set_predicate) {
 }
 
 SEASTAR_TEST_CASE(sstable_identifier_correctness) {
-    BOOST_REQUIRE(this_smp_shard_count() == 1);
     return test_env::do_with_async([] (test_env& env) {
         simple_schema ss;
         auto s = ss.schema();
