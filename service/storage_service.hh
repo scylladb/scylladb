@@ -1004,7 +1004,27 @@ public:
     future<> del_tablet_replica(table_id, dht::token, locator::tablet_replica dst, loosen_constraints force = loosen_constraints::no);
     future<> restore_tablets(table_id, sstring snap_name);
     future<> abort_restore_tablets(table_id);
-    future<> set_tablet_balancing_enabled(bool);
+    // Sets tablet balancing. When disabling, waits until the topology coordinator has no
+    // tablet transition in flight. Transitions which don't finish within grace_period and can
+    // be rolled back are cancelled, so the coordinator can service the request sooner; zero
+    // cancels nothing. Transitions which cannot be cancelled are waited for either way.
+    future<> set_tablet_balancing_enabled(bool enabled, std::optional<std::chrono::seconds> grace_period = std::nullopt);
+
+    // Cancels every tablet transition in the cluster which can still be rolled back, so that
+    // the topology coordinator rolls it back instead of running it to completion.  Transitions
+    // in a stage which cannot be rolled back, and every transition while a node is being
+    // drained, are left alone.  Warns and does nothing where the cluster does not support the
+    // TABLET_TRANSITION_CANCEL feature.
+    future<> cancel_tablet_transitions();
+
+    // Cancels the transition of one tablet, so that the coordinator rolls it back instead of
+    // running it to completion.
+    //
+    // Unlike cancel_tablet_transitions(), a transition which is draining a node is not exempt:
+    // the caller named this tablet, and restarting a stuck drain stream is a legitimate reason
+    // to ask.  Throws if the tablet is not transitioning, if its stage cannot be rolled back,
+    // or if the cluster does not support the TABLET_TRANSITION_CANCEL feature.
+    future<> cancel_tablet_transition(locator::global_tablet_id tablet);
 
     future<utils::UUID> submit_quiesce_topology_request();
     // The body of await_topology_quiesced(), run through _quiesce_topology so that
@@ -1025,7 +1045,8 @@ public:
 
     // Waits for a topology request with a given ID to complete and return non empty error string
     // if request completes with an error
-    future<sstring> wait_for_topology_request_completion(utils::UUID id, bool require_entry = true);
+    future<sstring> wait_for_topology_request_completion(utils::UUID id, bool require_entry = true,
+                                                        std::optional<lowres_clock::time_point> deadline = std::nullopt);
 
     // Initiates abort of a topology request with a given ID.
     // May have no effect if the request is not in an abortable state.

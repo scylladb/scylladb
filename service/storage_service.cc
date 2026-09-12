@@ -3169,8 +3169,9 @@ future<> storage_service::reset_cleanup_needed() {
     }
 }
 
-future<sstring> storage_service::wait_for_topology_request_completion(utils::UUID id, bool require_entry) {
-    co_return co_await _topology_state_machine.wait_for_request_completion(_sys_ks.local(), id, require_entry);
+future<sstring> storage_service::wait_for_topology_request_completion(utils::UUID id, bool require_entry,
+                                                                     std::optional<lowres_clock::time_point> deadline) {
+    co_return co_await _topology_state_machine.wait_for_request_completion(_sys_ks.local(), id, require_entry, deadline);
 }
 
 future<> storage_service::abort_topology_request(utils::UUID request_id) {
@@ -5356,9 +5357,20 @@ future<tablet_operation_result> storage_service::do_tablet_operation(locator::gl
 
     locator::tablet_metadata_guard guard(_db.local().find_column_family(tablet.table), tablet);
     auto& as = guard.get_abort_source();
-    auto sub = _group0_as.subscribe([&as] () noexcept {
+    auto abort = [&as] () noexcept {
         as.request_abort();
-    });
+    };
+    auto sub = _group0_as.subscribe(abort);
+    // Also follow the node's abort source, so that the guard's abort source is a superset
+    // of both and operations can rely on it alone to cover shutdown as well as changes to
+    // the tablet's transition.
+    auto shutdown_sub = _abort_source.subscribe(abort);
+    if (!sub || !shutdown_sub) {
+        // subscribe() leaves the subscription unlinked and doesn't invoke the callback if
+        // the source was already aborted, so propagate the abort by hand. Must happen before
+        // the operation is registered in _tablet_ops, so that nobody joins an aborted one.
+        abort();
+    }
 
     auto async_gate_holder = _async_gate.hold();
     promise<tablet_operation_result> p;
@@ -5584,7 +5596,7 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
                     auto& table = _db.local().find_column_family(tablet.table);
                     slogger.debug("stream_sstables[{}] Streaming for tablet {} of {} started table={}.{} range={} src={}",
                             ops_id, transition, tablet, table.schema()->ks_name(), table.schema()->cf_name(), range, src);
-                    auto resp = co_await streaming::tablet_stream_files(ops_id, table, range, src.host, dst_node, dst_shard_id, _messaging.local(), _abort_source, topo_guard);
+                    auto resp = co_await streaming::tablet_stream_files(ops_id, table, range, src.host, dst_node, dst_shard_id, _messaging.local(), guard.get_abort_source(), topo_guard);
                     stream_bytes = resp.stream_bytes;
                     slogger.debug("stream_sstables[{}] Streaming for tablet migration of {} successful", ops_id, tablet);
                     auto duration = std::chrono::duration<float>(std::chrono::steady_clock::now() - start_time);
@@ -6419,15 +6431,168 @@ future<bool> storage_service::try_transit_tablet(table_id table, dht::token toke
     co_return true;
 }
 
-future<> storage_service::set_tablet_balancing_enabled(bool enabled) {
+future<> storage_service::cancel_tablet_transitions() {
+    if (!_feature_service.tablet_transition_cancel) {
+        // Warned here rather than when the call starts: the caller does not care until the grace
+        // period has elapsed and we would otherwise be about to cancel.
+        rtlogger.warn("Tablet transitions cannot be cancelled because the cluster does not support "
+                      "the TABLET_TRANSITION_CANCEL feature yet, waiting for them to finish");
+        co_return;
+    }
+
+    while (true) {
+        auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
+
+        // A transition which drains a node for a topology operation is left alone. Cancelling
+        // it would let this request through - the balancer schedules no new drain migrations
+        // while a request is queued - but only by rolling back tablets the drain has to move
+        // again as soon as the request is serviced, so the streaming would be thrown away for
+        // nothing. The call waits for the drain's in-flight streams instead.
+        //
+        // Checked under the guard, and on every retry, so that a drain which starts while we
+        // are preparing the cancellation is noticed. The two spellings of draining differ:
+        // without parallel_tablet_draining it has its own transition state, in which the
+        // coordinator ignores pending requests anyway, so nothing at all is cancelled; with it
+        // draining runs in the tablet_migration state with the node's request paused, and only
+        // the transitions leaving that node are skipped.
+        if (_topology_state_machine._topology.tstate == topology::transition_state::tablet_draining) {
+            rtlogger.info("Not cancelling tablet transitions, a node is being drained");
+            co_return;
+        }
+
+        // One command per pass covers at most this many tablets, so that a cancellation which
+        // covers every tablet of a keyspace - an RF change puts them all into transition at
+        // once - cannot build a command raft would reject as too big. Tracking this inside
+        // group0_update_collector is SCYLLADB-4327.
+        constexpr size_t estimated_bytes_per_tablet = 512;
+        const size_t max_tablets_per_pass = std::max<size_t>(1,
+                _group0->group0_server().max_command_size() / 2 / estimated_bytes_per_tablet);
+
+        // The mutations are built during the scan, so there is no intermediate list of tablets
+        // and no second pass which could disagree with this one about what is cancellable.
+        // system.tablets is partitioned by table id, so all tablets of a table share a builder.
+        auto tm = get_token_metadata_ptr();
+        std::unordered_map<table_id, replica::tablet_mutation_builder> builders;
+        size_t cancelled = 0;
+        bool capped = false;
+        for (auto&& [base_table, tables] : tm->tablets().all_table_groups()) {
+            const auto& tmap = tm->tablets().get_tablet_map(base_table);
+            for (auto&& [tid, trinfo] : tmap.transitions()) {
+                co_await coroutine::maybe_yield();
+                if (cancelled >= max_tablets_per_pass) {
+                    capped = true;
+                    break;
+                }
+                if (trinfo.cancelled || !locator::can_cancel_tablet_transition(trinfo.stage)) {
+                    continue;
+                }
+                auto leaving = locator::get_leaving_replica(tmap.get_tablet_info(tid), trinfo);
+                if (leaving && _topology_state_machine._topology.paused_requests.contains(
+                        raft::server_id(leaving->host.uuid()))) {
+                    continue;
+                }
+                auto i = builders.try_emplace(base_table, guard.write_timestamp(), base_table).first;
+                i->second.cancel_transition(tmap.get_last_token(tid));
+                cancelled++;
+                rtlogger.debug("Cancelling transition of tablet {} at stage {}",
+                               locator::global_tablet_id{base_table, tid}, trinfo.stage);
+            }
+            if (capped) {
+                break;
+            }
+        }
+        if (!cancelled) {
+            co_return;
+        }
+
+        group0_update_collector updates;
+        for (auto& [table, builder] : builders) {
+            co_await coroutine::maybe_yield();
+            updates.add_large(builder.build());
+        }
+        auto reason = format("Cancelling {} tablet transitions", cancelled);
+        if (co_await exec_tablet_update(std::move(guard), std::move(updates), std::move(reason))
+                && !capped) {
+            co_return;
+        }
+        // Either the round lost a group0 race, or the pass was capped and there may be more.
+        // A cancelled tablet is skipped by the next scan, so the loop makes progress.
+    }
+}
+
+future<> storage_service::cancel_tablet_transition(locator::global_tablet_id tablet) {
+    auto holder = _async_gate.hold();
+
+    if (this_shard_id() != 0) {
+        // group0 is only set on shard 0, and the task api can abort from any shard.
+        co_return co_await container().invoke_on(0, [tablet] (auto& ss) {
+            return ss.cancel_tablet_transition(tablet);
+        });
+    }
+
+    if (!_feature_service.tablet_transition_cancel) {
+        throw std::runtime_error("Cannot cancel the tablet transition: the cluster does not "
+                                 "support the TABLET_TRANSITION_CANCEL feature yet");
+    }
+
+    // The coordinator is writing to group0 while we try to, so bound the retries rather than
+    // spinning: this is an operator-facing call and it should either act or say why not.
+    auto deadline = lowres_clock::now() + std::chrono::minutes(1);
+
+    while (true) {
+        if (lowres_clock::now() >= deadline) {
+            throw std::runtime_error(format("Could not cancel the transition of tablet {}, group0 "
+                                            "kept rejecting the change", tablet));
+        }
+        auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
+
+        auto tm = get_token_metadata_ptr();
+        if (!tm->tablets().has_tablet_map(tablet.table)) {
+            // The table can be dropped between listing the task and aborting it.
+            throw std::runtime_error(format("Table {} has no tablets", tablet.table));
+        }
+        const auto& tmap = tm->tablets().get_tablet_map(tablet.table);
+        auto* trinfo = tmap.get_tablet_transition_info(tablet.tablet);
+        if (!trinfo) {
+            throw std::runtime_error(format("Tablet {} is not in transition", tablet));
+        }
+        if (trinfo->cancelled) {
+            co_return;
+        }
+        if (!locator::can_cancel_tablet_transition(trinfo->stage)) {
+            throw std::runtime_error(format("Transition of tablet {} is at stage {}, which cannot be "
+                                            "rolled back", tablet,
+                                            locator::tablet_transition_stage_to_string(trinfo->stage)));
+        }
+
+        // system.tablets is partitioned by table id, so the mutation is on the base table.
+        auto base_table = tm->tablets().get_base_table(tablet.table);
+        replica::tablet_mutation_builder builder(guard.write_timestamp(), base_table);
+        builder.cancel_transition(tmap.get_last_token(tablet.tablet));
+        group0_update_collector updates;
+        updates.add_large(builder.build());
+
+        auto reason = format("Cancelling transition of tablet {}", tablet);
+        if (co_await exec_tablet_update(std::move(guard), std::move(updates), std::move(reason))) {
+            co_return;
+        }
+    }
+}
+
+future<> storage_service::set_tablet_balancing_enabled(bool enabled, std::optional<std::chrono::seconds> grace_period_opt) {
     auto holder = _async_gate.hold();
 
     if (this_shard_id() != 0) {
         // group0 is only set on shard 0.
         co_return co_await container().invoke_on(0, [&] (auto& ss) {
-            return ss.set_tablet_balancing_enabled(enabled);
+            return ss.set_tablet_balancing_enabled(enabled, grace_period_opt);
         });
     }
+
+    // The grace period belongs to the call - the caller knows its own deadline - but fall back
+    // to the configured default so that callers which don't pass one still get a bound.
+    auto grace_period = grace_period_opt.value_or(
+            std::chrono::seconds(_db.local().get_config().tablet_transition_abort_grace_period_in_seconds()));
 
     utils::UUID request_id;
     auto reason = format("Setting tablet balancing to {}", enabled);
@@ -6467,8 +6632,41 @@ future<> storage_service::set_tablet_balancing_enabled(bool enabled) {
     }
 
     if (request_id) {
-        co_await wait_for_topology_request_completion(request_id);
+        auto check = [] (const sstring& error) {
+            if (!error.empty()) {
+                throw std::runtime_error(format("Failed to disable tablet balancing: {}", error));
+            }
+        };
+
+        if (grace_period != std::chrono::seconds::zero()) {
+            // In-flight tablet transitions delay the request, and nothing bounds how long they
+            // take. Give them the grace period the caller asked for, then cancel whatever can be
+            // rolled back so that the coordinator rolls it back and can service the request.
+            //
+            // One pass is enough: the queued request makes the coordinator preempt balancing,
+            // so the balancer schedules nothing new while we wait. Transitions started by the
+            // tablet api, or by a global request queued ahead of this one, can still appear and
+            // delay it.
+            try {
+                check(co_await wait_for_topology_request_completion(request_id, true,
+                                                                   lowres_clock::now() + grace_period));
+                co_return;
+            } catch (const topology_state_machine::request_wait_timeout&) {
+                rtlogger.info("Tablet transitions did not finish within {}, cancelling the ones "
+                              "which can be rolled back so that disabling tablet balancing can "
+                              "complete", grace_period);
+            }
+            co_await cancel_tablet_transitions();
+        }
+
+        check(co_await wait_for_topology_request_completion(request_id));
     } else if (!enabled) {
+        if (grace_period != std::chrono::seconds::zero()) {
+            // No request was queued, so there is nothing to bound: this cluster is too old to
+            // support the global request queue, and therefore also too old to cancel.
+            rtlogger.warn("Ignoring the grace period, this cluster does not support queueing the "
+                          "request which disabling tablet balancing waits for");
+        }
         while (_topology_state_machine._topology.is_busy()) {
             rtlogger.debug("set_tablet_balancing_enabled(): topology is busy");
             co_await _topology_state_machine.event.when();
