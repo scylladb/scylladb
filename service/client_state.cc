@@ -197,6 +197,16 @@ future<> service::client_state::check_access_rules(const sstring& ks, auth::perm
     if (permission == auth::permission::SELECT && readable_system_resources.contains(resource)) {
         co_return;
     }
+
+    // system.toppartitions has a real performance impact (installs cross-shard sampling
+    // listeners for the query duration); gate it like system.config's MODIFY: superuser only.
+    // Anonymous means authentication is disabled, so it stays allowed like nodetool is.
+    static const auto toppartitions_resource = auth::make_data_resource(db::system_keyspace::NAME, "toppartitions");
+    if (permission == auth::permission::SELECT && resource == toppartitions_resource
+            && _user && !auth::is_anonymous(*_user)
+            && !co_await has_superuser()) {
+        throw exceptions::unauthorized_exception(format("{} can only be queried by a superuser.", resource));
+    }
     if (alteration_permissions.contains(permission)) {
         if (auth::is_protected(*_auth_service, auth::command_desc{permission, resource, type})) {
             throw exceptions::unauthorized_exception(format("{} is protected", resource));
