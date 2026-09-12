@@ -148,19 +148,19 @@ public:
     void no_restrictions();
 
     const expr::expression& get_partition_key_restrictions() const {
-        return _analysis._partition_key_restrictions;
+        return _analysis.partition_key_restrictions;
     }
 
     const expr::expression& get_clustering_columns_restrictions() const {
-        return _analysis._clustering_columns_restrictions;
+        return _analysis.clustering_columns_restrictions;
     }
 
     const expr::expression& get_nonprimary_key_restrictions() const {
-        return _analysis._nonprimary_key_restrictions;
+        return _analysis.nonprimary_key_restrictions;
     }
 
     const expr::single_column_restrictions_map& get_non_pk_restriction() const {
-        return _analysis._single_column_nonprimary_key_restrictions;
+        return _analysis.single_column_nonprimary_key_restrictions;
     }
 
     // The columns a view definition declares to be non-null, i.e. the base
@@ -169,12 +169,12 @@ public:
     // filtering view rows, and so are not part of get_*_restrictions().
     // Empty unless this came from analyze_view_restrictions().
     const std::unordered_set<const column_definition*>& get_not_null_columns() const {
-        return _analysis._not_null_columns;
+        return _analysis.not_null_columns;
     }
 
     bool key_is_in_relation() const { return _analysis.key_is_in_relation(); }
     bool clustering_key_restrictions_has_IN() const { return _analysis.clustering_key_restrictions_has_IN(); }
-    bool clustering_key_restrictions_has_only_eq() const { return _analysis._ck_is_all_eq; }
+    bool clustering_key_restrictions_has_only_eq() const { return _analysis.ck_is_all_eq; }
     bool has_token_restrictions() const { return _analysis.has_token_restrictions(); }
     bool has_eq_restriction_on_column(const column_definition& column) const {
         return _analysis.has_eq_restriction_on_column(column);
@@ -183,7 +183,7 @@ public:
         return _analysis.has_partition_key_unrestricted_components();
     }
     bool partition_key_restrictions_is_empty() const { return _analysis.partition_key_restrictions_is_empty(); }
-    bool partition_key_restrictions_is_all_eq() const { return _analysis._pk_is_all_eq; }
+    bool partition_key_restrictions_is_all_eq() const { return _analysis.pk_is_all_eq; }
     size_t partition_key_restrictions_size() const { return _analysis.partition_key_restrictions_size(); }
     size_t clustering_columns_restrictions_size() const { return _analysis.clustering_columns_restrictions_size(); }
     bool has_clustering_columns_restriction() const { return _analysis.has_clustering_columns_restriction(); }

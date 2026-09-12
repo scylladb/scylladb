@@ -861,7 +861,7 @@ bool is_empty_restriction(const expression& e) {
 }
 
 where_clause_analysis::where_clause_analysis(schema_ptr schema)
-    : _schema(std::move(schema))
+    : schema(std::move(schema))
 { }
 
 statement_restrictions::statement_restrictions(private_tag, schema_ptr schema, bool allow_filtering,
@@ -986,7 +986,7 @@ void statement_restrictions::analyze_view_definition(
         prepare_context& ctx,
         bool selects_only_static_columns) {
     auto where = _analysis.prepare_where_clause(db, where_clause, ctx);
-    _analysis._not_null_columns = extract_view_key_columns(where.predicates);
+    _analysis.not_null_columns = extract_view_key_columns(where.predicates);
     analyze_read(db, std::move(where), selects_only_static_columns, std::nullopt);
 }
 
@@ -1016,7 +1016,7 @@ where_clause_analysis::prepare_where_clause(
             on_internal_error(rlogger, format("statement_restrictions: where clause has non-binop element: {}", relation_expr));
         }
 
-        expr::binary_operator prepared_restriction = expr::validate_and_prepare_new_restriction(*relation_binop, db, _schema, ctx);
+        expr::binary_operator prepared_restriction = expr::validate_and_prepare_new_restriction(*relation_binop, db, schema, ctx);
         prepared_where_clause.push_back(std::move(prepared_restriction));
     }
 
@@ -1040,7 +1040,7 @@ where_clause_analysis::prepare_where_clause(
                     "Only the token function and scoring functions are supported in function-call restrictions");
             }
         }
-        auto preds = to_predicates(prepared_restriction, _schema.get());
+        auto preds = to_predicates(prepared_restriction, schema.get());
         result.predicates.insert(result.predicates.end(),
                 std::make_move_iterator(preds.begin()), std::make_move_iterator(preds.end()));
     }
@@ -1072,7 +1072,7 @@ where_clause_analysis::classify_predicates(std::vector<predicate> predicates, bo
         if (pred.is_multi_column) {
             // Multi column restrictions are only allowed on clustering columns
             if (ck_is_empty) {
-                _clustering_columns_restrictions = pred.filter;
+                clustering_columns_restrictions = pred.filter;
                 ck_is_empty = false;
                 has_mc_clustering = true;
                 first_mc_pred = &pred;
@@ -1091,14 +1091,14 @@ where_clause_analysis::classify_predicates(std::vector<predicate> predicates, bo
 
                 if (pred.equality) {
                     throw exceptions::invalid_request_exception(format("{} cannot be restricted by more than one relation if it includes an Equal",
-                        expr::get_columns_in_commons(_clustering_columns_restrictions, pred.filter)));
+                        expr::get_columns_in_commons(clustering_columns_restrictions, pred.filter)));
                 } else if (pred.is_in) {
                     throw exceptions::invalid_request_exception(format("{} cannot be restricted by more than one relation if it includes a IN",
-                                                                    expr::get_columns_in_commons(_clustering_columns_restrictions, pred.filter)));
+                                                                    expr::get_columns_in_commons(clustering_columns_restrictions, pred.filter)));
                 } else if (pred.is_slice) {
                     if (!ck_has_slice) {
                         throw exceptions::invalid_request_exception(format("Column \"{}\" cannot be restricted by both an equality and an inequality relation",
-                                                                    expr::get_columns_in_commons(_clustering_columns_restrictions, pred.filter)));
+                                                                    expr::get_columns_in_commons(clustering_columns_restrictions, pred.filter)));
                     }
 
                     // Don't allow to mix plain and SCYLLA_CLUSTERING_BOUND bounds
@@ -1122,7 +1122,7 @@ where_clause_analysis::classify_predicates(std::vector<predicate> predicates, bo
                             expr::get_columns_in_commons(pred.filter, first_mc_pred->filter)));
                     }
 
-                    _clustering_columns_restrictions = expr::make_conjunction(_clustering_columns_restrictions, pred.filter);
+                    clustering_columns_restrictions = expr::make_conjunction(clustering_columns_restrictions, pred.filter);
                     mc_ck_preds.push_back(pred);
                     ck_has_slice = true;
                     ck_is_all_eq = false;
@@ -1135,14 +1135,14 @@ where_clause_analysis::classify_predicates(std::vector<predicate> predicates, bo
             if (!pk_is_empty && !has_token) {
                 throw exceptions::invalid_request_exception(
                         seastar::format("Columns \"{}\" cannot be restricted by both a normal relation and a token relation",
-                                fmt::join(expr::get_sorted_column_defs(_partition_key_restrictions) |
+                                fmt::join(expr::get_sorted_column_defs(partition_key_restrictions) |
                                         std::views::transform([](auto* p) {
                                             return maybe_column_definition{p};
                                         }),
                                         ", ")));
             }
 
-            _partition_key_restrictions = expr::make_conjunction(_partition_key_restrictions, pred.filter);
+            partition_key_restrictions = expr::make_conjunction(partition_key_restrictions, pred.filter);
             pk_is_empty = false;
             has_token = true;
             if (!pred.equality) {
@@ -1166,17 +1166,17 @@ where_clause_analysis::classify_predicates(std::vector<predicate> predicates, bo
                 if (has_token) {
                     throw exceptions::invalid_request_exception(
                             seastar::format("Columns \"{}\" cannot be restricted by both a normal relation and a token relation",
-                                fmt::join(expr::get_sorted_column_defs(_partition_key_restrictions) |
+                                fmt::join(expr::get_sorted_column_defs(partition_key_restrictions) |
                                             std::views::transform([](auto* p) {
                                             return maybe_column_definition{p};
                                             }),
                                             ", ")));
                 }
 
-                _partition_key_restrictions = expr::make_conjunction(_partition_key_restrictions, pred.filter);
+                partition_key_restrictions = expr::make_conjunction(partition_key_restrictions, pred.filter);
                 pk_is_empty = false;
                 {
-                    auto [it, inserted] = _single_column_partition_key_restrictions.try_emplace(def, expr::conjunction{});
+                    auto [it, inserted] = single_column_partition_key_restrictions.try_emplace(def, expr::conjunction{});
                     it->second = expr::make_conjunction(std::move(it->second), pred.filter);
                 }
                 sc_pk_pred_vectors[def].push_back(pred);
@@ -1186,7 +1186,7 @@ where_clause_analysis::classify_predicates(std::vector<predicate> predicates, bo
                         it->second = make_conjunction(std::move(it->second), pred);
                     }
                 }
-                _partition_range_is_simple &= !pred.is_in;
+                partition_range_is_simple &= !pred.is_in;
                 if (pred.is_slice || (pred.op && needs_filtering(*pred.op))) {
                     pk_has_slice_or_needs_filtering = true;
                 }
@@ -1203,12 +1203,12 @@ where_clause_analysis::classify_predicates(std::vector<predicate> predicates, bo
                 const column_definition* last_column = ck_last_column;
 
                 if (last_column != nullptr && !allow_filtering) {
-                    if (ck_has_slice && _schema->position(*new_column) > _schema->position(*last_column)) {
+                    if (ck_has_slice && schema->position(*new_column) > schema->position(*last_column)) {
                         throw exceptions::invalid_request_exception(format("Clustering column \"{}\" cannot be restricted (preceding column \"{}\" is restricted by a non-EQ relation)",
                             new_column->name_as_text(), last_column->name_as_text()));
                     }
 
-                    if (_schema->position(*new_column) < _schema->position(*last_column)) {
+                    if (schema->position(*new_column) < schema->position(*last_column)) {
                         if (pred.is_slice) {
                             throw exceptions::invalid_request_exception(format("PRIMARY KEY column \"{}\" cannot be restricted (preceding column \"{}\" is restricted by a non-EQ relation)",
                                 last_column->name_as_text(), new_column->name_as_text()));
@@ -1216,10 +1216,10 @@ where_clause_analysis::classify_predicates(std::vector<predicate> predicates, bo
                     }
                 }
 
-                _clustering_columns_restrictions = expr::make_conjunction(_clustering_columns_restrictions, pred.filter);
+                clustering_columns_restrictions = expr::make_conjunction(clustering_columns_restrictions, pred.filter);
                 ck_is_empty = false;
                 {
-                    auto [it, inserted] = _single_column_clustering_key_restrictions.try_emplace(def, expr::conjunction{});
+                    auto [it, inserted] = single_column_clustering_key_restrictions.try_emplace(def, expr::conjunction{});
                     it->second = expr::make_conjunction(std::move(it->second), pred.filter);
                 }
                 sc_ck_pred_vectors[def].push_back(pred);
@@ -1238,13 +1238,13 @@ where_clause_analysis::classify_predicates(std::vector<predicate> predicates, bo
                 if (!pred.equality) {
                     ck_is_all_eq = false;
                 }
-                if (ck_last_column == nullptr || _schema->position(*new_column) > _schema->position(*ck_last_column)) {
+                if (ck_last_column == nullptr || schema->position(*new_column) > schema->position(*ck_last_column)) {
                     ck_last_column = new_column;
                 }
             } else {
-                _nonprimary_key_restrictions = expr::make_conjunction(_nonprimary_key_restrictions, pred.filter);
+                nonprimary_key_restrictions = expr::make_conjunction(nonprimary_key_restrictions, pred.filter);
                 {
-                    auto [it, inserted] = _single_column_nonprimary_key_restrictions.try_emplace(def, expr::conjunction{});
+                    auto [it, inserted] = single_column_nonprimary_key_restrictions.try_emplace(def, expr::conjunction{});
                     it->second = expr::make_conjunction(std::move(it->second), pred.filter);
                 }
                 sc_nonpk_pred_vectors[def].push_back(pred);
@@ -1253,24 +1253,24 @@ where_clause_analysis::classify_predicates(std::vector<predicate> predicates, bo
             throw exceptions::invalid_request_exception(format("Unhandled restriction: {}", pred.filter));
         }
 
-        _where.push_back(pred.filter);
+        where_factors.push_back(pred.filter);
         // Subscript EQ (e.g. m[1] = 'a') is not considered an EQ on the column
         // itself, matching the behavior of the old expression-walking code which
         // only recognized column_value and tuple_constructor in the LHS.
         if (pred.equality && !pred.is_subscript) {
             if (auto* sc = std::get_if<on_column>(&pred.on)) {
-                _columns_with_eq.insert(sc->column);
+                columns_with_eq.insert(sc->column);
             } else if (auto* mc = std::get_if<on_clustering_key_prefix>(&pred.on)) {
-                _columns_with_eq.insert(mc->columns.begin(), mc->columns.end());
+                columns_with_eq.insert(mc->columns.begin(), mc->columns.end());
             }
         }
     }
-    if (!_where.empty()) {
+    if (!where_factors.empty()) {
         if (!mc_ck_preds.empty()) {
-            _clustering_prefix_restrictions = std::move(mc_ck_preds);
+            clustering_prefix_restrictions = std::move(mc_ck_preds);
         } else {
             std::vector<predicate> prefix;
-            for (const auto& col : _schema->clustering_key_columns()) {
+            for (const auto& col : schema->clustering_key_columns()) {
                 const auto found = sc_ck_preds.find(&col);
                 if (found == sc_ck_preds.end()) {
                     break;
@@ -1284,23 +1284,23 @@ where_clause_analysis::classify_predicates(std::vector<predicate> predicates, bo
                     break;
                 }
             }
-            _clustering_prefix_restrictions = std::move(prefix);
+            clustering_prefix_restrictions = std::move(prefix);
         }
         if (token_pred) {
-            _partition_range_restrictions = token_range_restrictions{
+            partition_range = token_range_restrictions{
                 .token_restrictions = std::move(*token_pred),
             };
-        } else if (pk_range_preds.size() == _schema->partition_key_size()) {
-            _partition_range_restrictions = single_column_partition_range_restrictions{
+        } else if (pk_range_preds.size() == schema->partition_key_size()) {
+            partition_range = single_column_partition_range_restrictions{
                 .per_column_restrictions = std::move(pk_range_preds) | std::views::values | std::ranges::to<std::vector>(),
             };
         }
     }
-    _has_multi_column = has_mc_clustering;
-    _ck_is_on_collection = ck_is_on_collection;
-    _ck_is_all_eq = ck_is_all_eq;
-    _pk_is_all_eq = pk_is_all_eq;
-    _pk_has_slice_or_needs_filtering = pk_has_slice_or_needs_filtering;
+    this->has_multi_column = has_mc_clustering;
+    this->ck_is_on_collection = ck_is_on_collection;
+    this->ck_is_all_eq = ck_is_all_eq;
+    this->pk_is_all_eq = pk_is_all_eq;
+    this->pk_has_slice_or_needs_filtering = pk_has_slice_or_needs_filtering;
     return per_column_predicates;
 }
 
@@ -1326,21 +1326,21 @@ void statement_restrictions::detect_queriable_indexes(
         // Only regular-column restrictions are looked at: a query needing an
         // index on a key column is rejected a few steps down by the ordinary
         // filtering validation instead, and reported as that.
-        if (!_allow_filtering && !is_empty_restriction(_analysis._nonprimary_key_restrictions)) {
+        if (!_allow_filtering && !is_empty_restriction(_analysis.nonprimary_key_restrictions)) {
             throw_pinned_plan_foreign();
         }
         return;
     }
-    auto cf = db.find_column_family(_analysis._schema);
+    auto cf = db.find_column_family(_analysis.schema);
     auto& sim = cf.get_index_manager();
     const expr::allow_local_index allow_local(
             !_analysis.has_partition_key_unrestricted_components()
             && _analysis.partition_key_restrictions_is_all_eq());
-    if (!_analysis._has_multi_column) {
+    if (!_analysis.has_multi_column) {
         _has_queriable_ck_index = index_supports_some_column(preds.clustering_key, sim, allow_local, pinned_index_name);
     } else {
         _has_queriable_ck_index = multi_column_predicates_have_supporting_index(
-                _analysis._clustering_prefix_restrictions, sim, allow_local, pinned_index_name);
+                _analysis.clustering_prefix_restrictions, sim, allow_local, pinned_index_name);
     }
     _has_queriable_pk_index = !_analysis.has_token_restrictions()
             && index_supports_some_column(preds.partition_key, sim, allow_local, pinned_index_name);
@@ -1365,9 +1365,9 @@ void statement_restrictions::plan_query(
         // Resolve the pinned view id to the index it names, so the plan search
         // below can filter by it. An id naming no live index means it is gone.
         if (pinned_view_id) {
-            auto cf = db.find_column_family(_analysis._schema);
+            auto cf = db.find_column_family(_analysis.schema);
             for (const auto& idx : cf.get_index_manager().list_indexes()) {
-                if (index_view_id(db, *_analysis._schema, idx) == *pinned_view_id) {
+                if (index_view_id(db, *_analysis.schema, idx) == *pinned_view_id) {
                     pinned_index_name = idx.metadata().name();
                     break;
                 }
@@ -1398,7 +1398,7 @@ void statement_restrictions::plan_query(
     // hence we need turn these restrictions into index expressions.
     std::vector<index_search_group> search_groups;
     if (_uses_secondary_indexing || _analysis.pk_restrictions_need_filtering()) {
-        search_groups.push_back({preds.partition_key, _analysis._partition_key_restrictions});
+        search_groups.push_back({preds.partition_key, _analysis.partition_key_restrictions});
     }
 
     // A clustering key names a row that the query then does not read, which is
@@ -1411,25 +1411,25 @@ void statement_restrictions::plan_query(
     process_clustering_columns_restrictions();
 
     // Covers indexes on the first clustering column (among others).
-    if (_is_key_range && _has_queriable_ck_index && !_analysis._has_multi_column) {
+    if (_is_key_range && _has_queriable_ck_index && !_analysis.has_multi_column) {
         _uses_secondary_indexing = true;
     }
 
     if (_uses_secondary_indexing || _analysis.clustering_key_restrictions_need_filtering()) {
-        search_groups.push_back({preds.clustering_key, _analysis._clustering_columns_restrictions});
-    } else if (_analysis._ck_is_on_collection) {
+        search_groups.push_back({preds.clustering_key, _analysis.clustering_columns_restrictions});
+    } else if (_analysis.ck_is_on_collection) {
         fail(unimplemented::cause::INDEXES);
     }
 
-    if (!is_empty_restriction(_analysis._nonprimary_key_restrictions)) {
-        if (_has_queriable_regular_index && _analysis._partition_range_is_simple) {
+    if (!is_empty_restriction(_analysis.nonprimary_key_restrictions)) {
+        if (_has_queriable_regular_index && _analysis.partition_range_is_simple) {
             _uses_secondary_indexing = true;
         } else if (!_allow_filtering) {
             throw exceptions::invalid_request_exception("Cannot execute this query as it might involve data filtering and "
                 "thus may have unpredictable performance. If you want to execute "
                 "this query despite the performance unpredictability, use ALLOW FILTERING");
         }
-        search_groups.push_back({preds.other, _analysis._nonprimary_key_restrictions});
+        search_groups.push_back({preds.other, _analysis.nonprimary_key_restrictions});
     }
 
     if (_uses_secondary_indexing && !_allow_filtering) {
@@ -1437,7 +1437,7 @@ void statement_restrictions::plan_query(
     }
 
     if (_check_indexes) {
-        auto cf = db.find_column_family(_analysis._schema);
+        auto cf = db.find_column_family(_analysis.schema);
         auto& sim = cf.get_index_manager();
         const expr::allow_local_index allow_local_for_idx(
                 !_analysis.has_partition_key_unrestricted_components()
@@ -1462,7 +1462,7 @@ void statement_restrictions::plan_query(
         const auto& im = _idx_opt->metadata();
         if (db::schema_tables::view_should_exist(im)) {
             sstring index_table_name = im.name() + "_index";
-            schema_ptr view_schema = db.find_schema(_analysis._schema->ks_name(), index_table_name);
+            schema_ptr view_schema = db.find_schema(_analysis.schema->ks_name(), index_table_name);
             _view_schema = view_schema;
 
             if (im.local()) {
@@ -1477,7 +1477,7 @@ void statement_restrictions::plan_query(
 void statement_restrictions::build_filters(const column_predicates& preds) {
     if (_analysis.pk_restrictions_need_filtering()) {
         auto partition_key_filter = expr::conjunction{
-            .children = _analysis._single_column_partition_key_restrictions
+            .children = _analysis.single_column_partition_key_restrictions
                     | std::ranges::views::values
                     | std::ranges::to<std::vector>(),
         };
@@ -1486,7 +1486,7 @@ void statement_restrictions::build_filters(const column_predicates& preds) {
 
     if (ck_restrictions_need_filtering()) {
         auto clustering_key_filter = expr::conjunction{
-            .children = _analysis._single_column_clustering_key_restrictions
+            .children = _analysis.single_column_clustering_key_restrictions
                     | std::ranges::views::values
                     | std::ranges::to<std::vector>(),
         };
@@ -1500,7 +1500,7 @@ void statement_restrictions::build_filters(const column_predicates& preds) {
     };
 
     auto static_columns_filter = expr::conjunction{
-        .children = _analysis._single_column_nonprimary_key_restrictions
+        .children = _analysis.single_column_nonprimary_key_restrictions
                 | of_kind(column_kind::static_column)
                 | std::ranges::views::values
                 | std::ranges::to<std::vector>(),
@@ -1509,7 +1509,7 @@ void statement_restrictions::build_filters(const column_predicates& preds) {
     _partition_level_filter = expr::make_conjunction(std::move(_partition_level_filter), std::move(static_columns_filter));
 
     auto regular_columns_filter = expr::conjunction{
-        .children = _analysis._single_column_nonprimary_key_restrictions
+        .children = _analysis.single_column_nonprimary_key_restrictions
                 | of_kind(column_kind::regular_column)
                 | std::ranges::views::values
                 | std::ranges::to<std::vector>(),
@@ -1517,14 +1517,14 @@ void statement_restrictions::build_filters(const column_predicates& preds) {
 
     _clustering_row_level_filter = expr::make_conjunction(std::move(_clustering_row_level_filter), std::move(regular_columns_filter));
 
-    if (_analysis._has_multi_column) {
-        _clustering_row_level_filter = expr::make_conjunction(std::move(_clustering_row_level_filter), _analysis._clustering_columns_restrictions);
+    if (_analysis.has_multi_column) {
+        _clustering_row_level_filter = expr::make_conjunction(std::move(_clustering_row_level_filter), _analysis.clustering_columns_restrictions);
     }
 }
 
 void where_clause_analysis::build_key_range_fns() {
-    _get_partition_key_ranges_fn = build_partition_key_ranges_fn();
-    _get_clustering_bounds_fn = build_get_clustering_bounds_fn();
+    get_partition_key_ranges_fn = build_partition_key_ranges_fn();
+    get_clustering_bounds_fn = build_get_clustering_bounds_fn();
 }
 
 void statement_restrictions::build_index_fns() {
@@ -1536,46 +1536,46 @@ void statement_restrictions::build_index_fns() {
 
 bool
 where_clause_analysis::clustering_key_restrictions_has_IN() const {
-    return find(_clustering_columns_restrictions, expr::oper_t::IN);
+    return find(clustering_columns_restrictions, expr::oper_t::IN);
 }
 
 bool
 where_clause_analysis::clustering_key_restrictions_has_only_eq() const {
-    return _ck_is_all_eq;
+    return ck_is_all_eq;
 }
 
 bool
 where_clause_analysis::has_token_restrictions() const {
-    return std::holds_alternative<token_range_restrictions>(_partition_range_restrictions);
+    return std::holds_alternative<token_range_restrictions>(partition_range);
 }
 
 bool
 where_clause_analysis::key_is_in_relation() const {
-    return find(_partition_key_restrictions, expr::oper_t::IN);
+    return find(partition_key_restrictions, expr::oper_t::IN);
 }
 
 const expr::expression&
 where_clause_analysis::get_restrictions(column_kind kind) const {
     switch (kind) {
-    case column_kind::partition_key: return _partition_key_restrictions;
-    case column_kind::clustering_key: return _clustering_columns_restrictions;
-    default: return _nonprimary_key_restrictions;
+    case column_kind::partition_key: return partition_key_restrictions;
+    case column_kind::clustering_key: return clustering_columns_restrictions;
+    default: return nonprimary_key_restrictions;
     }
 }
 
 bool
 where_clause_analysis::has_clustering_columns_restriction() const {
-    return !is_empty_restriction(_clustering_columns_restrictions);
+    return !is_empty_restriction(clustering_columns_restrictions);
 }
 
 bool
 where_clause_analysis::has_non_primary_key_restriction() const {
-    return !is_empty_restriction(_nonprimary_key_restrictions);
+    return !is_empty_restriction(nonprimary_key_restrictions);
 }
 
 bool
 statement_restrictions::ck_restrictions_need_filtering() const {
-    if (is_empty_restriction(_analysis._clustering_columns_restrictions)) {
+    if (is_empty_restriction(_analysis.clustering_columns_restrictions)) {
         return false;
     }
 
@@ -1589,7 +1589,7 @@ statement_restrictions::ck_restrictions_need_filtering() const {
 
 bool
 where_clause_analysis::is_restricted(const column_definition* cdef) const {
-    if (_not_null_columns.contains(cdef)) {
+    if (not_null_columns.contains(cdef)) {
         return true;
     }
 
@@ -1599,7 +1599,7 @@ where_clause_analysis::is_restricted(const column_definition* cdef) const {
 
 
 bool where_clause_analysis::is_empty() const {
-    return _where.empty();
+    return where_factors.empty();
 }
 
 
@@ -1684,7 +1684,7 @@ statement_restrictions::find_idx(const secondary_index::secondary_index_manager&
 }
 
 bool where_clause_analysis::has_eq_restriction_on_column(const column_definition& column) const {
-    return _columns_with_eq.contains(&column);
+    return columns_with_eq.contains(&column);
 }
 
 std::vector<const column_definition*> statement_restrictions::get_column_defs_for_filtering(data_dictionary::database db) const {
@@ -1712,35 +1712,35 @@ void statement_restrictions::calculate_column_defs_for_filtering_and_erase_restr
             return are_predicates_supported_by(it->second, *opt_idx);
         };
         if (_analysis.pk_restrictions_need_filtering()) {
-            for (auto&& cdef : expr::get_sorted_column_defs(_analysis._partition_key_restrictions)) {
-                auto it = _analysis._single_column_partition_key_restrictions.find(cdef);
+            for (auto&& cdef : expr::get_sorted_column_defs(_analysis.partition_key_restrictions)) {
+                auto it = _analysis.single_column_partition_key_restrictions.find(cdef);
                 if (!column_uses_indexing(preds.partition_key, cdef)) {
                     column_defs_for_filtering.emplace_back(cdef);
                 } else {
-                    _analysis._single_column_partition_key_restrictions.erase(it);
+                    _analysis.single_column_partition_key_restrictions.erase(it);
                 }
             }
         }
         const bool pk_has_unrestricted_components = _analysis.has_partition_key_unrestricted_components();
         if (pk_has_unrestricted_components || _analysis.clustering_key_restrictions_need_filtering()) {
-            column_id first_filtering_id = pk_has_unrestricted_components ? 0 : _analysis._schema->clustering_key_columns().begin()->id +
+            column_id first_filtering_id = pk_has_unrestricted_components ? 0 : _analysis.schema->clustering_key_columns().begin()->id +
                     _analysis.num_clustering_prefix_columns_that_need_not_be_filtered();
-            for (auto&& cdef : expr::get_sorted_column_defs(_analysis._clustering_columns_restrictions)) {
-                auto it = _analysis._single_column_clustering_key_restrictions.find(cdef);
+            for (auto&& cdef : expr::get_sorted_column_defs(_analysis.clustering_columns_restrictions)) {
+                auto it = _analysis.single_column_clustering_key_restrictions.find(cdef);
                 if (cdef->id >= first_filtering_id && !column_uses_indexing(preds.clustering_key, cdef)) {
                     column_defs_for_filtering.emplace_back(cdef);
                 } else {
-                    _analysis._single_column_clustering_key_restrictions.erase(it);
+                    _analysis.single_column_clustering_key_restrictions.erase(it);
                 }
             }
         }
-        for (auto it = _analysis._single_column_nonprimary_key_restrictions.begin(); it != _analysis._single_column_nonprimary_key_restrictions.end();) {
+        for (auto it = _analysis.single_column_nonprimary_key_restrictions.begin(); it != _analysis.single_column_nonprimary_key_restrictions.end();) {
             auto&& [cdef, cur_restr] = *it;
             if (!column_uses_indexing(preds.other, cdef)) {
                 column_defs_for_filtering.emplace_back(cdef);
                 ++it;
             } else {
-                it = _analysis._single_column_nonprimary_key_restrictions.erase(it);
+                it = _analysis.single_column_nonprimary_key_restrictions.erase(it);
             }
         }
     }
@@ -1756,7 +1756,7 @@ void statement_restrictions::process_partition_key_restrictions() {
     // components must have a EQ. Only the last partition key component can be in IN relation.
     if (_analysis.has_token_restrictions()) {
         _is_key_range = true;
-    } else if (is_empty_restriction(_analysis._partition_key_restrictions)) {
+    } else if (is_empty_restriction(_analysis.partition_key_restrictions)) {
         _is_key_range = true;
         _uses_secondary_indexing = _has_queriable_pk_index;
     }
@@ -1774,35 +1774,35 @@ void statement_restrictions::process_partition_key_restrictions() {
 }
 
 bool where_clause_analysis::has_partition_key_unrestricted_components() const {
-    std::vector<const column_definition*> pk_columns = expr::get_sorted_column_defs(_partition_key_restrictions);
-    bool all_restricted = pk_columns.size() == _schema->partition_key_size();
+    std::vector<const column_definition*> pk_columns = expr::get_sorted_column_defs(partition_key_restrictions);
+    bool all_restricted = pk_columns.size() == schema->partition_key_size();
     return !all_restricted;
 }
 
 bool where_clause_analysis::partition_key_restrictions_is_empty() const {
-    return is_empty_restriction(_partition_key_restrictions);
+    return is_empty_restriction(partition_key_restrictions);
 }
 
 bool where_clause_analysis::partition_key_restrictions_is_all_eq() const {
-    return _pk_is_all_eq;
+    return pk_is_all_eq;
 }
 
 size_t where_clause_analysis::partition_key_restrictions_size() const {
-    return expr::get_sorted_column_defs(_partition_key_restrictions).size();
+    return expr::get_sorted_column_defs(partition_key_restrictions).size();
 }
 
 bool where_clause_analysis::pk_restrictions_need_filtering() const {
-     return !is_empty_restriction(_partition_key_restrictions)
+     return !is_empty_restriction(partition_key_restrictions)
          && !has_token_restrictions()
-         && (has_partition_key_unrestricted_components() || _pk_has_slice_or_needs_filtering);
+         && (has_partition_key_unrestricted_components() || pk_has_slice_or_needs_filtering);
 }
 
 size_t where_clause_analysis::clustering_columns_restrictions_size() const {
-    return expr::get_sorted_column_defs(_clustering_columns_restrictions).size();
+    return expr::get_sorted_column_defs(clustering_columns_restrictions).size();
 }
 
 bool where_clause_analysis::clustering_key_restrictions_need_filtering() const {
-    if (_has_multi_column) {
+    if (has_multi_column) {
         return false;
     }
 
@@ -1810,15 +1810,15 @@ bool where_clause_analysis::clustering_key_restrictions_need_filtering() const {
 }
 
 bool where_clause_analysis::has_unrestricted_clustering_columns() const {
-    return clustering_columns_restrictions_size() < _schema->clustering_key_size();
+    return clustering_columns_restrictions_size() < schema->clustering_key_size();
 }
 
 const column_definition& where_clause_analysis::unrestricted_column(column_kind kind) const {
     const auto& restrictions = get_restrictions(kind);
     const auto sorted_cols = expr::get_sorted_column_defs(restrictions);
-    for (size_t i = 0, count = _schema->columns_count(kind); i < count; ++i) {
+    for (size_t i = 0, count = schema->columns_count(kind); i < count; ++i) {
         if (i >= sorted_cols.size() || sorted_cols[i]->component_index() != i) {
-            return _schema->column_at(kind, i);
+            return schema->column_at(kind, i);
         }
     }
     on_internal_error(rlogger, format(
@@ -1827,8 +1827,8 @@ const column_definition& where_clause_analysis::unrestricted_column(column_kind 
 };
 
 void where_clause_analysis::validate_clustering_columns_form_a_prefix() const {
-    auto clustering_columns_iter = _schema->clustering_key_columns().begin();
-    for (auto&& restricted_column : expr::get_sorted_column_defs(_clustering_columns_restrictions)) {
+    auto clustering_columns_iter = schema->clustering_key_columns().begin();
+    for (auto&& restricted_column : expr::get_sorted_column_defs(clustering_columns_restrictions)) {
         const column_definition* clustering_column = &(*clustering_columns_iter);
         ++clustering_columns_iter;
         if (clustering_column != restricted_column) {
@@ -1848,7 +1848,7 @@ void where_clause_analysis::validate_clustering_restrictions_are_a_slice() const
         return;
     }
 
-    if (_ck_is_on_collection) {
+    if (ck_is_on_collection) {
         throw_collection_restriction_needs_index_or_filtering();
     }
 
@@ -1862,7 +1862,7 @@ void statement_restrictions::process_clustering_columns_restrictions() {
         return;
     }
 
-    if (_analysis._ck_is_on_collection && !_has_queriable_ck_index && !_allow_filtering) {
+    if (_analysis.ck_is_on_collection && !_has_queriable_ck_index && !_allow_filtering) {
         where_clause_analysis::throw_collection_restriction_needs_index_or_filtering();
     }
 
@@ -1975,7 +1975,7 @@ dht::partition_range_vector partition_ranges_from_EQs(
 } // anonymous namespace
 
 dht::partition_range_vector where_clause_analysis::get_partition_key_ranges(const query_options& options) const {
-    return _get_partition_key_ranges_fn(options);
+    return get_partition_key_ranges_fn(options);
 }
 
 get_partition_key_ranges_fn_t
@@ -1988,21 +1988,21 @@ where_clause_analysis::build_partition_key_ranges_fn() const {
         },
         [&] (const token_range_restrictions& r) -> get_partition_key_ranges_fn_t {
             return [&] (const query_options& options) -> dht::partition_range_vector {
-                return partition_ranges_from_token(r.token_restrictions, options, *_schema);
+                return partition_ranges_from_token(r.token_restrictions, options, *schema);
             };
         },
         [&] (const single_column_partition_range_restrictions& r) -> get_partition_key_ranges_fn_t {
-            if (_partition_range_is_simple) {
+            if (partition_range_is_simple) {
                 return [&] (const query_options& options) {
                     // Special case to avoid extra allocations required for a Cartesian product.
-                    return partition_ranges_from_EQs(r.per_column_restrictions, options, *_schema);
+                    return partition_ranges_from_EQs(r.per_column_restrictions, options, *schema);
                 };
             } else {
                 return [&] (const query_options& options) {
-                    return partition_ranges_from_singles(r.per_column_restrictions, options, *_schema);
+                    return partition_ranges_from_singles(r.per_column_restrictions, options, *schema);
                 };
             }
-        }}, _partition_range_restrictions);
+        }}, partition_range);
 }
 
 namespace {
@@ -2596,16 +2596,16 @@ build_range_from_raw_bounds_fn(
 
 get_clustering_bounds_fn_t
 where_clause_analysis::build_get_clustering_bounds_fn() const {
-    if (_clustering_prefix_restrictions.empty()) {
+    if (clustering_prefix_restrictions.empty()) {
         return [&] (const query_options& options) -> std::vector<query::clustering_range> {
             return {query::clustering_range::make_open_ended_both_sides()};
         };
     }
-    if (_clustering_prefix_restrictions[0].is_multi_column) {
+    if (clustering_prefix_restrictions[0].is_multi_column) {
         bool all_natural = true, all_reverse = true; ///< Whether column types are reversed or natural.
-        for (auto& pred : _clustering_prefix_restrictions) {
+        for (auto& pred : clustering_prefix_restrictions) {
             if (pred.order == expr::comparison_order::clustering) {
-                return build_range_from_raw_bounds_fn(_clustering_prefix_restrictions, *_schema);
+                return build_range_from_raw_bounds_fn(clustering_prefix_restrictions, *schema);
             }
             auto& lhs = expr::as<expr::tuple_constructor>(expr::as<expr::binary_operator>(pred.filter).lhs);
             for (auto& element : lhs.elements) {
@@ -2617,17 +2617,17 @@ where_clause_analysis::build_get_clustering_bounds_fn() const {
                 }
             }
         }
-        return build_get_multi_column_clustering_bounds_fn(_schema, _clustering_prefix_restrictions,
+        return build_get_multi_column_clustering_bounds_fn(schema, clustering_prefix_restrictions,
             all_natural, all_reverse);
         } else {
             return [&] (const query_options& options) -> std::vector<query::clustering_range> {
-                return get_single_column_clustering_bounds(options, *_schema, _clustering_prefix_restrictions);
+                return get_single_column_clustering_bounds(options, *schema, clustering_prefix_restrictions);
             };
         }
     }
 
 std::vector<query::clustering_range> where_clause_analysis::get_clustering_bounds(const query_options& options) const {
-    return _get_clustering_bounds_fn(options);
+    return get_clustering_bounds_fn(options);
 }
 
 namespace {
@@ -2647,7 +2647,7 @@ bool statement_restrictions::need_filtering() const {
         // If there is a token(p1, p2) restriction, no p1, p2 restrictions are allowed in the query.
         // All other restrictions must be on clustering or regular columns.
         int64_t non_pk_restrictions_count = _analysis.clustering_columns_restrictions_size();
-        non_pk_restrictions_count += expr::get_sorted_column_defs(_analysis._nonprimary_key_restrictions).size();
+        non_pk_restrictions_count += expr::get_sorted_column_defs(_analysis.nonprimary_key_restrictions).size();
 
         // We are querying using an index, one restriction goes to the index restriction.
         // If there are some restrictions other than token() and index column then we need to do filtering.
@@ -2656,12 +2656,12 @@ bool statement_restrictions::need_filtering() const {
     }
 
     const auto npart = _analysis.partition_key_restrictions_size();
-    if (npart > 0 && npart < _analysis._schema->partition_key_size()) {
+    if (npart > 0 && npart < _analysis.schema->partition_key_size()) {
         // Can't calculate the token value, so a naive base-table query must be filtered.  Same for any index tables,
         // except if there's only one restriction supported by an index.
         return !(npart == 1 && _has_queriable_pk_index &&
-                 is_empty_restriction(_analysis._clustering_columns_restrictions) &&
-                 is_empty_restriction(_analysis._nonprimary_key_restrictions));
+                 is_empty_restriction(_analysis.clustering_columns_restrictions) &&
+                 is_empty_restriction(_analysis.nonprimary_key_restrictions));
     }
     if (_analysis.pk_restrictions_need_filtering()) {
         // We most likely cannot calculate token(s).  Neither base-table nor index-table queries can avoid filtering.
@@ -2669,24 +2669,24 @@ bool statement_restrictions::need_filtering() const {
     }
     // Now we know the partition key is either unrestricted or fully restricted.
 
-    const auto nreg = expr::get_sorted_column_defs(_analysis._nonprimary_key_restrictions).size();
+    const auto nreg = expr::get_sorted_column_defs(_analysis.nonprimary_key_restrictions).size();
     if (nreg > 1 || (nreg == 1 && !_has_queriable_regular_index)) {
         return true; // Regular columns are unsorted in storage and no single index suffices.
     }
     if (nreg == 1) { // Single non-key restriction supported by an index.
         // Will the index-table query require filtering?  That depends on whether its clustering key is restricted to a
         // continuous range.  Recall that this clustering key is (token, pk, ck) of the base table.
-        if (npart == 0 && is_empty_restriction(_analysis._clustering_columns_restrictions)) {
+        if (npart == 0 && is_empty_restriction(_analysis.clustering_columns_restrictions)) {
             return false; // No clustering key restrictions => whole partitions.
         }
         return !token_known(*this) || _analysis.clustering_key_restrictions_need_filtering()
                 // Multi-column restrictions don't require filtering when querying the base table, but the index
                 // table has a different clustering key and may require filtering.
-                || _analysis._has_multi_column;
+                || _analysis.has_multi_column;
     }
     // Now we know there are no nonkey restrictions.
 
-    if (_analysis._has_multi_column) {
+    if (_analysis.has_multi_column) {
         // Multicolumn bounds mean lexicographic order, implying a continuous clustering range.  Multicolumn IN means a
         // finite set of continuous ranges.  Multicolumn restrictions cannot currently be combined with single-column
         // clustering restrictions.  Therefore, a continuous clustering range is guaranteed.
@@ -2723,7 +2723,7 @@ void statement_restrictions::validate_secondary_index_selections() const {
 }
 
 void statement_restrictions::prepare_indexed_global(const schema& idx_tbl_schema) {
-    if (!_analysis._partition_range_is_simple) {
+    if (!_analysis.partition_range_is_simple) {
         return;
     }
 
@@ -2733,26 +2733,26 @@ void statement_restrictions::prepare_indexed_global(const schema& idx_tbl_schema
         // When there is a token(p1, p2) >/</= ? restriction, it is not allowed to have restrictions on p1 or p2.
         // This means that p1 and p2 can have many different values (token is a hash, can have collisions).
         // Clustering prefix ends after token_restriction, all further restrictions have to be filtered.
-        expr::expression token_restriction = replace_partition_token(_analysis._partition_key_restrictions, token_column, *_analysis._schema);
-        _idx_tbl_ck_prefix = std::vector{to_predicate_on_column(token_restriction, token_column, _analysis._schema.get())};
+        expr::expression token_restriction = replace_partition_token(_analysis.partition_key_restrictions, token_column, *_analysis.schema);
+        _idx_tbl_ck_prefix = std::vector{to_predicate_on_column(token_restriction, token_column, _analysis.schema.get())};
 
         return;
     }
 
     // If we're here, it means the index cannot be on a partition column: process_partition_key_restrictions()
-    // avoids indexing when _analysis._partition_range_is_simple.  See _idx_tbl_ck_prefix blurb for its composition.
-    _idx_tbl_ck_prefix = std::vector<predicate>(1 + _analysis._schema->partition_key_size(), predicate{
+    // avoids indexing when _analysis.partition_range_is_simple.  See _idx_tbl_ck_prefix blurb for its composition.
+    _idx_tbl_ck_prefix = std::vector<predicate>(1 + _analysis.schema->partition_key_size(), predicate{
         .solve_for = nullptr,  // FIXME: this is all overwritten later. Should be refactored.
         .filter = expr::expression(expr::conjunction{}),
         .on = on_column{nullptr}, // Illegal but will be overwritten
         .is_singleton = false,
     });
     _idx_tbl_ck_prefix->reserve(_idx_tbl_ck_prefix->size() + idx_tbl_schema.clustering_key_size());
-    auto *single_column_partition_key_restrictions = std::get_if<single_column_partition_range_restrictions>(&_analysis._partition_range_restrictions);
+    auto *single_column_partition_key_restrictions = std::get_if<single_column_partition_range_restrictions>(&_analysis.partition_range);
     if (single_column_partition_key_restrictions) {
         for (const auto& e : single_column_partition_key_restrictions->per_column_restrictions) {
             const auto col = require_on_single_column(e);
-            const auto pos = _analysis._schema->position(*col) + 1;
+            const auto pos = _analysis.schema->position(*col) + 1;
             (*_idx_tbl_ck_prefix)[pos] = replace_column_def(e, &idx_tbl_schema.clustering_column_at(pos));
         }
     }
@@ -2768,28 +2768,28 @@ void statement_restrictions::prepare_indexed_global(const schema& idx_tbl_schema
     auto pk_expressions = (*_idx_tbl_ck_prefix)
             | std::views::transform(&predicate::filter)
             | std::views::drop(1)   // skip the token restriction
-            | std::views::take(_analysis._schema->partition_key_size()) // take only the partition key restrictions
+            | std::views::take(_analysis.schema->partition_key_size()) // take only the partition key restrictions
             | std::views::transform(expr::as<expr::binary_operator>) // we know it's an EQ
             | std::views::transform(std::mem_fn(&expr::binary_operator::rhs)) // "solve" for the column value
             | std::ranges::to<std::vector>();
 
     auto pk_solvers = (*_idx_tbl_ck_prefix)
             | std::views::drop(1) // skip the token restriction
-            | std::views::take(_analysis._schema->partition_key_size()) // take only the partition key restrictions
+            | std::views::take(_analysis.schema->partition_key_size()) // take only the partition key restrictions
             | std::views::transform(&predicate::solve_for)
             | std::ranges::to<std::vector>();
 
     auto is_singleton = std::ranges::all_of(
             (*_idx_tbl_ck_prefix)
             | std::views::drop(1)
-            | std::views::take(_analysis._schema->partition_key_size()),
+            | std::views::take(_analysis.schema->partition_key_size()),
             &predicate::is_singleton);
 
     if (!is_singleton) {
         on_internal_error(rlogger, "Inconsistency in singleton calculation in indexed query");
     }
 
-    auto token_func = make_shared<cql3::functions::token_fct>(_analysis._schema);
+    auto token_func = make_shared<cql3::functions::token_fct>(_analysis.schema);
 
     auto token_expr = binary_operator(
             column_value(token_column),
@@ -2802,7 +2802,7 @@ void statement_restrictions::prepare_indexed_global(const schema& idx_tbl_schema
             | std::views::transform(value_set_to_singleton)
             | std::ranges::to<utils::small_vector<managed_bytes, 4>>();
         auto pk = partition_key::from_exploded(pk_values);
-        auto tok = dht::get_token(*_analysis._schema, pk);
+        auto tok = dht::get_token(*_analysis.schema, pk);
         return value_list{managed_bytes(serialized(dht::token::to_int64(tok)))};
     };
 
@@ -2815,16 +2815,16 @@ void statement_restrictions::prepare_indexed_global(const schema& idx_tbl_schema
 }
 
 void statement_restrictions::prepare_indexed_local(const schema& idx_tbl_schema, const column_predicates& preds) {
-    if (!_analysis._partition_range_is_simple) {
+    if (!_analysis.partition_range_is_simple) {
         return;
     }
 
     // Local index clustering key is (indexed column, base clustering key)
     _idx_tbl_ck_prefix = std::vector<predicate>();
-    _idx_tbl_ck_prefix->reserve(1 + _analysis._clustering_prefix_restrictions.size());
+    _idx_tbl_ck_prefix->reserve(1 + _analysis.clustering_prefix_restrictions.size());
 
     const column_definition& indexed_column = idx_tbl_schema.column_at(column_kind::clustering_key, 0);
-    const column_definition& indexed_column_base_schema = *_analysis._schema->get_column_definition(indexed_column.name());
+    const column_definition& indexed_column_base_schema = *_analysis.schema->get_column_definition(indexed_column.name());
 
     // Find index column restrictions in the pre-built predicate vectors
     const single_column_predicate_vectors* pvecs;
@@ -2853,8 +2853,8 @@ void statement_restrictions::prepare_indexed_local(const schema& idx_tbl_schema,
 }
 
 void statement_restrictions::add_clustering_restrictions_to_idx_ck_prefix(const schema& idx_tbl_schema) {
-    for (const auto& e : _analysis._clustering_prefix_restrictions) {
-        if (_analysis._clustering_prefix_restrictions[0].is_multi_column) {
+    for (const auto& e : _analysis.clustering_prefix_restrictions) {
+        if (_analysis.clustering_prefix_restrictions[0].is_multi_column) {
             // TODO: We could handle single-element tuples, eg. `(c)>=(123)`.
             break;
         }
@@ -2876,15 +2876,15 @@ void statement_restrictions::add_clustering_restrictions_to_idx_ck_prefix(const 
 // need filtering but c2 does so num_prefix_columns_that_need_not_be_filtered
 // will be 1.
 //
-// _clustering_prefix_restrictions is already built with exactly this logic
+// clustering_prefix_restrictions is already built with exactly this logic
 // (iterating CK columns in schema order, stopping at gaps, needs-filtering
 // predicates, and after a slice), so its size is the answer.  Multi-column
 // restrictions are treated as needing filtering.
 unsigned int where_clause_analysis::num_clustering_prefix_columns_that_need_not_be_filtered() const {
-    if (_has_multi_column) {
+    if (has_multi_column) {
         return 0;
     }
-    return _clustering_prefix_restrictions.size();
+    return clustering_prefix_restrictions.size();
 }
 
 get_clustering_bounds_fn_t
@@ -3010,8 +3010,8 @@ void where_clause_analysis::validate_primary_key(const query_options& options) c
         [&] (const single_column_partition_range_restrictions& r) {
             validate_primary_key_restrictions(options, r.per_column_restrictions | std::views::transform(&predicate::filter));
         }
-    }, _partition_range_restrictions);
-    validate_primary_key_restrictions(options, _clustering_prefix_restrictions | std::views::transform(&predicate::filter));
+    }, partition_range);
+    validate_primary_key_restrictions(options, clustering_prefix_restrictions | std::views::transform(&predicate::filter));
 }
 
 

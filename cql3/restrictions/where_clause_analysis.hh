@@ -150,39 +150,39 @@ struct where_clause_predicates {
 /// The steps are meant to be run in the order they are declared below.
 class where_clause_analysis {
 public:
-    schema_ptr _schema;
+    schema_ptr schema;
 
     /**
      * Restrictions on partitioning columns
      */
-    expr::expression _partition_key_restrictions = expr::conjunction({});
+    expr::expression partition_key_restrictions = expr::conjunction({});
 
-    expr::single_column_restrictions_map _single_column_partition_key_restrictions;
+    expr::single_column_restrictions_map single_column_partition_key_restrictions;
 
     /**
      * Restrictions on clustering columns
      */
-    expr::expression _clustering_columns_restrictions = expr::conjunction({});
+    expr::expression clustering_columns_restrictions = expr::conjunction({});
 
-    expr::single_column_restrictions_map _single_column_clustering_key_restrictions;
+    expr::single_column_restrictions_map single_column_clustering_key_restrictions;
 
     /**
      * Restriction on non-primary key columns (i.e. secondary index restrictions)
      */
-    expr::expression _nonprimary_key_restrictions = expr::conjunction({});
+    expr::expression nonprimary_key_restrictions = expr::conjunction({});
 
-    expr::single_column_restrictions_map _single_column_nonprimary_key_restrictions;
+    expr::single_column_restrictions_map single_column_nonprimary_key_restrictions;
 
     /// The columns a view definition declared to be non-null.  Empty unless the
     /// caller asked for the view-definition reading of IS NOT NULL.
-    std::unordered_set<const column_definition*> _not_null_columns;
+    std::unordered_set<const column_definition*> not_null_columns;
 
-    std::vector<expr::expression> _where; ///< The entire WHERE clause (factorized).
+    std::vector<expr::expression> where_factors; ///< The entire WHERE clause (factorized).
 
-    /// Parts of _where defining the clustering slice.
+    /// Parts of where_factors defining the clustering slice.
     ///
     /// Meets all of the following conditions:
-    /// 1. all elements must be simultaneously satisfied (as restrictions) for _where to be satisfied
+    /// 1. all elements must be simultaneously satisfied (as restrictions) for where_factors to be satisfied
     /// 2. each element is an atom or a conjunction of atoms
     /// 3. either all atoms (across all elements) are multi-column or they are all single-column
     /// 4. if single-column, then:
@@ -192,29 +192,29 @@ public:
     ///   4.4 elements other than the last have only EQ or IN atoms
     ///   4.5 the last element has only EQ, IN, or is_slice() atoms
     /// 5. if multi-column, then each element is a binary_operator
-    std::vector<predicate> _clustering_prefix_restrictions;
+    std::vector<predicate> clustering_prefix_restrictions;
 
-    /// Parts of _where defining the partition range.
+    /// Parts of where_factors defining the partition range.
     ///
     /// If the partition range is dictated by token restrictions, this is a single element that holds all the
     /// binary_operators on token.  If single-column restrictions define the partition range, each element holds
     /// restrictions for one partition column.  Each partition column has a corresponding element, but the elements
     /// are in arbitrary order.
-    partition_range_restrictions _partition_range_restrictions;
+    partition_range_restrictions partition_range;
 
-    bool _partition_range_is_simple = true; ///< False iff _partition_range_restrictions imply a Cartesian product.
-    bool _pk_has_slice_or_needs_filtering = false; ///< True iff any PK restriction has a slice or needs-filtering operator.
-    bool _has_multi_column = false; ///< True iff _clustering_columns_restrictions has a multi-column restriction.
-    bool _ck_is_on_collection = false; ///< True iff _clustering_columns_restrictions has a collection restriction (CONTAINS/CONTAINS_KEY).
-    bool _ck_is_all_eq = true; ///< True iff all CK restrictions use EQ operator only.
-    bool _pk_is_all_eq = true; ///< True iff all PK restrictions use EQ operator only.
+    bool partition_range_is_simple = true; ///< False iff partition_range implies a Cartesian product.
+    bool pk_has_slice_or_needs_filtering = false; ///< True iff any PK restriction has a slice or needs-filtering operator.
+    bool has_multi_column = false; ///< True iff clustering_columns_restrictions has a multi-column restriction.
+    bool ck_is_on_collection = false; ///< True iff clustering_columns_restrictions has a collection restriction (CONTAINS/CONTAINS_KEY).
+    bool ck_is_all_eq = true; ///< True iff all CK restrictions use EQ operator only.
+    bool pk_is_all_eq = true; ///< True iff all PK restrictions use EQ operator only.
 
     /// Columns that appear on the LHS of an EQ restriction (not IN).
     /// For multi-column EQ like (ck1, ck2) = (1, 2), all columns in the tuple are included.
-    std::unordered_set<const column_definition*> _columns_with_eq;
+    std::unordered_set<const column_definition*> columns_with_eq;
 
-    get_partition_key_ranges_fn_t _get_partition_key_ranges_fn;
-    get_clustering_bounds_fn_t _get_clustering_bounds_fn;
+    get_partition_key_ranges_fn_t get_partition_key_ranges_fn;
+    get_clustering_bounds_fn_t get_clustering_bounds_fn;
 
 public:
     explicit where_clause_analysis(schema_ptr schema);
