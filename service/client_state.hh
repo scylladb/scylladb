@@ -75,6 +75,8 @@ private:
             , _user_connection(cs->_user_connection)
             , _is_internal(cs->_is_internal)
             , _bypass_auth_checks(cs->_bypass_auth_checks)
+            , _remote_port(cs->_remote_port)
+            , _original_shard(cs->_original_shard)
             , _remote_address(cs->_remote_address)
             , _auth_service(auth_service ? &auth_service->local() : nullptr)
             , _sl_controller(sl_controller ? &sl_controller->local() : nullptr)
@@ -82,7 +84,6 @@ private:
             , _timeout_config(cs->_timeout_config)
             , _as(as)
             , _enabled_protocol_extensions(cs->_enabled_protocol_extensions)
-            , _original_shard(cs->_original_shard)
     {}
     friend client_state_for_another_shard;
 private:
@@ -110,10 +111,12 @@ private:
     private volatile String keyspace;
 #endif
     std::optional<auth::authenticated_user> _user;
-    std::optional<client_options_cache_entry_type> _driver_name, _driver_version;
+    // entry_ptr is nullable itself; no std::optional needed around it.
+    client_options_cache_entry_type _driver_name, _driver_version;
 	std::list<client_option_key_value_cached_entry> _client_options;
 
-    auth_state _auth_state = auth_state::UNINITIALIZED;
+    // The flags and small enums below are bit-packed into one byte.
+    auth_state _auth_state : 2 = auth_state::UNINITIALIZED;
     // A connection is treated as a driver control connection by default: it is
     // meant to issue only the system queries a driver needs to manage itself.
     // Once it is observed running user (non-system) load it is multiplexed with
@@ -121,26 +124,33 @@ private:
     // The reclassification is sticky so the connection is never turned back into
     // a control connection. Whether a non-reclassified connection actually runs
     // in the driver scheduling group additionally depends on sl:driver existing.
-    bool _user_connection = false;
+    bool _user_connection : 1 = false;
     // Set together with _user_connection and cleared once the CQL server has
     // switched the connection to the user scheduling group, so the switch happens
     // exactly once.
-    bool _reclassification_pending = false;
+    bool _reclassification_pending : 1 = false;
 
     // isInternal is used to mark ClientState as used by some internal component
     // that should have an ability to modify system keyspace.
-    bool _is_internal;
+    bool _is_internal : 1;
 
     // bypass_auth_checks is used to skip authorization checks.
     // This is used by the maintenance socket to allow privileged access without
     // going through normal auth, while still treating queries as external.
-    bool _bypass_auth_checks;
+    bool _bypass_auth_checks : 1;
+
+    workload_type _workload_type : 2 = workload_type::unspecified;
 
     // The biggest timestamp that was returned by getTimestamp/assigned to a query
     static thread_local api::timestamp_type _last_timestamp_micros;
 
-    // Address of a client
-    socket_address _remote_address;
+    // Address of a client; kept apart (not as a socket_address, whose sockaddr_storage
+    // is 128 bytes) since there is one client_state per connection.
+    uint16_t _remote_port = 0;
+    // The shard where the current CQL request originally entered the node.
+    // After an internal CAS shard bounce this differs from this_shard_id().
+    unsigned _original_shard = this_shard_id();
+    gms::inet_address _remote_address;
 
     // Only populated for external client state.
     auth::service* _auth_service{nullptr};
@@ -149,8 +159,6 @@ private:
     // For restoring default values in the timeout config
     timeout_config _default_timeout_config;
     timeout_config _timeout_config;
-
-    workload_type _workload_type = workload_type::unspecified;
 
     // Used to communicate with the code executing user requests.
     // It's a way to indicate that we might abort processing the
@@ -191,7 +199,7 @@ public:
     }
 
     std::optional<client_options_cache_entry_type> get_driver_name() const {
-        return _driver_name;
+        return _driver_name ? std::optional(_driver_name) : std::nullopt;
     }
     future<> set_driver_name(client_options_cache_type& keys_and_values_cache, const sstring& driver_name) {
         _driver_name = co_await keys_and_values_cache.get_or_load(driver_name, [] (const client_options_cache_key_type&) {
@@ -208,7 +216,7 @@ public:
         const std::unordered_map<sstring, sstring>& client_options);
 
     std::optional<client_options_cache_entry_type> get_driver_version() const {
-        return _driver_version;
+        return _driver_version ? std::optional(_driver_version) : std::nullopt;
     }
     future<> set_driver_version(
         client_options_cache_type& keys_and_values_cache,
@@ -228,6 +236,7 @@ public:
                  abort_source* as = nullptr)
             : _is_internal(false)
             , _bypass_auth_checks(bypass_auth_checks)
+            , _remote_port(remote_address.port())
             , _remote_address(remote_address)
             , _auth_service(&auth_service)
             , _sl_controller(sl_controller)
@@ -240,15 +249,15 @@ public:
     }
 
     gms::inet_address get_client_address() const {
-        return gms::inet_address(_remote_address);
+        return _remote_address;
     }
 
     ::in_port_t get_client_port() const {
-        return _remote_address.port();
+        return _remote_port;
     }
 
-    const socket_address& get_remote_address() const {
-        return _remote_address;
+    socket_address get_remote_address() const {
+        return socket_address(_remote_address, _remote_port);
     }
 
     const timeout_config& get_timeout_config() const {
@@ -290,7 +299,8 @@ public:
             , _auth_state(auth_state::READY)
             , _is_internal(false)
             , _bypass_auth_checks(false)
-            , _remote_address(socket_address(forwarded_state.remote_address, forwarded_state.remote_port))
+            , _remote_port(forwarded_state.remote_port)
+            , _remote_address(forwarded_state.remote_address)
             , _auth_service(&auth_service)
             , _sl_controller(sl_controller)
             , _default_timeout_config(forwarded_state.timeout_config)
@@ -512,10 +522,6 @@ public:
 private:
 
     cql_transport::cql_protocol_extension_enum_set _enabled_protocol_extensions;
-
-    // The shard where the current CQL request originally entered the node.
-    // After an internal CAS shard bounce this differs from this_shard_id().
-    unsigned _original_shard = this_shard_id();
 
 public:
 
