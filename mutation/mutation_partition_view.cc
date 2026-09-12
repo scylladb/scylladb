@@ -90,7 +90,7 @@ template<typename Visitor>
 void read_and_visit_row(ser::row_view rv, const column_mapping& cm, column_kind kind, Visitor&& visitor)
 {
     for (auto&& cv : rv.columns()) {
-        auto id = cv.id();
+        auto [id, cell] = cv.read_all();
         auto& col = cm.column_at(kind, id);
 
         class atomic_cell_or_collection_visitor : public boost::static_visitor<> {
@@ -117,7 +117,6 @@ void read_and_visit_row(ser::row_view rv, const column_mapping& cm, column_kind 
                 throw std::runtime_error("Trying to deserialize unknown cell type");
             }
         };
-        auto&& cell = cv.c();
         boost::apply_visitor(atomic_cell_or_collection_visitor(visitor, id, col), cell);
     }
 }
@@ -171,8 +170,9 @@ void mutation_partition_view::do_accept(const column_mapping& cm, Visitor& visit
     }
 
     for (auto&& cr : mpv.rows()) {
-        auto t = row_tombstone(cr.deleted_at(), shadowable_tombstone(cr.shadowable_deleted_at()));
-        visitor.accept_row(position_in_partition_view::for_key(cr.key()), t, read_row_marker(cr.marker()), is_dummy::no, is_continuous::yes);
+        auto [key, marker, deleted_at, cells, shadowable_deleted_at] = cr.read_all();
+        auto t = row_tombstone(deleted_at, shadowable_tombstone(shadowable_deleted_at));
+        visitor.accept_row(position_in_partition_view::for_key(key), t, read_row_marker(marker), is_dummy::no, is_continuous::yes);
 
         struct cell_visitor {
             Visitor& _visitor;
@@ -184,7 +184,7 @@ void mutation_partition_view::do_accept(const column_mapping& cm, Visitor& visit
                _visitor.accept_row_cell(id, std::move(cm));
             }
         };
-        read_and_visit_row(cr.cells(), cm, column_kind::regular_column, cell_visitor{visitor});
+        read_and_visit_row(cells, cm, column_kind::regular_column, cell_visitor{visitor});
     }
 }
 
@@ -215,9 +215,9 @@ future<> mutation_partition_view::do_accept_gently(const column_mapping& cm, Vis
     }
 
     for (auto cr : mpv.rows()) {
-        auto t = row_tombstone(cr.deleted_at(), shadowable_tombstone(cr.shadowable_deleted_at()));
-        auto key = cr.key();
-        visitor.accept_row(position_in_partition_view::for_key(key), t, read_row_marker(cr.marker()), is_dummy::no, is_continuous::yes);
+        auto [key, marker, deleted_at, cells, shadowable_deleted_at] = cr.read_all();
+        auto t = row_tombstone(deleted_at, shadowable_tombstone(shadowable_deleted_at));
+        visitor.accept_row(position_in_partition_view::for_key(key), t, read_row_marker(marker), is_dummy::no, is_continuous::yes);
 
         struct cell_visitor {
             Visitor& _visitor;
@@ -229,7 +229,7 @@ future<> mutation_partition_view::do_accept_gently(const column_mapping& cm, Vis
                _visitor.accept_row_cell(id, std::move(cm));
             }
         };
-        read_and_visit_row(cr.cells(), cm, column_kind::regular_column, cell_visitor{visitor});
+        read_and_visit_row(cells, cm, column_kind::regular_column, cell_visitor{visitor});
         co_await coroutine::maybe_yield();
     }
 }
@@ -260,9 +260,9 @@ future<> mutation_partition_view::do_accept_gently(const column_mapping& cm, Asy
     }
 
     for (auto cr : mpv.rows()) {
-        auto t = row_tombstone(cr.deleted_at(), shadowable_tombstone(cr.shadowable_deleted_at()));
-        auto key = cr.key();
-        co_await visitor.accept_row(position_in_partition_view::for_key(key), t, read_row_marker(cr.marker()), is_dummy::no, is_continuous::yes);
+        auto [key, marker, deleted_at, cells, shadowable_deleted_at] = cr.read_all();
+        auto t = row_tombstone(deleted_at, shadowable_tombstone(shadowable_deleted_at));
+        co_await visitor.accept_row(position_in_partition_view::for_key(key), t, read_row_marker(marker), is_dummy::no, is_continuous::yes);
 
         struct cell_visitor {
             AsyncVisitor& _visitor;
@@ -274,7 +274,7 @@ future<> mutation_partition_view::do_accept_gently(const column_mapping& cm, Asy
                _visitor.accept_row_cell(id, std::move(cm));
             }
         };
-        read_and_visit_row(cr.cells(), cm, column_kind::regular_column, cell_visitor{visitor});
+        read_and_visit_row(cells, cm, column_kind::regular_column, cell_visitor{visitor});
         co_await coroutine::maybe_yield();
     }
 
@@ -476,10 +476,10 @@ clustering_row read_clustered_row(const schema& s, ser::clustering_row_view crv)
         clustering_row get() && { return std::move(_row); }
     };
 
-    auto cr = crv.row();
-    auto t = row_tombstone(cr.deleted_at(), shadowable_tombstone(cr.shadowable_deleted_at()));
-    clustering_row_builder builder(cr.key(), std::move(t), read_row_marker(cr.marker()));
-    read_and_visit_row(cr.cells(), s.get_column_mapping(), column_kind::regular_column, builder);
+    auto [key, marker, deleted_at, cells, shadowable_deleted_at] = crv.row().read_all();
+    auto t = row_tombstone(deleted_at, shadowable_tombstone(shadowable_deleted_at));
+    clustering_row_builder builder(std::move(key), std::move(t), read_row_marker(marker));
+    read_and_visit_row(cells, s.get_column_mapping(), column_kind::regular_column, builder);
     return std::move(builder).get();
 }
 
