@@ -633,7 +633,7 @@ void leveled_compaction_strategy::validate_options(const std::map<sstring, sstri
     size_tiered_compaction_strategy_options::validate(options, unchecked_options);
 
     auto tmp_value = compaction_strategy_impl::get_value(options, SSTABLE_SIZE_OPTION);
-    auto min_sstables_size = cql3::statements::property_definitions::to_long(SSTABLE_SIZE_OPTION, tmp_value, DEFAULT_MAX_SSTABLE_SIZE_IN_MB);
+    auto min_sstables_size = cql3::statements::property_definitions::to_int(SSTABLE_SIZE_OPTION, tmp_value, DEFAULT_MAX_SSTABLE_SIZE_IN_MB);
     if (min_sstables_size <= 0) {
         throw exceptions::configuration_exception(fmt::format("{} value ({}) must be positive", SSTABLE_SIZE_OPTION, min_sstables_size));
     }
