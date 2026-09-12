@@ -577,6 +577,8 @@ struct tablet_load_stats {
     // Adds tablet sizes from tls, returning their aggregated size.
     // Preemptible: tls and *this must outlive the returned future.
     future<uint64_t> add_tablet_sizes(const tablet_load_stats& tls);
+
+    future<> clear_gently() noexcept;
 };
 
 // Used as a return value for functions returning both table and tablet stats
@@ -619,6 +621,8 @@ struct load_stats {
     load_stats& operator=(const load_stats&) = delete;
     load_stats(load_stats&&) = default;
     load_stats& operator=(load_stats&&) = default;
+
+    ~load_stats();
 
     static load_stats from_v1(load_stats_v1&&);
 

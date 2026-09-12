@@ -16,6 +16,7 @@
 #include "locator/topology.hh"
 #include "replica/database.hh"
 #include "utils/stall_free.hh"
+#include <seastar/core/internal/run_in_background.hh>
 #include "utils/rjson.hh"
 #include "utils/div_ceil.hh"
 #include "gms/feature_service.hh"
@@ -1185,6 +1186,17 @@ load_stats load_stats::from_v1(load_stats_v1&& stats) {
     load_stats result;
     result.tables = std::move(stats.tables);
     return result;
+}
+
+future<> tablet_load_stats::clear_gently() noexcept {
+    return utils::clear_gently(tablet_sizes);
+}
+
+load_stats::~load_stats() {
+    if (tablet_stats.empty()) {
+        return;
+    }
+    seastar::internal::run_in_background(utils::dispose_gently(std::move(tablet_stats)));
 }
 
 future<load_stats> load_stats::clone_gently() const {
