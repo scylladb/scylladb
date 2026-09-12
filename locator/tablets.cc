@@ -1159,22 +1159,23 @@ table_load_stats& table_load_stats::operator+=(const table_load_stats& s) noexce
     return *this;
 }
 
-uint64_t tablet_load_stats::add_tablet_sizes(const tablet_load_stats& tls) {
+future<uint64_t> tablet_load_stats::add_tablet_sizes(const tablet_load_stats& tls) {
     uint64_t table_sizes_sum = 0;
     for (auto& [table, sizes] : tls.tablet_sizes) {
         for (auto& [range, tablet_size] : sizes) {
+            co_await coroutine::maybe_yield();
             tablet_sizes[table][range] = tablet_size;
             table_sizes_sum += tablet_size;
         }
     }
-    return table_sizes_sum;
+    co_return table_sizes_sum;
 }
 
 load_stats load_stats::from_v1(load_stats_v1&& stats) {
     return { .tables = std::move(stats.tables) };
 }
 
-load_stats& load_stats::operator+=(const load_stats& s) {
+future<> load_stats::apply(const load_stats& s) {
     static constexpr auto min_seq = std::numeric_limits<resize_decision::seq_number_t>::min();
 
     // A prior source has been merged if we already aggregated at least once.
@@ -1184,6 +1185,7 @@ load_stats& load_stats::operator+=(const load_stats& s) {
     bool had_prior_source = _aggregated;
 
     for (auto& [id, stats] : s.tables) {
+        co_await coroutine::maybe_yield();
         bool is_new = !tables.contains(id);
         tables[id] += stats;
         if (is_new && had_prior_source) {
@@ -1198,6 +1200,7 @@ load_stats& load_stats::operator+=(const load_stats& s) {
     // identity element and no invalidation is needed.
     if (had_prior_source) {
         for (auto& [id, table_stats] : tables) {
+            co_await coroutine::maybe_yield();
             if (!s.tables.contains(id)) {
                 table_stats.split_ready_seq_number = min_seq;
             }
@@ -1214,9 +1217,8 @@ load_stats& load_stats::operator+=(const load_stats& s) {
     }
     for (auto& [host, tablet_ls] : s.tablet_stats) {
         tablet_stats[host].effective_capacity = tablet_ls.effective_capacity;
-        tablet_stats[host].add_tablet_sizes(tablet_ls);
+        co_await tablet_stats[host].add_tablet_sizes(tablet_ls);
     }
-    return *this;
 }
 
 std::optional<uint64_t> load_stats::get_tablet_size(host_id host, const range_based_tablet_id& rb_tid) const {

@@ -577,8 +577,9 @@ struct tablet_load_stats {
     // The token ranges must be in the form (a, b] and only such ranges are allowed
     std::unordered_map<table_id, std::unordered_map<dht::token_range, uint64_t>> tablet_sizes;
 
-    // returns the aggregated size of all the tablets added
-    uint64_t add_tablet_sizes(const tablet_load_stats& tls);
+    // Adds tablet sizes from tls, returning their aggregated size.
+    // Preemptible: tls and *this must outlive the returned future.
+    future<uint64_t> add_tablet_sizes(const tablet_load_stats& tls);
 };
 
 // Used as a return value for functions returning both table and tablet stats
@@ -602,18 +603,21 @@ struct load_stats {
     tablet_load_stats_map tablet_stats;
 
     // Distinguishes a default-constructed (null) load_stats from one that has
-    // been aggregated via operator+=.  A null element contributes nothing when
-    // merged, while an aggregated-but-empty stats (e.g. from a node that
+    // been aggregated via apply().  A null element contributes nothing when
+    // applied to, while an aggregated-but-empty stats (e.g. from a node that
     // reports no tables) must still invalidate split readiness for tables
     // reported by other nodes.
     bool _aggregated = false;
 
     static load_stats from_v1(load_stats_v1&&);
 
-    load_stats& operator+=(const load_stats& s);
-    friend load_stats operator+(load_stats a, const load_stats& b) {
-        return a += b;
-    }
+    // Applies s on top of *this. Preemptible.
+    //
+    // Call sequentially: let one call resolve before starting the next on the
+    // same destination, and don't modify *this or s meanwhile. Both must
+    // outlive the returned future. Interleaved calls lose the split readiness
+    // invalidation and rehash `tables` under each other.
+    future<> apply(const load_stats& s);
 
     std::optional<uint64_t> get_tablet_size(host_id host, const range_based_tablet_id& rb_tid) const;
 

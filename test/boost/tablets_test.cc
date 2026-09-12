@@ -8340,7 +8340,7 @@ SEASTAR_THREAD_TEST_CASE(test_tablet_version_changes_after_tablet_migration) {
     }, std::move(cfg)).get();
 }
 
-// Verifies that load_stats::operator+= correctly invalidates
+// Verifies that load_stats::apply() correctly invalidates
 // split_ready_seq_number when a source has no tables.
 // Regression test for the scenario where node_A reports empty tables
 // (e.g. was down when a table was created) and node_B reports table1
@@ -8363,8 +8363,8 @@ SEASTAR_TEST_CASE(test_load_stats_split_ready_invalidation) {
         node_b.tables[table1] = table_load_stats{.size_in_bytes = 100, .split_ready_seq_number = 2};
 
         load_stats agg;
-        agg += node_a;
-        agg += node_b;
+        co_await agg.apply(node_a);
+        co_await agg.apply(node_b);
 
         BOOST_REQUIRE(agg.tables.contains(table1));
         BOOST_REQUIRE_EQUAL(agg.tables[table1].split_ready_seq_number, min_seq);
@@ -8380,8 +8380,8 @@ SEASTAR_TEST_CASE(test_load_stats_split_ready_invalidation) {
         node_b.tables[table1] = table_load_stats{.size_in_bytes = 100, .split_ready_seq_number = 2};
 
         load_stats agg;
-        agg += node_b;
-        agg += node_a;
+        co_await agg.apply(node_b);
+        co_await agg.apply(node_a);
 
         BOOST_REQUIRE(agg.tables.contains(table1));
         BOOST_REQUIRE_EQUAL(agg.tables[table1].split_ready_seq_number, min_seq);
@@ -8397,8 +8397,8 @@ SEASTAR_TEST_CASE(test_load_stats_split_ready_invalidation) {
         node_b.tables[table1] = table_load_stats{.size_in_bytes = 70, .split_ready_seq_number = 5};
 
         load_stats agg;
-        agg += node_a;
-        agg += node_b;
+        co_await agg.apply(node_a);
+        co_await agg.apply(node_b);
 
         BOOST_REQUIRE_EQUAL(agg.tables[table1].split_ready_seq_number, 3);
         BOOST_REQUIRE_EQUAL(agg.tables[table1].size_in_bytes, 120);
@@ -8413,8 +8413,8 @@ SEASTAR_TEST_CASE(test_load_stats_split_ready_invalidation) {
         node_b.tables[table2] = table_load_stats{.size_in_bytes = 70, .split_ready_seq_number = 5};
 
         load_stats agg;
-        agg += node_a;
-        agg += node_b;
+        co_await agg.apply(node_a);
+        co_await agg.apply(node_b);
 
         BOOST_REQUIRE_EQUAL(agg.tables[table1].split_ready_seq_number, min_seq);
         BOOST_REQUIRE_EQUAL(agg.tables[table2].split_ready_seq_number, min_seq);
@@ -8426,7 +8426,7 @@ SEASTAR_TEST_CASE(test_load_stats_split_ready_invalidation) {
         node_a.tables[table1] = table_load_stats{.size_in_bytes = 100, .split_ready_seq_number = 7};
 
         load_stats agg;
-        agg += node_a;
+        co_await agg.apply(node_a);
 
         BOOST_REQUIRE_EQUAL(agg.tables[table1].split_ready_seq_number, 7);
         BOOST_REQUIRE_EQUAL(agg.tables[table1].size_in_bytes, 100);
@@ -8442,13 +8442,12 @@ SEASTAR_TEST_CASE(test_load_stats_split_ready_invalidation) {
         node_b.tables[table1] = table_load_stats{.size_in_bytes = 50, .split_ready_seq_number = 4};
 
         load_stats agg;
-        agg += node_a;
-        agg += node_b;
+        co_await agg.apply(node_a);
+        co_await agg.apply(node_b);
 
         BOOST_REQUIRE_EQUAL(agg.tables[table1].split_ready_seq_number, 4);
     }
 
-    return make_ready_future<>();
 }
 
 BOOST_AUTO_TEST_SUITE_END()

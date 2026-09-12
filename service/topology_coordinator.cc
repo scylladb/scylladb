@@ -152,7 +152,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
 
     // The reason load_stats_ptr is a shared ptr is that load balancer can yield, and we don't want it
     // to suffer lifetime issues when stats refresh fiber overrides the current stats.
-    std::unordered_map<locator::host_id, locator::load_stats> _load_stats_per_node;
+    std::unordered_map<locator::host_id, locator::load_stats_ptr> _load_stats_per_node;
     serialized_action _tablet_load_stats_refresh;
 
     static constexpr std::chrono::seconds cdc_streams_gc_refresh_interval = std::chrono::seconds(60);
@@ -1404,7 +1404,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                                 throw std::runtime_error(fmt::format(
                                     "No load stats available for node {}", host_id));
                             }
-                            const auto& node_stats = it->second;
+                            const auto& node_stats = *it->second;
                             for (const auto& schema : tables) {
                                 if (!node_stats.tables.contains(schema->id())) {
                                     throw std::runtime_error(fmt::format(
@@ -1414,7 +1414,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                             }
                         } else { // rollback path (tablets to vnodes)
                             if (it != _load_stats_per_node.end()) {
-                                const auto& node_stats = it->second;
+                                const auto& node_stats = *it->second;
                                 for (const auto& schema : tables) {
                                     if (node_stats.tables.contains(schema->id())) {
                                         throw std::runtime_error(fmt::format(
@@ -4801,6 +4801,10 @@ future<topology_coordinator::tablet_load_stats_collect_result> topology_coordina
         locator::load_stats dc_stats;
         bool dc_has_token_owners = false;
         rtlogger.debug("raft topology: Refreshing table load stats for DC {} that has {} node(s)", dc, nodes.size());
+        // Collected here and applied one at a time below, because apply() must
+        // not interleave with itself.
+        std::vector<locator::load_stats_ptr> dc_node_stats;
+        dc_node_stats.reserve(nodes.size());
         co_await coroutine::parallel_for_each(nodes, [&] (const auto& node) -> future<> {
             auto dst = node.get().host_id();
             auto dst_server = raft::server_id(dst.uuid());
@@ -4830,7 +4834,7 @@ future<topology_coordinator::tablet_load_stats_collect_result> topology_coordina
             t.arm(timeout);
             auto sub = _as.subscribe(request_abort);
 
-            locator::load_stats node_stats;
+            locator::load_stats_ptr node_stats;
             if (!_gossiper.is_alive(dst)) {
                 if (require == require_live_nodes::no && _load_stats_per_node.contains(dst) &&
                         !utils::get_local_injector().enter("force_down_node_load_stats_invalid")) {
@@ -4843,28 +4847,34 @@ future<topology_coordinator::tablet_load_stats_collect_result> topology_coordina
                     co_return;
                 }
             } else if (_feature_service.tablet_load_stats_v2) {
-                node_stats = co_await ser::storage_service_rpc_verbs::send_table_load_stats(&_messaging,
-                                                                                            dst,
-                                                                                            as,
-                                                                                            dst_server);
+                node_stats = make_lw_shared<const locator::load_stats>(
+                    co_await ser::storage_service_rpc_verbs::send_table_load_stats(&_messaging,
+                                                                                   dst,
+                                                                                   as,
+                                                                                   dst_server));
             } else {
-                node_stats = locator::load_stats::from_v1(
+                node_stats = make_lw_shared<const locator::load_stats>(locator::load_stats::from_v1(
                     co_await ser::storage_service_rpc_verbs::send_table_load_stats_v1(&_messaging,
                                                                                       dst,
                                                                                       as,
-                                                                                      dst_server));
+                                                                                      dst_server)));
             }
 
             _load_stats_per_node[dst] = node_stats;
             if (is_token_owner) {
-                dc_stats += node_stats;
+                dc_node_stats.push_back(std::move(node_stats));
             }
         });
 
+        for (const auto& node_stats : dc_node_stats) {
+            co_await dc_stats.apply(*node_stats);
+        }
+        dc_node_stats.clear();
+
         // A DC with no token owners holds no replicas of any table, so dc_stats was never
-        // merged into and is still the identity element. `stats += dc_stats` would not be a
-        // no-op for it: load_stats::operator+= invalidates split readiness for every table
-        // the source does not report, and decides whether to do so from the destination's
+        // applied to and is still the identity element. `stats.apply(dc_stats)` would not be
+        // a no-op for it: load_stats::apply() invalidates split readiness for every table the
+        // source does not report, and decides whether to do so from the destination's
         // _aggregated flag rather than the source's. So skip such a DC entirely.
         if (!dc_has_token_owners) {
             continue;
@@ -4895,7 +4905,7 @@ future<topology_coordinator::tablet_load_stats_collect_result> topology_coordina
                           dc, table_id, rf_for_this_dc, table_stats.size_in_bytes, table_stats.split_ready_seq_number);
         }
 
-        stats += dc_stats;
+        co_await stats.apply(dc_stats);
     }
 
     for (auto& [table_id, table_load_stats] : stats.tables) {
