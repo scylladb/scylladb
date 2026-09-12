@@ -2949,10 +2949,6 @@ statement_restrictions::value_for_index_partition_key(const query_options& optio
     return _value_for_index_partition_key_fn(options);
 }
 
-sstring statement_restrictions::to_string() const {
-    return !_where.empty() ? expr::to_string(expr::conjunction{.children = _where}) : "";
-}
-
 static void validate_primary_key_restrictions(const query_options& options, std::ranges::range auto&& restrictions) {
     for (const auto& r: restrictions) {
         for_each_expression<binary_operator>(r, [&](const binary_operator& binop) {
