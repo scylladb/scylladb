@@ -295,9 +295,6 @@ public:
     bool has_clustering_columns_restriction() const { return _analysis.has_clustering_columns_restriction(); }
     bool has_unrestricted_clustering_columns() const { return _analysis.has_unrestricted_clustering_columns(); }
     bool has_non_primary_key_restriction() const { return _analysis.has_non_primary_key_restriction(); }
-    const column_definition& unrestricted_column(column_kind kind) const {
-        return _analysis.unrestricted_column(kind);
-    }
     bool is_restricted(const column_definition* cdef) const { return _analysis.is_restricted(cdef); }
     bool is_empty() const { return _analysis.is_empty(); }
 
