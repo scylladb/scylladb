@@ -7,6 +7,7 @@ target_sources(transport
     event_notifier.cc
     generic_server.cc
     messages/result_message.cc
+    response.cc
     server.cc)
 target_include_directories(transport
   PUBLIC
