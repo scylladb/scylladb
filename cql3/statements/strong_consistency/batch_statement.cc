@@ -9,6 +9,7 @@
 #include "cql3/statements/modification_statement.hh"
 #include "batch_statement.hh"
 
+#include <ranges>
 #include "db/timeout_clock.hh"
 #include "transport/messages/result_message.hh"
 #include "cql3/query_processor.hh"
@@ -130,8 +131,11 @@ uint32_t batch_statement::get_bound_terms() const {
     return _bound_terms;
 }
 
-bool batch_statement::depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const {
-    return std::ranges::any_of(_statements, [&ks_name, &cf_name] (auto&& s) { return s.statement->depends_on(ks_name, cf_name); });
+std::vector<dependent_table> batch_statement::dependent_tables() const {
+    return _statements
+        | std::views::transform([] (auto&& s) { return s.statement->dependent_tables(); })
+        | std::views::join
+        | std::ranges::to<std::vector>();
 }
 
 void batch_statement::validate() const {
