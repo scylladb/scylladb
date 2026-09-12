@@ -85,6 +85,9 @@ public:
     void calculate_metadata_id();
 
     cql_metadata_id_type get_metadata_id() const;
+
+    /// Returns heap memory owned by this prepared statement beyond sizeof(*this).
+    size_t external_memory_usage() const;
 };
 
 }
