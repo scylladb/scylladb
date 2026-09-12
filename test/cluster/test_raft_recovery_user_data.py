@@ -142,11 +142,14 @@ async def test_raft_recovery_user_data(manager: ScyllaClusterManager, remove_dea
         await cql.run_async(f"""ALTER KEYSPACE {ks_name} WITH replication =
                             {{'class': 'NetworkTopologyStrategy', 'dc1': {rf}, 'dc2': 0}}""")
 
-        logging.info(f'Removing {dead_servers}')
-        for i, being_removed in enumerate(dead_servers):
-            ignored = [dead_srv.ip_addr for dead_srv in dead_servers[i + 1:]]
-            initiator = live_servers[i]
-            await manager.remove_node(initiator.server_id, being_removed.server_id, ignored)
+        # Remove concurrently: distinct dead nodes can be removed in parallel (see
+        # test_concurrent_removenode_two_initiators_two_dead_nodes in test_topology_remove_decom.py),
+        # as long as each request ignores every other not-yet-removed dead node.
+        logging.info(f'Removing {dead_servers} concurrently')
+        await gather_safely(*(
+            manager.remove_node(live_servers[i].server_id, being_removed.server_id,
+                                [dead_srv.ip_addr for dead_srv in dead_servers if dead_srv is not being_removed])
+            for i, being_removed in enumerate(dead_servers)))
     else:
         # Replace dead nodes concurrently. Not recommended for users, but it should work, and it significantly speeds up
         # the test in debug mode.
