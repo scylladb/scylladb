@@ -140,6 +140,7 @@
 #include "tools/utils.hh"
 #include "schema/compression_initializer.hh"
 #include "schema/speculative_retry_initializer.hh"
+#include "tools/webshell/webshell.hh"
 
 
 namespace fs = std::filesystem;
@@ -2808,6 +2809,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             alternator::controller alternator_ctl(gossiper, proxy, ss, mm, sys_dist_ks, sys_ks, cdc_generation_service, service_memory_limiter, auth_service, sl_controller, vector_store_client, timeout_cfg, *cfg, dbcfg.statement_scheduling_group);
 
+            tools::webshell::controller webshell_ctl(dbcfg.statement_scheduling_group, qp, auth_service, sl_controller, [&cfg, &cluster_name] {
+                return tools::webshell::make_config(*cfg, cluster_name);
+            });
+
             // Register at_exit last, so that storage_service::drain_on_shutdown will be called first
             auto do_drain = defer_verbose_shutdown("local storage", [&ss] {
                 ss.local().drain_on_shutdown().get();
@@ -2834,6 +2839,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             if (bool enabled = cfg->alternator_port() || cfg->alternator_https_port()) {
                 ss.local().register_protocol_server(alternator_ctl, enabled).get();
+            }
+
+            if (cfg->webshell_http_port() || cfg->webshell_https_port()) {
+                ss.local().register_protocol_server(webshell_ctl, true).get();
             }
 
             stop_signal.ready();

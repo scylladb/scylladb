@@ -70,7 +70,7 @@ rows_assertions::rows_assertions(shared_ptr<cql_transport::messages::result_mess
 {
     if (dump) {
         std::stringstream ss;
-        cql3::print_query_results_text(ss, _rows->rs());
+        cql3::print_query_results_text(ss, _rows->rs()).get();
         testlog.debug("Query results for assert_that().is_rows(dump_to_logs::yes) at {}:{}:\n{}", _loc.file_name(), _loc.line(), ss.str());
     }
 }

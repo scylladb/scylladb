@@ -1,3 +1,9 @@
+include(add_resources)
+# The web interface served by webshell.cc is embedded in the executable.
+generate_resources(
+  MANIFEST webshell/webshell.resources
+  VAR webshell_resources)
+
 add_library(tools STATIC)
 target_sources(tools
   PRIVATE
@@ -10,13 +16,17 @@ target_sources(tools
     schema_loader.cc
     utils.cc
     lua_sstable_consumer.cc
-    json_mutation_stream_parser.cc)
+    json_mutation_stream_parser.cc
+    webshell/webshell.cc
+    ${webshell_resources})
 target_include_directories(tools
   PUBLIC
     ${CMAKE_SOURCE_DIR}
     ${RAPIDJSON_INCLUDE_DIRS}
   PRIVATE
-    ${LUA_INCLUDE_DIR})
+    ${LUA_INCLUDE_DIR}
+    # For the generated "resources/..." header included by webshell.cc.
+    ${scylla_gen_build_dir})
 target_link_libraries(tools
   PUBLIC
     Seastar::seastar
