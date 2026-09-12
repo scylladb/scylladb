@@ -403,7 +403,10 @@ class RpcVerbParam(ASTBase):
     argument as an `foreign_ptr<unique_ptr<>>`
     If the [[lw_shared_ptr]] attribute is specified then handler function signature for an RPC verb will contain this
     argument as an `foreign_ptr<lw_shared_ptr<>>`
-    If the [[ref]] attribute is specified the send function signature will contain this type as const reference"""
+    Send function signature parameters are always taken as const reference, to avoid an extra copy
+    into the by-value parameter before it is forwarded (unchanged) into the underlying RPC sink call,
+    which itself takes its arguments by const reference. [[ref]] is accepted for backward compatibility
+    but has no effect."""
     def __init__(self, type, name, attributes=Attributes()):
         super().__init__(name)
         self.type = type
@@ -424,10 +427,6 @@ class RpcVerbParam(ASTBase):
     def is_unique(self):
         return True in [a.startswith('unique_ptr') for a in self.attributes.attr_items]
 
-    def is_ref(self):
-        return True in [a.startswith('ref') for a in self.attributes.attr_items]
-
-
     def to_string(self):
         res = self.type.to_string()
         if self.is_optional():
@@ -438,9 +437,7 @@ class RpcVerbParam(ASTBase):
         return res
 
     def to_string_send_fn_signature(self):
-        res = self.type.to_string()
-        if self.is_ref():
-            res = 'const ' + res + '&'
+        res = 'const ' + self.type.to_string() + '&'
         if self.name:
             res += ' '
             res += self.name
@@ -588,7 +585,9 @@ class RpcVerb(ASTBase):
             res += ', as'
         if self.params:
             for idx, p in enumerate(self.params):
-                res += ', ' + f'std::move({p.name if p.name else f"_{idx + 1}"})'
+                # Params are const references; std::move on them would silently
+                # copy (or fail to compile for a move-only type).
+                res += ', ' + (p.name if p.name else f'_{idx + 1}')
         return res
 
     def send_function_invocation(self):
