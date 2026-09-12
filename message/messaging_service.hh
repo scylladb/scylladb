@@ -82,6 +82,8 @@ using wrapping_partition_range = wrapping_interval<dht::ring_position>;
 
 class repair_hash_with_cmd;
 class repair_row_on_wire_with_cmd;
+class repair_hash_with_cmd_batch;
+class repair_row_on_wire_with_cmd_batch;
 enum class repair_stream_cmd : uint8_t;
 class repair_stream_boundary;
 class frozen_mutation_fragment;
@@ -220,8 +222,11 @@ enum class messaging_verb : int32_t {
     FETCH_COLUMN_MAPPINGS = 91,
     REPAIR_GET_TABLE_SIZE = 92,
     BACKUP_SNAPSHOT_SSTABLES = 93,
+    REPAIR_GET_ROW_DIFF_WITH_RPC_STREAM_BATCHED = 94,
+    REPAIR_PUT_ROW_DIFF_WITH_RPC_STREAM_BATCHED = 95,
+    REPAIR_GET_FULL_ROW_HASHES_WITH_RPC_STREAM_BATCHED = 96,
 
-    LAST = 94,
+    LAST = 97,
 };
 
 } // namespace netw
@@ -449,6 +454,24 @@ public:
     rpc::sink<repair_hash_with_cmd> make_sink_for_repair_get_full_row_hashes_with_rpc_stream(rpc::source<repair_stream_cmd>& source);
     void register_repair_get_full_row_hashes_with_rpc_stream(std::function<future<rpc::sink<repair_hash_with_cmd>> (const rpc::client_info& cinfo, uint32_t repair_meta_id, rpc::source<repair_stream_cmd> source, rpc::optional<shard_id> dst_cpu_id_opt)>&& func);
     future<> unregister_repair_get_full_row_hashes_with_rpc_stream();
+
+    // Wrapper for REPAIR_GET_ROW_DIFF_WITH_RPC_STREAM_BATCHED
+    future<std::tuple<rpc::sink<repair_hash_with_cmd_batch>, rpc::source<repair_row_on_wire_with_cmd_batch>>> make_sink_and_source_for_repair_get_row_diff_with_rpc_stream_batched(uint32_t repair_meta_id, shard_id dst_cpu_id, locator::host_id id);
+    rpc::sink<repair_row_on_wire_with_cmd_batch> make_sink_for_repair_get_row_diff_with_rpc_stream_batched(rpc::source<repair_hash_with_cmd_batch>& source);
+    void register_repair_get_row_diff_with_rpc_stream_batched(std::function<future<rpc::sink<repair_row_on_wire_with_cmd_batch>> (const rpc::client_info& cinfo, uint32_t repair_meta_id, rpc::source<repair_hash_with_cmd_batch> source, rpc::optional<shard_id> dst_cpu_id_opt)>&& func);
+    future<> unregister_repair_get_row_diff_with_rpc_stream_batched();
+
+    // Wrapper for REPAIR_PUT_ROW_DIFF_WITH_RPC_STREAM_BATCHED
+    future<std::tuple<rpc::sink<repair_row_on_wire_with_cmd_batch>, rpc::source<repair_stream_cmd>>> make_sink_and_source_for_repair_put_row_diff_with_rpc_stream_batched(uint32_t repair_meta_id, shard_id dst_cpu_id, locator::host_id id);
+    rpc::sink<repair_stream_cmd> make_sink_for_repair_put_row_diff_with_rpc_stream_batched(rpc::source<repair_row_on_wire_with_cmd_batch>& source);
+    void register_repair_put_row_diff_with_rpc_stream_batched(std::function<future<rpc::sink<repair_stream_cmd>> (const rpc::client_info& cinfo, uint32_t repair_meta_id, rpc::source<repair_row_on_wire_with_cmd_batch> source, rpc::optional<shard_id> dst_cpu_id_opt)>&& func);
+    future<> unregister_repair_put_row_diff_with_rpc_stream_batched();
+
+    // Wrapper for REPAIR_GET_FULL_ROW_HASHES_WITH_RPC_STREAM_BATCHED
+    future<std::tuple<rpc::sink<repair_stream_cmd>, rpc::source<repair_hash_with_cmd_batch>>> make_sink_and_source_for_repair_get_full_row_hashes_with_rpc_stream_batched(uint32_t repair_meta_id, shard_id dst_cpu_id, locator::host_id id);
+    rpc::sink<repair_hash_with_cmd_batch> make_sink_for_repair_get_full_row_hashes_with_rpc_stream_batched(rpc::source<repair_stream_cmd>& source);
+    void register_repair_get_full_row_hashes_with_rpc_stream_batched(std::function<future<rpc::sink<repair_hash_with_cmd_batch>> (const rpc::client_info& cinfo, uint32_t repair_meta_id, rpc::source<repair_stream_cmd> source, rpc::optional<shard_id> dst_cpu_id_opt)>&& func);
+    future<> unregister_repair_get_full_row_hashes_with_rpc_stream_batched();
 
     void foreach_server_connection_stats(std::function<void(const rpc::client_info&, const rpc::stats&)>&& f) const;
 
