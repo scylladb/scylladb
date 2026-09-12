@@ -25,6 +25,7 @@
 #include "locator/tablets.hh"
 #include "partition_slice_builder.hh"
 #include "db/config.hh"
+#include "db/virtual_tables.hh"
 #include "gms/feature_service.hh"
 #include "system_keyspace_view_types.hh"
 #include "schema/schema_builder.hh"
@@ -3785,6 +3786,9 @@ system_keyspace::~system_keyspace() {
 future<> system_keyspace::shutdown() {
     if (!_shutdown) {
         _shutdown = true;
+        // Drain caches holding cross-shard foreign_ptrs while reactors are still up;
+        // see uninitialize_virtual_tables() for why this can't wait for static destruction.
+        co_await uninitialize_virtual_tables();
         co_await _db.unplug_system_keyspace();
     }
 }
