@@ -15,6 +15,7 @@
 #include <seastar/core/loop.hh>
 #include <seastar/util/closeable.hh>
 #include <seastar/util/short_streams.hh>
+#include <seastar/util/file.hh>
 #include <seastar/core/coroutine.hh>
 
 #include "sstables/generation_type.hh"
@@ -6646,159 +6647,380 @@ SEASTAR_TEST_CASE(test_perform_component_rewrite_multiple_sstables) {
 // never marked, produced by a compaction that reports success.  No exception,
 // no interruption, no log line -- which is why this is invisible in production
 // until the next restart rescans the data directory.
-SEASTAR_TEST_CASE(test_last_gc_sstable_is_not_leaked_on_successful_compaction) {
-    return test_env::do_with_async([] (test_env& env) {
-        auto builder = schema_builder(1, "tests", "gc_sstable_leak")
-                .with_column("id", utf8_type, column_kind::partition_key)
-                .with_column("value", int32_type);
-        builder.set_gc_grace_seconds(0);          // make tombstones immediately purgeable
-        auto s = builder.build();
+namespace {
 
-        auto cf = env.make_table_for_tests(s);
-        auto stop_cf = deferred_stop(cf);
-        auto base_sst_gen = env.make_sst_factory(s);
+// Every sstable a compaction created, and the subset it handed to the replacer.
+struct compaction_output_census {
+    struct created_sst { sstring toc; sstring origin; };
+    std::vector<created_sst> created;
+    std::unordered_set<sstring> handed_over_tocs;
 
-        // Record every sstable the compaction creates.  create_gc_compaction_writer()
-        // uses the same _sstable_creator as the regular writer, so this captures the
-        // garbage-collected output too; they are told apart by get_origin().
-        std::vector<shared_sstable> created;
-        auto sst_gen = [&] {
-            auto sst = base_sst_gen();
-            created.push_back(sst);
-            return sst;
-        };
-
-        api::timestamp_type ts = 1;
-        auto key_for = [&] (int i) {
-            return partition_key::from_exploded(*s, {to_bytes(format("key{:05d}", i))});
-        };
-        // Order keys by token: the compaction stream is token-ordered, and we
-        // need the purgeable partitions to come *last*.
-        std::vector<partition_key> keys;
-        for (int i = 0; i < 24; i++) {
-            keys.push_back(key_for(i));
-        }
-        std::ranges::sort(keys, [&] (const partition_key& a, const partition_key& b) {
-            return dht::get_token(*s, a) < dht::get_token(*s, b);
-        });
-
-        auto make_live = [&] (const partition_key& k) {
-            mutation m(s, k);
-            m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)), ts++);
-            return m;
-        };
-        // Fully-deleted partition with an already-expired deletion time: this is
-        // what the garbage-collection writer picks up.
-        auto make_purgeable = [&] (const partition_key& k) {
-            mutation m(s, k);
-            m.partition().apply(tombstone(ts++, gc_clock::time_point(gc_clock::duration(0))));
-            return m;
-        };
-
-        // Lowest-token half is live, highest-token half is a purgeable
-        // tombstone-only tail, so the end of the stream produces GC output only.
-        // The two inputs must be *disjoint*: an sstable run is a set of
-        // non-overlapping fragments, and an overlapping pair gets re-assigned a
-        // fresh run id on insertion ("Generating a new run identifier..."),
-        // which would disable the GC writer.
-        utils::chunked_vector<mutation> live, purgeable;
-        for (size_t i = 0; i < keys.size(); i++) {
-            if (i < keys.size() / 2) {
-                live.push_back(make_live(keys[i]));
-            } else {
-                purgeable.push_back(make_purgeable(keys[i]));
+    // The sstables that were written but never attached: on disk, referenced by
+    // nothing, and loaded again by the next restart.
+    std::vector<created_sst> orphaned() const {
+        std::vector<created_sst> ret;
+        for (const auto& info : created) {
+            if (!handed_over_tocs.contains(info.toc) && fs::exists(fs::path(std::string(info.toc)))) {
+                ret.push_back(info);
             }
         }
+        return ret;
+    }
 
-        auto sst1 = make_sstable_containing(base_sst_gen, std::move(live)).get();
-        auto sst2 = make_sstable_containing(base_sst_gen, std::move(purgeable)).get();
-        // Same run id on both inputs => _contains_multi_fragment_runs, which is
-        // a precondition of enable_garbage_collected_sstable_writer().
-        auto run = sstables::run_id::create_random_id();
-        sstables::test(sst1).set_run_identifier(run);
-        sstables::test(sst2).set_run_identifier(run);
+    std::optional<created_sst> find_by_origin(std::string_view origin) const {
+        auto it = std::ranges::find_if(created, [&] (const created_sst& sst) { return sst.origin == origin; });
+        return it == created.end() ? std::nullopt : std::optional(*it);
+    }
+};
 
-        column_family_test(cf).add_sstable(sst1).get();
-        column_family_test(cf).add_sstable(sst2).get();
+// Runs a compaction that ends up holding a garbage-collected sstable it never
+// attached, and reports what it created and what it handed over.
+compaction_output_census compact_leaving_unused_gc_sstable(test_env& env) {
+    auto builder = schema_builder(1, "tests", "gc_sstable_leak")
+            .with_column("id", utf8_type, column_kind::partition_key)
+            .with_column("value", int32_type);
+    builder.set_gc_grace_seconds(0);          // make tombstones immediately purgeable
+    auto s = builder.build();
 
-        // A real replacer, so the compaction's incremental replacements actually
-        // take effect (a no-op replacer would make every output look orphaned).
-        // Record everything the compaction ever hands over.
-        std::unordered_set<shared_sstable> handed_over;
-        auto replacer = [&] (compaction::compaction_completion_desc ccd) {
-            handed_over.insert(ccd.new_sstables.begin(), ccd.new_sstables.end());
-            handed_over.insert(ccd.old_sstables.begin(), ccd.old_sstables.end());
-            column_family_test(cf).rebuild_sstable_list(cf.as_compaction_group_view(),
-                                                        ccd.new_sstables, ccd.old_sstables).get();
-            env.test_compaction_manager().propagate_replacement(cf.as_compaction_group_view(),
-                                                                ccd.old_sstables, ccd.new_sstables);
-        };
+    auto cf = env.make_table_for_tests(s);
+    auto stop_cf = deferred_stop(cf);
+    auto base_sst_gen = env.make_sst_factory(s);
 
-        // max_sstable_bytes = 0 forces ~one partition per output sstable (see
-        // partitions_per_sstable()), so the regular writer rotates shut after
-        // every partition and is therefore already closed once the purgeable
-        // tail of the stream is reached -- meaning its consume_end_of_stream()
-        // is a no-op and never drives maybe_replace_exhausted_sstables_by_sst().
-        compaction::compaction_descriptor desc({sst1, sst2},
-                compaction::compaction_descriptor::default_level,
-                /* max_sstable_bytes */ 0);
-        desc.enable_garbage_collection(cf->get_sstable_set());
-        auto res = compact_sstables(env, std::move(desc), cf, sst_gen, replacer,
-                                    can_purge_tombstones::yes).get();
+    // Record every sstable the compaction creates.  create_gc_compaction_writer()
+    // uses the same _sstable_creator as the regular writer, so this captures the
+    // garbage-collected output too; they are told apart by get_origin().
+    std::vector<shared_sstable> created;
+    auto sst_gen = [&] {
+        auto sst = base_sst_gen();
+        created.push_back(sst);
+        return sst;
+    };
 
-        for (auto& sst : res.new_sstables) {
-            handed_over.insert(sst);
+    api::timestamp_type ts = 1;
+    auto key_for = [&] (int i) {
+        return partition_key::from_exploded(*s, {to_bytes(format("key{:05d}", i))});
+    };
+    // Order keys by token: the compaction stream is token-ordered, and we
+    // need the purgeable partitions to come *last*.
+    std::vector<partition_key> keys;
+    for (int i = 0; i < 24; i++) {
+        keys.push_back(key_for(i));
+    }
+    std::ranges::sort(keys, [&] (const partition_key& a, const partition_key& b) {
+        return dht::get_token(*s, a) < dht::get_token(*s, b);
+    });
+
+    auto make_live = [&] (const partition_key& k) {
+        mutation m(s, k);
+        m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)), ts++);
+        return m;
+    };
+    // Fully-deleted partition with an already-expired deletion time: this is
+    // what the garbage-collection writer picks up.
+    auto make_purgeable = [&] (const partition_key& k) {
+        mutation m(s, k);
+        m.partition().apply(tombstone(ts++, gc_clock::time_point(gc_clock::duration(0))));
+        return m;
+    };
+
+    // Lowest-token half is live, highest-token half is a purgeable
+    // tombstone-only tail, so the end of the stream produces GC output only.
+    // The two inputs must be *disjoint*: an sstable run is a set of
+    // non-overlapping fragments, and an overlapping pair gets re-assigned a
+    // fresh run id on insertion ("Generating a new run identifier..."),
+    // which would disable the GC writer.
+    utils::chunked_vector<mutation> live, purgeable;
+    for (size_t i = 0; i < keys.size(); i++) {
+        if (i < keys.size() / 2) {
+            live.push_back(make_live(keys[i]));
+        } else {
+            purgeable.push_back(make_purgeable(keys[i]));
         }
+    }
 
-        // Sanity check: the scenario must actually have exercised the GC writer,
-        // otherwise the test proves nothing.
-        auto gc_created = std::ranges::count_if(created, [] (const shared_sstable& sst) {
-            return sst->get_origin() == "garbage_collection";
-        });
-        BOOST_REQUIRE_MESSAGE(gc_created > 0, "no garbage-collected sstable was produced; "
-                                              "test scenario did not exercise the GC writer");
+    auto sst1 = make_sstable_containing(base_sst_gen, std::move(live)).get();
+    auto sst2 = make_sstable_containing(base_sst_gen, std::move(purgeable)).get();
+    // Same run id on both inputs => _contains_multi_fragment_runs, which is
+    // a precondition of enable_garbage_collected_sstable_writer().
+    auto run = sstables::run_id::create_random_id();
+    sstables::test(sst1).set_run_identifier(run);
+    sstables::test(sst2).set_run_identifier(run);
 
-        // Snapshot identities before dropping references.  An sstable that was
-        // only marked for deletion is unlinked when its last reference goes away,
-        // so the test must not keep any of its own -- otherwise a correctly
-        // handled sstable would still look like a leak.
-        struct created_sst { sstring toc; sstring origin; };
-        std::vector<created_sst> created_info;
-        for (auto& sst : created) {
-            created_info.push_back({sstring(fmt::to_string(sst->toc_filename())), sstring(sst->get_origin())});
-        }
-        std::unordered_set<sstring> handed_over_tocs;
-        for (auto& sst : handed_over) {
-            handed_over_tocs.insert(sstring(fmt::to_string(sst->toc_filename())));
-        }
-        created.clear();
-        handed_over.clear();
-        res.new_sstables.clear();
+    column_family_test(cf).add_sstable(sst1).get();
+    column_family_test(cf).add_sstable(sst2).get();
+
+    // A real replacer, so the compaction's incremental replacements actually
+    // take effect (a no-op replacer would make every output look orphaned).
+    // Record everything the compaction ever hands over.
+    std::unordered_set<shared_sstable> handed_over;
+    auto replacer = [&] (compaction::compaction_completion_desc ccd) {
+        handed_over.insert(ccd.new_sstables.begin(), ccd.new_sstables.end());
+        handed_over.insert(ccd.old_sstables.begin(), ccd.old_sstables.end());
+        column_family_test(cf).rebuild_sstable_list(cf.as_compaction_group_view(),
+                                                    ccd.new_sstables, ccd.old_sstables).get();
+        env.test_compaction_manager().propagate_replacement(cf.as_compaction_group_view(),
+                                                            ccd.old_sstables, ccd.new_sstables);
+    };
+
+    // max_sstable_bytes = 0 forces ~one partition per output sstable (see
+    // partitions_per_sstable()), so the regular writer rotates shut after
+    // every partition and is therefore already closed once the purgeable
+    // tail of the stream is reached -- meaning its consume_end_of_stream()
+    // is a no-op and never drives maybe_replace_exhausted_sstables_by_sst().
+    compaction::compaction_descriptor desc({sst1, sst2},
+            compaction::compaction_descriptor::default_level,
+            /* max_sstable_bytes */ 0);
+    desc.enable_garbage_collection(cf->get_sstable_set());
+    auto res = compact_sstables(env, std::move(desc), cf, sst_gen, replacer,
+                                can_purge_tombstones::yes).get();
+
+    for (auto& sst : res.new_sstables) {
+        handed_over.insert(sst);
+    }
+
+    // Sanity check: the scenario must actually have exercised the GC writer,
+    // otherwise the test proves nothing.
+    auto gc_created = std::ranges::count_if(created, [] (const shared_sstable& sst) {
+        return sst->get_origin() == "garbage_collection";
+    });
+    BOOST_REQUIRE_MESSAGE(gc_created > 0, "no garbage-collected sstable was produced; "
+                                          "test scenario did not exercise the GC writer");
+
+    // Snapshot identities before dropping references.  An sstable that was
+    // only marked for deletion is unlinked when its last reference goes away,
+    // so the caller must not keep any of its own -- otherwise a correctly
+    // handled sstable would still look like a leak.
+    compaction_output_census census;
+    for (auto& sst : created) {
+        census.created.push_back({sstring(fmt::to_string(sst->toc_filename())), sstring(sst->get_origin())});
+    }
+    for (auto& sst : handed_over) {
+        census.handed_over_tocs.insert(sstring(fmt::to_string(sst->toc_filename())));
+    }
+    created.clear();
+    handed_over.clear();
+    res.new_sstables.clear();
+    return census;
+}
+
+} // anonymous namespace
+
+SEASTAR_TEST_CASE(test_last_gc_sstable_is_not_leaked_on_successful_compaction) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto census = compact_leaving_unused_gc_sstable(env);
 
         // Every sstable the compaction created must either have gone through the
         // replacer (attached, and removed again through the normal path) or have
         // had its files removed from disk.  Anything else was written, sealed and
         // then forgotten: it survives on disk unreferenced, and the next restart
-        // will load it.  Deletion of an unreferenced sstable runs in the
-        // background, hence the retry loop.
-        auto orphaned = [&] {
-            std::vector<sstring> extra;
-            for (const auto& info : created_info) {
-                if (handed_over_tocs.contains(info.toc)) {
-                    continue;
-                }
-                if (fs::exists(fs::path(std::string(info.toc)))) {
-                    extra.push_back(format("{} (origin: {})", info.toc, info.origin));
-                }
-            }
-            return extra;
-        };
-        (void) eventually_true([&] { return orphaned().empty(); });
+        // will load it.  Deletion may complete in the background, hence the retry
+        // loop.
+        (void) eventually_true([&] { return census.orphaned().empty(); });
 
-        auto extra = orphaned();
+        auto extra = census.orphaned();
         BOOST_REQUIRE_MESSAGE(extra.empty(),
                 fmt::format("compaction created sstable(s) it never attached nor deleted: [{}]",
-                            fmt::join(extra, ", ")));
+                            fmt::join(extra | std::views::transform([] (const auto& info) {
+                                return format("{} (origin: {})", info.toc, info.origin);
+                            }), ", ")));
+    });
+}
+
+// Deleting the leaked garbage-collected sstable has to survive a crash.
+//
+// mark_for_deletion() does not: it records the intent in memory only, and the
+// files are unlinked once the last reference to the sstable object goes away.
+// A crash in between leaves a sealed, complete sstable that the next restart
+// picks up from the data directory again -- the very leak
+// test_last_gc_sstable_is_not_leaked_on_successful_compaction() is about.
+//
+// The deletion therefore goes through sstables::atomic_deletion, which first
+// commits the intent to a pending_delete log.  This test injects a failure right
+// after that commit -- i.e. it simulates dying before anything was unlinked --
+// and checks that the log is on disk and names the leaked sstable, which is what
+// makes the restart finish the deletion (see
+// test_distributed_loader_with_pending_delete for the replay itself).
+SEASTAR_TEST_CASE(test_unused_gc_sstable_deletion_is_crash_safe) {
+    return test_env::do_with_async([] (test_env& env) {
+        constexpr auto injection = "delete_atomically_after_prepare";
+        scoped_error_injection inject(injection);
+        if (!utils::get_local_injector().is_enabled(injection)) {
+            testlog.info("Skipping test: error injection is not compiled in");
+            return;
+        }
+
+        auto census = compact_leaving_unused_gc_sstable(env);
+
+        // The injected failure aborts the deletion after the commit, so the
+        // sstable this is all about is still identifiable.
+        auto leaked = census.find_by_origin("garbage_collection");
+        BOOST_REQUIRE_MESSAGE(leaked.has_value(), "no garbage-collected sstable was produced");
+        BOOST_REQUIRE_MESSAGE(!census.handed_over_tocs.contains(leaked->toc),
+                fmt::format("{} was attached; the scenario no longer leaves an unused GC sstable", leaked->toc));
+
+        auto toc = fs::path(std::string(leaked->toc));
+        auto pending_delete_dir = toc.parent_path() / sstables::pending_delete_dir;
+        BOOST_REQUIRE_MESSAGE(fs::exists(pending_delete_dir),
+                fmt::format("{} was not created, so nothing tells a restart to delete {}",
+                            pending_delete_dir, toc));
+
+        // The log names TOCs relative to the table's base directory.
+        bool listed = false;
+        for (const auto& entry : fs::directory_iterator(pending_delete_dir)) {
+            auto text = seastar::util::read_entire_file_contiguous(entry.path()).get();
+            if (text.find(std::string(toc.filename())) != std::string::npos) {
+                listed = true;
+                break;
+            }
+        }
+        BOOST_REQUIRE_MESSAGE(listed,
+                fmt::format("no pending_delete log in {} names {}, so a restart would load it again",
+                            pending_delete_dir, toc));
+    });
+}
+
+namespace {
+
+// Runs a compaction that gives up part way through, after it has sealed some
+// output but before any of it was handed to the replacer, and reports what it
+// created.
+//
+// Sealed output waits in _new_unused_sstables until an input sstable becomes
+// exhausted, at which point maybe_replace_exhausted_sstables_by_sst() hands it
+// over. With a single input that only happens once the last partition has been
+// written, so everything sealed before the failure is still sitting in that
+// vector when delete_sstables_for_interrupted_compaction() runs.
+//
+// The interruption is produced by failing the sstable creator, which is what a
+// real one looks like from the compaction's point of view: an exception out of
+// consumption and into compaction::run()'s handler. `fail_after` is the number of
+// sstables that get created before that happens.
+compaction_output_census compact_interrupted_after_sealing(test_env& env, size_t fail_after) {
+    auto s = schema_builder(1, "tests", "interrupted_compaction")
+            .with_column("id", utf8_type, column_kind::partition_key)
+            .with_column("value", int32_type)
+            .build();
+
+    auto cf = env.make_table_for_tests(s);
+    auto stop_cf = deferred_stop(cf);
+    auto base_sst_gen = env.make_sst_factory(s);
+
+    std::vector<shared_sstable> created;
+    auto sst_gen = [&] {
+        if (created.size() >= fail_after) {
+            throw std::runtime_error("test: sstable creation failed");
+        }
+        auto sst = base_sst_gen();
+        created.push_back(sst);
+        return sst;
+    };
+
+    api::timestamp_type ts = 1;
+    utils::chunked_vector<mutation> muts;
+    for (int i = 0; i < 24; i++) {
+        auto key = partition_key::from_exploded(*s, {to_bytes(format("key{:05d}", i))});
+        mutation m(s, key);
+        m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(1)), ts++);
+        muts.push_back(std::move(m));
+    }
+    // A single input, so it is not exhausted until the very end and nothing the
+    // compaction seals gets handed over before it fails.
+    auto sst = make_sstable_containing(base_sst_gen, std::move(muts)).get();
+    column_family_test(cf).add_sstable(sst).get();
+
+    std::unordered_set<shared_sstable> handed_over;
+    auto replacer = [&] (compaction::compaction_completion_desc ccd) {
+        handed_over.insert(ccd.new_sstables.begin(), ccd.new_sstables.end());
+        handed_over.insert(ccd.old_sstables.begin(), ccd.old_sstables.end());
+    };
+
+    // max_sstable_bytes = 0 gives ~one partition per output sstable, so the
+    // compaction seals several before it reaches the failing creation.
+    compaction::compaction_descriptor desc({sst},
+            compaction::compaction_descriptor::default_level,
+            /* max_sstable_bytes */ 0);
+    bool threw = false;
+    try {
+        compact_sstables(env, std::move(desc), cf, sst_gen, replacer, can_purge_tombstones::yes).get();
+    } catch (...) {
+        threw = true;
+    }
+    BOOST_REQUIRE_MESSAGE(threw, "the compaction was expected to fail, so nothing was interrupted");
+
+    compaction_output_census census;
+    for (auto& created_sst : created) {
+        census.created.push_back({sstring(fmt::to_string(created_sst->toc_filename())), sstring(created_sst->get_origin())});
+    }
+    for (auto& handed_over_sst : handed_over) {
+        census.handed_over_tocs.insert(sstring(fmt::to_string(handed_over_sst->toc_filename())));
+    }
+    // The base sstable factory is shared with the input, which the compaction
+    // never created; only what sst_gen produced is under test.
+    created.clear();
+    handed_over.clear();
+    return census;
+}
+
+} // anonymous namespace
+
+// An interrupted compaction must not leave behind the output it had already
+// sealed. Those sstables have a complete TOC, so a restart that finds them cannot
+// tell them from live ones and loads them.
+SEASTAR_TEST_CASE(test_interrupted_compaction_does_not_leak_sealed_sstables) {
+    return test_env::do_with_async([] (test_env& env) {
+        constexpr size_t fail_after = 3;
+        auto census = compact_interrupted_after_sealing(env, fail_after);
+
+        // Sanity check: the scenario has to have sealed something, or it proves
+        // nothing about the cleanup.
+        BOOST_REQUIRE_EQUAL(census.created.size(), fail_after);
+        BOOST_REQUIRE_MESSAGE(census.handed_over_tocs.empty(),
+                "the compaction handed sstables over, so none of them was left unattached");
+
+        // Deletion of an unreferenced sstable can complete in the background,
+        // hence the retry loop.
+        (void) eventually_true([&] { return census.orphaned().empty(); });
+
+        auto extra = census.orphaned();
+        BOOST_REQUIRE_MESSAGE(extra.empty(),
+                fmt::format("interrupted compaction left sealed sstable(s) behind: [{}]",
+                            fmt::join(extra | std::views::transform([] (const auto& info) {
+                                return format("{} (origin: {})", info.toc, info.origin);
+                            }), ", ")));
+    });
+}
+
+// ... and that deletion has to survive a crash, for the same reason as on the
+// successful path: mark_for_deletion() records the intent in memory only. Inject a
+// failure right after the commit -- i.e. simulate dying before anything was
+// unlinked -- and check the pending_delete log names what was left over.
+SEASTAR_TEST_CASE(test_interrupted_compaction_sstable_deletion_is_crash_safe) {
+    return test_env::do_with_async([] (test_env& env) {
+        constexpr auto injection = "delete_atomically_after_prepare";
+        scoped_error_injection inject(injection);
+        if (!utils::get_local_injector().is_enabled(injection)) {
+            testlog.info("Skipping test: error injection is not compiled in");
+            return;
+        }
+
+        constexpr size_t fail_after = 3;
+        auto census = compact_interrupted_after_sealing(env, fail_after);
+        BOOST_REQUIRE_EQUAL(census.created.size(), fail_after);
+
+        auto pending_delete_dir = fs::path(std::string(census.created.front().toc)).parent_path() / sstables::pending_delete_dir;
+        BOOST_REQUIRE_MESSAGE(fs::exists(pending_delete_dir),
+                fmt::format("{} was not created, so nothing tells a restart to delete the leftovers", pending_delete_dir));
+
+        std::string logs;
+        for (const auto& entry : fs::directory_iterator(pending_delete_dir)) {
+            logs += seastar::util::read_entire_file_contiguous(entry.path()).get();
+        }
+        for (const auto& info : census.created) {
+            auto name = std::string(fs::path(std::string(info.toc)).filename());
+            BOOST_REQUIRE_MESSAGE(logs.find(name) != std::string::npos,
+                    fmt::format("no pending_delete log in {} names {}, so a restart would load it again",
+                                pending_delete_dir, name));
+        }
     });
 }
 
