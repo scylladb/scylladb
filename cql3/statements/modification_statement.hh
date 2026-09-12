@@ -110,10 +110,6 @@ public:
 
     virtual ~modification_statement() override;
 
-    virtual bool require_full_clustering_key() const = 0;
-
-    virtual bool allow_clustering_key_slices() const = 0;
-
     uint32_t get_bound_terms() const override;
 
     const sstring& keyspace() const;

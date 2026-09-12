@@ -948,7 +948,8 @@ void modification_restrictions::analyze_mutation(
         data_dictionary::database db,
         statements::statement_type type,
         const expr::expression& where_clause,
-        prepare_context& ctx) {
+        prepare_context& ctx,
+        bool applies_only_to_static_columns) {
     auto where = _analysis.prepare_where_clause(db, where_clause, ctx);
     if (!where.scoring_functions.empty()) {
         throw exceptions::invalid_request_exception("Scoring functions are only supported in SELECT statements");
@@ -959,6 +960,92 @@ void modification_restrictions::analyze_mutation(
     _analysis.classify_predicates(std::move(where.predicates), /*allow_filtering=*/false);
     _analysis.validate_clustering_restrictions_are_a_slice();
     _analysis.build_key_range_fns();
+
+    if (applies_only_to_static_columns) {
+        reject_clustering_restrictions(type);
+    }
+    reject_token_restrictions();
+    reject_non_primary_key_restrictions();
+    if (!type.is_delete()) {
+        // Only a DELETE names a range of rows; anything else writes whole rows,
+        // and a slice cannot say which.
+        reject_clustering_slice();
+    }
+}
+
+void modification_restrictions::reject_token_restrictions() const {
+    if (_analysis.has_token_restrictions()) {
+        throw exceptions::invalid_request_exception(format("The token function cannot be used in WHERE clauses for UPDATE and DELETE statements: {}",
+                expr::to_string(_analysis.partition_key_restrictions)));
+    }
+}
+
+void modification_restrictions::reject_non_primary_key_restrictions() const {
+    if (!_analysis.single_column_nonprimary_key_restrictions.empty()) {
+        throw exceptions::invalid_request_exception(seastar::format("Invalid where clause contains non PRIMARY KEY columns: {}",
+                                                                    fmt::join(_analysis.single_column_nonprimary_key_restrictions
+                                         | std::views::keys
+                                         | std::views::transform([](const column_definition* c) {
+                                             return c->name_as_text();
+                                         }), ", ")));
+    }
+}
+
+void modification_restrictions::reject_clustering_slice() const {
+    if (deletes_a_range()) {
+        throw exceptions::invalid_request_exception(
+                format("Invalid operator in where clause {}", expr::to_string(_analysis.clustering_columns_restrictions)));
+    }
+}
+
+bool modification_restrictions::deletes_a_range() const {
+    return _analysis.clustering_key_restrictions_have_slice();
+}
+
+bool modification_restrictions::addresses_exact_rows() const {
+    return !_analysis.has_unrestricted_clustering_columns() && _analysis.ck_is_all_eq;
+}
+
+const column_definition* modification_restrictions::unnamed_clustering_column(
+        bool applies_only_to_static_columns) const {
+    // Tomek: Origin had "&& s->comparator->is_composite()" in the condition below.
+    // Comparator is a thrift concept, not CQL concept, and we want to avoid
+    // using thrift concepts here. I think it's safe to drop this here because the only
+    // case in which we would get a non-composite comparator here would be if the cell
+    // name type is SimpleSparse, which means:
+    //   (a) CQL compact table without clustering columns
+    //   (b) thrift static CF with non-composite comparator
+    // Those tables don't have clustering columns so we wouldn't reach this code, thus
+    // the check seems redundant.
+    if (!_analysis.has_unrestricted_clustering_columns() || applies_only_to_static_columns
+            || _analysis.schema->is_dense()) {
+        return nullptr;
+    }
+    return &_analysis.unrestricted_column(column_kind::clustering_key);
+}
+
+void modification_restrictions::reject_incomplete_clustering_key(bool applies_only_to_static_columns) const {
+    if (auto* missing = unnamed_clustering_column(applies_only_to_static_columns)) {
+        throw exceptions::invalid_request_exception(format("Missing mandatory PRIMARY KEY part {}",
+                missing->name_as_text()));
+    }
+}
+
+const column_definition* modification_restrictions::clustering_column_required_for_regular_columns(
+        bool applies_only_to_static_columns) const {
+    // In general, we can't modify specific columns if not all clustering columns have been specified.
+    // However, if we modify only static columns, it's fine since we won't really use the prefix anyway.
+    if (deletes_a_range()) {
+        return nullptr;
+    }
+    return unnamed_clustering_column(applies_only_to_static_columns);
+}
+
+void modification_restrictions::reject_incomplete_partition_key() const {
+    if (_analysis.has_partition_key_unrestricted_components()) {
+        throw exceptions::invalid_request_exception(format("Missing mandatory PRIMARY KEY part {}",
+            _analysis.unrestricted_column(column_kind::partition_key).name_as_text()));
+    }
 }
 
 void modification_restrictions::reject_clustering_restrictions(statements::statement_type type) const {
@@ -3065,10 +3152,8 @@ analyze_update_restrictions(
         bool applies_only_to_static_columns) {
     auto restrictions = seastar::make_shared<modification_restrictions>(
             modification_restrictions::private_tag{}, std::move(schema));
-    restrictions->analyze_mutation(db, statements::statement_type::UPDATE, where_clause, ctx);
-    if (applies_only_to_static_columns) {
-        restrictions->reject_clustering_restrictions(statements::statement_type::UPDATE);
-    }
+    restrictions->analyze_mutation(db, statements::statement_type::UPDATE, where_clause, ctx,
+            applies_only_to_static_columns);
     return restrictions;
 }
 
@@ -3081,10 +3166,8 @@ analyze_delete_restrictions(
         bool applies_only_to_static_columns) {
     auto restrictions = seastar::make_shared<modification_restrictions>(
             modification_restrictions::private_tag{}, std::move(schema));
-    restrictions->analyze_mutation(db, statements::statement_type::DELETE, where_clause, ctx);
-    if (applies_only_to_static_columns) {
-        restrictions->reject_clustering_restrictions(statements::statement_type::DELETE);
-    }
+    restrictions->analyze_mutation(db, statements::statement_type::DELETE, where_clause, ctx,
+            applies_only_to_static_columns);
     return restrictions;
 }
 
@@ -3100,7 +3183,8 @@ analyze_insert_restrictions(
     // is a perfectly sensible way to set only a static column.
     auto restrictions = seastar::make_shared<modification_restrictions>(
             modification_restrictions::private_tag{}, std::move(schema));
-    restrictions->analyze_mutation(db, statements::statement_type::INSERT, where_clause, ctx);
+    restrictions->analyze_mutation(db, statements::statement_type::INSERT, where_clause, ctx,
+            /*applies_only_to_static_columns=*/false);
     return restrictions;
 }
 

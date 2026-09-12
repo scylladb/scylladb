@@ -27,14 +27,6 @@ delete_statement::delete_statement(audit::audit_info_ptr&& audit_info, statement
     set_audit_info(std::move(audit_info));
 }
 
-bool delete_statement::require_full_clustering_key() const {
-    return false;
-}
-
-bool delete_statement::allow_clustering_key_slices() const {
-    return true;
-}
-
 utils::chunked_vector<mutation> delete_statement::apply_updates(
         const std::vector<dht::partition_range>& keys,
         const std::vector<query::clustering_range>& ranges,
@@ -96,7 +88,7 @@ delete_statement::prepare_internal(data_dictionary::database db, schema_ptr sche
     }
     prepare_conditions(db, *schema, ctx, *stmt);
     stmt->process_where_clause(db, _where_clause, ctx);
-    if (has_slice(stmt->restrictions().get_clustering_columns_restrictions())) {
+    if (stmt->restrictions().deletes_a_range()) {
         if (!schema->is_compound()) {
             throw exceptions::invalid_request_exception("Range deletions on \"compact storage\" schemas are not supported");
         }

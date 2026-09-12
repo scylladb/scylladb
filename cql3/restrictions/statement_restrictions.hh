@@ -56,52 +56,51 @@ public:
     modification_restrictions(const modification_restrictions&) = delete;
     modification_restrictions& operator=(const modification_restrictions&) = delete;
 
-    /// Reads the WHERE clause of a mutation.  The type only picks the wording of
-    /// the errors this may throw.
+    /// Reads the WHERE clause of a mutation and applies the rules that hold for
+    /// one: it has to name the rows to write, so it may not use token(), may not
+    /// restrict a non-primary-key column, and - unless it is a DELETE, the only
+    /// mutation that names a range of rows - may not slice the clustering key.
+    ///
+    /// The type picks the wording of the errors this may throw, and whether the
+    /// clustering slice is allowed.
     void analyze_mutation(
             data_dictionary::database db,
             statements::statement_type type,
             const expr::expression& where_clause,
-            prepare_context& ctx);
+            prepare_context& ctx,
+            bool applies_only_to_static_columns);
 
-    /// Rejects a WHERE clause that restricts clustering columns although the
-    /// statement writes only static columns: the clustering key names a row the
-    /// statement then does not write, which is never what the user meant.
+    /// Rejects a WHERE clause that does not name the whole clustering key.  A
+    /// DELETE names a range of rows and does not call this.
     ///
-    /// Does not apply to an INSERT, which creates the row it names.
-    void reject_clustering_restrictions(statements::statement_type type) const;
+    /// Takes the flag rather than remembering it: an IF [NOT] EXISTS condition
+    /// is classified after the analysis and can change it.
+    void reject_incomplete_clustering_key(bool applies_only_to_static_columns) const;
+
+    /// The clustering column the WHERE clause leaves unnamed while the statement
+    /// may still write regular columns; nullptr if it is free to do so.
+    const column_definition* clustering_column_required_for_regular_columns(
+            bool applies_only_to_static_columns) const;
+
+    /// Rejects a WHERE clause that does not name the whole partition key.
+    void reject_incomplete_partition_key() const;
+
+    /// True if the WHERE clause names a range of rows rather than whole rows.
+    /// Only a DELETE can.
+    bool deletes_a_range() const;
+
+    /// True if the WHERE clause names exact rows: the whole clustering key, by
+    /// equality.
+    bool addresses_exact_rows() const;
 
     /// Initializes the object for a statement that does not work out the rows it
     /// writes from a WHERE clause: INSERT ... JSON gets its primary key from the
     /// JSON document at execution time, and computes the keys itself.
     void no_restrictions();
 
-    const expr::expression& get_partition_key_restrictions() const {
-        return _analysis.partition_key_restrictions;
-    }
-
-    const expr::expression& get_clustering_columns_restrictions() const {
-        return _analysis.clustering_columns_restrictions;
-    }
-
-    /// The restrictions on non-primary-key columns, which a mutation rejects.
-    const expr::single_column_restrictions_map& get_non_pk_restriction() const {
-        return _analysis.single_column_nonprimary_key_restrictions;
-    }
-
     bool key_is_in_relation() const { return _analysis.key_is_in_relation(); }
     bool clustering_key_restrictions_has_IN() const { return _analysis.clustering_key_restrictions_has_IN(); }
-    bool clustering_key_restrictions_has_only_eq() const { return _analysis.ck_is_all_eq; }
-    bool has_token_restrictions() const { return _analysis.has_token_restrictions(); }
-    bool has_partition_key_unrestricted_components() const {
-        return _analysis.has_partition_key_unrestricted_components();
-    }
     bool has_clustering_columns_restriction() const { return _analysis.has_clustering_columns_restriction(); }
-    bool has_unrestricted_clustering_columns() const { return _analysis.has_unrestricted_clustering_columns(); }
-    const column_definition& unrestricted_column(column_kind kind) const {
-        return _analysis.unrestricted_column(kind);
-    }
-    bool is_empty() const { return _analysis.is_empty(); }
 
     dht::partition_range_vector get_partition_key_ranges(const query_options& options) const {
         return _analysis.get_partition_key_ranges(options);
@@ -113,6 +112,13 @@ public:
     /// Checks that the primary key restrictions don't contain null values, throws
     /// invalid_request_exception otherwise.
     void validate_primary_key(const query_options& options) const { _analysis.validate_primary_key(options); }
+
+private:
+    void reject_clustering_restrictions(statements::statement_type type) const;
+    void reject_token_restrictions() const;
+    void reject_non_primary_key_restrictions() const;
+    void reject_clustering_slice() const;
+    const column_definition* unnamed_clustering_column(bool applies_only_to_static_columns) const;
 };
 
 /**

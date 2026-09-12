@@ -60,10 +60,6 @@ public:
             const json_cache_opt& json_cache) const override;
 
 private:
-    virtual bool require_full_clustering_key() const override;
-
-    virtual bool allow_clustering_key_slices() const override;
-
     virtual void execute_operations_for_key(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params, const json_cache_opt& json_cache) const;
 };
 
