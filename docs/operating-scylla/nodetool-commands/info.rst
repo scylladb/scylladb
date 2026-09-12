@@ -19,16 +19,16 @@ Example output:
     Gossip active          : true
     Thrift active          : false
     Native Transport active: true
-    Load                   : 294.44 MB
+    Load                   : 294.44 MiB
     Generation No          : 1474434958
     Uptime (seconds)       : 1868
-    Heap Memory (MB)       : 39.21 / 247.50
-    Off Heap Memory (MB)   : 7.74
+    Heap Memory (MiB)      : 39.21 / 247.50
+    Off Heap Memory (MiB)  : 7.74
     Data Center            : us-east
     Rack                   : 1b
     Exceptions             : 0
-    Key Cache              : entries 0, size 0 bytes, capacity 0 MB, 0 hits, 0 requests, 0 recent hit rate, 0 save period in seconds
-    Row Cache              : entries 1064771, size 1.02 MB, capacity 450.8 MB, 96 hits, 120 requests, 0.800 recent hit rate, 0 save period in seconds
+    Key Cache              : entries 0, size 0 bytes, capacity 0 bytes, 0 hits, 0 requests, 0 recent hit rate, 0 save period in seconds
+    Row Cache              : entries 1064771, size 1.02 MiB, capacity 450.80 MiB, 96 hits, 120 requests, 0.800 recent hit rate, 0 save period in seconds
     Counter Cache          : entries 0, size 0 bytes, capacity 0 bytes, 0 hits, 0 requests, 0.000 recent hit rate, 0 save period in seconds
     Token                  : (invoke with -T/--tokens to see all 256 tokens)
 
@@ -85,13 +85,13 @@ Example output:
 +-----------+------------------------------+
 | Heap      |Not applicable with ScyllaDB  |
 | Memory    |                              |
-| (MB)      |                              |
+| (MiB)     |                              |
 |           |                              |
 +-----------+------------------------------+
 | Off       |Shows how much memory is used,|
 | Heap      |by all tables, for Memtables ,|
 | Memory    |Bloom filters, Indexes, and   |
-| (MB)      |Compression Metadata          |
+| (MiB)     |Compression Metadata          |
 |           |                              |
 |           |                              |
 |           |                              |
