@@ -95,14 +95,6 @@ update_statement::update_statement(
     set_audit_info(std::move(audit_info));
 }
 
-bool update_statement::require_full_clustering_key() const {
-    return true;
-}
-
-bool update_statement::allow_clustering_key_slices() const {
-    return false;
-}
-
 clustering_key_prefix row_key(const query::clustering_range& range) {
     return range.start() ? std::move(range.start()->value()) : clustering_key_prefix::make_empty();
 }

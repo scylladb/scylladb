@@ -562,52 +562,21 @@ modification_statement::process_where_clause(data_dictionary::database db, expr:
                 applies_only_to_static_columns());
     }
     classify_exists_condition(_restrictions->has_clustering_columns_restriction());
-    if (_restrictions->has_token_restrictions()) {
-        throw exceptions::invalid_request_exception(format("The token function cannot be used in WHERE clauses for UPDATE and DELETE statements: {}",
-                to_string(_restrictions->get_partition_key_restrictions())));
+    if (!type.is_delete()) {
+        // Only a DELETE names a range of rows; the others write whole rows, so
+        // the WHERE clause has to name the whole clustering key.
+        _restrictions->reject_incomplete_clustering_key(applies_only_to_static_columns());
     }
-    if (!_restrictions->get_non_pk_restriction().empty()) {
-        throw exceptions::invalid_request_exception(seastar::format("Invalid where clause contains non PRIMARY KEY columns: {}",
-                                                                    fmt::join(_restrictions->get_non_pk_restriction()
-                                         | std::views::keys
-                                         | std::views::transform([](const column_definition* c) {
-                                             return c->name_as_text();
-                                         }), ", ")));
-    }
-    const expr::expression& ck_restrictions = _restrictions->get_clustering_columns_restrictions();
-    if (has_slice(ck_restrictions) && !allow_clustering_key_slices()) {
-        throw exceptions::invalid_request_exception(
-                format("Invalid operator in where clause {}", to_string(ck_restrictions)));
-    }
-    if (_restrictions->has_unrestricted_clustering_columns() && !applies_only_to_static_columns() && !s->is_dense()) {
-        // Tomek: Origin had "&& s->comparator->is_composite()" in the condition below.
-        // Comparator is a thrift concept, not CQL concept, and we want to avoid
-        // using thrift concepts here. I think it's safe to drop this here because the only
-        // case in which we would get a non-composite comparator here would be if the cell
-        // name type is SimpleSparse, which means:
-        //   (a) CQL compact table without clustering columns
-        //   (b) thrift static CF with non-composite comparator
-        // Those tables don't have clustering columns so we wouldn't reach this code, thus
-        // the check seems redundant.
-        if (require_full_clustering_key()) {
-            throw exceptions::invalid_request_exception(format("Missing mandatory PRIMARY KEY part {}",
-                _restrictions->unrestricted_column(column_kind::clustering_key).name_as_text()));
-        }
-        // In general, we can't modify specific columns if not all clustering columns have been specified.
-        // However, if we modify only static columns, it's fine since we won't really use the prefix anyway.
-        if (!has_slice(ck_restrictions)) {
-            for (auto&& op : _column_operations) {
-                if (!op->column.is_static()) {
-                    throw exceptions::invalid_request_exception(format("Primary key column '{}' must be specified in order to modify column '{}'",
-                        _restrictions->unrestricted_column(column_kind::clustering_key).name_as_text(), op->column.name_as_text()));
-                }
+    if (auto* missing = _restrictions->clustering_column_required_for_regular_columns(
+                applies_only_to_static_columns())) {
+        for (auto&& op : _column_operations) {
+            if (!op->column.is_static()) {
+                throw exceptions::invalid_request_exception(format("Primary key column '{}' must be specified in order to modify column '{}'",
+                    missing->name_as_text(), op->column.name_as_text()));
             }
         }
     }
-    if (_restrictions->has_partition_key_unrestricted_components()) {
-        throw exceptions::invalid_request_exception(format("Missing mandatory PRIMARY KEY part {}",
-            _restrictions->unrestricted_column(column_kind::partition_key).name_as_text()));
-    }
+    _restrictions->reject_incomplete_partition_key();
     if (has_conditions()) {
         validate_where_clause_for_conditions();
     }
@@ -887,8 +856,7 @@ void modification_statement::validate_where_clause_for_conditions() const {
                 format("IN on the clustering key columns is not supported with conditional {}",
                     type.is_update() ? "updates" : "deletions"));
     }
-    if (type.is_delete() && (_restrictions->has_unrestricted_clustering_columns() ||
-                !_restrictions->clustering_key_restrictions_has_only_eq())) {
+    if (type.is_delete() && !_restrictions->addresses_exact_rows()) {
 
         bool deletes_regular_columns = _column_operations.empty() ||
             std::any_of(_column_operations.begin(), _column_operations.end(), [] (auto&& op) {
