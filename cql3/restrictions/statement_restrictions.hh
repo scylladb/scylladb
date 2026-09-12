@@ -10,6 +10,7 @@
 
 #pragma once
 
+#include <span>
 #include <vector>
 #include "cql3/expr/expression.hh"
 #include "cql3/expr/restrictions.hh"
@@ -83,6 +84,15 @@ public:
     std::vector<query::clustering_range> clustering_ranges(const query_options& options) const {
         return _analysis.get_clustering_bounds(options);
     }
+
+    /// The rows the statement writes.  An UPDATE names whole rows, so each one is
+    /// a clustering key rather than a range; the empty prefix is the static row.
+    std::vector<clustering_key_prefix> clustering_rows(const query_options& options) const;
+
+    /// The same, for a caller that already has the ranges and must not solve them
+    /// a second time - a non-pure value in a key would not evaluate the same way
+    /// twice, and the row written would not be the row read.
+    static std::vector<clustering_key_prefix> clustering_rows(std::span<const query::clustering_range> ranges);
 
     /// Checks that the primary key restrictions don't contain null values, throws
     /// invalid_request_exception otherwise.

@@ -1035,6 +1035,28 @@ void update_restrictions::analyze_update(
     }
 }
 
+std::vector<clustering_key_prefix> update_restrictions::clustering_rows(
+        std::span<const query::clustering_range> ranges) {
+    std::vector<clustering_key_prefix> rows;
+    rows.reserve(ranges.size());
+    for (const auto& range : ranges) {
+        if (!range.start()) {
+            // No clustering restriction at all: the static row.
+            rows.push_back(clustering_key_prefix::make_empty());
+        } else if (range.is_singular()) {
+            rows.push_back(range.start()->value());
+        } else {
+            // analyze_update() rejects anything that would name a range of rows.
+            on_internal_error(rlogger, format("update_restrictions: not a single row: {}", range));
+        }
+    }
+    return rows;
+}
+
+std::vector<clustering_key_prefix> update_restrictions::clustering_rows(const query_options& options) const {
+    return clustering_rows(_analysis.get_clustering_bounds(options));
+}
+
 void update_restrictions::reject_incomplete_clustering_key(bool applies_only_to_static_columns) const {
     if (auto* missing = unnamed_clustering_column(_analysis, applies_only_to_static_columns)) {
         throw exceptions::invalid_request_exception(format("Missing mandatory PRIMARY KEY part {}",
