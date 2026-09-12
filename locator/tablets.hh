@@ -664,6 +664,14 @@ struct load_stats {
     // - pending host is not found in load_stats.tablet_stats
     // Preemptible; *this must outlive the returned future.
     future<lw_shared_ptr<load_stats>> migrate_tablet_size(locator::host_id leaving, locator::host_id pending, locator::global_tablet_id gid, const dht::token_range trange) const;
+
+    // Whether move_tablet_size() would move anything.
+    bool can_move_tablet_size(locator::host_id leaving, locator::host_id pending, locator::global_tablet_id gid, const dht::token_range& trange) const;
+
+    // Moves the size of a tablet from leaving to pending in place. Returns false
+    // and changes nothing when migrate_tablet_size() would return nullptr. Lets a
+    // caller with many tablets to move pay for a single copy.
+    bool move_tablet_size(locator::host_id leaving, locator::host_id pending, locator::global_tablet_id gid, const dht::token_range& trange);
 };
 
 using load_stats_v2 = load_stats;

@@ -1414,24 +1414,36 @@ future<lw_shared_ptr<load_stats>> load_stats::reconcile_tablets_resize(const std
     co_return reconciled_stats;
 }
 
-future<lw_shared_ptr<load_stats>> load_stats::migrate_tablet_size(locator::host_id leaving, locator::host_id pending, locator::global_tablet_id gid, const dht::token_range trange) const {
+bool load_stats::can_move_tablet_size(locator::host_id leaving, locator::host_id pending, locator::global_tablet_id gid, const dht::token_range& trange) const {
     if (leaving == pending) {
-        co_return nullptr;
+        return false;
     }
     range_based_tablet_id rb_tid {gid.table, trange};
-    if (!get_tablet_size(leaving, rb_tid) || get_tablet_size(pending, rb_tid) || !tablet_stats.contains(pending)) {
-        co_return nullptr;
+    return get_tablet_size(leaving, rb_tid) && !get_tablet_size(pending, rb_tid) && tablet_stats.contains(pending);
+}
+
+bool load_stats::move_tablet_size(locator::host_id leaving, locator::host_id pending, locator::global_tablet_id gid, const dht::token_range& trange) {
+    if (!can_move_tablet_size(leaving, pending, gid, trange)) {
+        return false;
     }
 
     tablet_logger.debug("Moving tablet size for tablet: {} from: {} to: {}", gid, leaving, pending);
-    auto result = make_lw_shared<locator::load_stats>(co_await clone_gently());
-    auto& new_leaving_ts = result->tablet_stats.at(leaving);
-    auto& new_pending_ts = result->tablet_stats.at(pending);
+    auto& new_leaving_ts = tablet_stats.at(leaving);
+    auto& new_pending_ts = tablet_stats.at(pending);
     auto map_node = new_leaving_ts.tablet_sizes.at(gid.table).extract(trange);
     new_pending_ts.tablet_sizes[gid.table].insert(std::move(map_node));
     if (new_leaving_ts.tablet_sizes.at(gid.table).empty()) {
         new_leaving_ts.tablet_sizes.erase(gid.table);
     }
+    return true;
+}
+
+future<lw_shared_ptr<load_stats>> load_stats::migrate_tablet_size(locator::host_id leaving, locator::host_id pending, locator::global_tablet_id gid, const dht::token_range trange) const {
+    if (!can_move_tablet_size(leaving, pending, gid, trange)) {
+        co_return nullptr;
+    }
+    auto result = make_lw_shared<locator::load_stats>(co_await clone_gently());
+    result->move_tablet_size(leaving, pending, gid, trange);
     co_return result;
 }
 
