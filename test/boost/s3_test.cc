@@ -17,6 +17,7 @@
 #include <seastar/core/file.hh>
 #include <seastar/core/fstream.hh>
 #include <seastar/core/sleep.hh>
+#include <seastar/net/api.hh>
 #include <seastar/http/exception.hh>
 #include <seastar/util/closeable.hh>
 #include <seastar/util/short_streams.hh>
@@ -245,6 +246,92 @@ SEASTAR_THREAD_TEST_CASE(test_client_put_get_object_minio) {
 
 SEASTAR_THREAD_TEST_CASE(test_client_put_get_object_proxy) {
     client_put_get_object(make_proxy_client);
+}
+
+// Answers one accepted connection with a fixed response, ignoring whatever
+// request it got (this test only checks the client's reaction to the reply).
+future<> serve_one_fixed_response(server_socket& socket, sstring response) {
+    auto ar = co_await socket.accept();
+    auto out = output_stream<char>(ar.connection.output().detach(), 1024);
+    co_await out.write(response);
+    co_await out.flush();
+    co_await out.close();
+}
+
+// Saves an environment variable's current value and restores it on scope exit,
+// so setenv() in a test doesn't leak into later tests.
+class scoped_setenv {
+    sstring _name;
+    std::optional<sstring> _prev;
+public:
+    scoped_setenv(const char* name, const char* value) : _name(name) {
+        if (const char* prev = ::getenv(name)) {
+            _prev = sstring(prev);
+        }
+        ::setenv(name, value, 1);
+    }
+    ~scoped_setenv() {
+        if (_prev) {
+            ::setenv(_name.c_str(), _prev->c_str(), 1);
+        } else {
+            ::unsetenv(_name.c_str());
+        }
+    }
+};
+
+void do_test_get_object_contiguous_rejects_oversized_content_length(s3::range download_range, sstring response) {
+    scoped_setenv access_key("AWS_ACCESS_KEY_ID", "test");
+    scoped_setenv secret_key("AWS_SECRET_ACCESS_KEY", "test");
+
+    auto socket = seastar::listen(socket_address(0x7f000001, 0));
+    auto address = socket.local_address();
+    auto serve = serve_one_fixed_response(socket, std::move(response));
+    // Always drain this future, success or failure: the client may abort the
+    // connection right after inspecting the header, before this fake server
+    // finishes writing, and an unconsumed future must never be dropped. Abort
+    // the listener first, or serve_one_fixed_response() stays pending in
+    // socket.accept() forever when the client never connects at all.
+    auto join_serve = seastar::defer([&socket, &serve]() noexcept {
+        socket.abort_accept();
+        try {
+            serve.get();
+        } catch (...) {
+        }
+    });
+
+    s3::endpoint_config cfg = {
+        .port = address.port(),
+        .use_https = false,
+        .region = "local",
+    };
+    auto cln = s3::client::make("127.0.0.1", make_lw_shared<s3::endpoint_config>(std::move(cfg)));
+    auto close_client = seastar::defer([&]() noexcept {
+        try {
+            cln->close().get();
+        } catch (...) {
+            testlog.error("Failed to close test client: {}", std::current_exception());
+        }
+    });
+
+    BOOST_REQUIRE_EXCEPTION(cln->get_object_contiguous("/test-bucket/test-object", download_range).get(), storage_io_error,
+        [] (const storage_io_error& ex) {
+            return sstring(ex.what()).find("exceeds requested range length") != sstring::npos;
+        });
+}
+
+// SCYLLADB-4256: a full-object request must reject a Content-Length beyond
+// s3::maximum_object_size instead of allocating off it unbounded.
+SEASTAR_THREAD_TEST_CASE(test_get_object_contiguous_rejects_oversized_content_length_full) {
+    do_test_get_object_contiguous_rejects_oversized_content_length(s3::full_range, seastar::format(
+        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\nAAAA", s3::maximum_object_size + 1));
+}
+
+// SCYLLADB-4256: a ranged request must reject a Content-Length bigger than the
+// range asked for, even when it's far under s3::maximum_object_size.
+SEASTAR_THREAD_TEST_CASE(test_get_object_contiguous_rejects_oversized_content_length_ranged) {
+    do_test_get_object_contiguous_rejects_oversized_content_length(s3::range{0, 4}, seastar::format(
+        "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-3/1073741824\r\nContent-Length: {}\r\nConnection: close\r\n\r\nAAAA",
+        1_GiB));
 }
 
 void do_test_client_multipart_upload(const client_maker_function& client_maker, bool with_copy_upload) {
