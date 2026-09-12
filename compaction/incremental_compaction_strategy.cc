@@ -483,7 +483,12 @@ incremental_compaction_strategy::get_reshaping_job(std::vector<sstables::shared_
         offstrategy_threshold = max_sstables;
     }
 
-    auto run_count = std::ranges::size(input | std::views::transform(std::mem_fn(&sstables::sstable::run_identifier)) | std::ranges::to<std::unordered_set>());
+    auto run_ids = input
+        | std::views::transform(std::mem_fn(&sstables::sstable::run_identifier))
+        | std::ranges::to<std::vector>();
+    std::ranges::sort(run_ids);
+    auto it = std::unique(run_ids.begin(), run_ids.end());
+    size_t run_count = std::distance(run_ids.begin(), it);
     if (run_count >= offstrategy_threshold && mode == reshape_mode::strict) {
         std::sort(input.begin(), input.end(), [&schema] (const sstables::shared_sstable& a, const sstables::shared_sstable& b) {
             return dht::ring_position(a->get_first_decorated_key()).less_compare(*schema, dht::ring_position(b->get_first_decorated_key()));
