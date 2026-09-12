@@ -566,8 +566,6 @@ public:
     /// Finds the value of partition key of the index table
     bytes_opt value_for_index_partition_key(const query_options&) const;
 
-    sstring to_string() const;
-
     /// Checks that the primary key restrictions don't contain null values, throws invalid_request_exception otherwise.
     void validate_primary_key(const query_options& options) const;
 
