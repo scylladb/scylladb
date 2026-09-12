@@ -114,8 +114,6 @@ public:
 
     virtual bool allow_clustering_key_slices() const = 0;
 
-    virtual void add_update_for_key(mutation& m, const query::clustering_range& range, const update_parameters& params, const json_cache_opt& json_cache) const = 0;
-
     uint32_t get_bound_terms() const override;
 
     const sstring& keyspace() const;
@@ -209,11 +207,18 @@ public:
     // A single mutation object for lightweight transactions, which can only span one partition, or a vector
     // of mutations, one per partition key, for statements which affect multiple partition keys,
     // e.g. DELETE FROM table WHERE pk  IN (1, 2, 3).
-    utils::chunked_vector<mutation> apply_updates(
+    virtual utils::chunked_vector<mutation> apply_updates(
             const std::vector<dht::partition_range>& keys,
             const std::vector<query::clustering_range>& ranges,
             const update_parameters& params,
-            const json_cache_opt& json_cache) const;
+            const json_cache_opt& json_cache) const = 0;
+
+protected:
+    // One empty mutation per partition the statement addresses, for apply_updates()
+    // to write rows into.
+    utils::chunked_vector<mutation> make_mutations(const std::vector<dht::partition_range>& keys) const;
+
+public:
 
     /**
      * Checks whether the conditions represented by this statement apply provided the current state of the row on

@@ -199,21 +199,14 @@ bool modification_statement::applies_to(const selection::selection* selection,
     return expr::evaluate(_condition, inputs) == true_value;
 }
 
-utils::chunked_vector<mutation> modification_statement::apply_updates(
-        const std::vector<dht::partition_range>& keys,
-        const std::vector<query::clustering_range>& ranges,
-        const update_parameters& params,
-        const json_cache_opt& json_cache) const {
+utils::chunked_vector<mutation> modification_statement::make_mutations(
+        const std::vector<dht::partition_range>& keys) const {
 
     utils::chunked_vector<mutation> mutations;
     mutations.reserve(keys.size());
     for (auto key : keys) {
         // We know key.start() must be defined since we only allow EQ relations on the partition key.
         mutations.emplace_back(s, std::move(*key.start()->value().key()));
-        auto& m = mutations.back();
-        for (auto&& r : ranges) {
-            this->add_update_for_key(m, r, params, json_cache);
-        }
     }
     return mutations;
 }
