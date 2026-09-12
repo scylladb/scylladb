@@ -103,8 +103,44 @@ bool update_statement::allow_clustering_key_slices() const {
     return false;
 }
 
-void update_statement::execute_operations_for_key(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params, const json_cache_opt& json_cache) const {
-    for (auto&& update : _column_operations) {
+clustering_key_prefix row_key(const query::clustering_range& range) {
+    return range.start() ? std::move(range.start()->value()) : clustering_key_prefix::make_empty();
+}
+
+void open_row(const schema& s, statement_type type, bool has_column_operations,
+        mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) {
+    if (s.is_dense()) {
+        if (prefix.is_empty(s) || prefix.components().front().empty()) {
+            throw exceptions::invalid_request_exception(format("Missing PRIMARY KEY part {}", s.clustering_key_columns().begin()->name_as_text()));
+        }
+        // An empty name for the value is what we use to recognize the case where there is not column
+        // outside the PK, see CreateStatement.
+        // Since v3 schema we use empty_type instead, see schema.cc.
+        auto rb = s.regular_begin();
+        if (rb->name().empty() || rb->type == empty_type) {
+            // There is no column outside the PK. So no operation could have passed through validation
+            throwing_assert(!has_column_operations);
+            constants::setter(*s.regular_begin(), expr::constant(cql3::raw_value::make_value(bytes()), empty_type)).execute(m, prefix, params);
+        } else {
+            // dense means we don't have a row marker, so don't accept to set only the PK. See CASSANDRA-5648.
+            if (!has_column_operations) {
+                throw exceptions::invalid_request_exception(format("Column {} is mandatory for this COMPACT STORAGE table", s.regular_begin()->name_as_text()));
+            }
+        }
+    } else {
+        // If there are static columns, there also must be clustering columns, in which
+        // case empty prefix can only refer to the static row.
+        bool is_static_prefix = s.has_static_columns() && prefix.is_empty(s);
+        if (type.is_insert() && !is_static_prefix && s.is_cql3_table()) {
+            auto& row = m.partition().clustered_row(s, prefix);
+            row.apply(row_marker(params.timestamp(), params.ttl(), params.expiry()));
+        }
+    }
+}
+
+void apply_column_operations(const std::vector<std::unique_ptr<operation>>& ops,
+        mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) {
+    for (auto&& update : ops) {
         if (update->should_skip_operation(params._options)) {
             continue;
         }
@@ -112,35 +148,13 @@ void update_statement::execute_operations_for_key(mutation& m, const clustering_
     }
 }
 
+void update_statement::execute_operations_for_key(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params, const json_cache_opt& json_cache) const {
+    apply_column_operations(_column_operations, m, prefix, params);
+}
+
 void update_statement::add_update_for_key(mutation& m, const query::clustering_range& range, const update_parameters& params, const json_cache_opt& json_cache) const {
-    auto prefix = range.start() ? std::move(range.start()->value()) : clustering_key_prefix::make_empty();
-    if (s->is_dense()) {
-        if (prefix.is_empty(*s) || prefix.components().front().empty()) {
-            throw exceptions::invalid_request_exception(format("Missing PRIMARY KEY part {}", s->clustering_key_columns().begin()->name_as_text()));
-        }
-        // An empty name for the value is what we use to recognize the case where there is not column
-        // outside the PK, see CreateStatement.
-        // Since v3 schema we use empty_type instead, see schema.cc.
-        auto rb = s->regular_begin();
-        if (rb->name().empty() || rb->type == empty_type) {
-            // There is no column outside the PK. So no operation could have passed through validation
-            throwing_assert(_column_operations.empty());
-            constants::setter(*s->regular_begin(), expr::constant(cql3::raw_value::make_value(bytes()), empty_type)).execute(m, prefix, params);
-        } else {
-            // dense means we don't have a row marker, so don't accept to set only the PK. See CASSANDRA-5648.
-            if (_column_operations.empty()) {
-                throw exceptions::invalid_request_exception(format("Column {} is mandatory for this COMPACT STORAGE table", s->regular_begin()->name_as_text()));
-            }
-        }
-    } else {
-        // If there are static columns, there also must be clustering columns, in which
-        // case empty prefix can only refer to the static row.
-        bool is_static_prefix = s->has_static_columns() && prefix.is_empty(*s);
-        if (type.is_insert() && !is_static_prefix && s->is_cql3_table()) {
-            auto& row = m.partition().clustered_row(*s, prefix);
-            row.apply(row_marker(params.timestamp(), params.ttl(), params.expiry()));
-        }
-    }
+    auto prefix = row_key(range);
+    open_row(*s, type, !_column_operations.empty(), m, prefix, params);
 
     execute_operations_for_key(m, prefix, params, json_cache);
 
