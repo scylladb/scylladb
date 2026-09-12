@@ -13,7 +13,6 @@
 #include "cql3/stats.hh"
 #include "cql3/update_parameters.hh"
 #include "cql3/cql_statement.hh"
-#include "cql3/restrictions/statement_restrictions.hh"
 #include "cql3/statements/statement_type.hh"
 #include "exceptions/coordinator_result.hh"
 
@@ -96,8 +95,6 @@ private:
 
     std::optional<bool> _is_raw_counter_shard_write;
 
-protected:
-    shared_ptr<const restrictions::modification_restrictions> _restrictions;
 public:
     typedef std::optional<std::unordered_map<sstring, bytes_opt>> json_cache_opt;
 
@@ -139,10 +136,6 @@ public:
 
     void inc_cql_stats(bool is_internal) const;
 
-    const restrictions::modification_restrictions& restrictions() const {
-        return *_restrictions;
-    }
-
     bool is_conditional() const override;
 
 public:
@@ -160,8 +153,6 @@ public:
         return _is_raw_counter_shard_write.value_or(false);
     }
 
-    void process_where_clause(data_dictionary::database db, expr::expression where_clause, prepare_context& ctx);
-
     /// Decides whether an IF EXISTS / IF NOT EXISTS condition is about the static
     /// row or about a clustering row.  Must run before the checks that read
     /// applies_only_to_static_columns(), which this can change.
@@ -169,15 +160,15 @@ public:
 
     /// Checks that the primary key the statement names has no null values, throwing
     /// invalid_request_exception otherwise.
-    virtual void validate_primary_key(const query_options& options) const;
+    virtual void validate_primary_key(const query_options& options) const = 0;
 
     // CAS statement returns a result set. Prepare result set metadata
     // so that get_result_metadata() returns a meaningful value.
     void build_cas_result_set_metadata();
 
 public:
-    virtual dht::partition_range_vector build_partition_keys(const query_options& options, const json_cache_opt& json_cache) const;
-    virtual query::clustering_row_ranges create_clustering_ranges(const query_options& options, const json_cache_opt& json_cache) const;
+    virtual dht::partition_range_vector build_partition_keys(const query_options& options, const json_cache_opt& json_cache) const = 0;
+    virtual query::clustering_row_ranges create_clustering_ranges(const query_options& options, const json_cache_opt& json_cache) const = 0;
 
 protected:
     // Return true if this statement doesn't update or read any regular rows, only static rows.
@@ -246,6 +237,8 @@ public:
     // True if this statement needs to read only static column values to check if it can be applied.
     bool has_only_static_column_conditions() const { return !_has_regular_column_conditions && _has_static_column_conditions; }
 
+    bool has_regular_column_conditions() const { return _has_regular_column_conditions; }
+
     virtual future<::shared_ptr<cql_transport::messages::result_message>>
     execute(query_processor& qp, service::query_state& qs, const query_options& options, std::optional<service::group0_guard> guard) const override;
 
@@ -279,10 +272,11 @@ public:
 protected:
     /**
      * If there are conditions on the statement, this is called after the where clause and conditions have been
-     * processed to check that they are compatible.
+     * processed to check that they are compatible.  A conditional statement cannot
+     * use IN on a key column: it addresses one row.
      * @throws InvalidRequestException
      */
-    void validate_where_clause_for_conditions() const;
+    void reject_in_relations_with_conditions(bool key_is_in_relation, bool clustering_key_has_IN) const;
 
     friend class raw::modification_statement;
 };

@@ -98,6 +98,42 @@ void update_statement::execute_operations_for_key(mutation& m, const clustering_
     apply_column_operations(_column_operations, m, prefix, params);
 }
 
+dht::partition_range_vector
+update_statement::build_partition_keys(const query_options& options, const json_cache_opt& json_cache) const {
+    auto keys = _restrictions->get_partition_key_ranges(options);
+    for (auto const& k : keys) {
+        validation::validate_cql_key(*s, *k.start()->value().key());
+    }
+    return keys;
+}
+
+query::clustering_row_ranges
+update_statement::create_clustering_ranges(const query_options& options, const json_cache_opt& json_cache) const {
+    return _restrictions->get_clustering_bounds(options);
+}
+
+void update_statement::validate_primary_key(const query_options& options) const {
+    _restrictions->validate_primary_key(options);
+}
+
+void update_statement::process_where_clause(data_dictionary::database db, expr::expression where_clause, prepare_context& ctx) {
+    _restrictions = restrictions::analyze_update_restrictions(db, s, where_clause, ctx,
+            applies_only_to_static_columns());
+    classify_exists_condition(_restrictions->has_clustering_columns_restriction());
+    // An UPDATE writes whole rows, so the WHERE clause has to name the whole
+    // clustering key.
+    _restrictions->reject_incomplete_clustering_key(applies_only_to_static_columns());
+    _restrictions->reject_incomplete_partition_key();
+    if (has_conditions()) {
+        validate_where_clause_for_conditions();
+    }
+}
+
+void update_statement::validate_where_clause_for_conditions() const {
+    reject_in_relations_with_conditions(_restrictions->key_is_in_relation(),
+            _restrictions->clustering_key_restrictions_has_IN());
+}
+
 utils::chunked_vector<mutation> update_statement::apply_updates(
         const std::vector<dht::partition_range>& keys,
         const std::vector<query::clustering_range>& ranges,
