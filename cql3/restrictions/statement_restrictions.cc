@@ -1548,8 +1548,8 @@ where_clause_analysis::clustering_key_restrictions_has_IN() const {
 }
 
 bool
-where_clause_analysis::clustering_key_restrictions_has_only_eq() const {
-    return ck_is_all_eq;
+where_clause_analysis::clustering_key_restrictions_have_slice() const {
+    return expr::has_slice(clustering_columns_restrictions);
 }
 
 bool
