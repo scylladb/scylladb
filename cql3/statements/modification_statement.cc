@@ -199,6 +199,22 @@ bool modification_statement::applies_to(const selection::selection* selection,
     return expr::evaluate(_condition, inputs) == true_value;
 }
 
+void modification_statement::classify_exists_condition(bool restricts_clustering_columns) {
+    /*
+     * If there's no clustering columns restriction, we may assume that EXISTS
+     * check only selects static columns and hence we can use any row from the
+     * partition to check conditions.
+     */
+    if (_if_exists || _if_not_exists) {
+        throwing_assert(!_has_static_column_conditions && !_has_regular_column_conditions);
+        if (s->has_static_columns() && !restricts_clustering_columns) {
+            _has_static_column_conditions = true;
+        } else {
+            _has_regular_column_conditions = true;
+        }
+    }
+}
+
 void modification_statement::validate_primary_key(const query_options& options) const {
     _restrictions->validate_primary_key(options);
 }
@@ -545,19 +561,7 @@ modification_statement::process_where_clause(data_dictionary::database db, expr:
         _restrictions = restrictions::analyze_delete_restrictions(db, s, where_clause, ctx,
                 applies_only_to_static_columns());
     }
-    /*
-     * If there's no clustering columns restriction, we may assume that EXISTS
-     * check only selects static columns and hence we can use any row from the
-     * partition to check conditions.
-     */
-    if (_if_exists || _if_not_exists) {
-        throwing_assert(!_has_static_column_conditions && !_has_regular_column_conditions);
-        if (s->has_static_columns() && !_restrictions->has_clustering_columns_restriction()) {
-            _has_static_column_conditions = true;
-        } else {
-            _has_regular_column_conditions = true;
-        }
-    }
+    classify_exists_condition(_restrictions->has_clustering_columns_restriction());
     if (_restrictions->has_token_restrictions()) {
         throw exceptions::invalid_request_exception(format("The token function cannot be used in WHERE clauses for UPDATE and DELETE statements: {}",
                 to_string(_restrictions->get_partition_key_restrictions())));
