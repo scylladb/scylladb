@@ -163,6 +163,8 @@ fedora_packages=(
     jq
 
     libev-devel # for python driver
+
+    uv # test.py re-execs itself under `uv run --locked` against test/pyproject.toml
 )
 
 fedora_python3_packages=(
@@ -180,18 +182,21 @@ fedora_python3_packages=(
 )
 
 # an associative array from packages to constrains
+#
+# These are packages also needed outside of test.py (e.g. by cqlsh, or by the
+# shipped python3 relocatable package / dist/common/scripts). test.py's own
+# dependencies (scylla-driver and everything else it or pytest needs to run)
+# live in test/pyproject.toml / test/uv.lock instead: test.py re-execs itself
+# under `uv run --locked` on startup (see _ensure_running_under_uv() in
+# test.py), so their versions stay decoupled from this frozen toolchain
+# image, and any invocation that needs them directly (e.g. bare pytest) is
+# expected to also go through `uv run --project test --locked` rather than
+# relying on this image.
 declare -A pip_packages=(
     [scylla-driver]="==$(cat tools/cqlsh/requirements.txt | grep scylla-driver | cut -d= -f3)"
     [geomet]=""
     [traceback-with-variables]=""
     [scylla-api-client]=""
-    [treelib]=""
-    [allure-pytest]=""
-    [pytest-xdist]=""
-    [pykmip]=""
-    [universalasync]=""
-    [boto3-stubs[dynamodb]]=""
-    [setuptools_scm]=""
 )
 
 pip_symlinks=(

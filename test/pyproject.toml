@@ -1,0 +1,43 @@
+#
+# Copyright (C) 2026-present ScyllaDB
+#
+#
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
+#
+
+# Python dependencies required to run test.py.
+#
+# scylla-driver's pin here is intentionally independent of both
+# tools/cqlsh/requirements.txt and install-dependencies.sh: test.py syncs
+# this environment itself on startup (see _ensure_test_requirements() in
+# test.py), so bumping the version here takes effect immediately and does
+# not require rebuilding the frozen toolchain image.
+[project]
+name = "scylla-test"
+version = "0.1.0"
+requires-python = ">=3.14"
+dependencies = [
+    "scylla-driver==3.29.7",
+    "treelib==1.8.0",
+    "allure-pytest==2.16.0",
+    "pytest-xdist==3.8.0",
+    "pykmip==0.10.0",
+    "sqlalchemy==2.0.52",
+    "universalasync==0.5.1.0",
+    "boto3-stubs[dynamodb]==1.43.89",
+    "setuptools_scm==10.2.3",
+    "unidiff==1.0.0",
+    "boto3==1.43.88",
+    "aiohttp==3.13.5",
+    "colorama==0.4.6",
+    "humanfriendly==10.0",
+    "psutil==7.2.2",
+    "tabulate==0.9.0",
+    "pytest-asyncio==1.1.0",
+    "pytest-timeout==2.4.0",
+    "pytest-sugar==1.1.1",
+    "deepdiff==8.6.1",
+]
+
+[tool.uv]
+package = false

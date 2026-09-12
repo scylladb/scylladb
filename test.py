@@ -9,6 +9,53 @@
 
 from __future__ import annotations
 
+import os
+import pathlib
+import subprocess
+import sys
+
+
+def _ensure_running_under_uv() -> None:
+    """Re-exec test.py under `uv run --locked`, so the whole process (not
+    just some packages spliced onto sys.path) runs inside a venv synced
+    from test/pyproject.toml / test/uv.lock, instead of test.py depending
+    on whatever happens to be frozen into the toolchain image.
+
+    `--locked` makes `uv run` fail loudly instead of silently re-resolving
+    if test/pyproject.toml and test/uv.lock have drifted apart. `uv run`
+    also re-syncs the venv in place before running if the lockfile changed
+    since the last run, so bumping a pin there takes effect immediately,
+    with no toolchain image rebuild required.
+
+    The venv lives under build/test-dependencies, keyed by the interpreter
+    ABI, so `rm -rf build` wipes it along with everything else, and
+    different checkouts (potentially on different Python versions) never
+    share (or clobber) each other's packages.
+
+    Guarded by an environment variable (checked and set before the re-exec)
+    so this runs exactly once per process tree rather than looping.
+    """
+    if os.environ.get("_SCYLLA_TEST_UV_VENV_ACTIVE"):
+        return
+
+    import sysconfig
+
+    top_src_dir = pathlib.Path(__file__).resolve().parent
+    project_dir = top_src_dir / "test"
+    venv_dir = top_src_dir / "build" / "test-dependencies" / sysconfig.get_config_var("SOABI")
+
+    os.environ["_SCYLLA_TEST_UV_VENV_ACTIVE"] = "1"
+    os.environ["UV_PROJECT_ENVIRONMENT"] = str(venv_dir)
+    # "python3" (rather than sys.executable) is resolved against the PATH that
+    # `uv run` sets up for the synced venv, so the re-exec'd interpreter is the
+    # venv's own -- loading its site-packages automatically, the way spelling
+    # out sys.executable's original, non-venv path would not.
+    os.execvp("uv", ["uv", "run", "--project", str(project_dir), "--locked", "--quiet",
+                      "--", "python3", str(pathlib.Path(__file__).resolve()), *sys.argv[1:]])
+
+
+_ensure_running_under_uv()
+
 import argparse
 import asyncio
 import dataclasses
@@ -25,10 +72,7 @@ import itertools
 import logging
 import multiprocessing
 import os
-import pathlib
 import resource
-import subprocess
-import sys
 import time
 
 import humanfriendly
