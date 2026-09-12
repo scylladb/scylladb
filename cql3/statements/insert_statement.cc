@@ -27,6 +27,7 @@
 #include "types/user.hh"
 #include "types/concrete_types.hh"
 #include "validation.hh"
+#include <seastar/util/defer.hh>
 #include "dht/i_partitioner.hh"
 #include <optional>
 
@@ -79,6 +80,141 @@ parse(const sstring& json_string, const schema::columns_type& expected_receivers
 }
 
 namespace statements {
+
+insert_statement::insert_statement(
+        audit::audit_info_ptr&& audit_info,
+        uint32_t bound_terms,
+        schema_ptr s,
+        std::unique_ptr<attributes> attrs,
+        cql_stats& stats)
+    : modification_statement{statement_type::INSERT, bound_terms, std::move(s), std::move(attrs), stats}
+{
+    set_audit_info(std::move(audit_info));
+}
+
+void insert_statement::add_key_value(const column_definition& def, expr::expression value) {
+    _key_values.emplace_back(&def, std::move(value));
+}
+
+bool insert_statement::names(const column_definition& def) const {
+    return std::ranges::any_of(_key_values, [&def] (const auto& kv) { return kv.first == &def; });
+}
+
+void insert_statement::validate_addressed_row() {
+    classify_exists_condition(std::ranges::any_of(s->clustering_key_columns(),
+            [this] (const column_definition& def) { return names(def); }));
+
+    // The clustering columns the statement names must form a prefix of the
+    // clustering key, and - unless the statement writes the static row, or the
+    // table is COMPACT STORAGE, where a partial prefix names a range of cells
+    // (CASSANDRA-7990) - the whole of it.
+    const column_definition* unnamed = nullptr;
+    bool named_after_unnamed = false;
+    for (const column_definition& def : s->clustering_key_columns()) {
+        if (!names(def)) {
+            if (!unnamed) {
+                unnamed = &def;
+            }
+        } else if (unnamed) {
+            named_after_unnamed = true;
+        }
+    }
+    if (unnamed && (named_after_unnamed || (!applies_only_to_static_columns() && !s->is_dense()))) {
+        throw exceptions::invalid_request_exception(format("Missing mandatory PRIMARY KEY part {}",
+                unnamed->name_as_text()));
+    }
+
+    for (const column_definition& def : s->partition_key_columns()) {
+        if (!names(def)) {
+            throw exceptions::invalid_request_exception(format("Missing mandatory PRIMARY KEY part {}",
+                    def.name_as_text()));
+        }
+    }
+}
+
+const expr::expression* insert_statement::value_for(const column_definition& def) const {
+    auto it = std::ranges::find_if(_key_values, [&def] (const auto& kv) { return kv.first == &def; });
+    return it == _key_values.end() ? nullptr : &it->second;
+}
+
+dht::partition_range_vector
+insert_statement::build_partition_keys(const query_options& options, const json_cache_opt& json_cache) const {
+    std::vector<bytes_opt> exploded;
+    exploded.reserve(s->partition_key_size());
+    for (const column_definition& def : s->partition_key_columns()) {
+        // Every partition key column is named; validate_addressed_row() saw to it.
+        auto value = expr::evaluate(*value_for(def), options).to_bytes_opt();
+        if (!value) {
+            // A null key names no partition.  validate_primary_key() rejects it
+            // before this on the request path; this mirrors what a null value in
+            // an EQ restriction used to yield.
+            return {};
+        }
+        exploded.emplace_back(std::move(value));
+    }
+    auto pkey = partition_key::from_optional_exploded(*s, std::move(exploded));
+    validation::validate_cql_key(*s, pkey);
+    dht::partition_range_vector ranges;
+    ranges.emplace_back(query::range<query::ring_position>::make_singular(dht::decorate_key(*s, std::move(pkey))));
+    return ranges;
+}
+
+query::clustering_row_ranges
+insert_statement::create_clustering_ranges(const query_options& options, const json_cache_opt& json_cache) const {
+    std::vector<bytes_opt> exploded;
+    exploded.reserve(s->clustering_key_size());
+    for (const column_definition& def : s->clustering_key_columns()) {
+        // The named columns form a prefix, so the first unnamed one ends it.
+        const expr::expression* value = value_for(def);
+        if (!value) {
+            break;
+        }
+        auto bytes = expr::evaluate(*value, options).to_bytes_opt();
+        if (!bytes) {
+            return {};  // as above: a null key names no row
+        }
+        exploded.emplace_back(std::move(bytes));
+    }
+    if (exploded.empty()) {
+        // The statement names no clustering column, so it writes the static row
+        // or, on a COMPACT STORAGE table, the whole partition - which an
+        // unbounded range addresses, as an empty WHERE clause used to.
+        return {query::clustering_range::make_open_ended_both_sides()};
+    }
+    return {query::clustering_range::make_singular(clustering_key_prefix::from_optional_exploded(*s, std::move(exploded)))};
+}
+
+void insert_statement::validate_primary_key(const query_options& options) const {
+    for (const auto& [def, value] : _key_values) {
+        if (expr::evaluate(value, options).is_null()) {
+            throw exceptions::invalid_request_exception(format("Invalid null value in condition for column {}",
+                    def->name_as_text()));
+        }
+    }
+}
+
+void insert_statement::execute_operations_for_key(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params, const json_cache_opt& json_cache) const {
+    apply_column_operations(_column_operations, m, prefix, params);
+}
+
+utils::chunked_vector<mutation> insert_statement::apply_updates(
+        const std::vector<dht::partition_range>& keys,
+        const std::vector<query::clustering_range>& ranges,
+        const update_parameters& params,
+        const json_cache_opt& json_cache) const {
+    auto mutations = make_mutations(keys);
+    for (auto& m : mutations) {
+        for (auto&& range : ranges) {
+            auto prefix = row_key(range);
+            open_row(*s, type, !_column_operations.empty(), m, prefix, params);
+            execute_operations_for_key(m, prefix, params, json_cache);
+        }
+    }
+
+    warn(unimplemented::cause::INDEXES);
+
+    return mutations;
+}
 
 modification_statement::json_cache_opt insert_prepared_json_statement::maybe_prepare_json_cache(const query_options& options) const {
     cql3::raw_value c = expr::evaluate(_value, options);
@@ -202,7 +338,7 @@ insert_statement::insert_statement(cf_name name,
 insert_statement::prepare_internal(data_dictionary::database db, schema_ptr schema,
     prepare_context& ctx, std::unique_ptr<attributes> attrs, cql_stats& stats) const
 {
-    auto stmt = ::make_shared<cql3::statements::update_statement>(audit_info(), statement_type::INSERT, ctx.bound_variables_size(), schema, std::move(attrs), stats);
+    auto stmt = ::make_shared<cql3::statements::insert_statement>(audit_info(), ctx.bound_variables_size(), schema, std::move(attrs), stats);
 
     // Created from an INSERT
     if (stmt->is_counter()) {
@@ -217,7 +353,6 @@ insert_statement::prepare_internal(data_dictionary::database db, schema_ptr sche
         throw exceptions::invalid_request_exception("No columns provided to INSERT");
     }
 
-    std::vector<expr::expression> relations;
     std::unordered_set<bytes> column_ids;
     for (size_t i = 0; i < _column_names.size(); i++) {
         auto&& col = _column_names[i];
@@ -234,7 +369,23 @@ insert_statement::prepare_internal(data_dictionary::database db, schema_ptr sche
         auto&& value = _column_values[i];
 
         if (def->is_primary_key()) {
-            relations.push_back(expr::binary_operator(expr::unresolved_identifier{col}, expr::oper_t::EQ, value));
+            // Prepare the value against the column it is written to, exactly as
+            // the WHERE clause this used to synthesize did: that is what puts
+            // the bind marker in the prepare context under this column's name,
+            // which is what token-aware routing reads back.
+            auto prepared = expr::prepare_expression(value, db, schema->ks_name(), schema.get(),
+                    def->column_specification);
+            // As operation::set_value::prepare() does for the other columns:
+            // evaluate() only knows how to call scalar functions.
+            expr::verify_no_aggregate_functions(prepared, "VALUES clause");
+            auto reset_processing_pk_column = defer([&ctx] () noexcept { ctx.set_processing_pk_restrictions(false); });
+            if (def->is_partition_key()) {
+                // So that a non-pure function under a partition key column is
+                // registered for caching, and an LWT insert evaluates it once.
+                ctx.set_processing_pk_restrictions(true);
+            }
+            expr::fill_prepare_context(prepared, ctx);
+            stmt->add_key_value(*def, std::move(prepared));
         } else {
             auto operation = operation::set_value(value).prepare(db, keyspace(), *def);
             operation->fill_prepare_context(ctx);
@@ -242,7 +393,7 @@ insert_statement::prepare_internal(data_dictionary::database db, schema_ptr sche
         };
     }
     prepare_conditions(db, *schema, ctx, *stmt);
-    stmt->process_where_clause(db, expr::conjunction{relations}, ctx);
+    stmt->validate_addressed_row();
     return stmt;
 }
 

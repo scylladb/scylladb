@@ -25,7 +25,7 @@
 #include "cql3/statements/create_view_statement.hh"
 #include "cql3/statements/create_index_statement.hh"
 #include "cql3/statements/alter_table_statement.hh"
-#include "cql3/statements/update_statement.hh"
+#include "cql3/statements/modification_statement.hh"
 #include "db/cql_type_parser.hh"
 #include "db/config.hh"
 #include "db/extensions.hh"
@@ -346,7 +346,8 @@ std::vector<schema_ptr> do_load_schemas(const db::config& cfg, std::string_view 
             it->secondary_idx_man.reload();
             auto view = p->create_view_for_index(it->schema, index, db);
             real_db.tables.emplace_back(dd_impl, dd_impl.unwrap(ks), view, true);
-        } else if (auto p = dynamic_cast<cql3::statements::update_statement*>(statement)) {
+        } else if (auto p = dynamic_cast<cql3::statements::modification_statement*>(statement);
+                p && (p->type.is_insert() || p->type.is_update())) {
             if (p->keyspace() != db::schema_tables::NAME && p->column_family() != db::schema_tables::DROPPED_COLUMNS) {
                 throw std::runtime_error(fmt::format("tools::do_load_schemas(): expected modification statement to be against {}.{}, but it is against {}.{}",
                             db::schema_tables::NAME, db::schema_tables::DROPPED_COLUMNS, p->keyspace(), p->column_family()));
@@ -398,7 +399,7 @@ std::vector<schema_ptr> do_load_schemas(const db::config& cfg, std::string_view 
             }
             it->schema = std::move(new_schema);
         } else {
-            throw std::runtime_error(fmt::format("tools::do_load_schemas(): expected statement to be one of (create keyspace, create type, create table, create view, create index, update, alter table), got: {}",
+            throw std::runtime_error(fmt::format("tools::do_load_schemas(): expected statement to be one of (create keyspace, create type, create table, create view, create index, insert/update, alter table), got: {}",
                         typeid(statement).name()));
         }
     }

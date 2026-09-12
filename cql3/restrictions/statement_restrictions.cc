@@ -868,10 +868,6 @@ modification_restrictions::modification_restrictions(private_tag, schema_ptr sch
     : _analysis(std::move(schema))
 { }
 
-void modification_restrictions::no_restrictions() {
-    _analysis.build_key_range_fns();
-}
-
 select_restrictions::select_restrictions(private_tag, schema_ptr schema, bool allow_filtering,
         check_indexes do_check_indexes)
     : _analysis(std::move(schema))
@@ -3174,35 +3170,10 @@ analyze_delete_restrictions(
     return restrictions;
 }
 
-shared_ptr<const modification_restrictions>
-analyze_insert_restrictions(
-        data_dictionary::database db,
-        schema_ptr schema,
-        const expr::expression& where_clause,
-        prepare_context& ctx) {
-    // No reject_clustering_restrictions() here: an INSERT creates the row it
-    // names, so
-    //   INSERT INTO t (k, v, s) VALUES (0, 1, 2)
-    // is a perfectly sensible way to set only a static column.
-    auto restrictions = seastar::make_shared<modification_restrictions>(
-            modification_restrictions::private_tag{}, std::move(schema));
-    restrictions->analyze_mutation(db, statements::statement_type::INSERT, where_clause, ctx,
-            /*applies_only_to_static_columns=*/false);
-    return restrictions;
-}
-
 shared_ptr<const select_restrictions>
 make_empty_select_restrictions(schema_ptr schema) {
     auto restrictions = seastar::make_shared<select_restrictions>(
             select_restrictions::private_tag{}, std::move(schema), /*allow_filtering=*/true, check_indexes::no);
-    restrictions->no_restrictions();
-    return restrictions;
-}
-
-shared_ptr<const modification_restrictions>
-make_empty_insert_restrictions(schema_ptr schema) {
-    auto restrictions = seastar::make_shared<modification_restrictions>(
-            modification_restrictions::private_tag{}, std::move(schema));
     restrictions->no_restrictions();
     return restrictions;
 }
