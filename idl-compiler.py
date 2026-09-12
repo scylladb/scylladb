@@ -1457,9 +1457,27 @@ def add_view(cout, cls):
     for m in members:
         add_variant_read_size(cout, m.type)
 
+    # Accessing fields 0..N-1 one by one each re-walks the class from its start
+    # (O(N^2) total for N fields read in order). When there's more than one
+    # field, cache how far a previous accessor call got so that ascending-order
+    # access (the common case: read_and_visit_row(), write_partial_partition(),
+    # mutation_partition_view::do_accept(), ...) is O(N) overall. Out-of-order or
+    # repeated access just falls back to a full restart, same as before.
+    # Only non-last, non-[[version]] members update the cache: the last member's
+    # position is useless, and a [[version]] member may be absent on the wire
+    # (old-format sender), where skipping past it to compute the cached position
+    # would read past the frame end.
+    use_cache = len(members) > 1 and any(not m.attribute for m in members[:-1])
+
     fprintln(cout, f"""struct {cls.name}_view {{
     utils::input_stream v;
     """)
+
+    if use_cache:
+        fprintln(cout, reindent(4, """
+            mutable int _cached_field = -1;
+            mutable utils::input_stream _cached_pos = seastar::simple_input_stream();
+        """))
 
     if not is_stub(cls.name) and is_local_writable_type(cls.name):
         fprintln(cout, reindent(4, f"""
@@ -1469,9 +1487,11 @@ def add_view(cout, cls):
             }}
         """))
 
-    skip = "" if cls.final else "ser::skip(in, std::type_identity<size_type>());"
+    initial_skip = "" if cls.final else "ser::skip(in, std::type_identity<size_type>());"
+    skip = initial_skip
+    skip_stmts = []
     local_names = {}
-    for m in members:
+    for i, m in enumerate(members):
         name = get_member_name(m.name)
         local_names[name] = "this->" + name + "()"
         full_type = param_view_type(m.type)
@@ -1483,30 +1503,87 @@ def add_view(cout, cls):
         else:
             deser = f"{DESERIALIZER}(in, std::type_identity<{full_type}>())"
 
+        switch_cases = "".join(
+            f"                    case {j}: {skip_stmts[j]} [[fallthrough]];\n" for j in range(i)
+        )
+        update_cache = use_cache and i < len(members) - 1 and not m.attribute
+        cache_update = (f"auto post = in;\n"
+                        f"        ser::skip(post, std::type_identity<{full_type}>());\n"
+                        f"        _cached_field = {i};\n"
+                        f"        _cached_pos = std::move(post);\n"
+                        f"        ") if update_cache else ""
+        # For the first field there's nothing to have cached yet, so skip the
+        # (always-false) cache check entirely rather than emit dead code.
+        cache_check = (reindent(4, """
+                      if (_cached_field >= 0 && _cached_field < {i}) {{
+                        return seastar::with_serialized_stream(_cached_pos, [this, &_read] (auto& cp) {{ return _read(cp, _cached_field + 1); }});
+                      }}
+        """).format(**locals())) if i > 0 else ""
+
         if is_vector(m.type):
             elem_type = element_type(m.type)
-            fprintln(cout, reindent(4, """
-                auto {name}() const {{
-                  return seastar::with_serialized_stream(v, [] (auto& v) {{
-                   auto in = v;
-                   {skip}
-                   return vector_deserializer<{elem_type}>(in);
-                  }});
-                }}
-            """).format(f=DESERIALIZER, **locals()))
+            if use_cache:
+                fprintln(cout, reindent(4, """
+                    auto {name}() const {{
+                      auto _read = [this] (utils::input_stream in, int _start) {{
+                        std::ignore = this;
+                        switch (_start) {{
+                    {switch_cases}                    default: break;
+                        }}
+                        {cache_update}return vector_deserializer<{elem_type}>(in);
+                      }};
+                    {cache_check}                  return seastar::with_serialized_stream(v, [this, &_read] (auto& v) {{
+                        std::ignore = this;
+                        auto in = v;
+                        {initial_skip}
+                        return _read(std::move(in), 0);
+                      }});
+                    }}
+                """).format(f=DESERIALIZER, **locals()))
+            else:
+                fprintln(cout, reindent(4, """
+                    auto {name}() const {{
+                      return seastar::with_serialized_stream(v, [] (auto& v) {{
+                       auto in = v;
+                       {skip}
+                       return vector_deserializer<{elem_type}>(in);
+                      }});
+                    }}
+                """).format(f=DESERIALIZER, **locals()))
         else:
-            fprintln(cout, reindent(4, """
-                auto {name}() const {{
-                  return seastar::with_serialized_stream(v, [this] (auto& v) -> decltype({f}(std::declval<utils::input_stream&>(), std::type_identity<{full_type}>())) {{
-                   std::ignore = this;
-                   auto in = v;
-                   {skip}
-                   return {deser};
-                  }});
-                }}
-            """).format(f=DESERIALIZER, **locals()))
+            if use_cache:
+                fprintln(cout, reindent(4, """
+                    auto {name}() const {{
+                      auto _read = [this] (utils::input_stream in, int _start) -> decltype({f}(std::declval<utils::input_stream&>(), std::type_identity<{full_type}>())) {{
+                        std::ignore = this;
+                        switch (_start) {{
+                    {switch_cases}                    default: break;
+                        }}
+                        {cache_update}return {deser};
+                      }};
+                    {cache_check}                  return seastar::with_serialized_stream(v, [this, &_read] (auto& v) {{
+                        std::ignore = this;
+                        auto in = v;
+                        {initial_skip}
+                        return _read(std::move(in), 0);
+                      }});
+                    }}
+                """).format(f=DESERIALIZER, **locals()))
+            else:
+                fprintln(cout, reindent(4, """
+                    auto {name}() const {{
+                      return seastar::with_serialized_stream(v, [this] (auto& v) -> decltype({f}(std::declval<utils::input_stream&>(), std::type_identity<{full_type}>())) {{
+                       std::ignore = this;
+                       auto in = v;
+                       {skip}
+                       return {deser};
+                      }});
+                    }}
+                """).format(f=DESERIALIZER, **locals()))
 
-        skip = skip + f"\n       ser::skip(in, std::type_identity<{full_type}>());"
+        skip_stmt = f"ser::skip(in, std::type_identity<{full_type}>());"
+        skip = skip + f"\n       {skip_stmt}"
+        skip_stmts.append(skip_stmt)
 
     fprintln(cout, "};")
     skip_impl = "auto& in = v;\n       " + skip if cls.final else "v.skip(read_frame_size(v));"
