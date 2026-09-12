@@ -166,6 +166,10 @@ public:
 
     void process_where_clause(data_dictionary::database db, expr::expression where_clause, prepare_context& ctx);
 
+    /// Checks that the primary key the statement names has no null values, throwing
+    /// invalid_request_exception otherwise.
+    virtual void validate_primary_key(const query_options& options) const;
+
     // CAS statement returns a result set. Prepare result set metadata
     // so that get_result_metadata() returns a meaningful value.
     void build_cas_result_set_metadata();
