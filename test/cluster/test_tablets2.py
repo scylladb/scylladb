@@ -229,6 +229,10 @@ async def test_topology_changes(manager: ScyllaClusterManager):
         time.sleep(5) # Give load balancer some time to do work
         await check()
 
+        # Shuffle mode never converges, competing with decommission's own
+        # migrations and blowing its timeout if left enabled.
+        await disable_injection_on(manager, "tablet_allocator_shuffle", servers)
+
         await manager.decommission_node(servers[0].server_id)
 
         await check()
