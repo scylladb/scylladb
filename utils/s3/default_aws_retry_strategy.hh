@@ -32,7 +32,9 @@ public:
     // ask whether it has one.
     static s3::throttling_controller& no_throttling();
 
-    default_aws_retry_strategy(unsigned max_retries = default_max_retries, s3::throttling_controller& controller = no_throttling(), seastar::abort_source* as = nullptr);
+    default_aws_retry_strategy(unsigned max_retries = default_max_retries,
+            s3::throttling_controller& controller = no_throttling(),
+            seastar::abort_source* as = nullptr);
 
     unsigned max_retries() const { return _max_retries; }
     s3::throttling_controller& controller() const { return _controller; }

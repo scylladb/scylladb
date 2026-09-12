@@ -613,7 +613,8 @@ future<> client::make_request(http::request req,
     co_await authorize(request);
 
     auto abortable_rs = retry_strategy_for_abort_source(rs, as);
-    co_await gc.http.make_request(request, handler, abortable_rs ? *abortable_rs : rs, std::nullopt, as).handle_exception([err_handler = std::move(err_handler)](auto ex) {
+    const auto& effective_rs = abortable_rs ? *abortable_rs : rs;
+    co_await gc.http.make_request(request, handler, effective_rs, std::nullopt, as).handle_exception([err_handler = std::move(err_handler)](auto ex) {
         err_handler(std::move(ex));
     });
 }

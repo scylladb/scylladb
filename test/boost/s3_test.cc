@@ -35,7 +35,6 @@
 #include "utils/assert.hh"
 #include "utils/error_injection.hh"
 #include "utils/s3/aws_error.hh"
-#include "utils/s3/default_aws_retry_strategy.hh"
 #include "utils/s3/client.hh"
 #include "utils/s3/creds.hh"
 #include "utils/s3/aws_throttling_controller.hh"
