@@ -252,14 +252,14 @@ future<result<cql3::result_generator>> query_pager::fetch_page_generator_result(
 }
 
 class filtering_query_pager : public query_pager {
-    const ::shared_ptr<const cql3::restrictions::statement_restrictions> _filtering_restrictions;
+    const ::shared_ptr<const cql3::restrictions::select_restrictions> _filtering_restrictions;
 public:
     filtering_query_pager(service::storage_proxy& p, schema_ptr s, shared_ptr<const cql3::selection::selection> selection,
                 service::query_state& state,
                 const cql3::query_options& options,
                 lw_shared_ptr<query::read_command> cmd,
                 dht::partition_range_vector ranges,
-                ::shared_ptr<const cql3::restrictions::statement_restrictions> filtering_restrictions,
+                ::shared_ptr<const cql3::restrictions::select_restrictions> filtering_restrictions,
                 std::optional<service::cas_shard> cas_shard,
                 query_function query_function_override)
         : query_pager(p, s, selection, state, options, std::move(cmd), std::move(ranges), std::move(cas_shard), std::move(query_function_override))
@@ -487,7 +487,7 @@ std::unique_ptr<service::pager::query_pager> service::pager::query_pagers::pager
         service::query_state& state, const cql3::query_options& options,
         lw_shared_ptr<query::read_command> cmd,
         dht::partition_range_vector ranges,
-        ::shared_ptr<const cql3::restrictions::statement_restrictions> filtering_restrictions,
+        ::shared_ptr<const cql3::restrictions::select_restrictions> filtering_restrictions,
         std::optional<service::cas_shard> cas_shard,
         query_function query_function_override) {
     // If partition row limit is applied to paging, we still need to fall back

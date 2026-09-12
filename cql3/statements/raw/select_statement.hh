@@ -127,7 +127,7 @@ public:
     }
 private:
     std::vector<selection::prepared_selector> maybe_jsonize_select_clause(std::vector<selection::prepared_selector> select, data_dictionary::database db, schema_ptr schema);
-    ::shared_ptr<const restrictions::statement_restrictions> prepare_restrictions(
+    ::shared_ptr<const restrictions::select_restrictions> prepare_restrictions(
         data_dictionary::database db,
         schema_ptr schema,
         prepare_context& ctx,
@@ -141,14 +141,14 @@ private:
     std::optional<expr::expression> prepare_limit(data_dictionary::database db, prepare_context& ctx, const std::optional<expr::expression>& limit);
 
     // Checks whether it is legal to have ORDER BY in this statement
-    static void verify_ordering_is_allowed(const parameters& params, const restrictions::statement_restrictions& restrictions);
+    static void verify_ordering_is_allowed(const parameters& params, const restrictions::select_restrictions& restrictions);
 
     void handle_unrecognized_ordering_column(const column_identifier& column) const;
 
     // Processes ORDER BY column orderings, converts column_identifiers to column_defintions
     prepared_orderings_type prepare_orderings(const schema& schema) const;
 
-    void verify_ordering_is_valid(const prepared_orderings_type&, const schema&, const restrictions::statement_restrictions& restrictions) const;
+    void verify_ordering_is_valid(const prepared_orderings_type&, const schema&, const restrictions::select_restrictions& restrictions) const;
 
     // Checks whether this ordering reverses all results.
     // We only allow leaving select results unchanged or reversing them.
@@ -157,21 +157,21 @@ private:
     select_statement::ordering_comparator_type get_ordering_comparator(
         const prepared_orderings_type&,
         selection::selection& selection,
-        const restrictions::statement_restrictions& restrictions);
+        const restrictions::select_restrictions& restrictions);
 
     void validate_distinct_selection(const schema& schema,
         const selection::selection& selection,
-        const restrictions::statement_restrictions& restrictions) const;
+        const restrictions::select_restrictions& restrictions) const;
 
     /** If ALLOW FILTERING was not specified, this verifies that it is not needed */
     void check_needs_filtering(
-            const restrictions::statement_restrictions& restrictions,
+            const restrictions::select_restrictions& restrictions,
             db::tri_mode_restriction_t::mode strict_allow_filtering,
             std::vector<sstring>& warnings);
 
     void ensure_filtering_columns_retrieval(data_dictionary::database db,
                                             selection::selection& selection,
-                                            const restrictions::statement_restrictions& restrictions);
+                                            const restrictions::select_restrictions& restrictions);
 
     /// Returns indices of GROUP BY cells in fetched rows.
     std::vector<size_t> prepare_group_by(const schema& schema, selection::selection& selection) const;
