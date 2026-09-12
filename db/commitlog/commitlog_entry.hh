@@ -93,20 +93,18 @@ public:
     frozen_mutation&& mutation() && { return std::move(_mutation); }
 };
 
-// A Raft log entry (command, configuration change, or dummy) together with
-// its group ID.  Stored in the database commitlog when the strongly-consistent
-// tables experimental feature is enabled and the segment uses the variant
-// serialization format.
-struct raft_commitlog_entry {
+// One raft batch as stored in the commitlog: the group id, the group's commit
+// index at write time, and the entries the batch appended. One commitlog entry,
+// so one position; an oversized batch is rejected rather than fragmented.
+struct raft_commitlog_batch {
     raft::group_id group_id;
-    raft::log_entry_ptr entry;
+    raft::index_t commit_idx;
+    std::vector<raft::log_entry_ptr> entries;
 };
 
-// The on-disk envelope for variant-format commitlog segments. Each
-// entry contains exactly one of the variant alternatives: a mutation_entry
-// (normal table write) or a raft_commitlog_entry (Raft log entry for
-// strongly-consistent tables).
-using commitlog_entry_variant = std::variant<raft_commitlog_entry, mutation_entry>;
+// The on-disk envelope for variant-format commitlog segments: each entry holds
+// exactly one alternative, a normal table write or one raft batch.
+using commitlog_entry_variant = std::variant<raft_commitlog_batch, mutation_entry>;
 struct commitlog_entry {
     commitlog_entry_variant item;
 };
@@ -178,11 +176,14 @@ public:
     frozen_mutation&& mutation() && { return std::move(_me).mutation(); }
 };
 
-// Writer for Raft log entries to the database commit log using the commitlog_entry format.
-class commitlog_raft_log_entry_writer {
-public:
+// Writes one raft batch as a commitlog entry. Holds a reference to the caller's
+// entries, not a copy: they outlive the write. Serializes with the field writers
+// generated for raft_commitlog_batch, so the bytes cannot drift from it.
+class commitlog_raft_batch_writer {
 protected:
-    raft_commitlog_entry _item;
+    raft::group_id _group_id;
+    raft::index_t _commit_idx;
+    const std::vector<raft::log_entry_ptr>& _entries;
     std::size_t _size = std::numeric_limits<std::size_t>::max();
 
     template<typename Output>
@@ -190,8 +191,9 @@ protected:
     void compute_size();
 
 public:
-    explicit commitlog_raft_log_entry_writer(raft_commitlog_entry item)
-        : _item(std::move(item)) { compute_size(); }
+    commitlog_raft_batch_writer(raft::group_id group_id, raft::index_t commit_idx,
+            const std::vector<raft::log_entry_ptr>& entries)
+        : _group_id(group_id), _commit_idx(commit_idx), _entries(entries) { compute_size(); }
 
     size_t size() const {
         SCYLLA_ASSERT(_size != std::numeric_limits<size_t>::max());
@@ -200,9 +202,10 @@ public:
 
     using ostream = typename seastar::memory_output_stream<detail::sector_split_iterator>;
     void write(ostream& out) const;
-    const raft_commitlog_entry& get_log_entry() const {
-        return _item;
-    }
+
+    raft::group_id group_id() const { return _group_id; }
+    raft::index_t commit_idx() const { return _commit_idx; }
+    const std::vector<raft::log_entry_ptr>& entries() const { return _entries; }
 };
 
 class commitlog_entry_reader {

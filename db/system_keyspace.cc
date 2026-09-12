@@ -81,6 +81,14 @@ namespace {
     const auto set_wait_for_sync_to_commitlog = schema_builder::register_schema_initializer([](schema_builder& builder) {
         static const std::unordered_set<sstring> tables = {
             system_keyspace::PAXOS,
+            // Strongly consistent groups persist their votes and their initial
+            // descriptor here by CQL, and both must be durable before the write
+            // that depends on them is acknowledged: a lost vote lets a node vote
+            // twice in one term, and a lost bootstrap row leaves raft batches on
+            // disk with no row to replay them against. The internal query
+            // processor has no per-statement force-sync, so the table asks for it
+            // (SCYLLADB-3828).
+            system_keyspace::RAFT_GROUPS,
         };
         if (builder.ks_name() == system_keyspace::NAME && tables.contains(builder.cf_name())) {
             builder.set_wait_for_sync_to_commitlog(true);
@@ -409,7 +417,7 @@ schema_ptr system_keyspace::cdc_streams_history() {
 }
 
 schema_ptr system_keyspace::raft() {
-    static thread_local auto schema = replica::make_raft_schema(db::system_keyspace::RAFT, true);
+    static thread_local auto schema = replica::make_group0_raft_schema(db::system_keyspace::RAFT);
     return schema;
 }
 
@@ -432,17 +440,7 @@ schema_ptr system_keyspace::raft_snapshot_config() {
 // The raft_groups_partitioner creates tokens that map to the specified shard.
 
 schema_ptr system_keyspace::raft_groups() {
-    static thread_local auto schema = replica::make_raft_schema(db::system_keyspace::RAFT_GROUPS, false);
-    return schema;
-}
-
-schema_ptr system_keyspace::raft_groups_snapshots() {
-    static thread_local auto schema = replica::make_raft_snapshots_schema(db::system_keyspace::RAFT_GROUPS_SNAPSHOTS, false);
-    return schema;
-}
-
-schema_ptr system_keyspace::raft_groups_snapshot_config() {
-    static thread_local auto schema = replica::make_raft_snapshot_config_schema(db::system_keyspace::RAFT_GROUPS_SNAPSHOT_CONFIG, false);
+    static thread_local auto schema = replica::make_tablet_raft_groups_schema(db::system_keyspace::RAFT_GROUPS);
     return schema;
 }
 
@@ -2269,7 +2267,7 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
     r.insert(r.end(), {sstables_registry()});
 
     if (cfg.check_experimental(db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES)) {
-        r.insert(r.end(), {raft_groups(), raft_groups_snapshots(), raft_groups_snapshot_config()});
+        r.insert(r.end(), {raft_groups()});
     }
 
     return r;
@@ -2281,9 +2279,7 @@ static bool maybe_write_in_user_memory(schema_ptr s, replica::database& db) {
             || (s.get() == system_keyspace::batchlog_v2().get())
             || (s.get() == system_keyspace::paxos().get())
             || s == system_keyspace::scylla_views_builds_in_progress()
-            || (strongly_consistent && s == system_keyspace::raft_groups())
-            || (strongly_consistent && s == system_keyspace::raft_groups_snapshots())
-            || (strongly_consistent && s == system_keyspace::raft_groups_snapshot_config());
+            || (strongly_consistent && s == system_keyspace::raft_groups());
 }
 
 future<> system_keyspace::make(
