@@ -29,6 +29,10 @@ namespace db {
     class system_keyspace;
 }
 
+namespace locator {
+    class tablet_metadata;
+}
+
 namespace service {
 
 class raft_group0;
@@ -133,6 +137,15 @@ struct topology_features {
 
     // Calculates a set of features that are supported by all normal nodes but not yet enabled.
     std::set<sstring> calculate_not_yet_enabled_features() const;
+};
+
+// A hint that the mutations behind a group0 command touched only the
+// `version`/`fence_version` static cells of system.topology's static row,
+// so the in-memory topology state can be patched in place instead of
+// re-read and reparsed from system.topology in full.
+struct topology_change_hint {
+    std::optional<int64_t> version;
+    std::optional<int64_t> fence_version;
 };
 
 struct topology {
@@ -256,6 +269,11 @@ struct topology {
     size_t size() const;
     // Are there any non-left nodes?
     bool is_empty() const;
+
+    // Keep paused_requests in sync with tablets: pause leave/remove requests for
+    // nodes still holding tablet replicas, and unpause ones that have since drained.
+    // Must run after every topology_state_load, regardless of which path built topology.
+    void recompute_paused_requests(const locator::tablet_metadata& tablets);
 
     // Returns false iff we can safely start a new topology change.
     bool is_busy() const;

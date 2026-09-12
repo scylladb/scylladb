@@ -18,6 +18,8 @@
 #include "test/lib/random_utils.hh"
 #include "service/topology_mutation.hh"
 #include "service/storage_service.hh"
+#include "db/system_keyspace.hh"
+#include "mutation/atomic_cell.hh"
 #include <fmt/ranges.h>
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/testing/on_internal_error.hh>
@@ -830,6 +832,38 @@ SEASTAR_TEST_CASE(test_paused_rf_change_requests_persistence) {
     }, tablet_cql_test_config());
 }
 
+SEASTAR_TEST_CASE(test_topology_paused_requests_updated_with_tablet_drain) {
+    auto h_draining = host_id(utils::UUID_gen::get_time_UUID());
+    auto h_leaving = raft::server_id(h_draining.uuid());
+
+    service::topology topo;
+    topo.requests.emplace(h_leaving, topology_request::leave);
+
+    // Node still has a tablet replica: pausing keeps it out of the scheduler.
+    {
+        tablet_metadata tm;
+        tablet_map tmap(1);
+        tmap.set_tablet(tmap.first_tablet(), tablet_info {
+            tablet_replica_set { tablet_replica { h_draining, 0 } }
+        });
+        tm.set_tablet_map(table_id(utils::UUID_gen::get_time_UUID()), std::move(tmap));
+
+        topo.recompute_paused_requests(tm);
+        BOOST_REQUIRE(topo.paused_requests.contains(h_leaving));
+    }
+
+    // Tablets have since drained off the node: the stale pause must be evicted,
+    // this is the fix for the bug where topology_state_load's fast path (and
+    // even the full-reload path before it) never removed entries once added.
+    {
+        tablet_metadata tm; // no replicas anywhere
+        topo.recompute_paused_requests(tm);
+        BOOST_REQUIRE(!topo.paused_requests.contains(h_leaving));
+    }
+
+    return make_ready_future<>();
+}
+
 SEASTAR_TEST_CASE(test_tablet_metadata_persistence_with_colocated_tables) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         auto h1 = host_id(utils::UUID_gen::get_time_UUID());
@@ -1327,6 +1361,90 @@ SEASTAR_TEST_CASE(test_tablet_metadata_hint) {
 
             mut.partition().apply(tombstone(delete_ts, gc_clock::now()));
         });
+    }, tablet_cql_test_config());
+}
+
+SEASTAR_TEST_CASE(test_topology_change_hint) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto ts = current_timestamp(e);
+
+        // version-only mutation -> hint present with the right value
+        {
+            service::topology_mutation_builder builder(ts++);
+            builder.set_version(7);
+            utils::chunked_vector<canonical_mutation> muts{builder.build()};
+
+            auto hint = db::get_topology_change_hint(muts);
+            BOOST_REQUIRE(hint);
+            BOOST_REQUIRE_EQUAL(hint->version, 7);
+            BOOST_REQUIRE(!hint->fence_version);
+        }
+
+        // version + fence_version -> both present
+        {
+            service::topology_mutation_builder builder(ts++);
+            builder.set_version(8);
+            builder.set_fence_version(8);
+            utils::chunked_vector<canonical_mutation> muts{builder.build()};
+
+            auto hint = db::get_topology_change_hint(muts);
+            BOOST_REQUIRE(hint);
+            BOOST_REQUIRE_EQUAL(hint->version, 8);
+            BOOST_REQUIRE_EQUAL(hint->fence_version, 8);
+        }
+
+        // any other static column touched -> nullopt
+        {
+            service::topology_mutation_builder builder(ts++);
+            builder.set_version(9);
+            builder.set_transition_state(service::topology::transition_state::commit_cdc_generation);
+            utils::chunked_vector<canonical_mutation> muts{builder.build()};
+
+            BOOST_REQUIRE(!db::get_topology_change_hint(muts));
+        }
+
+        // a dead cell (deletion) for transition_state -> nullopt, not ignored
+        {
+            service::topology_mutation_builder builder(ts++);
+            builder.set_version(10);
+            builder.del_transition_state();
+            utils::chunked_vector<canonical_mutation> muts{builder.build()};
+
+            BOOST_REQUIRE(!db::get_topology_change_hint(muts));
+        }
+
+        // a dead cell for version itself -> nullopt, not treated as a live version bump
+        {
+            auto s = db::system_keyspace::topology();
+            auto& version_cdef = *s->get_column_definition("version");
+
+            mutation mut(s, partition_key::from_singular(*s, sstring(db::system_keyspace::TOPOLOGY)));
+            mut.partition().static_row().maybe_create().apply(version_cdef, atomic_cell::make_dead(ts++, gc_clock::now()));
+            utils::chunked_vector<canonical_mutation> muts{canonical_mutation(mut)};
+
+            BOOST_REQUIRE(!db::get_topology_change_hint(muts));
+        }
+
+        // clustering row (per-node data) touched -> nullopt
+        {
+            auto id = raft::server_id::create_random_id();
+            service::topology_mutation_builder builder(ts++);
+            builder.set_version(11);
+            builder.with_node(id).set("node_state", service::node_state::normal);
+            utils::chunked_vector<canonical_mutation> muts{builder.build()};
+
+            BOOST_REQUIRE(!db::get_topology_change_hint(muts));
+        }
+
+        // unrelated mutation (not touching system.topology at all) -> nullopt
+        {
+            simple_schema s;
+            auto mut = s.new_mutation("pk1");
+            s.add_row(mut, s.make_ckey(1), "v");
+            utils::chunked_vector<canonical_mutation> muts{canonical_mutation(mut)};
+
+            BOOST_REQUIRE(!db::get_topology_change_hint(muts));
+        }
     }, tablet_cql_test_config());
 }
 

@@ -133,6 +133,19 @@ bool topology::is_empty() const {
     return size() == 0;
 }
 
+void topology::recompute_paused_requests(const locator::tablet_metadata& tablets) {
+    // paused_requests is fully derived from requests + tablet placement, so recompute
+    // it from scratch rather than patching it incrementally (avoids leaving stale
+    // entries for nodes whose tablets have since drained).
+    paused_requests.clear();
+    for (auto&& [node, req]: requests) {
+        if ((req == topology_request::leave || req == topology_request::remove)
+                && tablets.has_replica_on(locator::host_id(node.uuid()))) {
+            paused_requests.emplace(node, req);
+        }
+    }
+}
+
 static std::unordered_map<topology::transition_state, sstring> transition_state_to_name_map = {
     {topology::transition_state::join_group0, "join group0"},
     {topology::transition_state::commit_cdc_generation, "commit cdc generation"},
