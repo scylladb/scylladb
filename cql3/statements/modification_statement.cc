@@ -552,9 +552,7 @@ void modification_statement::build_cas_result_set_metadata() {
 
 void
 modification_statement::process_where_clause(data_dictionary::database db, expr::expression where_clause, prepare_context& ctx) {
-    if (type.is_insert()) {
-        _restrictions = restrictions::analyze_insert_restrictions(db, s, where_clause, ctx);
-    } else if (type.is_update()) {
+    if (type.is_update()) {
         _restrictions = restrictions::analyze_update_restrictions(db, s, where_clause, ctx,
                 applies_only_to_static_columns());
     } else {
@@ -641,7 +639,7 @@ modification_statement::prepare(data_dictionary::database db, prepare_context& c
     // Since this cache is only meaningful for LWT queries, just clear the ids
     // if it's not a conditional statement so that the AST nodes don't
     // participate in the caching mechanism later.
-    if (!prepared_stmt->has_conditions() && prepared_stmt->_restrictions) {
+    if (!prepared_stmt->has_conditions()) {
         ctx.clear_pk_function_calls_cache();
     }
     prepared_stmt->_may_use_token_aware_routing = ctx.get_partition_key_bind_indexes(*schema).size() != 0;
