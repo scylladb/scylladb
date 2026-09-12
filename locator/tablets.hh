@@ -558,9 +558,6 @@ struct table_load_stats {
     resize_decision::seq_number_t split_ready_seq_number = std::numeric_limits<resize_decision::seq_number_t>::max();
 
     table_load_stats& operator+=(const table_load_stats& s) noexcept;
-    friend table_load_stats operator+(table_load_stats a, const table_load_stats& b) {
-        return a += b;
-    }
 };
 
 // Deprecated, use load_stats instead.
