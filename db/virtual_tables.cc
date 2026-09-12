@@ -1050,8 +1050,10 @@ private:
 /// Implementations need to override execute_on_leader(), which will be executed
 /// on shard0 of current group0 leader.
 ///
-/// Current implementation is suitable for tables which are relatively small as all
-/// data is materialized in memory and queried in one page.
+/// execute_on_leader() streams rows out as they are produced. The redirect path
+/// fetches the leader's result page by page (using the same query_uuid-keyed
+/// paging protocol CQL paging uses), forwarding each page as soon as it arrives
+/// so the follower's bounded result collector keeps providing backpressure.
 class group0_virtual_table : public streaming_virtual_table {
 private:
     sharded<service::raft_group_registry>& _raft_gr;
@@ -1081,35 +1083,80 @@ public:
     }
 
     future<> redirect_to_leader(result_collector& result, reader_permit permit) {
-        auto leader = co_await get_leader(permit);
-        auto cmd = query::read_command(_s->id(),
-                                       _s->version(),
-                                       partition_slice_builder(*_s).build(),
-                                       query::max_result_size(256*1024*1024), // Sanity limit
-                                       query::tombstone_limit::max,
-                                       query::row_limit(query::max_rows),
-                                       query::partition_limit(query::max_partitions));
-        reader_permit::awaits_guard ag(permit);
-        auto&& [result_data, hit_rate, opt_exception] = co_await ser::storage_proxy_rpc_verbs::send_read_mutation_data(&_ms.local(),
-              locator::host_id(leader.uuid()),
-              permit.timeout(),
-              cmd,
-              query::full_partition_range,
-              {});
-        if (opt_exception.has_value() && *opt_exception) {
-            co_await coroutine::return_exception_ptr((*opt_exception).into_exception_ptr());
-        }
-        // A streaming_virtual_table requires partitions in ring order; don't
-        // just trust the RPC round-trip to preserve it.
-        auto& partitions = result_data.partitions();
-        std::ranges::sort(partitions, dht::ring_position_less_comparator(*_s),
-                [this] (const partition& p) { return p.mut().decorated_key(*_s); });
-        for (auto&& p : partitions) {
-            auto m = p.mut().unfreeze(_s);
-            co_await result.emit_partition_start(m.decorated_key());
-            for (const auto& re : m.partition().clustered_rows()) {
-                co_await result.emit_row(clustering_row(*_s, re));
+        auto query_uuid = query_id::create_random_id();
+        bool is_first_page = true;
+        std::optional<dht::decorated_key> open_partition;
+        position_in_partition last_pos = position_in_partition::for_partition_start();
+        dht::partition_range range = query::full_partition_range;
+
+        for (;;) {
+            auto leader = co_await get_leader(permit);
+            auto slice = partition_slice_builder(*_s).with_option<query::partition_slice::option::allow_short_read>().build();
+
+            // Resume exactly where the previous page left off: skip partitions
+            // up to and including open_partition, and within it resume after
+            // last_pos (mirrors query_pager::do_fetch_page's paging logic).
+            if (open_partition) {
+                if (last_pos.has_key()) {
+                    query::clustering_row_ranges row_ranges = slice.default_row_ranges();
+                    query::trim_clustering_row_ranges_to(*_s, row_ranges, position_in_partition::after_key(*_s, last_pos));
+                    slice.set_range(*_s, open_partition->key(), std::move(row_ranges));
+                }
+                bool inclusive = last_pos.has_key(); // still finishing this partition
+                range = dht::partition_range::make_starting_with(
+                        dht::partition_range::bound(dht::ring_position(*open_partition), inclusive));
             }
+
+            auto cmd = query::read_command(_s->id(),
+                                           _s->version(),
+                                           std::move(slice),
+                                           permit.max_result_size(),
+                                           query::tombstone_limit::max,
+                                           query::row_limit(query::max_rows),
+                                           query::partition_limit(query::max_partitions),
+                                           gc_clock::now(),
+                                           std::nullopt,
+                                           query_uuid,
+                                           query::is_first_page(is_first_page));
+            reader_permit::awaits_guard ag(permit);
+            auto&& [result_data, hit_rate, opt_exception] = co_await ser::storage_proxy_rpc_verbs::send_read_mutation_data(&_ms.local(),
+                  locator::host_id(leader.uuid()),
+                  permit.timeout(),
+                  cmd,
+                  range,
+                  {});
+            if (opt_exception.has_value() && *opt_exception) {
+                co_await coroutine::return_exception_ptr((*opt_exception).into_exception_ptr());
+            }
+            is_first_page = false;
+
+            auto& partitions = result_data.partitions();
+            for (auto&& p : partitions) {
+                auto m = p.mut().unfreeze(_s);
+                if (!open_partition || !open_partition->equal(*_s, m.decorated_key())) {
+                    if (open_partition) {
+                        co_await result.emit_partition_end();
+                    }
+                    open_partition = m.decorated_key();
+                    co_await result.emit_partition_start(*open_partition);
+                }
+                const auto& rows = m.partition().clustered_rows();
+                for (const auto& re : rows) {
+                    co_await result.emit_row(clustering_row(*_s, re));
+                }
+                last_pos = rows.empty() ? position_in_partition::for_partition_start()
+                                        : position_in_partition(rows.crbegin()->position());
+            }
+
+            if (!result_data.is_short_read()) {
+                break;
+            }
+            if (partitions.empty()) {
+                // Nothing came back yet the leader reports more to fetch; avoid spinning forever.
+                break;
+            }
+        }
+        if (open_partition) {
             co_await result.emit_partition_end();
         }
         co_return;
