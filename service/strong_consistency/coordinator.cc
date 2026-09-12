@@ -393,17 +393,28 @@ future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
         logger.debug("mutate(): add_entry({}), {}",
             command.mutation.pretty_printer(schema), state_fmt);
 
+        // The injection's enabled state is checked first before co_awaiting
+        // in order not to accidentally preempt in case when the injection
+        // is not enabled and the task has just run out of quota.
+        const char* wait_injection_name = "sc_coordinator_wait_before_add_entry";
+        if (utils::get_local_injector().is_enabled(wait_injection_name)) {
+            co_await utils::get_local_injector().inject(wait_injection_name,
+                utils::wait_for_message(5min));
+        }
+
         future<> add_entry_result = co_await coroutine::as_future(
             op->raft_server.server().add_entry(std::move(raft_cmd),
                 raft::wait_type::committed,
-                &aoe.abort_source()));
+                &aoe.abort_source(),
+                ts_with_term->term));
 
         if (!add_entry_result.failed()) {
             co_return std::monostate{};
         }
 
         auto ex = std::move(add_entry_result).get_exception();
-        if (try_catch<raft::not_a_leader>(ex) || try_catch<raft::dropped_entry>(ex)) {
+        if (try_catch<raft::not_a_leader>(ex) || try_catch<raft::dropped_entry>(ex)
+                || try_catch<raft::term_changed>(ex)) {
             logger.debug("mutate(): add_entry, got retriable error {}, table {}.{}, {}",
                 ex, schema->ks_name(), schema->cf_name(), state_fmt);
 

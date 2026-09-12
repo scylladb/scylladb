@@ -9,6 +9,7 @@ Test consistency of schema changes with topology changes.
 import asyncio
 import logging
 import functools
+import math
 import operator
 import time
 import re
@@ -495,10 +496,15 @@ async def trigger_snapshot(manager, server: ServerInfo) -> None:
     host = cql.cluster.metadata.get_host(server.ip_addr)
     await manager.api.client.post(f"/raft/trigger_snapshot/{group0_id}", host=server.ip_addr)
 
-async def trigger_stepdown(manager, server: ServerInfo) -> None:
+async def trigger_stepdown(manager, server: ServerInfo, group_id: str | None = None) -> None:
+    """Make `server` step down as the leader of `group_id`, or of group0 if not given.
+
+    Fails if `server` is not the leader of that group.
+    """
     cql = manager.get_cql()
     host = cql.cluster.metadata.get_host(server.ip_addr)
-    await manager.api.client.post("/raft/trigger_stepdown", host=server.ip_addr)
+    params = {"group_id": group_id} if group_id is not None else None
+    await manager.api.client.post("/raft/trigger_stepdown", host=server.ip_addr, params=params)
 
 
 
@@ -553,17 +559,26 @@ async def ensure_group0_leader_on(manager: ScyllaClusterManager, server: ServerI
     Ensure that raft group0 leader runs on a given server, triggering stepdowns if necessary.
     Assumes that servers are not added concurrently.
     """
+    await ensure_raft_group_leader_on(manager, server, None, timeout_seconds)
 
+async def ensure_raft_group_leader_on(manager: ScyllaClusterManager, server: ServerInfo, group_id: Optional[str], timeout_seconds = 60):
+    """
+    Ensure that the leader of given raft group runs on a given server, triggering stepdowns if necessary.
+    If group_id is None, then group0 is assumed as the given group.
+    Assumes that servers are not added concurrently.
+    """
     deadline = time.time() + timeout_seconds
     servers_by_host = await manager.all_servers_by_host_id()
     desired_host_id = await manager.get_host_id(server.server_id)
+
+    group_name = "group0" if group_id is None else f"raft group {group_id}"
 
     while True:
         if time.time() > deadline:
             raise RuntimeError(f"timed out")
 
-        await read_barrier(manager.api, server.ip_addr)
-        coord = await manager.api.get_raft_leader(server.ip_addr)
+        await read_barrier(manager.api, server.ip_addr, group_id, timeout=math.ceil(deadline - time.time()))
+        coord = await manager.api.get_raft_leader(server.ip_addr, group_id)
         if coord == desired_host_id:
             break
 
@@ -571,10 +586,10 @@ async def ensure_group0_leader_on(manager: ScyllaClusterManager, server: ServerI
             logger.info("no leader")
             continue
 
-        logger.info(f"group0 leader is {coord}, want {desired_host_id}")
+        logger.info(f"{group_name} leader is {coord}, want {desired_host_id}")
         coord_host = servers_by_host[coord]
         logger.info(f"triggering stepdown of {coord}/{coord_host.ip_addr}")
-        await manager.api.client.post("/raft/trigger_stepdown", host=coord_host.ip_addr)
+        await trigger_stepdown(manager, coord_host, group_id)
 
 async def get_non_coordinator_host(manager: ScyllaClusterManager) -> ServerInfo | None:
     """Get first non-coordinator ServerInfo."""

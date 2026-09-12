@@ -590,3 +590,41 @@ SEASTAR_THREAD_TEST_CASE(test_add_entry_preserves_submission_order) {
         BOOST_REQUIRE_EQUAL((*applied)[v], v);
     }
 }
+
+SEASTAR_THREAD_TEST_CASE(test_add_entry_append_succeeds_only_in_requested_term) {
+    test_case test_config {
+        .nodes = 1,
+        .config = std::vector<raft::server::configuration>{
+            raft::server::configuration {
+                .enable_forwarding = false,
+            },
+        },
+    };
+    auto cluster = raft_cluster<std::chrono::steady_clock>{
+        std::move(test_config),
+        ::apply_changes,
+        100, // apply_entries
+        0,
+        0, false, tick_delay, rpc_config{}
+    };
+    cluster.start_all().get();
+    auto stop = defer([&cluster] noexcept { cluster.stop_all().get(); });
+
+    auto& server = cluster.get_server(0);
+    server.wait_for_leader(nullptr).get();
+
+    const auto [before_idx, term] = server.log_last_idx_term();
+    BOOST_REQUIRE(term > raft::term_t{0});
+    const auto wrong_term = raft::term_t{term.value() - 1};
+
+    // Attempting to append while expecting the old term should fail and nothing
+    // should be appended to the log.
+    BOOST_CHECK_THROW(
+            server.add_entry(create_command(42), raft::wait_type::committed, nullptr, wrong_term).get(),
+            raft::term_changed);
+    BOOST_CHECK_EQUAL(server.log_last_idx_term().first, before_idx);
+
+    // Attempting to append while expecting the current term should succeed.
+    server.add_entry(create_command(42), raft::wait_type::committed, nullptr, term).get();
+    BOOST_CHECK_EQUAL(server.log_last_idx_term().first, raft::index_t{before_idx.value() + 1});
+}

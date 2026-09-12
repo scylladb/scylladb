@@ -101,7 +101,7 @@ public:
 
 
     // server interface
-    future<> add_entry(command command, wait_type type, seastar::abort_source* as) override;
+    future<> add_entry(command command, wait_type type, seastar::abort_source* as, std::optional<term_t> append_in_term) override;
     future<> set_configuration(config_member_set c_new, seastar::abort_source* as) override;
     raft::configuration get_configuration() const override;
     future<> start() override;
@@ -121,7 +121,7 @@ public:
     void set_applier_queue_max_size(size_t queue_max_size) override;
     future<> stepdown(logical_clock::duration timeout, server_id target) override;
     future<> modify_config(std::vector<config_member> add, std::vector<server_id> del, seastar::abort_source* as) override;
-    future<entry_id> add_entry_on_leader(command command, seastar::abort_source* as);
+    future<entry_id> add_entry_on_leader(command command, seastar::abort_source* as, std::optional<term_t> append_in_term);
     void register_metrics() override;
     size_t max_command_size() const override;
 private:
@@ -697,11 +697,18 @@ future<> server_impl::wait_for_entry(entry_id eid, wait_type type, seastar::abor
     co_return;
 }
 
-future<entry_id> server_impl::add_entry_on_leader(command cmd, seastar::abort_source* as) {
+future<entry_id> server_impl::add_entry_on_leader(command cmd, seastar::abort_source* as, std::optional<term_t> append_in_term) {
     // Wait for sufficient memory to become available
     semaphore_units<> memory_permit;
     while (true) {
         term_t t = _fsm->get_current_term();
+        if (append_in_term && *append_in_term != t) [[unlikely]] {
+            if (*append_in_term > t) {
+                on_internal_error(logger, format("[{}] Requested to append an entry in a term newer than the current, requested term: {}, current term: {}",
+                        _tag, *append_in_term, t));
+            }
+            co_await coroutine::return_exception(raft::term_changed());
+        }
         try {
             memory_permit = co_await _fsm->wait_for_memory_permit(as, log::memory_usage_of(cmd, _config.max_command_size));
         } catch (semaphore_aborted&) {
@@ -738,7 +745,7 @@ future<add_entry_reply> server_impl::execute_add_entry(server_id from, command c
     }
     logger.trace("[{}] adding a forwarded entry from {}", _tag, from);
     try {
-        co_return add_entry_reply{co_await add_entry_on_leader(std::move(cmd), as)};
+        co_return add_entry_reply{co_await add_entry_on_leader(std::move(cmd), as, std::nullopt)};
     } catch (raft::not_a_leader& e) {
         co_return add_entry_reply{transient_error{std::current_exception(), e.leader}};
     }
@@ -782,7 +789,7 @@ future<> server_impl::do_on_leader_with_retries(seastar::abort_source* as, Async
     }
 }
 
-future<> server_impl::add_entry(command command, wait_type type, seastar::abort_source* as) {
+future<> server_impl::add_entry(command command, wait_type type, seastar::abort_source* as, std::optional<term_t> append_in_term) {
     if (command.size() > _config.max_command_size) {
         logger.trace("[{}] add_entry command size exceeds the limit: {} > {}",
                      _tag, command.size(), _config.max_command_size);
@@ -814,11 +821,13 @@ future<> server_impl::add_entry(command command, wait_type type, seastar::abort_
                     co_await coroutine::return_exception_ptr(eptr);
                 }
             }
-            eid = co_await add_entry_on_leader(std::move(command), as);
+            eid = co_await add_entry_on_leader(std::move(command), as, append_in_term);
         }
         co_await utils::get_local_injector().inject("block_raft_add_entry_before_wait_for_entry",
                 utils::wait_for_message(std::chrono::minutes(5)));
         co_return co_await wait_for_entry(eid, type, as);
+    } else if (append_in_term.has_value()) [[unlikely]] {
+        on_internal_error(logger, "Cannot use `append_in_term` when forwarding is enabled");
     }
 
     co_await do_on_leader_with_retries(as, [&](const server_id& leader) -> future<do_on_leader_result> {
