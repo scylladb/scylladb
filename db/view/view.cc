@@ -139,6 +139,21 @@ cql3::statements::select_statement& view_info::select_statement(data_dictionary:
     return *_select_statement;
 }
 
+const cql3::restrictions::view_restrictions& view_info::restrictions(data_dictionary::database db) const {
+    if (!_restrictions) {
+        cql3::prepare_context ctx;
+        ctx.set_bound_variables({}, cql3::internal_dialect());
+        // A view backing a secondary index has no WHERE clause at all, and an
+        // empty string is not a parseable one.
+        auto where = where_clause().empty()
+                ? cql3::expr::expression(cql3::expr::conjunction{})
+                : cql3::util::where_clause_to_relations(where_clause(), cql3::internal_dialect());
+        _restrictions = cql3::restrictions::analyze_view_restrictions(
+                db, db.find_schema(base_id()), where, ctx);
+    }
+    return *_restrictions;
+}
+
 const query::partition_slice& view_info::partition_slice(data_dictionary::database db) const {
     if (!_partition_slice) {
         _partition_slice = select_statement(db).make_partition_slice(cql3::query_options({ }));
@@ -160,6 +175,7 @@ const column_definition* view_info::view_column(const column_definition& base_de
 void view_info::reset_view_info() {
     // Forget the cached objects which may refer to the base schema.
     _select_statement = nullptr;
+    _restrictions = nullptr;
     _partition_slice = std::nullopt;
 }
 
@@ -257,7 +273,7 @@ void stats::register_stats() {
 }
 
 bool partition_key_matches(data_dictionary::database db, const schema& base, const view_info& view, const dht::decorated_key& key) {
-    const cql3::expr::expression& pk_restrictions = view.select_statement(db).get_restrictions()->get_partition_key_restrictions();
+    const cql3::expr::expression& pk_restrictions = view.restrictions(db).get_partition_key_restrictions();
     std::vector<bytes> exploded_pk = key.key().explode();
     std::vector<bytes> exploded_ck;
     std::vector<const column_definition*> pk_columns;
@@ -282,7 +298,7 @@ bool partition_key_matches(data_dictionary::database db, const schema& base, con
 }
 
 bool clustering_prefix_matches(data_dictionary::database db, const schema& base, const view_info& view, const partition_key& key, const clustering_key_prefix& ck) {
-    const cql3::expr::expression& r = view.select_statement(db).get_restrictions()->get_clustering_columns_restrictions();
+    const cql3::expr::expression& r = view.restrictions(db).get_clustering_columns_restrictions();
     std::vector<bytes> exploded_pk = key.explode();
     std::vector<bytes> exploded_ck = ck.explode();
     std::vector<const column_definition*> ck_columns;
@@ -367,7 +383,7 @@ public:
     bool check_if_matches(const clustering_key& key, const query::result_row_view& static_row, const query::result_row_view& row) const {
         std::vector<bytes> ck = key.explode();
         return std::ranges::all_of(
-            _view.select_statement(_db).get_restrictions()->get_non_pk_restriction() | std::views::values,
+            _view.restrictions(_db).get_non_pk_restriction() | std::views::values,
             [&] (auto&& r) {
                 // FIXME: move outside all_of(). However, crashes.
                 auto static_and_regular_columns = cql3::expr::get_non_pk_values(*_selection, static_row, &row);
@@ -1643,7 +1659,7 @@ future<query::clustering_row_ranges> calculate_affected_clustering_ranges(data_d
     if (mp.partition_tombstone() || !mp.row_tombstones().empty()) {
         for (auto&& v : views) {
             // FIXME: #2371
-            if (v->view_info()->select_statement(db).get_restrictions()->has_unrestricted_clustering_columns()) {
+            if (v->view_info()->restrictions(db).has_unrestricted_clustering_columns()) {
                 view_row_ranges.push_back(interval<clustering_key_prefix_view>::make_open_ended_both_sides());
                 break;
             }
