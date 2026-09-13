@@ -83,7 +83,16 @@ public:
                 if (utils::get_local_injector().enter("disable_raft_drop_append_entries_for_specified_group")) {
                     utils::get_local_injector().disable("raft_drop_incoming_append_entries_for_specified_group");
                 }
-                co_await _mm.get_group0_barrier().trigger(false, &_as);
+                try {
+                    co_await _mm.get_group0_barrier().trigger(false, &_as);
+                } catch (const seastar::broken_semaphore&) {
+                    // migration_manager::drain() joins the barrier at the very
+                    // beginning of storage_service::stop_transport(), long before
+                    // the raft groups are aborted, and a joined serialized_action
+                    // reports broken_semaphore without looking at the abort source.
+                    // The node is shutting down, which for us is an abort.
+                    throw abort_requested_exception();
+                }
             });
             // Apply mutations sequentially to preserve linearizability.
             // E.g., for writes A-B-C-D, a reader must observe
