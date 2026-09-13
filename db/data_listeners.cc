@@ -49,8 +49,9 @@ toppartitions_item_key::operator sstring() const {
 }
 
 toppartitions_data_listener::toppartitions_data_listener(replica::database& db, std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash> table_filters,
-        std::unordered_set<sstring> keyspace_filters, bool track_read, bool track_write)
+        std::unordered_set<sstring> keyspace_filters, size_t capacity, bool track_read, bool track_write)
         : _db(db), _table_filters(std::move(table_filters)), _keyspace_filters(std::move(keyspace_filters))
+        , _top_k_read(capacity), _top_k_write(capacity)
         , _track_read(track_read), _track_write(track_write) {
     dblog.debug("toppartitions_data_listener: installing {}", fmt::ptr(this));
     _db.data_listeners().install(this);
@@ -130,7 +131,7 @@ toppartitions_query::toppartitions_query(sharded<replica::database>& xdb, std::u
 future<> toppartitions_query::scatter() {
     bool track_read = !_kind || *_kind == "read";
     bool track_write = !_kind || *_kind == "write";
-    return _query->start(std::ref(_xdb), _table_filters, _keyspace_filters, track_read, track_write);
+    return _query->start(std::ref(_xdb), _table_filters, _keyspace_filters, _capacity, track_read, track_write);
 }
 
 using top_t = toppartitions_data_listener::global_top_k::results;
