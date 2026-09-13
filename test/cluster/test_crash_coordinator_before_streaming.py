@@ -19,28 +19,7 @@ from test.cluster.util import (BANNED_NOTIFICATION, check_token_ring_and_group0_
 logger = logging.getLogger(__name__)
 
 
-@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_kill_coordinator_during_op(manager: ScyllaClusterManager, failure_detector_timeout: int, scale_timeout: callable) -> None:
-    """ Kill coordinator with error injection while topology operation is running for cluster: decommission,
-    bootstrap, removenode, replace.
-
-    1. Find the coordinator node.
-    2. Inject an error to abort coordinator before streaming starts
-    3. Start the operation on target node
-    4. Wait for the operation to abort
-    5. Check if the new coordinator has been elected
-    6. Start the old coordinator node
-
-    Topology operation is expected to fail and cluster is rolled back
-    to previous state.
-
-    | Operation | Coverage |
-    | Decommission | done |
-    | Removenode | done |
-    | Bootstrap | done|
-    | Replace | done|
-    """
-    # Decrease the failure detector threshold so we don't have to wait for too long.
+async def _start_cluster_and_kill_coordinator(manager: ScyllaClusterManager, failure_detector_timeout: int):
     config = {
         'failure_detector_timeout_in_ms': failure_detector_timeout,
         # Raise the raft direct failure detector threshold above its 2s default.
@@ -54,19 +33,20 @@ async def test_kill_coordinator_during_op(manager: ScyllaClusterManager, failure
             }
         ]
     }
-    cmdline = [
-        '--logger-log-level', 'raft_topology=trace',
-    ]
+    cmdline = ['--logger-log-level', 'raft_topology=trace']
     nodes = [await manager.server_add(config=config, cmdline=cmdline) for _ in range(5)]
     coordinators_ids = await get_coordinator_host_ids(manager)
     assert len(coordinators_ids) == 1, "At least 1 coordinator id should be found"
-
-    # Configure manager to ignore crashes caused by crash_coordinator_before_stream injection
     manager.ignore_cores_log_patterns.append("crash_coordinator_before_stream: aborting")
-
-    # kill coordinator during decommission
-    logger.debug("Kill coordinator during decommission")
     coordinator_host = await get_coordinator_host(manager)
+    return config, cmdline, nodes, coordinator_host
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_kill_coordinator_during_decommission(manager: ScyllaClusterManager, failure_detector_timeout: int, scale_timeout: callable) -> None:
+    """ Kill coordinator with error injection while decommission is running. Topology operation is
+    expected to fail and cluster is rolled back to previous state. """
+    _config, _cmdline, nodes, coordinator_host = await _start_cluster_and_kill_coordinator(manager, failure_detector_timeout)
     other_nodes = [srv for srv in nodes if srv.server_id != coordinator_host.server_id]
     previous_coordinator_id = await manager.get_host_id(coordinator_host.server_id)
     await manager.api.enable_injection(coordinator_host.ip_addr, "crash_coordinator_before_stream", one_shot=True)
@@ -77,10 +57,12 @@ async def test_kill_coordinator_during_op(manager: ScyllaClusterManager, failure
     await manager.servers_see_each_other(await manager.running_servers())
     await check_token_ring_and_group0_consistency(manager)
 
-    # kill coordinator during removenode
-    logger.debug("Kill coordinator during removenode")
-    nodes = await manager.running_servers()
-    coordinator_host = await get_coordinator_host(manager)
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_kill_coordinator_during_removenode(manager: ScyllaClusterManager, failure_detector_timeout: int, scale_timeout: callable) -> None:
+    """ Kill coordinator with error injection while removenode is running. Topology operation is
+    expected to fail and cluster is rolled back to previous state. """
+    _config, _cmdline, nodes, coordinator_host = await _start_cluster_and_kill_coordinator(manager, failure_detector_timeout)
     other_nodes = [srv for srv in nodes if srv.server_id != coordinator_host.server_id]
     working_srv_id = other_nodes[0].server_id
     node_to_remove_srv_id = other_nodes[-1].server_id
@@ -105,14 +87,13 @@ async def test_kill_coordinator_during_op(manager: ScyllaClusterManager, failure
     await wait_for_no_pending_topology_transition(manager, time.time() + scale_timeout(60))
     await manager.servers_see_each_other(await manager.running_servers())
     await check_token_ring_and_group0_consistency(manager)
-    logger.debug("Restore number of nodes in cluster")
-    await manager.server_add(config=config, cmdline=cmdline)
 
-    # kill coordinator during bootstrap
-    logger.debug("Kill coordinator during bootstrap")
-    nodes = await manager.running_servers()
-    coordinator_host = await get_coordinator_host(manager)
-    other_nodes = [srv for srv in nodes if srv.server_id != coordinator_host.server_id]
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_kill_coordinator_during_bootstrap(manager: ScyllaClusterManager, failure_detector_timeout: int, scale_timeout: callable) -> None:
+    """ Kill coordinator with error injection while bootstrap is running. Topology operation is
+    expected to fail and cluster is rolled back to previous state. """
+    config, cmdline, nodes, coordinator_host = await _start_cluster_and_kill_coordinator(manager, failure_detector_timeout)
     new_node = await manager.server_add(start=False, config=config, cmdline=cmdline)
     previous_coordinator_id = await manager.get_host_id(coordinator_host.server_id)
     await manager.api.enable_injection(coordinator_host.ip_addr, "crash_coordinator_before_stream", one_shot=True)
@@ -123,10 +104,12 @@ async def test_kill_coordinator_during_op(manager: ScyllaClusterManager, failure
     await manager.servers_see_each_other(await manager.running_servers())
     await check_token_ring_and_group0_consistency(manager)
 
-    # kill coordinator during replace
-    logger.debug("Kill coordinator during replace")
-    nodes = await manager.running_servers()
-    coordinator_host = await get_coordinator_host(manager)
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_kill_coordinator_during_replace(manager: ScyllaClusterManager, failure_detector_timeout: int, scale_timeout: callable) -> None:
+    """ Kill coordinator with error injection while replace is running. Topology operation is
+    expected to fail and cluster is rolled back to previous state. """
+    config, cmdline, nodes, coordinator_host = await _start_cluster_and_kill_coordinator(manager, failure_detector_timeout)
     other_nodes = [srv for srv in nodes if srv.server_id != coordinator_host.server_id]
     node_to_replace_srv_id = other_nodes[-1].server_id
     await manager.server_stop_gracefully(node_to_replace_srv_id)
