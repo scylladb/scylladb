@@ -228,8 +228,7 @@ public:
  * of the restrictions themselves this holds the query plan: the index to read,
  * if any, and the filters to apply to what comes back.
  *
- * Built by analyze_select_restrictions(), or - for the SELECT defining a
- * materialized view - analyze_view_restrictions().
+ * Built by analyze_select_restrictions().
  */
 class select_restrictions {
     where_clause_analysis _analysis;
@@ -302,14 +301,6 @@ public:
             bool selects_only_static_columns,
             pinned_plan_opt pinned_plan);
 
-    /// Reads the WHERE clause of the SELECT statement defining a materialized
-    /// view and plans the query the view is refreshed by.
-    void analyze_view_definition(
-            data_dictionary::database db,
-            const expr::expression& where_clause,
-            prepare_context& ctx,
-            bool selects_only_static_columns);
-
     /// Initializes the object for a statement with no WHERE clause: every
     /// partition, every row, nothing to filter.
     void no_restrictions();
@@ -328,15 +319,6 @@ public:
 
     const expr::single_column_restrictions_map& get_non_pk_restriction() const {
         return _analysis.single_column_nonprimary_key_restrictions;
-    }
-
-    // The columns a view definition declares to be non-null, i.e. the base
-    // columns a base row must have a value for to have a view row.  Handled
-    // separately from the other restrictions: they select base rows rather than
-    // filtering view rows, and so are not part of get_*_restrictions().
-    // Empty unless this came from analyze_view_restrictions().
-    const std::unordered_set<const column_definition*>& get_not_null_columns() const {
-        return _analysis.not_null_columns;
     }
 
     bool key_is_in_relation() const { return _analysis.key_is_in_relation(); }
@@ -532,17 +514,6 @@ shared_ptr<const view_restrictions> analyze_view_restrictions(
         schema_ptr schema,
         const expr::expression& where_clause,
         prepare_context& ctx);
-
-/// Reads the same WHERE clause as the SELECT a view is refreshed by.
-/// Transitional: a view's partition slice still comes from a prepared
-/// select_statement, which needs select_restrictions to compute it.
-shared_ptr<const select_restrictions> analyze_view_select_restrictions(
-        data_dictionary::database db,
-        schema_ptr schema,
-        const expr::expression& where_clause,
-        prepare_context& ctx,
-        bool selects_only_static_columns,
-        check_indexes do_check_indexes);
 
 /// Analyzes the WHERE clause of an UPDATE statement.
 shared_ptr<const update_restrictions> analyze_update_restrictions(

@@ -117,10 +117,7 @@ public:
     virtual void prepare_keyspace(const service::client_state& state) override;
     virtual void prepare_keyspace(std::string_view keyspace) override;
 
-    virtual std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) override {
-        return prepare(db, stats, cfg, false);
-    }
-    std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg, bool for_view);
+    virtual std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) override;
 
     virtual void set_pinned_plan(restrictions::pinned_plan_opt pinned_plan) override {
         _pinned_plan = std::move(pinned_plan);
@@ -132,7 +129,6 @@ private:
         schema_ptr schema,
         prepare_context& ctx,
         ::shared_ptr<selection::selection> selection,
-        bool for_view = false,
         bool allow_filtering = false,
         restrictions::check_indexes do_check_indexes = restrictions::check_indexes::yes,
         restrictions::pinned_plan_opt pinned_plan = std::nullopt);
