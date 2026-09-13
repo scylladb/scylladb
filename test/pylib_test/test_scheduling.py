@@ -19,14 +19,17 @@ import argparse
 import asyncio
 import configparser
 import importlib.util
+import json
 import pathlib
 import re
+import sqlite3
 import sys
 from functools import lru_cache
 
 import pytest
 
 from test import HOST_ID, TEST_DIR, TOP_SRC_DIR
+from test.pylib.db.writer import DEFAULT_DB_NAME, SCHEDULER_RUNS_TABLE
 from test.pylib.scheduling import SchedulerError, execution, registry
 from test.pylib.scheduling.config import RunConfig
 from test.pylib.scheduling.scheduler import Scheduler
@@ -208,6 +211,8 @@ def test_a_scheduler_that_cannot_run_this_command_line_stops_the_run(options, mo
     assert "--scheduler=stub-refuses" in printed
     assert "-k is not supported with it" in printed
     assert "Traceback" not in printed
+    # A run that never happened is not a run that was scheduled.
+    assert not (pathlib.Path(options.tmpdir) / DEFAULT_DB_NAME).exists()
 
 
 def test_listing_tests_decides_nothing(options, monkeypatch, capsys) -> None:
@@ -219,6 +224,7 @@ def test_listing_tests_decides_nothing(options, monkeypatch, capsys) -> None:
 
     assert isinstance(scheduler, StubRefuses)
     assert capsys.readouterr().out == ""
+    assert not (pathlib.Path(options.tmpdir) / DEFAULT_DB_NAME).exists()
 
 
 def test_exactly_one_scheduler_plugin_is_loaded(options) -> None:
@@ -264,6 +270,139 @@ def test_the_setters_are_the_whole_vocabulary(options) -> None:
 def test_concurrency_must_be_at_least_one(options) -> None:
     with pytest.raises(SchedulerError):
         RunConfig.defaults(options).set_concurrency(0)
+
+
+# --- what the run says about the scheduler that ran it ------------------------
+
+
+def test_one_line_names_the_scheduler(options, capsys) -> None:
+    RunConfig.defaults(options).log_scheduler(Passthrough())
+    assert capsys.readouterr().out.splitlines()[0] == "scheduler: passthrough@1"
+
+
+def test_the_line_names_the_plugin_when_there_is_one(options, capsys) -> None:
+    RunConfig.defaults(options).log_scheduler(StubPlugin())
+    assert capsys.readouterr().out.splitlines()[0] == (
+        "scheduler: stub-plugin@1 plugin=some.other.module")
+
+
+def scheduler_runs(tmpdir: pathlib.Path) -> list[sqlite3.Row]:
+    """Every scheduler_runs row in the metrics DB under *tmpdir*."""
+    connection = sqlite3.connect(pathlib.Path(tmpdir) / DEFAULT_DB_NAME)
+    connection.row_factory = sqlite3.Row
+    try:
+        return list(connection.execute(f"SELECT * FROM {SCHEDULER_RUNS_TABLE}"))
+    finally:
+        connection.close()
+
+
+def test_gather_metrics_records_what_the_scheduler_decided(options) -> None:
+    cfg = RunConfig.defaults(options)
+    cfg.set_dist("loadscope")
+    cfg.log_scheduler(StubPlugin())
+
+    row, = scheduler_runs(options.tmpdir)
+    assert (row["name"], row["version"], row["plugin"]) == (
+        "stub-plugin", "1", "some.other.module")
+    assert row["timestamp"]
+    assert json.loads(row["config"]) == {
+        "concurrency": 4, "dist": "loadscope", "parameters": {}}
+
+
+def test_a_scheduler_records_its_own_parameters(options) -> None:
+    """Whatever the scheduler reports is kept, in its own terms."""
+
+    class Budgeted(Scheduler):
+        """A scheduler that has settings of its own."""
+
+        name = "budgeted"
+
+        def parameters(self):
+            return {"budget_shards": 160, "unclaimed": "warn"}
+
+    RunConfig.defaults(options).log_scheduler(Budgeted())
+
+    recorded = json.loads(scheduler_runs(options.tmpdir)[0]["config"])
+    assert recorded["parameters"] == {"budget_shards": 160, "unclaimed": "warn"}
+
+
+def test_parameters_are_read_after_configure_has_run(options, monkeypatch) -> None:
+    """A scheduler reports what it worked out, not what it started with."""
+
+    class Budgeted(Scheduler):
+        """Works out its budget in configure(), then reports it."""
+
+        name = "budgeted"
+
+        def configure(self, cfg: RunConfig) -> None:
+            self.budget = 8 * len(cfg.options.modes)
+            cfg.set_concurrency(2)
+
+        def parameters(self):
+            return {"budget": self.budget}
+
+    monkeypatch.setitem(registry.SCHEDULERS, "budgeted", Budgeted)
+    monkeypatch.setattr(options, "scheduler", "budgeted")
+    monkeypatch.setattr(options, "jobs", 4)
+
+    run_main(options, monkeypatch)
+
+    recorded = json.loads(scheduler_runs(options.tmpdir)[0]["config"])
+    assert recorded == {"concurrency": 2, "dist": "worksteal", "parameters": {"budget": 8}}
+
+
+def test_the_command_line_is_not_recorded(tmp_path) -> None:
+    """Only what the scheduler decided is stored.
+
+    --pytest-arg can pass this repo's --auth_password and --aws-secret-key, and
+    the metrics DB is collected as a build artifact.  The command line does not
+    belong in it.
+    """
+    options = parse_test_py(["--mode=dev", f"--tmpdir={tmp_path}",
+                             "--pytest-arg=--auth_password=hunter2"])
+    cfg = RunConfig.defaults(options)
+    cfg.log_scheduler(Passthrough())
+
+    recorded = scheduler_runs(tmp_path)[0]["config"]
+    assert "hunter2" not in recorded
+    assert set(json.loads(recorded)) == {"concurrency", "dist", "parameters"}
+
+    # Not recording it must not stop the run from getting it.
+    assert "--auth_password=hunter2" in execution.pytest_args(cfg, Passthrough())
+
+
+def test_the_table_accumulates_and_can_be_selected_by_scheduler(options) -> None:
+    """This is why it is a table and not a file: rows can be selected.
+
+    A run normally writes its own ``sqlite_<HOST_ID>.db``.  More than one row in
+    one file means the host id was fixed, or the files were collected together.
+    """
+    RunConfig.defaults(options).log_scheduler(Passthrough())
+    RunConfig.defaults(options).log_scheduler(StubPlugin())
+
+    assert [row["name"] for row in scheduler_runs(options.tmpdir)] == [
+        "passthrough", "stub-plugin"]
+
+
+def test_without_gather_metrics_only_the_line_is_produced(tmp_path, capsys) -> None:
+    options = parse_test_py(["--mode=dev", "--no-gather-metrics", f"--tmpdir={tmp_path}"])
+    RunConfig.defaults(options).log_scheduler(Passthrough())
+
+    assert capsys.readouterr().out == "scheduler: passthrough@1\n"
+    assert not (tmp_path / DEFAULT_DB_NAME).exists()
+
+
+def test_a_parameter_json_cannot_hold_does_not_fail_the_run(options) -> None:
+    class Exotic(Scheduler):
+        """A scheduler whose parameters are not all JSON values."""
+
+        name = "exotic"
+
+        def parameters(self):
+            return {"thing": object()}
+
+    recorded = json.loads(RunConfig.defaults(options).as_json(Exotic()))
+    assert "object object at" in recorded["parameters"]["thing"]
 
 
 # --- the registry -------------------------------------------------------------

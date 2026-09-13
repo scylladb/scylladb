@@ -305,6 +305,7 @@ async def main() -> int:
         # The message comes from the scheduler: only it knows what it could not do.
         print(palette.fail(f"error: --scheduler={options.scheduler}: {e}"))
         return EXIT_SCHEDULER_ERROR
+    cfg.log_scheduler(scheduler)
 
     try:
         logging.info('running all tests')
