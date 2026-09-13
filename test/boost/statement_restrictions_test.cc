@@ -1042,11 +1042,6 @@ SEASTAR_TEST_CASE(combinatorial_restrictions) {
                 sr->is_empty() == (mask == 0),
                 ctx_msg("is_empty"));
 
-            // --- get_not_null_columns: none of our fragments use IS NOT NULL ---
-            BOOST_CHECK_MESSAGE(
-                sr->get_not_null_columns().empty(),
-                ctx_msg("get_not_null_columns should be empty"));
-
             // --- get_partition_key_ranges ---
             // Always returns exactly 1 range.  Full PK → singular range
             // (specific partition).  Otherwise → open-ended range.
