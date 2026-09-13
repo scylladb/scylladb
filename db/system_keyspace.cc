@@ -1155,7 +1155,13 @@ schema_ptr system_keyspace::sstables_registry() {
 }
 
 schema_ptr system_keyspace::tablets() {
-    static thread_local auto schema = replica::make_tablets_schema();
+    // rebuild on flag flip: cql_test_env reuses this shard's thread across envs with differing configs
+    static thread_local bool built_with_strong_consistency = false;
+    static thread_local schema_ptr schema;
+    if (!schema || built_with_strong_consistency != replica::is_strongly_consistent_tables_enabled()) {
+        built_with_strong_consistency = replica::is_strongly_consistent_tables_enabled();
+        schema = replica::make_tablets_schema();
+    }
     return schema;
 }
 
