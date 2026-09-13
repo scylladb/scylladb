@@ -10,15 +10,15 @@ requested mode is dropped before pytest sees it: pytest would exit 4
 nothing."""
 
 import argparse
-import importlib.util
 import pathlib
-import sys
 
 import pytest
 
-from test import TOP_SRC_DIR
 from test.pylib import runner
 from test.pylib.runner import TestSuiteConfig, drop_disabled_tests
+from test.pylib.scheduling import execution
+from test.pylib.scheduling.config import RunConfig
+from test.pylib.scheduling.schedulers.passthrough import Passthrough
 
 CONFIG = """\
 disable:
@@ -94,15 +94,8 @@ def test_drop_disabled_tests_reads_each_config_once(suite: pathlib.Path, monkeyp
     assert looked_up == [suite, suite / "sub"]
 
 
-def test_run_pytest_returns_5_when_every_named_test_is_dropped(suite: pathlib.Path,
-                                                               monkeypatch: pytest.MonkeyPatch) -> None:
-    # test.py is a script next to the test/ package, so it is loaded by path;
-    # its dataclasses look the module up in sys.modules.
-    spec = importlib.util.spec_from_file_location("test_py", TOP_SRC_DIR / "test.py")
-    test_py = importlib.util.module_from_spec(spec)
-    monkeypatch.setitem(sys.modules, "test_py", test_py)
-    spec.loader.exec_module(test_py)
+def test_run_pytest_returns_5_when_every_named_test_is_dropped(suite: pathlib.Path) -> None:
     options = argparse.Namespace(tmpdir=str(suite), name=[f"{suite / 'test_a.py'}::test_x"],
-                                 keep_duplicates=True, modes=["dev"])
+                                 keep_duplicates=True, modes=["dev"], jobs=1)
     # Returns before building the pytest command line, which would otherwise run the whole test/ directory.
-    assert test_py.run_pytest(options) == pytest.ExitCode.NO_TESTS_COLLECTED
+    assert execution.run_pytest(RunConfig.defaults(options), Passthrough()) == pytest.ExitCode.NO_TESTS_COLLECTED
