@@ -32,7 +32,9 @@ import treelib
 from scripts import coverage
 from test import ALL_MODES, TOP_SRC_DIR, path_to, DEBUG_MODES
 from test.pylib import coverage_utils
-from test.pylib.scheduling import execution
+from test.pylib.scheduling import SchedulerError, execution, registry
+from test.pylib.scheduling.config import RunConfig
+from test.pylib.scheduling.scheduler import Scheduler
 from test.pylib.util import LogPrefixAdapter, get_configured_modes, palette
 
 launch_time = time.monotonic()
@@ -82,6 +84,25 @@ class ThreadsCalculator:
 
 
 
+class SelectScheduler(argparse.Action):
+    """``--scheduler=<name>``, or ``--scheduler=list`` to print the registry.
+
+    The listing and the "no such scheduler" error both live on the option.  A
+    bad name is then reported the way argparse reports any other bad value,
+    instead of being checked again later in parse_cmd_line().
+    """
+
+    def __call__(self, parser, namespace, value, option_string=None) -> None:
+        if value == registry.LIST_KEYWORD:
+            print(registry.describe())
+            parser.exit()
+        if value not in registry.SCHEDULERS:
+            parser.error(palette.fail(
+                f"unknown --scheduler={value}; available: {', '.join(registry.known_names())} "
+                f"(use --scheduler={registry.LIST_KEYWORD} for details)"))
+        setattr(namespace, self.dest, value)
+
+
 def parse_cmd_line() -> argparse.Namespace:
     """ Print usage and process command line options. """
     parser = argparse.ArgumentParser(description='Scylla test runner', formatter_class=argparse.RawTextHelpFormatter)
@@ -124,6 +145,11 @@ def parse_cmd_line() -> argparse.Namespace:
                          help="Multiplier for the number of threads to use for running the tests. Default is) 1.0, "
                               "which means no change. Use a value less than 1.0 to reduce the number of threads, or a"
                               "value greater than 1.0 to increase the number of threads.")
+    parser.add_argument('--scheduler', action=SelectScheduler, default=registry.DEFAULT, metavar="NAME",
+                        help=f"Which scheduler decides how the tests are spread over this machine. "
+                             f"Default: {registry.DEFAULT}, which decides nothing of its own and leaves "
+                             f"the distribution to pytest-xdist. "
+                             f"Use --scheduler={registry.LIST_KEYWORD} to see what is available.")
     parser.add_argument('--save-log-on-success', "-s", default=False,
                         dest="save_log_on_success", action="store_true",
                         help="Save test log output on success and skip cleanup before the run.")
@@ -225,6 +251,8 @@ def parse_cmd_line() -> argparse.Namespace:
             nr_cpus = int(subprocess.check_output(
                 ['taskset', '-c', args.cpus, 'python3', '-c',
                  'import os; print(len(os.sched_getaffinity(0)))']))
+        # ThreadsCalculator is passthrough's calculation, not a shared
+        # foundation: a scheduler that wants a different number brings its own.
         args.jobs = ThreadsCalculator(args.modes, args.threads_multiplier).get_number_of_threads(nr_cpus)
 
     if not args.coverage_modes and args.coverage:
@@ -242,8 +270,16 @@ def parse_cmd_line() -> argparse.Namespace:
     return args
 
 
-def run_pytest(options: argparse.Namespace) -> int:
-    exit_code = execution.run_pytest(options)
+#: The selected scheduler refused to run with this command line.  test.py
+#: returns pytest's exit codes as they are, so this reuses one instead of
+#: inventing a new meaning.  A scheduler only ever sees the command line, so
+#: turning it down is a usage error.  A code of our own would also have had to
+#: avoid pytest's 0-5 and EXIT_MAXFAIL_REACHED.
+EXIT_SCHEDULER_ERROR = execution.EXIT_USAGE_ERROR
+
+
+def run_pytest(cfg: RunConfig, scheduler: Scheduler) -> int:
+    exit_code = execution.run_pytest(cfg, scheduler)
 
     rusage = resource.getrusage(resource.RUSAGE_CHILDREN)
     cpu_used = rusage.ru_stime + rusage.ru_utime
@@ -256,16 +292,26 @@ def run_pytest(options: argparse.Namespace) -> int:
 async def main() -> int:
 
     options = parse_cmd_line()
+    scheduler = registry.get_scheduler(options.scheduler)
+    cfg = RunConfig.defaults(options)
 
     if options.list_tests:
-        return run_pytest(options)
+        # Listing tests decides nothing, so there is nothing to schedule.
+        return run_pytest(cfg, scheduler)
+
+    try:
+        scheduler.configure(cfg)
+    except SchedulerError as e:
+        # The message comes from the scheduler: only it knows what it could not do.
+        print(palette.fail(f"error: --scheduler={options.scheduler}: {e}"))
+        return EXIT_SCHEDULER_ERROR
 
     try:
         logging.info('running all tests')
         # Run pytest in the default thread pool executor so the event loop stays
         # responsive (e.g. signal handlers continue to work while pytest runs).
         loop = asyncio.get_running_loop()
-        exit_code = await loop.run_in_executor(None, run_pytest, options)
+        exit_code = await loop.run_in_executor(None, run_pytest, cfg, scheduler)
         logging.info('after running all tests')
     except asyncio.CancelledError:
         print('\ntests cancelled by signal')
