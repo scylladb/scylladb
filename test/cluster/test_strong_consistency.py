@@ -1173,10 +1173,6 @@ async def test_queries_when_shutting_down(manager: ScyllaClusterManager, target:
             )) for follower in followers])
 
 
-@pytest.mark.skip_bug(
-    link="https://scylladb.atlassian.net/browse/SCYLLADB-1056",
-    reason="Speed up abortion of applier fiber in raft::server_impl::abort",
-)
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
 async def test_abort_state_machine_apply_after_dropping_table(manager: ScyllaClusterManager):
     """
@@ -1231,21 +1227,16 @@ async def test_abort_state_machine_apply_after_dropping_table(manager: ScyllaClu
         mark = await log.mark()
 
         await cql.run_async(f"DROP TABLE {table}")
-        # Wait until the Raft group has started being removed.
-        await log.wait_for(rf"schedule_raft_group_deletion\(\): starting aborting raft server for group id {group_id}", from_mark=mark)
+        await log.wait_for(rf"abort\(\): Aborting state machine for group {group_id}", from_mark=mark, timeout=60)
         mark = await log.mark()
 
-        # At this point, the Raft server should already be getting aborted,
-        # so we can resume state_machine::apply.
+        # At this point, the state machine is aborted, so we can resume
+        # state_machine::apply.
         await manager.api.message_injection(target_server.ip_addr, wait_before_apply_injection)
         # Verify that state_machine::apply was really aborted.
-        await log.wait_for(rf"apply\(\): execution for tablet \S+, group_id={group_id} aborted", from_mark=mark)
+        await log.wait_for(rf"apply\(\): execution for tablet \S+, group_id={group_id} aborted", from_mark=mark, timeout=60)
 
 
-@pytest.mark.skip_bug(
-    link="https://scylladb.atlassian.net/browse/SCYLLADB-1056",
-    reason="Speed up abortion of applier fiber in raft::server_impl::abort",
-)
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
 async def test_abort_state_machine_apply_during_shutdown(manager: ScyllaClusterManager):
     """
@@ -1298,15 +1289,14 @@ async def test_abort_state_machine_apply_during_shutdown(manager: ScyllaClusterM
         mark = await log.mark()
 
         stop_task = asyncio.create_task(manager.server_stop_gracefully(target_server.server_id))
-        # Wait until the Raft group has started being removed.
-        await log.wait_for(rf"schedule_raft_group_deletion\(\): starting aborting raft server for group id {group_id}", from_mark=mark)
+        await log.wait_for(rf"abort\(\): Aborting state machine for group {group_id}", from_mark=mark, timeout=60)
         mark = await log.mark()
 
-        # At this point, the Raft server should already be getting aborted,
-        # so we can resume state_machine::apply.
+        # At this point, the state machine is aborted, so we can resume
+        # state_machine::apply.
         await manager.api.message_injection(target_server.ip_addr, wait_before_apply_injection)
         # Verify that state_machine::apply was really aborted.
-        await log.wait_for(rf"apply\(\): execution for tablet \S+, group_id={group_id} aborted", from_mark=mark)
+        await log.wait_for(rf"apply\(\): execution for tablet \S+, group_id={group_id} aborted", from_mark=mark, timeout=60)
 
         # The test framework should verify that we haven't observed any errors
         # during the stopping procedure.
