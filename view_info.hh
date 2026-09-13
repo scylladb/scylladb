@@ -12,10 +12,6 @@
 #include "schema/schema_fwd.hh"
 #include "db/view/view.hh"
 
-namespace cql3::statements {
-class select_statement;
-}
-
 namespace cql3::restrictions {
 class view_restrictions;
 }
@@ -24,7 +20,6 @@ class view_info final {
     const schema& _schema;
     raw_view_info _raw;
     // The following fields are used to select base table rows.
-    mutable shared_ptr<cql3::statements::select_statement> _select_statement;
     mutable shared_ptr<const cql3::restrictions::view_restrictions> _restrictions;
     mutable std::optional<query::partition_slice> _partition_slice;
     db::view::base_dependent_view_info _base_info;
@@ -52,11 +47,10 @@ public:
         return _raw.where_clause();
     }
 
-    cql3::statements::select_statement& select_statement(data_dictionary::database) const;
-
     /// What the view's definition says about the base rows it covers.
     const cql3::restrictions::view_restrictions& restrictions(data_dictionary::database) const;
     const query::partition_slice& partition_slice(data_dictionary::database) const;
+    std::vector<const column_definition*> selected_base_columns(data_dictionary::database) const;
     const column_definition* view_column(const schema& base, column_kind kind, column_id base_id) const;
     const column_definition* view_column(const column_definition& base_def) const;
     bool has_base_non_pk_columns_in_view_pk() const;
