@@ -2104,7 +2104,7 @@ group_by_references_clustering_keys(const selection::selection& sel, const std::
     });
 }
 
-std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg, bool for_view) {
+std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
     if (_no_from && _select_clause.empty()) {
         // No table to expand the wildcard against.
         // Rejecting before maybe_jsonize_select_clause() guards against SELECT JSON *.
@@ -2216,7 +2216,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
         throw exceptions::invalid_request_exception("PER PARTITION LIMIT is not allowed with aggregate queries.");
     }
 
-    auto restrictions = prepare_restrictions(db, schema, ctx, selection, for_view, _parameters->allow_filtering() || is_ann_query || has_bm25_ordering,
+    auto restrictions = prepare_restrictions(db, schema, ctx, selection, _parameters->allow_filtering() || is_ann_query || has_bm25_ordering,
             restrictions::check_indexes(!_parameters->is_mutation_fragments()), _pinned_plan);
 
     const auto& scoring_restrictions = restrictions->get_scoring_function_restrictions();
@@ -2250,7 +2250,6 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
         std::visit([&](auto&& ordering) {
             using T = std::decay_t<decltype(ordering)>;
             if constexpr (!std::is_same_v<T, raw::select_statement::scoring_function_ordering>) {
-                throwing_assert(!for_view);
                 verify_ordering_is_allowed(*_parameters, *restrictions);
                 prepared_orderings_type prepared_orderings = prepare_orderings(*schema);
                 verify_ordering_is_valid(prepared_orderings, *schema, *restrictions);
@@ -2446,18 +2445,11 @@ select_statement::prepare_restrictions(data_dictionary::database db,
                                        schema_ptr schema,
                                        prepare_context& ctx,
                                        ::shared_ptr<selection::selection> selection,
-                                       bool for_view,
                                        bool allow_filtering,
                                        restrictions::check_indexes do_check_indexes,
                                        restrictions::pinned_plan_opt pinned_plan)
 {
     try {
-        if (for_view) {
-            // The SELECT defining a materialized view. It differs in what
-            // IS NOT NULL means, and it is never asked for ALLOW FILTERING.
-            return restrictions::analyze_view_select_restrictions(db, schema, _where_clause, ctx,
-                selection->contains_only_static_columns(), do_check_indexes);
-        }
         return restrictions::analyze_select_restrictions(db, schema, _where_clause, ctx,
             selection->contains_only_static_columns(), allow_filtering, do_check_indexes, std::move(pinned_plan));
     } catch (const exceptions::unrecognized_entity_exception& e) {

@@ -1109,16 +1109,6 @@ void select_restrictions::analyze_select(
             std::move(pinned_plan));
 }
 
-void select_restrictions::analyze_view_definition(
-        data_dictionary::database db,
-        const expr::expression& where_clause,
-        prepare_context& ctx,
-        bool selects_only_static_columns) {
-    auto where = _analysis.prepare_where_clause(db, where_clause, ctx);
-    _analysis.not_null_columns = extract_view_key_columns(where.predicates);
-    analyze_read(db, std::move(where), selects_only_static_columns, std::nullopt);
-}
-
 void select_restrictions::analyze_read(
         data_dictionary::database db,
         where_clause_predicates where,
@@ -3199,23 +3189,6 @@ analyze_view_restrictions(
     auto restrictions = seastar::make_shared<view_restrictions>(
             view_restrictions::private_tag{}, std::move(schema));
     restrictions->analyze_view_definition(db, where_clause, ctx);
-    return restrictions;
-}
-
-shared_ptr<const select_restrictions>
-analyze_view_select_restrictions(
-        data_dictionary::database db,
-        schema_ptr schema,
-        const expr::expression& where_clause,
-        prepare_context& ctx,
-        bool selects_only_static_columns,
-        check_indexes do_check_indexes) {
-    // A view definition is not run on behalf of a client, so it is never asked
-    // to spell out ALLOW FILTERING: whatever the key order cannot express is
-    // filtered when the view is refreshed, and that is the user's stated intent.
-    auto restrictions = seastar::make_shared<select_restrictions>(
-            select_restrictions::private_tag{}, std::move(schema), /*allow_filtering=*/true, do_check_indexes);
-    restrictions->analyze_view_definition(db, where_clause, ctx, selects_only_static_columns);
     return restrictions;
 }
 
