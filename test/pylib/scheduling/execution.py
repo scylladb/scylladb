@@ -4,11 +4,24 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 
-"""It is pytest all the way down.
+"""Turn a run configuration into pytest arguments, and run pytest.
 
-This module turns the ``test.py`` command line into pytest arguments and makes
-the single ``pytest.main()`` call.  It is the only place that knows about
-pytest flags.
+This module builds the pytest command line from a
+:class:`~test.pylib.scheduling.config.RunConfig`, loads the scheduler's plugin
+if it has one, and makes the single ``pytest.main()`` call.  It is the only
+place that knows about pytest flags.  ``test.py`` decides nothing here, and a
+scheduler never builds a command line itself.
+
+There is always one pytest process, in one of two shapes:
+
+* xdist distributes the tests: ``-n{concurrency} --dist={mode}``
+* the scheduler distributes them: the same arguments, plus a plugin that
+  implements ``pytest_xdist_make_scheduler``
+
+If a scheduler ever needs something xdist cannot do, the way out is
+``-p no:xdist`` plus a plugin that implements ``pytest_runtestloop``.  That is
+still a plugin, not a second way to start tests.  Nothing needs it yet, so it is
+not built.  ``docs/dev/test-scheduler.md`` says what it would cost.
 """
 
 import dataclasses
@@ -23,7 +36,13 @@ import pytest
 from test import HOST_ID, TOP_SRC_DIR
 
 if TYPE_CHECKING:
-    import argparse
+    from test.pylib.scheduling.config import RunConfig
+    from test.pylib.scheduling.scheduler import Scheduler
+
+#: pytest's exit code for "these arguments cannot be run".  It lives here
+#: because this module is the one that knows pytest.  test.py uses it when a
+#: scheduler turns down a command line, which is the same kind of failure.
+EXIT_USAGE_ERROR = int(pytest.ExitCode.USAGE_ERROR)
 
 
 # TODO: Remove _CollectionArgument and _deduplicate_test_args once we update
@@ -93,8 +112,13 @@ def _deduplicate_test_args(args: list[str]) -> list[str]:
     return [arg for i, arg in enumerate(args) if i in kept_indices]
 
 
-def pytest_args(options: argparse.Namespace) -> list[str]:
-    """Render the parsed command line into the pytest one."""
+def pytest_args(cfg: RunConfig, scheduler: Scheduler) -> list[str]:
+    """Build the pytest command line from *cfg*.
+
+    The scheduler's plugin is added only if it has one, so with ``passthrough``
+    nothing scheduler-specific is in the arguments.
+    """
+    options = cfg.options
     temp_dir = pathlib.Path(options.tmpdir).absolute()
 
     report_dir = temp_dir / 'report'
@@ -112,11 +136,11 @@ def pytest_args(options: argparse.Namespace) -> list[str]:
         args.extend([
             f'--junit-xml={junit_output_file}',
             "-rf",
-            f'-n{options.jobs}',
+            f'-n{cfg.concurrency}',
             f'--tmpdir={temp_dir}',
             f'--maxfail={options.max_failures}',
             f'--alluredir={report_dir / f"allure_{HOST_ID}"}',
-            f'--dist=worksteal',
+            f'--dist={cfg.dist}',
         ])
     if options.verbose:
         args.append('-v')
@@ -159,10 +183,14 @@ def pytest_args(options: argparse.Namespace) -> list[str]:
         args.append(f'-m={options.markers}')
     if options.log_level:
         args.append(f'--log-level={options.log_level}')
+    # At most one scheduler plugin is ever loaded, because only one scheduler
+    # is selected per run.
+    if scheduler.plugin:
+        args.extend(['-p', scheduler.plugin])
     args.extend(files_to_run)
     return args
 
 
-def run_pytest(options: argparse.Namespace) -> int:
+def run_pytest(cfg: RunConfig, scheduler: Scheduler) -> int:
     """Run the tests: a single ``pytest.main()`` call."""
-    return pytest.main(args=pytest_args(options))
+    return pytest.main(args=pytest_args(cfg, scheduler))
