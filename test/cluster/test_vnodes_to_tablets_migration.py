@@ -1771,3 +1771,70 @@ async def test_backup_during_migration(manager: ScyllaClusterManager, s3_storage
             await asyncio.gather(*(do_restore_server(manager, logger, dst_ks, 'test_ls', s, sstables[s], None, False, f'{prefix}/{s.server_id}', s3_storage) for s in servers))
             await verify_data_integrity(cql, dst_ks, 'test_ls', BACKUP_NUM_KEYS)
             await check_table_replicas(cql, manager, servers, dst_ks, 'test_ls', BACKUP_NUM_KEYS)
+
+
+async def test_backup_during_pow2_convergence(manager: ScyllaClusterManager, s3_storage: Storage):
+    """Take a backup while converging to pow2, check that it cannot be restored
+    with the tablet-aware API, but it can with the load-and-stream API.
+
+    Tablet-aware restore requires that the tablet count in the manifest is a
+    power of two, which is not true for backups taken during the convergence.
+    The per-node and the cluster backup both record the not yet converged
+    layout.
+    """
+    servers = await create_backup_cluster(manager, s3_storage, NO_ABORT_ON_INTERNAL_ERROR)
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {BACKUP_TOPOLOGY.rf}}} AND tablets = {{'enabled': false}}") as src_ks:
+        await create_vnode_table(cql, src_ks, 'test', BACKUP_NUM_KEYS)
+
+        await manager.disable_tablet_balancing()
+        cql = await migrate_keyspace_to_tablets(manager, servers, src_ks, ['test'], wait_for_convergence=False)
+        await verify_data_integrity(cql, src_ks, 'test', BACKUP_NUM_KEYS)
+        target_pow2 = await get_target_pow2_tablet_count(manager, servers[0], src_ks, 'test')
+        assert target_pow2 > 0, "Expected the tablet layout to still be converging"
+        tablet_count = await get_tablet_count(manager, servers[0], src_ks, 'test')
+        assert tablet_count & (tablet_count - 1) != 0, \
+            f"Expected a non power-of-two tablet count before the convergence, got {tablet_count}"
+
+        logger.info("Taking a per-node snapshot during the pow2 convergence")
+        snap_name, sstables = await take_snapshot(src_ks, servers, manager, logger)
+        await check_snapshot_manifests(manager, servers, src_ks, snap_name, 'arbitrary', tablet_count)
+
+        logger.info("Backing up the per-node snapshots to object storage")
+        prefix = f'mid-convergence/{snap_name}'
+        await asyncio.gather(*(do_backup(s, snap_name, f'{prefix}/{s.server_id}', src_ks, 'test', s3_storage, manager, logger) for s in servers))
+
+        logger.info("Taking a cluster snapshot and running a cluster backup of it during the pow2 convergence")
+        cluster_snap_name = unique_name('csnap_')
+        await manager.api.take_cluster_snapshot(servers[0].ip_addr, src_ks, tag=cluster_snap_name, tables=['test'])
+        await check_snapshot_manifests(manager, servers, src_ks, cluster_snap_name, 'arbitrary', tablet_count)
+        manifest = await run_cluster_backup(s3_storage, f'cluster/{cluster_snap_name}', manager, cluster_snap_name, src_ks, 'test', servers)
+        tablets_type = manifest['table']['tablets_type']
+        assert tablets_type == 'arbitrary', f"Expected tablets_type 'arbitrary' in the cluster backup manifest, got '{tablets_type}'"
+
+        await manager.enable_tablet_balancing()
+        logger.info(f"Waiting for pow2 convergence of {src_ks}.test")
+        await wait_for_pow2_convergence(manager, servers[0], src_ks, 'test')
+
+        async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {BACKUP_TOPOLOGY.rf}}}") as dst_ks:
+            await cql.run_async(f"CREATE TABLE {dst_ks}.test_ta (pk int PRIMARY KEY, c int)")
+            await cql.run_async(f"CREATE TABLE {dst_ks}.test_ls (pk int PRIMARY KEY, c int)")
+
+            logger.info(f"Checking that the tablet-aware API rejects the mid-convergence backup")
+            locations = [{
+                "datacenter": servers[0].datacenter,
+                "endpoint": s3_storage.address,
+                "bucket": s3_storage.bucket_name,
+                "prefix": prefix,
+                "manifests": [f'{s.server_id}/manifest.json' for s in servers],
+            }]
+            with pytest.raises(HTTPError, match=f"Invalid tablet_count {tablet_count} in manifest .* expected a power of 2") as excinfo:
+                await manager.api.restore_tablets_multidc(servers[0].ip_addr, dst_ks, 'test_ta', snap_name, locations)
+            logger.info(f"Tablet-aware restore of the mid-convergence backup failed with: {excinfo.value}")
+            assert not await cql.run_async(f"SELECT pk FROM {dst_ks}.test_ta"), f"{dst_ks}.test_ta is not empty after the rejected restore"
+
+            logger.info(f"Restoring the mid-convergence backup into {dst_ks}.test_ls with the load-and-stream API")
+            await asyncio.gather(*(do_restore_server(manager, logger, dst_ks, 'test_ls', s, sstables[s], None, False, f'{prefix}/{s.server_id}', s3_storage) for s in servers))
+            await verify_data_integrity(cql, dst_ks, 'test_ls', BACKUP_NUM_KEYS)
+            await check_table_replicas(cql, manager, servers, dst_ks, 'test_ls', BACKUP_NUM_KEYS)
