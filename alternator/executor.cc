@@ -2544,7 +2544,11 @@ public:
     struct delete_item {};
     struct put_item {};
     put_or_delete_item(const rjson::value& key, schema_ptr schema, delete_item);
-    put_or_delete_item(const rjson::value& item, schema_ptr schema, put_item, std::unordered_map<bytes, std::string> key_attributes);
+    // key_attributes and vector_attributes depend only on the schema, so the
+    // caller computes them once per table and passes them for every item.
+    put_or_delete_item(const rjson::value& item, schema_ptr schema, put_item,
+            const std::unordered_map<bytes, std::string>& key_attributes,
+            const std::unordered_map<bytes, int>& vector_attributes);
     // put_or_delete_item doesn't keep a reference to schema (so it can be
     // moved between shards for LWT) so it needs to be given again to build():
     mutation build(schema_ptr schema, api::timestamp_type ts) const;
@@ -2605,7 +2609,9 @@ std::unordered_map<bytes, std::string> si_key_attributes(data_dictionary::table 
 // against the vector index constraints.
 static std::unordered_map<bytes, int> vector_index_attributes(const schema& s) {
     std::unordered_map<bytes, int> ret;
-    for (const index_metadata& im : s.indices()) {
+    // all_indices() returns a reference; indices() would copy every
+    // index_metadata into a fresh vector on each call.
+    for (const index_metadata& im : s.all_indices() | std::views::values) {
         const auto& opts = im.options();
         auto class_it = opts.find(db::index::secondary_index::custom_class_option_name);
         if (class_it == opts.end() || class_it->second != "vector_index") {
@@ -2644,7 +2650,7 @@ static std::unordered_map<bytes, int> vector_index_attributes(const schema& s) {
 // validate_value_if_index_key() should only be called after validate_value()
 // already validated that the value itself has a valid form.
 static void validate_value_if_index_key(
-        std::unordered_map<bytes, std::string> key_attributes,
+        const std::unordered_map<bytes, std::string>& key_attributes,
         const bytes& attribute,
         const rjson::value& value) {
     auto it = key_attributes.find(attribute);
@@ -2728,11 +2734,12 @@ static void validate_value_if_vector_index_attribute(
     }
 }
 
-put_or_delete_item::put_or_delete_item(const rjson::value& item, schema_ptr schema, put_item, std::unordered_map<bytes, std::string> key_attributes)
+put_or_delete_item::put_or_delete_item(const rjson::value& item, schema_ptr schema, put_item,
+        const std::unordered_map<bytes, std::string>& key_attributes,
+        const std::unordered_map<bytes, int>& vec_attrs)
         : _pk(pk_from_json(item, schema)), _ck(ck_from_json(item, schema)) {
     _cells = std::vector<cell>();
     _cells->reserve(item.MemberCount());
-    auto vec_attrs = vector_index_attributes(*schema);
     for (auto it = item.MemberBegin(); it != item.MemberEnd(); ++it) {
         bytes column_name = to_bytes(rjson::to_string_view(it->name));
         validate_value(it->value, "PutItem");
@@ -3159,7 +3166,8 @@ public:
     put_item_operation(parsed::expression_cache& parsed_expression_cache, service::storage_proxy& proxy, rjson::value&& request)
         : rmw_operation(proxy, std::move(request))
         , _mutation_builder(rjson::get(_request, "Item"), schema(), put_or_delete_item::put_item{},
-            si_key_attributes(proxy.data_dictionary().find_table(schema()->ks_name(), schema()->cf_name()))) {
+            si_key_attributes(proxy.data_dictionary().find_table(schema()->ks_name(), schema()->cf_name())),
+            vector_index_attributes(*schema())) {
         _pk = _mutation_builder.pk();
         _ck = _mutation_builder.ck();
         if (_returnvalues != returnvalues::NONE && _returnvalues != returnvalues::ALL_OLD) {
@@ -3629,6 +3637,13 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
             }
         }
 
+        // Both depend only on the schema, so they are computed once per table
+        // rather than once per item - a batch may hold up to
+        // alternator_max_items_in_batch_write (default 100) items.
+        const auto key_attributes = si_key_attributes(
+                _proxy.data_dictionary().find_table(schema->ks_name(), schema->cf_name()));
+        const auto vec_attributes = vector_index_attributes(*schema);
+
         std::unordered_set<primary_key, primary_key_hash, primary_key_equal> used_keys(
                 1, primary_key_hash{schema}, primary_key_equal{schema});
         for (auto& request : it->value.GetArray()) {
@@ -3639,7 +3654,7 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
                 validate_is_object(item, "Item in PutRequest");
                 auto&& put_item = put_or_delete_item(
                         item, schema, put_or_delete_item::put_item{},
-                        si_key_attributes(_proxy.data_dictionary().find_table(schema->ks_name(), schema->cf_name())));
+                        key_attributes, vec_attributes);
                 mutation_builders.emplace_back(schema, std::move(put_item));
                 auto mut_key = std::make_pair(mutation_builders.back().second.pk(), mutation_builders.back().second.ck());
                 if (used_keys.contains(mut_key)) {
