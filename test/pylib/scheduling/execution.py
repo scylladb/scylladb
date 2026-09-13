@@ -8,8 +8,8 @@
 
 This module builds the pytest command line from a
 :class:`~test.pylib.scheduling.config.RunConfig`, loads the scheduler's plugin
-if it has one, and makes the single ``pytest.main()`` call.  It is the only
-place that knows about pytest flags.  ``test.py`` decides nothing here, and a
+if it has one, and makes the single ``pytest.main()`` call. It is the only
+place that knows about pytest flags. ``test.py`` decides nothing here, and a
 scheduler never builds a command line itself.
 
 There is always one pytest process, in one of two shapes:
@@ -19,9 +19,9 @@ There is always one pytest process, in one of two shapes:
   implements ``pytest_xdist_make_scheduler``
 
 If a scheduler ever needs something xdist cannot do, the way out is
-``-p no:xdist`` plus a plugin that implements ``pytest_runtestloop``.  That is
-still a plugin, not a second way to start tests.  Nothing needs it yet, so it is
-not built.  ``docs/dev/test-scheduler.md`` says what it would cost.
+``-p no:xdist`` plus a plugin that implements ``pytest_runtestloop``. That is
+still a plugin, not a second way to start tests. Nothing needs it yet, so it is
+not built. ``docs/dev/test-scheduler.md`` says what it would cost.
 """
 
 import dataclasses
@@ -39,9 +39,9 @@ if TYPE_CHECKING:
     from test.pylib.scheduling.config import RunConfig
     from test.pylib.scheduling.scheduler import Scheduler
 
-#: pytest's exit code for "these arguments cannot be run".  It lives here
-#: because this module is the one that knows pytest.  test.py uses it when a
-#: scheduler turns down a command line, which is the same kind of failure.
+# pytest's exit code for "these arguments cannot be run". It lives here
+# because this module is the one that knows pytest. test.py uses it when a
+# scheduler turns down a command line, which is the same kind of failure.
 EXIT_USAGE_ERROR = int(pytest.ExitCode.USAGE_ERROR)
 
 
@@ -56,7 +56,7 @@ class _CollectionArgument:
     includes the fields needed for normalization (parametrization and
     original_index were added in pytest 9.0).
 
-    ``a in b`` means ``b`` subsumes (contains) ``a``.  Adapted from
+    ``a in b`` means ``b`` subsumes (contains) ``a``. Adapted from
     pytest 9.0.3 ``_pytest.main.is_collection_argument_subsumed_by``.
     """
     path: pathlib.Path

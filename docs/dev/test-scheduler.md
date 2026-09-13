@@ -156,10 +156,10 @@ What `cfg` gives you to read: `cfg.options`, the parsed `test.py` command line
 as the user gave it, and `cfg.concurrency` and `cfg.dist`, the values the run
 would use right now, so you can decide relative to them.
 
-What you may change is a short, named list, not `add_arg(anything)`. Today that
-is `cfg.set_concurrency(n)` and `cfg.set_dist(mode)`. The list will grow. Adding
-to it means changing `RunConfig` and the execution module on purpose. It never
-means changing `test.py`.
+What you may change is short and named, not `add_arg(anything)`. Today that is
+`cfg.set_concurrency(n)`, which checks the value, and `cfg.dist`, the xdist
+distribution mode. The list will grow. Adding to it means changing `RunConfig`
+and the execution module on purpose. It never means changing `test.py`.
 
 Options your scheduler cannot work with are your business, not `test.py`'s. A
 scheduler that works out the concurrency itself has to decide what `--jobs`
@@ -193,9 +193,8 @@ CI job names what scheduled it:
 
     scheduler: my-scheduler@1 plugin=test.pylib.scheduling.schedulers.my_plugin
 
-With `--gather-metrics`, which is on by default and turns on the rest of the
-metrics too, the run is also written to the metrics DB
-(`{tmpdir}/sqlite_<HOST_ID>.db`), one `scheduler_runs` row per run:
+The run is also written to the metrics DB (`{tmpdir}/sqlite_<HOST_ID>.db`),
+which every run writes, one `scheduler_runs` row per run:
 
 | column | |
 | --- | --- |
