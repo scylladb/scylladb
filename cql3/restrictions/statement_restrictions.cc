@@ -3164,8 +3164,43 @@ analyze_select_restrictions(
     return restrictions;
 }
 
-shared_ptr<const select_restrictions>
+view_restrictions::view_restrictions(private_tag, schema_ptr schema)
+    : _analysis(std::move(schema))
+{ }
+
+void view_restrictions::analyze_view_definition(
+        data_dictionary::database db,
+        const expr::expression& where_clause,
+        prepare_context& ctx) {
+    auto where = _analysis.prepare_where_clause(db, where_clause, ctx);
+    if (!where.scoring_functions.empty()) {
+        throw exceptions::invalid_request_exception("Scoring functions are only supported in SELECT statements");
+    }
+    // In a view definition IS NOT NULL declares which base rows have a view row,
+    // rather than filtering, so it is recorded and taken out of the restrictions.
+    _analysis.not_null_columns = extract_view_key_columns(where.predicates);
+    drop_tautological_not_null_restrictions(where.predicates);
+    // A view definition is not run on behalf of a client, so it is never asked to
+    // spell out ALLOW FILTERING: whatever the key order cannot express is filtered
+    // when the view is refreshed, and that is the user's stated intent.
+    _analysis.classify_predicates(std::move(where.predicates), /*allow_filtering=*/true);
+    _analysis.build_key_range_fns();
+}
+
+shared_ptr<const view_restrictions>
 analyze_view_restrictions(
+        data_dictionary::database db,
+        schema_ptr schema,
+        const expr::expression& where_clause,
+        prepare_context& ctx) {
+    auto restrictions = seastar::make_shared<view_restrictions>(
+            view_restrictions::private_tag{}, std::move(schema));
+    restrictions->analyze_view_definition(db, where_clause, ctx);
+    return restrictions;
+}
+
+shared_ptr<const select_restrictions>
+analyze_view_select_restrictions(
         data_dictionary::database db,
         schema_ptr schema,
         const expr::expression& where_clause,
