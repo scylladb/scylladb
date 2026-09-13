@@ -73,7 +73,7 @@ static bool validate_primary_key(
         const column_definition* def,
         const std::unordered_set<const column_definition*>& base_pk,
         bool has_non_pk_column,
-        const restrictions::select_restrictions& restrictions) {
+        const restrictions::view_restrictions& restrictions) {
 
     if (def->type->is_multi_cell()) {
         throw exceptions::invalid_request_exception(format("Cannot use MultiCell column '{}' in PRIMARY KEY of materialized view", def->name_as_text()));
@@ -211,8 +211,13 @@ std::pair<view_ptr, cql3::cql_warnings_vec> create_view_statement::prepare_view(
     raw_select.set_bound_variables({}, internal_dialect());
 
     cql_stats ignored;
-    auto prepared = raw_select.prepare(db, ignored, default_cql_config, true);
-    auto restrictions = static_pointer_cast<statements::select_statement>(prepared->statement)->get_restrictions();
+    // Preparing the SELECT is what validates the view's select clause; its
+    // restrictions are not what this needs - a view definition is not a query.
+    raw_select.prepare(db, ignored, default_cql_config, true);
+
+    prepare_context view_ctx;
+    view_ctx.set_bound_variables({}, internal_dialect());
+    auto restrictions = restrictions::analyze_view_restrictions(db, schema, _where_clause, view_ctx);
 
     auto base_primary_key_cols =
             schema->primary_key_columns()

@@ -161,6 +161,67 @@ public:
 };
 
 /**
+ * What the SELECT defining a materialized view says about the base rows the view
+ * has a row for.
+ *
+ * A view definition is not a query.  It is never executed, never reads an index
+ * and never filters: it says which base rows the view covers, and which base
+ * columns must be non-null for a view row to exist.  So there is no query plan
+ * here at all - none of select_restrictions' index or filter state.
+ *
+ * Built by analyze_view_restrictions() below.
+ */
+class view_restrictions {
+    where_clause_analysis _analysis;
+public:
+    // Marks the constructor as internal: a constructed object says nothing until
+    // it is analyzed, so go through the analyze_*_restrictions() factories below.
+    struct private_tag { explicit private_tag() = default; };
+
+    view_restrictions(private_tag, schema_ptr schema);
+
+    view_restrictions(const view_restrictions&) = delete;
+    view_restrictions& operator=(const view_restrictions&) = delete;
+
+    void analyze_view_definition(
+            data_dictionary::database db,
+            const expr::expression& where_clause,
+            prepare_context& ctx);
+
+    // The columns the view definition declares to be non-null, i.e. the base
+    // columns a base row must have a value for to have a view row.  Handled
+    // separately from the other restrictions: they select base rows rather than
+    // filtering view rows, and so are not part of get_*_restrictions().
+    const std::unordered_set<const column_definition*>& get_not_null_columns() const {
+        return _analysis.not_null_columns;
+    }
+
+    /// True if the view definition restricts the column at all, IS NOT NULL
+    /// included.  A view's primary key column has to be.
+    bool is_restricted(const column_definition* cdef) const { return _analysis.is_restricted(cdef); }
+
+    const expr::expression& get_partition_key_restrictions() const {
+        return _analysis.partition_key_restrictions;
+    }
+
+    const expr::expression& get_clustering_columns_restrictions() const {
+        return _analysis.clustering_columns_restrictions;
+    }
+
+    /// The restrictions on non-primary-key base columns - the view's filter.
+    const expr::single_column_restrictions_map& get_non_pk_restriction() const {
+        return _analysis.single_column_nonprimary_key_restrictions;
+    }
+
+    bool has_unrestricted_clustering_columns() const { return _analysis.has_unrestricted_clustering_columns(); }
+
+    /// The clustering ranges of the base table the view covers.
+    std::vector<query::clustering_range> clustering_ranges(const query_options& options) const {
+        return _analysis.get_clustering_bounds(options);
+    }
+};
+
+/**
  * What a SELECT statement's WHERE clause says about the rows it reads.
  *
  * A SELECT can read a secondary index and filter the rows it reads, so on top
@@ -465,8 +526,17 @@ shared_ptr<const select_restrictions> analyze_select_restrictions(
         check_indexes do_check_indexes,
         pinned_plan_opt pinned_plan = std::nullopt);
 
-/// Analyzes the WHERE clause of the SELECT statement defining a materialized view.
-shared_ptr<const select_restrictions> analyze_view_restrictions(
+/// Reads the WHERE clause of a materialized view's definition.
+shared_ptr<const view_restrictions> analyze_view_restrictions(
+        data_dictionary::database db,
+        schema_ptr schema,
+        const expr::expression& where_clause,
+        prepare_context& ctx);
+
+/// Reads the same WHERE clause as the SELECT a view is refreshed by.
+/// Transitional: a view's partition slice still comes from a prepared
+/// select_statement, which needs select_restrictions to compute it.
+shared_ptr<const select_restrictions> analyze_view_select_restrictions(
         data_dictionary::database db,
         schema_ptr schema,
         const expr::expression& where_clause,

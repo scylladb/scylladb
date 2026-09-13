@@ -2455,7 +2455,7 @@ select_statement::prepare_restrictions(data_dictionary::database db,
         if (for_view) {
             // The SELECT defining a materialized view. It differs in what
             // IS NOT NULL means, and it is never asked for ALLOW FILTERING.
-            return restrictions::analyze_view_restrictions(db, schema, _where_clause, ctx,
+            return restrictions::analyze_view_select_restrictions(db, schema, _where_clause, ctx,
                 selection->contains_only_static_columns(), do_check_indexes);
         }
         return restrictions::analyze_select_restrictions(db, schema, _where_clause, ctx,
