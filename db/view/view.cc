@@ -35,7 +35,6 @@
 #include "mutation/canonical_mutation.hh"
 #include "replica/database.hh"
 #include "keys/clustering_bounds_comparator.hh"
-#include "cql3/statements/select_statement.hh"
 #include "cql3/cql_config.hh"
 #include "cql3/util.hh"
 #include "cql3/restrictions/statement_restrictions.hh"
@@ -109,36 +108,6 @@ view_info::view_info(const schema& schema, const raw_view_info& raw_view_info, d
         , _base_info(std::move(base_info))
 { }
 
-cql3::statements::select_statement& view_info::select_statement(data_dictionary::database db) const {
-    if (!_select_statement) {
-        std::unique_ptr<cql3::statements::raw::select_statement> raw;
-        // FIXME(sarna): legacy code, should be removed after "computed_columns" feature is guaranteed
-        // to be available on every node. Then, we won't need to check if this view is backing a secondary index.
-        const column_definition* legacy_token_column = nullptr;
-        if (db.find_column_family(base_id()).get_index_manager().is_global_index(_schema)) {
-           if (!_schema.clustering_key_columns().empty()) {
-               legacy_token_column = &_schema.clustering_key_columns().front();
-           }
-        }
-
-        if (legacy_token_column || std::ranges::any_of(_schema.all_columns(), std::mem_fn(&column_definition::is_computed))) {
-            auto real_columns = _schema.all_columns() | std::views::filter([legacy_token_column] (const column_definition& cdef) {
-                return &cdef != legacy_token_column && !cdef.is_computed();
-            });
-            schema::columns_type columns = std::ranges::to<schema::columns_type>(std::move(real_columns));
-            raw = cql3::util::build_select_statement(base_name(), where_clause(), include_all_columns(), columns);
-        } else {
-            raw = cql3::util::build_select_statement(base_name(), where_clause(), include_all_columns(), _schema.all_columns());
-        }
-        raw->prepare_keyspace(_schema.ks_name());
-        raw->set_bound_variables({}, cql3::internal_dialect());
-        cql3::cql_stats ignored;
-        auto prepared = raw->prepare(db, ignored, cql3::default_cql_config, true);
-        _select_statement = static_pointer_cast<cql3::statements::select_statement>(prepared->statement);
-    }
-    return *_select_statement;
-}
-
 const cql3::restrictions::view_restrictions& view_info::restrictions(data_dictionary::database db) const {
     if (!_restrictions) {
         cql3::prepare_context ctx;
@@ -154,9 +123,53 @@ const cql3::restrictions::view_restrictions& view_info::restrictions(data_dictio
     return *_restrictions;
 }
 
+// The base columns a view reads, in the order the SELECT built from its
+// definition names them.
+std::vector<const column_definition*> view_info::selected_base_columns(data_dictionary::database db) const {
+    schema_ptr base_schema = db.find_schema(base_id());
+    if (include_all_columns()) {
+        return cql3::selection::selection::wildcard_columns(base_schema);
+    }
+    // FIXME(sarna): legacy code, should be removed after "computed_columns" feature is guaranteed
+    // to be available on every node. Then, we won't need to check if this view is backing a secondary index.
+    const column_definition* legacy_token_column = nullptr;
+    if (db.find_column_family(base_id()).get_index_manager().is_global_index(_schema)) {
+        if (!_schema.clustering_key_columns().empty()) {
+            legacy_token_column = &_schema.clustering_key_columns().front();
+        }
+    }
+    std::vector<const column_definition*> columns;
+    for (const column_definition& view_def : _schema.all_columns()) {
+        if (&view_def == legacy_token_column || view_def.is_computed()) {
+            continue;
+        }
+        if (const column_definition* base_def = base_schema->get_column_definition(view_def.name())) {
+            columns.push_back(base_def);
+        }
+    }
+    return columns;
+}
+
 const query::partition_slice& view_info::partition_slice(data_dictionary::database db) const {
     if (!_partition_slice) {
-        _partition_slice = select_statement(db).make_partition_slice(cql3::query_options({ }));
+        query::column_id_vector static_columns;
+        query::column_id_vector regular_columns;
+        query::partition_slice::option_set opts;
+        for (const column_definition* col : selected_base_columns(db)) {
+            if (col->is_static()) {
+                static_columns.push_back(col->id);
+            } else if (col->is_regular()) {
+                regular_columns.push_back(col->id);
+            }
+            opts.set_if<query::partition_slice::option::send_partition_key>(col->is_partition_key());
+            opts.set_if<query::partition_slice::option::send_clustering_key>(col->is_clustering_key());
+        }
+        // The other options a SELECT would set are all off for a view: it selects
+        // plain columns, so no timestamps or TTLs, and it is neither DISTINCT,
+        // nor reversed, nor cache-bypassing.
+        _partition_slice = query::partition_slice(
+                restrictions(db).clustering_ranges(cql3::query_options({ })),
+                std::move(static_columns), std::move(regular_columns), opts, nullptr, query::max_rows);
     }
     return *_partition_slice;
 }
@@ -174,7 +187,6 @@ const column_definition* view_info::view_column(const column_definition& base_de
 
 void view_info::reset_view_info() {
     // Forget the cached objects which may refer to the base schema.
-    _select_statement = nullptr;
     _restrictions = nullptr;
     _partition_slice = std::nullopt;
 }
