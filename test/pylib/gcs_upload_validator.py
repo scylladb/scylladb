@@ -318,7 +318,14 @@ class handler(BaseHTTPRequestHandler):
                 self._reject(err, 0 if buffered is not None else body_len)
                 return
 
-        headers = {k: v for k, v in self.headers.items() if k.lower() not in HOP_BY_HOP}
+        # Header names are case insensitive, so the ones replaced below have to
+        # be dropped by lowercased name. A client that spells them differently
+        # -- botocore signing through awscrt sends "host", curl sends "Host" --
+        # would otherwise leave its own copy in place beside ours, and Go's
+        # net/http answers a request carrying two Host headers with a bare 400
+        # before it ever reaches the mock's routing.
+        dropped = HOP_BY_HOP | {"host", "content-length"}
+        headers = {k: v for k, v in self.headers.items() if k.lower() not in dropped}
         headers["Host"] = f"{self.server.upstream_host}:{self.server.upstream_port}"
         headers["Content-Length"] = str(body_len)
 
