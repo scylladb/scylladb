@@ -1510,12 +1510,12 @@ BACKUP_TOPOLOGY = topo(rf=2, nodes=2, racks=2, dcs=1)
 BACKUP_NUM_KEYS = 50
 
 
-async def create_backup_cluster(manager: ScyllaClusterManager, object_storage: Storage):
+async def create_backup_cluster(manager: ScyllaClusterManager, object_storage: Storage, extra_cmdline: list[str] = []):
     """Start a vnode-based cluster suitable for a migration followed by backup and restore."""
     servers, _ = await create_cluster(BACKUP_TOPOLOGY, manager, logger, object_storage,
                                       extra_config={'num_tokens': 16, 'tablet_load_stats_refresh_interval_in_seconds': 1},
                                       # More than one shard so that the storage upgrade reshards for real
-                                      extra_cmdline=['--smp', '2'])
+                                      extra_cmdline=['--smp', '2'] + extra_cmdline)
     return servers
 
 
@@ -1680,3 +1680,94 @@ async def test_restore_pre_migration_backup_after_migration(manager: ScyllaClust
         await asyncio.gather(*(do_restore_server(manager, logger, ks, 'test', s, sstables[s], None, False, f'{prefix}/{s.server_id}', s3_storage) for s in servers))
         await verify_data_integrity(cql, ks, 'test', BACKUP_NUM_KEYS)
         await check_table_replicas(cql, manager, servers, ks, 'test', BACKUP_NUM_KEYS)
+
+
+# The tablet-aware restore rejects a manifest whose tablet count is not a power of
+# two with on_internal_error(), although the manifest is user input. The test
+# harness starts nodes with --abort-on-internal-error, which would crash the
+# coordinator; production defaults to throwing instead, and that is the behaviour
+# the tests below pin, so they turn the abort off.
+NO_ABORT_ON_INTERNAL_ERROR = ['--abort-on-internal-error', '0']
+
+
+async def test_backup_during_migration(manager: ScyllaClusterManager, s3_storage: Storage):
+    """Take a backup mid-migration and restore it after the migration.
+
+    Backups during a migration are not officially supported, but nothing in the
+    code excludes them with migration. This test records what happens if they
+    are taken anyway, to document the current behaviour and notice any future
+    changes.
+
+    With one node upgraded to tablets and one still on vnodes:
+
+    * a per-node snapshot succeeds on every node, but the manifests disagree:
+      the upgraded node describes a tablets table with the not yet converged
+      layout, the other node a vnodes table;
+    * a cluster snapshot is rejected, because the keyspace schema still says
+      vnodes until the migration is finalized.
+
+    Once the migration is over, restoring the mid-migration backup:
+
+    * fails with the tablet-aware API while parsing the manifests: neither
+      tablet count is a power of two (the tablets one is not converged, the
+      vnodes one is 0), and they disagree with each other; which check fails
+      first depends on the parsing order;
+    * succeeds with the load-and-stream API, since it does not read the
+      manifests.
+    """
+    servers = await create_backup_cluster(manager, s3_storage, NO_ABORT_ON_INTERNAL_ERROR)
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {BACKUP_TOPOLOGY.rf}}} AND tablets = {{'enabled': false}}") as src_ks:
+        await create_vnode_table(cql, src_ks, 'test', BACKUP_NUM_KEYS)
+
+        logger.info(f"Starting vnodes-to-tablets migration of keyspace '{src_ks}'")
+        await manager.api.create_vnode_tablet_migration(servers[0].ip_addr, src_ks)
+        upgraded, not_upgraded = servers[0], servers[1]
+        cql = await upgrade_node_storage_to_tablets(manager, servers, upgraded)
+        tablet_count = await get_tablet_count(manager, servers[0], src_ks, 'test')
+
+        logger.info("Taking a per-node snapshot with one node upgraded to tablets")
+        snap_name, sstables = await take_snapshot(src_ks, servers, manager, logger)
+        await check_snapshot_manifests(manager, [upgraded], src_ks, snap_name, 'arbitrary', tablet_count)
+        await check_snapshot_manifests(manager, [not_upgraded], src_ks, snap_name, 'none', 0)
+
+        logger.info("Backing up the per-node snapshots to object storage")
+        prefix = f'mid-migration/{snap_name}'
+        await asyncio.gather(*(do_backup(s, snap_name, f'{prefix}/{s.server_id}', src_ks, 'test', s3_storage, manager, logger) for s in servers))
+
+        logger.info("Checking that a cluster snapshot is rejected during the migration")
+        # storage_proxy::snapshot_keyspace() checks the keyspace schema, which switches
+        # to tablets only at migration finalization.
+        for s in servers:
+            with pytest.raises(HTTPError, match=f"Keyspace {src_ks} does not use tablets"):
+                await manager.api.take_cluster_snapshot(s.ip_addr, src_ks, tag=unique_name('csnap_'), tables=['test'])
+
+        cql = await upgrade_node_storage_to_tablets(manager, servers, not_upgraded)
+        await finalize_keyspace_migration(manager, servers[0], src_ks, ['test'])
+        await verify_data_integrity(cql, src_ks, 'test', BACKUP_NUM_KEYS)
+
+        async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {BACKUP_TOPOLOGY.rf}}}") as dst_ks:
+            await cql.run_async(f"CREATE TABLE {dst_ks}.test_ta (pk int PRIMARY KEY, c int)")
+            await cql.run_async(f"CREATE TABLE {dst_ks}.test_ls (pk int PRIMARY KEY, c int)")
+
+            logger.info(f"Checking that the tablet-aware API rejects the mid-migration backup")
+            locations = [{
+                "datacenter": servers[0].datacenter,
+                "endpoint": s3_storage.address,
+                "bucket": s3_storage.bucket_name,
+                "prefix": prefix,
+                "manifests": [f'{s.server_id}/manifest.json' for s in servers],
+            }]
+            # The manifests are parsed concurrently, so any of the two may fail the
+            # power-of-two check first, or the second one may fail the consistency check.
+            with pytest.raises(HTTPError, match=r"Invalid tablet_count \d+ in manifest .* expected a power of 2"
+                                                "|Inconsistent tablet_count values in manifest") as excinfo:
+                await manager.api.restore_tablets_multidc(servers[0].ip_addr, dst_ks, 'test_ta', snap_name, locations)
+            logger.info(f"Tablet-aware restore of the mid-migration backup failed with: {excinfo.value}")
+            assert not await cql.run_async(f"SELECT pk FROM {dst_ks}.test_ta"), f"{dst_ks}.test_ta is not empty after the rejected restore"
+
+            logger.info(f"Restoring the mid-migration backup into {dst_ks}.test_ls with the load-and-stream API")
+            await asyncio.gather(*(do_restore_server(manager, logger, dst_ks, 'test_ls', s, sstables[s], None, False, f'{prefix}/{s.server_id}', s3_storage) for s in servers))
+            await verify_data_integrity(cql, dst_ks, 'test_ls', BACKUP_NUM_KEYS)
+            await check_table_replicas(cql, manager, servers, dst_ks, 'test_ls', BACKUP_NUM_KEYS)
