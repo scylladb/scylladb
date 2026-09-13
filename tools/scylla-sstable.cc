@@ -209,11 +209,12 @@ path_with_source obtain_data_dir(const bpo::variables_map& app_config, db::confi
     if (app_config.contains("scylla-data-dir")) {
         return {.path = fs::path(app_config["scylla-data-dir"].as<sstring>()), .source = "--scylla-data-dir parameter"};
     } else if (app_config.contains("scylla-yaml-file")) {
-        return {.path = fs::path(cfg.data_file_directories()[0]), .source = "--scylla-yaml-file parameter"};
+        // at(), not [], as the configuration may not name a data dir at all
+        return {.path = fs::path(cfg.data_file_directories().at(0)), .source = "--scylla-yaml-file parameter"};
     } else if (std::getenv("SCYLLA_CONF")) {
-        return {.path = fs::path(cfg.data_file_directories()[0]), .source = "SCYLLA_CONF environment variable"};
+        return {.path = fs::path(cfg.data_file_directories().at(0)), .source = "SCYLLA_CONF environment variable"};
     } else if (std::getenv("SCYLLA_HOME")) {
-        return {.path = fs::path(cfg.data_file_directories()[0]), .source = "SCYLLA_HOME environment variable"};
+        return {.path = fs::path(cfg.data_file_directories().at(0)), .source = "SCYLLA_HOME environment variable"};
     } else {
         const auto info = extract_from_sstable_path(app_config);
         return {.path = info.data_dir_path, .source = seastar::format("autodetected from sstable path ({})", info.sstable_path.native())};
