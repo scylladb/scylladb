@@ -1154,9 +1154,20 @@ schema_ptr system_keyspace::sstables_registry() {
     return schema;
 }
 
+static thread_local schema_ptr tablets_schema;
+
 schema_ptr system_keyspace::tablets() {
-    static thread_local auto schema = replica::make_tablets_schema();
-    return schema;
+    if (!tablets_schema) {
+        tablets_schema = replica::make_tablets_schema();
+    }
+    return tablets_schema;
+}
+
+// FIXME: once strongly_consistent_tables_enabled is removed (strongly consistent
+// tables leave experimental), drop reset_tablets_schema_for_testing() and make
+// tablets_schema a static thread_local local of system_keyspace::tablets() again.
+void system_keyspace::reset_tablets_schema_for_testing() {
+    tablets_schema = nullptr;
 }
 
 schema_ptr system_keyspace::service_levels_v2() {

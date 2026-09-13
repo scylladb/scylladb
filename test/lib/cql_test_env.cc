@@ -640,6 +640,7 @@ private:
             replica::set_strongly_consistent_tables_enabled(cfg->check_experimental(
                 db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES
             ));
+            smp::invoke_on_all([] { db::system_keyspace::reset_tablets_schema_for_testing(); }).get();
 
             gms::feature_config fcfg;
             fcfg.disabled_features = get_disabled_features_from_db_config(*cfg, cfg_in.disabled_features);

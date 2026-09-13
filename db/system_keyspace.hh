@@ -261,6 +261,8 @@ public:
     static schema_ptr cdc_streams_history();
     static schema_ptr tablets();
     static schema_ptr local();
+    // The cached schema depends on the strongly-consistent-tables flag, which tests vary per env.
+    static void reset_tablets_schema_for_testing();
     static schema_ptr service_levels_v2();
     static schema_ptr view_build_status_v2();
     static schema_ptr dicts();
