@@ -87,7 +87,7 @@ class ThreadsCalculator:
 class SelectScheduler(argparse.Action):
     """``--scheduler=<name>``, or ``--scheduler=list`` to print the registry.
 
-    The listing and the "no such scheduler" error both live on the option.  A
+    The listing and the "no such scheduler" error both live on the option. A
     bad name is then reported the way argparse reports any other bad value,
     instead of being checked again later in parse_cmd_line().
     """
@@ -98,7 +98,7 @@ class SelectScheduler(argparse.Action):
             parser.exit()
         if value not in registry.SCHEDULERS:
             parser.error(palette.fail(
-                f"unknown --scheduler={value}; available: {', '.join(registry.known_names())} "
+                f"unknown --scheduler={value}; available: {', '.join(sorted(registry.SCHEDULERS))} "
                 f"(use --scheduler={registry.LIST_KEYWORD} for details)"))
         setattr(namespace, self.dest, value)
 
@@ -270,11 +270,11 @@ def parse_cmd_line() -> argparse.Namespace:
     return args
 
 
-#: The selected scheduler refused to run with this command line.  test.py
-#: returns pytest's exit codes as they are, so this reuses one instead of
-#: inventing a new meaning.  A scheduler only ever sees the command line, so
-#: turning it down is a usage error.  A code of our own would also have had to
-#: avoid pytest's 0-5 and EXIT_MAXFAIL_REACHED.
+# The selected scheduler refused to run with this command line. test.py
+# returns pytest's exit codes as they are, so this reuses one instead of
+# inventing a new meaning. A scheduler only ever sees the command line, so
+# turning it down is a usage error. A code of our own would also have had to
+# avoid pytest's 0-5 and EXIT_MAXFAIL_REACHED.
 EXIT_SCHEDULER_ERROR = execution.EXIT_USAGE_ERROR
 
 
@@ -292,7 +292,9 @@ def run_pytest(cfg: RunConfig, scheduler: Scheduler) -> int:
 async def main() -> int:
 
     options = parse_cmd_line()
-    scheduler = registry.get_scheduler(options.scheduler)
+    # The name needs no check here: --scheduler has already made it against
+    # the registry, which is where a user can get it wrong.
+    scheduler = registry.SCHEDULERS[options.scheduler]()
     cfg = RunConfig.defaults(options)
 
     if options.list_tests:
@@ -305,6 +307,7 @@ async def main() -> int:
         # The message comes from the scheduler: only it knows what it could not do.
         print(palette.fail(f"error: --scheduler={options.scheduler}: {e}"))
         return EXIT_SCHEDULER_ERROR
+    cfg.log_scheduler(scheduler)
 
     try:
         logging.info('running all tests')

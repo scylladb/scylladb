@@ -164,8 +164,8 @@ continues until all tests are run even if any one of them fails.
 A *scheduler* chooses how the tests are spread over the machine. Pick one with
 `--scheduler=<name>`; `--scheduler=list` shows what is available. The default,
 `passthrough`, decides nothing of its own and leaves the distribution to xdist,
-exactly as described above. Every run prints which scheduler ran it, and with
-`--gather-metrics` records what it decided in the metrics database. See
+exactly as described above. Every run prints which scheduler ran it, and records
+what it decided in the metrics database. See
 [test-scheduler.md](test-scheduler.md) for how to write one.
 
 ## CQL tests

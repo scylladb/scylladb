@@ -21,6 +21,7 @@ METRICS_TABLE = 'test_metrics'
 SYSTEM_RESOURCE_METRICS_TABLE = 'system_resource_metrics'
 CGROUP_MEMORY_METRICS_TABLE = 'cgroup_memory_metrics'
 HOST_INFO_TABLE = 'host_info'
+SCHEDULER_RUNS_TABLE = 'scheduler_runs'
 DEFAULT_DB_NAME = f'sqlite_{HOST_ID}.db'
 DATE_TIME_TEMPLATE = '%Y-%m-%d %H:%M:%S.%f'
 
@@ -65,6 +66,19 @@ create_table = [
         status VARCHAR(15),
         worker_id VARCHAR(15),
         FOREIGN KEY(test_id) REFERENCES {TESTS_TABLE}(id),
+        FOREIGN KEY(host_id) REFERENCES {HOST_INFO_TABLE}(host_id)
+    );
+    ''',
+
+    f'''
+    CREATE TABLE IF NOT EXISTS {SCHEDULER_RUNS_TABLE} (
+        id INTEGER PRIMARY KEY,
+        host_id VARCHAR(5) NOT NULL,
+        name VARCHAR(32) NOT NULL,
+        version VARCHAR(15) NOT NULL,
+        plugin TEXT,
+        config TEXT NOT NULL,
+        timestamp DATETIME,
         FOREIGN KEY(host_id) REFERENCES {HOST_INFO_TABLE}(host_id)
     );
     ''',
