@@ -12,6 +12,12 @@
 #include <cstring>
 
 #include <fmt/format.h>
+#include <fmt/ranges.h>
+
+#include <seastar/core/reactor.hh>
+#include <seastar/net/api.hh>
+
+#include <stdexcept>
 
 namespace utils {
 
@@ -67,6 +73,60 @@ bool cidr::contains(const seastar::net::inet_address& address) const {
     }
     const uint8_t mask = static_cast<uint8_t>(0xff << (8 - leftover_bits));
     return (lhs[whole_bytes] & mask) == (rhs[whole_bytes] & mask);
+}
+
+seastar::net::inet_address select_address_in(const cidr& prefix,
+        const std::vector<seastar::net::inet_address>& candidates) {
+    std::vector<seastar::net::inet_address> matches;
+    for (const auto& candidate : candidates) {
+        if (prefix.contains(candidate)) {
+            matches.push_back(candidate);
+        }
+    }
+    if (matches.empty()) {
+        throw std::runtime_error(fmt::format(
+                "No address of this node is in {}. Its addresses are {}.", prefix, candidates));
+    }
+    if (matches.size() > 1) {
+        throw std::runtime_error(fmt::format(
+                "More than one address of this node is in {}: {}. Narrow the network, or name an address.",
+                prefix, matches));
+    }
+    return matches.front();
+}
+
+std::vector<seastar::net::inet_address> local_addresses(bool include_loopback) {
+    std::vector<seastar::net::inet_address> addresses;
+    for (const auto& interface : seastar::engine().net().network_interfaces()) {
+        if (!interface.is_up()) {
+            continue;
+        }
+        if (interface.is_loopback() && !include_loopback) {
+            continue;
+        }
+        for (const auto& address : interface.addresses()) {
+            addresses.push_back(address);
+        }
+    }
+    return addresses;
+}
+
+seastar::net::inet_address select_local_address(const cidr& prefix) {
+    // Loopback only when that is what was asked for: a prefix inside 127.0.0.0/8 or ::1
+    // is one a single-machine setup writes on purpose, while any other prefix landing on
+    // a loopback address would be a node nobody outside the machine can reach.
+    static const auto loopback_v4 = cidr::parse("127.0.0.0/8");
+    static const auto loopback_v6 = cidr::parse("::1/128");
+    const bool wants_loopback = loopback_v4->contains(prefix.network())
+            || loopback_v6->contains(prefix.network());
+
+    auto candidates = local_addresses(wants_loopback);
+    if (candidates.empty()) {
+        throw std::runtime_error(fmt::format(
+                "Cannot listen on {}: this node cannot enumerate its own network interfaces. "
+                "Name an address instead.", prefix));
+    }
+    return select_address_in(prefix, candidates);
 }
 
 }

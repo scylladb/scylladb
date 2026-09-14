@@ -10,6 +10,9 @@
 
 #include <fmt/format.h>
 
+#include <stdexcept>
+#include <vector>
+
 #include "utils/cidr.hh"
 
 using namespace utils;
@@ -95,6 +98,44 @@ BOOST_AUTO_TEST_CASE(test_families_do_not_mix) {
     BOOST_REQUIRE(!contains("::/0", "10.0.0.1"));
     // /0 matches everything of its own family, and nothing of the other.
     BOOST_REQUIRE(contains("0.0.0.0/0", "10.0.0.1"));
+}
+
+static std::vector<inet_address> addresses(std::initializer_list<const char*> texts) {
+    std::vector<inet_address> result;
+    for (const auto* text : texts) {
+        result.emplace_back(seastar::sstring(text));
+    }
+    return result;
+}
+
+BOOST_AUTO_TEST_CASE(test_select_address_in_picks_the_one_that_matches) {
+    auto prefix = cidr::parse("10.0.0.0/8");
+    BOOST_REQUIRE(prefix);
+    auto chosen = select_address_in(*prefix, addresses({"192.168.1.5", "10.1.2.3", "172.16.0.1"}));
+    BOOST_REQUIRE_EQUAL(chosen, inet_address("10.1.2.3"));
+}
+
+BOOST_AUTO_TEST_CASE(test_select_address_in_refuses_when_none_matches) {
+    auto prefix = cidr::parse("10.0.0.0/8");
+    BOOST_REQUIRE(prefix);
+    BOOST_REQUIRE_THROW(select_address_in(*prefix, addresses({"192.168.1.5"})), std::runtime_error);
+    BOOST_REQUIRE_THROW(select_address_in(*prefix, {}), std::runtime_error);
+}
+
+BOOST_AUTO_TEST_CASE(test_select_address_in_refuses_when_several_match) {
+    // Silently taking the first would make the node reachable on an address nobody
+    // chose, and leave no trace of why.
+    auto prefix = cidr::parse("10.0.0.0/8");
+    BOOST_REQUIRE(prefix);
+    BOOST_REQUIRE_THROW(select_address_in(*prefix, addresses({"10.1.2.3", "10.4.5.6"})),
+            std::runtime_error);
+}
+
+BOOST_AUTO_TEST_CASE(test_select_address_in_ignores_the_other_family) {
+    auto prefix = cidr::parse("fd00::/8");
+    BOOST_REQUIRE(prefix);
+    auto chosen = select_address_in(*prefix, addresses({"10.1.2.3", "fd00::5"}));
+    BOOST_REQUIRE_EQUAL(chosen, inet_address("fd00::5"));
 }
 
 BOOST_AUTO_TEST_CASE(test_is_cidr) {
