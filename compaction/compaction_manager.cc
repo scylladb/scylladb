@@ -1386,7 +1386,13 @@ void compaction_manager::do_stop() noexcept {
         // Possible when the node shuts down before enable() is called,
         // e.g. due to an early startup failure. The task manager module
         // was registered in the constructor and must be unregistered.
-        _stop_future = _task_manager_module->stop();
+        // The static shares action was subscribed to static_shares config
+        // updates in the constructor too, so it can have an invocation in
+        // flight, which touches this object after it completes. It has to be
+        // drained as well, just like really_do_stop() does.
+        _stop_future = _task_manager_module->stop().then([this] {
+            return _update_compaction_static_shares_action.join();
+        });
         return;
     }
 
