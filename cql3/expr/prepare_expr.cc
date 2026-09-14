@@ -855,9 +855,12 @@ tuple_constructor_prepare_nontuple(const tuple_constructor& tc, data_dictionary:
     if (receiver) {
         type = receiver->type;
     } else {
+        // A DESC clustering column has a reversed type; leaving it in an element of
+        // the tuple type would make tuple comparisons invert that component.
+        auto element_type = [] (const expression& e) { return type_of(e)->underlying_type(); };
         type = tuple_type_impl::get_instance(
                 values
-                | std::views::transform(type_of)
+                | std::views::transform(element_type)
                 | std::ranges::to<std::vector>());
     }
     tuple_constructor value {
