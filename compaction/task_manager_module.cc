@@ -626,6 +626,10 @@ static future<std::optional<double>> get_global_cleanup_compaction_workload(shar
     uint64_t bytes = 0;
     auto keyspaces = db.local().get_non_local_vnode_based_strategy_keyspaces();
     for (const auto& ks : keyspaces) {
+        // The keyspace may have been dropped while the previous ones were being summed up.
+        if (!db.local().has_keyspace(ks)) {
+            continue;
+        }
         std::vector<table_info> tables;
         const auto& cf_meta_data = db.local().find_keyspace(ks).metadata().get()->cf_meta_data();
         for (auto& [name, schema] : cf_meta_data) {
