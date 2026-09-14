@@ -293,8 +293,9 @@ public:
         abort_fn _abort_fn;
         finalize_fn _finalizer;
 
-        // Engaged only after the task is finished and its resources have been released.
-        std::optional<task_manager::task::progress> _cached_progress;
+        // The progress once the task is complete, so that it is computed at most once
+        // and remains available after the progress callback is released.
+        mutable std::optional<task_manager::task::progress> _cached_progress;
         // The workload callback's first result: the expected total does not change once known.
         mutable std::optional<double> _cached_workload;
     public:

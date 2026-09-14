@@ -441,7 +441,12 @@ future<task_manager::task::progress> task_manager::generic_task_impl::get_progre
     if (_cached_progress) {
         co_return *_cached_progress;
     }
-    co_return co_await (_progress_fn ? _progress_fn() : task::impl::get_progress());
+    auto complete = is_complete();
+    auto progress = co_await (_progress_fn ? _progress_fn() : task::impl::get_progress());
+    if (complete) {
+        _cached_progress = progress;
+    }
+    co_return progress;
 }
 
 tasks::is_abortable task_manager::generic_task_impl::is_abortable() const noexcept {
@@ -475,12 +480,11 @@ future<> task_manager::generic_task_impl::release_resources() noexcept {
         _workload_fn = {};
         _abort_fn = {};
     });
-    auto progress_f = co_await coroutine::as_future(get_progress());
-    if (progress_f.failed()) {
-        tmlogger.warn("Failed to cache the progress of task {}: {}", _status.id, progress_f.get_exception());
-        _cached_progress = task::progress{};
-    } else {
-        _cached_progress = progress_f.get();
+    if (_progress_fn) {
+        auto progress_f = co_await coroutine::as_future(get_progress());
+        if (progress_f.failed()) {
+            tmlogger.warn("Failed to cache the progress of task {}: {}", _status.id, progress_f.get_exception());
+        }
     }
     auto finalize_f = co_await coroutine::as_future(_finalizer ? _finalizer() : task::impl::release_resources());
     if (finalize_f.failed()) {
