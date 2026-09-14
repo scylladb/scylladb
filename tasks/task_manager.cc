@@ -482,12 +482,6 @@ future<> task_manager::generic_task_impl::release_resources() noexcept {
     } else {
         _cached_progress = progress_f.get();
     }
-    auto workload_f = co_await coroutine::as_future(expected_total_workload());
-    if (workload_f.failed()) {
-        tmlogger.warn("Failed to cache the workload of task {}: {}", _status.id, workload_f.get_exception());
-    } else {
-        _cached_workload = workload_f.get();
-    }
     auto finalize_f = co_await coroutine::as_future(_finalizer ? _finalizer() : task::impl::release_resources());
     if (finalize_f.failed()) {
         tmlogger.warn("Failed to finalize task {}: {}", _status.id, finalize_f.get_exception());
@@ -500,9 +494,13 @@ future<> task_manager::generic_task_impl::run() {
 
 future<std::optional<double>> task_manager::generic_task_impl::expected_total_workload() const {
     if (_cached_workload) {
-        co_return *_cached_workload;
+        co_return _cached_workload;
     }
-    co_return co_await (_workload_fn ? _workload_fn() : task::impl::expected_total_workload());
+    auto workload = co_await (_workload_fn ? _workload_fn() : task::impl::expected_total_workload());
+    if (workload) {
+        _cached_workload = workload;
+    }
+    co_return workload;
 }
 
 task_manager::task_builder::task_builder(module_ptr module, std::string type)

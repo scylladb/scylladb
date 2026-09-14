@@ -295,7 +295,8 @@ public:
 
         // Engaged only after the task is finished and its resources have been released.
         std::optional<task_manager::task::progress> _cached_progress;
-        std::optional<double> _cached_workload;
+        // The workload callback's first result: the expected total does not change once known.
+        mutable std::optional<double> _cached_workload;
     public:
         generic_task_impl(
             module_ptr module,
