@@ -228,7 +228,10 @@ struct config_scope_value {
 // scope iteration; default to quoting if it somehow is not.
 sstring format_config_option_value(std::string_view name, const sstring& value) {
     const auto* opt = db::cluster_config_registry::find(name);
-    if (opt && opt->type() != db::cluster_config_registry::value_type::text) {
+    // A structured value is stored in a form of its own (flow-style YAML for the listeners),
+    // which is not a CQL literal, so it is quoted like text - a form ALTER takes as well.
+    if (opt && opt->type() != db::cluster_config_registry::value_type::text
+            && opt->type() != db::cluster_config_registry::value_type::structured) {
         return value;
     }
     std::string escaped;
