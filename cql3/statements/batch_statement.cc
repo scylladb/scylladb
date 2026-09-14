@@ -221,7 +221,7 @@ void batch_statement::build_cas_result_set_metadata() {
 
 namespace raw {
 
-std::unique_ptr<prepared_statement>
+future<std::unique_ptr<prepared_statement>>
 batch_statement::prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
     auto&& meta = get_prepare_context();
 
@@ -265,9 +265,9 @@ batch_statement::prepare(data_dictionary::database db, cql_stats& stats, const c
         ai->set_batch_infos(std::move(batch_audit_infos));
     }
 
-    return std::make_unique<prepared_statement>(std::move(ai), std::move(statement),
+    return make_ready_future<std::unique_ptr<prepared_statement>>(std::make_unique<prepared_statement>(std::move(ai), std::move(statement),
                                                       meta.get_variable_specifications(),
-                                                      std::move(partition_key_bind_indices));
+                                                      std::move(partition_key_bind_indices)));
 }
 
 audit::statement_category batch_statement::category() const {

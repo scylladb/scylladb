@@ -14,6 +14,7 @@
 #include "cql3/prepare_context.hh"
 #include "cql3/column_specification.hh"
 
+#include <seastar/core/future.hh>
 #include <seastar/core/shared_ptr.hh>
 
 #include <vector>
@@ -43,7 +44,7 @@ public:
 
     void set_bound_variables(const std::vector<::shared_ptr<column_identifier>>& bound_names, dialect d);
 
-    virtual std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) = 0;
+    virtual future<std::unique_ptr<prepared_statement>> prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) = 0;
 
 protected:
     virtual audit::statement_category category() const = 0;
