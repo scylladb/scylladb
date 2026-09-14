@@ -16,14 +16,20 @@
 #include <seastar/testing/test_case.hh>
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
+#include "test/lib/error_injection.hh"
 #include "test/lib/test_utils.hh"
 
 #include <seastar/core/future-util.hh>
 #include <seastar/core/metrics_api.hh>
+#include <seastar/core/thread.hh>
+#include <seastar/util/defer.hh>
 #include "transport/messages/result_message.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
+#include "cql3/statements/batch_statement.hh"
+#include "cql3/statements/modification_statement.hh"
 #include "replica/database.hh"
+#include "utils/error_injection.hh"
 
 BOOST_AUTO_TEST_SUITE(query_processor_test)
 
@@ -384,6 +390,250 @@ SEASTAR_TEST_CASE(test_select_full_scan_metrics) {
         auto stat_ps8 = qp.get_cql_stats().select_partition_range_scan;
         qp.execute_internal("select * from ks.fsm where token(pk) = 1;", cql3::query_processor::cache_internal::yes).get();
         BOOST_CHECK_EQUAL(stat_ps8, qp.get_cql_stats().select_partition_range_scan);
+    });
+}
+
+template <typename T>
+static size_t count_yields(const future<T>& f, std::string_view injection_name) {
+    auto& injector = utils::get_local_injector();
+    size_t yields = 0;
+    auto seen = injector.enter_count(injection_name);
+    while (!f.available()) {
+        seastar::thread::yield();
+        auto count = injector.enter_count(injection_name);
+        yields += count != seen;
+        seen = count;
+    }
+    return yields;
+}
+
+// Preparing a batch yields between its sub-statements, so a batch of slow
+// sub-statements does not stall the reactor (SCYLLADB-219). The injection
+// makes every sub-statement burn 1 ms of CPU, more than the task quota, so
+// the prepare yields after each of the 8.
+SEASTAR_TEST_CASE(test_batch_prepare_does_not_stall) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+        fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+        return;
+#endif
+        e.execute_cql("CREATE TABLE ks.t (pk int PRIMARY KEY, v int)").get();
+        auto& qp = e.local_qp();
+        auto& injector = utils::get_local_injector();
+
+        // A batch of n INSERTs.
+        constexpr size_t n = 8;
+        std::string text = "BEGIN UNLOGGED BATCH ";
+        for (size_t i = 0; i < n; ++i) {
+            text += fmt::format("INSERT INTO ks.t (pk, v) VALUES ({}, {}); ", i, i);
+        }
+        text += "APPLY BATCH";
+        auto parsed = cql3::query_processor::parse_statement(text, cql3::internal_dialect());
+
+        // Prepare it with the 1 ms spin, and count the yields.
+        auto disable = defer([&] () noexcept { injector.disable("delay_after_batch_sub_statement"); });
+        injector.enable("delay_after_batch_sub_statement", false, {{"spin_us", "1000"}});
+        auto prepare = parsed->prepare(qp.db(), qp.get_cql_stats(), qp.get_cql_config());
+        auto yields = count_yields(prepare, "delay_after_batch_sub_statement");
+        auto prepared = prepare.get().prepared;
+
+        // It yielded after most sub-statements, and prepared all of them.
+        BOOST_REQUIRE_GE(yields, n / 2);
+        auto& batch = dynamic_cast<cql3::statements::batch_statement&>(*prepared->statement);
+        BOOST_REQUIRE_EQUAL(batch.get_statements().size(), n);
+    });
+}
+
+// A schema change waits while a batch is prepared, so the sub-statements of
+// the batch all use one version of their table. The batch then runs, plain or
+// conditional, and the schema change is applied after its prepare. A table
+// dropped and created again is another table under the same name, so a DROP
+// TABLE waits too.
+SEASTAR_TEST_CASE(test_schema_change_waits_for_batch_prepare) {
+    // A conditional batch runs Paxos, as in paxos_state_test.
+    cql_test_config cfg;
+    cfg.initial_tablets = 1;
+    cfg.need_remote_proxy = true;
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+        fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+        return;
+#endif
+        e.execute_cql("CREATE TABLE ks.t (pk int, ck int, v int, PRIMARY KEY (pk, ck))").get();
+        auto& qp = e.local_qp();
+        auto& injector = utils::get_local_injector();
+        auto disable = defer([&] () noexcept { injector.disable("delay_after_batch_sub_statement"); });
+        const char* plain = "BEGIN UNLOGGED BATCH INSERT INTO ks.t (pk, ck, v) VALUES (0, 1, 1); INSERT INTO ks.t (pk, ck, v) VALUES (0, 2, 2); APPLY BATCH";
+        const char* conditional = "BEGIN BATCH INSERT INTO ks.t (pk, ck, v) VALUES (1, 1, 1) IF NOT EXISTS; INSERT INTO ks.t (pk, ck, v) VALUES (1, 2, 2) IF NOT EXISTS; APPLY BATCH";
+
+        int column = 0;
+        for (auto batch : {plain, conditional}) {
+            // Pause the prepare after the first sub-statement.
+            injector.enable("delay_after_batch_sub_statement", true, {{"pause", "1"}});
+            auto query = e.execute_cql(batch);
+            wait_for_injection_enter("delay_after_batch_sub_statement").get();
+
+            // An ALTER waits for the paused prepare.
+            const auto version = e.data_dictionary().find_schema("ks", "t")->version();
+            auto alter = e.execute_cql(fmt::format("ALTER TABLE ks.t ADD c{} int", column++));
+            e.wait_until_schema_change_waits();
+            BOOST_REQUIRE(!alter.available());
+            BOOST_REQUIRE(e.data_dictionary().find_schema("ks", "t")->version() == version);
+
+            // The batch runs, then the ALTER is applied.
+            injector.receive_message("delay_after_batch_sub_statement");
+            query.get();
+            alter.get();
+            BOOST_REQUIRE(e.data_dictionary().find_schema("ks", "t")->version() != version);
+        }
+
+        // Both batches wrote their rows.
+        assert_that(e.execute_cql("SELECT pk, ck FROM ks.t").get()).is_rows().with_size(4);
+
+        // This batch is only prepared, so the test can check the table of each
+        // sub-statement.
+        const auto old_id = e.data_dictionary().find_schema("ks", "t")->id();
+        auto parsed = cql3::query_processor::parse_statement(conditional, cql3::internal_dialect());
+        injector.enable("delay_after_batch_sub_statement", true, {{"pause", "1"}});
+        auto prepare = parsed->prepare(qp.db(), qp.get_cql_stats(), qp.get_cql_config());
+        wait_for_injection_enter("delay_after_batch_sub_statement").get();
+
+        // A DROP TABLE waits for the paused prepare.
+        auto drop = e.execute_cql("DROP TABLE ks.t");
+        e.wait_until_schema_change_waits();
+        BOOST_REQUIRE(!drop.available());
+
+        // The prepare ends, then the DROP. The table created again has a new id.
+        injector.receive_message("delay_after_batch_sub_statement");
+        auto prepared = prepare.get().prepared;
+        drop.get();
+        e.execute_cql("CREATE TABLE ks.t (pk int, ck int, v int, PRIMARY KEY (pk, ck))").get();
+        BOOST_REQUIRE(e.data_dictionary().find_schema("ks", "t")->id() != old_id);
+
+        // Both sub-statements use the table from before the DROP.
+        const auto& statements = dynamic_cast<cql3::statements::batch_statement&>(*prepared->statement).get_statements();
+        BOOST_REQUIRE_EQUAL(statements.size(), 2);
+        BOOST_REQUIRE(statements[0].statement->s->id() == old_id);
+        BOOST_REQUIRE(statements[1].statement->s->id() == old_id);
+    }, std::move(cfg));
+}
+
+// A USE on the connection can run while the prepare of a batch is suspended.
+// The tables of the batch must resolve against the keyspace from before the
+// USE.
+SEASTAR_TEST_CASE(test_use_during_batch_prepare) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+        fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+        return;
+#endif
+        e.execute_cql("CREATE TABLE ks.t (pk int PRIMARY KEY, v int)").get();
+        e.execute_cql("CREATE KEYSPACE ks2 WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}").get();
+        e.execute_cql("CREATE TABLE ks2.t (pk int PRIMARY KEY, v int)").get();
+        auto& injector = utils::get_local_injector();
+
+        // Pause the prepare of a batch sent while the connection uses ks.
+        auto disable = defer([&] () noexcept { injector.disable("delay_after_batch_sub_statement"); });
+        injector.enable("delay_after_batch_sub_statement", true, {{"pause", "1"}});
+        auto query = e.execute_cql("BEGIN UNLOGGED BATCH INSERT INTO t (pk, v) VALUES (1, 1); INSERT INTO t (pk, v) VALUES (2, 2); APPLY BATCH");
+        wait_for_injection_enter("delay_after_batch_sub_statement").get();
+
+        // The USE runs during the pause.
+        e.execute_cql("USE ks2").get();
+        injector.receive_message("delay_after_batch_sub_statement");
+        query.get();
+
+        // The batch wrote to ks.
+        assert_that(e.execute_cql("SELECT pk FROM ks.t").get()).is_rows().with_size(2);
+        assert_that(e.execute_cql("SELECT pk FROM ks2.t").get()).is_rows().is_empty();
+    });
+}
+
+// Two callers can prepare the same internal statement at once when its
+// prepare() suspends. The second must not replace the first one's entry,
+// whose weak pointer was already handed out.
+SEASTAR_TEST_CASE(test_concurrent_prepare_internal_share_one_statement) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+        fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+        return;
+#endif
+        e.execute_cql("CREATE TABLE ks.t (pk int PRIMARY KEY, v int)").get();
+        auto& qp = e.local_qp();
+        auto& injector = utils::get_local_injector();
+        const sstring text = "BEGIN UNLOGGED BATCH INSERT INTO ks.t (pk, v) VALUES (?, ?); INSERT INTO ks.t (pk, v) VALUES (?, ?); APPLY BATCH";
+
+        // The first prepare pauses, and a second one of the same text runs
+        // meanwhile.
+        auto disable = defer([&] () noexcept { injector.disable("delay_after_batch_sub_statement"); });
+        injector.enable("delay_after_batch_sub_statement", true, {{"pause", "1"}});
+        auto first = qp.prepare_internal(text);
+        wait_for_injection_enter("delay_after_batch_sub_statement").get();
+        auto second = qp.prepare_internal(text).get();
+        injector.receive_message("delay_after_batch_sub_statement");
+        auto first_ptr = first.get();
+
+        // Both callers got the same statement, and it runs.
+        BOOST_REQUIRE_EQUAL(&*first_ptr, &*second);
+        qp.execute_internal(text, {1, 1, 2, 2}, cql3::query_processor::cache_internal::yes).get();
+        assert_that(e.execute_cql("SELECT pk FROM ks.t").get()).is_rows().with_size(2);
+    });
+}
+
+// A BATCH message that finds a prepared statement older than its table removes
+// it from the cache, and the driver prepares it again (SCYLLADB-219).
+SEASTAR_TEST_CASE(test_remove_prepared) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE ks.t (pk int PRIMARY KEY, v int)").get();
+        auto& qp = e.local_qp();
+        const sstring text = "INSERT INTO ks.t (pk, v) VALUES (?, ?)";
+        auto id = e.prepare(text).get();
+        auto prepared = qp.get_prepared(id);
+        BOOST_REQUIRE(prepared);
+
+        qp.remove_prepared(std::nullopt, id, *prepared);
+        BOOST_REQUIRE(!qp.get_prepared(id));
+
+        BOOST_REQUIRE(e.prepare(text).get() == id);
+        BOOST_REQUIRE(qp.get_prepared(id));
+    });
+}
+
+// A PREPARE response that is still being sent keeps a stale statement alive,
+// and the user's authorized cache returns it even after the statement is
+// prepared again. Removing the stale statement drops that entry and keeps the
+// newer statement (SCYLLADB-219).
+SEASTAR_TEST_CASE(test_remove_prepared_keeps_newer_statement) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE ks.t (pk int PRIMARY KEY, v int)").get();
+        auto& qp = e.local_qp();
+        const auto& user = e.local_client_state().user();
+        const sstring text = "INSERT INTO ks.t (pk, v) VALUES (1, 1)";
+
+        // An EXECUTE adds the statement to the user's authorized cache, and a
+        // PREPARE response that is not sent yet keeps it alive.
+        auto id = e.prepare(text).get();
+        e.execute_prepared(id, {}).get();
+        auto unsent_response = qp.prepare(text, e.local_client_state(), e.test_dialect()).get();
+        auto stale = qp.get_prepared(id);
+        BOOST_REQUIRE(stale);
+
+        // A schema change drops the statement from the cache, and the driver
+        // prepares it again.
+        e.execute_cql("ALTER TABLE ks.t ADD w int").get();
+        BOOST_REQUIRE(e.prepare(text).get() == id);
+        auto newer = qp.get_prepared(id);
+        BOOST_REQUIRE(newer && newer.get() != stale.get());
+
+        // The user's authorized entry still finds the stale statement, so a
+        // BATCH message finds it and removes it.
+        BOOST_REQUIRE(qp.get_prepared(user, id).get() == stale.get());
+
+        // Removing the stale statement drops the user's entry, and the newer
+        // statement stays.
+        qp.remove_prepared(user, id, *stale);
+        BOOST_REQUIRE(!qp.get_prepared(user, id));
+        BOOST_REQUIRE(qp.get_prepared(id).get() == newer.get());
     });
 }
 
