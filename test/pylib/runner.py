@@ -33,7 +33,6 @@ from _pytest.junitxml import xml_key
 
 
 from test import ALL_MODES, DEBUG_MODES, TOP_SRC_DIR, HOST_ID, path_to
-from test.pylib import SeastarIOMetric
 from test.pylib.artifact_registry import ArtifactRegistry as artifacts
 from test.pylib.coverage_utils import coverage_dir
 from test.pylib.ldap_server import start_ldap
@@ -263,7 +262,8 @@ def pytest_runtest_protocol(item, nextitem):
                 # skipped test have no call report so need to get setup report instead
                 call_report = reports.get("call") if reports.get("call") is not None else reports.get("setup")
                 success = call_report is not None and not call_report.failed
-                test_metrics = resource_gather.get_test_metrics()
+                test_metrics = resource_gather.get_test_metrics(
+                    seastar_io=item.stash.get(SEASTAR_IO_KEY, None))
                 if call_report is not None:
                     status = "skipped" if call_report.skipped else call_report.outcome
                     if hasattr(call_report, "wasxfail"):
@@ -278,13 +278,6 @@ def pytest_runtest_protocol(item, nextitem):
                 else:
                     status = "unknown"
                 test_metrics.status = status
-
-                seastar_io = item.stash.get(SEASTAR_IO_KEY, None)
-                if seastar_io:
-                    test_metrics.seastar_read_bytes = seastar_io.get(SeastarIOMetric.READ_BYTES)
-                    test_metrics.seastar_read_ops = seastar_io.get(SeastarIOMetric.READ_OPS)
-                    test_metrics.seastar_write_bytes = seastar_io.get(SeastarIOMetric.WRITE_BYTES)
-                    test_metrics.seastar_write_ops = seastar_io.get(SeastarIOMetric.WRITE_OPS)
 
                 resource_gather.write_metrics_to_db(
                     metrics=test_metrics,

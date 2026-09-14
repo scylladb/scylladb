@@ -46,9 +46,8 @@ from cassandra.policies import (
 )
 
 from test.pylib.driver_utils import safe_driver_shutdown
-from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo, ServerUpState
+from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo, ServerUpState, SeastarIOMetric
 from test.pylib.log_browsing import ScyllaLogFile
-from test.pylib import SeastarIOMetric
 from test.pylib.rest_client import HTTPError, ScyllaMetricsClient, ScyllaRESTAPIClient
 from test.pylib.scylla_cluster import ReplaceConfig, ScyllaCluster
 from test.pylib.scylla_server import ScyllaServer, ScyllaVersionDescription
