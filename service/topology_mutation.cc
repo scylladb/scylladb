@@ -172,8 +172,8 @@ topology_node_mutation_builder& topology_node_mutation_builder::set(const char* 
     return apply_set(cell, collection_apply_mode::overwrite, features | std::views::transform([] (const auto& f) { return sstring(f); }));
 }
 
-canonical_mutation topology_node_mutation_builder::build() {
-    return canonical_mutation{std::move(_builder._m)};
+small_mutation topology_node_mutation_builder::build() {
+    return small_mutation{std::move(_builder._m)};
 }
 
 row& topology_mutation_builder::row() {

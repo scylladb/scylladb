@@ -1391,7 +1391,7 @@ future<> storage_service::raft_initialize_discovery_leader(const join_node_reque
     builder.add_enabled_features(params.supported_features | std::ranges::to<std::set<sstring>>())
             .set_upgrade_state_done(); // Start right in the topology-on-raft mode
     auto enable_features_mutation = builder.build();
-    insert_join_request_mutations.add(std::move(enable_features_mutation));
+    insert_join_request_mutations.add_small(std::move(enable_features_mutation));
 
     auto skip_service_levels_v2_initialization = utils::get_local_injector().enter("skip_service_levels_v2_initialization");
     auto sl_status_mutation = co_await _sys_ks.local().make_service_levels_version_mutation(skip_service_levels_v2_initialization ? 1 : 2, write_timestamp);
