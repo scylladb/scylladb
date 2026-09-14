@@ -320,6 +320,12 @@ inline int max_expression_nesting = 12;
 #pragma GCC diagnostic ignored "-Wunused-function"
 }
 
+@parser::header {
+// ANTLR declares the lookahead variable of a prediction DFA as a plain int and
+// compares it against the generated token type enum, which is unsigned.
+#pragma GCC diagnostic ignored "-Wsign-compare"
+}
+
 @lexer::context {
     using collector_type = cql3::error_collector<ComponentType, ExceptionBaseType::TokenType, ExceptionBaseType>;
     using listener_type = cql3::error_listener<ComponentType, ExceptionBaseType>;
