@@ -32,6 +32,7 @@
 #include "keys/keys.hh"
 #include "gms/feature_service.hh"
 #include "gms/gossiper.hh"
+#include "gms/inet_address.hh"
 #include "mutation/frozen_mutation.hh"
 #include "transport/protocol_server.hh"
 #include "release.hh"
@@ -487,7 +488,13 @@ private:
             : name(s.name())
             , protocol(s.protocol())
             , protocol_version(s.protocol_version()) {
-            for (const auto& addr : s.listen_addresses()) {
+            // The servers keep their listeners in no particular order; sort
+            // them so the table content is stable.
+            auto addresses = s.listen_addresses();
+            std::ranges::sort(addresses, std::less<>(), [] (const socket_address& addr) {
+                return std::make_tuple(gms::inet_address(addr.addr()), addr.port());
+            });
+            for (const auto& addr : addresses) {
                 listen_addresses.push_back(format("{}:{}", addr.addr(), addr.port()));
             }
         }
