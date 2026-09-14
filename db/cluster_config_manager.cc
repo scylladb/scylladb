@@ -280,11 +280,7 @@ future<> cluster_config_manager::run_config_callbacks() {
     //
     // The local node's identity, used to resolve node-oriented options through the
     // node -> rack -> dc -> cluster precedence chain.
-    lookup_context node_ctx;
-    const auto& topology = _db.get_token_metadata().get_topology();
-    node_ctx.dc_name = topology.get_datacenter();
-    node_ctx.rack_name = topology.get_rack();
-    node_ctx.node_uuid = topology.my_host_id().uuid();
+    lookup_context node_ctx = local_node_context();
 
     // At most one callback pass runs per shard at a time: all refresh execution happens
     // in shard 0's refresh_fiber(), which awaits this pass before starting the next one.
@@ -609,6 +605,19 @@ int64_t cluster_config_manager::resolve_integer_config(const cluster_config_regi
 double cluster_config_manager::resolve_floating_point_config(const cluster_config_registry::option& opt, const lookup_context& ctx) const {
     check_not_db_config(opt);
     return cluster_config_registry::to_floating_point(opt, resolve_config(opt.name, ctx));
+}
+
+cluster_config_manager::lookup_context cluster_config_manager::local_node_context() const {
+    lookup_context ctx;
+    const auto& topology = _db.get_token_metadata().get_topology();
+    ctx.dc_name = topology.get_datacenter();
+    ctx.rack_name = topology.get_rack();
+    ctx.node_uuid = topology.my_host_id().uuid();
+    return ctx;
+}
+
+sstring cluster_config_manager::resolve_structured_config(const cluster_config_registry::option& opt, const lookup_context& ctx) const {
+    return cluster_config_registry::to_structured(opt, resolve_config(opt.name, ctx));
 }
 
 sstring cluster_config_manager::resolve_text_config(const cluster_config_registry::option& opt, const lookup_context& ctx) const {

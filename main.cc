@@ -62,6 +62,7 @@
 #include "db/cluster_config_db_config_bridge.hh"
 #include "db/cluster_config_manager.hh"
 #include "db/cluster_config_registry.hh"
+#include "db/listener_config.hh"
 #include "db/system_keyspace.hh"
 #include "gms/gossiper.hh"
 #include "db/system_distributed_keyspace.hh"
@@ -2938,12 +2939,31 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // after drain stops them in stop_transport()
             // Register controllers after drain_on_shutdown() below, so that even on start
             // failure drain is called and stops controllers
-            auto cql_listeners = db::get_listeners(*cfg, db::listener_config::protocol_type::cql);
+            // The listeners this node is to serve, as the "listeners" cluster config option
+            // resolves for it. Read once here: applying a later change to a running server
+            // is the job of the callback registered further down, not of this read.
+            auto configured_listeners = [&] {
+                const auto* option = db::cluster_config_registry::find(db::cluster_config_registry::option_name::listeners);
+                auto text = cluster_config_manager.local().resolve_structured_config(
+                        *option, cluster_config_manager.local().local_node_context());
+                try {
+                    return db::decode_listeners(text);
+                } catch (...) {
+                    // Written through CQL the value was validated, so this means a row
+                    // corrupted or written out of band. Degrade to the per-protocol options
+                    // rather than refuse to start with no way to reach the node.
+                    startlog.error("Ignoring unreadable \"listeners\" cluster config value: {}",
+                            std::current_exception());
+                    return db::listener_configs{};
+                }
+            }();
+
+            auto cql_listeners = db::get_listeners(*cfg, configured_listeners, db::listener_config::protocol_type::cql);
             cql_transport::controller cql_server_ctl(auth_service, mm_notifier, gossiper, qp, service_memory_limiter, sl_controller, lifecycle_notifier, messaging, timeout_cfg, *cfg, cql_listeners, cql_sg_stats_key, maintenance_socket_enabled::no, dbcfg.statement_scheduling_group);
 
             api::set_server_service_levels(ctx, cql_server_ctl, qp).get();
 
-            auto alternator_listeners = db::get_listeners(*cfg, db::listener_config::protocol_type::alternator);
+            auto alternator_listeners = db::get_listeners(*cfg, configured_listeners, db::listener_config::protocol_type::alternator);
             alternator::controller alternator_ctl(gossiper, proxy, ss, mm, sys_dist_ks, sys_ks, cdc_generation_service, service_memory_limiter, auth_service, sl_controller, vector_store_client, timeout_cfg, *cfg, alternator_listeners, dbcfg.statement_scheduling_group);
 
             // Register at_exit last, so that storage_service::drain_on_shutdown will be called first

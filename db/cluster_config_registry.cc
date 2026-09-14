@@ -28,6 +28,7 @@
 #include "types/types.hh"
 #include "utils/chunked_string.hh"
 #include "utils/log.hh"
+#include "db/listener_config.hh"
 #include "utils/on_internal_error.hh"
 
 namespace db::cluster_config_registry {
@@ -47,8 +48,7 @@ static_assert(std::variant_size_v<config_value> == 5);
 // The two resolution domains. CLUSTER is the shared last step of both chains, so it belongs
 // to both sets; an option that wants only part of a chain spells its scopes out.
 constexpr scope_set table_oriented_scopes = scope_set::of<scope::cluster, scope::keyspace, scope::table>();
-// Unused until the first node-oriented option ships.
-[[maybe_unused]] constexpr scope_set node_oriented_scopes = scope_set::of<scope::cluster, scope::datacenter, scope::rack, scope::node>();
+constexpr scope_set node_oriented_scopes = scope_set::of<scope::cluster, scope::datacenter, scope::rack, scope::node>();
 
 // The scopes that place an option in one domain or the other, i.e. each set without CLUSTER.
 constexpr scope_set table_only_scopes = scope_set::of<scope::keyspace, scope::table>();
@@ -59,6 +59,13 @@ constexpr scope_set node_only_scopes = scope_set::of<scope::datacenter, scope::r
 constexpr bool is_single_domain(scope_set scopes) {
     return !(scopes.intersects(table_only_scopes) && scopes.intersects(node_only_scopes));
 }
+
+// The codec of the "listeners" option. Its two halves live beside listener_config, which is
+// what they parse into; the registry only holds them together.
+constexpr structured_codec listeners_codec{
+    .validate = &db::validate_listeners,
+    .canonicalize = &db::canonicalize_listeners,
+};
 
 // Defined below, with the other parsers and validators.
 // Declared here so that the automatic scrub period option may take their address.
@@ -108,6 +115,16 @@ constexpr std::array registry_options = {
         .default_value = int64_t(100),
         .kind = option_kind::db_config,
         .valid_range = integer_range{.min = 1, .max = std::numeric_limits<uint32_t>::max()},
+    },
+    option{
+        .name = option_name::listeners,
+        .description = "The client-facing sockets to listen on, as a map of listener name to listener configuration",
+        .scopes = node_oriented_scopes,
+        // Empty: no listeners of its own, so a node falls back on the per-protocol options
+        // in scylla.yaml. Not a set of default listeners, because those depend on options
+        // the registry cannot see.
+        .default_value = structured_default{"{}"},
+        .codec = &listeners_codec,
     },
 };
 
