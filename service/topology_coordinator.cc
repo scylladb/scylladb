@@ -838,7 +838,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             bool sleep = true;
             try {
                 auto guard = co_await start_operation();
-                utils::chunked_vector<canonical_mutation> updates;
+                group0_update_collector updates;
 
                 co_await _cdc_gens.garbage_collect_cdc_streams(updates, guard.write_timestamp());
 
@@ -3277,11 +3277,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             // that can now be finalized (no in-progress tablet merges).
             {
                 auto tm = get_token_metadata_ptr();
-                auto cdc_muts = co_await _cdc_gens.maybe_finalize_pending_stream_enables(*tm, guard.write_timestamp());
-                if (!cdc_muts.empty()) {
-                    rtlogger.info("Finalizing deferred Alternator stream enablement for {} table(s)", cdc_muts.size());
-                    mixed_change change{std::move(cdc_muts)};
-                    group0_command g0_cmd = _group0.client().prepare_command(std::move(change), guard,
+                group0_update_collector cdc_muts;
+                auto tables = co_await _cdc_gens.maybe_finalize_pending_stream_enables(*tm, guard.write_timestamp(), cdc_muts);
+                if (tables) {
+                    rtlogger.info("Finalizing deferred Alternator stream enablement for {} table(s)", tables);
+                    group0_command g0_cmd = co_await _group0.client().prepare_command<mixed_change>(std::move(cdc_muts), guard,
                         "Finalize deferred Alternator stream enablement");
                     co_await _group0.client().add_entry(std::move(g0_cmd), std::move(guard), _as);
                     co_return true;
