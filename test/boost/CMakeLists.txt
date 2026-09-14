@@ -363,7 +363,8 @@ add_scylla_test(combined_tests
     cache_algorithm_test.cc
     castas_fcts_test.cc
     cdc_test.cc
-    cluster_config_manager_test.cc
+    cidr_test.cc
+cluster_config_manager_test.cc
     column_mapping_test.cc
     commitlog_cleanup_test.cc
     commitlog_raft_replay_test.cc
