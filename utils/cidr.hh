@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <optional>
 #include <string_view>
+#include <vector>
 
 #include <seastar/net/inet_address.hh>
 
@@ -52,6 +53,26 @@ private:
 /// Whether `text` looks like a prefix rather than a plain address or a host name. Cheap
 /// enough to ask before parsing, for a caller that accepts either.
 bool is_cidr(std::string_view text);
+
+/// The one address in `candidates` that is inside `prefix`.
+///
+/// Throws when none of them is, and when more than one is. Both are configuration
+/// mistakes that are worse to paper over than to refuse: a node that silently listened on
+/// whichever address happened to be enumerated first would be reachable on an address
+/// nobody meant, and finding out why means reading the interface list of that one machine.
+seastar::net::inet_address select_address_in(const cidr& prefix,
+        const std::vector<seastar::net::inet_address>& candidates);
+
+/// The addresses of this host's usable interfaces: those that are up, and not loopback
+/// unless `include_loopback`. Empty on a network stack that does not enumerate interfaces
+/// (the native one does not), which a caller has to be ready for.
+std::vector<seastar::net::inet_address> local_addresses(bool include_loopback);
+
+/// The local address inside `prefix`, for a listener that was configured with a network
+/// rather than an address. Loopback is considered only when the prefix is itself within
+/// loopback, so that "listen on 10.0.0.0/8" cannot land on 127.0.0.1 while
+/// "listen on 127.0.0.0/8" still works for a single-machine setup.
+seastar::net::inet_address select_local_address(const cidr& prefix);
 
 }
 
