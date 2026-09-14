@@ -2988,15 +2988,49 @@ const cql3::cql_metadata_id_type& cql_metadata_id_wrapper::get_response_metadata
     return _response_metadata_id.value();
 }
 
-future<> cql_server::listen(socket_address addr, cql_listener_config listener_config,
+future<> cql_server::listen(const sstring& name, socket_address addr, cql_listener_config listener_config,
         std::shared_ptr<seastar::tls::credentials_builder> creds,
         bool is_shard_aware, bool keepalive,
         std::optional<file_permissions> unix_domain_socket_permissions,
         bool proxy_protocol,
         std::function<generic_server::server&()> get_shard_instance) {
-    _listener_configs[addr] = listener_config;
-    return generic_server::server::listen(addr, std::move(creds), is_shard_aware, keepalive,
-            unix_domain_socket_permissions, proxy_protocol, std::move(get_shard_instance));
+    // Two listeners spelled differently can resolve to the same address. The second could
+    // never bind, and recording its configuration would overwrite that of the one already
+    // listening there - which its connections go on reading. Refuse it before touching
+    // anything; this runs before the first suspension point, so it also holds between
+    // listeners being opened concurrently.
+    auto [it, inserted] = _listener_configs.try_emplace(addr, std::move(listener_config));
+    if (!inserted) {
+        co_await coroutine::return_exception(std::runtime_error(
+                fmt::format("Cannot listen on {} as {}: another listener is already listening there", addr, name)));
+    }
+    std::exception_ptr ex;
+    try {
+        co_await generic_server::server::listen(name, addr, std::move(creds), is_shard_aware, keepalive,
+                unix_domain_socket_permissions, proxy_protocol, std::move(get_shard_instance));
+        co_return;
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    // Nothing listens on the address, so nothing is told what the configuration says.
+    _listener_configs.erase(addr);
+    co_await coroutine::return_exception_ptr(std::move(ex));
+}
+
+future<> cql_server::unlisten(const sstring& name) {
+    auto addr = listener_address(name);
+    co_await generic_server::server::unlisten(name);
+    // Only once the listener is gone and its connections are drained, so that one of them
+    // can still be told about its shard-aware sibling on the way out.
+    if (addr) {
+        _listener_configs.erase(*addr);
+    }
+}
+
+void cql_server::update_listener_config(socket_address addr, cql_listener_config listener_config) {
+    // Looked up by every SUPPORTED the listener's connections send, so they pick it up
+    // with the next one.
+    _listener_configs.at(addr) = std::move(listener_config);
 }
 
 future<utils::chunked_vector<foreign_ptr<std::unique_ptr<client_data>>>> cql_server::get_client_data() {
