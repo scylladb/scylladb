@@ -622,7 +622,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
     // it should take no more than 1.6s which is incomparably smaller than bootstrapping operation
     // (bootstrapping is quick if there is no data in the cluster, but usually if one has 100 nodes they
     // have tons of data, so indeed streaming/repair will take much longer (hours/days)).
-    future<std::tuple<utils::UUID, group0_guard, canonical_mutation>> prepare_and_broadcast_cdc_generation_data(
+    future<std::tuple<utils::UUID, group0_guard, mutation>> prepare_and_broadcast_cdc_generation_data(
             locator::token_metadata_ptr tmptr, group0_guard guard, std::optional<bootstrapping_info> binfo) {
 
         auto get_sharding_info_for_host_id = [&] (locator::host_id ep) -> std::pair<size_t, uint8_t> {
@@ -640,7 +640,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         co_return co_await prepare_and_broadcast_cdc_generation_data(tmptr, std::move(guard), binfo, get_sharding_info_for_host_id);
     }
 
-    future<std::tuple<utils::UUID, group0_guard, canonical_mutation>> prepare_and_broadcast_cdc_generation_data(
+    future<std::tuple<utils::UUID, group0_guard, mutation>> prepare_and_broadcast_cdc_generation_data(
             locator::token_metadata_ptr tmptr, group0_guard guard, std::optional<bootstrapping_info> binfo,
             noncopyable_function<std::pair<size_t, uint8_t>(locator::host_id)> get_sharding_info_for_host_id) {
 
@@ -650,25 +650,25 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             on_internal_error(rtlogger, "cdc_generation_data: gen_mutations is empty");
         }
 
-        utils::chunked_vector<canonical_mutation> updates{gen_mutations.begin(), gen_mutations.end()};
-
-        if (updates.size() > 1) {
+        if (gen_mutations.size() > 1) {
             release_guard(std::move(guard));
 
-            co_await parallel_for_each(updates.begin(), std::prev(updates.end()), [this, gen_uuid = gen_uuid] (canonical_mutation& m) {
+            co_await parallel_for_each(gen_mutations.begin(), std::prev(gen_mutations.end()),
+                    [this, gen_uuid = gen_uuid] (mutation& m) -> future<> {
                 auto const reason = format(
                     "insert CDC generation data (UUID: {}), part", gen_uuid);
 
                 rtlogger.trace("do update {} reason {}", m, reason);
-                write_mutations change{{std::move(m)}};
-                group0_command g0_cmd = _group0.client().prepare_command(std::move(change), reason);
-                return _group0.client().add_entry_unguarded(std::move(g0_cmd), &_as);
+                group0_update_collector part;
+                part.add_large(std::move(m));
+                group0_command g0_cmd = co_await _group0.client().prepare_command<write_mutations>(std::move(part), reason);
+                co_await _group0.client().add_entry_unguarded(std::move(g0_cmd), &_as);
             });
 
             guard = co_await start_operation();
         }
 
-        co_return std::tuple{gen_uuid, std::move(guard), std::move(updates.back())};
+        co_return std::tuple{gen_uuid, std::move(guard), std::move(gen_mutations.back())};
     }
 
     // Deletes obsolete CDC generations. These are the published generations that stopped operating
@@ -1063,7 +1063,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             auto reason = ::format(
                 "insert CDC generation data (UUID: {})", gen_uuid);
             group0_update_collector updates;
-            updates.add(std::move(mutation));
+            co_await updates.add(std::move(mutation));
             updates.add(builder.build());
             co_await update_topology_state(std::move(guard), std::move(updates), reason);
         }
@@ -3377,7 +3377,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         auto reason = ::format(
                             "bootstrap: insert tokens and CDC generation data (UUID: {})", gen_uuid);
                         group0_update_collector updates;
-                        updates.add(std::move(mutation));
+                        co_await updates.add(std::move(mutation));
                         updates.add(builder.build());
                         co_await update_topology_state(std::move(guard_), std::move(updates), reason);
 
