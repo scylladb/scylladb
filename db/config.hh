@@ -424,6 +424,7 @@ public:
     named_value<bool> enable_tombstone_gc_for_streaming_and_repair;
     named_value<double> repair_partition_count_estimation_ratio;
     named_value<uint32_t> repair_hints_batchlog_flush_cache_time_in_ms;
+    named_value<uint32_t> repair_hints_batchlog_flush_timeout_in_seconds;
     named_value<uint64_t> repair_multishard_reader_buffer_hint_size;
     named_value<uint64_t> repair_multishard_reader_enable_read_ahead;
     named_value<bool> enable_small_table_optimization_for_rbno;

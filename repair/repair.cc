@@ -479,9 +479,8 @@ future<std::tuple<bool, bool, gc_clock::time_point>> repair_service::flush_hints
         std::erase_if(waiting_nodes, [&] (const auto& addr) {
             return ignore_nodes.contains(addr);
         });
-        auto hints_timeout = std::chrono::seconds(300);
-        auto batchlog_timeout = std::chrono::seconds(300);
-        repair_flush_hints_batchlog_request req{id.uuid(), {}, hints_timeout, batchlog_timeout};
+        auto timeout = std::chrono::seconds(_config.repair_hints_batchlog_flush_timeout_in_seconds());
+        repair_flush_hints_batchlog_request req{id.uuid(), {}, timeout, timeout};
         auto start_time = gc_clock::now();
         std::vector<gc_clock::time_point> times;
         try {
