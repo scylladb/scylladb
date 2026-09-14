@@ -32,7 +32,6 @@
 #include "db/view/base_info.hh"
 #include "db/view/view_build_status.hh"
 #include "db/view/view_consumer.hh"
-#include "mutation/canonical_mutation.hh"
 #include "replica/database.hh"
 #include "keys/clustering_bounds_comparator.hh"
 #include "cql3/statements/select_statement.hh"
@@ -2550,17 +2549,11 @@ static future<> announce_with_raft(
         auto guard = co_await group0_client.start_operation(as);
         auto timestamp = guard.write_timestamp();
 
-        auto mut = co_await mutation_gen(guard.write_timestamp());
-        utils::chunked_vector<canonical_mutation> cmuts;
-        cmuts.emplace_back(std::move(mut));
+        ::service::group0_update_collector muts;
+        muts.add_small(co_await mutation_gen(guard.write_timestamp()));
 
-        auto group0_cmd = group0_client.prepare_command(
-            ::service::write_mutations{
-                .mutations{std::move(cmuts)},
-            },
-            guard,
-            description
-        );
+        auto group0_cmd = co_await group0_client.prepare_command<::service::write_mutations>(
+                std::move(muts), guard, description);
 
         try {
             co_await group0_client.add_entry(std::move(group0_cmd), std::move(guard), as, ::service::raft_timeout{});
@@ -2858,19 +2851,17 @@ future<> view_builder::run_in_background() {
     });
 }
 
-future<> view_builder::generate_mutations_on_node_left(replica::database& db, db::system_keyspace& sys_ks, api::timestamp_type timestamp, locator::host_id host_id, utils::chunked_vector<canonical_mutation>& muts) {
+future<> view_builder::generate_mutations_on_node_left(replica::database& db, db::system_keyspace& sys_ks, api::timestamp_type timestamp, locator::host_id host_id, ::service::group0_update_collector& muts) {
     // When a node is removed, we delete all its rows from the view_build_status table together with
     // the topology update operation.
 
-    auto& qp = sys_ks.query_processor();
-    muts.reserve(muts.size() + db.get_views().size());
     // We expect the table to have a row for each existing view, so generate delete mutations for all views.
     for (auto& view : db.get_views()) {
         if (should_ignore_tablet_keyspace(db, view->ks_name())) {
             continue;
         }
         auto mut = co_await sys_ks.make_remove_view_build_status_on_host_mutation(timestamp, {view->ks_name(), view->cf_name()}, host_id);
-        muts.emplace_back(std::move(mut));
+        muts.add_small(std::move(mut));
     }
 }
 

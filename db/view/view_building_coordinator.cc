@@ -841,7 +841,7 @@ void view_building_coordinator::rollback_aborted_tasks(service::group0_update_co
     out.add_small(builder.build());
 }
 
-future<> view_building_coordinator::mark_view_build_statuses_on_node_join(utils::chunked_vector<canonical_mutation>& out, const service::group0_guard& guard, locator::host_id host_id) {
+future<> view_building_coordinator::mark_view_build_statuses_on_node_join(service::group0_update_collector& out, const service::group0_guard& guard, locator::host_id host_id) {
     // View builder coordinator marks statuses (STARTED/SUCCESS) on all nodes at once,
     // so copy the status to the new node.
     // Ignore views which are not started yet.
@@ -850,19 +850,19 @@ future<> view_building_coordinator::mark_view_build_statuses_on_node_join(utils:
         if (!statuses.contains(host_id)) {
             auto view_name = table_id_to_name(_db, view_id);
             auto mut = co_await _sys_ks.make_view_build_status_mutation(guard.write_timestamp(), view_name, host_id, statuses.begin()->second);
-            out.emplace_back(std::move(mut));
+            out.add_small(std::move(mut));
             vbc_logger.debug("Marking view {} on node {} as: {}", view_name, host_id, db::view::build_status_to_sstring(statuses.begin()->second));
         }
     }
 }
 
-future<> view_building_coordinator::remove_view_build_statuses_on_left_node(utils::chunked_vector<canonical_mutation>& out, const service::group0_guard& guard, locator::host_id host_id) {
+future<> view_building_coordinator::remove_view_build_statuses_on_left_node(service::group0_update_collector& out, const service::group0_guard& guard, locator::host_id host_id) {
     vbc_logger.debug("Removing view build statuses for leaving node {}", host_id);
     for (const auto& [view_id, statuses]: _vb_sm.views_state.status_map) {
         if (statuses.contains(host_id)) {
             auto view_name = table_id_to_name(_db, view_id);
             auto mut = co_await _sys_ks.make_remove_view_build_status_on_host_mutation(guard.write_timestamp(), view_name, host_id);
-            out.emplace_back(std::move(mut));
+            out.add_small(std::move(mut));
             vbc_logger.debug("Removed view build status for view {} on node {}", view_name, host_id);
         }
     }
