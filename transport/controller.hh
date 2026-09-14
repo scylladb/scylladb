@@ -18,6 +18,7 @@
 
 #include "protocol_server.hh"
 #include "db/listener_config.hh"
+#include "transport/cql_listener_config.hh"
 #include "service/maintenance_mode.hh"
 
 using namespace seastar;
@@ -39,10 +40,38 @@ class updateable_timeout_config;
 namespace cql_transport {
 
 class cql_server;
-struct cql_listener_config;
 struct connection_service_level_params;
 class controller : public protocol_server {
+    // Everything needed to open one listening socket, worked out from a listener's
+    // configuration: its address resolved, its credentials built, and the shard-aware
+    // sibling it advertises looked up.
+    struct listen_cfg {
+        sstring name;
+        socket_address addr;
+        cql_listener_config lcfg;
+        bool is_shard_aware;
+        std::shared_ptr<seastar::tls::credentials_builder> cred;
+        // The options `cred` was built out of. Kept so that two resolutions of the same
+        // listener compare equal: resolving builds a fresh credentials_builder every
+        // time, so comparing the pointers would call every encrypted listener changed,
+        // and tear down its connections, whenever anything at all was reconfigured.
+        std::unordered_map<sstring, sstring> tls_options;
+        bool proxy_protocol;
+        bool keepalive;
+
+        bool operator==(const listen_cfg& other) const {
+            return name == other.name && addr == other.addr && lcfg == other.lcfg
+                    && is_shard_aware == other.is_shard_aware
+                    && bool(cred) == bool(other.cred) && tls_options == other.tls_options
+                    && proxy_protocol == other.proxy_protocol && keepalive == other.keepalive;
+        }
+    };
+
     db::listener_configs _listeners;
+    // What is actually being served, by name, as it was resolved when it was opened.
+    // apply_listeners() compares against this rather than against _listeners, so that a
+    // listener is reopened when anything it was opened with changed.
+    std::unordered_map<sstring, listen_cfg> _served;
     std::vector<socket_address> _listen_addresses;
     std::unique_ptr<sharded<cql_server>> _server;
     semaphore _ops_sem; /* protects start/stop operations on _server */
@@ -70,8 +99,27 @@ class controller : public protocol_server {
     future<> unsubscribe_server(sharded<cql_server>& server);
 
     cql_listener_config shard_aware_sibling(const sstring& name, const db::listener_config&,
+            const db::listener_configs& listeners,
             const std::unordered_map<sstring, net::inet_address>& resolved_addresses) const;
+    // Resolve a set of listeners into what it takes to serve them. Does everything that
+    // can fail - name resolution, reading certificates, checking that a shard-aware
+    // sibling exists and is reachable - so that a set which cannot be served is rejected
+    // before any socket is touched.
+    future<std::vector<listen_cfg>> resolve_listeners(const db::listener_configs& listeners) const;
     future<> start_listening_on_tcp_sockets(sharded<cql_server>& cserver);
+public:
+    // Serve `listeners` from now on instead of whatever is being served: open the ones
+    // that are new, stop the ones that are gone, and reopen the ones whose configuration
+    // changed. Connections on a listener that goes away are drained, so a client keeps
+    // the answer to the request it had in flight; connections on a listener that stays
+    // are left alone.
+    //
+    // The whole set is resolved before anything is touched, so a set that cannot be
+    // served - a name that does not resolve, a certificate that cannot be read, a
+    // shard-aware sibling that is missing - is rejected with the server still serving
+    // what it was.
+    future<> apply_listeners(db::listener_configs listeners);
+private:
     future<> start_listening_on_maintenance_socket(sharded<cql_server>& cserver);
 
     maintenance_socket_enabled _used_by_maintenance_socket;

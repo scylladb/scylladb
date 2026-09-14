@@ -2984,15 +2984,25 @@ const cql3::cql_metadata_id_type& cql_metadata_id_wrapper::get_response_metadata
     return _response_metadata_id.value();
 }
 
-future<> cql_server::listen(socket_address addr, cql_listener_config listener_config,
+future<> cql_server::listen(const sstring& name, socket_address addr, cql_listener_config listener_config,
         std::shared_ptr<seastar::tls::credentials_builder> creds,
         bool is_shard_aware, bool keepalive,
         std::optional<file_permissions> unix_domain_socket_permissions,
         bool proxy_protocol,
         std::function<generic_server::server&()> get_shard_instance) {
     _listener_configs[addr] = listener_config;
-    return generic_server::server::listen(addr, std::move(creds), is_shard_aware, keepalive,
+    return generic_server::server::listen(name, addr, std::move(creds), is_shard_aware, keepalive,
             unix_domain_socket_permissions, proxy_protocol, std::move(get_shard_instance));
+}
+
+future<> cql_server::unlisten(const sstring& name) {
+    auto addr = listener_address(name);
+    co_await generic_server::server::unlisten(name);
+    // Only once the listener is gone and its connections are drained, so that one of them
+    // can still be told about its shard-aware sibling on the way out.
+    if (addr) {
+        _listener_configs.erase(*addr);
+    }
 }
 
 future<utils::chunked_vector<foreign_ptr<std::unique_ptr<client_data>>>> cql_server::get_client_data() {

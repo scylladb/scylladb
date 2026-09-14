@@ -81,9 +81,15 @@ future<> controller::start_server() {
     return do_start_server().finally([this] { _ops_sem.signal(); });
 }
 
-static future<> listen_on_all_shards(sharded<cql_server>& cserver, socket_address addr, cql_listener_config lcfg, std::shared_ptr<seastar::tls::credentials_builder> creds, bool is_shard_aware, bool keepalive, std::optional<file_permissions> unix_domain_socket_permissions, bool proxy_protocol = false) {
-    co_await cserver.invoke_on_all([addr, lcfg, creds, is_shard_aware, keepalive, unix_domain_socket_permissions, proxy_protocol] (cql_server& server) {
-        return server.listen(addr, lcfg, creds, is_shard_aware, keepalive, unix_domain_socket_permissions, proxy_protocol, [&c = server.container()]() -> generic_server::server& { return c.local(); });
+static future<> listen_on_all_shards(sharded<cql_server>& cserver, const sstring& name, socket_address addr, cql_listener_config lcfg, std::shared_ptr<seastar::tls::credentials_builder> creds, bool is_shard_aware, bool keepalive, std::optional<file_permissions> unix_domain_socket_permissions, bool proxy_protocol = false) {
+    co_await cserver.invoke_on_all([name, addr, lcfg, creds, is_shard_aware, keepalive, unix_domain_socket_permissions, proxy_protocol] (cql_server& server) {
+        return server.listen(name, addr, lcfg, creds, is_shard_aware, keepalive, unix_domain_socket_permissions, proxy_protocol, [&c = server.container()]() -> generic_server::server& { return c.local(); });
+    });
+}
+
+static future<> unlisten_on_all_shards(sharded<cql_server>& cserver, const sstring& name) {
+    co_await cserver.invoke_on_all([name] (cql_server& server) {
+        return server.unlisten(name);
     });
 }
 
@@ -93,12 +99,13 @@ static future<> listen_on_all_shards(sharded<cql_server>& cserver, socket_addres
 // resolved_addresses maps every listener address, as spelled in the
 // configuration, to the address it resolves to.
 cql_listener_config controller::shard_aware_sibling(const sstring& name, const db::listener_config& listener,
+        const db::listener_configs& listeners,
         const std::unordered_map<sstring, net::inet_address>& resolved_addresses) const {
     if (listener.shard_aware_listener.empty()) {
         return {};
     }
-    auto sibling = _listeners.find(listener.shard_aware_listener);
-    if (sibling == _listeners.end()) {
+    auto sibling = listeners.find(listener.shard_aware_listener);
+    if (sibling == listeners.end()) {
         throw std::runtime_error(fmt::format("Listener {}: shard_aware_listener names a listener that doesn't serve CQL: {}",
                 name, listener.shard_aware_listener));
     }
@@ -124,23 +131,12 @@ cql_listener_config controller::shard_aware_sibling(const sstring& name, const d
     };
 }
 
-future<> controller::start_listening_on_tcp_sockets(sharded<cql_server>& cserver) {
+future<std::vector<controller::listen_cfg>> controller::resolve_listeners(const db::listener_configs& listeners) const {
     auto& cfg = _config;
     auto preferred = cfg.rpc_interface_prefer_ipv6() ? std::make_optional(net::inet_address::family::INET6) : std::nullopt;
     auto family = cfg.enable_ipv6_dns_lookup() || preferred ? std::nullopt : std::make_optional(net::inet_address::family::INET);
     auto default_keepalive = cfg.rpc_keepalive();
 
-    struct listen_cfg {
-        sstring name;
-        socket_address addr;
-        cql_listener_config lcfg;
-        bool is_shard_aware;
-        std::shared_ptr<seastar::tls::credentials_builder> cred;
-        bool proxy_protocol;
-        bool keepalive;
-    };
-
-    _listen_addresses.clear();
     std::vector<listen_cfg> configs;
 
     // Listeners sharing the same address, or the same set of TLS options, share
@@ -151,7 +147,7 @@ future<> controller::start_listening_on_tcp_sockets(sharded<cql_server>& cserver
     // Resolve every listener's address first, so that a listener can be checked
     // against the address of the shard-aware listener it names, whether that
     // listener comes before or after it.
-    for (auto& [name, l] : _listeners) {
+    for (auto& [name, l] : listeners) {
         auto addr_name = l.address.empty() ? cfg.rpc_address() : l.address;
         auto [addr_it, inserted] = resolved_addresses.try_emplace(addr_name);
         if (inserted) {
@@ -159,10 +155,11 @@ future<> controller::start_listening_on_tcp_sockets(sharded<cql_server>& cserver
         }
     }
 
-    for (auto& [name, l] : _listeners) {
+    for (auto& [name, l] : listeners) {
         auto addr = resolved_addresses.at(l.address.empty() ? cfg.rpc_address() : l.address);
 
         std::shared_ptr<seastar::tls::credentials_builder> cred;
+        db::config::string_map tls_options;
         if (l.tls) {
             // An empty set of options means the CQL-wide defaults.
             auto opts = l.tls_options.empty() ? cfg.client_encryption_options() : l.tls_options;
@@ -171,6 +168,7 @@ future<> controller::start_listening_on_tcp_sockets(sharded<cql_server>& cserver
             // once TLS was selected per listener, and configure_tls_creds_builder()
             // doesn't know it, so drop it.
             opts.erase("enabled");
+            tls_options = opts;
             auto it = std::ranges::find_if(creds, [&] (auto& c) { return c.first == opts; });
             if (it == creds.end()) {
                 cred = std::make_shared<seastar::tls::credentials_builder>();
@@ -185,23 +183,96 @@ future<> controller::start_listening_on_tcp_sockets(sharded<cql_server>& cserver
         configs.emplace_back(listen_cfg{
             .name = name,
             .addr = socket_address{addr, l.port},
-            .lcfg = shard_aware_sibling(name, l, resolved_addresses),
+            .lcfg = shard_aware_sibling(name, l, listeners, resolved_addresses),
             .is_shard_aware = l.shard_aware,
             .cred = std::move(cred),
+            .tls_options = std::move(tls_options),
             .proxy_protocol = l.proxy_protocol,
             .keepalive = l.keepalive.value_or(default_keepalive),
         });
-        _listen_addresses.push_back(configs.back().addr);
+    }
+    co_return configs;
+}
+
+future<> controller::start_listening_on_tcp_sockets(sharded<cql_server>& cserver) {
+    auto configs = co_await resolve_listeners(_listeners);
+
+    _listen_addresses.clear();
+    _served.clear();
+    for (auto& cfg : configs) {
+        _listen_addresses.push_back(cfg.addr);
+        _served.emplace(cfg.name, cfg);
     }
 
     co_await parallel_for_each(configs, [&cserver](const listen_cfg & cfg) -> future<> {
-        co_await listen_on_all_shards(cserver, cfg.addr, cfg.lcfg, cfg.cred, cfg.is_shard_aware, cfg.keepalive, std::nullopt, cfg.proxy_protocol);
+        co_await listen_on_all_shards(cserver, cfg.name, cfg.addr, cfg.lcfg, cfg.cred, cfg.is_shard_aware, cfg.keepalive, std::nullopt, cfg.proxy_protocol);
 
         logger.info("Starting listening for CQL clients on {} as {} ({}, {}{})"
                 , cfg.addr, cfg.name, cfg.cred ? "encrypted" : "unencrypted", cfg.is_shard_aware ? "shard-aware" : "non-shard-aware"
                 , cfg.proxy_protocol ? ", proxy-protocol" : ""
         );
     });
+}
+
+future<> controller::apply_listeners(db::listener_configs listeners) {
+    auto units = co_await get_units(_ops_sem, 1);
+
+    if (!_server) {
+        // Nothing is being served, so there is nothing to reconcile: remember the set, and
+        // let start_server() open it when it runs.
+        _listeners = std::move(listeners);
+        co_return;
+    }
+
+    // Resolve the whole set first. This is everything that can fail - a name that does not
+    // resolve, a certificate that cannot be read, a shard-aware sibling that is missing or
+    // on another address - and until it has succeeded the server keeps serving what it was.
+    auto resolved = co_await resolve_listeners(listeners);
+    std::unordered_map<sstring, listen_cfg> wanted;
+    for (auto& cfg : resolved) {
+        wanted.emplace(cfg.name, std::move(cfg));
+    }
+
+    auto& cserver = *_server;
+
+    // Compare what was resolved, not what was configured: a listener whose own
+    // configuration did not change still has to be reopened if the shard-aware sibling it
+    // advertises did, since that is part of what its connections are told.
+    auto unchanged = [&] (const sstring& name) {
+        auto it = wanted.find(name);
+        return it != wanted.end() && it->second == _served.at(name);
+    };
+
+    // Take away the listeners that are gone or have changed. This drains their
+    // connections, which is why a listener that did not change is left alone: its clients
+    // should not pay for a change to a different listener.
+    for (const auto& [name, cfg] : _served) {
+        if (unchanged(name)) {
+            continue;
+        }
+        logger.info("Stopping listening for CQL clients on {} as {}", cfg.addr, name);
+        co_await unlisten_on_all_shards(cserver, name);
+    }
+
+    // Then open the ones that are new, and reopen the ones that changed.
+    for (const auto& [name, cfg] : wanted) {
+        if (_served.contains(name) && unchanged(name)) {
+            continue;
+        }
+        co_await listen_on_all_shards(cserver, cfg.name, cfg.addr, cfg.lcfg, cfg.cred,
+                cfg.is_shard_aware, cfg.keepalive, std::nullopt, cfg.proxy_protocol);
+        logger.info("Starting listening for CQL clients on {} as {} ({}, {}{})",
+                cfg.addr, cfg.name, cfg.cred ? "encrypted" : "unencrypted",
+                cfg.is_shard_aware ? "shard-aware" : "non-shard-aware",
+                cfg.proxy_protocol ? ", proxy-protocol" : "");
+    }
+
+    _listeners = std::move(listeners);
+    _served = std::move(wanted);
+    _listen_addresses.clear();
+    for (const auto& [name, cfg] : _served) {
+        _listen_addresses.push_back(cfg.addr);
+    }
 }
 
 future<> controller::start_listening_on_maintenance_socket(sharded<cql_server>& cserver) {
@@ -237,7 +308,7 @@ future<> controller::start_listening_on_maintenance_socket(sharded<cql_server>& 
         file_permissions::user_read | file_permissions::user_write |
         file_permissions::group_read | file_permissions::group_write;
 
-    co_await listen_on_all_shards(cserver, addr, cql_listener_config{}, nullptr, false, _config.rpc_keepalive(), unix_domain_socket_permissions);
+    co_await listen_on_all_shards(cserver, "maintenance", addr, cql_listener_config{}, nullptr, false, _config.rpc_keepalive(), unix_domain_socket_permissions);
 
     if (_config.maintenance_socket_group.is_set()) {
         auto group_name = _config.maintenance_socket_group();
