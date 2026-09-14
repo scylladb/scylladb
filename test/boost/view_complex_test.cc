@@ -785,6 +785,15 @@ SEASTAR_TEST_CASE(test_partition_deletion_with_flush) {
     }, cfg);
 }
 
+void assert_msg_rows(auto&& msg, std::vector<std::vector<bytes_opt>>&& rows = {}) {
+    if (rows.empty()) {
+        assert_that(msg).is_rows().is_empty();
+    } else {
+        assert_that(msg).is_rows().with_rows(std::move(rows));
+    }
+}
+
+// CASSANDRA-13409: deleted columns must not reappear when the view key changes.
 void test_commutative_row_deletion(cql_test_env& e, std::function<void()>&& maybe_flush) {
     e.execute_cql("create table cf (p int, v1 int, v2 int, primary key (p))").get();
     e.execute_cql("create materialized view vcf as select * from cf "
@@ -794,8 +803,13 @@ void test_commutative_row_deletion(cql_test_env& e, std::function<void()>&& mayb
     e.execute_cql("insert into cf (p, v1, v2) values (3, 1, 3) using timestamp 1").get();
     maybe_flush();
     eventually([&] {
-        auto msg = e.execute_cql("select v2, writetime(v2) from vcf").get();
-        assert_that(msg).is_rows().with_rows({{
+        assert_msg_rows(e.execute_cql("select p, v1, v2 from cf").get(), {{
+            {int32_type->decompose(3)},
+            {int32_type->decompose(1)},
+            {int32_type->decompose(3)}
+        }});
+
+        assert_msg_rows(e.execute_cql("select v2, writetime(v2) from vcf").get(), {{
             {int32_type->decompose(3)},
             {long_type->decompose(1L)}
         }});
@@ -804,15 +818,20 @@ void test_commutative_row_deletion(cql_test_env& e, std::function<void()>&& mayb
     e.execute_cql("delete from cf using timestamp 2 where p = 3").get();
     maybe_flush();
     eventually([&] {
-        auto msg = e.execute_cql("select v2, writetime(v2) from vcf").get();
-        assert_that(msg).is_rows().is_empty();
+        assert_msg_rows(e.execute_cql("select p, v1, v2 from cf").get());
+        assert_msg_rows(e.execute_cql("select v2, writetime(v2) from vcf").get());
     });
 
     e.execute_cql("insert into cf (p, v1) values (3, 1) using timestamp 3").get();
     maybe_flush();
     eventually([&] {
-        auto msg = e.execute_cql("select v1, p, v2, writetime(v2) from vcf").get();
-        assert_that(msg).is_rows().with_rows({{
+        assert_msg_rows(e.execute_cql("select p, v1, v2 from cf").get(), {{
+            {int32_type->decompose(3)},
+            {int32_type->decompose(1)},
+            { }
+        }});
+
+        assert_msg_rows(e.execute_cql("select v1, p, v2, writetime(v2) from vcf").get(), {{
             {int32_type->decompose(1)},
             {int32_type->decompose(3)},
             { },
@@ -823,8 +842,13 @@ void test_commutative_row_deletion(cql_test_env& e, std::function<void()>&& mayb
     e.execute_cql("update cf using timestamp 4 set v1 = 2 where p = 3").get();
     maybe_flush();
     eventually([&] {
-        auto msg = e.execute_cql("select v1, p, v2, writetime(v2) from vcf").get();
-        assert_that(msg).is_rows().with_rows({{
+        assert_msg_rows(e.execute_cql("select p, v1, v2 from cf").get(), {{
+            {int32_type->decompose(3)},
+            {int32_type->decompose(2)},
+            { }
+        }});
+
+        assert_msg_rows(e.execute_cql("select v1, p, v2, writetime(v2) from vcf").get(), {{
             {int32_type->decompose(2)},
             {int32_type->decompose(3)},
             { },
@@ -835,8 +859,13 @@ void test_commutative_row_deletion(cql_test_env& e, std::function<void()>&& mayb
     e.execute_cql("update cf using timestamp 5 set v1 = 1 where p = 3").get();
     maybe_flush();
     eventually([&] {
-        auto msg = e.execute_cql("select v1, p, v2, writetime(v2) from vcf").get();
-        assert_that(msg).is_rows().with_rows({{
+        assert_msg_rows(e.execute_cql("select p, v1, v2 from cf").get(), {{
+            {int32_type->decompose(3)},
+            {int32_type->decompose(1)},
+            { }
+        }});
+
+        assert_msg_rows(e.execute_cql("select v1, p, v2, writetime(v2) from vcf").get(), {{
             {int32_type->decompose(1)},
             {int32_type->decompose(3)},
             { },
@@ -844,7 +873,36 @@ void test_commutative_row_deletion(cql_test_env& e, std::function<void()>&& mayb
         }});
     });
 
+    e.local_db().get_compaction_manager().perform_major_compaction(e.local_db().find_column_family("ks", "cf").try_get_compaction_group_view_with_static_sharding(), tasks::make_empty_task_info()).get();
     e.local_db().get_compaction_manager().perform_major_compaction(e.local_db().find_column_family("ks", "vcf").try_get_compaction_group_view_with_static_sharding(), tasks::make_empty_task_info()).get();
+
+    eventually([&] {
+        assert_msg_rows(e.execute_cql("select p, v1, v2 from cf").get(), {{
+            {int32_type->decompose(3)},
+            {int32_type->decompose(1)},
+            { }
+        }});
+
+        assert_msg_rows(e.execute_cql("select v1, p, v2, writetime(v2) from vcf").get(), {{
+            {int32_type->decompose(1)},
+            {int32_type->decompose(3)},
+            { },
+            { }
+        }});
+    });
+
+    // The deletion must win over the preceding write at the same timestamp.
+    e.execute_cql("update cf using timestamp 5 set v1 = null where p = 3").get();
+    maybe_flush();
+    eventually([&] {
+        assert_msg_rows(e.execute_cql("select p, v1, v2 from cf").get(), {{
+            {int32_type->decompose(3)},
+            { },
+            { }
+        }});
+
+        assert_msg_rows(e.execute_cql("select v1, p, v2, writetime(v2) from vcf").get());
+    });
 }
 
 SEASTAR_TEST_CASE(test_commutative_row_deletion_without_flush) {
