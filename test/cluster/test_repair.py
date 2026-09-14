@@ -220,6 +220,44 @@ async def test_batchlog_flush_in_repair_without_cache(manager):
     await do_batchlog_flush_in_repair(manager, 0);
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_repair_flush_gives_up_on_silent_replica(manager):
+    """A flush request that the replica never answers does not hold its
+    caller forever. The request is held on the replica outside every
+    replica-side deadline, so only the caller's own bound can end the wait."""
+    injection = "repair_flush_hints_batchlog_handler_hold"
+    margin_injection = "repair_flush_hints_batchlog_rpc_margin_in_ms"
+    # A one second flush timeout and no flush cache, so every repair flushes
+    # and a stuck flush fails fast.
+    config = {'tablets_mode_for_new_keyspaces': 'disabled',
+              'repair_hints_batchlog_flush_cache_time_in_ms': 0}
+    node1, node2 = await manager.servers_add(2, config=config, auto_rack_dc="dc1")
+    cql = manager.get_cql()
+    hosts = await wait_for_cql_and_get_hosts(cql, [node1, node2], time.time() + 60)
+    await cql.run_async("ALTER CLUSTER WITH repair_hints_batchlog_flush_timeout_in_seconds = 1")
+    await wait_for_config_map_value_on_hosts(cql, hosts, CLUSTER_CONFIGS_QUERY, [], "repair_hints_batchlog_flush_timeout_in_seconds", "1")
+    cql.execute("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}")
+    cql.execute("CREATE TABLE ks.tbl (pk int PRIMARY KEY) WITH tombstone_gc = {'mode': 'repair'}")
+
+    node2_host_id = await manager.api.get_host_id(node2.ip_addr)
+    log1 = await manager.server_open_log(node1.server_id)
+    log2 = await manager.server_open_log(node2.server_id)
+    mark1 = await log1.mark()
+    mark2 = await log2.mark()
+    await manager.api.enable_injection(node2.ip_addr, injection, one_shot=True)
+    # The caller normally gives the replica a 30 second head start; the test
+    # does not need to sit through it.
+    await manager.api.enable_injection(node1.ip_addr, margin_injection, one_shot=False, parameters={"value": "500"})
+    try:
+        repair = asyncio.create_task(manager.api.repair(node1.ip_addr, "ks", "tbl"))
+        await log2.wait_for(f"{injection}: waiting for message", from_mark=mark2)
+
+        await asyncio.wait_for(repair, timeout=20)
+        await log1.wait_for(rf"Sending repair_flush_hints_batchlog to node={node2_host_id}, failed: .*timed.?out", from_mark=mark1)
+    finally:
+        await manager.api.message_injection(node2.ip_addr, injection)
+        await manager.api.disable_injection(node1.ip_addr, margin_injection)
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_repair_batchlog_flush_bounded_when_replay_is_stuck(manager):
     """
     Check that the batchlog flush a repair asks for gives up at the request's
