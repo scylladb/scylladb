@@ -321,8 +321,8 @@ public:
 
     virtual future<utils::chunked_vector<mutation>> get_modification_mutations(const sstring& text) override {
         auto qs = make_query_state();
-        auto cql_stmt = local_qp().get_statement(text, qs->get_client_state(), test_dialect())->statement;
-        auto modif_stmt = dynamic_pointer_cast<cql3::statements::modification_statement>(std::move(cql_stmt));
+        auto prepared = co_await local_qp().get_statement(text, qs->get_client_state(), test_dialect());
+        auto modif_stmt = dynamic_pointer_cast<cql3::statements::modification_statement>(prepared->statement);
         if (!modif_stmt) {
             throw std::runtime_error(format("get_stmt_mutations: not a modification statement: {}", text));
         }
@@ -331,8 +331,7 @@ public:
         cql3::statements::modification_statement::json_cache_opt json_cache = modif_stmt->maybe_prepare_json_cache(qo);
         std::vector<dht::partition_range> keys = modif_stmt->build_partition_keys(qo, json_cache);
 
-        return modif_stmt->get_mutations(local_qp(), qo, timeout, false, qo.get_timestamp(*qs), *qs, json_cache, keys)
-            .finally([qs, modif_stmt = std::move(modif_stmt)] {});
+        co_return co_await modif_stmt->get_mutations(local_qp(), qo, timeout, false, qo.get_timestamp(*qs), *qs, json_cache, keys);
     }
 
     virtual future<> create_table(std::function<schema(std::string_view)> schema_maker) override {
@@ -1326,24 +1325,22 @@ public:
                 __FUNCTION__, batch_type == batch_statement::type::LOGGED ? "LOGGED" : "UNLOGGED", fmt::join(queries, "\n  "));
 
         std::vector<batch_statement::single_statement> modifications;
-        std::ranges::transform(queries, back_inserter(modifications), [this](const auto& query) {
-            auto stmt = local_qp().get_statement(query, _core_local.local().client_state, test_dialect());
+        for (const auto& query : queries) {
+            auto stmt = co_await local_qp().get_statement(query, _core_local.local().client_state, test_dialect());
             if (!dynamic_cast<modification_statement*>(stmt->statement.get())) {
                 throw exceptions::invalid_request_exception(
                     "Invalid statement in batch: only UPDATE, INSERT and DELETE statements are allowed.");
             }
-            return batch_statement::single_statement(static_pointer_cast<modification_statement>(stmt->statement));
-        });
+            modifications.emplace_back(static_pointer_cast<modification_statement>(stmt->statement));
+        }
         auto batch = ::make_shared<batch_statement>(
             batch_type,
             std::move(modifications),
             cql3::attributes::none(),
             local_qp().get_cql_stats());
         auto qs = make_query_state();
-        auto& lqo = *qo;
-        return local_qp().execute_batch_without_checking_exception_message(batch, *qs, lqo, batch->get_statements().size(), {}).then([qs, batch, qo = std::move(qo)] (auto msg) {
-            return cql_transport::messages::propagate_exception_as_future(std::move(msg));
-        });
+        auto msg = co_await local_qp().execute_batch_without_checking_exception_message(batch, *qs, *qo, batch->get_statements().size(), {});
+        co_return co_await cql_transport::messages::propagate_exception_as_future(std::move(msg));
     }
 
     virtual sharded<qos::service_level_controller>& service_level_controller_service() override {

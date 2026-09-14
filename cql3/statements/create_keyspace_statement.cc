@@ -158,10 +158,10 @@ future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, utils::chun
     co_return std::make_tuple(created_event(), std::move(m), std::move(warnings));
 }
 
-std::unique_ptr<cql3::statements::prepared_statement>
+future<std::unique_ptr<cql3::statements::prepared_statement>>
 cql3::statements::create_keyspace_statement::prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
     _attrs->set_default_replication_strategy_class_option();
-    return std::make_unique<prepared_statement>(audit_info(), make_shared<create_keyspace_statement>(*this));
+    return make_ready_future<std::unique_ptr<prepared_statement>>(std::make_unique<prepared_statement>(audit_info(), make_shared<create_keyspace_statement>(*this)));
 }
 
 future<> cql3::statements::create_keyspace_statement::grant_permissions_to_creator(const service::client_state& cs, service::group0_batch& mc) const {

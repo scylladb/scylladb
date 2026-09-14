@@ -532,7 +532,7 @@ void modification_statement::build_cas_result_set_metadata() {
 
 namespace raw {
 
-std::unique_ptr<prepared_statement>
+future<std::unique_ptr<prepared_statement>>
 modification_statement::prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
     schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
     auto meta = get_prepare_context();
@@ -548,8 +548,8 @@ modification_statement::prepare(data_dictionary::database db, cql_stats& stats, 
     });
 
     auto partition_key_bind_indices = meta.get_partition_key_bind_indexes(*schema);
-    return std::make_unique<prepared_statement>(audit_info(), std::move(statement), meta, 
-        std::move(partition_key_bind_indices));
+    return make_ready_future<std::unique_ptr<prepared_statement>>(std::make_unique<prepared_statement>(audit_info(), std::move(statement), meta, 
+        std::move(partition_key_bind_indices)));
 }
 
 ::shared_ptr<cql3::statements::modification_statement>

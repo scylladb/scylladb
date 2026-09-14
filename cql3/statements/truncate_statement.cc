@@ -35,14 +35,14 @@ truncate_statement::truncate_statement(cf_name name, std::unique_ptr<attributes:
     throwing_assert(!_attrs->time_to_live.has_value());
 }
 
-std::unique_ptr<prepared_statement> truncate_statement::prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
+future<std::unique_ptr<prepared_statement>> truncate_statement::prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
     schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
     auto prepared_attributes = _attrs->prepare(db, keyspace(), column_family());
     prepare_context& ctx = get_prepare_context();
     prepared_attributes->fill_prepare_context(ctx);
     auto stmt = ::make_shared<cql3::statements::truncate_statement>(std::move(schema), std::move(prepared_attributes), ctx.bound_variables_size());
     // TRUNCATE has no restrictions, so no bind marker can stand for a partition key component.
-    return std::make_unique<prepared_statement>(audit_info(), std::move(stmt), ctx, std::vector<uint16_t>());
+    return make_ready_future<std::unique_ptr<prepared_statement>>(std::make_unique<prepared_statement>(audit_info(), std::move(stmt), ctx, std::vector<uint16_t>()));
 }
 
 } // namespace raw
