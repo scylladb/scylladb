@@ -2966,6 +2966,34 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto alternator_listeners = db::get_listeners(*cfg, configured_listeners, db::listener_config::protocol_type::alternator);
             alternator::controller alternator_ctl(gossiper, proxy, ss, mm, sys_dist_ks, sys_ks, cdc_generation_service, service_memory_limiter, auth_service, sl_controller, vector_store_client, timeout_cfg, *cfg, alternator_listeners, dbcfg.statement_scheduling_group);
 
+            // Follow the option from here on. Registered after the controllers are built
+            // so that it is torn down before them, and on shard 0 only: applying a set of
+            // listeners fans out to every shard by itself.
+            auto listeners_registration = cluster_config_manager.local().register_config_callback(sstring(db::cluster_config_registry::option_name::listeners),
+                    [&cfg, &cql_server_ctl, &alternator_ctl] (const db::cluster_config_manager::lookup_context&,
+                            std::optional<sstring> value) -> future<> {
+                const auto* option = db::cluster_config_registry::find(db::cluster_config_registry::option_name::listeners);
+                db::listener_configs configured;
+                try {
+                    configured = db::decode_listeners(db::cluster_config_registry::to_structured(*option, value));
+                } catch (...) {
+                    startlog.error("Ignoring unreadable \"listeners\" cluster config value: {}",
+                            std::current_exception());
+                    co_return;
+                }
+
+                auto wanted_alternator = db::get_listeners(*cfg, configured, db::listener_config::protocol_type::alternator);
+                if (wanted_alternator != alternator_ctl.listeners()) {
+                    // The Alternator listeners are served by an http_server, which cannot
+                    // be told to give up one of its listening sockets, so there is nothing
+                    // to apply them to short of restarting the server under its clients.
+                    startlog.warn("The Alternator listeners changed; the change will take effect when this node is restarted");
+                }
+
+                co_await cql_server_ctl.apply_listeners(
+                        db::get_listeners(*cfg, configured, db::listener_config::protocol_type::cql));
+            });
+
             // Register at_exit last, so that storage_service::drain_on_shutdown will be called first
             auto do_drain = defer_verbose_shutdown("local storage", [&ss] {
                 ss.local().drain_on_shutdown().get();

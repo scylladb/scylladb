@@ -16,11 +16,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Any, NamedTuple, TYPE_CHECKING
 
 import pytest
 
 from test.cluster.listener_utils import (
+    connect,
+    cql_options_on,
     Endpoint,
     TLS_OPTIONS,
     alternator_list_tables,
@@ -29,6 +32,8 @@ from test.cluster.listener_utils import (
     cql_options,
 )
 from test.cluster.util import reconnect_driver
+from test.pylib.rest_client import read_barrier
+from test.pylib.util import wait_for
 from test.pylib.host_registry import HostRegistry
 
 if TYPE_CHECKING:
@@ -309,3 +314,60 @@ async def test_plaintext_listeners_refuse_tls(deployment: Deployment) -> None:
     await assert_request_refused(cql_options(deployment.endpoints['cql'], tls=True))
     await assert_request_refused(cql_options(deployment.endpoints['cql_default'], tls=True))
     await assert_request_refused(alternator_list_tables(deployment.endpoints['alternator'], tls=True))
+
+async def set_listeners_live(manager: ScyllaClusterManager, server: ServerInfo,
+                             listeners: dict[str, dict[str, Any]]) -> None:
+    """Change the listeners of a running node, without restarting it."""
+    host_id = await manager.get_host_id(server.server_id)
+    cql = manager.get_cql()
+    await cql.run_async(
+            f"ALTER NODE {host_id} WITH listeners = '{as_cluster_config_value(listeners)}'")
+    await read_barrier(manager.api, server.ip_addr)
+
+
+async def test_listeners_change_without_a_restart(manager: ScyllaClusterManager,
+                                                  deployment: Deployment,
+                                                  leased_addresses: tuple[str, str]) -> None:
+    """A listener added to the option starts serving, and one taken out of it stops,
+    on a node that keeps running throughout.
+    """
+    first, _ = leased_addresses
+    added = Endpoint(first, IGNORED_LEGACY_PORT)
+
+    listeners = dict(deployment.listeners)
+    listeners['cql_added'] = {'protocol': 'cql', 'address': added.address, 'port': added.port}
+    removed = deployment.endpoints['cql_proxy_protocol']
+    del listeners['cql_proxy_protocol']
+
+    await set_listeners_live(manager, deployment.server, listeners)
+
+    async def added_is_serving() -> bool | None:
+        try:
+            return 'CQL_VERSION' in await cql_options(added) or None
+        except Exception:
+            return None
+
+    await wait_for(added_is_serving, time.time() + 60)
+    await assert_not_listening(removed)
+    # The listeners nobody touched carried on serving.
+    assert 'CQL_VERSION' in await cql_options(deployment.endpoints['cql'])
+    assert 'CQL_VERSION' in await cql_options(deployment.endpoints['cql_ssl'])
+
+
+async def test_a_listener_that_did_not_change_keeps_its_connections(
+        manager: ScyllaClusterManager, deployment: Deployment,
+        leased_addresses: tuple[str, str]) -> None:
+    """Changing one listener leaves the connections of the others alone."""
+    first, _ = leased_addresses
+    kept = deployment.endpoints['cql']
+
+    reader, writer = await connect(kept)
+    try:
+        listeners = dict(deployment.listeners)
+        listeners['cql_added'] = {'protocol': 'cql', 'address': first, 'port': IGNORED_LEGACY_PORT}
+        await set_listeners_live(manager, deployment.server, listeners)
+
+        # The connection opened before the change still answers afterwards.
+        assert 'CQL_VERSION' in await cql_options_on(reader, writer)
+    finally:
+        writer.close()

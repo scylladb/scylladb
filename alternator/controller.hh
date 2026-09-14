@@ -106,6 +106,9 @@ public:
     virtual sstring name() const override;
     virtual sstring protocol() const override;
     virtual sstring protocol_version() const override;
+    // The listeners this controller was given, so that a change to them can be noticed.
+    const db::listener_configs& listeners() const noexcept { return _listeners; }
+
     virtual std::vector<socket_address> listen_addresses() const override;
     virtual future<> start_server() override;
     virtual future<> stop_server() override;
