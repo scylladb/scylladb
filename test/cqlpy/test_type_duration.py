@@ -108,7 +108,9 @@ def test_type_duration_negative_part(cql, table1):
 # In math or physics lingo, "y" is a dimension, not a unit vector.
 def test_type_duration_missing_multiplier(cql, table1):
     p = unique_key_int()
-    with pytest.raises(SyntaxException):
+    # "y" alone lexes as an identifier, not a duration, so it is rejected as an
+    # unresolvable column name rather than as a syntax error.
+    with pytest.raises((SyntaxException, InvalidRequest)):
         cql.execute(f"INSERT INTO {table1} (p, d) VALUES ({p}, y)")
 
 # Only integer multipliers of each units is allowed. If you want half a year,
@@ -168,7 +170,9 @@ def test_type_duration_iso_8601(cql, table1):
 # duration, but here we see it's not accepted in ISO 8601 format:
 def test_type_duration_iso_8601_mix_w(cql, table1):
     p = unique_key_int()
-    with pytest.raises(SyntaxException):
+    # Not a duration, so it lexes as an identifier and is rejected as an
+    # unresolvable column name rather than as a syntax error.
+    with pytest.raises((SyntaxException, InvalidRequest)):
         cql.execute(f"INSERT INTO {table1} (p, d) VALUES ({p}, P2Y3W)")
 
 # Test the "alternative" ISO 8601 format,
@@ -202,9 +206,11 @@ def test_type_duration_iso_8601_alternative_missing_t(cql, table1):
 def test_type_duration_iso_8601_case_sensitive(cql, table1):
     p = unique_key_int()
     cql.execute(f"INSERT INTO {table1} (p, d) VALUES ({p}, P1Y2D)") # works
-    with pytest.raises(SyntaxException):
+    # The mixed-case spellings are not durations, so they lex as identifiers and
+    # are rejected as unresolvable column names rather than as syntax errors.
+    with pytest.raises((SyntaxException, InvalidRequest)):
         cql.execute(f"INSERT INTO {table1} (p, d) VALUES ({p}, P1y2D)")
-    with pytest.raises(SyntaxException):
+    with pytest.raises((SyntaxException, InvalidRequest)):
         cql.execute(f"INSERT INTO {table1} (p, d) VALUES ({p}, p1Y2D)")
     with pytest.raises(SyntaxException):
         cql.execute(f"INSERT INTO {table1} (p, d) VALUES ({p}, P0001-03-00t02:10:00)")

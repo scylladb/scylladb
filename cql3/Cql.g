@@ -191,6 +191,101 @@ inline int max_expression_nesting = 12;
         return function_call{std::move(f), std::move(args)};
     }
 
+    // The CQL name of every native type; native_type lists the same keywords.
+    // A C-style cast to one of these reaches make_c_cast() as an identifier
+    // rather than as a type, so the name has to be resolvable on its own.
+    static const std::unordered_map<sstring, data_type>& _native_types() {
+        static thread_local const std::unordered_map<sstring, data_type> m = {
+            {"ascii", ascii_type},
+            {"bigint", long_type},
+            {"blob", bytes_type},
+            {"boolean", boolean_type},
+            {"counter", counter_type},
+            {"date", simple_date_type},
+            {"decimal", decimal_type},
+            {"double", double_type},
+            {"duration", duration_type},
+            {"float", float_type},
+            {"inet", inet_addr_type},
+            {"int", int32_type},
+            {"smallint", short_type},
+            {"text", utf8_type},
+            {"time", time_type},
+            {"timestamp", timestamp_type},
+            {"timeuuid", timeuuid_type},
+            {"tinyint", byte_type},
+            {"uuid", uuid_type},
+            {"varchar", utf8_type},
+            {"varint", varint_type},
+        };
+        return m;
+    }
+
+    // Reads an already-parsed term back as the name of a type: a native type, or
+    // a user-defined type optionally qualified by a keyspace.  Returns nullptr if
+    // the term is not shaped like a type name.  See parenExpression.
+    shared_ptr<cql3_type::raw> term_as_type_name(const expression& e) {
+        auto user_type = [] (shared_ptr<cql3::column_identifier> ks, const sstring& name) {
+            return cql3_type::raw::user_type(cql3::ut_name(std::move(ks),
+                    ::make_shared<cql3::column_identifier>(name, true)));
+        };
+        if (auto* id = expr::as_if<expr::unresolved_identifier>(&e)) {
+            const sstring& name = id->ident->text();
+            if (auto i = _native_types().find(name); i != _native_types().end()) {
+                return cql3_type::raw::from(cql3_type(i->second));
+            }
+            if (_reserved_type_names().contains(name) || name == "empty") {
+                add_recognition_error("Invalid (reserved) user type name " + name);
+                return cql3_type::raw::from(cql3_type(bytes_type));
+            }
+            return user_type(nullptr, name);
+        }
+        // "ks.t" parses as a field selection, the keyspace standing in for a value.
+        if (auto* fs = expr::as_if<expr::field_selection>(&e)) {
+            if (auto* ks = expr::as_if<expr::unresolved_identifier>(&fs->structure)) {
+                return user_type(::make_shared<cql3::column_identifier>(ks->ident->text(), true),
+                                 fs->field->text());
+            }
+        }
+        return nullptr;
+    }
+
+    // Builds a C-style cast from a parenthesized term list that turned out to be
+    // followed by an operand, so the list has to have named a type.
+    expression make_c_cast(std::vector<expression> elements, expression arg) {
+        auto type = elements.size() == 1 ? term_as_type_name(elements[0]) : nullptr;
+        if (!type) {
+            add_recognition_error(fmt::format("Invalid type name in cast: ({})",
+                    fmt::join(elements | std::views::transform([] (const expression& e) {
+                        return fmt::format("{:user}", e); }), ", ")));
+            return arg;
+        }
+        return cast{.style = cast::cast_style::c, .arg = std::move(arg), .type = std::move(type)};
+    }
+
+    // For the semantic predicates in parenExpression.
+    bool next_token_is(ANTLR_UINT32 token_type) {
+        return this->LA(1) == token_type;
+    }
+
+    // Could this parenthesized term list be the target of a C-style cast?  Says
+    // nothing about whether the name denotes a type that exists - term_as_type_name()
+    // decides that, once the parse has committed.
+    static bool is_shaped_like_a_type_name(const std::vector<expression>& elements) {
+        if (elements.size() != 1) {
+            return false;
+        }
+        if (auto* fs = expr::as_if<expr::field_selection>(&elements[0])) {
+            return expr::is<expr::unresolved_identifier>(fs->structure);
+        }
+        return expr::is<expr::unresolved_identifier>(elements[0]);
+    }
+
+    // Is the term just a reference to a column?
+    static bool is_column_reference(const expression& e) {
+        return expr::is<expr::unresolved_identifier>(e);
+    }
+
     // Is the expression just a reference to the named column?
     static bool is_column_named(const expression& e, const cql3::column_identifier::raw& name) {
         auto* id = expr::as_if<expr::unresolved_identifier>(&e);
@@ -499,32 +594,38 @@ selectClause returns [std::vector<shared_ptr<raw_selector>> expr]
 
 selector returns [shared_ptr<raw_selector> s]
     @init{ shared_ptr<cql3::column_identifier> alias; }
-    : us=unaliasedSelector (K_AS c=ident { alias = c; })? { $s = ::make_shared<raw_selector>(std::move(us), alias); }
+    : us=term (K_AS c=ident { alias = c; })? { $s = ::make_shared<raw_selector>(std::move(us), alias); }
     ;
 
-unaliasedSelector returns [uexpression tmp]
+// The body of a term.  This rule used to be the selector-only half of CQL's
+// notion of a term; the two are the same thing, and what each context actually
+// accepts is settled when the term is prepared, where the schema and the
+// expected type are known - see cql3/expr/prepare_expr.cc.  So the C-style cast
+// and the literals, which only a term used to have, are reachable from here now,
+// and column names, WRITETIME, TTL, COUNT(*), SQL CAST and the '.' and '[]'
+// suffixes, which only a selector used to have, are reachable from a term.
+//
+// TODO: fold into term, whose only alternative this now is.
+termBody returns [uexpression tmp]
     @init { nesting_guard guard(*this); }
     :  ( c=cident                                  { tmp = unresolved_identifier{std::move(c)}; }
        | v=value                                   { tmp = std::move(v); }
-       | tl=tupleLiteral                           { tmp = std::move(tl); }
+       | ll=listLiteral                            { tmp = std::move(ll); }
        | K_COUNT '(' countArgument ')'             { tmp = make_count_rows_function_expression(); }
-       | K_WRITETIME '(' a=subscriptExpr ')'       { tmp = column_mutation_attribute{column_mutation_attribute::attribute_kind::writetime,
+       | K_WRITETIME '(' a=term ')'                { tmp = column_mutation_attribute{column_mutation_attribute::attribute_kind::writetime,
                                                                                               std::move(a)}; }
-       | K_TTL       '(' a=subscriptExpr ')'       { tmp = column_mutation_attribute{column_mutation_attribute::attribute_kind::ttl,
+       | K_TTL       '(' a=term ')'                { tmp = column_mutation_attribute{column_mutation_attribute::attribute_kind::ttl,
                                                                                               std::move(a)}; }
-       | f=functionName args=selectionFunctionArgs { tmp = make_function_call(std::move(f), std::move(args)); }
-       | K_CAST      '(' arg=unaliasedSelector K_AS t=native_type ')'  { tmp = cast{.style = cast::cast_style::sql, .arg = std::move(arg), .type = std::move(t)}; }
+       | f=functionName args=functionArgs          { tmp = make_function_call(std::move(f), std::move(args)); }
+       | K_CAST      '(' arg=term K_AS t=native_type ')'  { tmp = cast{.style = cast::cast_style::sql, .arg = std::move(arg), .type = std::move(t)}; }
+       | p=parenExpression                         { tmp = std::move(p); }
        )
-       ( '.' fi=cident { tmp = field_selection{std::move(tmp), std::move(fi)}; }
+       // Greedy on purpose: in "(int)x.y" the '.' belongs to the cast's operand,
+       // giving a cast of x.y, which is how the same expression reads in C.
+       ( options { greedy = true; }
+       : '.' fi=cident { tmp = field_selection{std::move(tmp), std::move(fi)}; }
        | '[' sub=term ']' { tmp = subscript{std::move(tmp), std::move(sub)}; }
        )*
-    ;
-
-selectionFunctionArgs returns [std::vector<expression> a]
-    : '(' ')'
-    | '(' s1=unaliasedSelector { a.push_back(std::move(s1)); }
-          ( ',' sn=unaliasedSelector { a.push_back(std::move(sn)); } )*
-      ')'
     ;
 
 countArgument
@@ -549,7 +650,7 @@ orderByClause[raw::select_statement::parameters::orderings_type& orderings, bool
         raw::select_statement::ordering ordering = raw::select_statement::ordering::ascending;
         std::optional<expression> ann_ordering;
     }
-    : f=functionName fc_args=selectionFunctionArgs
+    : f=functionName fc_args=functionArgs
     {
         if (!orderings.empty()) {
             throw exceptions::invalid_request_exception(
@@ -1796,11 +1897,6 @@ braceCollectionLiteral returns [uexpression value]
     | '{' '}' { $value = collection_constructor{collection_constructor::style_type::set, {}}; }
     ;
 
-collectionLiteral returns [uexpression value]
-    : l=listLiteral            { $value = std::move(l); }
-    | b=braceCollectionLiteral { $value = std::move(b); }
-    ;
-
 usertypeLiteral returns [uexpression ut]
     @init{ usertype_constructor::elements_map_type m; }
     @after{ $ut = usertype_constructor{std::move(m)}; }
@@ -1808,22 +1904,15 @@ usertypeLiteral returns [uexpression ut]
     : '{' k1=ident ':' v1=term { m.emplace(std::move(*k1), std::move(v1)); } ( ',' kn=ident ':' vn=term { m.emplace(std::move(*kn), std::move(vn)); } )* '}'
     ;
 
-// A parenthesized list of terms, with the opening '(' already consumed.  Split
-// out so that parenTerm can left-factor the '(' it shares with the C-style cast.
-//
-// The list is a tuple, except for the one case where the parentheses could just
-// as well be grouping: "(x)" around a single term is a one-element tuple only in
-// the dialect CQL has always had, and is otherwise simply x.  A grammar that
-// grows operators needs the latter, so that "(a + b) * c" multiplies rather than
-// building a tuple; tuple(x) is then how a one-element tuple is spelled.
-tupleLiteralTail returns [uexpression tt]
-    @init{ std::vector<expression> l; }
-    @after{ $tt = make_parenthesized_term(std::move(l)); }
-    : t1=term { l.push_back(std::move(t1)); } ( ',' tn=term { l.push_back(std::move(tn)); } )* ')'
+// A comma-separated term list and the closing ')', with the opening '(' already
+// consumed, so that parenExpression can left-factor the '('.
+termListTail[std::vector<expression>& elements]
+    : t1=term { elements.push_back(std::move(t1)); } ( ',' tn=term { elements.push_back(std::move(tn)); } )* ')'
     ;
 
 tupleLiteral returns [uexpression tt]
-    : '(' t=tupleLiteralTail { $tt = std::move(t); }
+    @init{ std::vector<expression> l; }
+    : '(' termListTail[l] { $tt = make_parenthesized_term(std::move(l)); }
     ;
 
 value returns [uexpression value]
@@ -1834,7 +1923,7 @@ value returns [uexpression value]
     // terms and selectors share one grammar they will, and "{a: 1}" has always
     // meant the user-defined type.
     | ('{' ident ':') => u=usertypeLiteral { $value = std::move(u); }
-    | l=collectionLiteral  { $value = std::move(l); }
+    | b=braceCollectionLiteral { $value = std::move(b); }
     | K_NULL               { $value = make_untyped_null(); }
     | e=marker             { $value = std::move(e); }
     ;
@@ -1869,23 +1958,55 @@ functionArgs returns [std::vector<expression> a]
        ')'
     ;
 
-// The two parenthesized forms of a term, left-factored on the shared '('.
+// The two parenthesized forms of a term: a tuple, and a C-style cast.
 //
-// Telling them apart is possible only because a term cannot start with a bare
-// identifier: the sole term beginning with IDENT is a function call, which is
-// followed by '(', while a type name is followed by ')' or '<'.  So '(' IDENT ')'
-// can only be a cast to a user-defined type, never a one-element tuple.
-parenTerm returns [uexpression pterm]
-    : '(' ( c=comparatorType ')' t=term { $pterm = cast{.style = cast::cast_style::c, .arg = std::move(t), .type = c}; }
-          | tt=tupleLiteralTail         { $pterm = std::move(tt); }
+// Lookahead cannot separate them.  "(a)" is a one-element tuple while "(a)b"
+// casts b to the user-defined type a, and telling which is which means scanning
+// past a balanced ')' - something an LL parser cannot do.  Only the cast targets
+// that open with a type keyword followed by '<' are separable that way; the rest
+// are shaped exactly like a term, so they are parsed as one and read back as a
+// type name by make_c_cast() once an operand turns out to follow.
+parenExpression returns [uexpression pexpr]
+    @init{ std::vector<expression> elements; }
+    : '(' ( t=parameterizedCastType ')' a=term
+                { $pexpr = cast{.style = cast::cast_style::c, .arg = std::move(a), .type = std::move(t)}; }
+          | termListTail[elements]
+            // Three tokens can also follow a finished term, so an operand
+            // starting with one of them is indistinguishable from the
+            // continuation: K_AS is the selector alias in "SELECT (a, b) AS x",
+            // '[' the subscript in "(a, b)[0]", and ':' the map separator in
+            // "{(a, b): 1}".  The first two always lose to the continuation; the
+            // third only when what precedes it could not have named a type, so
+            // that the type hint "(int):v" still reaches its bind marker.
+            ( { !next_token_is(K_AS)
+                && !next_token_is(LBRACKET)
+                && (!next_token_is(COLON) || is_shaped_like_a_type_name(elements)) }?=>
+              a=term { $pexpr = make_c_cast(std::move(elements), std::move(a)); }
+            |        { $pexpr = make_parenthesized_term(std::move(elements)); }
+            )
           )
     ;
 
+// The C-style cast targets that a single token of lookahead separates from a
+// term: each opens with a type keyword followed by '<'.  The keywords are all
+// unreserved, so "(list)" is the tuple holding the column named list, while
+// "(list<int>)" is a cast.
+parameterizedCastType returns [shared_ptr<cql3_type::raw> t]
+    : c=collection_type[false]  { $t = std::move(c); }
+    | tt=tuple_type[false]      { $t = std::move(tt); }
+    | vt=vector_type            { $t = std::move(vt); }
+    | K_FROZEN '<' f=comparator_type[false] '>'
+      {
+        try {
+            $t = cql3::cql3_type::raw::frozen(f);
+        } catch (exceptions::invalid_request_exception& e) {
+            add_recognition_error(e.what());
+        }
+      }
+    ;
+
 term returns [uexpression term1]
-    @init { nesting_guard guard(*this); }
-    : v=value                          { $term1 = std::move(v); }
-    | f=functionName args=functionArgs { $term1 = make_function_call(std::move(f), std::move(args)); }
-    | p=parenTerm                      { $term1 = std::move(p); }
+    : b=termBody { $term1 = std::move(b); }
     ;
 
 columnOperation[operations_type& operations]
@@ -1904,30 +2025,28 @@ columnOperationDifferentiator[operations_type& operations, ::shared_ptr<cql3::co
 // column name, so each of the three has a distinguishable shape.  That will stop
 // being true once terms and selectors share one grammar, so parse the leading
 // term once and check afterwards which operand names the column being assigned.
-// A term cannot be a bare column name, but both operands of a column update can:
-// "SET l = l + [1]" and "SET l = [1] + l" are both spelled with one.  This will
-// go away once terms and selectors share one grammar and a term can be a column.
-termOrColumn returns [uexpression e]
-    : c=cident { $e = unresolved_identifier{std::move(c)}; }
-    | t=term   { $e = std::move(t); }
-    ;
-
 normalColumnOperation[operations_type& operations, ::shared_ptr<cql3::column_identifier::raw> key]
     @init{ std::optional<expression> lhs; }
     : K_SCYLLA_COUNTER_SHARD_LIST '(' t=term ')'
       {
           operations.emplace_back(std::move(key), std::make_unique<cql3::operation::set_counter_value_from_tuple_list>(std::move(t)));
       }
-    | l=termOrColumn { lhs = std::move(l); }
-      ( '+' u=termOrColumn
+    | l=term { lhs = std::move(l); }
+      ( '+' u=term
         {
-          if (is_column_named(*lhs, *key)) {
-              operations.emplace_back(std::move(key), std::make_unique<cql3::operation::addition>(std::move(u)));
-          } else {
+          // A column on the right makes it a prepend, "X = <value> + X"; anything
+          // else an append, "X = X + <value>".  Either way the column being
+          // assigned has to be the operand that names one.
+          if (is_column_reference(u.value())) {
               if (!is_column_named(u.value(), *key)) {
                   add_recognition_error("Only expressions of the form X = <value> + X are supported.");
               }
               operations.emplace_back(std::move(key), std::make_unique<cql3::operation::prepend>(std::move(*lhs)));
+          } else {
+              if (!is_column_named(*lhs, *key)) {
+                  add_recognition_error("Only expressions of the form X = X +<value> are supported.");
+              }
+              operations.emplace_back(std::move(key), std::make_unique<cql3::operation::addition>(std::move(u)));
           }
         }
       | '-' u=term
@@ -2058,7 +2177,7 @@ relation returns [uexpression e]
             std::move(t));
         }
     | name=cident
-      ( ('.' fn=allowedFunctionName)? fn_args=selectionFunctionArgs
+      ( ('.' fn=allowedFunctionName)? fn_args=functionArgs
         {
           sstring ks = fn.empty() ? "" : name->text();
           sstring fname = fn.empty() ? name->text() : std::move(fn);
@@ -2721,6 +2840,16 @@ INTEGER
 
 QMARK
     : '?'
+    ;
+
+// Named so that parenExpression can name them in a semantic predicate; ANTLR
+// maps every ':' and '[' in the grammar onto these tokens.
+COLON
+    : ':'
+    ;
+
+LBRACKET
+    : '['
     ;
 
 /*
