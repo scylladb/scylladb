@@ -155,7 +155,7 @@ future<> controller::start_server() {
                 auto addr_name = l.address.empty() ? _config.alternator_address() : l.address;
                 auto [addr_it, inserted] = resolved_addresses.try_emplace(addr_name);
                 if (inserted) {
-                    addr_it->second = utils::resolve(addr_name, "listener address", family, preferred).get();
+                    addr_it->second = utils::resolve_listen_address(addr_name, "listener address", family, preferred).get();
                 }
 
                 std::optional<size_t> credentials_idx;
