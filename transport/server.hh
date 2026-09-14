@@ -119,6 +119,7 @@ struct cql_server_config {
     bool allow_shard_aware_drivers = true;
     smp_service_group bounce_request_smp_service_group = default_smp_service_group();
     utils::updateable_value<uint32_t> max_relations_in_where_clause;
+    utils::updateable_value<bool> cql_in_bind_variable_name_uses_uppercase_operator;
     utils::updateable_value<uint32_t> request_timeout_on_shutdown_in_seconds;
 };
 

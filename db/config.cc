@@ -1279,6 +1279,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
             "Use on a new, parallel algorithm for performing aggregate queries.")
     , cql_duplicate_bind_variable_names_refer_to_same_variable(this, "cql_duplicate_bind_variable_names_refer_to_same_variable", liveness::LiveUpdate, value_status::Used, true,
             "A bind variable that appears twice in a CQL query refers to a single variable (if false, no name matching is performed).")
+    , cql_in_bind_variable_name_uses_uppercase_operator(this, "cql_in_bind_variable_name_uses_uppercase_operator", liveness::LiveUpdate, value_status::Used, true,
+            "Name the bind variable of an IN restriction \"IN(column)\" (if false, the operator is spelled in lowercase, \"in(column)\").")
     , max_relations_in_where_clause(this, "max_relations_in_where_clause", liveness::LiveUpdate, value_status::Used, 100,
             "Maximum number of relations allowed in a WHERE clause. Queries with too many relations can cause quadratic complexity.")
     , alternator_port(this, "alternator_port", value_status::Used, 0, "Alternator API port.")
