@@ -673,8 +673,10 @@ async def train_alternator(executable: PathLike, workdir: PathLike) -> None:
             # [workload, ops_per_shard, concurrency]
             ["write",     250_000, 100],
             ["read",      250_000, 100],
+            ["batch_read", 20_000, 100],   # 32 items/request, so fewer ops for a comparable item count
             ["scan",        1_000, 100],
             ["write_gsi", 250_000, 100],
+            ["batch_write_gsi", 20_000, 32],
             ["write_rmw", 250_000,  32],   # LWT/Paxos: keep in-flight LSA state bounded
         ]
         for workload in workloads:
