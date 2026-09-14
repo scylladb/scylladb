@@ -164,6 +164,32 @@ inline int max_expression_nesting = 12;
     std::unordered_map<cql3::column_identifier, size_t> _named_bind_variables_indexes;
     std::vector<std::unique_ptr<TokenType>> _missing_tokens;
 
+    // What a parenthesized list of terms builds.  A single term is a one-element
+    // tuple only in the dialect CQL has always had; see tupleLiteral.
+    expression make_parenthesized_term(std::vector<expression> elements) {
+        if (elements.size() == 1 && !_dialect.parentheses_around_a_single_term_make_a_tuple) {
+            return std::move(elements[0]);
+        }
+        return tuple_constructor{std::move(elements)};
+    }
+
+    // SQL spells a tuple of one element ROW(x), there being no way to tell "(x)"
+    // from a parenthesized x; CQL spells it tuple(x).  "tuple" is also a legal
+    // function name, and the two are indistinguishable until the name is read,
+    // so the constructor is recognized here rather than in the grammar.  A
+    // function of that name is still callable, qualified by its keyspace.
+    expression make_function_call(cql3::functions::function_name f, std::vector<expression> args) {
+        // A keyword spells its own case, unlike an identifier, which
+        // allowedFunctionName folds; either spelling names the constructor.
+        if (f.keyspace.empty() && to_lower(f.name) == "tuple") {
+            if (args.empty()) {
+                add_recognition_error("A tuple must have at least one element");
+            }
+            return tuple_constructor{std::move(args)};
+        }
+        return function_call{std::move(f), std::move(args)};
+    }
+
     // Can't use static variable, since it needs to be defined out-of-line
     static const std::unordered_set<sstring>& _reserved_type_names() {
         static std::unordered_set<sstring> s = {
@@ -472,7 +498,7 @@ unaliasedSelector returns [uexpression tmp]
                                                                                               std::move(a)}; }
        | K_TTL       '(' a=subscriptExpr ')'       { tmp = column_mutation_attribute{column_mutation_attribute::attribute_kind::ttl,
                                                                                               std::move(a)}; }
-       | f=functionName args=selectionFunctionArgs { tmp = function_call{std::move(f), std::move(args)}; }
+       | f=functionName args=selectionFunctionArgs { tmp = make_function_call(std::move(f), std::move(args)); }
        | K_CAST      '(' arg=unaliasedSelector K_AS t=native_type ')'  { tmp = cast{.style = cast::cast_style::sql, .arg = std::move(arg), .type = std::move(t)}; }
        )
        ( '.' fi=cident { tmp = field_selection{std::move(tmp), std::move(fi)}; }
@@ -1757,9 +1783,15 @@ usertypeLiteral returns [uexpression ut]
     : '{' k1=ident ':' v1=term { m.emplace(std::move(*k1), std::move(v1)); } ( ',' kn=ident ':' vn=term { m.emplace(std::move(*kn), std::move(vn)); } )* '}'
     ;
 
+// A parenthesized list of terms.  It is a tuple, except for the one case where
+// the parentheses could just as well be grouping: "(x)" around a single term is
+// a one-element tuple only in the dialect CQL has always had, and is otherwise
+// simply x.  A grammar that grows operators needs the latter, so that
+// "(a + b) * c" multiplies rather than building a tuple; tuple(x) is then how a
+// one-element tuple is spelled.
 tupleLiteral returns [uexpression tt]
     @init{ std::vector<expression> l; }
-    @after{ $tt = tuple_constructor{std::move(l)}; }
+    @after{ $tt = make_parenthesized_term(std::move(l)); }
     : '(' t1=term { l.push_back(std::move(t1)); } ( ',' tn=term { l.push_back(std::move(tn)); } )* ')'
     ;
 
@@ -1805,7 +1837,7 @@ functionArgs returns [std::vector<expression> a]
 term returns [uexpression term1]
     @init { nesting_guard guard(*this); }
     : v=value                          { $term1 = std::move(v); }
-    | f=functionName args=functionArgs { $term1 = function_call{std::move(f), std::move(args)}; }
+    | f=functionName args=functionArgs { $term1 = make_function_call(std::move(f), std::move(args)); }
     | '(' c=comparatorType ')' t=term  { $term1 = cast{.style = cast::cast_style::c, .arg = std::move(t), .type = c}; }
     ;
 
@@ -1954,6 +1986,7 @@ relationType returns [oper_t op = oper_t{}]
 relation returns [uexpression e]
     @init{
         oper_t rt;
+        std::optional<expression> lhs;
         nesting_guard guard(*this);
     }
     : K_TOKEN l=tupleOfIdentifiers type=relationType t=term
@@ -1964,15 +1997,18 @@ relation returns [uexpression e]
             std::move(t));
         }
     | name=cident
-      ( ('.' fn=allowedFunctionName)? fn_args=selectionFunctionArgs type=relationType t=term
+      ( ('.' fn=allowedFunctionName)? fn_args=selectionFunctionArgs
         {
           sstring ks = fn.empty() ? "" : name->text();
           sstring fname = fn.empty() ? name->text() : std::move(fn);
-          $e = binary_operator(
-            function_call{functions::function_name{std::move(ks), std::move(fname)}, std::move(fn_args)},
-            type,
-            std::move(t));
+          lhs = make_function_call(functions::function_name{std::move(ks), std::move(fname)}, std::move(fn_args));
         }
+        ( type=relationType t=term
+            { $e = binary_operator(std::move(*lhs), type, std::move(t)); }
+        // tuple(c) IN (...): the one-column tuple spelled with the constructor.
+        | K_IN in_tuples=multiColumnInValues
+            { $e = binary_operator(std::move(*lhs), oper_t::IN, std::move(in_tuples)); }
+        )
       | type=relationType t=term { $e = binary_operator(unresolved_identifier{std::move(name)}, type, std::move(t)); }
       | K_IS K_NOT K_NULL {
             $e = binary_operator(unresolved_identifier{std::move(name)}, oper_t::IS_NOT, make_untyped_null()); }
@@ -1999,54 +2035,15 @@ relation returns [uexpression e]
       | '[' key=term ']' type=relationType t=term { $e = binary_operator(subscript{.val = unresolved_identifier{std::move(name)}, .sub = std::move(key)}, type, std::move(t)); }
       )
     | ids=tupleOfIdentifiers
-      ( K_IN
-          ( '(' ')'
-              {
-                $e = binary_operator(
-                    ids,
-                    oper_t::IN,
-                    collection_constructor {
-                      .style = collection_constructor::style_type::list_or_vector,
-                      .elements = std::vector<expression>()
-                    }
-                  );
-              }
-          | tupleInMarker=marker /* (a, b, c) IN ? */
-              {
-                $e = binary_operator(
-                    ids,
-                    oper_t::IN,
-                    std::move(tupleInMarker)
-                  );
-              }
-          | literals=tupleOfTupleLiterals /* (a, b, c) IN ((1, 2, 3), (4, 5, 6), ...) */
-              {
-                $e = binary_operator(
-                    ids,
-                    oper_t::IN,
-                    collection_constructor {
-                      .style = collection_constructor::style_type::list_or_vector,
-                      .elements = std::move(literals)
-                    }
-                  );
-              }
-          | markers=tupleOfMarkersForTuples /* (a, b, c) IN (?, ?, ...) */
-              {
-                $e = binary_operator(
-                    ids,
-                    oper_t::IN,
-                    collection_constructor {
-                      .style = collection_constructor::style_type::list_or_vector,
-                      .elements = std::move(markers)
-                    }
-                  );
-              }
-          )
-      | type=relationType literal=tupleLiteral /* (a, b, c) > (1, 2, 3) or (a, b, c) > (?, ?, ?) */
+      ( K_IN in_tuples=multiColumnInValues
+          {
+              $e = binary_operator(ids, oper_t::IN, std::move(in_tuples));
+          }
+      | type=relationType literal=tupleLiteralOrConstructor /* (a, b, c) > (1, 2, 3) or (a, b, c) > (?, ?, ?) */
           {
               $e = binary_operator(ids, type, std::move(literal));
           }
-      | type=relationType K_SCYLLA_CLUSTERING_BOUND literal=tupleLiteral /* (a, b, c) > (1, 2, 3) or (a, b, c) > (?, ?, ?) */
+      | type=relationType K_SCYLLA_CLUSTERING_BOUND literal=tupleLiteralOrConstructor /* (a, b, c) > (1, 2, 3) or (a, b, c) > (?, ?, ?) */
           {
               $e = binary_operator(ids, type, std::move(literal), cql3::expr::comparison_order::clustering);
           }
@@ -2071,7 +2068,30 @@ singleColumnInValues returns [std::vector<expression> list]
     ;
 
 tupleOfTupleLiterals returns [std::vector<expression> literals]
-    : '(' t1=tupleLiteral { $literals.emplace_back(std::move(t1)); } (',' ti=tupleLiteral { $literals.emplace_back(std::move(ti)); })* ')'
+    : '(' t1=tupleLiteralOrConstructor { $literals.emplace_back(std::move(t1)); } (',' ti=tupleLiteralOrConstructor { $literals.emplace_back(std::move(ti)); })* ')'
+    ;
+
+// A tuple where only a tuple can stand - the right-hand side of a multi-column
+// relation - so the constructor spelling raises no question of what "tuple" is.
+// (Elsewhere a term reaches the constructor through make_function_call().)
+tupleLiteralOrConstructor returns [uexpression tt]
+    @init{ std::vector<expression> l; }
+    : t=tupleLiteral { $tt = std::move(t); }
+    | K_TUPLE '(' t1=term { l.push_back(std::move(t1)); } ( ',' tn=term { l.push_back(std::move(tn)); } )* ')'
+      { $tt = tuple_constructor{std::move(l)}; }
+    ;
+
+// What a multi-column relation may be IN: nothing, a marker, tuples, or markers
+// for tuples.
+multiColumnInValues returns [uexpression e]
+    : '(' ')'                        /* (a, b, c) IN () */
+        { $e = collection_constructor{collection_constructor::style_type::list_or_vector, {}}; }
+    | m=marker                       /* (a, b, c) IN ? */
+        { $e = std::move(m); }
+    | l=tupleOfTupleLiterals         /* (a, b, c) IN ((1, 2, 3), (4, 5, 6), ...) */
+        { $e = collection_constructor{collection_constructor::style_type::list_or_vector, std::move(l)}; }
+    | ms=tupleOfMarkersForTuples     /* (a, b, c) IN (?, ?, ...) */
+        { $e = collection_constructor{collection_constructor::style_type::list_or_vector, std::move(ms)}; }
     ;
 
 tupleOfMarkersForTuples returns [std::vector<expression> markers]
