@@ -854,11 +854,15 @@ unknown_variant_type deserialize(Input& in, std::type_identity<unknown_variant_t
 // using a range.
 // Use begin() and end() to iterate through the frozen vector,
 // deserializing (or skipping) one element at a time.
-template <typename T, bool IsForward=true>
+//
+// Note: The InputStream parameter must support construction from simple_input_stream()
+// (e.g. seastar::memory_input_stream). Types like fragmented_memory_input_stream that
+// lack this conversion are supported only when the default constructor is not instantiated.
+template <typename T, bool IsForward=true, typename InputStream=utils::input_stream>
 class vector_deserializer {
 public:
     using value_type = T;
-    using input_stream = utils::input_stream;
+    using input_stream = InputStream;
 
 private:
     input_stream _in;
@@ -887,7 +891,7 @@ private:
         }
     };
     struct reverse_iterator_data {
-        std::reverse_iterator<utils::chunked_vector<input_stream>::const_iterator> _substream_it;
+        std::reverse_iterator<typename utils::chunked_vector<input_stream>::const_iterator> _substream_it;
         void skip() {
             ++_substream_it;
         }
