@@ -20,6 +20,7 @@
 #include "sstables/sstables_manager.hh"
 #include "sstables/storage.hh"
 #include "sstables/open_info.hh"
+#include "dht/auto_refreshing_sharder.hh"
 #include "sstables/sstable_version.hh"
 #include "sstables/generation_type.hh"
 #include "sstables/types.hh"
@@ -57,14 +58,18 @@ static future<> load_sstable_for_tablet(const file_stream_id& ops_id, replica::d
     auto& sharded_vbw = vbw.container();
     co_await db.container().invoke_on(shard, [&sharded_vbw, id, desc, state, ops_id] (replica::database& db) -> future<> {
         replica::table& t = db.find_column_family(id);
-        auto erm = t.get_effective_replication_map();
         auto& sstm = t.get_sstables_manager();
         auto sst = sstm.make_sstable(t.schema(), t.get_storage_options(), desc.generation, desc.sid, state, desc.version, desc.format);
-        sstables::sstable_open_config cfg { .unsealed_sstable = true };
+        sstables::sstable_open_config cfg {
+            .current_shard_as_sstable_owner = true,
+            .unsealed_sstable = true,
+        };
+        // Unused given current_shard_as_sstable_owner, but load() wants a sharder.
+        dht::auto_refreshing_sharder sharder(t.shared_from_this());
         // load() with unsealed_sstable=true opens the SSTable without requiring a "sealed"
         // registry entry — the registry entry is still in "creating" state at this point,
         // as left by clone() on the caller side.
-        co_await sst->load(erm->get_sharder(*t.schema()), cfg);
+        co_await sst->load(sharder, cfg);
         auto on_add = [sst, &sstm] (sstables::shared_sstable loading_sst) -> future<> {
             if (loading_sst == sst) {
                 auto cfg = sstm.configure_writer(sst->get_origin());
