@@ -112,12 +112,6 @@ class raft_group0_client {
 
     maintenance_mode_enabled _maintenance_mode;
 
-    template <typename Command>
-    void validate_change(const Command& change) {}
-    template<typename Command>
-    requires std::same_as<Command, topology_change> || std::same_as<Command, mixed_change>
-    void validate_change(const Command& change);
-
     // Assembles the command envelope around an already validated change.
     group0_command make_command(group0_change change, group0_guard& guard, std::string_view description);
 
@@ -159,13 +153,6 @@ public:
     // we could forward the call to shard 0, have group0_guard keep a foreign_ptr to the internal data structures on shard 0,
     // and add_entry would again forward to shard 0.
     future<group0_guard> start_operation(seastar::abort_source& as, std::optional<raft_timeout> timeout = std::nullopt);
-
-    template<typename Command>
-    requires std::same_as<Command, write_mutations>
-    group0_command prepare_command(Command change, std::string_view description);
-    template<typename Command>
-    requires std::same_as<Command, schema_change> || std::same_as<Command, topology_change> || std::same_as<Command, write_mutations> || std::same_as<Command, mixed_change>
-    group0_command prepare_command(Command change, group0_guard& guard, std::string_view description);
 
     // Builds a group0 command out of the collected update. Validates the
     // update before serializing it, which is cheaper than deserializing the
