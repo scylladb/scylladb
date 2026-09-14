@@ -307,6 +307,28 @@ to explicitly mark them as such.
 
 ## Expressions
 
+### Type hints in a select clause
+
+A *type hint* — the C-style cast `(T)x` described under
+[Terms](../definitions.rst) — can be used anywhere a term can, including the
+select clause:
+
+```cql
+SELECT (blob)int_column FROM t;
+SELECT f((int)?) FROM t;
+```
+
+Cassandra accepts a type hint only where a value is expected, and spells the
+select-clause conversion `CAST(x AS T)`. The two are not the same operation:
+`CAST` converts, while a type hint only reinterprets a value whose
+representation is already the target type's, or widens a number.
+
+`(T)` is spelled exactly like a one-element tuple, so the operand `x` may not
+begin with `AS` or with `[`: both of those can also follow a finished term, as
+a column alias and as a subscript, and are read that way. `SELECT (a, b) AS x`
+therefore selects a tuple under the name `x`, and `(a, b)[0]` subscripts the
+tuple rather than casting a list literal.
+
 ### NULL
 
 Scylla aims for a uniform handling of NULL values in expressions, inspired

@@ -154,6 +154,11 @@ A term is thus one of:
   reinterpret between byte-compatible types (e.g. ``(blob)int_value``) or a numeric widening
   (e.g. ``(bigint)int_value``). A lossy (narrowing), cross-family, or unrelated conversion is
   rejected; use ``CAST(x AS T)`` for those.
+
+  ``(T)`` is spelled exactly like a one-element tuple, so ``x`` must be present for the
+  parenthesized name to be read as a type at all, and ``x`` may not begin with ``AS`` or
+  with ``[`` — both of those can also follow a finished term, as a column alias and as a
+  subscript, and are read that way.
 - A bind marker, which denotes a variable to be bound at execution time. See the section on :ref:`prepared-statements`
   for details. A bind marker can be either anonymous (``?``) or named (``:some_name``). The latter form provides a more
   convenient way to refer to the variable for binding it and should generally be preferred.
