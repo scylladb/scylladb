@@ -19,6 +19,7 @@
 #include "idl/mutation.dist.impl.hh"
 #include "readers/mutation_reader.hh"
 #include "converting_mutation_partition_applier.hh"
+#include "utils/on_internal_error.hh"
 #include "mutation_partition_view.hh"
 
 //
@@ -83,7 +84,10 @@ frozen_mutation::frozen_mutation(const mutation& m)
                   .write_key(m.key())
                   .partition([&] (auto wr) {
                       part_ser.write(std::move(wr));
-                  }).end_mutation();
+                  })
+                  // A mutation covers a single partition and so carries none.
+                  .skip_token_range_tombstones()
+                  .end_mutation();
     _bytes.reduce_chunk_count();
 }
 
@@ -134,6 +138,39 @@ mutation_partition_view frozen_mutation::partition() const {
     return mutation_partition_view::from_view(mutation_view().partition());
 }
 
+frozen_mutation freeze_token_range_tombstones(const schema& s, const token_range_tombstone_list& trts) {
+    bytes_ostream out;
+    auto key = partition_key::make_empty();
+    mutation_partition mp(s);
+    mutation_partition_serializer part_ser(s, mp);
+
+    ser::writer_of_mutation<bytes_ostream> wom(out);
+    auto trt_writer = std::move(wom).write_table_id(s.id())
+                  .write_schema_version(s.version())
+                  .write_key(key)
+                  .partition([&] (auto wr) {
+                      part_ser.write(std::move(wr));
+                  })
+                  .start_token_range_tombstones();
+    for (const auto& trt : trts) {
+        trt_writer.add_token_range_tombstones(trt);
+    }
+    std::move(trt_writer).end_token_range_tombstones().end_mutation();
+    return frozen_mutation(std::move(out), std::move(key));
+}
+
+bool frozen_mutation::is_token_range_tombstones_only() const {
+    return _pk.is_empty() && !mutation_view().token_range_tombstones().empty();
+}
+
+token_range_tombstone_list frozen_mutation::token_range_tombstones() const {
+    token_range_tombstone_list res;
+    for (auto&& trt : mutation_view().token_range_tombstones()) {
+        res.apply(trt);
+    }
+    return res;
+}
+
 frozen_mutation::printer frozen_mutation::pretty_printer(schema_ptr s) const {
     return { *this, std::move(s) };
 }
@@ -168,7 +205,11 @@ frozen_mutation streamed_mutation_freezer::consume_end_of_stream() {
                       serialize_mutation_fragments(_schema, _partition_tombstone,
                                                    std::move(_sr), std::move(_rts),
                                                    std::move(_crs), std::move(wr));
-                  }).end_mutation();
+                  })
+                  // The freezer folds them into the partition tombstones, see
+                  // consume(partition_start&&).
+                  .skip_token_range_tombstones()
+                  .end_mutation();
     return frozen_mutation(std::move(out), std::move(_key));
 }
 
@@ -180,6 +221,9 @@ class fragmenting_mutation_freezer {
     std::optional<static_row> _sr;
     utils::chunked_vector<clustering_row> _crs;
     range_tombstone_list _rts;
+    // Token range tombstones from the head of the stream. They apply to every
+    // partition which follows, so they are kept for the whole stream.
+    token_range_tombstone_list _token_range_tombstones;
 
     frozen_mutation_consumer_fn _consumer;
 
@@ -199,7 +243,10 @@ private:
                           serialize_mutation_fragments(_schema, _partition_tombstone,
                                                        std::move(_sr), std::move(_rts),
                                                        std::move(_crs), std::move(wr));
-                      }).end_mutation();
+                      })
+                      // Folded into the partition tombstones, as above.
+                      .skip_token_range_tombstones()
+                      .end_mutation();
 
         _sr = { };
         _rts.clear();
@@ -220,10 +267,13 @@ public:
         : _schema(s), _rts(s), _consumer(c), _fragment_size(fragment_size), _current_rtc(position_in_partition::before_all_clustered_rows(), {}) { }
 
     future<stop_iteration> consume(partition_start&& ps) {
-        _key = std::move(ps.key().key());
         _fragmented = false;
         _dirty_size += sizeof(tombstone);
         _partition_tombstone = ps.partition_tombstone();
+        // A token range tombstone covering this partition acts as a partition
+        // tombstone.
+        _partition_tombstone.apply(_token_range_tombstones.search(ps.key().token()));
+        _key = std::move(ps.key().key());
         return make_ready_future<stop_iteration>(stop_iteration::no);
     }
 
@@ -249,6 +299,15 @@ public:
         }
         _current_rtc = std::move(rtc);
         return ret;
+    }
+
+    // A frozen mutation describes a single partition, so there is nowhere to
+    // put a tombstone which spans partitions. There is no need for one either:
+    // the output is per-partition, so the deletion is folded into the
+    // tombstone of every partition it covers, which is equivalent.
+    future<stop_iteration> consume(token_range_tombstone&& trt) {
+        _token_range_tombstones.apply(trt);
+        return make_ready_future<stop_iteration>(stop_iteration::no);
     }
 
     future<stop_iteration> consume(partition_end&&) {

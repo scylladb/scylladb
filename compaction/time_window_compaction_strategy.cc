@@ -240,7 +240,7 @@ time_window_compaction_strategy::get_reshaping_job(std::vector<sstables::shared_
     // Sort input sstables by first_key order
     // to allow efficient reshaping of disjoint sstables.
     std::sort(input.begin(), input.end(), [&schema] (const sstables::shared_sstable& a, const sstables::shared_sstable& b) {
-        return dht::ring_position(a->get_first_decorated_key()).less_compare(*schema, dht::ring_position(b->get_first_decorated_key()));
+        return a->get_first_ring_position().less_compare(*schema, b->get_first_ring_position());
     });
 
     for (auto& sst : input) {

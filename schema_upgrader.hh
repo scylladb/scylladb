@@ -94,6 +94,9 @@ public:
     mutation_fragment_v2 consume(range_tombstone_change&& rt) {
         return mutation_fragment_v2(*_new, std::move(*_permit), std::move(rt));
     }
+    mutation_fragment_v2 consume(token_range_tombstone&& trt) {
+        return mutation_fragment_v2(*_new, std::move(*_permit), std::move(trt));
+    }
     mutation_fragment_v2 consume(partition_start&& ph) {
         return mutation_fragment_v2(*_new, std::move(*_permit), std::move(ph));
     }

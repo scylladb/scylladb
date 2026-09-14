@@ -233,6 +233,18 @@ public:
         _rows_count += stats.rows_count;
     }
 
+    // Accounts for a tombstone which belongs to no partition, such as a token
+    // range tombstone. Its timestamp and deletion time count towards the
+    // sstable's the way a partition tombstone's do, so that the sstable's
+    // expiry and its estimate of droppable tombstones see it.
+    void update(const tombstone& t) {
+        column_stats stats;
+        stats.update(t);
+        _timestamp_tracker.update(stats.timestamp_tracker);
+        _local_deletion_time_tracker.update(stats.local_deletion_time_tracker);
+        merge_tombstone_histogram(stats.tombstone_histogram);
+    }
+
     void construct_compaction(compaction_metadata& m) {
         auto cardinality = _cardinality.get_bytes();
         m.cardinality.elements = utils::chunked_vector<uint8_t>(cardinality.get(), cardinality.get() + cardinality.size());

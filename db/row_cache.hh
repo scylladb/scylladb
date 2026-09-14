@@ -16,6 +16,7 @@
 #include "utils/phased_barrier.hh"
 #include "utils/histogram.hh"
 #include "mutation/partition_version.hh"
+#include "mutation/token_range_tombstone.hh"
 #include "utils/double-decker.hh"
 #include "utils/chunked_vector.hh"
 #include "db/cache_tracker.hh"
@@ -247,6 +248,22 @@ private:
     mutation_source _underlying;
     phase_type _underlying_phase = partition_snapshot::min_phase;
     mutation_source_opt _prev_snapshot;
+
+    // Token range tombstones of the underlying source.
+    //
+    // These are kept beside the cached partitions rather than folded into
+    // them. Folding would make each cached partition correct on its own, but
+    // then a tombstone written later would have to be pushed into every
+    // partition it covers, or the covered range invalidated. Keeping the list
+    // separate turns that into a merge of two lists, which is what update()
+    // does. The cost is that every reader emits the list and the consumer
+    // applies it per partition, which is what it does for the other sources
+    // anyway.
+    //
+    // Grown from two places: update(), from the memtable being merged in, and
+    // the readers which go to the underlying source, which pick up its
+    // prologue.
+    token_range_tombstone_list _token_range_tombstones;
 
     // Positions >= than this are using _prev_snapshot, the rest is using _underlying.
     std::optional<dht::ring_position_ext> _prev_snapshot_pos;

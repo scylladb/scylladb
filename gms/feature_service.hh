@@ -173,6 +173,12 @@ public:
     gms::feature rack_list_rf { *this, "RACK_LIST_RF"sv };
     gms::feature driver_service_level { *this, "DRIVER_SERVICE_LEVEL"sv };
     gms::feature strongly_consistent_tables { *this, "STRONGLY_CONSISTENT_TABLES"sv };
+    // Truncating a table writes a token range tombstone instead of discarding
+    // its sstables. Nothing may write one until every node understands them:
+    // an older node ignores the field carrying them in a frozen mutation, and
+    // ignores the Scylla.db component holding them in an sstable, so it would
+    // return the data they delete.
+    gms::feature token_range_tombstones { *this, "TOKEN_RANGE_TOMBSTONES"sv };
     gms::feature logstor { *this, "LOGSTOR"sv };
     gms::feature client_routes { *this, "CLIENT_ROUTES"sv };
     gms::feature removenode_with_left_token_ring { *this, "REMOVENODE_WITH_LEFT_TOKEN_RING"sv };

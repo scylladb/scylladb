@@ -94,6 +94,13 @@ void mutation_fragment::destroy_data() noexcept
     }
 }
 
+mutation_fragment_v2::mutation_fragment_v2(const schema& s, reader_permit permit, token_range_tombstone&& r)
+    : _data(std::make_unique<data>(std::move(permit), kind::token_range_tombstone))
+{
+    new (&_data->_token_range_tombstone) token_range_tombstone(std::move(r));
+    reset_memory(s);
+}
+
 mutation_fragment_v2::mutation_fragment_v2(const schema& s, reader_permit permit, static_row&& r)
     : _data(std::make_unique<data>(std::move(permit), kind::static_row))
 {
@@ -132,6 +139,9 @@ mutation_fragment_v2::mutation_fragment_v2(const schema& s, reader_permit permit
 void mutation_fragment_v2::destroy_data() noexcept
 {
     switch (_data->_kind) {
+    case kind::token_range_tombstone:
+        _data->_token_range_tombstone.~token_range_tombstone();
+        break;
     case kind::static_row:
         _data->_static_row.~static_row();
         break;

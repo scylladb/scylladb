@@ -14,6 +14,7 @@
 #include "idl/mutation.dist.impl.hh"
 #include "frozen_mutation.hh"
 #include <seastar/coroutine/maybe_yield.hh>
+#include "utils/on_internal_error.hh"
 
 using namespace db;
 
@@ -304,6 +305,9 @@ frozen_mutation_fragment_v2 freeze(const schema& s, const mutation_fragment_v2& 
                     .write_key(ps.key().key())
                     .write_partition_tombstone(ps.partition_tombstone())
                 .end_partition_start();
+        },
+        [&] (const token_range_tombstone& trt) {
+            return std::move(writer).write_fragment_token_range_tombstone(trt);
         },
         [&] (const partition_end& pe) {
             return std::move(writer).write_fragment_partition_end(pe);

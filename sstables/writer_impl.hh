@@ -14,6 +14,7 @@
 #include "mutation/mutation_fragment.hh"
 #include "metadata_collector.hh"
 #include "mutation/mutation_fragment_stream_validator.hh"
+#include "mutation/token_range_tombstone.hh"
 
 namespace sstables {
 
@@ -27,6 +28,10 @@ struct sstable_writer::writer_impl {
     column_stats _c_stats;
     mutation_fragment_stream_validating_filter _validator;
     sstable_enabled_features _features = sstable_enabled_features::all();
+    // Token range tombstones from the head of the stream. They are not part of
+    // any partition, so they are collected here rather than handed to the
+    // format-specific writer, and stored in the Scylla.db component.
+    token_range_tombstone_list _token_range_tombstones;
 
     writer_impl(sstable& sst, const schema& schema, const sstable_writer_config& cfg)
         : _sst(sst)

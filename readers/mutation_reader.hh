@@ -277,6 +277,9 @@ public:
             future<stop_iteration> consume(range_tombstone_change&& rt) {
                 return handle_result(_consumer.consume(std::move(rt)));
             }
+            future<stop_iteration> consume(token_range_tombstone&& trt) {
+                return handle_result(_consumer.consume(std::move(trt)));
+            }
             future<stop_iteration> consume(partition_start&& ps) {
                 _decorated_key.emplace(std::move(ps.key()));
                 _consumer.consume_new_partition(*_decorated_key);

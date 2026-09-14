@@ -14,8 +14,16 @@ import pytest
 
 logger = logging.getLogger(__name__)
 
+# Truncating by writing a token range tombstone leaves none of what these tests
+# look at: no truncation record, no replay position saved, no sstables
+# discarded under disabled compaction. The old path is still taken by a cluster
+# which has not enabled the feature, so these keep testing it by suppressing
+# the feature rather than by being rewritten.
+LEGACY_TRUNCATE_CFG = {'error_injections_at_startup': [
+        {'name': 'suppress_features', 'value': 'TOKEN_RANGE_TOMBSTONES'}]}
+
 async def test_truncation_on_drop(manager: ScyllaClusterManager):
-    await manager.server_add()
+    await manager.server_add(config=LEGACY_TRUNCATE_CFG)
     cql = manager.get_cql()
 
     # Create a keyspace
@@ -39,7 +47,7 @@ async def test_truncation_on_drop(manager: ScyllaClusterManager):
         assert row[0].count == 0
 
 async def test_truncation_records_pruned_on_dirty_restart(manager: ScyllaClusterManager):
-    server = await manager.server_add()
+    server = await manager.server_add(config=LEGACY_TRUNCATE_CFG)
     cql = manager.get_cql()
 
     async def restart():

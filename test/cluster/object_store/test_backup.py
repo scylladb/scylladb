@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from functools import partial
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.internal_types import ServerInfo
-from test.cluster.util import wait_for_cql_and_get_hosts, get_replication, new_test_keyspace, new_test_table
+from test.cluster.util import wait_for_cql_and_get_hosts, get_replication, new_test_keyspace, new_test_table, table_dir_name
 from test.pylib.rest_client import read_barrier, HTTPError
 from test.pylib.util import unique_name, wait_all, wait_for_view
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas, get_tablet_count
@@ -290,14 +290,11 @@ async def test_simple_backup_and_restore(manager: ScyllaClusterManager, object_s
 
         snap_name, toc_names = await take_snapshot_on_one_server(ks, server, manager, logger)
 
-        cf_dir = os.listdir(f'{workdir}/data/{ks}')[0]
+        cf_dir = await table_dir_name(cql, ks, cf)
 
         # A backup only ever captures the base table's sstables -- a view has no sstables
         # of its own worth backing up, since it can always be rebuilt from the base table.
         # So restoring the base table alone must eventually repopulate the view too.
-        # The view is created only after the snapshot/cf_dir are captured above, since
-        # otherwise it would create a second column-family directory under data/{ks} and
-        # make the os.listdir(...)[0] picks above racy/ambiguous.
         view = 'test_cf_by_value'
         if with_view:
             await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.{view} AS SELECT * FROM {ks}.{cf} "
@@ -335,8 +332,18 @@ async def test_simple_backup_and_restore(manager: ScyllaClusterManager, object_s
         status = await manager.api.wait_task(server.ip_addr, tid)
         assert (status is not None) and (status['state'] == 'done')
 
+        # Recreate the table rather than truncating it: a truncate deletes
+        # everything written before it, including the rows in the backup, so
+        # the restore below would bring back nothing.
         print('Drop the table data and validate it\'s gone')
-        cql.execute(f"TRUNCATE TABLE {ks}.{cf};")
+        if with_view:
+            await cql.run_async(f"DROP MATERIALIZED VIEW {ks}.{view}")
+        await cql.run_async(f"DROP TABLE {ks}.{cf}")
+        await cql.run_async(f"CREATE TABLE {ks}.{cf} ( name text primary key, value text );")
+        cf_dir = await table_dir_name(cql, ks, cf)
+        if with_view:
+            await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.{view} AS SELECT * FROM {ks}.{cf} "
+                            "WHERE value IS NOT NULL AND name IS NOT NULL PRIMARY KEY (value, name)")
         files = list_sstables()
         assert len(files) == 0
         res = cql.execute(f"SELECT * FROM {ks}.{cf};")
@@ -359,6 +366,13 @@ async def test_simple_backup_and_restore(manager: ScyllaClusterManager, object_s
             assert status['progress_completed'] > 0
 
         print('Check that sstables came back')
+        if not do_abort:
+            # A restore into a table with a view lands in the staging directory
+            # first, and the sstables only appear in the table's own directory
+            # once the view has been built from them.
+            async def sstables_came_back():
+                return True if list_sstables() else None
+            await wait_for(sstables_came_back, time.time() + 60)
         files = list_sstables()
 
         sstable_names = [f'{entry.name}' for entry in files if entry.name.endswith('.db')]
@@ -441,9 +455,12 @@ async def do_abort_restore(manager: ScyllaClusterManager, object_storage):
             assert backup_status is not None and backup_status.get('state') == 'done', \
                 f"Backup task failed on server {server.server_id}"
 
-        # Truncate data and start restore
+        # Recreate the table rather than truncating it: a truncate deletes
+        # everything written before it, including the backed up rows, so the
+        # restore below would bring back nothing.
         logger.info("Dropping table data...")
-        await cql.run_async(f"TRUNCATE TABLE {keyspace}.{table};")
+        await cql.run_async(f"DROP TABLE {keyspace}.{table};")
+        await cql.run_async(create_table_query)
         logger.info("Initiating restore operations...")
 
         injection = "stream_mutation_fragments" # "block_load_and_stream"
@@ -789,7 +806,11 @@ async def do_test_streaming_scopes(build_mode: str, manager: ScyllaClusterManage
                 if restored_min_tablet_count == original_min_tablet_count:
                     await check_streaming_directions(logger, servers, topology, host_ids, scope, pro, log_marks)
 
-                await cql.run_async(f"TRUNCATE {ks}.test")
+                # Not TRUNCATE: it deletes everything written before it, so the
+                # next iteration's restore of the same backup would bring back
+                # nothing. Recreating the table clears it without that history.
+                await cql.run_async(f"DROP TABLE {ks}.test")
+                await cql.run_async(f"CREATE TABLE {ks}.test ( pk text primary key, value int ) WITH tablets = {{'min_tablet_count': {restored_min_tablet_count}}};")
 
             await cql.run_async(f"DROP TABLE {ks}.test")
 

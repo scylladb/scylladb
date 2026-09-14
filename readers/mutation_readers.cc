@@ -17,6 +17,7 @@
 #include "readers/combined.hh"
 #include "readers/delegating.hh"
 #include "readers/delegating_impl.hh"
+#include "readers/token_range_tombstone_prepending.hh"
 #include "readers/empty.hh"
 #include "readers/mutation_reader.hh"
 #include "readers/forwardable.hh"
@@ -34,6 +35,91 @@
 #include <stack>
 
 extern logging::logger mrlog;
+
+namespace {
+
+// See make_token_range_tombstone_prepending_reader().
+class token_range_tombstone_prepending_reader : public delegating_reader {
+    token_range_tombstone_list _tombstones;
+    bool _emitted = false;
+public:
+    token_range_tombstone_prepending_reader(mutation_reader&& r, token_range_tombstone_list tombstones)
+        : delegating_reader(std::move(r))
+        , _tombstones(std::move(tombstones))
+    { }
+    virtual future<> fill_buffer() override {
+        if (!_emitted) {
+            _emitted = true;
+            for (const auto& trt : _tombstones) {
+                push_mutation_fragment(*_schema, _permit, token_range_tombstone(trt));
+            }
+        }
+        return delegating_reader::fill_buffer();
+    }
+};
+
+} // anonymous namespace
+
+namespace {
+
+// See make_token_range_tombstone_absorbing_reader().
+class token_range_tombstone_absorbing_reader : public mutation_reader::impl {
+    mutation_reader _underlying;
+    token_range_tombstone_list& _into;
+public:
+    token_range_tombstone_absorbing_reader(mutation_reader&& r, token_range_tombstone_list& into)
+        : impl(r.schema(), r.permit())
+        , _underlying(std::move(r))
+        , _into(into)
+    { }
+    virtual future<> fill_buffer() override {
+        while (!is_buffer_full() && !is_end_of_stream()) {
+            co_await _underlying.fill_buffer();
+            while (!_underlying.is_buffer_empty()) {
+                auto mf = _underlying.pop_mutation_fragment();
+                if (mf.is_token_range_tombstone()) {
+                    _into.apply(mf.as_token_range_tombstone());
+                    continue;
+                }
+                push_mutation_fragment(std::move(mf));
+            }
+            _end_of_stream = _underlying.is_end_of_stream();
+        }
+    }
+    virtual future<> next_partition() override {
+        clear_buffer_to_next_partition();
+        if (is_buffer_empty()) {
+            _end_of_stream = false;
+            co_await _underlying.next_partition();
+        }
+    }
+    virtual future<> fast_forward_to(const dht::partition_range& pr) override {
+        clear_buffer();
+        _end_of_stream = false;
+        return _underlying.fast_forward_to(pr);
+    }
+    virtual future<> fast_forward_to(position_range pr) override {
+        clear_buffer();
+        _end_of_stream = false;
+        return _underlying.fast_forward_to(std::move(pr));
+    }
+    virtual future<> close() noexcept override {
+        return _underlying.close();
+    }
+};
+
+} // anonymous namespace
+
+mutation_reader make_token_range_tombstone_absorbing_reader(mutation_reader r, token_range_tombstone_list& into) {
+    return make_mutation_reader<token_range_tombstone_absorbing_reader>(std::move(r), into);
+}
+
+mutation_reader make_token_range_tombstone_prepending_reader(mutation_reader r, token_range_tombstone_list tombstones) {
+    if (tombstones.empty()) {
+        return r;
+    }
+    return make_mutation_reader<token_range_tombstone_prepending_reader>(std::move(r), std::move(tombstones));
+}
 
 mutation_reader make_delegating_reader(mutation_reader& r) {
     return make_mutation_reader<delegating_reader>(r);
@@ -58,6 +144,7 @@ public:
 
     void apply(mutation_fragment_v2 mf) {
         switch (mf.mutation_fragment_kind()) {
+            case mutation_fragment_v2::kind::token_range_tombstone: // fall-through
             case mutation_fragment_v2::kind::partition_start:
                 // can't happen
                 SCYLLA_ASSERT(false);
@@ -343,6 +430,9 @@ mutation_reader make_reversing_reader(mutation_reader original, query::max_resul
                 co_return;
             }
             mutation_fragment_v2_opt ps, sr, pe;
+            // Token range tombstones are not part of any partition, so they are
+            // not reversed; they stay at the head of the stream.
+            std::vector<mutation_fragment_v2> trts;
             const partition_key* pk = nullptr;
             bool have_partition = false;
 
@@ -352,6 +442,9 @@ mutation_reader make_reversing_reader(mutation_reader original, query::max_resul
                     break;
                 }
                 switch (mf_opt->mutation_fragment_kind()) {
+                    case mutation_fragment_v2::kind::token_range_tombstone:
+                        trts.push_back(std::move(*mf_opt));
+                        break;
                     case mutation_fragment_v2::kind::partition_start:
                         ps = std::move(mf_opt);
                         pk = &ps->as_partition_start().key().key();
@@ -382,6 +475,12 @@ mutation_reader make_reversing_reader(mutation_reader original, query::max_resul
                 }
                 push_front(std::move(*ps));
                 push_back(std::move(*pe));
+            }
+            // Pushed back to front so that they end up in their original order,
+            // ahead of the partition.
+            while (!trts.empty()) {
+                push_front(std::move(trts.back()));
+                trts.pop_back();
             }
             _end_of_stream = _source.is_end_of_stream();
         }
@@ -821,6 +920,12 @@ public:
     stop_iteration consume(range_tombstone_change&& rtc) {
         maybe_emit_partition_start();
         push_mutation_fragment(*_schema, _permit, std::move(rtc));
+        return stop_iteration(is_buffer_full());
+    }
+    stop_iteration consume(token_range_tombstone&& trt) {
+        // A mutation describes a single partition, so it never produces one of
+        // these. Emitted ahead of the partition, should that ever change.
+        push_mutation_fragment(*_schema, _permit, std::move(trt));
         return stop_iteration(is_buffer_full());
     }
     stop_iteration consume_end_of_partition() {
@@ -1457,6 +1562,12 @@ public: // Needed for CompactedFragmentsConsumer concept
         push_mutation_fragment(mutation_fragment_v2(*_schema, _permit, std::move(rtc)));
         return stop_iteration::no;
     }
+    stop_iteration consume(token_range_tombstone&& trt) {
+        // Kept in the output: it also deletes partitions which are not visible
+        // to this reader.
+        push_mutation_fragment(mutation_fragment_v2(*_schema, _permit, std::move(trt)));
+        return stop_iteration::no;
+    }
     stop_iteration consume_end_of_partition() {
         maybe_push_partition_start();
         push_mutation_fragment(mutation_fragment_v2(*_schema, _permit, partition_end{}));
@@ -1502,6 +1613,9 @@ public:
                     auto mf = _reader.pop_mutation_fragment();
                     _last_uncompacted_kind = mf.mutation_fragment_kind();
                     switch (mf.mutation_fragment_kind()) {
+                    case mutation_fragment_v2::kind::token_range_tombstone:
+                        _compactor.consume(std::move(mf).as_token_range_tombstone(), *this, _gc_consumer);
+                        break;
                     case mutation_fragment_v2::kind::static_row:
                         _compactor.consume(std::move(mf).as_static_row(), *this, _gc_consumer);
                         break;

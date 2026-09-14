@@ -9,6 +9,7 @@
 #pragma once
 
 #include "readers/mutation_reader_fwd.hh"
+#include "mutation/token_range_tombstone.hh"
 #include "readers/mutation_reader.hh"
 #include "sstables/progress_monitor.hh"
 #include "sstables/types_fwd.hh"
@@ -131,6 +132,14 @@ public:
 
 class sstable_set : public enable_lw_shared_from_this<sstable_set> {
     std::unique_ptr<sstable_set_impl> _impl;
+    // The union of the token range tombstones of every sstable in the set.
+    //
+    // Every scan of the set needs this, because a token range tombstone
+    // deletes whole partitions and has to be known before the first partition
+    // is emitted. Computing it walks all sstables, so it is cached and
+    // recomputed only when the set changes: sets are rebuilt on flush and
+    // compaction, orders of magnitude less often than they are read.
+    mutable std::optional<token_range_tombstone_list> _token_range_tombstones;
 public:
     ~sstable_set();
     sstable_set(std::unique_ptr<sstable_set_impl> impl);
@@ -169,6 +178,10 @@ public:
     bool insert(shared_sstable sst);
     // Return true iff sst was erase
     bool erase(shared_sstable sst);
+    // The union of the token range tombstones of every sstable in the set.
+    // Needs no I/O: they are held in memory with the rest of the sstable's
+    // Scylla metadata.
+    const token_range_tombstone_list& token_range_tombstones() const;
     size_t size() const noexcept;
     uint64_t bytes_on_disk() const noexcept;
     file_size_stats get_file_size_stats() const noexcept;

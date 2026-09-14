@@ -53,6 +53,7 @@ class sstables_task_executor;
 class major_compaction_task_executor;
 class custom_compaction_task_executor;
 class regular_compaction_task_executor;
+class token_range_tombstone_compaction_task_executor;
 class offstrategy_compaction_task_executor;
 class rewrite_sstables_compaction_task_executor;
 class rewrite_sstables_component_compaction_task_executor;
@@ -334,6 +335,13 @@ public:
 
     // Submit a table to be compacted.
     void submit(compaction::compaction_group_view& t);
+    // Compacts, right away, everything a token range tombstone in the group
+    // deletes, so that the space it frees is reclaimed without waiting for the
+    // compaction strategy to get around to it. An sstable deleted in its
+    // entirety is dropped without being read; a regular compaction holding any
+    // of the inputs is stopped to make way. A no-op when there is nothing such
+    // a tombstone deletes.
+    void submit_token_range_tombstone_compaction(compaction::compaction_group_view& t);
 
     // Can regular compaction be performed in the given table
     bool can_perform_regular_compaction(compaction::compaction_group_view& t);
@@ -513,6 +521,7 @@ public:
     friend class compaction::split_compaction_task_executor;
     friend class compaction::custom_compaction_task_executor;
     friend class compaction::regular_compaction_task_executor;
+    friend class compaction::token_range_tombstone_compaction_task_executor;
     friend class compaction::offstrategy_compaction_task_executor;
     friend class compaction::rewrite_sstables_compaction_task_executor;
     friend class compaction::rewrite_sstables_component_compaction_task_executor;
@@ -555,6 +564,7 @@ private:
     sstables::run_id _output_run_identifier;
     sstring _description;
     compaction_manager::compaction_stats_opt _stats = std::nullopt;
+    const std::unordered_set<sstables::shared_sstable>* _compacting_registration = nullptr;
 
 public:
     explicit compaction_task_executor(compaction_manager& mgr, throw_if_stopping do_throw_if_stopping, ::compaction::compaction_group_view* t, compaction_type type, sstring desc);
@@ -624,6 +634,23 @@ public:
         return _state == state::active;
     }
 
+    // The sstables the running compaction holds: its inputs, less those an
+    // incremental compaction has already released as exhausted, plus its
+    // outputs so far. This is the set the task's compacting_sstable_registration
+    // maintains, published for as long as the registration lives; no reference
+    // is held here, so releasing an exhausted input still closes it.
+    const std::unordered_set<sstables::shared_sstable>& input_sstables() const noexcept {
+        static const std::unordered_set<sstables::shared_sstable> none;
+        return _compacting_registration ? *_compacting_registration : none;
+    }
+    void publish_compacting(const std::unordered_set<sstables::shared_sstable>* compacting) noexcept {
+        _compacting_registration = compacting;
+    }
+    // Whether a token range tombstone compaction may stop this one to take its
+    // inputs. Regular compactions make way; maintenance operations do not.
+    virtual bool yields_to_token_range_tombstone_compaction() const noexcept {
+        return false;
+    }
     const ::compaction::compaction_data& compaction_data() const noexcept {
         return _compaction_data;
     }

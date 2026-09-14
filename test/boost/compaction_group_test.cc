@@ -150,7 +150,7 @@ SEASTAR_TEST_CASE(basic_compaction_group_splitting_test) {
             return dht::compaction_group_of(1, t);
         };
         auto sstable_needs_split = [&] (const sstables::shared_sstable& sst) {
-            return classifier(sst->get_first_decorated_key().token()) != classifier(sst->get_last_decorated_key().token());
+            return classifier(sst->get_first_ring_position().token()) != classifier(sst->get_last_ring_position().token());
         };
 
         auto run_test = [&] (std::vector<sstables::shared_sstable> ssts, size_t expected_output, noncopyable_function<void(const sstables::shared_sstable&)> validate) {
@@ -180,7 +180,7 @@ SEASTAR_TEST_CASE(basic_compaction_group_splitting_test) {
             auto input = sstable_that_needs_split(s, sst_factory);
             std::unordered_set<mutation_writer::token_group_id> expected_ids { 0, 1 };
             run_test({ input }, 2, [&] (const sstables::shared_sstable& sst) {
-                BOOST_REQUIRE(expected_ids.erase(classifier(sst->get_first_decorated_key().token())) == 1);
+                BOOST_REQUIRE(expected_ids.erase(classifier(sst->get_first_ring_position().token())) == 1);
             });
             BOOST_REQUIRE(expected_ids.empty());
         }
@@ -189,7 +189,7 @@ SEASTAR_TEST_CASE(basic_compaction_group_splitting_test) {
             auto input = generate_sstable(s, sst_factory, [&] (dht::token t) { return classifier(t) == 0; });
             run_test({ input }, 1, [&] (const sstables::shared_sstable& sst) {
                 BOOST_REQUIRE(sst->generation() == input->generation());
-                BOOST_REQUIRE_EQUAL(0, classifier(sst->get_first_decorated_key().token()));
+                BOOST_REQUIRE_EQUAL(0, classifier(sst->get_first_ring_position().token()));
             });
         }
 
@@ -248,7 +248,7 @@ SEASTAR_TEST_CASE(compactions_dont_cross_group_boundary_test) {
             return replica::repair_sstable_classification::repaired;
         };
         auto repair_sstable_classifier = [&] (const sstables::shared_sstable& sst, int64_t sstables_repaired_at) -> replica::repair_sstable_classification {
-            return repair_token_classifier(sst->get_first_decorated_key().token());
+            return repair_token_classifier(sst->get_first_ring_position().token());
         };
         t.set_repair_sstable_classifier(repair_sstable_classifier);
 

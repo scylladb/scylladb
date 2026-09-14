@@ -149,6 +149,7 @@ public:
     future<> consume(static_row&& sr);
     future<> consume(clustering_row&& cr);
     future<> consume(range_tombstone_change&& rt);
+    future<> consume(token_range_tombstone&& trt);
     future<> consume(partition_end&& pe);
 
     future<> consume_end_of_stream() {
@@ -427,6 +428,14 @@ future<> timestamp_based_splitting_mutation_writer::consume(clustering_row&& cr)
 
     return parallel_for_each(split_clustering_row(std::move(cr)), [this] (std::pair<bucket_id, clustering_row>& cr_piece) {
         return write_to_bucket(cr_piece.first, mutation_fragment_v2(*_schema, _permit, std::move(cr_piece.second)));
+    });
+}
+
+future<> timestamp_based_splitting_mutation_writer::consume(token_range_tombstone&& trt) {
+    // Not attributable to a single timestamp bucket: it applies to whole
+    // partitions, so every bucket has to see it.
+    return parallel_for_each(_buckets, [this, trt = std::move(trt)] (auto& b) {
+        return b.second.consume(mutation_fragment_v2(*_schema, _permit, token_range_tombstone(trt)));
     });
 }
 

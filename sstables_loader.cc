@@ -437,7 +437,7 @@ future<std::vector<tablet_sstable_collection>> tablet_sstable_streamer::get_ssta
     auto reversed_sstables = sstables | std::views::reverse;
 
     for (auto& [tablet_range, sstables_fully_contained, sstables_partially_contained] : tablets_sstables) {
-        auto [fully, partially] = co_await get_sstables_for_tablet(reversed_sstables, tablet_range, [](const auto& sst) { return sst->get_first_decorated_key().token(); }, [](const auto& sst) { return sst->get_last_decorated_key().token(); });
+        auto [fully, partially] = co_await get_sstables_for_tablet(reversed_sstables, tablet_range, [](const auto& sst) { return sst->get_first_ring_position().token(); }, [](const auto& sst) { return sst->get_last_ring_position().token(); });
         sstables_fully_contained = std::move(fully);
         sstables_partially_contained = std::move(partially);
     }
@@ -510,6 +510,16 @@ future<> sstable_streamer::stream_sstable_mutations(streaming::plan_id ops_uuid,
     for (auto& sst : sstables) {
         estimated_partitions += co_await sst->estimated_keys_for_range(token_range);
         sst_set->insert(sst);
+    }
+
+    // Streaming these would mean carrying them to the targets alongside the
+    // fragments, which the fragment stream this uses cannot express. Dropping
+    // them would send the data they delete to the targets and resurrect it, so
+    // refuse instead of doing that quietly.
+    if (auto trts = sst_set->token_range_tombstones(); !trts.empty()) {
+        throw std::runtime_error(fmt::format(
+                "load_and_stream: sstables of {}.{} carry token range tombstones ({}), which this path cannot stream",
+                s->ks_name(), s->cf_name(), trts));
     }
 
     auto start_time = std::chrono::steady_clock::now();
@@ -1116,7 +1126,7 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
                                                             datacenter,
                                                             rack,
                                                             *attached_sst->sstable_identifier(),
-                                                            attached_sst->get_first_decorated_key().token(),
+                                                            attached_sst->get_first_ring_position().token(),
                                                             db::is_downloaded::yes);
             });
         });

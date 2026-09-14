@@ -66,6 +66,9 @@ public:
     stop_iteration consume(static_row&& sr, tombstone, bool);
     stop_iteration consume(clustering_row&& cr, row_tombstone, bool is_live);
     stop_iteration consume(range_tombstone_change&&);
+    // The compactor folds a covering token range tombstone into each
+    // partition's tombstone, so nothing is left to do here.
+    stop_iteration consume(token_range_tombstone&&) { return stop_iteration::no; }
     stop_iteration consume_end_of_partition();
 };
 

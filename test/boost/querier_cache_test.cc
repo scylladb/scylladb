@@ -56,6 +56,9 @@ public:
         _ck = cr.key();
         return stop_iteration::no;
     }
+    stop_iteration consume(token_range_tombstone&&) {
+        return stop_iteration::no;
+    }
     stop_iteration consume(range_tombstone_change&& rtc) {
         return stop_iteration::no;
     }

@@ -39,6 +39,7 @@
 #include "sstables/types.hh"
 #include "sstables/checksummed_data_source.hh"
 #include "mutation/mutation_fragment_stream_validator.hh"
+#include "mutation/token_range_tombstone.hh"
 #include "readers/mutation_reader_fwd.hh"
 #include "readers/mutation_reader.hh"
 #include "tracing/trace_state.hh"
@@ -435,6 +436,22 @@ public:
     const dht::decorated_key& get_first_decorated_key() const;
     const dht::decorated_key& get_last_decorated_key() const;
 
+    // The first and last position on the ring this sstable occupies.
+    //
+    // Most callers want to know which part of the ring an sstable covers, not
+    // which partition key sits at its edge, and a ring position can express
+    // that with a bare token. Prefer these over the decorated key accessors
+    // above, which are for the two callers which need the key itself and which
+    // have nothing to return for an sstable storing no partitions.
+    dht::ring_position get_first_ring_position() const;
+    dht::ring_position get_last_ring_position() const;
+    // Whether the accessors above have anything to return: an sstable which
+    // stores no partitions and deletes no token range covers nothing.
+    bool has_ring_extent() const;
+    // Whether the sstable stores any partition at all. One which only deletes a
+    // token range does not, and then it has no first or last key.
+    bool has_partitions() const noexcept { return _first.has_value(); }
+
     // SSTable comparator using the first key (decorated key).
     std::strong_ordering compare_by_first_key(const sstable& other) const;
 
@@ -607,6 +624,9 @@ private:
     generation_type _generation{0};
     sstable_state _state;
     sstable_enabled_features _features = {};
+    // Token range tombstones carried by the Scylla.db component. They delete
+    // whole partitions, including partitions which live in other sstables.
+    token_range_tombstone_list _token_range_tombstones;
 
     std::unique_ptr<storage> _storage;
 
@@ -749,7 +769,8 @@ private:
                                run_identifier identifier,
                                std::optional<scylla_metadata::large_data_stats> ld_stats,
                                std::optional<scylla_metadata::ext_timestamp_stats> ts_stats,
-                               std::optional<scylla_metadata::large_data_records> ld_records = std::nullopt);
+                               std::optional<scylla_metadata::large_data_records> ld_records = std::nullopt,
+                               token_range_tombstone_list token_range_tombstones = {});
     sstable_id ensure_sstable_identifier();
     // Verifies that the sstable identifier persisted in the Scylla metadata
     // agrees with the one this sstable is known by, when both are known.
@@ -958,6 +979,12 @@ public:
 
     bool has_shadowable_tombstones() const {
         return has_feature(sstable_feature::ShadowableTombstones);
+    }
+
+    // Token range tombstones stored in this sstable. They delete every
+    // partition whose token they cover, in this sstable and in any other.
+    const token_range_tombstone_list& token_range_tombstones() const {
+        return _token_range_tombstones;
     }
 
     sstable_enabled_features features() const {

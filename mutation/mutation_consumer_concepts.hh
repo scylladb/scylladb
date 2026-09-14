@@ -60,12 +60,14 @@ concept MutationConsumer =
 
 template<typename T, typename ReturnType>
 concept FlattenedConsumerReturningV2 =
-    requires(T obj, const dht::decorated_key& dk, tombstone tomb, static_row sr, clustering_row cr, range_tombstone_change rt) {
+    requires(T obj, const dht::decorated_key& dk, tombstone tomb, static_row sr, clustering_row cr, range_tombstone_change rt,
+            token_range_tombstone trt) {
         { obj.consume_new_partition(dk) };
         { obj.consume(tomb) };
         { obj.consume(std::move(sr)) } -> std::same_as<ReturnType>;
         { obj.consume(std::move(cr)) } -> std::same_as<ReturnType>;
         { obj.consume(std::move(rt)) } -> std::same_as<ReturnType>;
+        { obj.consume(std::move(trt)) } -> std::same_as<ReturnType>;
         { obj.consume_end_of_partition() };
         { obj.consume_end_of_stream() };
     };

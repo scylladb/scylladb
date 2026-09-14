@@ -47,6 +47,11 @@ concept FragmentProducer = requires(Producer p, dht::partition_range part_range,
     { p.next_partition() } -> std::same_as<future<>>;
     { p.fast_forward_to(part_range) } -> std::same_as<future<>>;
     { p.fast_forward_to(pos_range) } -> std::same_as<future<>>;
+
+    // Token range tombstones of the merged streams, to be emitted ahead of all
+    // partitions. Complete once the producer has produced its first batch.
+    { p.token_range_tombstones() } -> std::same_as<const token_range_tombstone_list&>;
+    { p.mark_token_range_tombstones_emitted() } -> std::same_as<void>;
 };
 
 /**
@@ -92,6 +97,14 @@ public:
         , _permit(std::move(permit))
         , _producer(std::move(producer))
         , _statistics(statistics) {
+    }
+
+    const token_range_tombstone_list& token_range_tombstones() const {
+        return _producer.token_range_tombstones();
+    }
+
+    void mark_token_range_tombstones_emitted() {
+        _producer.mark_token_range_tombstones_emitted();
     }
 
     future<mutation_fragment_v2_opt> operator()() {
@@ -234,7 +247,16 @@ private:
     const schema_ptr _schema;
     streamed_mutation::forwarding _fwd_sm;
     mutation_reader::forwarding _fwd_mr;
+    // The union of the token range tombstones of all readers. They precede all
+    // partitions in the stream and take no part in the positional merge, so
+    // they are absorbed as they are seen and emitted once, ahead of everything
+    // else. Once emitted no reader may contribute a new one; see
+    // reader_selector::token_range_tombstones().
+    token_range_tombstone_list _token_range_tombstones;
+    bool _token_range_tombstones_emitted = false;
 private:
+    void absorb_token_range_tombstone(token_range_tombstone&& trt);
+    future<mutation_fragment_v2_opt> read_skipping_prologue(reader_iterator reader);
     future<mutation_fragment_batch_opt> maybe_produce_batch();
     void maybe_add_readers_at_partition_boundary();
     void maybe_add_readers(const std::optional<dht::ring_position_view>& pos);
@@ -254,6 +276,8 @@ public:
     // Produces the next batch of mutation-fragments of the same
     // position.
     future<mutation_fragment_batch> operator()();
+    const token_range_tombstone_list& token_range_tombstones() const { return _token_range_tombstones; }
+    void mark_token_range_tombstones_emitted() { _token_range_tombstones_emitted = true; }
     future<> next_partition();
     future<> fast_forward_to(const dht::partition_range& pr);
     future<> fast_forward_to(position_range pr);
@@ -272,6 +296,7 @@ template <FragmentProducer Producer>
 class merging_reader : public mutation_reader::impl {
     mutation_fragment_merger<Producer> _merger;
     streamed_mutation::forwarding _fwd_sm;
+    bool _prologue_emitted = false;
 public:
     merging_reader(schema_ptr schema,
             reader_permit permit,
@@ -389,9 +414,43 @@ future<> mutation_reader_merger::prepare_next() {
     });
 }
 
+void mutation_reader_merger::absorb_token_range_tombstone(token_range_tombstone&& trt) {
+    if (_token_range_tombstones_emitted) {
+        // Too late: the partitions this would delete may already be downstream.
+        auto before = _token_range_tombstones;
+        _token_range_tombstones.apply(trt);
+        if (!_token_range_tombstones.equal(before)) {
+            on_internal_error(mrlog, format("combining reader: a reader contributed {} after the token range"
+                    " tombstone prologue was emitted; a selector which creates readers lazily has to declare"
+                    " them in reader_selector::token_range_tombstones()", trt));
+        }
+        return;
+    }
+    _token_range_tombstones.apply(trt);
+}
+
+// Token range tombstones are not part of any partition and have no position to
+// merge on, so they never reach the heaps: they are absorbed here and the union
+// is emitted ahead of all partitions.
+//
+// Deliberately not a coroutine, and neither is its caller: the read path takes
+// care that a failing read -- a timeout, say -- propagates as an exceptional
+// future rather than being thrown and caught at every hop, and a co_await
+// would throw. See replica_read_timeout_no_exception. The recursion is bounded
+// by the length of the prologue, which is a handful of fragments at most.
+future<mutation_fragment_v2_opt> mutation_reader_merger::read_skipping_prologue(reader_iterator reader) {
+    return (*reader)().then([this, reader] (mutation_fragment_v2_opt mfo) {
+        if (!mfo || !mfo->is_token_range_tombstone()) {
+            return make_ready_future<mutation_fragment_v2_opt>(std::move(mfo));
+        }
+        absorb_token_range_tombstone(std::move(*mfo).as_token_range_tombstone());
+        return read_skipping_prologue(reader);
+    });
+}
+
 future<mutation_reader_merger::needs_merge> mutation_reader_merger::prepare_one(
         reader_and_last_fragment_kind rk, reader_galloping reader_galloping) {
-    return (*rk.reader)().then([this, rk, reader_galloping] (mutation_fragment_v2_opt mfo) {
+    return read_skipping_prologue(rk.reader).then([this, rk, reader_galloping] (mutation_fragment_v2_opt mfo) {
         if (mfo) {
             if (mfo->is_partition_start()) {
                 _reader_heap.emplace_back(rk.reader, std::move(*mfo));
@@ -479,7 +538,12 @@ mutation_reader_merger::mutation_reader_merger(schema_ptr schema,
     : _selector(std::move(selector))
     , _schema(std::move(schema))
     , _fwd_sm(fwd_sm)
-    , _fwd_mr(fwd_mr) {
+    , _fwd_mr(fwd_mr)
+    // A selector which creates readers lazily has to declare its token range
+    // tombstones up front, before the first partition is emitted. One which
+    // hands over all of its readers at once declares nothing and the merger
+    // picks them up from the readers as it reads them.
+    , _token_range_tombstones(_selector->token_range_tombstones()) {
     maybe_add_readers(std::nullopt);
 }
 
@@ -636,6 +700,16 @@ template <FragmentProducer P>
 future<> merging_reader<P>::fill_buffer() {
     return repeat([this] {
         return _merger().then([this] (mutation_fragment_v2_opt mfo) {
+            if (!_prologue_emitted) {
+                // Every reader which can contribute a partition has been read
+                // at least once by the time the first fragment comes out, so
+                // the union is complete. Emit it ahead of all partitions.
+                _prologue_emitted = true;
+                for (const auto& trt : _merger.token_range_tombstones()) {
+                    push_mutation_fragment(*_schema, _permit, token_range_tombstone(trt));
+                }
+                _merger.mark_token_range_tombstones_emitted();
+            }
             if (!mfo) {
                 _end_of_stream = true;
                 return stop_iteration::yes;
@@ -895,6 +969,15 @@ class clustering_order_reader_merger {
                 return make_ready_future<>();
             }
 
+            if (mf->is_token_range_tombstone()) {
+                // A token range tombstone deletes whole partitions, so it has
+                // the same problem as a partition tombstone below.
+                on_internal_error(mrlog, format(
+                        "clustering_order_reader_merger: {} encountered."
+                        " This reader merger cannot be used for readers that return token range tombstones"
+                        " or it would give incorrect results.", mf->as_token_range_tombstone()));
+            }
+
             if (mf->is_partition_start()) {
                 // We assume there are no partition tombstones.
                 // This should have been checked before opening the reader.
@@ -1008,6 +1091,15 @@ class clustering_order_reader_merger {
     }
 
 public:
+    // This merger refuses readers which carry partition-level deletions, so it
+    // never has any of these; see peek_reader().
+    const token_range_tombstone_list& token_range_tombstones() const {
+        static const token_range_tombstone_list empty;
+        return empty;
+    }
+
+    void mark_token_range_tombstones_emitted() { }
+
     clustering_order_reader_merger(
             schema_ptr schema, reader_permit permit,
             streamed_mutation::forwarding fwd_sm,

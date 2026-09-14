@@ -450,7 +450,11 @@ async def test_leader_change_while_building(manager: ScyllaClusterManager):
         await wait_for_view(cql, 'mv_cf_view1', node_count)
         await check_view_contents(cql, ks, "tab", "mv_cf_view1")
 
-@pytest.mark.xfail
+# Truncating a table while a view is being built from it used to leave the view
+# holding rows whose base rows were gone: the build read sstables which the
+# truncate then discarded, and nothing told the view about it. A truncate which
+# writes a token range tombstone deletes the base rows the ordinary way, and the
+# view is truncated with its base, so the case this expected to fail now works.
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_truncate_while_building(manager: ScyllaClusterManager):
     node_count = 3

@@ -481,8 +481,8 @@ future<utils::chunked_vector<sstable_snapshot_metadata>> sstables_manager::take_
             .toc_name = sstable->component_basename(sstables::component_type::TOC),
             .data_size = sstable->data_size(),
             .index_size = sstable->index_size(),
-            .first_token = dht::token::to_int64(sstable->get_first_decorated_key().token()),
-            .last_token = dht::token::to_int64(sstable->get_last_decorated_key().token()),
+            .first_token = dht::token::to_int64(sstable->get_first_ring_position().token()),
+            .last_token = dht::token::to_int64(sstable->get_last_ring_position().token()),
             .repaired_at = sst_stats.repaired_at, 
         };
         sstables_metadata.push_back(std::move(md));

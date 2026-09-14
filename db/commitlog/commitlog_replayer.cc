@@ -263,6 +263,11 @@ future<> db::commitlog_replayer::impl::process(
             auto& table = _db.local().find_column_family(uuid);
             const auto& schema = *table.schema();
             auto token = fm.token(schema);
+            // A mutation which carries token range tombstones belongs to no
+            // partition: its key is a placeholder, so its token means nothing.
+            // It must not be filtered or routed by that token, or the deletion
+            // is silently lost. See freeze_token_range_tombstones().
+            const bool has_token_range_tombstones = !fm.token_range_tombstones().empty();
 
             auto cf_rp = cf_min_pos(uuid, shard_id);
             if (rp <= cf_rp) {
@@ -272,7 +277,7 @@ future<> db::commitlog_replayer::impl::process(
             }
 
             auto token_range_rp = token_min_pos(uuid, shard_id, token);
-            if (rp <= token_range_rp) {
+            if (!has_token_range_tombstones && rp <= token_range_rp) {
                 rlogger.trace("entry {}, token {} in table {}, is younger than recorded replay position {} for its token range. skipping",
                               rp, token, fm.column_family_id(), token_range_rp);
                 s->skipped_mutations++;
@@ -280,7 +285,7 @@ future<> db::commitlog_replayer::impl::process(
             }
 
             auto apply = [&] (seastar::shard_id shard) {
-                return _db.invoke_on(shard, [this, &fm, &src_cm, rp] (replica::database& db) mutable -> future<> {
+                return _db.invoke_on(shard, [this, &fm, &src_cm, rp, has_token_range_tombstones] (replica::database& db) mutable -> future<> {
                     // TODO: might need better verification that the deserialized mutation
                     // is schema compatible. My guess is that just applying the mutation
                     // will not do this.
@@ -290,7 +295,9 @@ future<> db::commitlog_replayer::impl::process(
                         rlogger.debug("replaying at {} v={} {}:{} at {}", fm.column_family_id(), fm.schema_version(),
                                 cf.schema()->ks_name(), cf.schema()->cf_name(), rp);
                     }
-                    if (const auto err = validation::is_cql_key_invalid(*cf.schema(), fm.key()); err) {
+                    if (const auto err = has_token_range_tombstones
+                            ? std::optional<sstring>()
+                            : validation::is_cql_key_invalid(*cf.schema(), fm.key()); err) {
                         throw std::runtime_error(fmt::format("found entry with invalid key {} at {} v={} {}:{} at {}: {}.", fm.key(), fm.column_family_id(),
                                 fm.schema_version(), cf.schema()->ks_name(), cf.schema()->cf_name(), rp, *err));
                     }
@@ -300,6 +307,14 @@ future<> db::commitlog_replayer::impl::process(
                     // their "replay_position" attribute will be empty, which is
                     // lower than anything the new session will produce.
                     if (cf.schema()->version() != fm.schema_version()) {
+                        // This path converts the partition to the current
+                        // schema and applies it as a mutation, which cannot
+                        // carry token range tombstones, so apply those here.
+                        // They hold no schema dependent data, so no conversion
+                        // is needed.
+                        for (const auto& trt : fm.token_range_tombstones()) {
+                            cf.apply(trt);
+                        }
                         auto& local_cm = _column_mappings.local().map;
                         auto cm_it = local_cm.try_emplace(fm.schema_version(), src_cm).first;
                         const column_mapping& cm = cm_it->second;
@@ -323,7 +338,9 @@ future<> db::commitlog_replayer::impl::process(
                     }
                 });
             };
-            auto shards = table.get_effective_replication_map()->shard_for_writes(schema, token);
+            auto shards = has_token_range_tombstones
+                    ? std::ranges::to<dht::shard_replica_set>(std::views::iota(0u, smp::count))
+                    : table.get_effective_replication_map()->shard_for_writes(schema, token);
             if (shards.empty()) {
                 rlogger.debug("no shard for token {} in table {}", token, uuid);
                 s->skipped_mutations++;

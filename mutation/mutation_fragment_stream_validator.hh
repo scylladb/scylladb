@@ -44,6 +44,9 @@ private:
     position_in_partition _prev_pos;
     dht::decorated_key _prev_partition_key;
     tombstone _current_tombstone;
+    // Token range tombstones are only valid at the head of the stream, before
+    // the first partition_start. Cleared by the first partition_start.
+    bool _in_prologue = true;
 
 private:
     validation_result validate(dht::token t, const partition_key* pkey);

@@ -12,6 +12,7 @@
 #include "mutation.hh"
 #include "query/query-result-writer.hh"
 #include "mutation_rebuilder.hh"
+#include "mutation/token_range_tombstone.hh"
 #include "mutation/json.hh"
 #include "types/collection.hh"
 #include "types/tuple.hh"
@@ -168,6 +169,16 @@ void mutation::apply(const mutation_fragment& mf) {
     partition().apply(*schema(), mf);
 }
 
+void mutation::apply(const token_range_tombstone& rt) {
+    if (rt.contains(token())) {
+        partition().apply(rt.tomb());
+    }
+}
+
+void mutation::apply(const token_range_tombstone_list& rts) {
+    partition().apply(rts.search(token()));
+}
+
 mutation& mutation::operator=(const mutation& m) {
     return *this = mutation(m);
 }
@@ -267,6 +278,12 @@ public:
     stop_iteration consume(clustering_row&& cr) {
         return consume_fragment(std::move(cr));
     }
+    stop_iteration consume(token_range_tombstone&& trt) {
+        // A mutation covers a single partition, so splitting one never
+        // produces a token range tombstone.
+        return stop_iteration::no;
+    }
+
     stop_iteration consume(range_tombstone_change&& rtc) {
         return consume_fragment(std::move(rtc));
     }

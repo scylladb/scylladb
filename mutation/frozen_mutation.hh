@@ -176,6 +176,15 @@ public:
     partition_key_view key() const;
     dht::decorated_key decorated_key(const schema& s) const;
     mutation_partition_view partition() const;
+    // Token range tombstones carried alongside the partition. They belong to no
+    // partition, so key() says nothing about them; see idl/mutation.idl.hh.
+    token_range_tombstone_list token_range_tombstones() const;
+    // True if this mutation carries token range tombstones and nothing else,
+    // as produced by freeze_token_range_tombstones(). Its key is a placeholder
+    // and must not be used to route it: there is no partition to route to, and
+    // with tablets the token the placeholder hashes to is usually one this node
+    // holds no storage for.
+    bool is_token_range_tombstones_only() const;
     // The supplied schema must be of the same version as the schema of
     // the mutation which was used to create this instance.
     // throws schema_mismatch_error otherwise.
@@ -228,6 +237,15 @@ public:
 };
 
 frozen_mutation freeze(const mutation& m);
+
+// Builds a frozen mutation carrying only token range tombstones.
+//
+// It has no partition of its own: the key is an empty placeholder, present
+// only because a frozen mutation has to have one. Anything which routes or
+// filters by key -- picking a shard, or skipping a replayed entry whose token
+// range has already been cleaned up -- must not do so for one of these, or the
+// deletion is lost. See idl/mutation.idl.hh.
+frozen_mutation freeze_token_range_tombstones(const schema& s, const token_range_tombstone_list& trts);
 utils::chunked_vector<frozen_mutation> freeze(const utils::chunked_vector<mutation>&);
 utils::chunked_vector<mutation> unfreeze(const utils::chunked_vector<frozen_mutation>&);
 
