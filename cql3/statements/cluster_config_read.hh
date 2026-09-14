@@ -28,8 +28,6 @@ namespace cql3::statements {
 // empty map. Centralizing this keeps every scope reader (and ALTER TABLE's
 // read-modify-write) in agreement about what "no stored overrides" means.
 //
-// `params` is taken by value so it outlives the internal query: query_data_params
-// is a non-owning span, so the bound values must stay alive across the co_await.
 seastar::future<std::map<seastar::sstring, seastar::sstring>>
 read_configs_column(query_processor& qp, seastar::sstring cql, std::vector<data_value_or_unset> params);
 

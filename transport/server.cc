@@ -1755,7 +1755,7 @@ process_query_internal(service::client_state& client_state, sharded<cql3::query_
     }
 
     tracing::trace(trace_state, "Parsing a statement");
-    auto prepared = qp.local().get_statement(query.assume_value(), client_state, dialect,
+    auto prepared = qp.local().get_statement(std::move(query).assume_value(), client_state, dialect,
             cql3::query_processor::prepared_for_driver::no,
             cql3::query_processor::pinned_plan_from_paging_state(options.get_paging_state()));
     auto& statement = *prepared->statement;

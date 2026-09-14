@@ -23,10 +23,10 @@ read_configs_column(query_processor& qp, seastar::sstring cql, std::vector<data_
     auto& internal_client_state = service::client_state::for_internal_calls();
     service::query_state internal_query_state(internal_client_state, empty_service_permit());
     auto rows = co_await qp.execute_internal(
-            cql,
+            std::move(cql),
             db::consistency_level::ONE,
             internal_query_state,
-            query_data_params(params),
+            std::move(params),
             query_processor::cache_internal::yes);
 
     std::map<seastar::sstring, seastar::sstring> configs;
