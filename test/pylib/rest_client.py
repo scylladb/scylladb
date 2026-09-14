@@ -425,6 +425,12 @@ class ScyllaRESTAPIClient():
         if status != 'SUCCESSFUL':
             raise Exception(f"Repair id {sequence_number} on node {node_ip} for table {keyspace}.{table} failed: status={status}")
 
+    async def describe_ring(self, node_ip: str, keyspace: str, table: Optional[str] = None) -> Any:
+        params = None
+        if (table):
+            params = {"table": table}
+        return await self.client.get_json(f'/storage_service/describe_ring/{keyspace}', host=node_ip, params=params)
+
     def __get_autocompaction_url(self, keyspace: str, table: Optional[str] = None) -> str:
         """Return autocompaction url for the given keyspace/table"""
         return f"/storage_service/auto_compaction/{keyspace}" if not table else \
