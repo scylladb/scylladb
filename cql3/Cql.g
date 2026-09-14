@@ -493,6 +493,7 @@ unaliasedSelector returns [uexpression tmp]
     @init { nesting_guard guard(*this); }
     :  ( c=cident                                  { tmp = unresolved_identifier{std::move(c)}; }
        | v=value                                   { tmp = std::move(v); }
+       | tl=tupleLiteral                           { tmp = std::move(tl); }
        | K_COUNT '(' countArgument ')'             { tmp = make_count_rows_function_expression(); }
        | K_WRITETIME '(' a=subscriptExpr ')'       { tmp = column_mutation_attribute{column_mutation_attribute::attribute_kind::writetime,
                                                                                               std::move(a)}; }
@@ -1783,23 +1784,28 @@ usertypeLiteral returns [uexpression ut]
     : '{' k1=ident ':' v1=term { m.emplace(std::move(*k1), std::move(v1)); } ( ',' kn=ident ':' vn=term { m.emplace(std::move(*kn), std::move(vn)); } )* '}'
     ;
 
-// A parenthesized list of terms.  It is a tuple, except for the one case where
-// the parentheses could just as well be grouping: "(x)" around a single term is
-// a one-element tuple only in the dialect CQL has always had, and is otherwise
-// simply x.  A grammar that grows operators needs the latter, so that
-// "(a + b) * c" multiplies rather than building a tuple; tuple(x) is then how a
-// one-element tuple is spelled.
-tupleLiteral returns [uexpression tt]
+// A parenthesized list of terms, with the opening '(' already consumed.  Split
+// out so that parenTerm can left-factor the '(' it shares with the C-style cast.
+//
+// The list is a tuple, except for the one case where the parentheses could just
+// as well be grouping: "(x)" around a single term is a one-element tuple only in
+// the dialect CQL has always had, and is otherwise simply x.  A grammar that
+// grows operators needs the latter, so that "(a + b) * c" multiplies rather than
+// building a tuple; tuple(x) is then how a one-element tuple is spelled.
+tupleLiteralTail returns [uexpression tt]
     @init{ std::vector<expression> l; }
     @after{ $tt = make_parenthesized_term(std::move(l)); }
-    : '(' t1=term { l.push_back(std::move(t1)); } ( ',' tn=term { l.push_back(std::move(tn)); } )* ')'
+    : t1=term { l.push_back(std::move(t1)); } ( ',' tn=term { l.push_back(std::move(tn)); } )* ')'
+    ;
+
+tupleLiteral returns [uexpression tt]
+    : '(' t=tupleLiteralTail { $tt = std::move(t); }
     ;
 
 value returns [uexpression value]
     : c=constant           { $value = std::move(c); }
     | l=collectionLiteral  { $value = std::move(l); }
     | u=usertypeLiteral    { $value = std::move(u); }
-    | t=tupleLiteral       { $value = std::move(t); }
     | K_NULL               { $value = make_untyped_null(); }
     | e=marker             { $value = std::move(e); }
     ;
@@ -1834,11 +1840,23 @@ functionArgs returns [std::vector<expression> a]
        ')'
     ;
 
+// The two parenthesized forms of a term, left-factored on the shared '('.
+//
+// Telling them apart is possible only because a term cannot start with a bare
+// identifier: the sole term beginning with IDENT is a function call, which is
+// followed by '(', while a type name is followed by ')' or '<'.  So '(' IDENT ')'
+// can only be a cast to a user-defined type, never a one-element tuple.
+parenTerm returns [uexpression pterm]
+    : '(' ( c=comparatorType ')' t=term { $pterm = cast{.style = cast::cast_style::c, .arg = std::move(t), .type = c}; }
+          | tt=tupleLiteralTail         { $pterm = std::move(tt); }
+          )
+    ;
+
 term returns [uexpression term1]
     @init { nesting_guard guard(*this); }
     : v=value                          { $term1 = std::move(v); }
     | f=functionName args=functionArgs { $term1 = make_function_call(std::move(f), std::move(args)); }
-    | '(' c=comparatorType ')' t=term  { $term1 = cast{.style = cast::cast_style::c, .arg = std::move(t), .type = c}; }
+    | p=parenTerm                      { $term1 = std::move(p); }
     ;
 
 columnOperation[operations_type& operations]
