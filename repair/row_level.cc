@@ -46,6 +46,7 @@
 #include "streaming/consumer.hh"
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/all.hh>
+#include <seastar/core/with_timeout.hh>
 #include <seastar/coroutine/as_future.hh>
 #include "db/system_keyspace.hh"
 #include "service/storage_proxy.hh"
@@ -2690,20 +2691,21 @@ future<repair_flush_hints_batchlog_response> repair_service::repair_flush_hints_
     if (cache_disabled || (now - _flush_hints_batchlog_time > cache_time)) {
         // Empty targets meants all nodes
         db::hints::sync_point sync_point = co_await _sp.local().create_hint_sync_point(std::vector<locator::host_id>{});
-        lowres_clock::time_point deadline = lowres_clock::now() + req.hints_timeout;
+        lowres_clock::time_point hints_deadline = lowres_clock::now() + req.hints_timeout;
+        lowres_clock::time_point batchlog_deadline = lowres_clock::now() + req.batchlog_timeout;
         try {
             bool bm_throw = utils::get_local_injector().enter("repair_flush_hints_batchlog_handler_bm_uninitialized");
             if (!_bm.local_is_initialized() || bm_throw) {
                 throw std::runtime_error("Backlog manager isn't initialized");
             }
             co_await coroutine::all(
-                [this, &from, &req, &sync_point, &deadline] () -> future<> {
+                [this, &from, &req, &sync_point, &hints_deadline] () -> future<> {
                     rlogger.info("repair[{}]: Started to flush hints for repair_flush_hints_batchlog_request from node={}", req.repair_uuid, from);
-                    co_await _sp.local().wait_for_hint_sync_point(std::move(sync_point), deadline);
+                    co_await _sp.local().wait_for_hint_sync_point(std::move(sync_point), hints_deadline);
                     rlogger.info("repair[{}]: Finished to flush hints for repair_flush_hints_batchlog_request from node={}", req.repair_uuid, from);
                     co_return;
                 },
-                [this, now, cache_disabled, &flush_time, &cache_time, &from, &req, &all_replayed] () -> future<>  {
+                [this, now, cache_disabled, &flush_time, &cache_time, &from, &req, &all_replayed, &batchlog_deadline] () -> future<>  {
                     rlogger.info("repair[{}]: Started to flush batchlog for repair_flush_hints_batchlog_request from node={}", req.repair_uuid, from);
                     auto last_replay = _bm.local().get_last_replay();
                     bool issue_flush = false;
@@ -2729,7 +2731,9 @@ future<repair_flush_hints_batchlog_response> repair_service::repair_flush_hints_
                     }
                     if (issue_flush) {
                         utils::get_local_injector().enter("repair_flush_hints_batchlog_handler");
-                        all_replayed = co_await _bm.local().do_batch_log_replay(db::batchlog_manager::post_replay_cleanup::no);
+                        // A replay that outlives the deadline keeps running under the
+                        // batchlog manager, only this request stops waiting for it.
+                        all_replayed = co_await with_timeout(batchlog_deadline, _bm.local().do_batch_log_replay(db::batchlog_manager::post_replay_cleanup::no));
                     }
                     rlogger.info("repair[{}]: Finished to flush batchlog for repair_flush_hints_batchlog_request from node={}, flushed={} all_replayed={}", req.repair_uuid, from, issue_flush, all_replayed);
                 }
