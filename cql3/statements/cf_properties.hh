@@ -65,8 +65,8 @@ public:
         _defined_ordering.emplace_back(alias, reversed);
     }
 
-    void validate(const data_dictionary::database db, sstring ks_name, const schema::extensions_map& schema_extensions) const {
-        _properties->validate(db, std::move(ks_name), schema_extensions);
+    void validate(const data_dictionary::database db, sstring ks_name, const schema::extensions_map& schema_extensions, cf_prop_defs::is_alter alter = cf_prop_defs::is_alter::no) const {
+        _properties->validate(db, std::move(ks_name), schema_extensions, alter);
     }
 };
 
