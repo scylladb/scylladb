@@ -1828,8 +1828,13 @@ tupleLiteral returns [uexpression tt]
 
 value returns [uexpression value]
     : c=constant           { $value = std::move(c); }
+    // A user-defined type literal and a map literal both open with '{', and are
+    // told apart by whether the first key is a bare field name.  Today a map key
+    // is a term and a term cannot be a bare name, so the two never overlap; once
+    // terms and selectors share one grammar they will, and "{a: 1}" has always
+    // meant the user-defined type.
+    | ('{' ident ':') => u=usertypeLiteral { $value = std::move(u); }
     | l=collectionLiteral  { $value = std::move(l); }
-    | u=usertypeLiteral    { $value = std::move(u); }
     | K_NULL               { $value = make_untyped_null(); }
     | e=marker             { $value = std::move(e); }
     ;
