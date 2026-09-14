@@ -668,12 +668,6 @@ class load_balancer {
         absl::flat_hash_map<table_id, size_t> tablet_count_per_table;
         absl::flat_hash_map<table_id, uint64_t> tablet_sizes_per_table;
 
-        // Number of tablets which are streamed from this shard.
-        size_t streaming_read_load = 0;
-
-        // Number of tablets which are streamed to this shard.
-        size_t streaming_write_load = 0;
-
         // Tablets which still have a replica on this shard which are candidates for migrating away from this shard.
         // Grouped by table. Used when _use_table_aware_balancing == true.
         // The set of candidates per table may be empty.
@@ -950,6 +944,13 @@ class load_balancer {
     std::optional<locator::load_sketch> _load_sketch;
     // Holds the set of tablets already scheduled for transition during plan-making.
     std::unordered_set<global_tablet_id> _scheduled_tablets;
+    struct streaming_shard_load {
+        size_t read_load = 0;
+        size_t write_load = 0;
+    };
+    // Per-shard streaming load of the node set being balanced, cleared and re-seeded by
+    // each plan maker.
+    std::unordered_map<global_shard_id, streaming_shard_load> _streaming_load;
     // Holds tablet replica count per table in the balanced node set (within a single DC).
     absl::flat_hash_map<table_id, size_t> _tablet_count_per_table;
     // Holds total used storage per table in the DC
@@ -1267,6 +1268,7 @@ public:
 
         // Populate the load of the migration that is already in the plan
         node_load_map nodes;
+        _streaming_load.clear();
         // TODO: share code with make_plan()
         topo.for_each_node([&] (const locator::node& node) {
             bool is_drained = node.get_state() == locator::node::state::being_decommissioned
@@ -1416,6 +1418,7 @@ public:
         const locator::topology& topo = _tm->get_topology();
 
         node_load_map nodes;
+        _streaming_load.clear();
         _tm->for_each_token_owner([&] (const locator::node& node) {
             if (node.get_state() == locator::node::state::normal && !node.is_excluded() && node.dc_rack().dc == dc) {
                 ensure_node(nodes, node.host_id());
@@ -2783,12 +2786,12 @@ public:
     void apply_load(node_load_map& nodes, const tablet_migration_streaming_info& info) {
         for (auto&& replica : info.read_from) {
             if (nodes.contains(replica.host)) {
-                nodes[replica.host].shards[replica.shard].streaming_read_load += info.stream_weight;
+                _streaming_load[replica].read_load += info.stream_weight;
             }
         }
         for (auto&& replica : info.written_to) {
             if (nodes.contains(replica.host)) {
-                nodes[replica.host].shards[replica.shard].streaming_write_load += info.stream_weight;
+                _streaming_load[replica].write_load += info.stream_weight;
             }
         }
     }
@@ -2804,7 +2807,8 @@ public:
             if (!nodes.contains(r.host)) {
                 continue;
             }
-            auto load = nodes[r.host].shards[r.shard].streaming_read_load;
+            auto it = _streaming_load.find(r);
+            auto load = it != _streaming_load.end() ? it->second.read_load : 0;
             if (load > 0 && load + info.stream_weight > max_read_streaming_load) {
                 lblogger.debug("Migration skipped because of read load limit on {} ({})", r, load);
                 return false;
@@ -2814,7 +2818,8 @@ public:
             if (!nodes.contains(r.host)) {
                 continue;
             }
-            auto load = nodes[r.host].shards[r.shard].streaming_write_load;
+            auto it = _streaming_load.find(r);
+            auto load = it != _streaming_load.end() ? it->second.write_load : 0;
             if (load > 0 && load + info.stream_weight > max_write_streaming_load) {
                 lblogger.debug("Migration skipped because of write load limit on {} ({})", r, load);
                 return false;
@@ -4132,13 +4137,16 @@ public:
     using only_active = bool_class<struct only_active_tag>;
 
     void print_node_stats(node_load_map& nodes, only_active only_active_) {
+        std::unordered_map<host_id, streaming_shard_load> host_streaming_load;
+        for (auto& [replica, load] : _streaming_load) {
+            auto& host_load = host_streaming_load[replica.host];
+            host_load.read_load += load.read_load;
+            host_load.write_load += load.write_load;
+        }
         for (auto&& [host, load] : nodes) {
-            size_t read = 0;
-            size_t write = 0;
-            for (auto& shard_load : load.shards) {
-                read += shard_load.streaming_read_load;
-                write += shard_load.streaming_write_load;
-            }
+            auto it = host_streaming_load.find(host);
+            size_t read = it != host_streaming_load.end() ? it->second.read_load : 0;
+            size_t write = it != host_streaming_load.end() ? it->second.write_load : 0;
             auto level = !only_active_ || (read + write) > 0 ? seastar::log_level::info : seastar::log_level::debug;
             lblogger.log(level, "Node {}: {}/{} load={:.6f} tablets={} shards={} tablets/shard={:.3f} state={} cap={}"
                                 " rd={} wr={}",
@@ -4177,6 +4185,7 @@ public:
         // Select subset of nodes to balance.
 
         node_load_map nodes;
+        _streaming_load.clear();
         std::unordered_set<host_id> nodes_to_drain;
 
         _tm->for_each_token_owner([&] (const locator::node& node) {
