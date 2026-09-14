@@ -33,6 +33,7 @@ from _pytest.junitxml import xml_key
 
 
 from test import ALL_MODES, DEBUG_MODES, TOP_SRC_DIR, HOST_ID, path_to
+from test.pylib import SeastarIOMetric
 from test.pylib.artifact_registry import ArtifactRegistry as artifacts
 from test.pylib.coverage_utils import coverage_dir
 from test.pylib.ldap_server import start_ldap
@@ -134,6 +135,11 @@ PHASE_REPORT_KEY = pytest.StashKey[dict[str, pytest.CollectReport]]()
 # entry at session finish marks a cluster the sweep in
 # recycle_leftover_clusters() still has to dispose of.
 CLUSTER_KEY = pytest.StashKey[ScyllaCluster | None]()
+
+# Set by the `manager` fixture from after_test()'s result: this test's seastar
+# IO counter totals, keyed by metric name (SeastarIOMetric).
+# Picked up by pytest_runtest_protocol to store with the per-test metrics.
+SEASTAR_IO_KEY = pytest.StashKey[dict[str, int]]()
 
 FAILED_TEST_DIR = "failed_test"
 
@@ -272,6 +278,13 @@ def pytest_runtest_protocol(item, nextitem):
                 else:
                     status = "unknown"
                 test_metrics.status = status
+
+                seastar_io = item.stash.get(SEASTAR_IO_KEY, None)
+                if seastar_io:
+                    test_metrics.seastar_read_bytes = seastar_io.get(SeastarIOMetric.READ_BYTES)
+                    test_metrics.seastar_read_ops = seastar_io.get(SeastarIOMetric.READ_OPS)
+                    test_metrics.seastar_write_bytes = seastar_io.get(SeastarIOMetric.WRITE_BYTES)
+                    test_metrics.seastar_write_ops = seastar_io.get(SeastarIOMetric.WRITE_OPS)
 
                 resource_gather.write_metrics_to_db(
                     metrics=test_metrics,
