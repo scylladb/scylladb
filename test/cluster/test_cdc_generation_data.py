@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 The injection forces the topology coordinator to send CDC generation data in multiple parts,
 if it didn't the command size would go over commitlog segment size limit making it impossible to commit and apply the command.
 """
+@pytest.mark.max_running_shards(4)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_send_data_in_parts(manager: ScyllaClusterManager):
     config = {
@@ -37,6 +38,7 @@ async def test_send_data_in_parts(manager: ScyllaClusterManager):
         pytest.fail("No CDC generation data sent in parts was found")
 
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_group0_apply_while_node_is_being_shutdown(manager: ScyllaClusterManager):
     # This a regression test for #24401.

@@ -40,6 +40,7 @@ async def assert_creating_ks_fails(cql, query, ks_name):
         await cql.run_async(f"USE {ks_name}")
 
 
+@pytest.mark.max_running_shards(6)
 async def test_default_rf(manager: ScyllaClusterManager):
     """
     As of now, the only RF guardrail enabled is a soft limit checking that RF >= 3. Not complying to this soft limit
@@ -63,6 +64,7 @@ async def test_default_rf(manager: ScyllaClusterManager):
     await create_ks_and_assert_warning(cql, query, ks_name, ["warn", "min", "replication", "factor", "3", "dc1", "2"])
 
 
+@pytest.mark.max_running_shards(2)
 async def test_all_rf_limits(manager: ScyllaClusterManager):
     """
     There are 4 limits for RF: soft/hard min and soft/hard max limits. Breaking soft limits issues a warning,
@@ -101,6 +103,7 @@ async def test_all_rf_limits(manager: ScyllaClusterManager):
             await create_ks_and_assert_warning(cql, query, ks_name, [])
 
 
+@pytest.mark.max_running_shards(2)
 async def test_invalid_write_cl_guardrail_config(manager: ScyllaClusterManager):
     """A node configured with invalid values for write_consistency_levels_warned
     and write_consistency_levels_disallowed should still start and respond to
@@ -123,6 +126,7 @@ async def test_invalid_write_cl_guardrail_config(manager: ScyllaClusterManager):
     rows = await cql.run_async("SELECT * FROM system.local")
     assert len(rows) == 1
 
+@pytest.mark.max_running_shards(6)
 async def test_write_cl_default(manager: ScyllaClusterManager):
     """Test checks that the current implementation doesn't cause
     any warning nor failure for the default configuration."""

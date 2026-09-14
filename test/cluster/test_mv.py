@@ -49,6 +49,7 @@ async def test_mv_tombstone_gc_setting(manager):
                 s = list(cql.execute(f"DESC {mv}"))[0].create_statement
                 assert "'mode': 'repair'" in s
 
+@pytest.mark.max_running_shards(6)
 async def test_mv_tombstone_gc_not_inherited(manager):
     """
     Test that the tombstone_gc parameter set on a base table is NOT inherited

@@ -22,6 +22,7 @@ async def create_server_and_cqls(manager, cqls_num):
 
     return tuple(create_cluster_connection() for _ in range(cqls_num))
 
+@pytest.mark.max_running_shards(2)
 async def test_changed_prepared_statement_metadata_columns(manager):
     cql1, cql2, cql3 = await create_server_and_cqls(manager, cqls_num=3)
 
@@ -41,6 +42,7 @@ async def test_changed_prepared_statement_metadata_columns(manager):
             assert len(cql1.execute(prepared).one()) == 3
             assert len(cql2.execute(prepared2).one()) == 3
 
+@pytest.mark.max_running_shards(2)
 async def test_changed_prepared_statement_metadata_types(manager):
     cql1, cql2, cql3 = await create_server_and_cqls(manager, cqls_num=3)
 
@@ -60,6 +62,7 @@ async def test_changed_prepared_statement_metadata_types(manager):
             assert len(cql1.execute(prepared).one()) == 2
             assert len(cql2.execute(prepared2).one()) == 2
 
+@pytest.mark.max_running_shards(2)
 async def test_changed_prepared_statement_metadata_udt(manager):
     cql1, cql2, cql3 = await create_server_and_cqls(manager, cqls_num=3)
 

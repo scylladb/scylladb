@@ -88,6 +88,7 @@ async def get_registry_entries(cql, table_id, node_owner, host):
     return rows
 
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.parametrize('replication_factor', [1, 3])
 @pytest.mark.parametrize('mode', ['normal', 'encrypted'])
 async def test_basic(manager: ScyllaClusterManager, object_storage, tmp_path, mode, replication_factor):
@@ -165,6 +166,7 @@ async def test_basic(manager: ScyllaClusterManager, object_storage, tmp_path, mo
         have_res = {x.name: x.value for x in res}
         assert have_res == rows, f'Unexpected table content: {have_res}'
 
+@pytest.mark.max_running_shards(2)
 async def test_garbage_collect(manager: ScyllaClusterManager, object_storage):
     '''verify ownership table is garbage-collected on boot'''
 
@@ -209,6 +211,7 @@ async def test_garbage_collect(manager: ScyllaClusterManager, object_storage):
                 assert not o.key.startswith(str(ent[2])), f'Sstable object not cleaned, found {o.key}'
 
 
+@pytest.mark.max_running_shards(2)
 async def test_populate_from_quarantine(manager: ScyllaClusterManager, object_storage):
     '''verify sstables are populated from quarantine state'''
 
@@ -246,6 +249,7 @@ async def test_populate_from_quarantine(manager: ScyllaClusterManager, object_st
         assert have_res == rows, f'Unexpected table content: {have_res}'
 
 
+@pytest.mark.max_running_shards(2)
 async def test_misconfigured_storage(manager: ScyllaClusterManager, object_storage):
     '''creating keyspace with unknown endpoint is not allowed'''
     # scylladb/scylladb#15074
@@ -267,6 +271,7 @@ async def test_misconfigured_storage(manager: ScyllaClusterManager, object_stora
                       f" REPLICATION = {replication_opts} AND STORAGE = {storage_opts};"))
 
 
+@pytest.mark.max_running_shards(2)
 async def test_storage_type_endpoint_mismatch(manager: ScyllaClusterManager, s3_storage, gs_storage):
     '''creating a keyspace whose STORAGE type doesn't match the configured type of the
     given endpoint (S3 endpoint used with type GS, or vice versa) must not be allowed,
@@ -294,6 +299,7 @@ async def test_storage_type_endpoint_mismatch(manager: ScyllaClusterManager, s3_
                       f" REPLICATION = {replication_opts} AND STORAGE = {storage_opts};"))
 
 
+@pytest.mark.max_running_shards(2)
 async def test_memtable_flush_retries(manager: ScyllaClusterManager, tmpdir, object_storage):
     '''verify that memtable flush doesn't crash in case storage access keys are incorrect'''
 
@@ -336,6 +342,7 @@ async def test_memtable_flush_retries(manager: ScyllaClusterManager, tmpdir, obj
         have_res = { x.name: x.value for x in res }
         assert have_res == dict(rows), f'Unexpected table content: {have_res}'
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.parametrize('config_with_full_url', [True, False])
 async def test_get_object_store_endpoints(manager: ScyllaClusterManager, config_with_full_url):
     if config_with_full_url:
@@ -385,6 +392,7 @@ async def get_object_storage_written_bytes(server_ip, storage_type: str) -> floa
     return written
 
 
+@pytest.mark.max_running_shards(2)
 async def test_create_keyspace_after_config_update(manager: ScyllaClusterManager, object_storage):
     print('Trying to create a keyspace with an endpoint not configured in object_storage_endpoints should trip storage_manager::is_known_endpoint()')
     server = await manager.server_add()
@@ -472,6 +480,7 @@ async def test_create_keyspace_after_config_update(manager: ScyllaClusterManager
     assert rows == {'test_key': 123, 'after_reconfig': 456, 'after_metrics': 789}, f'Unexpected table content: {rows}'
 
 
+@pytest.mark.max_running_shards(4)
 async def test_tablet_move_updates_registry(manager: ScyllaClusterManager, s3_storage):
     """
     Verify that moving a tablet from one node to another correctly
@@ -561,6 +570,7 @@ async def test_tablet_move_updates_registry(manager: ScyllaClusterManager, s3_st
         logger.info("Source registry entries cleaned up successfully")
 
 
+@pytest.mark.max_running_shards(4)
 async def test_decommission_migrates_registry(manager: ScyllaClusterManager, s3_storage):
     """
     Verify registry behavior around decommission.
@@ -642,6 +652,7 @@ async def test_decommission_migrates_registry(manager: ScyllaClusterManager, s3_
         assert len(rows) == 10, f"Expected 10 rows, got {len(rows)}"
 
 
+@pytest.mark.max_running_shards(4)
 async def test_repair_creates_registry_entries(manager: ScyllaClusterManager, s3_storage):
     """
     Verify that non-incremental (tablet) repair on an object-storage keyspace
@@ -750,6 +761,7 @@ async def test_repair_creates_registry_entries(manager: ScyllaClusterManager, s3
         assert len(rows) == 10, f"Expected 10 rows, got {len(rows)}"
 
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.parametrize('operation', ['truncate', 'drop_table', 'drop_keyspace'])
 async def test_registry_cleanup_on_all_nodes(manager: ScyllaClusterManager, object_storage, operation):
     """
@@ -791,6 +803,7 @@ async def test_registry_cleanup_on_all_nodes(manager: ScyllaClusterManager, obje
         await assert_registry_empty_on_all_nodes(cql, hosts, table_id, operation)
 
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_stream_sink_abort_on_object_storage(manager: ScyllaClusterManager, object_storage):
@@ -929,6 +942,7 @@ async def run_scylla_sstable(args, timeout=300):
     return proc.returncode, stdout.decode(), stderr.decode()
 
 
+@pytest.mark.max_running_shards(2)
 async def test_scylla_sstable_dump_scylla_metadata(manager: ScyllaClusterManager, object_storage, tmp_path):
     objconf = object_storage.create_endpoint_conf()
     cfg = {'enable_user_defined_functions': False,

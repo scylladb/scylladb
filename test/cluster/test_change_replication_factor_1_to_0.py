@@ -18,6 +18,7 @@ from test.pylib.util import wait_for
 logger = logging.getLogger(__name__)
 
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.parametrize(
     "use_tablets",
     [
@@ -70,6 +71,7 @@ async def test_change_replication_factor_1_to_0(request: pytest.FixtureRequest, 
 # Tests #22688 - we should be able to both do further alter:s of a keyspace
 # even after removing replication factor fully from a dc and decommission of said
 # dc.
+@pytest.mark.max_running_shards(4)
 @pytest.mark.parametrize(
     "use_tablets",
     [

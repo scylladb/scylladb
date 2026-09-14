@@ -27,6 +27,7 @@ async def repeat_until_success(f):
 """
 Test if superuser is recreated after manual sstable delete (password reset procedure).
 """
+@pytest.mark.max_running_shards(6)
 async def test_auth_after_reset(manager: ScyllaClusterManager) -> None:
     servers = await manager.servers_add(3, config=auth_config, auto_rack_dc="dc1")
     cql, _ = await manager.get_ready_cql(servers)

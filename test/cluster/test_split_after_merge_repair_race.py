@@ -117,6 +117,7 @@ async def _wait_for_pattern_any(logs, marks, pattern, timeout):
     raise asyncio.TimeoutError(f"pattern {pattern!r}: lost matching server")
 
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.asyncio
 @pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_split_bypass_race_with_repair_after_merge(manager: ScyllaClusterManager):

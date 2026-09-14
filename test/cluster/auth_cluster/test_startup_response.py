@@ -18,6 +18,7 @@ from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.driver_utils import safe_driver_shutdown
 from test.cluster.auth_cluster import extra_scylla_config_options as auth_config
 
+@pytest.mark.max_running_shards(2)
 async def test_startup_no_auth_response(manager: ScyllaClusterManager, build_mode):
     """
     Test behavior when client hangs on startup auth response.

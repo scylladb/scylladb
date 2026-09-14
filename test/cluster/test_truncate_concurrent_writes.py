@@ -19,6 +19,7 @@ import os
 
 logger = logging.getLogger(__name__)
 
+@pytest.mark.max_running_shards(6)
 async def test_validate_truncate_with_concurrent_writes(manager: ScyllaClusterManager):
 
     # This test validates that all the data before a truncate started has been deleted,

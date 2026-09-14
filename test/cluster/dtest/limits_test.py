@@ -91,6 +91,7 @@ class TestLimits(Tester):
         assert len(res.current_rows) == 1
         session.execute("""DROP TABLE test1""")
 
+    @pytest.mark.max_running_shards(2)
     def test_max_key_length(self):
         cluster = self.prepare()
         cluster.populate(1).start()
@@ -150,6 +151,7 @@ class TestLimits(Tester):
         assert len(list(res)) == 1
         session.execute("""DROP TABLE test1""")
 
+    @pytest.mark.max_running_shards(2)
     def test_max_column_value_size(self):
         cluster = self.prepare()
         cluster.populate(1).start()
@@ -193,6 +195,7 @@ class TestLimits(Tester):
 
         session.execute("""DROP TABLE stuff""")
 
+    @pytest.mark.max_running_shards(2)
     def test_max_tuple(self):
         cluster = self.prepare()
         cluster.populate(1).start()
@@ -233,6 +236,7 @@ class TestLimits(Tester):
         assert len(list(res)) == rows
         session.execute("""DROP TABLE STUFF""")
 
+    @pytest.mark.max_running_shards(2)
     def test_max_batch_size(self):
         cluster = self.prepare()
         cluster.populate(1).start()
@@ -275,6 +279,7 @@ class TestLimits(Tester):
 
         session.execute("""TRUNCATE test1""")
 
+    @pytest.mark.max_running_shards(2)
     def test_max_cells(self):
         if self.cluster.scylla_mode == "debug":
             skip_env("client times out in debug mode")

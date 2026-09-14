@@ -9,6 +9,7 @@ import pytest
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.parametrize('cfg_source', ['yaml', 'cmdline'])
 async def test_invalid_speculative_retry_config(manager: ScyllaClusterManager, cfg_source: str):
     """

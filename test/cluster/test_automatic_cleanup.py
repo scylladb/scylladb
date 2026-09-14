@@ -13,6 +13,7 @@ import asyncio
 logger = logging.getLogger(__name__)
 
 
+@pytest.mark.max_running_shards(6)
 async def test_no_cleanup_when_unnecessary(manager: ScyllaClusterManager):
     """The test runs two bootstraps and checks that there is no cleanup in between.
        Then it runs a decommission and checks that cleanup runs automatically and then
@@ -71,6 +72,7 @@ async def test_no_cleanup_when_unnecessary(manager: ScyllaClusterManager):
     assert sum(len(x) for x in matches) == 0
 
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='debug', reason='dev is enough')
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_cleanup_waits_for_stale_writes(manager: ScyllaClusterManager):

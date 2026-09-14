@@ -25,6 +25,7 @@ async def count_requests_queued(manager: ScyllaClusterManager, coord_srv: Server
     return len(list(filter(lambda t: t['type'] == request_type, tasks)))
 
 
+@pytest.mark.max_running_shards(8)
 @pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_tablets_are_drained_in_parallel(manager: ScyllaClusterManager):
     """
@@ -83,6 +84,7 @@ async def test_tablets_are_drained_in_parallel(manager: ScyllaClusterManager):
         await decomm_task2
 
 
+@pytest.mark.max_running_shards(10)
 @pytest.mark.parametrize("same_rack", [False, True])
 @pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_tablets_are_rebuilt_in_parallel(manager: ScyllaClusterManager, same_rack):
@@ -158,6 +160,7 @@ async def test_tablets_are_rebuilt_in_parallel(manager: ScyllaClusterManager, sa
         await gather_safely(*tasks)
 
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_decommission_can_be_canceled(manager: ScyllaClusterManager):
     """
@@ -234,6 +237,7 @@ async def test_decommission_can_be_canceled(manager: ScyllaClusterManager):
         assert load[decomm_hostid] == 0
 
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_decommission_is_rejected_when_another_one_is_still_pending(manager: ScyllaClusterManager):
     """
@@ -278,6 +282,7 @@ async def test_decommission_is_rejected_when_another_one_is_still_pending(manage
         await decomm_task
 
 
+@pytest.mark.max_running_shards(10)
 @pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_remove_is_canceled_if_there_is_node_down(manager: ScyllaClusterManager):
     """
@@ -330,6 +335,7 @@ async def test_remove_is_canceled_if_there_is_node_down(manager: ScyllaClusterMa
             await remove_task
 
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_decommission_start_time_is_stable(manager: ScyllaClusterManager):
     """
@@ -376,6 +382,7 @@ async def test_decommission_start_time_is_stable(manager: ScyllaClusterManager):
         assert task2['start_time'] == task['start_time']
 
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_decommission_can_not_be_canceled_once_running(manager: ScyllaClusterManager):
     """
@@ -421,6 +428,7 @@ async def test_decommission_can_not_be_canceled_once_running(manager: ScyllaClus
         assert load[decomm_hostid] == 0
 
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_decommission_fails_if_capacity_is_gone_during_draining(manager: ScyllaClusterManager):
     """
@@ -466,6 +474,7 @@ async def test_decommission_fails_if_capacity_is_gone_during_draining(manager: S
             await decomm_task
 
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_node_lost_during_decommission_drain(manager: ScyllaClusterManager):
     """

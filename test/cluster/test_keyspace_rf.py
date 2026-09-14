@@ -15,6 +15,7 @@ from test.pylib.internal_types import ServerUpState
 from test.cluster.util import create_new_test_keyspace, get_replication, get_replica_count
 
 
+@pytest.mark.max_running_shards(18)
 @pytest.mark.parametrize("tablets_enabled", [True, False])
 @pytest.mark.parametrize("rf_rack_valid_keyspaces", [False, True])
 async def test_create_keyspace_with_default_replication_factor(manager: ScyllaClusterManager, tablets_enabled: bool, rf_rack_valid_keyspaces: bool, build_mode):

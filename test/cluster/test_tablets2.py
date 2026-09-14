@@ -79,6 +79,7 @@ async def wait_for_valid_load_stats(cql, table_id, timeout=120):
 
         await asyncio.sleep(0.2)
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_metadata_propagates_with_schema_changes_in_snapshot_mode(manager: ScyllaClusterManager):
     """Test that you can create a table and insert and query data"""
@@ -152,6 +153,7 @@ async def test_tablet_metadata_propagates_with_schema_changes_in_snapshot_mode(m
                 conn_logger.setLevel(logging.INFO)
 
 
+@pytest.mark.max_running_shards(6)
 async def test_scans(manager: ScyllaClusterManager):
     logger.info("Bootstrapping cluster")
     servers = await manager.servers_add(3)
@@ -172,6 +174,7 @@ async def test_scans(manager: ScyllaClusterManager):
             assert r.c == r.pk
 
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_table_drop_with_auto_snapshot(manager: ScyllaClusterManager):
     logger.info("Bootstrapping cluster")
@@ -192,6 +195,7 @@ async def test_table_drop_with_auto_snapshot(manager: ScyllaClusterManager):
     await cql.run_async("DROP KEYSPACE test;")
 
 
+@pytest.mark.max_running_shards(10)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_topology_changes(manager: ScyllaClusterManager):
     logger.info("Bootstrapping cluster")
@@ -270,6 +274,7 @@ async def get_two_servers_to_move_tablet(manager: ScyllaClusterManager):
 
     return (servers, cql, s0_host_id, s1_host_id, replica, tablet_token, dst_shard, ks)
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_streaming_rx_error_no_failed_message_with_fail_stream_plan(manager: ScyllaClusterManager):
     servers, cql, s0_host_id, s1_host_id, replica, tablet_token, dst_shard, ks = await get_two_servers_to_move_tablet(manager)
@@ -310,6 +315,7 @@ async def test_streaming_rx_error_no_failed_message_with_fail_stream_plan(manage
     rows = await cql.run_async(f"SELECT pk from {ks}.test")
     assert len(list(rows)) == 0
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_streaming_rx_error_no_failed_message_no_fail_stream_plan_hang(manager: ScyllaClusterManager):
     servers, cql, s0_host_id, s1_host_id, replica, tablet_token, dst_shard, ks = await get_two_servers_to_move_tablet(manager)
@@ -334,6 +340,7 @@ async def test_streaming_rx_error_no_failed_message_no_fail_stream_plan_hang(man
     except TimeoutError:
         logger.info("Migration timeout as expected")
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_streaming_is_guarded_by_topology_guard(manager: ScyllaClusterManager):
     logger.info("Bootstrapping cluster")
@@ -408,6 +415,7 @@ async def test_streaming_is_guarded_by_topology_guard(manager: ScyllaClusterMana
         assert len(list(rows)) == 0
 
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_table_dropped_during_streaming(manager: ScyllaClusterManager):
     """
@@ -482,6 +490,7 @@ async def test_table_dropped_during_streaming(manager: ScyllaClusterManager):
         replica = await get_tablet_replica(manager, servers[0], ks, 'test2', tablet_token)
         assert replica == (s1_host_id, 0)
 
+@pytest.mark.max_running_shards(4)
 async def test_tablet_cleanup(manager: ScyllaClusterManager):
     cmdline = ['--smp=2', '--commitlog-sync=batch']
 
@@ -552,6 +561,7 @@ async def test_tablet_cleanup(manager: ScyllaClusterManager):
         # Bonus: check that commitlog_cleanups doesn't have any garbage after restart.
         assert 0 == (await cql.run_async("SELECT COUNT(*) FROM system.commitlog_cleanups", host=hosts[0]))[0].count
 
+@pytest.mark.max_running_shards(3)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_cleanup_failure(manager: ScyllaClusterManager):
     cmdline = ['--smp=1']
@@ -606,6 +616,7 @@ async def test_tablet_cleanup_failure(manager: ScyllaClusterManager):
         logger.info("Guarantee source node of migration left no sstables undeleted")
         assert len(ssts) == 0
 
+@pytest.mark.max_running_shards(3)
 async def test_tablet_resharding(manager: ScyllaClusterManager):
     cmdline = ['--smp=3']
     config = {'tablets_mode_for_new_keyspaces': 'enabled'}
@@ -627,6 +638,7 @@ async def test_tablet_resharding(manager: ScyllaClusterManager):
         server.server_id,
         expected_error="Detected a tablet with invalid replica shard, reducing shard count with tablet-enabled tables is not yet supported. Replace the node instead.")
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.parametrize("injection_error", ["foreach_compaction_group_wait", "major_compaction_wait"])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_split(manager: ScyllaClusterManager, injection_error: str):
@@ -696,6 +708,7 @@ async def test_tablet_split(manager: ScyllaClusterManager, injection_error: str)
         await s1_log.wait_for(f"{injection_error}: released", from_mark=s1_mark)
         await compaction_task
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_correctness_of_tablet_split_finalization_after_restart(manager: ScyllaClusterManager):
     logger.info("Bootstrapping cluster")
@@ -769,6 +782,7 @@ async def test_correctness_of_tablet_split_finalization_after_restart(manager: S
 
         await check()
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.parametrize("injection_error", ["foreach_compaction_group_wait", "major_compaction_wait"])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_concurrent_tablet_migration_and_major(manager: ScyllaClusterManager, injection_error):
@@ -825,6 +839,7 @@ async def test_concurrent_tablet_migration_and_major(manager: ScyllaClusterManag
 
         await check()
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_concurrent_table_drop_and_major(manager: ScyllaClusterManager):
     logger.info("Bootstrapping cluster")
@@ -862,6 +877,7 @@ async def test_concurrent_table_drop_and_major(manager: ScyllaClusterManager):
             logger.info("Check that major was successfully aborted on migration")
             await s1_log.wait_for(f"ongoing compactions for table {ks}.test .* due to table removal", from_mark=s1_mark)
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_leaves_cleanup_stage_during_major_compaction(manager: ScyllaClusterManager):
     """Reproducer for SCYLLADB-3758: tablet migration stuck in stage=cleanup.
@@ -985,6 +1001,7 @@ def get_shard_that_has_tablets(tablet_count_per_shard: list[int]) -> int:
             return shard_id
     return -1
 
+@pytest.mark.max_running_shards(8)
 async def test_tablet_count_metric_per_shard(manager: ScyllaClusterManager):
     # Given two running servers
     shards_count = 4
@@ -1071,6 +1088,7 @@ async def test_tablet_count_metric_per_shard(manager: ScyllaClusterManager):
         dest_expected_count_per_shard[3] += count_of_tokens_on_src_shard_to_move
         await assert_tablet_count_metric_value_for_shards(manager, dest_server, dest_expected_count_per_shard)
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.parametrize("primary_replica_only", [False, True])
 async def test_tablet_load_and_stream(manager: ScyllaClusterManager, primary_replica_only):
     logger.info("Bootstrapping cluster")
@@ -1171,6 +1189,7 @@ async def test_tablet_load_and_stream(manager: ScyllaClusterManager, primary_rep
 
     await asyncio.gather(*[cql.run_async(f"drop keyspace {i}") for i in [ks, ks2]])
 
+@pytest.mark.max_running_shards(8)
 async def test_storage_service_api_uneven_ownership_keyspace_and_table_params_used(manager: ScyllaClusterManager):
     # Given two running servers
     shards_count = 4
@@ -1205,6 +1224,7 @@ async def test_storage_service_api_uneven_ownership_keyspace_and_table_params_us
 
             already_verified.add(actual_ip)
 
+@pytest.mark.max_running_shards(4)
 async def test_tablet_storage_freeing(manager: ScyllaClusterManager):
     logger.info("Start first node")
     servers = [await manager.server_add()]
@@ -1245,6 +1265,7 @@ async def test_tablet_storage_freeing(manager: ScyllaClusterManager):
         size_after = await manager.server_get_sstables_disk_usage(servers[0].server_id, ks, "test")
         assert size_before * 0.33 < size_after < size_before * 0.66
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_schema_change_during_cleanup(manager: ScyllaClusterManager):
     logger.info("Start first node")
@@ -1286,6 +1307,7 @@ async def test_schema_change_during_cleanup(manager: ScyllaClusterManager):
         await cql.run_async(f"ALTER TABLE {ks}.test WITH gc_grace_seconds = 0;")
         await migration_task
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tombstone_gc_correctness_during_tablet_split(manager: ScyllaClusterManager):
     logger.info("Bootstrapping cluster")
@@ -1443,6 +1465,7 @@ def verify_replicas_per_server(desc: str, expected_replicas_per_server: dict[Ser
     assert total == initial_tablets * rf
 
 
+@pytest.mark.max_running_shards(12)
 async def test_decommission_rack_basic(manager: ScyllaClusterManager):
     """
     Test decommissioning of all nodes in a rack
@@ -1484,6 +1507,7 @@ async def test_decommission_rack_basic(manager: ScyllaClusterManager):
         tablet_count = await get_tablet_count_per_shard_for_hosts(manager, live_servers.values(), tables)
         verify_replicas_per_server("After decommission", expected_replicas_per_server, tablet_count, ctx.initial_tablets, ctx.rf)
 
+@pytest.mark.max_running_shards(16)
 async def test_decommission_rack_after_adding_new_rack(manager: ScyllaClusterManager):
     """
     Test decommissioning a rack, after a rack with new nodes is added
@@ -1536,6 +1560,7 @@ async def test_decommission_rack_after_adding_new_rack(manager: ScyllaClusterMan
         tablet_count = await get_tablet_count_per_shard_for_hosts(manager, all_servers, tables)
         verify_replicas_per_server("After decommission", expected_replicas_per_server, tablet_count, ctx.initial_tablets, ctx.rf)
 
+@pytest.mark.max_running_shards(12)
 async def test_decommission_not_enough_racks(manager: ScyllaClusterManager):
     """
     Test that decommissioning a rack fails if the number of rack is
@@ -1578,6 +1603,7 @@ async def test_decommission_not_enough_racks(manager: ScyllaClusterManager):
         tablet_count = await get_tablet_count_per_shard_for_hosts(manager, all_servers.values(), tables)
         verify_replicas_per_server("After decommission", expected_replicas_per_server, tablet_count, ctx.initial_tablets, ctx.rf)
 
+@pytest.mark.max_running_shards(3)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_cleanup_vs_snapshot_race(manager: ScyllaClusterManager):
     cmdline = ['--smp=1']
@@ -1618,6 +1644,7 @@ async def test_tablet_cleanup_vs_snapshot_race(manager: ScyllaClusterManager):
 # It's achieved by migrating a tablet away that contains the highest replay position of a shard,
 # so when drop/truncate happens, the highest replay position will be greater than all the data
 # found in the table (includes data in memtable).
+@pytest.mark.max_running_shards(2)
 @pytest.mark.parametrize("operation", ['DROP TABLE', 'TRUNCATE'])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_drop_table_and_truncate_after_migration(manager: ScyllaClusterManager, operation):
@@ -1658,6 +1685,7 @@ async def test_drop_table_and_truncate_after_migration(manager: ScyllaClusterMan
     await cql.run_async(f"{operation} {ks}.test")
 
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.parametrize("streaming_mode", ["sstables_during_snapshot", "sstables_after_snapshot", "logstor_after_snapshot"])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_drop_table_during_streaming(manager: ScyllaClusterManager, streaming_mode: str):
@@ -1722,6 +1750,7 @@ async def test_drop_table_during_streaming(manager: ScyllaClusterManager, stream
         except HTTPError as e:
             logger.info("Tablet migration failed after drop as expected: %s", e.message)
 
+@pytest.mark.max_running_shards(8)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_truncate_during_topology_change(manager: ScyllaClusterManager):
     """Test truncate operation during topology change."""
@@ -1787,6 +1816,7 @@ async def test_truncate_during_topology_change(manager: ScyllaClusterManager):
         assert rows[0].count == 0, "Table should be empty after truncation"
 
 # Reproducer for https://github.com/scylladb/scylladb/issues/22040.
+@pytest.mark.max_running_shards(2)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_concurrent_schema_change_with_compaction_completion(manager: ScyllaClusterManager):
     cmdline = ['--smp=2']
@@ -1824,6 +1854,7 @@ async def test_concurrent_schema_change_with_compaction_completion(manager: Scyl
         await force_minor_compaction()
 
 # This is a test and reproducer for https://github.com/scylladb/scylladb/issues/24153
+@pytest.mark.max_running_shards(1)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_split_correctness_on_tablet_count_change(manager: ScyllaClusterManager):
     logger.info('Bootstrapping cluster')
@@ -1894,6 +1925,7 @@ async def test_split_correctness_on_tablet_count_change(manager: ScyllaClusterMa
         await manager.api.message_injection(server.ip_addr, "merge_completion_fiber")
 
 # Reproducer for https://github.com/scylladb/scylladb/issues/26041.
+@pytest.mark.max_running_shards(2)
 @pytest.mark.parametrize("primary_replica_only", [False, True])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_load_and_stream_and_split_synchronization(manager: ScyllaClusterManager, primary_replica_only):
@@ -1983,6 +2015,7 @@ async def test_tablet_load_and_stream_and_split_synchronization(manager: ScyllaC
 
         await check(ks)
 
+@pytest.mark.max_running_shards(4)
 async def test_update_load_stats_after_rebuild(manager: ScyllaClusterManager):
     logger.info("Bootstrapping cluster")
     cmdline = [
@@ -2033,6 +2066,7 @@ async def test_update_load_stats_after_rebuild(manager: ScyllaClusterManager):
         assert len(replica_hosts) == 2
         assert s0_host_id in replica_hosts and s1_host_id in replica_hosts, "Tablet size was added to load_stats after rebuild"
 
+@pytest.mark.max_running_shards(4)
 async def test_update_load_stats_after_migration(manager: ScyllaClusterManager):
     logger.info("Bootstrapping cluster")
     cmdline = [
@@ -2092,6 +2126,7 @@ async def test_update_load_stats_after_migration(manager: ScyllaClusterManager):
         assert leaving_replica[0] not in replica_hosts, "Leaving replica tablet size is not in load_stats any more"
         assert pending_replica[0] in replica_hosts, "Pending replica tablet size is in load_stats"
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_crash_on_missing_table_from_load_stats(manager: ScyllaClusterManager):
     logger.info('Bootstrapping cluster')
@@ -2129,6 +2164,7 @@ async def test_crash_on_missing_table_from_load_stats(manager: ScyllaClusterMana
         await s0_log.wait_for('raft topology: Refreshed table load stats for all DC', from_mark=s0_mark)
 
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablets_barrier_waits_for_replica_erms(manager: ScyllaClusterManager):
     """
@@ -2210,6 +2246,7 @@ async def test_tablets_barrier_waits_for_replica_erms(manager: ScyllaClusterMana
         assert len(list(rows)) == 1
 
 # This is a test and reproducer for https://github.com/scylladb/scylladb/issues/26041
+@pytest.mark.max_running_shards(4)
 @pytest.mark.parametrize("repair_before_split", [False, True])
 @pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_split_and_incremental_repair_synchronization(manager: ScyllaClusterManager, repair_before_split: bool):
@@ -2299,6 +2336,7 @@ async def test_split_and_incremental_repair_synchronization(manager: ScyllaClust
         hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
         await manager.servers_see_each_other(servers)
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_split_and_intranode_synchronization(manager: ScyllaClusterManager):
     logger.info('Bootstrapping cluster')
@@ -2375,6 +2413,7 @@ async def test_split_and_intranode_synchronization(manager: ScyllaClusterManager
         # Give enough time for split to happen in debug mode
         await wait_for(finished_splitting, time.time() + 120)
 
+@pytest.mark.max_running_shards(1)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_split_stopped_on_shutdown(manager: ScyllaClusterManager):
     logger.info('Bootstrapping cluster')
@@ -2447,6 +2486,7 @@ async def test_split_stopped_on_shutdown(manager: ScyllaClusterManager):
         assert tablet_count >= expected_tablet_count
 
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.asyncio
 @pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_split_vs_regular_compaction_stale_snapshot(manager: ScyllaClusterManager):

@@ -51,6 +51,7 @@ async def wait_for_tablet_stage(manager, server, keyspace_name, table_name, toke
 # We create multiple views, some with the same partition key and some not, and
 # check that those views with the same partition key are co-located by reading
 # their tablet map from system.tablets and checking they have base_table set.
+@pytest.mark.max_running_shards(2)
 async def test_base_view_colocation(manager: ScyllaClusterManager):
     cfg = {'enable_tablets': True}
     cmdline = [
@@ -96,6 +97,7 @@ async def test_base_view_colocation(manager: ScyllaClusterManager):
 # both tablets to be co-located on the other node.  After they are moved we
 # stop the other node, remaining only with the one node that should hold the
 # base and view tablets, and verify we can read both tables from this node.
+@pytest.mark.max_running_shards(4)
 @pytest.mark.parametrize("move_table", ["base", "child"])
 async def test_move_tablet(manager: ScyllaClusterManager, move_table: str):
     cfg = {'enable_tablets': True}
@@ -164,6 +166,7 @@ async def test_move_tablet(manager: ScyllaClusterManager, move_table: str):
 # be split because it's co-located with the base table and their combined sizes are large enough.
 # We verify that the tablets of both tables are split, and the tables have the same tablet count.
 # Then delete some keys and verify the tablets of both tables are merged.
+@pytest.mark.max_running_shards(4)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.parametrize(
     "with_merge",
@@ -296,6 +299,7 @@ async def test_tablet_split_and_merge(manager: ScyllaClusterManager, with_merge:
 # While it's in some transition stage, we hold it and create a co-located view.
 # We verify we can continue read and write to both tables. Then we complete the
 # migration and verify everything continues to work as expected.
+@pytest.mark.max_running_shards(4)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.parametrize("wait_stage", [("streaming", "stream_tablet_wait"), ("cleanup", "cleanup_tablet_wait")])
 async def test_create_colocated_table_while_base_is_migrating(manager: ScyllaClusterManager, wait_stage):
@@ -432,6 +436,7 @@ async def test_repair_colocated_base_and_view(manager: ScyllaClusterManager):
 
 # Verify the default tombstone GC mode for colocated tables is 'timeout',
 # and that altering it to 'repair' is not allowed.
+@pytest.mark.max_running_shards(6)
 async def test_colocated_tables_gc_mode(manager: ScyllaClusterManager):
     servers = await manager.servers_add(3, auto_rack_dc="dc1")
     cql = manager.get_cql()

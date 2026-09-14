@@ -9,6 +9,7 @@ import time
 import logging
 logger = logging.getLogger(__name__)
 
+@pytest.mark.max_running_shards(6)
 async def test_boot(manager):
     rbno = True
     cfg = {'enable_repair_based_node_ops': rbno, 'num_tokens': 256}

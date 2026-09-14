@@ -24,6 +24,7 @@ pytestmark = pytest.mark.prepare_3_racks_cluster
 
 
 
+@pytest.mark.max_running_shards(6)
 async def test_change_two(manager, random_tables, build_mode):
     """Stop two nodes, change their IPs and start, check the cluster is
     functional"""

@@ -35,6 +35,7 @@ async def wait_for_cleanup_log(logs, marks, timeout: float = 15) -> list[tuple[s
             task.cancel()
 
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_session_abort_cleans_orphan_repair_meta(manager: ScyllaClusterManager):

@@ -13,6 +13,7 @@ from test.pylib.util import unique_name, wait_for_cql_and_get_hosts
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.cluster.auth_cluster import extra_scylla_config_options as auth_config
 
+@pytest.mark.max_running_shards(6)
 async def test_attach_service_level_to_user(request, manager: ScyllaClusterManager):
     user = f"test_user_{unique_name()}"
 

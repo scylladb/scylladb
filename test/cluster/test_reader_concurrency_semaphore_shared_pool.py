@@ -15,6 +15,7 @@ from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for
 
 from .util import new_test_keyspace, new_test_table
+import pytest
 
 
 logger = logging.getLogger(__name__)
@@ -32,6 +33,7 @@ async def _pool_metric(manager: ScyllaClusterManager, ip_addr: str, name: str) -
     return int(metrics.get(name, MAIN_POOL_LABELS) or 0)
 
 
+@pytest.mark.max_running_shards(1)
 async def test_shared_pool_live_resize_under_reads(manager: ScyllaClusterManager):
     """
     Change reader_concurrency_semaphore_shared_pool_fraction live (0.2 -> 0 -> 0.5)

@@ -13,6 +13,7 @@ import asyncio
 import logging
 
 logger = logging.getLogger(__name__)
+@pytest.mark.max_running_shards(1)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_cleanup_stop(manager: ScyllaClusterManager):
     logger.info("Bootstrapping cluster")

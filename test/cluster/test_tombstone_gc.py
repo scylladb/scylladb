@@ -26,6 +26,7 @@ def check_tombstone_gc_mode(cql, table, mode):
     assert f"'mode': '{mode}'" in s
 
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.parametrize("rf", [1, 2])
 @pytest.mark.parametrize("tablets", [True, False])
 async def test_default_tombstone_gc(manager: ScyllaClusterManager, rf: int, tablets: bool):
@@ -37,6 +38,7 @@ async def test_default_tombstone_gc(manager: ScyllaClusterManager, rf: int, tabl
             check_tombstone_gc_mode(cql, table, "repair")
 
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.parametrize("rf", [1, 2])
 @pytest.mark.parametrize("tablets", [True, False])
 async def test_default_tombstone_gc_does_not_override(manager: ScyllaClusterManager, rf: int, tablets: bool):
@@ -49,6 +51,7 @@ async def test_default_tombstone_gc_does_not_override(manager: ScyllaClusterMana
             check_tombstone_gc_mode(cql, table, "disabled")
 
 
+@pytest.mark.max_running_shards(6)
 async def test_group0_tombstone_gc(manager: ScyllaClusterManager):
     """
     Regression test for #15607.
@@ -261,6 +264,7 @@ async def test_group0_tombstone_gc(manager: ScyllaClusterManager):
                 await delete_raft_group_data(first_group0_id, cql, h)
 
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.skip_mode(mode='release', reason="test only needs to run once - allowing only the 'dev' mode")
 @pytest.mark.skip_mode(mode='debug', reason="test only needs to run once - allowing only the 'dev' mode")
 async def test_group0_state_id_failure(manager: ScyllaClusterManager):
@@ -293,6 +297,7 @@ async def test_group0_state_id_failure(manager: ScyllaClusterManager):
     assert not matches, "The 'endpoint_state_map does not contain endpoint' warning appeared in the log"
 
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.parametrize("tablets", (True, False))
 async def test_tombstone_gc_rf_one(manager: ScyllaClusterManager, tablets: bool):

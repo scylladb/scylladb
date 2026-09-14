@@ -12,6 +12,7 @@ from cassandra.auth import PlainTextAuthProvider
 
 logger = logging.getLogger(__name__)
 
+@pytest.mark.max_running_shards(4)
 async def test_auth_cache_metrics(manager: ScyllaClusterManager):
     """
     Verify that auth cache metrics correctly track roles and permissions

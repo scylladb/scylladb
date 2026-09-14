@@ -21,6 +21,7 @@ import psutil
 from test.pylib.host_registry import Host, HostRegistry
 from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo, ServerUpState
 from test.pylib.rest_client import ScyllaRESTAPIClient
+from test.pylib.running_shards import RunningShards
 from test.pylib.scylla_server import (
     SCYLLA_CMDLINE_OPTIONS,
     ScyllaServer,
@@ -28,6 +29,7 @@ from test.pylib.scylla_server import (
     get_current_version_description,
     make_scylla_conf,
     merge_cmdline_options,
+    shards_of,
 )
 from test.pylib.util import gather_safely, graceful_stop_timeout
 
@@ -85,6 +87,10 @@ class ScyllaCluster:
         self.servers = ChainMap(self.running, self.stopped)
         self.removed: Set[ServerNum] = set()                    # removed servers (might be running)
         self.starting: Dict[ServerNum, ScyllaServer] = {}       # servers starting right now, not yet running (and not included in "servers").
+        # This cluster's shard claim and peak.  No claim until whoever builds
+        # the cluster sets one (see the cluster factory); until then it only
+        # counts and limits nothing.
+        self.shard_usage = RunningShards()
         # The first IP assigned to a server added to the cluster.
         self.initial_seed: Optional[IPAddress] = None
         # cluster is started (but it might not have running servers);
@@ -225,6 +231,12 @@ class ScyllaCluster:
                 self.cmdline_options_override,
             ])
 
+            if start:
+                # Only a server that will run takes shards.  With start=False it
+                # is just installed and left in self.stopped.  server_start()
+                # reserves for it if the test starts it later.
+                self._reserve_shards(shards_of(cmdline_options), "adding a server")
+
             # Sum of the basic server configuration and the user-provided
             # config options, with increasing priority (if two sources provide
             # the same option, the higher priority one wins):
@@ -356,6 +368,26 @@ class ScyllaCluster:
         return [server.server_info() for server in self.running.values()
                 if server.server_id not in self.removed]
 
+    @property
+    def running_shards(self) -> int:
+        """Shards the cluster is running right now.
+
+        Servers that are starting count too.  They already use the machine, and
+        a parallel servers_add() has to see the shards its siblings are taking.
+        A server marked removed also counts, because marking it does not stop
+        the process.
+        """
+        return sum(server.shards for server in (*self.running.values(), *self.starting.values()))
+
+    def _reserve_shards(self, shards: int, what: str) -> None:
+        """Account for `shards` about to start, and refuse to break the claim.
+
+        Call it before holding anything, so raising leaves no server started,
+        and with no await before the registration it guards, or a parallel add
+        would reserve against a stale count.
+        """
+        self.shard_usage.reserve(running=self.running_shards, adding=shards, what=what)
+
     def all_servers(self) -> list[ServerInfo]:
         """Get a list of tuples of server id and IP address of all servers"""
         return [server.server_info() for server in self.servers.values()]
@@ -411,7 +443,14 @@ class ScyllaCluster:
         if server_id in self.running:
             return
         assert server_id in self.stopped, f"Server {server_id} unknown"
-        server = self.stopped.pop(server_id)
+        server = self.stopped[server_id]
+        # cmdline_options_override replaces the server's whole command line
+        # (see ScyllaServer.start), so it also decides how many shards it runs.
+        # Recorded before reserving, so that every later reservation counts this
+        # server as the size the override made it, not as it was installed.
+        server.running_cmdline_options = cmdline_options_override
+        self._reserve_shards(server.shards, f"starting server {server_id}")
+        del self.stopped[server_id]
         self.logger.info("Cluster %s starting server %s ip %s", self,
                          server_id, server.ip_addr)
         if not seeds:

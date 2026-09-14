@@ -45,6 +45,7 @@ def workdir():
     with tempfile.TemporaryDirectory() as tmp_dir:
         yield tmp_dir
 
+@pytest.mark.max_running_shards(2)
 async def test_file_streaming_respects_encryption(manager: ScyllaClusterManager, storage, workdir):
     # pylint: disable=missing-function-docstring
     cfg = {
@@ -218,6 +219,7 @@ supported_cipher_algorithms = {
     # "RC2": [80, 128],  # [40, 80, 128]  # 40 to 128
 }
 
+@pytest.mark.max_running_shards(2)
 async def test_supported_cipher_algorithms(manager, key_provider):
     """Checks our providers can operate the algos we claim"""
     errors = []
@@ -231,6 +233,7 @@ async def test_supported_cipher_algorithms(manager, key_provider):
                       exception_handler=handler)
     assert not errors, errors
 
+@pytest.mark.max_running_shards(2)
 async def test_wrong_cipher_algorithm(manager, key_provider):
     """Checks we reject non-valid cipher parameters/algos"""
     errors = []
@@ -271,6 +274,7 @@ async def test_wrong_cipher_algorithm(manager, key_provider):
     assert not errors, errors
     assert len(expected_errors) == len(broken_ciphers), expected_errors
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.parametrize(argnames="compression", argvalues=("LZ4", "Snappy", "Deflate"))
 async def test_encryption_table_compression(manager, tmpdir, suite_log_dir, compression, scylla_binary):
     """Test compression + ear"""
@@ -281,6 +285,7 @@ async def test_encryption_table_compression(manager, tmpdir, suite_log_dir, comp
                           compression=compression)
 
 
+@pytest.mark.max_running_shards(6)
 async def test_reboot(manager, key_provider):
     """Tests SIGKILL restart of 3-node cluster"""
     async def restart(manager: ScyllaClusterManager, servers: list[ServerInfo], table_names: list[str]):
@@ -354,6 +359,7 @@ async def validate_sstables_encryption(manager: ScyllaClusterManager, server: Se
             assert actual_data == expected_data
 
 
+@pytest.mark.max_running_shards(2)
 async def test_alter(manager, key_provider):
     """Tests altering encrypted CF:s and verify sstable data"""
     async def restart(manager: ScyllaClusterManager, servers: list[ServerInfo], table_names: list[str]):
@@ -392,6 +398,7 @@ async def test_alter(manager, key_provider):
                       ciphers={"AES/CBC/PKCS5Padding": [128]},
                       restart=restart)
 
+@pytest.mark.max_running_shards(2)
 async def test_per_table_master_key(manager: ScyllaClusterManager, tmpdir, suite_log_dir):
     """Test per table KMS master key"""
     class MultiAliasKMSProvider (KMSKeyProviderFactory):
@@ -436,6 +443,7 @@ async def test_per_table_master_key(manager: ScyllaClusterManager, tmpdir, suite
                           restart=restart)
 
 
+@pytest.mark.max_running_shards(2)
 async def test_non_existant_table_master_key(manager: ScyllaClusterManager, tmpdir, suite_log_dir):
     """Test we fail properly if using a non-existant master key"""
     class NoSuchKeyKMSProvider (KMSKeyProviderFactory):
@@ -447,6 +455,7 @@ async def test_non_existant_table_master_key(manager: ScyllaClusterManager, tmpd
         with pytest.raises(Exception):
             await _smoke_test(manager, kp, ciphers={"AES/CBC/PKCS5Padding": [128]})
 
+@pytest.mark.max_running_shards(2)
 async def test_system_auth_encryption(manager: ScyllaClusterManager, tmpdir):
     cfg = {"authenticator": "org.apache.cassandra.auth.PasswordAuthenticator", 
                "authorizer": "org.apache.cassandra.auth.CassandraAuthorizer",
@@ -541,6 +550,7 @@ async def test_system_auth_encryption(manager: ScyllaClusterManager, tmpdir):
     await verify_system_info(False) # should not see stuff now
 
 
+@pytest.mark.max_running_shards(2)
 async def test_system_encryption_reboot(manager: ScyllaClusterManager, tmpdir):
     """Tests SIGKILL restart of encrypted node"""
     async def restart(manager: ScyllaClusterManager, servers: list[ServerInfo], table_names: list[str]):

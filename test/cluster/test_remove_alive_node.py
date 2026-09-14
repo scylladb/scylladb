@@ -10,6 +10,7 @@ import logging
 import pytest
 
 
+@pytest.mark.max_running_shards(6)
 async def test_removing_alive_node_fails(manager: ScyllaClusterManager) -> None:
     """
     Test verifying that an attempt to remove an alive node fails as expected.

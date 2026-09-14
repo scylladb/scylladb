@@ -13,6 +13,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+@pytest.mark.max_running_shards(6)
 async def test_replace_with_same_ip_twice(manager: ScyllaClusterManager, failure_detector_timeout) -> None:
     logger.info("starting a cluster with two nodes")
     servers = await manager.servers_add(3, config={'failure_detector_timeout_in_ms': failure_detector_timeout})

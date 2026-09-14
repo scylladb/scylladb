@@ -37,6 +37,7 @@ async def two_nodes_cluster(manager: ScyllaClusterManager) -> list[ServerNum]:
     return servers
 
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.replication_factor(N_SERVERS)
 async def test_change_rpc_address(two_nodes_cluster: list[ServerNum],
                                   manager: ScyllaClusterManager,

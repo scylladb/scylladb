@@ -285,6 +285,7 @@ async def _run_workload(
         await tester.verify_consistency()
 
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.tier2
 async def test_lwt_contention_many_workers(manager: ScyllaClusterManager, scale_timeout, build_mode, contention_cluster):
     """
@@ -308,6 +309,7 @@ async def test_lwt_contention_many_workers(manager: ScyllaClusterManager, scale_
     )
 
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.tier2
 async def test_lwt_contention_multi_iterations(manager: ScyllaClusterManager, scale_timeout, contention_cluster):
     """

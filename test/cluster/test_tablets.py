@@ -37,6 +37,7 @@ logger = logging.getLogger(__name__)
 # me-1-big-TOC.txt
 sstable_filename_glob = "??-*-???-*.*"
 
+@pytest.mark.max_running_shards(4)
 async def test_tablet_replication_factor_enough_nodes(manager: ScyllaClusterManager):
     cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled'}
     # This test verifies that Scylla rejects creating a table if there are too few token-owning nodes.
@@ -59,6 +60,7 @@ async def test_tablet_replication_factor_enough_nodes(manager: ScyllaClusterMana
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
 
 
+@pytest.mark.max_running_shards(2)
 async def test_tablet_scaling_option_is_respected(manager: ScyllaClusterManager):
     # 32 is high enough to ensure we demand more tablets than the default choice.
     cfg = {'tablets_mode_for_new_keyspaces': 'enabled', 'tablets_initial_scale_factor': 32}
@@ -73,6 +75,7 @@ async def test_tablet_scaling_option_is_respected(manager: ScyllaClusterManager)
     assert len(tablets) == 64
 
 
+@pytest.mark.max_running_shards(8)
 async def test_tablet_cannot_decommision_below_replication_factor(manager: ScyllaClusterManager):
     logger.info("Bootstrapping cluster")
     cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled'}
@@ -107,6 +110,7 @@ async def test_tablet_cannot_decommision_below_replication_factor(manager: Scyll
         for r in rows:
             assert r.c == r.pk
 
+@pytest.mark.max_running_shards(1)
 async def test_reshape_with_tablets(manager: ScyllaClusterManager):
     logger.info("Bootstrapping cluster")
     cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled'}
@@ -143,6 +147,7 @@ async def test_reshape_with_tablets(manager: ScyllaClusterManager):
         assert len(sstable_info[0]['sstables']) == number_of_tablets
 
 
+@pytest.mark.max_running_shards(1)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_stop_reshape_aborts_all_compaction_groups(manager: ScyllaClusterManager):
     """Verify that stop RESHAPE aborts reshape across all tables and compaction groups.
@@ -252,6 +257,7 @@ async def test_stop_reshape_aborts_all_compaction_groups(manager: ScyllaClusterM
                 assert rows[0].count > 0
 
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.parametrize("direction", ["up", "down", "none"])
 async def test_tablet_rf_change(manager: ScyllaClusterManager, direction):
     cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled'}
@@ -321,6 +327,7 @@ async def test_tablet_rf_change(manager: ScyllaClusterManager, direction):
             assert len(fragments[k]) == rf_to, f"Found mutations for {k} key on {fragments[k]} hosts, but expected only {rf_to} of them"
 
 
+@pytest.mark.max_running_shards(6)
 async def test_tablet_mutation_fragments_unowned_partition(manager: ScyllaClusterManager):
     """Check that MUTATION_FRAGMENTS() queries handle the case when a partition
     not owned by the node is attempted to be read."""
@@ -349,6 +356,7 @@ async def test_tablet_mutation_fragments_unowned_partition(manager: ScyllaCluste
 
 # The test checks that describe_ring and range_to_address_map API return
 # information that's consistent with system.tablets contents
+@pytest.mark.max_running_shards(12)
 @pytest.mark.parametrize("endpoint", ["describe_ring", "range_to_endpoint", "tokens_endpoint"])
 async def test_tablets_api_consistency(manager: ScyllaClusterManager, endpoint):
     servers = []
@@ -405,6 +413,7 @@ async def test_tablets_api_consistency(manager: ScyllaClusterManager, endpoint):
 # That provides us with a guarantee that the old and the new QUORUM overlap.
 # In this test, we verify that in a simple scenario with one DC. We explicitly disable
 # enforcing RF-rack-valid keyspaces to be able to perform more flexible alterations.
+@pytest.mark.max_running_shards(2)
 async def test_singledc_alter_tablets_rf(manager: ScyllaClusterManager):
     await manager.server_add(config={"rf_rack_valid_keyspaces": "false", "enable_tablets": "true"}, property_file={"dc": "dc1", "rack": "r1"})
     cql = manager.get_cql()
@@ -428,6 +437,7 @@ async def test_singledc_alter_tablets_rf(manager: ScyllaClusterManager):
         with pytest.raises(InvalidRequest):
             await change_rf(0) # Trying to decrease the RF by more than 2 should fail.
 
+@pytest.mark.max_running_shards(10)
 async def test_arbitrary_multi_rf_change_fails(manager: ScyllaClusterManager):
     config = {"rf_rack_valid_keyspaces": "false", "enable_tablets": "true", "tablet_load_stats_refresh_interval_in_seconds": 1}
     cmdline = ['--logger-log-level', 'raft_topology=debug', '--logger-log-level', 'load_balancer=debug']
@@ -492,6 +502,7 @@ async def test_arbitrary_multi_rf_change_fails(manager: ScyllaClusterManager):
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['r1'], 'dc2': ['r4']}") as ks:
         await cql.run_async(f"ALTER KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['r1'], 'dc2': 0, 'dc3': ['r7']}}")
 
+@pytest.mark.max_running_shards(8)
 async def test_alter_tablets_rf_dc_drop(request: pytest.FixtureRequest, manager: ScyllaClusterManager) -> None:
     config = {"endpoint_snitch": "GossipingPropertyFileSnitch", "tablets_mode_for_new_keyspaces": "enabled"}
 
@@ -532,6 +543,7 @@ async def test_alter_tablets_rf_dc_drop(request: pytest.FixtureRequest, manager:
         await cql.run_async(f"alter keyspace {ks} with durable_writes = true")
         await check_rf(ks=ks, expected_dc1_rf=2, expected_dc2_rf=0)
 
+@pytest.mark.max_running_shards(8)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_numeric_rf_to_rack_list_conversion(request: pytest.FixtureRequest, manager: ScyllaClusterManager) -> None:
     async def get_replication_options(ks: str, host, ip_addr):
@@ -635,6 +647,7 @@ async def test_numeric_rf_to_rack_list_conversion(request: pytest.FixtureRequest
     assert len(repl['dc2']) == 1
     assert repl['dc2'][0] == 'rack2a'
 
+@pytest.mark.max_running_shards(8)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_enforce_rack_list_option(request: pytest.FixtureRequest, manager: ScyllaClusterManager) -> None:
     async def get_replication_options(ks: str, host, ip_addr):
@@ -746,6 +759,7 @@ async def check_system_schema_keyspaces(manager, keyspace, replication, next_rep
     else:
         assert res[0].next_replication is None
 
+@pytest.mark.max_running_shards(12)
 async def test_multi_rf_change_multi_dc_0_N(request: pytest.FixtureRequest, manager: ScyllaClusterManager) -> None:
     """Test RF changes where each DC transitions only between 0 and N replicas."""
     config = {"tablets_mode_for_new_keyspaces": "enabled", "rf_rack_valid_keyspaces": "false", "tablet_load_stats_refresh_interval_in_seconds": 1}
@@ -806,6 +820,7 @@ async def test_multi_rf_change_multi_dc_0_N(request: pytest.FixtureRequest, mana
         assert len(t.replicas) == 1
         assert t.replicas[0][0] in dc2_host_ids
 
+@pytest.mark.max_running_shards(12)
 async def test_multi_rf_change_colocated_tables_0_N(request: pytest.FixtureRequest, manager: ScyllaClusterManager) -> None:
     """Test RF changes with colocated tables where each DC transitions only between 0 and N replicas."""
     config = {"tablets_mode_for_new_keyspaces": "enabled", "rf_rack_valid_keyspaces": "false", "tablet_load_stats_refresh_interval_in_seconds": 1}
@@ -852,6 +867,7 @@ async def test_multi_rf_change_colocated_tables_0_N(request: pytest.FixtureReque
     await check_system_schema_keyspaces(manager, "ks1", {'dc1': ['rack1a']}, None)
     await check_replicas(1)
 
+@pytest.mark.max_running_shards(8)
 @pytest.mark.parametrize("enforce_rack_list", ['false', 'true'])
 async def test_multi_rf_change_0_N(request: pytest.FixtureRequest, manager: ScyllaClusterManager, enforce_rack_list) -> None:
     config = {"tablets_mode_for_new_keyspaces": "enabled", "rf_rack_valid_keyspaces": "false", "tablet_load_stats_refresh_interval_in_seconds": 1}
@@ -880,6 +896,7 @@ async def test_multi_rf_change_0_N(request: pytest.FixtureRequest, manager: Scyl
         for r in replicas:
             assert len(r.replicas) == 2
 
+@pytest.mark.max_running_shards(12)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_multi_rf_increase_abort_0_N(request: pytest.FixtureRequest, manager: ScyllaClusterManager) -> None:
     """Test aborting a 0->N RF increase (adding a new DC)."""
@@ -955,6 +972,7 @@ async def test_multi_rf_increase_abort_0_N(request: pytest.FixtureRequest, manag
         for rep in t.replicas:
             assert rep[0] in dc1_host_ids
 
+@pytest.mark.max_running_shards(12)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_multi_rf_decrease_abort_0_N(request: pytest.FixtureRequest, manager: ScyllaClusterManager) -> None:
     """Test aborting an N->0 RF decrease (removing a DC). Abort should not be allowed."""
@@ -1024,6 +1042,7 @@ async def test_multi_rf_decrease_abort_0_N(request: pytest.FixtureRequest, manag
         for rep in t.replicas:
             assert rep[0] in dc1_host_ids
 
+@pytest.mark.max_running_shards(16)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_multi_rf_of_many_keyspaces_0_N(request: pytest.FixtureRequest, manager: ScyllaClusterManager) -> None:
     """Test concurrent 0->N RF changes across multiple keyspaces."""
@@ -1096,6 +1115,7 @@ async def test_multi_rf_of_many_keyspaces_0_N(request: pytest.FixtureRequest, ma
             for host_id in dc2_host_ids:
                 assert host_id in [r[0] for r in t.replicas]
 
+@pytest.mark.max_running_shards(12)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_multi_rf_increase_before_decrease_0_N(request: pytest.FixtureRequest, manager: ScyllaClusterManager) -> None:
     """Test aborting an RF change that involves both 0->N increase and N->0 decrease across DCs."""
@@ -1181,6 +1201,7 @@ async def test_multi_rf_increase_before_decrease_0_N(request: pytest.FixtureRequ
             assert rep[0] in host_ids[0:3]
         assert all(host in [r[0] for r in t.replicas] for host in host_ids[0:3])
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_numeric_rf_to_rack_list_conversion_abort(request: pytest.FixtureRequest, manager: ScyllaClusterManager) -> None:
     async def get_replication_options(ks: str, host, ip_addr):
@@ -1244,6 +1265,7 @@ async def test_numeric_rf_to_rack_list_conversion_abort(request: pytest.FixtureR
     repl = await get_replication_options("ks1", host, servers[0].ip_addr)
     assert repl['dc1'] == '1'
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_failed_tablet_rebuild_is_retried(request: pytest.FixtureRequest, manager: ScyllaClusterManager) -> None:
     async def alter_keyspace(new_rf):
@@ -1293,6 +1315,7 @@ async def test_failed_tablet_rebuild_is_retried(request: pytest.FixtureRequest, 
 
     await alter_keyspace("'dc1': ['rack1a', 'rack1b', 'rack1c']")
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_failed_tablet_rebuild_is_retried_on_alter(manager: ScyllaClusterManager) -> None:
     async def alter_keyspace(new_rf):
@@ -1339,6 +1362,7 @@ async def test_failed_tablet_rebuild_is_retried_on_alter(manager: ScyllaClusterM
 # available nodes (all excluded), the ALTER KEYSPACE must fail promptly
 # instead of livelocking with the request endlessly bouncing between
 # paused and resumed states.
+@pytest.mark.max_running_shards(6)
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_rack_list_colocation_livelock_no_target_nodes(request: pytest.FixtureRequest, manager: ScyllaClusterManager) -> None:
@@ -1441,6 +1465,7 @@ async def test_rack_list_colocation_livelock_no_target_nodes(request: pytest.Fix
 # Reproducer for https://github.com/scylladb/scylladb/issues/18110
 # Check that an existing cached read, will be cleaned up when the tablet it reads
 # from is migrated away.
+@pytest.mark.max_running_shards(4)
 async def test_saved_readers_tablet_migration(manager: ScyllaClusterManager, build_mode):
     cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled'}
 
@@ -1510,6 +1535,7 @@ async def test_saved_readers_tablet_migration(manager: ScyllaClusterManager, bui
 #   5) A has view, so writes to it will also result in reads (table::push_view_replica_updates())
 #   6) tablet's update_effective_replication_map() is not refreshing tablet sstable set (for new tablet migrating in)
 #   7) so read on step 5 is not being able to find sstable set for tablet migrating in
+@pytest.mark.max_running_shards(4)
 @pytest.mark.parametrize("with_cache", ['false', 'true'])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_read_of_pending_replica_during_migration(manager: ScyllaClusterManager, with_cache):
@@ -1576,6 +1602,7 @@ async def test_read_of_pending_replica_during_migration(manager: ScyllaClusterMa
 
 # This test checks that --enable-tablets option and the TABLETS parameters of the CQL CREATE KEYSPACE
 # statement are mutually correct.
+@pytest.mark.max_running_shards(2)
 @pytest.mark.parametrize("tablets_mode_for_new_keyspaces", ["enabled", "disabled", "enforced"])
 @pytest.mark.parametrize("cql_tablets_params", ["enabled", "disabled", None])
 @pytest.mark.parametrize("replication_strategy", ["NetworkTopologyStrategy", "SimpleStrategy", "EverywhereStrategy", "LocalStrategy"])
@@ -1627,6 +1654,7 @@ async def test_keyspace_creation_cql_vs_config_sanity(manager: ScyllaClusterMana
         await cql.run_async(f"drop keyspace {ks}")
 
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_streaming_with_unbuilt_view(manager: ScyllaClusterManager):
     """
@@ -1692,6 +1720,7 @@ async def test_tablet_streaming_with_unbuilt_view(manager: ScyllaClusterManager)
         rows = await cql.run_async(f"SELECT c from {ks}.mv1")
         assert len(list(rows)) == num_of_rows
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_streaming_with_staged_sstables(manager: ScyllaClusterManager):
     """
@@ -1781,6 +1810,7 @@ async def test_tablet_streaming_with_staged_sstables(manager: ScyllaClusterManag
         rows = await cql.run_async(f"SELECT c from {ks}.mv1")
         assert len(list(rows)) == expected_num_of_rows
 
+@pytest.mark.max_running_shards(4)
 async def test_orphaned_sstables_on_startup(manager: ScyllaClusterManager):
     """
     Reproducer for https://github.com/scylladb/scylladb/issues/18038
@@ -1834,6 +1864,7 @@ async def test_orphaned_sstables_on_startup(manager: ScyllaClusterManager):
     # Error thrown is of format : "Unable to load SSTable {sstable_name} : Storage wasn't found for tablet {tablet_id} of table {ks}.test"
     await manager.server_start(servers[0].server_id, expected_error="Storage wasn't found for tablet", expected_crash=True)
 
+@pytest.mark.max_running_shards(12)
 @pytest.mark.parametrize("with_zero_token_node", [False, True])
 async def test_remove_failure_with_no_normal_token_owners_in_dc(manager: ScyllaClusterManager, with_zero_token_node: bool):
     """
@@ -1877,6 +1908,7 @@ async def test_remove_failure_with_no_normal_token_owners_in_dc(manager: ScyllaC
                                     ignore_dead_nodes=[replaced_host_id])
         await manager.server_add(replace_cfg=replace_cfg, property_file=node_to_remove.property_file())
 
+@pytest.mark.max_running_shards(8)
 async def test_excludenode(manager: ScyllaClusterManager):
     """
     Verifies recovery scenario involving marking the node as excluded using excludenode.
@@ -1915,6 +1947,7 @@ async def test_excludenode(manager: ScyllaClusterManager):
         # Check that removenode succeeds on the node which is excluded
         await manager.remove_node(live_node.server_id, server_id=node_to_remove.server_id)
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_excludenode_shrink_rf(manager: ScyllaClusterManager):
     """
@@ -1962,6 +1995,7 @@ async def test_excludenode_shrink_rf(manager: ScyllaClusterManager):
         repl = get_replication(cql, ks)
         assert 'dc2' not in repl or get_replica_count(repl.get('dc2', '0')) == 0
 
+@pytest.mark.max_running_shards(12)
 @pytest.mark.parametrize("with_zero_token_node", [False, True])
 async def test_remove_failure_then_replace(manager: ScyllaClusterManager, with_zero_token_node: bool):
     """
@@ -1996,6 +2030,7 @@ async def test_remove_failure_then_replace(manager: ScyllaClusterManager, with_z
         replace_cfg = ReplaceConfig(replaced_id=node_to_remove.server_id, reuse_ip_addr = False, use_host_id=True, wait_dead=True)
         await manager.server_add(replace_cfg=replace_cfg, property_file=node_to_remove.property_file())
 
+@pytest.mark.max_running_shards(12)
 @pytest.mark.tier2
 @pytest.mark.parametrize("with_zero_token_node", [False, True])
 async def test_replace_with_no_normal_token_owners_in_dc(manager: ScyllaClusterManager, with_zero_token_node: bool):
@@ -2054,6 +2089,7 @@ async def test_replace_with_no_normal_token_owners_in_dc(manager: ScyllaClusterM
         # For dropping the keyspace
         await asyncio.gather(*[manager.server_start(node.server_id) for node in servers['dc2']])
 
+@pytest.mark.max_running_shards(12)
 async def test_replace_after_losing_all_tablet_replicas(manager: ScyllaClusterManager):
     """
     Verify what happens when a node is replaced after all replicas of some
@@ -2217,6 +2253,7 @@ async def test_replace_after_losing_all_tablet_replicas(manager: ScyllaClusterMa
         await asyncio.gather(*[cql.run_async(stmt, [k, k]) for k in doomed_keys])
         assert {r.pk for r in await cql.run_async(query)} == set(keys)
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_drop_keyspace_while_split(manager: ScyllaClusterManager):
 
@@ -2267,6 +2304,7 @@ async def test_drop_keyspace_while_split(manager: ScyllaClusterManager):
     await manager.api.message_injection(servers[0].ip_addr, "truncate_compaction_disabled_wait")
     await drop_ks_task
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_drop_with_tablet_migration_cleanup(manager: ScyllaClusterManager):
 
@@ -2321,6 +2359,7 @@ async def test_drop_with_tablet_migration_cleanup(manager: ScyllaClusterManager)
         await drop_future
 
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_two_tablets_concurrent_repair_and_migration(manager: ScyllaClusterManager):
     injection = "repair_shard_repair_task_impl_do_repair_ranges"
@@ -2348,6 +2387,7 @@ async def test_two_tablets_concurrent_repair_and_migration(manager: ScyllaCluste
 
     await asyncio.gather(repair_task(), migration_task())
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_split_finalization_with_migrations(manager: ScyllaClusterManager):
     """
@@ -2427,6 +2467,7 @@ async def test_tablet_split_finalization_with_migrations(manager: ScyllaClusterM
     logger.info("Waiting for migrations to complete")
     await log.wait_for("Tablet load balancer did not make any plan", from_mark=migration_mark)
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_two_tablets_concurrent_repair_and_migration_repair_writer_level(manager: ScyllaClusterManager):
     injection = "repair_writer_impl_create_writer_wait"
@@ -2532,13 +2573,16 @@ async def check_tablet_rebuild_with_repair(manager: ScyllaClusterManager, fail: 
             else:
                 assert res[0].count == 0
 
+@pytest.mark.max_running_shards(6)
 async def test_tablet_rebuild(manager: ScyllaClusterManager):
     await check_tablet_rebuild_with_repair(manager, False)
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_rebuild_failure(manager: ScyllaClusterManager):
     await check_tablet_rebuild_with_repair(manager, True)
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_repair_with_invalid_session_id(manager: ScyllaClusterManager):
     injection = "handle_tablet_migration_repair_random_session"
@@ -2554,6 +2598,7 @@ async def test_repair_with_invalid_session_id(manager: ScyllaClusterManager):
     matches = [await log.grep(r"std::runtime_error: Session not found", from_mark=mark) for log, mark in zip(logs, marks)]
     assert sum(len(x) for x in matches) > 0
 
+@pytest.mark.max_running_shards(2)
 async def test_moving_replica_to_replica(manager: ScyllaClusterManager):
     """
     Verify that trying to move a tablet replica to a node that is already
@@ -2592,6 +2637,7 @@ async def test_moving_replica_to_replica(manager: ScyllaClusterManager):
             dst_shard=0,
             token=tablet_token)
 
+@pytest.mark.max_running_shards(2)
 async def test_moving_replica_within_single_rack(manager: ScyllaClusterManager):
     """
     Verify that it's possible to move a tablet from a replica node to a node
@@ -2634,6 +2680,7 @@ async def test_moving_replica_within_single_rack(manager: ScyllaClusterManager):
         dst_shard=0,
         token=tablet_token)
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_disabling_balancing_preempts_balancer(manager: ScyllaClusterManager):
     servers = await manager.servers_add(2, auto_rack_dc="dc1")
@@ -2653,6 +2700,7 @@ async def test_disabling_balancing_preempts_balancer(manager: ScyllaClusterManag
         await manager.disable_tablet_balancing()
 
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_table_creation_wakes_up_balancer(manager: ScyllaClusterManager):
     """
@@ -2686,6 +2734,7 @@ async def test_table_creation_wakes_up_balancer(manager: ScyllaClusterManager):
         await manager.api.message_injection(server.ip_addr, 'wait-before-topology-coordinator-goes-to-sleep')
         await log.wait_for('wait-after-topology-coordinator-gets-event: wait', from_mark=mark, timeout=5)
 
+@pytest.mark.max_running_shards(6)
 async def test_multi_rf_increase_auto_abort_excluded_node(request: pytest.FixtureRequest, manager: ScyllaClusterManager) -> None:
     """Test that an RF change is automatically aborted when a required rack has no available nodes.
 
@@ -2748,6 +2797,7 @@ async def test_multi_rf_increase_auto_abort_excluded_node(request: pytest.Fixtur
             assert len(t.replicas) == 1
             assert t.replicas[0][0] == dc1_host_id
 
+@pytest.mark.max_running_shards(6)
 async def test_rf_extend_abort_with_down_node(request: pytest.FixtureRequest, manager: ScyllaClusterManager) -> None:
     """Test that an RF extend is aborted when a required rack has a down (not excluded) node.
 
@@ -2801,6 +2851,7 @@ async def test_rf_extend_abort_with_down_node(request: pytest.FixtureRequest, ma
             assert t.replicas[0][0] == dc1_host_id
 
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_split_completion_with_data_in_main_cg(manager: ScyllaClusterManager):
@@ -2893,6 +2944,7 @@ async def test_split_completion_with_data_in_main_cg(manager: ScyllaClusterManag
         await manager.api.message_injection(target.ip_addr, "tablet_split_monitor_wait")
         await manager.server_update_config(target.server_id, "error_injections_at_startup", [])
 
+@pytest.mark.max_running_shards(10)
 @pytest.mark.asyncio
 async def test_rf_reduction_preserves_quorum_writes(manager: ScyllaClusterManager) -> None:
     """RF reduction must preserve QUORUM-acknowledged writes even when surviving replicas missed them.

@@ -20,6 +20,7 @@ def disable_auto_compaction(ip_addr, ks_name, cf_name):
     if not ret.ok:
         raise RuntimeError(f'failed to disable autocompaction using {api_path}: {ret.text}')
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_resurrection_while_file_streaming(manager: ScyllaClusterManager):
     '''

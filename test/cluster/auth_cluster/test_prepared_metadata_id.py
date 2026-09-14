@@ -142,6 +142,7 @@ def _prepare_and_execute(host: str, query: str) -> tuple[bytes, bool, int]:
             safe_driver_shutdown(cluster)
 
 
+@pytest.mark.max_running_shards(2)
 async def test_prepared_list_metadata_ids(manager: ScyllaClusterManager) -> None:
     servers = await manager.running_servers()
     if servers:

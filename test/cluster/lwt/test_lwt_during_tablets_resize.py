@@ -131,6 +131,7 @@ async def run_random_resizes(
     }
 
 
+@pytest.mark.max_running_shards(12)
 @pytest.mark.no_parallel
 async def test_multi_column_lwt_during_split_merge(manager: ScyllaClusterManager, scale_timeout):
     """

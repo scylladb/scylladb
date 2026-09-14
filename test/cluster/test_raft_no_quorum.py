@@ -34,6 +34,7 @@ async def update_group0_raft_op_timeout(server_id: ServerNum, manager: ScyllaClu
         await manager.server_update_config(server_id, 'group0_raft_op_timeout_in_ms', timeout)
 
 
+@pytest.mark.max_running_shards(10)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.skip_mode(mode='debug', reason='aarch64/debug is unpredictably slow', platform_key='aarch64')
 async def test_cannot_add_new_node(manager: ScyllaClusterManager, raft_op_timeout: int) -> None:
@@ -87,6 +88,7 @@ async def test_cannot_add_new_node(manager: ScyllaClusterManager, raft_op_timeou
     logger.info("done")
 
 
+@pytest.mark.max_running_shards(8)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.skip_mode(mode='debug', reason='aarch64/debug is unpredictably slow', platform_key='aarch64')
 async def test_quorum_lost_during_node_join(manager: ScyllaClusterManager, raft_op_timeout: int) -> None:
@@ -130,6 +132,7 @@ async def test_quorum_lost_during_node_join(manager: ScyllaClusterManager, raft_
     await fourth_node_future
 
 
+@pytest.mark.max_running_shards(8)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.skip_mode(mode='debug', reason='aarch64/debug is unpredictably slow', platform_key='aarch64')
 async def test_quorum_lost_during_node_join_response_handler(manager: ScyllaClusterManager, raft_op_timeout: int) -> None:
@@ -203,6 +206,7 @@ async def test_quorum_lost_during_node_join_response_handler(manager: ScyllaClus
     await fourth_node_future
 
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.skip_mode(mode='debug', reason='aarch64/debug is unpredictably slow', platform_key='aarch64')
 async def test_cannot_run_operations(manager: ScyllaClusterManager, raft_op_timeout: int) -> None:
@@ -252,6 +256,7 @@ async def test_cannot_run_operations(manager: ScyllaClusterManager, raft_op_time
     logger.info("done")
 
 
+@pytest.mark.max_running_shards(10)
 @pytest.mark.skip_mode(mode='release', reason='dev mode is sufficient for this test')
 @pytest.mark.skip_mode(mode='debug', reason='dev mode is sufficient for this test')
 async def test_can_restart(manager: ScyllaClusterManager, raft_op_timeout: int) -> None:

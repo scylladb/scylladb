@@ -79,6 +79,7 @@ common_debug_cli_options = [
     '--dump-memory-diagnostics-on-alloc-failure-kind=all',
 ]
 
+@pytest.mark.max_running_shards(4)
 async def test_retrain_dict(manager: ScyllaClusterManager):
     """
     Tests basic functionality of SSTable compression with shared dictionaries.
@@ -203,6 +204,7 @@ async def test_retrain_dict(manager: ScyllaClusterManager):
 
     logger.info("Test completed successfully")
 
+@pytest.mark.max_running_shards(4)
 async def test_estimate_compression_ratios(manager: ScyllaClusterManager):
     logger.info("Bootstrapping cluster")
 
@@ -295,6 +297,7 @@ async def test_estimate_compression_ratios(manager: ScyllaClusterManager):
 
     assert sorted(expected_entries.keys()) == sorted(tuple(r.items()) for r in result)
 
+@pytest.mark.max_running_shards(2)
 async def test_dict_memory_limit(manager: ScyllaClusterManager):
     # Bootstrap cluster and configure server
     logger.info("Bootstrapping cluster")
@@ -401,6 +404,7 @@ async def test_dict_memory_limit(manager: ScyllaClusterManager):
         await cql.run_async("DROP TABLE test.test")
         await assert_eventually_dict_memory_leq_than(total_threshold=0)
 
+@pytest.mark.max_running_shards(2)
 async def test_sstable_compression_dictionaries_enable_writing(manager: ScyllaClusterManager):
     """
     Tests basic functionality of the `sstable_compression_dictionaries_enable_writing` config knob.

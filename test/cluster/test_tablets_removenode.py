@@ -29,6 +29,7 @@ async def run_async_cl_all(cql, query: str):
     return await cql.run_async(stmt)
 
 
+@pytest.mark.max_running_shards(6)
 async def test_removenode_with_coordinator_restart(manager: ScyllaClusterManager):
     """
     Verifies that removenode can proceed when the coordinator is restarted
@@ -60,6 +61,7 @@ async def test_removenode_with_coordinator_restart(manager: ScyllaClusterManager
     await manager.remove_node(servers[1].server_id, servers[2].server_id)
 
 
+@pytest.mark.max_running_shards(6)
 async def test_replace(manager: ScyllaClusterManager):
     logger.info("Bootstrapping cluster")
     cmdline = [
@@ -140,6 +142,7 @@ async def test_replace(manager: ScyllaClusterManager):
     await check_ks(ks3)
 
 
+@pytest.mark.max_running_shards(8)
 async def test_removenode(manager: ScyllaClusterManager):
     logger.info("Bootstrapping cluster")
     cmdline = ['--logger-log-level', 'storage_service=trace']
@@ -202,6 +205,7 @@ async def test_removenode(manager: ScyllaClusterManager):
     await check()
 
 
+@pytest.mark.max_running_shards(10)
 async def test_removenode_with_ignored_node(manager: ScyllaClusterManager):
     logger.info("Bootstrapping cluster")
     cmdline = [

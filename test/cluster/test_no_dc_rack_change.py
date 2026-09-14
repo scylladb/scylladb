@@ -11,6 +11,7 @@ from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 
 logger = logging.getLogger(__name__)
 
+@pytest.mark.max_running_shards(4)
 async def test_no_dc_rack_change(manager: ScyllaClusterManager) -> None:
     """
     Check that it is not possible to change node's DC or rack during restart.

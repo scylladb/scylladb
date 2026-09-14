@@ -14,6 +14,7 @@ from test.cluster.util import new_test_keyspace
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 
 
+@pytest.mark.max_running_shards(4)
 async def test_sticky_coordinator_enforced(manager: ScyllaClusterManager) -> None:
     await manager.servers_add(2, cmdline=['--logger-log-level', 'paging=trace'], auto_rack_dc="dc1")
 

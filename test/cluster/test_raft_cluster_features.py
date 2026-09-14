@@ -15,31 +15,37 @@ from test.cluster import test_cluster_features
 import pytest
 
 
+@pytest.mark.max_running_shards(6)
 async def test_rolling_upgrade_happy_path(manager: ScyllaClusterManager) -> None:
     await manager.servers_add(3, auto_rack_dc="dc1")
     await test_cluster_features.test_rolling_upgrade_happy_path(manager)
 
 
+@pytest.mark.max_running_shards(6)
 async def test_downgrade_after_partial_upgrade(manager: ScyllaClusterManager) -> None:
     await manager.servers_add(3, auto_rack_dc="dc1")
     await test_cluster_features.test_downgrade_after_partial_upgrade(manager)
 
 
+@pytest.mark.max_running_shards(8)
 async def test_joining_old_node_fails(manager: ScyllaClusterManager) -> None:
     await manager.servers_add(3, auto_rack_dc="dc1")
     await test_cluster_features.test_joining_old_node_fails(manager)
 
 
+@pytest.mark.max_running_shards(6)
 async def test_downgrade_after_successful_upgrade_fails(manager: ScyllaClusterManager) -> None:
     await manager.servers_add(3, auto_rack_dc="dc1")
     await test_cluster_features.test_downgrade_after_successful_upgrade_fails(manager)
 
 
+@pytest.mark.max_running_shards(6)
 async def test_partial_upgrade_can_be_finished_with_removenode(manager: ScyllaClusterManager) -> None:
     await manager.servers_add(3, auto_rack_dc="dc1")
     await test_cluster_features.test_partial_upgrade_can_be_finished_with_removenode(manager)
 
 
+@pytest.mark.max_running_shards(6)
 async def test_cannot_disable_cluster_feature_after_all_declare_support(manager: ScyllaClusterManager) -> None:
     """Upgrade all nodes to support the test cluster feature, but suppress
        the topology coordinator and prevent it from enabling the feature.

@@ -23,6 +23,7 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 
+@pytest.mark.max_running_shards(8)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_cdc_generation_clearing(manager: ScyllaClusterManager):
     """Test that obsolete CDC generations are removed from CDC_GENERATIONS_V3 and TOPOLOGY.committed_cdc_generations
@@ -90,6 +91,7 @@ async def test_cdc_generation_clearing(manager: ScyllaClusterManager):
         await check_system_topology_and_cdc_generations_v3_consistency(manager, hosts)
 
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_unpublished_cdc_generations_arent_cleared(manager: ScyllaClusterManager):
     """Test that unpublished CDC generations aren't removed from CDC_GENERATIONS_V3 and

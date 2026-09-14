@@ -15,6 +15,7 @@ from test.pylib.util import wait_for
 
 logger = logging.getLogger(__name__)
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_long_join(manager: ScyllaClusterManager) -> None:
     """The test checks that join works even if expiring entries are dropped
@@ -29,6 +30,7 @@ async def test_long_join(manager: ScyllaClusterManager) -> None:
     await manager.api.message_injection(s1.ip_addr, inj)
     await asyncio.gather(task)
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_long_join_drop_entries_on_bootstrapping(manager: ScyllaClusterManager) -> None:
     """The test checks that join works even if expiring entries are dropped

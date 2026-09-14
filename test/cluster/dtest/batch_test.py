@@ -182,6 +182,7 @@ class BatchTester:
 class TestBatch(Tester):
     """Batch tests grouped by cluster topology to enable cluster reuse."""
 
+    @pytest.mark.max_running_shards(2)
     @pytest.mark.single_node
     def test_single_node_batch_group(self):
         """Group of tests that reuse a single-node cluster.
@@ -212,6 +213,7 @@ class TestBatch(Tester):
         logger.info("Running: check_unlogged_batch_gcgs_below_threshold_should_not_print_warning")
         bt.check_unlogged_batch_gcgs_below_threshold_should_not_print_warning(session)
 
+    @pytest.mark.max_running_shards(6)
     def test_multi_node_batch_group(self):
         """Group of tests that reuse a 3-node cluster."""
         bt = BatchTester(self)

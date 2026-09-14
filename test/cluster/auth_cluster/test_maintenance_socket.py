@@ -95,6 +95,7 @@ async def connect_with_credentials(manager: ScyllaClusterManager, ip: str, usern
     return await wait_for(try_connect, time.time() + timeout)
 
 
+@pytest.mark.max_running_shards(2)
 async def test_maintenance_socket(manager: ScyllaClusterManager, cql_clusters: CqlClusters):
     """
     Test that when connecting to the maintenance socket, the user has superuser permissions,
@@ -150,6 +151,7 @@ async def test_maintenance_socket(manager: ScyllaClusterManager, cql_clusters: C
     maintenance_session.execute("CREATE TABLE ks1.t2 (pk int PRIMARY KEY, val int);")
 
 
+@pytest.mark.max_running_shards(2)
 async def test_no_default_superuser_exists_by_default(manager: ScyllaClusterManager, cql_clusters: CqlClusters):
     """
     Test that no 'cassandra' user exists when no default superuser is configured.
@@ -173,6 +175,7 @@ async def test_no_default_superuser_exists_by_default(manager: ScyllaClusterMana
         pass
 
 
+@pytest.mark.max_running_shards(2)
 async def test_no_default_superuser_maintenance_socket_ops(manager: ScyllaClusterManager, cql_clusters: CqlClusters):
     """
     Test that we can manage user roles via the maintenance socket.
@@ -263,6 +266,7 @@ async def test_no_default_superuser_maintenance_socket_ops(manager: ScyllaCluste
     await wait_for(check_role_dropped, time.time() + 60)
 
 
+@pytest.mark.max_running_shards(2)
 async def test_maintenance_socket_grant_revoke(manager: ScyllaClusterManager, cql_clusters: CqlClusters):
     """
     Test that GRANT, REVOKE, and REVOKE ALL via the maintenance socket work correctly.

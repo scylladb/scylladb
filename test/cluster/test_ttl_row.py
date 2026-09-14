@@ -49,6 +49,7 @@ async def get_cpu_metrics(manager: ScyllaClusterManager):
     return (ms_streaming, ms_statement, items_deleted)
 
 
+@pytest.mark.max_running_shards(6)
 async def test_row_ttl_scheduling_group(manager: ScyllaClusterManager):
     """Verify that the expiration scans and deletion operations done by the
        per-row TTL feature are done entirely in the "streaming" scheduling
@@ -149,6 +150,7 @@ async def test_row_ttl_scheduling_group(manager: ScyllaClusterManager):
     assert ms_streaming > 0, f'expected some streaming-group work, got 0 (statement: {ms_statement} ms)'
     assert ms_statement < ms_streaming * 0.1, f'expected negligible statement-group work, got {ms_statement} ms (streaming: {ms_streaming} ms)'
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.parametrize("with_down_node", [False, True], ids=["all_nodes_up", "one_node_down"])
 async def test_row_ttl_multinode_expiration(manager: ScyllaClusterManager, with_down_node):
     """When the cluster has multiple nodes, different nodes are responsible
@@ -205,6 +207,7 @@ async def test_row_ttl_multinode_expiration(manager: ScyllaClusterManager, with_
                 time.sleep(0.1)
             assert 0 == len(list(await cql.run_async(SimpleStatement(f'SELECT p FROM {table}', consistency_level=ConsistencyLevel.QUORUM))))
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_row_ttl_upgrade(manager: ScyllaClusterManager):
     """This test verifies that a rolling upgrade works as designed for the
@@ -289,6 +292,7 @@ async def test_row_ttl_upgrade(manager: ScyllaClusterManager):
     assert 0 == len(list(await cql.run_async(SimpleStatement(f'SELECT p FROM ks.tbl2', consistency_level=ConsistencyLevel.QUORUM))))
 
 
+@pytest.mark.max_running_shards(12)
 async def test_row_ttl_multi_dc(manager: ScyllaClusterManager):
     """Check that the TTL feature works correctly on a setup with multiple
        data centers. Rows added in one DC will, of course, get copied to all

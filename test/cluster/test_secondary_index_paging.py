@@ -47,6 +47,7 @@ async def fill(cql, table, rows):
         await cql.run_async(insert, [p, v])
 
 
+@pytest.mark.max_running_shards(4)
 async def test_resumed_page_keeps_its_plan_on_another_coordinator(manager: ScyllaClusterManager) -> None:
     servers = await manager.servers_add(2, auto_rack_dc="dc1")
     cql = manager.get_cql()
@@ -84,6 +85,7 @@ async def test_resumed_page_keeps_its_plan_on_another_coordinator(manager: Scyll
         assert expected == sorted(row.p for row in got)
 
 
+@pytest.mark.max_running_shards(4)
 async def test_resuming_a_dropped_index_is_refused_on_another_coordinator(manager: ScyllaClusterManager) -> None:
     servers = await manager.servers_add(2, auto_rack_dc="dc1")
     cql = manager.get_cql()
@@ -142,6 +144,7 @@ async def indexed_table(cql, hosts, ks):
     return table
 
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.skip_mode(mode='release', reason='dev mode is enough for this test')
 @pytest.mark.skip_mode(mode='debug', reason='dev mode is enough for this test')
 async def test_paged_read_crosses_versions(manager: ScyllaClusterManager,
@@ -170,6 +173,7 @@ async def test_paged_read_crosses_versions(manager: ScyllaClusterManager,
             assert expected == sorted(row.p for row in got)
 
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.skip_mode(mode='release', reason='dev mode is enough for this test')
 @pytest.mark.skip_mode(mode='debug', reason='dev mode is enough for this test')
 async def test_resuming_a_pre_plan_paging_state_is_not_refused(manager: ScyllaClusterManager,

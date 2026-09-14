@@ -292,6 +292,7 @@ async def run_random_resizes(
         "seen_merge": merge_count,
     }
 
+@pytest.mark.max_running_shards(12)
 @pytest.mark.no_parallel
 async def test_multi_column_lwt_migrate_and_random_resizes(manager: ScyllaClusterManager, scale_timeout):
 

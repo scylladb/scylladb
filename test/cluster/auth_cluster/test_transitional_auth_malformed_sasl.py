@@ -12,6 +12,7 @@ from cassandra.query import SimpleStatement
 
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.cluster.auth_cluster import extra_scylla_config_options as auth_config
+import pytest
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,7 @@ class _MalformedSaslAuthProvider(AuthProvider):
 
 
 # Reproduces SCYLLADB-4166
+@pytest.mark.max_running_shards(2)
 async def test_transitional_auth_malformed_sasl_token(manager: ScyllaClusterManager) -> None:
     server = await manager.server_add(config={**auth_config,
                                               "authenticator": TRANSITIONAL_AUTHENTICATOR,

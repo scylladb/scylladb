@@ -16,6 +16,7 @@ import pytest
 
 logger = logging.getLogger(__name__)
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_add_and_drop_column_with_cdc(manager: ScyllaClusterManager):
     """ Test writing to a table with CDC enabled while adding and dropping a column.
@@ -74,6 +75,7 @@ async def test_add_and_drop_column_with_cdc(manager: ScyllaClusterManager):
         cdc_rows = await cql.run_async(f"SELECT COUNT(*) FROM {ks}.test_scylla_cdc_log")
         assert base_rows[0].count == cdc_rows[0].count, f"Base table rows: {base_rows[0].count}, CDC log rows: {cdc_rows[0].count}"
 
+@pytest.mark.max_running_shards(2)
 async def test_cdc_compatible_schema(manager: ScyllaClusterManager):
     """
     Basic test that we can write to a table with CDC enabled when the schema of
@@ -109,6 +111,7 @@ async def test_cdc_compatible_schema(manager: ScyllaClusterManager):
         matches = await log.grep("has no CDC schema set")
         assert len(matches) == 0, "Found unexpected log messages indicating missing CDC schema"
 
+@pytest.mark.max_running_shards(2)
 async def test_recreate_column_too_soon(manager: ScyllaClusterManager):
     """ Test that recreating a dropped column too soon fails with an appropriate error.
 
@@ -129,6 +132,7 @@ async def test_recreate_column_too_soon(manager: ScyllaClusterManager):
         with pytest.raises(Exception, match="a column with the same name was dropped too recently"):
             await cql.run_async(f"ALTER TABLE {ks}.test ADD dropped_col int")
 
+@pytest.mark.max_running_shards(6)
 async def test_concurrent_writes_and_drop_column_with_cdc_preimage(manager: ScyllaClusterManager):
     """ Test concurrent writes and column drop with CDC preimage enabled.
 

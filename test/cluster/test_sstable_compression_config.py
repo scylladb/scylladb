@@ -31,6 +31,7 @@ def yaml_to_cmdline(config):
     return cmdline
 
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.parametrize('cfg_source', ['yaml', 'cmdline'])
 async def test_chunk_size_negative(manager: ScyllaClusterManager, cfg_source: str):
     config = {
@@ -46,6 +47,7 @@ async def test_chunk_size_negative(manager: ScyllaClusterManager, cfg_source: st
         await manager.server_add(cmdline=yaml_to_cmdline(config), expected_error=expected_error)
 
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.parametrize('cfg_source', ['yaml', 'cmdline'])
 async def test_chunk_size_beyond_max(manager: ScyllaClusterManager, cfg_source: str):
     config = {
@@ -61,6 +63,7 @@ async def test_chunk_size_beyond_max(manager: ScyllaClusterManager, cfg_source: 
         await manager.server_add(cmdline=yaml_to_cmdline(config), expected_error=expected_error)
 
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.parametrize('cfg_source', ['yaml', 'cmdline'])
 async def test_chunk_size_not_power_of_two(manager: ScyllaClusterManager, cfg_source: str):
     config = {
@@ -77,6 +80,7 @@ async def test_chunk_size_not_power_of_two(manager: ScyllaClusterManager, cfg_so
         await manager.server_add(cmdline=yaml_to_cmdline(config), expected_error=expected_error)
 
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.parametrize('cfg_source', ['yaml', 'cmdline'])
 async def test_crc_check_chance_out_of_bounds(manager: ScyllaClusterManager, cfg_source: str):
     config = {
@@ -92,6 +96,7 @@ async def test_crc_check_chance_out_of_bounds(manager: ScyllaClusterManager, cfg
     else:
         await manager.server_add(cmdline=yaml_to_cmdline(config), expected_error=expected_error)
 
+@pytest.mark.max_running_shards(4)
 async def test_default_compression_on_upgrade(manager: ScyllaClusterManager, scylla_2025_1: ScyllaVersionDescription, scylla_binary: Path):
     """
     Check that the default SSTable compression algorithm is:
@@ -144,6 +149,7 @@ async def test_default_compression_on_upgrade(manager: ScyllaClusterManager, scy
     await create_table_and_check_compression(cql, "test_ks", "table_after_upgrade", "LZ4WithDictsCompressor", "after upgrade and feature enabled")
 
 
+@pytest.mark.max_running_shards(2)
 async def test_alternator_tables_respect_compression_config(manager: ScyllaClusterManager):
     """
     Check that the default compression settings for all Alternator tables (base
@@ -229,6 +235,7 @@ async def test_alternator_tables_respect_compression_config(manager: ScyllaClust
         table.delete()
 
 
+@pytest.mark.max_running_shards(2)
 async def test_cql_base_tables_respect_compression_config(manager: ScyllaClusterManager):
     """
     Check that the default compression settings for CQL base tables are taken
@@ -259,6 +266,7 @@ async def test_cql_base_tables_respect_compression_config(manager: ScyllaCluster
         await cql.run_async(f"DROP KEYSPACE {ks}")
 
 
+@pytest.mark.max_running_shards(2)
 async def test_cql_aux_tables_respect_compression_config(manager: ScyllaClusterManager):
     """
     Check that the default compression settings for CQL auxiliary tables

@@ -13,6 +13,7 @@ from test.cluster.test_config import wait_for_config
 # Default Prometheus metrics port
 PROMETHEUS_PORT = 9180
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.asyncio
 async def test_prometheus_allow_protobuf_default(manager):
     """
@@ -36,6 +37,7 @@ async def test_prometheus_allow_protobuf_default(manager):
 # Accept header for requesting Prometheus protobuf format with native histograms
 PROMETHEUS_PROTOBUF_ACCEPT_HEADER = 'application/vnd.google.protobuf; proto=io.prometheus.client.MetricFamily; encoding=delimited'
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.asyncio
 async def test_prometheus_protobuf_native_histogram(manager):
     """

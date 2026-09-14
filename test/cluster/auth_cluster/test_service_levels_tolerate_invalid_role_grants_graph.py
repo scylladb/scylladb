@@ -6,8 +6,10 @@
 
 from test.cluster.auth_cluster import extra_scylla_config_options as auth_config
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
+import pytest
 
 
+@pytest.mark.max_running_shards(2)
 async def test_tolerating_cycles_in_auth(manager: ScyllaClusterManager):
     """
     Verify that the service levels logic in group0 gracefully handles cycles
@@ -44,6 +46,7 @@ async def test_tolerating_cycles_in_auth(manager: ScyllaClusterManager):
     await log.wait_for("Cycle detected in the system.role_members table: (a -> b -> a|b -> a -> b)")
 
 
+@pytest.mark.max_running_shards(2)
 async def test_invalid_graph_with_edges_to_non_existing_members(manager: ScyllaClusterManager):
     """
     Verify that the service levels logic gracefully handles invalid graphs of roles

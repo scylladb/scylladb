@@ -21,6 +21,7 @@ import os
 # to 128 * 2^10 bytes.
 #
 # Reproducer for issue scylladb/scylladb#24018.
+@pytest.mark.max_running_shards(2)
 async def test_large_create_statement(manager: ScyllaClusterManager):
     cmdline = ["--logger-log-level", "describe=trace"]
     srv = await manager.server_add(cmdline=cmdline)
@@ -52,6 +53,7 @@ async def test_large_create_statement(manager: ScyllaClusterManager):
             matches = await log.grep("oversized allocation", from_mark=marker)
             assert len(matches) == 0
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.parametrize("mode", ["normal", "maintenance"])
 async def test_describe_cluster_sanity(manager: ScyllaClusterManager, mode: str):
     """

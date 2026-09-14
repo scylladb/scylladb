@@ -18,6 +18,7 @@ def verify_data(response, expected_data):
         pytest.fail("Length of response and expected data mismatch")
 
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_reversed_queries_during_upgrade(manager: ScyllaClusterManager) -> None:
     """

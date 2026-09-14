@@ -23,6 +23,7 @@ from cassandra.cluster import ConnectionException, NoHostAvailable  # type: igno
 
 logger = logging.getLogger(__name__)
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_unfinished_writes_during_shutdown(request: pytest.FixtureRequest, manager: ScyllaClusterManager) -> None:
     """ Test a simultaneous topology change and write query during shutdown,

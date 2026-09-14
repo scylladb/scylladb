@@ -228,3 +228,9 @@ def nodetool(request, jmx, nodetool_path, rest_api_mock_server):
             return res
 
     return invoker
+
+# These tests start no cluster: each invocation runs `scylla nodetool`,
+# and a scylla *tool* runs on one shard by design -- configure_tool_mode() in
+# tools/utils.cc sets smp to 1 -- against a Python REST-API mock.  Not free,
+# but one shard's worth, and a constant.
+pytestmark = pytest.mark.max_running_shards(1)

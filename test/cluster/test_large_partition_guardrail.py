@@ -29,6 +29,7 @@ async def _make_oversized_partition(cql, tbl, pk, num_rows, value_size_bytes):
         await cql.run_async(insert, [pk, ck, bytes(value_size_bytes)])
 
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_large_data_guardrails_rolling_upgrade(manager: ScyllaClusterManager):
@@ -105,6 +106,7 @@ async def test_large_data_guardrails_rolling_upgrade(manager: ScyllaClusterManag
         await cql.run_async(insert, [1, 99, b"\x00"])
 
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_read_repair_skips_large_data_guardrails(manager: ScyllaClusterManager):

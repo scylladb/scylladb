@@ -11,6 +11,7 @@ import pytest
 pytestmark = pytest.mark.prepare_3_racks_cluster
 
 
+@pytest.mark.max_running_shards(8)
 async def test_replacing_alive_node_fails(manager: ScyllaClusterManager) -> None:
     """Try replacing an alive node and check that it fails"""
     servers = await manager.running_servers()

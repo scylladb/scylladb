@@ -248,6 +248,7 @@ def _server_config(tmp_path, extra_config=None):
     return config
 
 
+@pytest.mark.max_running_shards(2)
 async def test_cql_optional_client_cert(manager: ScyllaClusterManager, tmp_path):
     """Test CertificateOrPasswordAuthenticator with require_client_auth=optional.
 
@@ -370,6 +371,7 @@ async def test_cql_optional_client_cert(manager: ScyllaClusterManager, tmp_path)
         safe_driver_shutdown(cluster_no_rule_cert)
 
 
+@pytest.mark.max_running_shards(2)
 async def test_cql_plain_port(manager: ScyllaClusterManager, tmp_path):
     """Test CertificateOrPasswordAuthenticator on an unencrypted CQL port.
 
@@ -475,6 +477,7 @@ def _attempt_cert_login(host, tmp_path, cert, refused):
         safe_driver_shutdown(cluster)
 
 
+@pytest.mark.max_running_shards(2)
 async def test_audit_accepted_certificate_login(manager: ScyllaClusterManager, tmp_path):
     """An accepted certificate login is audited under the role it names (SCYLLADB-3926)."""
     async with _audit_login_node(manager, tmp_path) as (host, admin):
@@ -485,6 +488,7 @@ async def test_audit_accepted_certificate_login(manager: ScyllaClusterManager, t
                             description='certuser certificate login')
 
 
+@pytest.mark.max_running_shards(2)
 async def test_audit_rejected_certificate_login(manager: ScyllaClusterManager, tmp_path):
     """A certificate the role query cannot match is audited under an empty name (SCYLLADB-3926)."""
     async with _audit_login_node(manager, tmp_path) as (host, admin):
@@ -494,6 +498,7 @@ async def test_audit_rejected_certificate_login(manager: ScyllaClusterManager, t
         _await_login_record(admin, host, '', error=True, description='rejected certificate')
 
 
+@pytest.mark.max_running_shards(2)
 async def test_audit_certificate_for_missing_role(manager: ScyllaClusterManager, tmp_path):
     """A certificate naming a role that does not exist is audited as an error (SCYLLADB-3926).
 
@@ -511,6 +516,7 @@ async def test_audit_certificate_for_missing_role(manager: ScyllaClusterManager,
             'a refused certificate login must not also produce a success record'
 
 
+@pytest.mark.max_running_shards(2)
 async def test_audit_password_login_on_tls_port(manager: ScyllaClusterManager, tmp_path):
     """A password login on the TLS port keeps producing its SASL-path record (SCYLLADB-3926)."""
     async with _audit_login_node(manager, tmp_path) as (host, admin):
@@ -574,6 +580,7 @@ def _refused_login_records(session):
     return [r for r in _login_records(session) if r.username == '' and r.error]
 
 
+@pytest.mark.max_running_shards(2)
 async def test_audit_login_without_certificate(manager: ScyllaClusterManager, tmp_path):
     """A client presenting no certificate at all must be audited (SCYLLADB-3926).
 
@@ -607,6 +614,7 @@ async def test_audit_login_without_certificate(manager: ScyllaClusterManager, tm
             assert row.table_name == ''
 
 
+@pytest.mark.max_running_shards(2)
 async def test_audit_repeated_refused_startup(manager: ScyllaClusterManager, tmp_path):
     """Every rejected STARTUP on one connection must be audited (SCYLLADB-3926).
 

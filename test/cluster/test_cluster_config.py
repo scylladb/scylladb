@@ -84,6 +84,7 @@ async def wait_for_schema_agreement(manager: ScyllaClusterManager, servers, dead
     return await wait_for(schema_versions_agree, deadline)
 
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.asyncio
 async def test_cluster_config_auto_repair_table_scope_persistence(manager: ScyllaClusterManager) -> None:
     servers = [
@@ -116,6 +117,7 @@ async def test_cluster_config_auto_repair_table_scope_persistence(manager: Scyll
     await wait_for_config_map_value_on_hosts(cql, hosts, CLUSTER_CONFIGS_QUERY, [], "auto_repair_enabled", None)
 
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.asyncio
 async def test_rack_name_is_not_globally_unique(manager: ScyllaClusterManager) -> None:
     """Regression guard: rack names are not required to be globally unique.
@@ -135,6 +137,7 @@ async def test_rack_name_is_not_globally_unique(manager: ScyllaClusterManager) -
     assert {server.rack for server in servers} == {"rack1"}
 
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.asyncio
 async def test_cluster_config_auto_repair_survives_restart_and_join(manager: ScyllaClusterManager) -> None:
     servers = [
@@ -166,6 +169,7 @@ async def test_cluster_config_auto_repair_survives_restart_and_join(manager: Scy
 # field-by-field in topology_coordinator::finalize_migration(). If it drops config_options,
 # make_create_keyspace_mutations() emits a collection tombstone for the empty map and every
 # keyspace-scope override is silently erased.
+@pytest.mark.max_running_shards(2)
 @pytest.mark.asyncio
 async def test_keyspace_config_survives_vnodes_to_tablets_migration(manager: ScyllaClusterManager) -> None:
     server = await manager.server_add(config={"num_tokens": 16})
@@ -239,6 +243,7 @@ async def test_mixed_version_upgrade_with_old_binary(
     await wait_for_config_map_value_on_hosts(cql, ready_hosts, CLUSTER_CONFIGS_QUERY, [], "auto_repair_enabled", None)
 
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.asyncio
 async def test_mixed_version_downgrade_with_old_binary_is_rejected_after_feature_enablement(
     manager: ScyllaClusterManager, scylla_binary: Path, scylla_2026_1: ScyllaVersionDescription,
@@ -273,6 +278,7 @@ async def test_mixed_version_downgrade_with_old_binary_is_rejected_after_feature
     )
 
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.asyncio
 async def test_old_binary_cannot_join_after_cluster_config_feature_enablement(
     manager: ScyllaClusterManager, scylla_binary: Path, scylla_2026_1: ScyllaVersionDescription,
@@ -295,6 +301,7 @@ async def test_old_binary_cannot_join_after_cluster_config_feature_enablement(
     )
 
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.asyncio
 async def test_joining_node_observes_preexisting_schema_backed_config_metadata(manager: ScyllaClusterManager) -> None:
     servers = [
@@ -323,6 +330,7 @@ async def test_joining_node_observes_preexisting_schema_backed_config_metadata(m
     await wait_for_config_map_value(cql, new_host, TABLE_CONFIGS_QUERY, ["ks_cfg_join", "tbl"], "auto_repair_enabled", "true")
 
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.asyncio
 async def test_mixed_version_schema_agreement_before_feature_enablement(
     manager: ScyllaClusterManager, scylla_binary: Path, scylla_2026_1: ScyllaVersionDescription,
@@ -422,6 +430,7 @@ async def stored_config_state(cql) -> dict:
 # wipe, replay, and require the stored configs maps to be reproduced exactly at every
 # scope. Then prove inheritance survived the trip: a broader-scope ALTER in the restored
 # cluster still propagates to the purely-inheriting table.
+@pytest.mark.max_running_shards(2)
 @pytest.mark.asyncio
 async def test_describe_schema_internals_round_trips_stored_config(manager: ScyllaClusterManager) -> None:
     server = await manager.server_add()

@@ -11,6 +11,7 @@ import pytest
 
 logger = logging.getLogger(__name__)
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.prepare_3_racks_cluster
 async def test_gossiper_endpoints(manager: ScyllaClusterManager) -> None:
     servers = await manager.running_servers()
@@ -39,6 +40,7 @@ async def test_gossiper_endpoints(manager: ScyllaClusterManager) -> None:
             assert down_server_ip in down_endpoints, "Stopped server isn't marked as dead"
 
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.asyncio
 async def test_natural_failure_detection(manager: ScyllaClusterManager, failure_detector_timeout) -> None:
     """Verify that the failure detector detects a killed node as DOWN

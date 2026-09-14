@@ -55,6 +55,7 @@ async def assert_registry_clean_after_restart(manager, server, table_id):
     logger.info("Registry entries after recovery: %d", len(entries))
     return cql, entries
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_crash_after_compaction_prepare(manager: ScyllaClusterManager, object_storage):
@@ -116,6 +117,7 @@ async def test_crash_after_compaction_prepare(manager: ScyllaClusterManager, obj
         logger.info("Row count after recovery: %d", count)
         assert count == 20, f"Expected 20 rows after recovery, got {count}"
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_crash_after_compaction_unlink(manager: ScyllaClusterManager, object_storage):
@@ -148,6 +150,7 @@ async def test_crash_after_compaction_unlink(manager: ScyllaClusterManager, obje
         logger.info("Row count after recovery: %d", count)
         assert count == 20, f"Expected 20 rows after recovery, got {count}"
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_crash_during_truncate(manager: ScyllaClusterManager, object_storage):
@@ -178,6 +181,7 @@ async def test_crash_during_truncate(manager: ScyllaClusterManager, object_stora
 
         await assert_registry_clean_after_restart(manager, server, table_id)
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_crash_before_batch_mutation_commits(manager: ScyllaClusterManager, object_storage):

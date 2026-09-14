@@ -75,6 +75,7 @@ def get_live_topology(host: str) -> topology.LiveClusterTopologySource:
     return topology.get_live_topology_source_from_args(source_args(host))
 
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.asyncio
 async def test_tablet_snapshot_matches_live_topology(manager: ScyllaClusterManager, tmp_path: Path):
     """
@@ -133,6 +134,7 @@ async def test_tablet_snapshot_matches_live_topology(manager: ScyllaClusterManag
             assert live_topo == manual_snapshot_topo
 
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.tier2

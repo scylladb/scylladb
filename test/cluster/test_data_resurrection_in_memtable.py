@@ -101,30 +101,35 @@ async def run_test_cache_tombstone_gc(manager: ScyllaClusterManager, statement_p
         check_data(host3, [])
 
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_cache_tombstone_gc_partition_tombstone(manager: ScyllaClusterManager):
     await run_test_cache_tombstone_gc(manager,
                                       [("INSERT INTO {ks}.tbl (pk, ck, v) VALUES (0, 100, 999)", "DELETE FROM {ks}.tbl WHERE pk = 0")])
 
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_cache_tombstone_gc_row_tombstone(manager: ScyllaClusterManager):
     await run_test_cache_tombstone_gc(manager,
                                       [("INSERT INTO {ks}.tbl (pk, ck, v) VALUES (0, 100, 999)", "DELETE FROM {ks}.tbl WHERE pk = 0 AND ck = 100")])
 
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_cache_tombstone_gc_range_tombstone(manager: ScyllaClusterManager):
     await run_test_cache_tombstone_gc(manager,
                                       [("INSERT INTO {ks}.tbl (pk, ck, v) VALUES (0, 100, 999)", "DELETE FROM {ks}.tbl WHERE pk = 0 AND ck > 0 AND ck < 1000")])
 
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_cache_tombstone_gc_cell_tombstone(manager: ScyllaClusterManager):
     await run_test_cache_tombstone_gc(manager,
                                       [("UPDATE {ks}.tbl SET v = 999 WHERE pk = 0 AND ck = 100", "DELETE v FROM {ks}.tbl WHERE pk = 0 AND ck = 100")])
 
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_cache_tombstone_gc_cell_tombstone_and_row_tombstone(manager: ScyllaClusterManager):
     await run_test_cache_tombstone_gc(manager,

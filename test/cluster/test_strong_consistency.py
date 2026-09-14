@@ -118,6 +118,7 @@ async def get_table_raft_group_id(manager: ScyllaClusterManager, ks: str, table:
     rows = await manager.get_cql().run_async(f"SELECT raft_group_id FROM system.tablets where table_id = {table_id}")
     return str(rows[0].raft_group_id)
 
+@pytest.mark.max_running_shards(6)
 async def test_basic_write_read(manager: ScyllaClusterManager, build_mode: str):
 
     logger.info("Bootstrapping cluster")
@@ -330,6 +331,7 @@ async def test_basic_write_read(manager: ScyllaClusterManager, build_mode: str):
     # To check that the servers can be stopped gracefully. By default the test runner just kills them.
     await gather_safely(*[manager.server_stop_gracefully(s.server_id) for s in servers])
 
+@pytest.mark.max_running_shards(12)
 async def test_multi_shard_write_read(manager: ScyllaClusterManager):
     """
     Verify that strongly consistent tables work correctly on non-shard-0.
@@ -365,6 +367,7 @@ async def test_multi_shard_write_read(manager: ScyllaClusterManager):
 
     await gather_safely(*[manager.server_stop_gracefully(s.server_id) for s in servers])
 
+@pytest.mark.max_running_shards(4)
 async def test_sc_multishard_metadata_reads(manager: ScyllaClusterManager):
     """
     Verify that multi-shard reads of raft metadata for strongly-consistent tables work correctly.
@@ -451,6 +454,7 @@ async def test_sc_multishard_metadata_reads(manager: ScyllaClusterManager):
 
     await manager.server_stop_gracefully(server.server_id)
 
+@pytest.mark.max_running_shards(4)
 async def test_sc_persistence_restart_with_smp_increase(manager: ScyllaClusterManager):
     """
     Verify that the metadata for strongly-consistent tables
@@ -501,6 +505,7 @@ async def test_sc_persistence_restart_with_smp_increase(manager: ScyllaClusterMa
     await manager.server_stop_gracefully(server.server_id)
 
 
+@pytest.mark.max_running_shards(2)
 async def test_sc_persistence_with_compaction(manager: ScyllaClusterManager):
     """
     Verify that compaction of system.raft_groups works correctly.
@@ -546,6 +551,7 @@ async def test_sc_persistence_with_compaction(manager: ScyllaClusterManager):
     await manager.server_stop_gracefully(server.server_id)
 
 
+@pytest.mark.max_running_shards(2)
 async def test_sc_persistence_after_crash(manager: ScyllaClusterManager):
     """
     Verify that metadata for strongly-consistent tables is recovered
@@ -581,6 +587,7 @@ async def test_sc_persistence_after_crash(manager: ScyllaClusterManager):
 
     await manager.server_stop_gracefully(server.server_id)
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_no_schema_when_apply_write(manager: ScyllaClusterManager):
     servers = await manager.servers_add(2, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
@@ -625,6 +632,7 @@ async def test_no_schema_when_apply_write(manager: ScyllaClusterManager):
         assert row.c == 20
         assert row.new_col == 30
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_old_schema_when_apply_write(manager: ScyllaClusterManager):
     servers = await manager.servers_add(2, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
@@ -667,6 +675,7 @@ async def test_old_schema_when_apply_write(manager: ScyllaClusterManager):
         assert row.c == 20
         assert row.new_col is None
 
+@pytest.mark.max_running_shards(4)
 async def test_forward_cql_prepared_with_bound_values(manager: ScyllaClusterManager):
     """
     When we prepare an statement not on the leader, we should
@@ -709,6 +718,7 @@ async def test_forward_cql_prepared_with_bound_values(manager: ScyllaClusterMana
                 logger.info(f"Trace event: {event.description}")
                 assert "Prepared statement not found on target" not in event.description
 
+@pytest.mark.max_running_shards(4)
 async def test_forward_cql_cache_invalidation(manager: ScyllaClusterManager):
     """
     Test that cql forwarding works after invalidation of prepared statement cache on schema changes.
@@ -750,6 +760,7 @@ async def test_forward_cql_cache_invalidation(manager: ScyllaClusterManager):
             prepared_not_found_after = metrics_after.get('scylla_transport_requests_forwarded_prepared_not_found') or 0
             assert prepared_not_found_after > prepared_not_found_before
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode('release', "error injections aren't enabled in release mode")
 async def test_forward_cql_exception_passthrough(manager: ScyllaClusterManager):
     """
@@ -817,6 +828,7 @@ async def test_forward_cql_exception_passthrough(manager: ScyllaClusterManager):
             await manager.api.message_injection(non_leader_replica_host.address, "wait_before_handling_forwarded_request")
 
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.skip_mode("release", "error injections aren't enabled in release mode")
 async def test_drop_table_during_insert(manager: ScyllaClusterManager):
     """Regression test for SCYLLADB-1450: node crashes when DROP TABLE races with
@@ -870,6 +882,7 @@ async def test_drop_table_during_insert(manager: ScyllaClusterManager):
         await manager.api.get_host_id(server.ip_addr)
 
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
 async def test_timed_out_queries(manager: ScyllaClusterManager):
     """
@@ -978,6 +991,7 @@ async def test_timed_out_queries(manager: ScyllaClusterManager):
                 await cql.run_async(f"INSERT INTO {table} (pk, v) VALUES (11, 13) USING TIMEOUT 100ms")
 
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
 async def test_queries_while_dropping_table(manager: ScyllaClusterManager):
     """Verify that in-flight reads and writes are promptly aborted when
@@ -1086,6 +1100,7 @@ async def test_queries_while_dropping_table(manager: ScyllaClusterManager):
             await read_fut
 
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
 @pytest.mark.parametrize("target", ["leader", "follower"])
 async def test_queries_when_shutting_down(manager: ScyllaClusterManager, target: str):
@@ -1319,6 +1334,7 @@ async def test_abort_state_machine_apply_during_shutdown(manager: ScyllaClusterM
         assert len(rows) == 1
         assert rows[0].v == 13
 
+@pytest.mark.max_running_shards(8)
 async def test_leader_cache_eliminates_redirect(manager: ScyllaClusterManager):
     """
     Verify that after a non-replica node learns the leader location via a redirect,
@@ -1417,6 +1433,7 @@ async def test_leader_cache_eliminates_redirect(manager: ScyllaClusterManager):
             assert len(rows) == 1
             assert rows[0].value == 25
 
+@pytest.mark.max_running_shards(8)
 @pytest.mark.asyncio
 async def test_read_forwarding(manager: ScyllaClusterManager):
     """
@@ -1512,6 +1529,7 @@ async def test_read_forwarding(manager: ScyllaClusterManager):
                 assert rows[0].c == i * 10, f"Linearizability violation: pk={100 + i}, expected c={i * 10}, got c={rows[0].c}"
 
 
+@pytest.mark.max_running_shards(4)
 async def test_write_from_non_replica_after_leader_down(manager: ScyllaClusterManager):
     """
     Verify that if a raft group leader goes down, a non-replica node can still
@@ -1585,6 +1603,7 @@ async def test_write_from_non_replica_after_leader_down(manager: ScyllaClusterMa
             assert len(rows) == 1
             assert rows[0].c == 2
 
+@pytest.mark.max_running_shards(3)
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
 async def test_stepdown_on_graceful_shutdown(manager: ScyllaClusterManager):

@@ -20,6 +20,7 @@ TESTS_TABLE = 'tests'
 METRICS_TABLE = 'test_metrics'
 SYSTEM_RESOURCE_METRICS_TABLE = 'system_resource_metrics'
 CGROUP_MEMORY_METRICS_TABLE = 'cgroup_memory_metrics'
+CLUSTER_METRICS_TABLE = 'cluster_metrics'
 HOST_INFO_TABLE = 'host_info'
 DEFAULT_DB_NAME = f'sqlite_{HOST_ID}.db'
 DATE_TIME_TEMPLATE = '%Y-%m-%d %H:%M:%S.%f'
@@ -95,8 +96,53 @@ create_table = [
         FOREIGN KEY(test_id) REFERENCES {TESTS_TABLE}(id),
         FOREIGN KEY(host_id) REFERENCES {HOST_INFO_TABLE}(host_id)
     );
+    ''',
+
+    f'''
+    CREATE TABLE IF NOT EXISTS {CLUSTER_METRICS_TABLE} (
+        id INTEGER PRIMARY KEY,
+        test_id INT NOT NULL,
+        host_id VARCHAR(5) NOT NULL,
+        nodeid TEXT NOT NULL,
+        max_running_shards INTEGER NOT NULL,
+        status VARCHAR(15),
+        claim INTEGER,
+        FOREIGN KEY(test_id) REFERENCES {TESTS_TABLE}(id),
+        FOREIGN KEY(host_id) REFERENCES {HOST_INFO_TABLE}(host_id)
+    );
     '''
 ]
+
+# Columns added to a table after it first shipped.  The database outlives a run
+# -- prepare_dirs() clears *.log from the tmpdir but not sqlite_*.db, and a host
+# with SCYLLA_TEST_HOST_ID set keeps the same filename -- so CREATE TABLE IF NOT
+# EXISTS silently leaves an older file a column short and every insert then
+# fails.  Applied idempotently at open, in order.
+add_column = [
+    (CLUSTER_METRICS_TABLE, 'claim', 'INTEGER'),
+    (CLUSTER_METRICS_TABLE, 'status', 'VARCHAR(15)'),
+]
+
+
+def add_missing_columns(cursor) -> None:
+    """Bring an existing database up to the schema above.
+
+    Runs after create_table, so every table it names exists.  The check cannot
+    be atomic: every xdist worker shares one database file and builds a writer
+    per test, so two can both find a column missing.  The one that loses that
+    race carries on, since another worker adding the column is the outcome it
+    wanted -- and the schema is read again to make sure that is what happened.
+    """
+    for table, column, decl in add_column:
+        cursor.execute(f"PRAGMA table_info({table})")
+        if column not in {row[1] for row in cursor.fetchall()}:
+            try:
+                cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+            except sqlite3.OperationalError:
+                cursor.execute(f"PRAGMA table_info({table})")
+                if column not in {row[1] for row in cursor.fetchall()}:
+                    raise
+
 
 def adapt_datetime_iso(val):
     """Adapt datetime.datetime to timezone-naive ISO 8601 date."""
@@ -127,6 +173,7 @@ class SQLiteWriter:
             cursor.execute('PRAGMA synchronous=off')
             for table in create_table:
                 cursor.execute(table)
+            add_missing_columns(cursor)
             conn.commit()
 
     @contextmanager

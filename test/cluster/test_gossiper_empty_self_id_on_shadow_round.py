@@ -14,6 +14,7 @@ from test.cluster.util import get_coordinator_host
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_gossiper_empty_self_id_on_shadow_round(manager: ScyllaClusterManager):
     """

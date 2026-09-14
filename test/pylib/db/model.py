@@ -62,3 +62,28 @@ class Test:
     mode: str
     run_id: int
     test_name: str
+
+
+@define
+class ClusterMetric:
+    """Per-test cluster capacity: what the test's cluster actually ran.
+
+    `nodeid` is here alongside the `tests` row it points at because it is the
+    key the backfill script needs -- it names the class and the parameters of
+    the source function to mark, which `tests.test_name` does not carry.
+    """
+    test_id: int
+    host_id: str
+    nodeid: str
+    max_running_shards: int
+    # How the test ended, the same value test_metrics gets.  Here as well
+    # because tests.id is shared by every run of a test with the same name,
+    # mode and run id, so a join on it cannot tell one run's rows from
+    # another's -- and only the run that finished measured the whole test.
+    status: str
+    # The claim in force while this was measured, or None if none was.  Without
+    # it a row is not interpretable: a claim caps the peak (see
+    # RunningShards.reserve), so `max_running_shards` from an enforced run is
+    # the smaller of what the test used and what it was allowed.  Only a row
+    # with no claim reports what the test would use unrestricted.
+    claim: int | None

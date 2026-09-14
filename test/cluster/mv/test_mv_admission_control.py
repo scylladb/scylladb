@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 # In the test, we create a table and perform a pair of writes to it. The
 # second write should fail due to admission control. We check that this
 # is indeed the error thrown.
+@pytest.mark.max_running_shards(2)
 @pytest.mark.skip_mode(mode='release', reason="error injections aren't enabled in release mode")
 async def test_mv_admission_control_exception(manager: ScyllaClusterManager) -> None:
     node_count = 2
@@ -59,6 +60,7 @@ async def test_mv_admission_control_exception(manager: ScyllaClusterManager) -> 
 # are rejected by admission control and retried until they reach all replicas, instead
 # of succeeding just on the remaining replicas, reaching a quorum, but failing the
 # write on the slow node.
+@pytest.mark.max_running_shards(8)
 @pytest.mark.skip_mode(mode='release', reason="error injections aren't enabled in release mode")
 async def test_mv_retried_writes_reach_all_replicas(manager: ScyllaClusterManager) -> None:
     node_count = 4

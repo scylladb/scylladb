@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 # 
 # In this test, we check that creating a vector index without
 # rf_rack_valid_keyspaces being set is possible.
+@pytest.mark.max_running_shards(2)
 async def test_vector_store_can_be_created_without_rf_rack_valid(manager: ScyllaClusterManager):
     # Explicitly disable the rf_rack_valid_keyspaces option.
     config = {"rf_rack_valid_keyspaces": False}

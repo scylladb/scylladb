@@ -13,6 +13,7 @@ from test.pylib.rest_client import HTTPError
 
 logger = logging.getLogger(__name__)
 
+@pytest.mark.max_running_shards(2)
 async def test_rest_api_on_startup(request, manager: ScyllaClusterManager):
 
     host = None

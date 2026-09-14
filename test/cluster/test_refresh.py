@@ -93,6 +93,7 @@ class SSTablesOnLocalStorage:
     async def restore(self, manager, sstables_per_server, prefix, ks, cf, scope, primary_replica_only, logger):
         await asyncio.gather(*(self.refresh_one(manager, s, ks, cf, sstables, scope, primary_replica_only) for s, sstables in sstables_per_server.items()))
 
+@pytest.mark.max_running_shards(16)
 @pytest.mark.parametrize("topology", [
         topo(rf = 1, nodes = 3, racks = 1, dcs = 1),
         topo(rf = 3, nodes = 5, racks = 1, dcs = 1),
@@ -105,6 +106,7 @@ async def test_refresh_with_streaming_scopes(build_mode: str, manager: ScyllaClu
     await do_test_streaming_scopes(build_mode, manager, topology, SSTablesOnLocalStorage())
 
 
+@pytest.mark.max_running_shards(4)
 async def test_refresh_deletes_uploaded_sstables(manager: ScyllaClusterManager):
     '''
     Check that refreshing a cluster deletes the sstable files from the upload directory after loading
@@ -195,6 +197,7 @@ async def wait_for_row_count_on_host(cql, host, ks, table, expected, timeout=120
         pytest.fail(f"Expected {expected} rows in {ks}.{table} on {host}, got {last}")
 
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.parametrize("tablets", [False, True])
 async def test_refresh_generates_view_updates(manager: ScyllaClusterManager, tablets):
     '''
@@ -271,6 +274,7 @@ async def test_refresh_generates_view_updates(manager: ScyllaClusterManager, tab
             await wait_for_row_count_on_host(cql, host, ks, f'{idx}_index', expected_rows)
 
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_refresh_does_not_claim_sstables_created_by_another_shard(manager: ScyllaClusterManager):
     '''

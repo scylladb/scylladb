@@ -11,6 +11,7 @@ from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.internal_types import IPAddress
 from test.cluster.util import new_test_keyspace, new_test_table
 from cassandra.cluster import ConsistencyLevel
+import pytest
 
 logger = logging.getLogger(__name__)
 
@@ -172,6 +173,7 @@ async def do_test_internode_compression_between_datacenters(manager: ScyllaClust
         for addr, _, _ in proxy_addrs:
             await HostRegistry().release_host(addr)
 
+@pytest.mark.max_running_shards(6)
 async def test_internode_compression_compress_packets_between_nodes(request, manager: ScyllaClusterManager) -> None:
     def check_expected(msg_size, node1_proxy, node2_proxy, node3_proxy):
         # get the stats
@@ -184,6 +186,7 @@ async def test_internode_compression_compress_packets_between_nodes(request, man
 
     await do_test_internode_compression_between_datacenters(manager, "all", check_expected)
 
+@pytest.mark.max_running_shards(6)
 async def test_internode_compression_between_datacenters(request, manager: ScyllaClusterManager) -> None:
     def check_expected(msg_size, node1_proxy, node2_proxy, node3_proxy):
         # get the stats

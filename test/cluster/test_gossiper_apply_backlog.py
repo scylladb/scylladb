@@ -52,6 +52,7 @@ BOUND = 4 * NODES
 MEASURE_SECONDS = 15
 
 
+@pytest.mark.max_running_shards(10)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.asyncio
 async def test_gossiper_apply_backlog_is_bounded(manager: ScyllaClusterManager) -> None:

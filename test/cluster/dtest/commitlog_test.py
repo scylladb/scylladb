@@ -162,6 +162,7 @@ class TestCommitLog(Tester):
                 else:
                     raise e
 
+    @pytest.mark.max_running_shards(2)
     def test_commitlog_replay_on_startup(self):
         """Test commit log replay"""
         node1 = self.node1
@@ -219,6 +220,7 @@ class TestCommitLog(Tester):
         res = session.execute("SELECT * FROM Test. users")
         assert_lists_equal_ignoring_order(rows_to_list(res), [["gandalf", 1955, "male", "p@$$", "WA"]])
 
+    @pytest.mark.max_running_shards(2)
     def test_commitlog_replay_with_alter_table(self):
         """
         Test commit log replay with alter table
@@ -319,21 +321,25 @@ class TestCommitLog(Tester):
                 ignore_order=True,
             )
 
+    @pytest.mark.max_running_shards(2)
     def test_default_segment_size(self):
         """Test default commitlog_segment_size_in_mb (32MB)"""
 
         self._segment_size_test(32)
 
+    @pytest.mark.max_running_shards(2)
     def test_small_segment_size(self):
         """Test a small commitlog_segment_size_in_mb (5MB)"""
 
         self._segment_size_test(5)
 
+    @pytest.mark.max_running_shards(2)
     def test_default_compressed_segment_size(self):
         """Test default compressed commitlog_segment_size_in_mb (32MB)"""
         # Scylla: Unknown option commitlog_compression
         self._segment_size_test(32, compressed=True)
 
+    @pytest.mark.max_running_shards(2)
     def test_small_compressed_segment_size(self):
         """Test a small compressed commitlog_segment_size_in_mb (5MB)"""
         # Scylla: Unknown option commitlog_compression
@@ -364,6 +370,7 @@ class TestCommitLog(Tester):
         )
         return session, node1
 
+    @pytest.mark.max_running_shards(2)
     def test_periodic_commitlog(self):
         """
         Test periodic mode of commitlog flushing
@@ -519,18 +526,21 @@ class TestCommitLog(Tester):
         insert_c1c2(session, n=int(total_size * 1.5))
         assert_row_count(session=session, table_name="ks.cf", expected=int(total_size * 1.5))
 
+    @pytest.mark.max_running_shards(2)
     def test_total_space_limit_of_commitlog_with_memory_based_limit(self):
         """
         Test with auto-sized commitlog files, and total space limit (based on available memory)
         """
         self._test_total_space_limit_of_commitlog(commitlog_segment_size_in_mb=-1, commitlog_total_space_in_mb=-1)
 
+    @pytest.mark.max_running_shards(2)
     def test_total_space_limit_of_commitlog_with_small_limit(self):
         """
         Test with 5M commitlog files, total space limit is 30M
         """
         self._test_total_space_limit_of_commitlog(commitlog_segment_size_in_mb=5, commitlog_total_space_in_mb=30)
 
+    @pytest.mark.max_running_shards(2)
     def test_alter_keyspace_durable_writes_false(self):
         """
         Test 'CREATE KEYSPACE ... WITH durable_writes = false;'
@@ -570,6 +580,7 @@ class TestCommitLog(Tester):
         session = self.patient_cql_connection(node1)
         assert_all(session=session, query="SELECT * FROM dw.cf", expected=[[1], [2]], ignore_order=True)
 
+    @pytest.mark.max_running_shards(2)
     def test_alter_keyspace_durable_writes_true(self):
         """
         Test 'ALTER KEYSPACE ... WITH durable_writes = true;'
@@ -633,6 +644,7 @@ class TestCommitLog(Tester):
         session.execute(create_statement)
         self.insert_statement = session.prepare(f"INSERT INTO {self.ks}.{self.cf} ({', '.join(f'c{i:05d}' for i in range(columns))}) VALUES({', '.join('?' for i in range(columns))});")
 
+    @pytest.mark.max_running_shards(2)
     def test_one_big_mutation_replay_on_startup(self):
         """
         Test commit log replay with a single big (larger than mutation limit) commitlog mutation
@@ -659,6 +671,7 @@ class TestCommitLog(Tester):
         assert node1.grep_log(f"large_data - Writing large row {self.ks}/{self.cf}:")
         assert in_table == [self.values]
 
+    @pytest.mark.max_running_shards(2)
     def test_one_big_mutation_corrupted_on_startup(self):
         """
         Test commit log replay with a single big (larger than mutation limit) commitlog mutation
@@ -696,6 +709,7 @@ class TestCommitLog(Tester):
         assert node1.grep_log("commitlog_replayer - Corrupted file")
         assert in_table == []
 
+    @pytest.mark.max_running_shards(2)
     def test_one_big_mutation_rollback_on_startup(self):
         """
         Test commit log replay with a single big (larger than mutation limit) commitlog mutation
@@ -723,6 +737,7 @@ class TestCommitLog(Tester):
         assert not node1.grep_log(f"large_data - Writing large row {self.ks}/{self.cf}")
         assert in_table == []
 
+    @pytest.mark.max_running_shards(2)
     def test_pinned_cl_segment_doesnt_resurrect_data(self):
         """
         The tested scenario is as follows:

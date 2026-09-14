@@ -235,6 +235,7 @@ async def verify_migration_status(manager: ScyllaClusterManager, server: ServerI
                 raise
 
 
+@pytest.mark.max_running_shards(3)
 async def test_migration(manager: ScyllaClusterManager):
     """Verify vnodes-to-tablets migration for a single table on a single-node cluster.
 
@@ -364,6 +365,7 @@ async def test_migration(manager: ScyllaClusterManager):
         await wait_for_pow2_convergence(manager, server, ks, 'test')
 
 
+@pytest.mark.max_running_shards(3)
 async def test_migration_rollback(manager: ScyllaClusterManager):
     """Verify rollback of vnodes-to-tablets migration on a single-node cluster.
 
@@ -482,6 +484,7 @@ async def test_migration_rollback(manager: ScyllaClusterManager):
         await verify_data_integrity(cql, ks, "test", num_keys)
 
 
+@pytest.mark.max_running_shards(6)
 async def test_migration_multinode(manager: ScyllaClusterManager):
     """Verify vnodes-to-tablets migration for a single table on a multi-node cluster with rolling restarts.
 
@@ -632,6 +635,7 @@ async def test_migration_multinode(manager: ScyllaClusterManager):
         await wait_for_pow2_convergence(manager, servers[0], ks, 'test')
 
 
+@pytest.mark.max_running_shards(6)
 async def test_migration_multidc(manager: ScyllaClusterManager):
     """Verify vnodes-to-tablets migration on a multi-DC cluster with asymmetric RF.
 
@@ -797,6 +801,7 @@ async def setup_single_node(manager: ScyllaClusterManager):
     return server, cql
 
 
+@pytest.mark.max_running_shards(2)
 async def test_migration_nonexistent_keyspace(manager: ScyllaClusterManager):
     """Verify that migration APIs fail on a non-existent keyspace."""
     server, cql = await setup_single_node(manager)
@@ -809,6 +814,7 @@ async def test_migration_nonexistent_keyspace(manager: ScyllaClusterManager):
         await manager.api.finalize_vnode_tablet_migration(server.ip_addr, "ks")
 
 
+@pytest.mark.max_running_shards(2)
 async def test_migration_already_tablets(manager: ScyllaClusterManager):
     """Verify that starting migration on a keyspace that already uses tablets fails."""
     server, cql = await setup_single_node(manager)
@@ -818,6 +824,7 @@ async def test_migration_already_tablets(manager: ScyllaClusterManager):
             await manager.api.create_vnode_tablet_migration(server.ip_addr, ks_tablets)
 
 
+@pytest.mark.max_running_shards(2)
 async def test_migration_empty_keyspace(manager: ScyllaClusterManager):
     """Verify that starting migration on a keyspace with no tables fails."""
     server, cql = await setup_single_node(manager)
@@ -827,6 +834,7 @@ async def test_migration_empty_keyspace(manager: ScyllaClusterManager):
             await manager.api.create_vnode_tablet_migration(server.ip_addr, ks_empty)
 
 
+@pytest.mark.max_running_shards(2)
 async def test_migration_finalize_without_migration(manager: ScyllaClusterManager):
     """Verify that finalizing migration without starting one first fails."""
     server, cql = await setup_single_node(manager)
@@ -837,6 +845,7 @@ async def test_migration_finalize_without_migration(manager: ScyllaClusterManage
             await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks_vnodes)
 
 
+@pytest.mark.max_running_shards(2)
 async def test_migration_upgrade_without_migration(manager: ScyllaClusterManager):
     """Verify that upgrading a node to tablets without an active migration fails."""
     server, cql = await setup_single_node(manager)
@@ -845,6 +854,7 @@ async def test_migration_upgrade_without_migration(manager: ScyllaClusterManager
         await manager.api.upgrade_node_to_tablets(server.ip_addr)
 
 
+@pytest.mark.max_running_shards(2)
 async def test_migration_overlapping_migrations(manager: ScyllaClusterManager):
     """Verify that starting a second migration while one is already in progress fails."""
     server, cql = await setup_single_node(manager)
@@ -865,6 +875,7 @@ async def test_migration_overlapping_migrations(manager: ScyllaClusterManager):
         await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks1)
 
 
+@pytest.mark.max_running_shards(2)
 async def test_migration_finalize_before_upgrade(manager: ScyllaClusterManager):
     """Verify that finalizing migration before the node has finished upgrading fails."""
     server, cql = await setup_single_node(manager)
@@ -883,6 +894,7 @@ async def test_migration_finalize_before_upgrade(manager: ScyllaClusterManager):
         await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks)
 
 
+@pytest.mark.max_running_shards(2)
 async def test_migration_task_not_abortable(manager: ScyllaClusterManager):
     """Verify that aborting a vnodes-to-tablets migration task via the task manager fails."""
     server, cql = await setup_single_node(manager)
@@ -908,6 +920,7 @@ async def test_migration_task_not_abortable(manager: ScyllaClusterManager):
         await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks)
 
 
+@pytest.mark.max_running_shards(2)
 async def test_migration_wait_task(manager: ScyllaClusterManager):
     """Verify that the task manager "wait" API works for vnodes-to-tablets migration tasks.
 
@@ -982,6 +995,7 @@ async def test_migration_wait_task(manager: ScyllaClusterManager):
         assert wait_status.progress_completed == 1, f"Expected 1 upgraded node for completed migration, got {wait_status.progress_completed}"
 
 
+@pytest.mark.max_running_shards(3)
 async def test_migration_multiple_keyspaces(manager: ScyllaClusterManager):
     """Verify that two keyspaces can be migrated from vnodes to tablets simultaneously."""
     num_shards = 3
@@ -1052,6 +1066,7 @@ async def test_migration_multiple_keyspaces(manager: ScyllaClusterManager):
                     f"intended_storage_mode should be cleared for node {row.host_id} after all migrations are done, got '{row.intended_storage_mode}'"
 
 
+@pytest.mark.max_running_shards(3)
 @pytest.mark.asyncio
 async def test_migration_multiple_tables(manager: ScyllaClusterManager):
     """Verify vnodes-to-tablets migration on keyspace with multiple tables.
@@ -1106,6 +1121,7 @@ async def test_migration_multiple_tables(manager: ScyllaClusterManager):
         await wait_for_pow2_convergence(manager, server, ks, 't2')
 
 
+@pytest.mark.max_running_shards(3)
 @pytest.mark.asyncio
 async def test_tablet_status_in_migration_api(manager: ScyllaClusterManager):
     """"Verify the ?include=tablet_status query parameter in the migration API.
@@ -1218,6 +1234,7 @@ async def test_tablet_status_in_migration_api(manager: ScyllaClusterManager):
                 f"Tablet count {tablet_count} for table {t['table']} is not a power of two"
 
 
+@pytest.mark.max_running_shards(3)
 @pytest.mark.asyncio
 async def test_pow2_convergence_virtual_task(manager: ScyllaClusterManager):
     """Verify that pow2 convergence is tracked via a virtual task.
@@ -1362,6 +1379,7 @@ async def test_pow2_convergence_virtual_task(manager: ScyllaClusterManager):
             f"Expected no convergence tasks after completion, got {len(convergence_tasks)}"
 
 
+@pytest.mark.max_running_shards(4)
 async def test_migration_with_zero_token_node(manager: ScyllaClusterManager):
     """Verify vnodes-to-tablets migration succeeds in the presence of zero-token nodes (arbiter DCs).
 

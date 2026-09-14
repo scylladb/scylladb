@@ -168,6 +168,7 @@ async def assert_rows_present(cql, table: str, pk: str, keys, present: bool) -> 
 
 
 # Write with RF=1 and CL=ANY to a dead node should write hints and succeed
+@pytest.mark.max_running_shards(4)
 async def test_write_cl_any_to_dead_node_generates_hints(manager: ScyllaClusterManager):
     node_count = 2
     cmdline = ["--logger-log-level", "hints_manager=trace"]
@@ -207,6 +208,7 @@ async def test_write_cl_any_to_dead_node_generates_hints(manager: ScyllaClusterM
             # For dropping the keyspace
             await manager.server_start(servers[1].server_id)
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_limited_concurrency_of_writes(manager: ScyllaClusterManager):
     """
@@ -238,6 +240,7 @@ async def test_limited_concurrency_of_writes(manager: ScyllaClusterManager):
         # For dropping the keyspace
         await manager.server_start(node2.server_id)
 
+@pytest.mark.max_running_shards(6)
 async def test_sync_point(manager: ScyllaClusterManager):
     """
     We want to verify that the sync point API is compliant with its design.
@@ -291,6 +294,7 @@ async def test_sync_point(manager: ScyllaClusterManager):
         assert await await_sync_point(manager.api.client, node1.ip_addr, sync_point1, 30)
 
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason="error injections aren't enabled in release mode")
 async def test_hints_consistency_during_decommission(manager: ScyllaClusterManager):
     """
@@ -376,6 +380,7 @@ async def test_hints_consistency_during_decommission(manager: ScyllaClusterManag
         for i in range(100):
             assert list(await cql.run_async(f"SELECT v FROM {table} WHERE pk = {i}")) == [(i + 1,)]
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_hints_consistency_during_replace(manager: ScyllaClusterManager):
     """
@@ -420,6 +425,7 @@ async def test_hints_consistency_during_replace(manager: ScyllaClusterManager):
         for i in range(100):
             assert list(await cql.run_async(f"SELECT v FROM {table} WHERE pk = {i}")) == [(i + 1,)]
 
+@pytest.mark.max_running_shards(6)
 async def test_draining_hints(manager: ScyllaClusterManager):
     """
     This test verifies that all hints are drained when a node is being decommissioned.
@@ -448,6 +454,7 @@ async def test_draining_hints(manager: ScyllaClusterManager):
         _ = tg.create_task(manager.decommission_node(s1.server_id, timeout=60))
         _ = tg.create_task(await_sync_point(manager.api.client, s1.ip_addr, sync_point, 60))
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_canceling_hint_draining(manager: ScyllaClusterManager):
     """
@@ -494,6 +501,7 @@ async def test_canceling_hint_draining(manager: ScyllaClusterManager):
     assert await await_sync_point(manager.api.client, s1.ip_addr, sync_point, 60)
     await s1_log.wait_for(f"Removed hint directory for {host_id2}")
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_hint_to_pending(manager: ScyllaClusterManager):
     """
@@ -552,6 +560,7 @@ async def test_hint_to_pending(manager: ScyllaClusterManager):
 
         assert list(await cql.run_async(f"SELECT v FROM {table} WHERE pk = 0")) == [(0,)]
 
+@pytest.mark.max_running_shards(3)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_hint_to_leaving_when_reducing_rf(manager: ScyllaClusterManager):
     '''
@@ -623,6 +632,7 @@ async def test_hint_to_leaving_when_reducing_rf(manager: ScyllaClusterManager):
         assert list(await cql.run_async(f"SELECT v FROM {table} WHERE pk = 0")) == [(0,)]
 
 
+@pytest.mark.max_running_shards(3)
 @pytest.mark.skip_mode(mode="release", reason="error injections aren't enabled in release mode")
 async def test_hints_rebalance(manager: ScyllaClusterManager):
     """
@@ -724,6 +734,7 @@ async def test_hints_rebalance(manager: ScyllaClusterManager):
     await assert_rows_present(cql, "ks.t", "pk", list(range(expected_rows)), present=True)
 
 
+@pytest.mark.max_running_shards(6)
 async def test_hints_removenode(manager: ScyllaClusterManager):
     """
     Hints addressed to a node that is removed from the cluster with removenode must be drained
@@ -762,6 +773,7 @@ async def test_hints_removenode(manager: ScyllaClusterManager):
     assert results == expected, f"Mismatch: {results} vs. {expected}"
 
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.skip_mode(mode="release", reason="error injections aren't enabled in release mode")
 async def test_hints_basic_check(manager: ScyllaClusterManager):
     """
@@ -801,6 +813,7 @@ async def test_hints_basic_check(manager: ScyllaClusterManager):
     assert rows == [(1,)], "The hint was not replayed to the node that was down"
 
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode="release", reason="error injections aren't enabled in release mode")
 async def test_hints_counter(manager: ScyllaClusterManager):
     """
@@ -873,6 +886,7 @@ async def test_hints_counter(manager: ScyllaClusterManager):
     assert result == expected
 
 
+@pytest.mark.max_running_shards(6)
 async def test_hints_decom(manager: ScyllaClusterManager):
     """
     Verify that hints are drained when a target for hints is decommissioned.
@@ -920,6 +934,7 @@ async def test_hints_decom(manager: ScyllaClusterManager):
     await wait_for_hint_dir_removed(s2_hints_dir, s3_host_id)
 
 
+@pytest.mark.max_running_shards(4)
 async def test_hints_dont_revive(manager: ScyllaClusterManager):
     """
     A hint carries the timestamp of the original write, so replaying it after the row has been
@@ -978,6 +993,7 @@ async def validate_max_hinted_handoff_concurrency(manager: ScyllaClusterManager,
         f"expected max_hinted_handoff_concurrency to be {expected_value} on {server.ip_addr}, got {value}"
 
 
+@pytest.mark.max_running_shards(4)
 @pytest.mark.parametrize("max_hinted_handoff_concurrency,cmdline", [
     (0, None),
     (64, None),
@@ -1027,6 +1043,7 @@ async def test_support_max_hh_concurrency_param(manager: ScyllaClusterManager,
     assert results[0].count == row_count
 
 
+@pytest.mark.max_running_shards(2)
 async def test_ignore_invalid_hint_directories(manager: ScyllaClusterManager):
     """
     A directory whose name is invalid must be ignored by the hint manager - both
@@ -1056,6 +1073,7 @@ async def test_ignore_invalid_hint_directories(manager: ScyllaClusterManager):
     assert list_hint_target_dirs(hints_dir) == {hint_dir_name}
 
 
+@pytest.mark.max_running_shards(9)
 async def test_hints_switch_config_in_runtime_via_http_api(manager: ScyllaClusterManager):
     """
     Enabling, disabling and DC-filtering hinted handoff through the HTTP API must take effect
@@ -1133,6 +1151,7 @@ async def test_hints_switch_config_in_runtime_via_http_api(manager: ScyllaCluste
     await assert_rows_present(cql, "ks.t", "pk", keys_dc3_only, present=True)
 
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_hintedhandoff_sync_point_api(manager: ScyllaClusterManager):
     """
@@ -1370,6 +1389,7 @@ async def test_hintedhandoff_sync_point_api(manager: ScyllaClusterManager):
     await assert_rows_present(cql, "ks.t", "pk", keys5, present=True)
 
 
+@pytest.mark.max_running_shards(4)
 async def test_hint_storage_proxy_metrics(manager: ScyllaClusterManager):
     """
     The hint metrics of the sender and of the receiver must agree: what the sender counts as
@@ -1424,6 +1444,7 @@ async def test_hint_storage_proxy_metrics(manager: ScyllaClusterManager):
     assert sent_bytes_total == received_bytes_total
 
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_hint_retransmission_keeps_column_mappings(manager: ScyllaClusterManager):
     """

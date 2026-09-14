@@ -18,6 +18,7 @@ from test.cluster.util import new_test_keyspace
 logger = logging.getLogger(__name__)
 
 
+@pytest.mark.max_running_shards(6)
 async def test_read_repair_with_conflicting_hash_keys(request: pytest.FixtureRequest, manager: ScyllaClusterManager) -> None:
     """
     Test that conflicting hash keys are handled correctly during read repair.

@@ -224,6 +224,45 @@ async def get_scylla_2026_1_description(build_mode: str) -> ScyllaVersionDescrip
         argv=[],
     )
 
+
+# Seastar spells the shard count both `--smp` and `-c`.
+SMP_OPTIONS = ('--smp', '-c')
+
+
+def specifies_shards(cmdline_options: List[str]) -> bool:
+    """Whether these options set a shard count at all, in any spelling."""
+    return any(name.partition('=')[0] in SMP_OPTIONS
+               or (name.startswith('-c') and name[2:].isdigit())
+               for name in cmdline_options)
+
+
+def shards_of(cmdline_options: List[str]) -> int:
+    """Number of shards a process started with these options runs.
+
+    Its effective `--smp`, or `-c`, which Seastar takes as the same option:
+    servers get the long spelling, C++ test cases the short one.  Last spelling
+    wins.  Without one Seastar takes a shard per core, which this reports --
+    loudly, since no test means to ask for that.
+    """
+    smp: Optional[str] = None
+    rest = list(cmdline_options)
+    while rest:
+        name, sep, attached = rest.pop(0).partition('=')
+        if name in SMP_OPTIONS:
+            if sep:
+                smp = attached                       # --smp=2
+            elif rest and not rest[0].startswith('-'):
+                smp = rest.pop(0)                    # --smp 2 / -c 2
+        elif name.startswith('-c') and name[2:].isdigit():
+            smp = name[2:]                           # -c2, value attached
+    if smp is None:
+        cores = os.cpu_count() or 1
+        logging.getLogger(__name__).warning(
+            "no --smp/-c in %s, counting %d shards -- a core each, as Seastar would",
+            cmdline_options, cores)
+        return cores
+    return int(smp)
+
 # [--smp, 1], [--smp, 2] -> [--smp, 2]
 # [--smp, 1], [--smp] -> [--smp]
 # [--smp, 1], [--smp, __missing__] -> [--smp]
@@ -359,6 +398,9 @@ class ScyllaServer:
         # `cmdline` it was given, i.e. everything in `cmdline_options` above except
         # SCYLLA_CMDLINE_OPTIONS, the version's argv, and the cluster-level options.
         self._per_server_cmdline_options: List[str] = []
+        # What a per-start cmdline_options_override replaced them with, if any:
+        # that is the command line the process runs (see start() and shards).
+        self.running_cmdline_options: Optional[List[str]] = None
         self.auth_provider: Optional[AuthProvider] = None
         self.cmd: Optional[Process] = None
         self.start_stop_lock = asyncio.Lock()
@@ -445,7 +487,18 @@ class ScyllaServer:
         if self.property_file and "rack" in self.property_file:
             return self.property_file["rack"]
         return "DEFAULT_RACK"
-    
+
+    @property
+    def shards(self) -> int:
+        """Number of shards this server runs.
+
+        From the command line the process runs, which is the override when a
+        start was given one.  Recomputed rather than remembered, because
+        update_cmdline() can change --smp while the server is stopped.
+        """
+        return shards_of(self.cmdline_options if self.running_cmdline_options is None
+                         else self.running_cmdline_options)
+
     def server_info(self) -> ServerInfo:
         pid = self.cmd.pid if self.cmd else None
         return ServerInfo(self.server_id, self.ip_addr, self.rpc_address, self.datacenter, self.rack, pid)

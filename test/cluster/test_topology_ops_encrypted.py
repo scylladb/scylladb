@@ -18,6 +18,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+@pytest.mark.max_running_shards(10)
 @pytest.mark.parametrize("tablets_enabled", [True, False])
 async def test_topology_ops_encrypted(request, manager: ScyllaClusterManager, tablets_enabled: bool, tmp_path):
     """Test basic topology operations using the topology coordinator. But encrypted."""

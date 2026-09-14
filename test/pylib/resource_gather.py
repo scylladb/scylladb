@@ -26,9 +26,10 @@ import psutil
 
 from threading import Event
 from test import HOST_ID, TOP_SRC_DIR
-from test.pylib.db.model import HostInfo, Metric, SystemResourceMetric, CgroupMetric, Test
+from test.pylib.db.model import ClusterMetric, HostInfo, Metric, SystemResourceMetric, CgroupMetric, Test
 from test.pylib.db.writer import (
     CGROUP_MEMORY_METRICS_TABLE,
+    CLUSTER_METRICS_TABLE,
     DEFAULT_DB_NAME,
     HOST_INFO_TABLE,
     METRICS_TABLE,
@@ -82,6 +83,10 @@ class ResourceGather(ABC):
     def write_metrics_to_db(self, metrics: Metric, success: bool = False) -> None:
         pass
 
+    def write_cluster_metrics(self, nodeid: str, max_running_shards: int, claim: int | None,
+                              status: str) -> None:
+        pass
+
     def teardown_test_tracking(self) -> None:
         pass
 
@@ -130,6 +135,26 @@ class ResourceGatherRecord(ResourceGather):
     def write_metrics_to_db(self, metrics: Metric, success: bool = False) -> None:
         metrics.success = success
         self.sqlite_writer.write_row(metrics, METRICS_TABLE)
+
+    def write_cluster_metrics(self, nodeid: str, max_running_shards: int, claim: int | None,
+                              status: str) -> None:
+        """Record the peak shard count the test's cluster ran.
+
+        Written for every test that leased a cluster, claim or not: this is what
+        the marker backfill reads.  `claim` is what was in force, and bounds the
+        peak -- so only a row without one reports unrestricted usage.  `status`
+        says whether the test got far enough for the peak to be its own.
+        """
+        self.sqlite_writer.write_row(
+            ClusterMetric(
+                test_id=self.test_id,
+                host_id=HOST_ID,
+                nodeid=nodeid,
+                max_running_shards=max_running_shards,
+                status=status,
+                claim=claim,
+            ),
+            CLUSTER_METRICS_TABLE)
 
     def teardown_test_tracking(self) -> None:
         self.sqlite_writer.close()

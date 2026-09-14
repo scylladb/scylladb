@@ -14,6 +14,7 @@ import pytest
 logger = logging.getLogger(__name__)
 
 
+@pytest.mark.max_running_shards(10)
 @pytest.mark.parametrize("enforce", [True, False])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_add_node_in_new_rack_violating_rf_rack(manager: ScyllaClusterManager, enforce: bool):
@@ -58,6 +59,7 @@ async def test_add_node_in_new_rack_violating_rf_rack(manager: ScyllaClusterMana
         assert any(matches)
 
 
+@pytest.mark.max_running_shards(12)
 @pytest.mark.parametrize("enforce", [True, False])
 @pytest.mark.parametrize("op", ["remove", "decommission"])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
@@ -119,6 +121,7 @@ async def test_remove_node_violating_rf_rack(manager: ScyllaClusterManager, enfo
         assert any(matches)
 
 
+@pytest.mark.max_running_shards(10)
 @pytest.mark.parametrize("injection", ["before_bootstrap", "after_bootstrap"])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_keyspace_creation_during_node_join(manager: ScyllaClusterManager, injection: str):
@@ -224,6 +227,7 @@ async def test_keyspace_creation_during_node_join(manager: ScyllaClusterManager,
         await add_node2_task
 
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.parametrize("op", ["remove", "decommission"])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_keyspace_creation_during_node_remove(manager: ScyllaClusterManager, op: str):
@@ -289,6 +293,7 @@ async def test_keyspace_creation_during_node_remove(manager: ScyllaClusterManage
     await node_op_task
 
 
+@pytest.mark.max_running_shards(10)
 @pytest.mark.parametrize("op", ["remove", "decommission"])
 async def test_remove_node_violating_rf_rack_with_rack_list(manager: ScyllaClusterManager, op: str):
     """
@@ -337,6 +342,7 @@ async def test_remove_node_violating_rf_rack_with_rack_list(manager: ScyllaClust
     await remove_node(servers[2])
 
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.parametrize("op", ["remove", "decommission"])
 @pytest.mark.parametrize("scenario", ["last_in_dc", "last_in_rack"])
 async def test_remove_last_node_in_dc_violating_rf_rack(manager: ScyllaClusterManager, op: str, scenario: str):

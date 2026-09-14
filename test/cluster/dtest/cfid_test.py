@@ -15,6 +15,7 @@ from dtest_class import Tester, create_cf, create_ks
 
 @pytest.mark.single_node
 class TestCFID(Tester):
+    @pytest.mark.max_running_shards(2)
     @pytest.mark.cluster_options(auto_snapshot=True)
     def test_cfid(self):
         """

@@ -47,6 +47,7 @@ async def create_system_distributed_service_levels(cql):
             shares int)""")
 
 
+@pytest.mark.max_running_shards(2)
 @pytest.mark.skip_mode(mode="release", reason="error injection is disabled in release mode")
 async def test_self_heals_service_levels_v1_after_restart(manager: ScyllaClusterManager, scale_timeout: callable):
     """Reproduces a raft-topology cluster created before service levels were initialized as v2."""
@@ -113,6 +114,7 @@ async def _validate_host_service_level_ver(hosts, cql, ver):
         assert version_rows[0].value == str(ver)
 
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.skip_mode(mode="release", reason="error injection is disabled in release mode")
 async def test_self_heal_waits_for_unavailable_replicas(manager: ScyllaClusterManager, scale_timeout: callable):
     """Verify SCYLLADB-3337: service level migration should wait for all nodes to be available"""

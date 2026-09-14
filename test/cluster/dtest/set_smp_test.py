@@ -24,6 +24,7 @@ class TestSetSmp(Tester):
         # Return the last match (most recent start)
         return int(matches[-1][1].group(1))
 
+    @pytest.mark.max_running_shards(2)
     def test_set_smp(self):
         """Verify that set_smp() takes effect on the next start."""
         cluster = self.cluster

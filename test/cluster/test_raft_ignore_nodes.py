@@ -60,6 +60,7 @@ async def make_servers(manager: ScyllaClusterManager, servers_num: int,
     return servers_ordered
 
 
+@pytest.mark.max_running_shards(14)
 async def test_raft_replace_ignore_nodes(manager: ScyllaClusterManager) -> None:
     """Replace 3 dead nodes.
 
@@ -108,6 +109,7 @@ async def test_raft_replace_ignore_nodes(manager: ScyllaClusterManager) -> None:
     await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
 
 
+@pytest.mark.max_running_shards(14)
 async def test_raft_remove_ignore_nodes(manager: ScyllaClusterManager) -> None:
     """Remove 3 dead nodes.
 

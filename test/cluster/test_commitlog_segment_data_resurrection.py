@@ -21,6 +21,7 @@ from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
 logger = logging.getLogger(__name__)
 
 
+@pytest.mark.max_running_shards(2)
 async def test_pinned_cl_segment_doesnt_resurrect_data(manager: ScyllaClusterManager):
     """
         The tested scenario is as follows:
@@ -139,6 +140,7 @@ async def test_pinned_cl_segment_doesnt_resurrect_data(manager: ScyllaClusterMan
         assert len(list(cql.execute(f"SELECT * FROM {tbl2} WHERE pk = {pk1}"))) == 0
 
 
+@pytest.mark.max_running_shards(6)
 @pytest.mark.asyncio
 async def test_pinned_cl_segment_doesnt_resurrect_data_but_repair_ensures_tombstone_gc(manager: ScyllaClusterManager):
     """
