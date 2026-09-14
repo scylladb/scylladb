@@ -28,3 +28,13 @@ def test_limit_empty(cql, table1):
 def test_json_empty(cql, table1):
     with pytest.raises(SyntaxException):
         cql.execute(f'INSERT INTO {table1} JSON')
+
+# A column update is "X = X + <value>" or "X = <value> + X"; the column being
+# assigned has to be one of the two operands.  Both operands can be a bare
+# column name now that terms and selectors are one grammar, so the grammar
+# checks which of them names the column.
+def test_column_update_names_neither_operand(cql, table1):
+    with pytest.raises(SyntaxException, match='Only expressions of the form X = <value>'):
+        cql.execute(f'UPDATE {table1} SET v = v + c WHERE p=1 AND c=1')
+    with pytest.raises(SyntaxException, match='Only expressions of the form X = X'):
+        cql.execute(f'UPDATE {table1} SET v = c + 1 WHERE p=1 AND c=1')

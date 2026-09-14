@@ -407,3 +407,17 @@ def test_writetime_mixed_map_and_map_element(cql, table1):
     cql.execute(f'UPDATE {table1} USING TIMESTAMP {timestamp1} SET m = m + {{1:10}}  WHERE p={p}')
     cql.execute(f'UPDATE {table1} USING TIMESTAMP {timestamp2} SET m = m + {{2:20}} WHERE p={p}')
     assert list(cql.execute(f"SELECT m, m[1], m[2], WRITETIME(m[2]), WRITETIME(m[1]) FROM {table1} WHERE p={p}")) == [({1: 10, 2: 20}, 10, 20, timestamp2, timestamp1)]
+
+# The argument of WRITETIME() and TTL() used to be its own little grammar - a
+# column with at most one subscript or field after it - and is an ordinary term
+# now.  So anything can be written there, and what is not a column is turned
+# down when the selector is prepared rather than by the parser.
+def test_writetime_of_a_general_expression(cql, table1):
+    with pytest.raises(InvalidRequest, match='WRITETIME expects a column'):
+        cql.execute(f"SELECT WRITETIME(1) FROM {table1}")
+    with pytest.raises(InvalidRequest, match='TTL expects a column'):
+        cql.execute(f"SELECT TTL('x') FROM {table1}")
+    # A subscripted column is still what it always was.
+    p = unique_key_int()
+    cql.execute(f"INSERT INTO {table1} (p, m) VALUES ({p}, {{1: 2}})")
+    assert list(cql.execute(f"SELECT WRITETIME(m[1]) FROM {table1} WHERE p = {p}"))[0][0] is not None

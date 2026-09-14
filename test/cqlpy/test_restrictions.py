@@ -12,7 +12,7 @@
 
 import pytest
 from .util import new_test_table, unique_key_int
-from cassandra.protocol import InvalidRequest
+from cassandra.protocol import InvalidRequest, SyntaxException
 
 @pytest.fixture(scope="module")
 def table1(cql, test_keyspace):
@@ -157,3 +157,31 @@ def test_multi_column_restriction_eq(cql, table3):
     # The tuple (1,2) is too short, so should also fail.
     with pytest.raises(InvalidRequest):
         cql.execute(f'SELECT * FROM {table3} WHERE a={p} AND (b,c,d) = (1, 2)')
+
+# Terms and selectors are one grammar, so both sides of a relation parse the
+# same way and "a = b" is no longer a syntax error.  Comparing two columns is
+# not supported, and has to be turned down with a diagnosis rather than fail
+# further down the read path, where only the left-hand column was fetched.
+def test_column_on_the_right_of_a_relation(cql, table1):
+    for where in ['a = b', 'b > a', 'a IN (b)', 'b IN (a, 1)']:
+        with pytest.raises(InvalidRequest, match='cannot be compared against'):
+            cql.execute(f"SELECT * FROM {table1} WHERE {where} ALLOW FILTERING")
+
+@pytest.fixture(scope="module")
+def table_with_column_named_key(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace,
+                        "p int PRIMARY KEY, l list<int>, m map<int, int>, key int") as table:
+        yield table
+
+# "key" is an unreserved keyword, so now that a term can be a bare column name
+# "l CONTAINS key" could be read either as CONTAINS KEY missing its operand or
+# as a comparison against the column named key.  It is read as the operator.
+def test_contains_key_is_read_as_the_operator(cql, table_with_column_named_key):
+    table = table_with_column_named_key
+    cql.execute(f"SELECT * FROM {table} WHERE m CONTAINS KEY 1 ALLOW FILTERING")
+    with pytest.raises(SyntaxException):
+        cql.execute(f"SELECT * FROM {table} WHERE l CONTAINS key ALLOW FILTERING")
+    # The column is still reachable as the operand, and refused there for the
+    # same reason any column on the right of a relation is.
+    with pytest.raises(InvalidRequest, match='cannot be compared against'):
+        cql.execute(f"SELECT * FROM {table} WHERE m CONTAINS KEY key ALLOW FILTERING")

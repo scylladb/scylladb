@@ -31,7 +31,7 @@
 # but Cassandra rejects them.
 
 import pytest
-from cassandra.protocol import InvalidRequest
+from cassandra.protocol import InvalidRequest, SyntaxException
 from .util import unique_name, unique_key_int
 import uuid
 
@@ -181,3 +181,67 @@ def test_function_arg_type_hint(cql, table2):
     # In prepared_timeuuid the bind variable has type timeuuid, so passing a timestamp value should fail
     with pytest.raises(TypeError):
         cql.execute(prepared_timeuuid, [timestamp_value])
+
+# Terms and selectors are one grammar, so a C-style cast - which used to be
+# available only where a value is expected - works in a select clause too.
+# Cassandra spells the select-clause conversion CAST(x AS T) instead, and the
+# two are not the same operation: CAST converts, a type hint reinterprets.
+def test_cast_in_select_clause(cql, table1, scylla_only):
+    pk = unique_key_int()
+    cql.execute(f"INSERT INTO {table1} (pk, int_col) VALUES ({pk}, 5)")
+    five = int(5).to_bytes(4, 'big')
+    assert list(cql.execute(f"SELECT (blob)int_col FROM {table1} WHERE pk = {pk}")) == [(five,)]
+    # The alias has to win over reading AS as the operand of a cast to the
+    # user-defined type "int_col".
+    assert list(cql.execute(f"SELECT (blob)int_col AS b FROM {table1} WHERE pk = {pk}")) == [(five,)]
+    # A cast needs no table to select from.
+    assert list(cql.execute("SELECT (blob)(int)5")) == [(five,)]
+
+# The target of a C-style cast may be a parameterized type, not only a scalar.
+# None of these conversions is allowed, but each has to reach the type check
+# rather than fail to parse.
+def test_cast_to_parameterized_type(cql, table1, scylla_only):
+    for target in ['list<int>', 'set<int>', 'map<int, int>', 'tuple<int, int>',
+                   'frozen<list<int>>', 'vector<float, 3>']:
+        with pytest.raises(InvalidRequest, match='[Cc]ast'):
+            cql.execute(f"SELECT ({target})int_col FROM {table1}")
+
+# A cast target that is just a name is a user-defined type, optionally qualified
+# by a keyspace.  Neither exists here, so both are reported as unknown types -
+# the point being that neither is a syntax error.
+def test_cast_to_user_defined_type(cql, table1, test_keyspace, scylla_only):
+    with pytest.raises(InvalidRequest, match='[Uu]nknown type'):
+        cql.execute(f"SELECT (no_such_type_at_all)int_col FROM {table1}")
+    with pytest.raises(InvalidRequest, match='[Uu]nknown type'):
+        cql.execute(f"SELECT ({test_keyspace}.no_such_type_at_all)int_col FROM {table1}")
+    # Names CQL reserves for itself are still refused outright.
+    with pytest.raises(SyntaxException, match='reserved'):
+        cql.execute(f"SELECT (empty)int_col FROM {table1}")
+
+# "(T)" is spelled exactly like a one-element tuple, so what is inside the
+# parentheses is only read as a type once an operand turns out to follow it -
+# and then it really has to be a type name.
+def test_cast_target_must_be_a_type_name(cql, table1, scylla_only):
+    with pytest.raises(SyntaxException, match='Invalid type name in cast'):
+        cql.execute(f"SELECT (1, 2)int_col FROM {table1}")
+    with pytest.raises(SyntaxException, match='Invalid type name in cast'):
+        cql.execute(f"SELECT (1)2 FROM {table1}")
+
+# A type hint can be given to a named bind marker, even though ':' is also what
+# separates the key of a map literal from its value.
+def test_cast_named_bind_marker(cql, table1, scylla_only):
+    pk = unique_key_int()
+    prepared = cql.prepare(f"INSERT INTO {table1} (pk, blob_col) VALUES ({pk}, (int):v)")
+    cql.execute(prepared, {'v': 1234})
+    assert list(cql.execute(f"SELECT blob_col FROM {table1} WHERE pk = {pk}")) == [(int(1234).to_bytes(4, 'big'),)]
+
+# '[' after the ')' subscripts what precedes it, so an identifier-shaped target
+# cannot be given a list literal to cast - it would be indistinguishable from
+# subscripting a one-element tuple.  A target that opens with a type keyword is
+# separable by lookahead and keeps its list literal.
+def test_cast_operand_cannot_be_a_list_literal(cql, table1, scylla_only):
+    pk = unique_key_int()
+    cql.execute(f"INSERT INTO {table1} (pk) VALUES ({pk})")
+    with pytest.raises(SyntaxException):
+        cql.execute(f"SELECT (blob)[1, 2] FROM {table1} WHERE pk = {pk}")
+    assert list(cql.execute(f"SELECT (frozen<list<int>>)[1, 2] FROM {table1} WHERE pk = {pk}")) == [([1, 2],)]

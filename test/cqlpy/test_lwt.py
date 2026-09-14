@@ -335,6 +335,15 @@ def test_lwt_counter_syntax_numeric_types(cql, test_keyspace, scylla_only):
 # columns is a syntax error, regardless of whether the statement has an IF
 # clause. We may decide to allow this syntax in the future, in which case
 # this test should be changed - but for now we don't support it.
+# An IF condition compares a column with a value.  Terms and selectors are one
+# grammar now, so a column on the right parses; it is turned down when the
+# condition is prepared, as it is in a WHERE clause.
+def test_lwt_condition_column_on_the_right(cql, table1):
+    p = unique_key_int()
+    for cond in ['r = s', 's = r', 'r > s']:
+        with pytest.raises(InvalidRequest, match='cannot be compared against'):
+            cql.execute(f'UPDATE {table1} SET r = 1 WHERE p={p} AND c=1 IF {cond}')
+
 def test_lwt_counter_syntax_mismatched_column(cql, table1):
     p = unique_key_int()
     # The grammar rejects r = p + 1 (p != r) as a SyntaxException.
