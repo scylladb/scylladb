@@ -457,8 +457,11 @@ static future<std::list<locator::host_id>> get_hosts_participating_in_repair(
 
 future<gc_clock::time_point> flush_hints_batchlog_on_node(netw::messaging_service& ms, locator::host_id node, const repair_flush_hints_batchlog_request& req) {
     auto start_time = gc_clock::now();
-    auto timeout = std::max(req.hints_timeout, req.batchlog_timeout) + std::chrono::seconds(30);
-    abort_on_expiry expiry(lowres_clock::now() + timeout);
+    std::chrono::milliseconds margin = std::chrono::seconds(30);
+    if (auto injected = utils::get_local_injector().inject_parameter<uint32_t>("repair_flush_hints_batchlog_rpc_margin_in_ms")) {
+        margin = std::chrono::milliseconds(*injected);
+    }
+    abort_on_expiry expiry(lowres_clock::now() + std::max(req.hints_timeout, req.batchlog_timeout) + margin);
     repair_flush_hints_batchlog_response resp;
     try {
         resp = co_await ser::repair_rpc_verbs::send_repair_flush_hints_batchlog(&ms, node, expiry.abort_source(), req);

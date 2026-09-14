@@ -2682,6 +2682,7 @@ future<repair_flush_hints_batchlog_response> repair_service::repair_flush_hints_
     rlogger.debug("repair[{}]: Started to process repair_flush_hints_batchlog_request from node={} hints_timeout={}s batchlog_timeout={}s",
             req.repair_uuid, from, req.hints_timeout.count(), req.batchlog_timeout.count());
     auto permit = co_await seastar::get_units(_flush_hints_batchlog_sem, 1);
+    co_await utils::get_local_injector().inject("repair_flush_hints_batchlog_handler_hold", utils::wait_for_message(std::chrono::minutes(5)));
     bool updated = false;
     auto now = gc_clock::now();
     auto cache_time = std::chrono::milliseconds(_config.repair_hints_batchlog_flush_cache_time_in_ms());
