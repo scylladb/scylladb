@@ -1957,7 +1957,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 for (auto&& drain_fail : plan.drain_failures()) {
                     co_await coroutine::maybe_yield();
                     auto server_id = raft::server_id(drain_fail.node().uuid());
-                    _topo_sm.generate_cancel_request_update(out.frozen_mutations(), _feature_service, guard, server_id, drain_fail.reason());
+                    _topo_sm.generate_cancel_request_update(out, _feature_service, guard, server_id, drain_fail.reason());
                 }
             } else {
                 for (const tablet_migration_info& mig: plan.migrations()) {
@@ -2203,7 +2203,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 if (!_topo_sm._topology.paused_requests.contains(raft_server)) {
                     return;
                 }
-                _topo_sm.generate_cancel_request_update(updates.frozen_mutations(), _feature_service, guard, raft_server,
+                _topo_sm.generate_cancel_request_update(updates, _feature_service, guard, raft_server,
                     fmt::format("tablet draining failed: {}, moving {} to {}, due to {}", gid, replica, trinfo.pending_replica, reason));
             };
 
@@ -3182,7 +3182,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
     }
 
     future<> cancel_all_requests(group0_guard guard, std::unordered_set<raft::server_id> dead_nodes) {
-        utils::chunked_vector<canonical_mutation> muts;
+        group0_update_collector muts;
         std::vector<raft::server_id> reject_join;
         if (_topo_sm._topology.requests.empty()) {
             co_return;

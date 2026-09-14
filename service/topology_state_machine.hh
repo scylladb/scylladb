@@ -33,6 +33,7 @@ namespace service {
 
 class raft_group0;
 class group0_guard;
+class group0_update_collector;
 
 enum class node_state: uint16_t {
     none,                // the new node joined group0 but has not bootstrapped yet (has no tokens and data to serve)
@@ -298,7 +299,7 @@ struct topology_state_machine {
     // Generates mutations that cancel a topology request which is active on the given node.
     // If no request is found, or it cannot be canceled at this stage, no mutations are generated.
     // In case it's topology_request::join/replace, you must also call respond_to_joining_node().
-    void generate_cancel_request_update(utils::chunked_vector<canonical_mutation>& muts,
+    void generate_cancel_request_update(group0_update_collector& muts,
                                         gms::feature_service& features,
                                         const group0_guard& guard,
                                         raft::server_id node,
