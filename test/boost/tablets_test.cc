@@ -5119,8 +5119,9 @@ SEASTAR_THREAD_TEST_CASE(test_size_based_load_balancing_table_load) {
         // Should be larger than 1 to account for potential splits when capacity increases.
         // If it had 1 byte per tablet, splits would turn tablet size into 0 on subdivision, which brings table load to 0.
         table_size = tablet_count * 4;
-        auto table_id = create_table_and_set_tablet_sizes(e, topo, ks_name, tablet_count, table_size);
-        table_sizes[table_id] = table_size;
+        // Not checked: clamped to minimal_tablet_size_for_balancing it's ~0.4% of capacity, inside
+        // the convergence band, so its per-shard spread is unconstrained. See SCYLLADB-4038.
+        create_table_and_set_tablet_sizes(e, topo, ks_name, tablet_count, table_size);
 
         auto& stm = e.shared_token_metadata().local();
 
