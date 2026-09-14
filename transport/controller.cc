@@ -151,7 +151,7 @@ future<std::vector<controller::listen_cfg>> controller::resolve_listeners(const 
         auto addr_name = l.address.empty() ? cfg.rpc_address() : l.address;
         auto [addr_it, inserted] = resolved_addresses.try_emplace(addr_name);
         if (inserted) {
-            addr_it->second = co_await utils::resolve(addr_name, "listener address", family, preferred);
+            addr_it->second = co_await utils::resolve_listen_address(addr_name, "listener address", family, preferred);
         }
     }
 

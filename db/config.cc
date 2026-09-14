@@ -43,6 +43,7 @@
 #include "utils/log.hh"
 #include "service/tablet_allocator_fwd.hh"
 #include "backlog_controller_fwd.hh"
+#include "utils/cidr.hh"
 #include "utils/config_file_impl.hh"
 #include "exceptions/exceptions.hh"
 #include <seastar/core/metrics_api.hh>
@@ -2316,6 +2317,23 @@ future<gms::inet_address> resolve(const sstring& address, std::string_view name,
     }
 
     co_return coroutine::exception(std::move(ex));
+}
+
+future<gms::inet_address> resolve_listen_address(const sstring& address, std::string_view name, gms::inet_address::opt_family family, gms::inet_address::opt_family preferred) {
+    if (!utils::is_cidr(address)) {
+        return resolve(address, name, family, preferred);
+    }
+    auto prefix = utils::cidr::parse(address);
+    if (!prefix) {
+        return make_exception_future<gms::inet_address>(std::runtime_error(
+                seastar::format("Couldn't parse {} '{}' as a network", name, address)));
+    }
+    try {
+        return make_ready_future<gms::inet_address>(gms::inet_address(utils::select_local_address(*prefix)));
+    } catch (...) {
+        return make_exception_future<gms::inet_address>(std::runtime_error(
+                seastar::format("Couldn't resolve {} '{}': {}", name, address, std::current_exception())));
+    }
 }
 
 future<gms::inet_address> resolve(const config_file::named_value<sstring>& address, gms::inet_address::opt_family family, gms::inet_address::opt_family preferred) {

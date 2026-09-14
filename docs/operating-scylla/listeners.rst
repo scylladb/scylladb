@@ -108,7 +108,11 @@ Every listener takes the following keys.
      - The TCP port to listen on. Must not be zero.
    * - ``address``
      - see description
-     - The address to listen on. Defaults to ``rpc_address`` for ``cql``, and to
+     - The address to listen on, or a network written as ``10.0.0.0/8``, meaning
+       whichever address of the node is in it. A network is what makes one value work
+       for every node when the option is set for a whole cluster, a datacenter or a
+       rack; a node refuses to start when none of its addresses is in that network, or
+       when more than one is. Defaults to ``rpc_address`` for ``cql``, and to
        ``alternator_address`` for ``alternator``.
    * - ``shard_aware``
      - ``false``
