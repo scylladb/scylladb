@@ -124,6 +124,7 @@ struct uninitialized {
     uninitialized& operator=(const uninitialized&) = default;
     uninitialized& operator=(uninitialized&&) = default;
     operator T&&() && { return check(), std::move(*_val); }
+    const T& value() const& { return check(), *_val; }
     operator std::optional<T>&&() && { return check(), std::move(_val); }
     void check() const { if (!_val) { throw std::runtime_error("not initialized"); } }
 };
@@ -188,6 +189,12 @@ inline int max_expression_nesting = 12;
             return tuple_constructor{std::move(args)};
         }
         return function_call{std::move(f), std::move(args)};
+    }
+
+    // Is the expression just a reference to the named column?
+    static bool is_column_named(const expression& e, const cql3::column_identifier::raw& name) {
+        auto* id = expr::as_if<expr::unresolved_identifier>(&e);
+        return id && *id->ident == name;
     }
 
     // Can't use static variable, since it needs to be defined out-of-line
@@ -1870,44 +1877,58 @@ columnOperationDifferentiator[operations_type& operations, ::shared_ptr<cql3::co
     | '[' K_SCYLLA_TIMEUUID_LIST_INDEX '(' k=term ')' ']' collectionColumnOperation[operations, key, std::move(k), true]
     ;
 
+// "X = X + <value>", "X = <value> + X" and "X = X - <value>" all begin with a
+// term, and today they are told apart only because a term cannot be a bare
+// column name, so each of the three has a distinguishable shape.  That will stop
+// being true once terms and selectors share one grammar, so parse the leading
+// term once and check afterwards which operand names the column being assigned.
+// A term cannot be a bare column name, but both operands of a column update can:
+// "SET l = l + [1]" and "SET l = [1] + l" are both spelled with one.  This will
+// go away once terms and selectors share one grammar and a term can be a column.
+termOrColumn returns [uexpression e]
+    : c=cident { $e = unresolved_identifier{std::move(c)}; }
+    | t=term   { $e = std::move(t); }
+    ;
+
 normalColumnOperation[operations_type& operations, ::shared_ptr<cql3::column_identifier::raw> key]
-    : t=term ('+' c=cident )?
+    @init{ std::optional<expression> lhs; }
+    : K_SCYLLA_COUNTER_SHARD_LIST '(' t=term ')'
       {
-          if (!c) {
-              operations.emplace_back(std::move(key), std::make_unique<cql3::operation::set_value>(std::move(t)));
+          operations.emplace_back(std::move(key), std::make_unique<cql3::operation::set_counter_value_from_tuple_list>(std::move(t)));
+      }
+    | l=termOrColumn { lhs = std::move(l); }
+      ( '+' u=termOrColumn
+        {
+          if (is_column_named(*lhs, *key)) {
+              operations.emplace_back(std::move(key), std::make_unique<cql3::operation::addition>(std::move(u)));
           } else {
-              if (*key != *c) {
-                add_recognition_error("Only expressions of the form X = <value> + X are supported.");
+              if (!is_column_named(u.value(), *key)) {
+                  add_recognition_error("Only expressions of the form X = <value> + X are supported.");
               }
-              operations.emplace_back(std::move(key), std::make_unique<cql3::operation::prepend>(std::move(t)));
+              operations.emplace_back(std::move(key), std::make_unique<cql3::operation::prepend>(std::move(*lhs)));
           }
-      }
-    | c=cident sig=('+' | '-') t=term
-      {
-          if (*key != *c) {
-              add_recognition_error("Only expressions of the form X = X " + $sig.text + "<value> are supported.");
+        }
+      | '-' u=term
+        {
+          if (!is_column_named(*lhs, *key)) {
+              add_recognition_error("Only expressions of the form X = X -<value> are supported.");
           }
-          std::unique_ptr<cql3::operation::raw_update> op;
-          if ($sig.text == "+") {
-              op = std::make_unique<cql3::operation::addition>(std::move(t));
-          } else {
-              op = std::make_unique<cql3::operation::subtraction>(std::move(t));
-          }
-          operations.emplace_back(std::move(key), std::move(op));
-      }
-    | c=cident i=INTEGER
-      {
+          operations.emplace_back(std::move(key), std::make_unique<cql3::operation::subtraction>(std::move(u)));
+        }
+      | i=INTEGER
+        {
           // Note that this production *is* necessary because X = X - 3 will in fact be lexed as [ X, '=', X, INTEGER].
-          if (*key != *c) {
+          if (!is_column_named(*lhs, *key)) {
               // We don't yet allow a '+' in front of an integer, but we could in the future really, so let's be future-proof in our error message
               add_recognition_error("Only expressions of the form X = X " + sstring($i.text[0] == '-' ? "-" : "+") + " <value> are supported.");
           }
           operations.emplace_back(std::move(key), std::make_unique<cql3::operation::addition>(untyped_constant{untyped_constant::integer, $i.text}));
-      }
-    | K_SCYLLA_COUNTER_SHARD_LIST '(' t=term ')'
-      {
-          operations.emplace_back(std::move(key), std::make_unique<cql3::operation::set_counter_value_from_tuple_list>(std::move(t)));
-      }
+        }
+      |
+        {
+          operations.emplace_back(std::move(key), std::make_unique<cql3::operation::set_value>(std::move(*lhs)));
+        }
+      )
     ;
 
 collectionColumnOperation[operations_type& operations,
