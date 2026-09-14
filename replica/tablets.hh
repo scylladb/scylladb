@@ -114,9 +114,8 @@ future<> read_tablet_mutations(seastar::sharded<database>&, std::function<void(c
 future<std::optional<locator::tablet_transition_stage>> read_tablet_transition_stage(cql3::query_processor& qp, table_id tid, dht::token last_token);
 
 /// Validates changes to system.tablets represented by mutations
-void validate_tablet_metadata_change(const locator::tablet_metadata& tm, const utils::chunked_vector<canonical_mutation>& mutations);
-
-// Same, given the mutation. Ignores mutations of other tables.
+// Throws if `m` is a tablet metadata mutation which would put a tablet into an invalid state,
+// e.g. give it more than one pending replica. Ignores mutations of other tables.
 void validate_tablet_metadata_change(const locator::tablet_metadata& tm, const mutation& m);
 
 } // namespace replica

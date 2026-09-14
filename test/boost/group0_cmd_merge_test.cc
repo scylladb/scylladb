@@ -226,32 +226,6 @@ SEASTAR_TEST_CASE(test_group0_update_collector_for_each_mutation) {
     });
 }
 
-// Verifies that group0_update_collector::add(canonical_mutation) accepts canonical_mutations
-// and collect() returns them unchanged.
-SEASTAR_TEST_CASE(test_group0_update_collector_accepts_canonical_mutations) {
-    return seastar::async([] {
-        simple_schema ss;
-        auto s = ss.schema();
-
-        service::group0_update_collector collector;
-
-        auto mut = ss.new_mutation("pk0");
-        ss.add_row(mut, ss.make_ckey(0), make_random_string(64));
-        collector.add(canonical_mutation(mut));
-
-        auto mut2 = ss.new_mutation("pk1");
-        ss.add_row(mut2, ss.make_ckey(0), make_random_string(32));
-        collector.add(canonical_mutation(mut2));
-
-        auto cms = collector.collect().get();
-
-        BOOST_REQUIRE_EQUAL(cms.size(), 2u);
-
-        assert_that(cms[0].to_mutation(s)).is_equal_to(mut);
-        assert_that(cms[1].to_mutation(s)).is_equal_to(mut2);
-    });
-}
-
 // Verifies that adding many small mutations of the same partition through
 // add()/add_small() keeps the accumulated mutation bounded: collect() returns
 // several mutations, each within the size limit, that merge back into the union

@@ -83,7 +83,6 @@ class group0_update_collector {
     // Mutations that reached _max_mutation_size and are no longer merged into,
     // together with their running upper-bound size estimate.
     utils::chunked_vector<std::pair<mutation, size_t>> _closed_mutations;
-    utils::chunked_vector<canonical_mutation> _frozen_mutations;
     uint64_t _change_counter = 0;
 
     // Locates the accumulating mutation that `m` should be merged into,
@@ -122,32 +121,8 @@ public:
     /// It may be split later in collect().
     void add_large(mutation);
 
-    /// Adds a canonical mutation to the collector.
-    /// Not merged with other mutations and not split.
-    /// This is available for interoperability with old code, prefer add(mutation).
-    void add(canonical_mutation);
-
-    /// Adds a canonical mutation to the collector, without merging or splitting.
-    /// Vector-like alias for add(canonical_mutation), so that call sites which
-    /// used to emplace_back() into a canonical_mutation vector stay unchanged.
-    void emplace_back(canonical_mutation&& cm) {
-        add(std::move(cm));
-    }
-
-    /// Adds a vector of canonical mutations to the collector.
-    /// Not merged with other mutations and not split.
-    /// This is available for interoperability with old code, prefer add(mutation).
-    void add(utils::chunked_vector<canonical_mutation>);
-
-    /// Returns a reference to the vector of canonical_mutations that have been added to the collector.
-    /// This is available for interoperability with old code, prefer add(mutation).
-    utils::chunked_vector<canonical_mutation>& frozen_mutations() {
-        return _frozen_mutations;
-    }
-
     /// Calls `f` on every collected mutation, in unspecified order.
     /// Lets the update be inspected, e.g. validated, without deserializing it.
-    /// Mutations added as canonical_mutation are not visited.
     future<> for_each_mutation(std::function<void(const mutation&)> f) const;
 
     /// Converts accumulated mutations into a vector of canonical_mutations.
@@ -166,7 +141,7 @@ public:
     }
 
     bool empty() const {
-        return _mutations.empty() && _closed_mutations.empty() && _frozen_mutations.empty();
+        return _mutations.empty() && _closed_mutations.empty();
     }
 };
 

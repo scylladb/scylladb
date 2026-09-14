@@ -747,18 +747,6 @@ std::optional<locator::tablet_metadata_change_hint> get_tablet_metadata_change_h
     return hint;
 }
 
-void validate_tablet_metadata_change(const locator::tablet_metadata& tm, const utils::chunked_vector<canonical_mutation>& mutations) {
-    auto s = db::system_keyspace::tablets();
-
-    for (const auto& cm : mutations) {
-        if (cm.column_family_id() != s->id()) {
-            continue;
-        }
-
-        do_validate_tablet_metadata_change(tm, *s, cm.to_mutation(s));
-    }
-}
-
 void validate_tablet_metadata_change(const locator::tablet_metadata& tm, const mutation& m) {
     auto s = db::system_keyspace::tablets();
     if (m.column_family_id() != s->id()) {
