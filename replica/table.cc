@@ -739,7 +739,8 @@ public:
 
     void update_effective_replication_map(const locator::effective_replication_map_ptr& old_erm,
                                           const locator::effective_replication_map& erm,
-                                          noncopyable_function<void()> refresh_mutation_source) override {}
+                                          noncopyable_function<void()> refresh_mutation_source,
+                                          const locator::tablet_metadata_change_hint* tablet_hint) override {}
 
     compaction_group& compaction_group_for_token(dht::token token) const override {
         return get_compaction_group();
@@ -793,6 +794,8 @@ struct background_merge_guard {
 class tablet_storage_group_manager final : public storage_group_manager {
     replica::table& _t;
     locator::host_id _my_host_id;
+    // Points into table::_erm's tablet_metadata, which keeps it alive.
+    // Refreshed together with _erm in update_effective_replication_map().
     const locator::tablet_map* _tablet_map;
     future<> _stop_fut = make_ready_future();
     // Every table replica that completes split work will load the seq number from tablet metadata into its local
@@ -834,7 +837,8 @@ private:
 
     // Called when coordinator executes tablet merge.
     void handle_tablet_merge_completion(locator::effective_replication_map_ptr old_erm,
-                                        const locator::tablet_map& old_tmap, const locator::tablet_map& new_tmap);
+                                        const locator::tablet_map& old_tmap, const locator::tablet_map& new_tmap,
+                                        utils::UUID rack_uuid);
 
     // When merge completes, compaction groups of sibling tablets are added to same storage
     // group, but they're not merged yet into one, since the merge completion handler happens
@@ -933,6 +937,7 @@ public:
 
         auto& tmap = tablet_map();
         auto local_replica = this_tablet_replica();
+        auto rack_uuid = erm.get_topology().get_rack_uuid();
 
         for (auto tid : tmap.tablet_ids()) {
             if (!tmap.has_replica(tid, local_replica)) {
@@ -947,7 +952,7 @@ public:
 
             auto range = tmap.get_token_range(tid);
             tlogger.debug("Tablet with id {} and range {} present for {}.{}", tid, range, schema()->ks_name(), schema()->cf_name());
-            ret[tid.value()] = allocate_storage_group(tmap, tid, std::move(range), erm.get_topology().get_rack_uuid());
+            ret[tid.value()] = allocate_storage_group(tmap, tid, std::move(range), rack_uuid);
         }
         _storage_groups = std::move(ret);
     }
@@ -960,7 +965,8 @@ public:
 
     void update_effective_replication_map(const locator::effective_replication_map_ptr& old_erm,
                                           const locator::effective_replication_map& erm,
-                                          noncopyable_function<void()> refresh_mutation_source) override;
+                                          noncopyable_function<void()> refresh_mutation_source,
+                                          const locator::tablet_metadata_change_hint* tablet_hint) override;
 
     compaction_group& compaction_group_for_token(dht::token token) const override;
     utils::chunked_vector<storage_group_ptr> storage_groups_for_token_range(dht::token_range tr) const override;
@@ -3804,7 +3810,8 @@ future<> tablet_storage_group_manager::merge_completion_fiber() {
 
 void tablet_storage_group_manager::handle_tablet_merge_completion(locator::effective_replication_map_ptr old_erm,
                                                                   const locator::tablet_map& old_tmap,
-                                                                  const locator::tablet_map& new_tmap) {
+                                                                  const locator::tablet_map& new_tmap,
+                                                                  utils::UUID rack_uuid) {
     auto table_id = schema()->id();
     size_t old_tablet_count = old_tmap.tablet_count();
     size_t new_tablet_count = new_tmap.tablet_count();
@@ -3823,7 +3830,7 @@ void tablet_storage_group_manager::handle_tablet_merge_completion(locator::effec
 
     auto open_new_group = [&] (locator::tablet_id new_tid) {
         current_new = new_tid;
-        new_sg = allocate_storage_group(new_tmap, new_tid, new_tmap.get_token_range(new_tid), old_erm->get_topology().get_rack_uuid());
+        new_sg = allocate_storage_group(new_tmap, new_tid, new_tmap.get_token_range(new_tid), rack_uuid);
         for (auto& view : new_sg->main_compaction_group()->all_views()) {
             auto cre = _t.get_compaction_manager().stop_and_disable_compaction_no_wait(*view, "tablet merging");
             _compaction_reenablers_for_merging.push_back(background_merge_guard{std::move(cre), old_erm});
@@ -3890,10 +3897,19 @@ void tablet_storage_group_manager::handle_tablet_merge_completion(locator::effec
 void tablet_storage_group_manager::update_effective_replication_map(
         const locator::effective_replication_map_ptr& old_erm,
         const locator::effective_replication_map& erm,
-        noncopyable_function<void()> refresh_mutation_source)
+        noncopyable_function<void()> refresh_mutation_source,
+        const locator::tablet_metadata_change_hint* tablet_hint)
 {
     auto* new_tablet_map = &erm.get_token_metadata().tablets().get_tablet_map(schema()->id());
     auto* old_tablet_map = std::exchange(_tablet_map, new_tablet_map);
+    // A shared tablet_map plus a hint means placement didn't change; without a hint
+    // it may be a schema change, so run unconditionally. Rack can change independently,
+    // so it's compared against old_erm rather than skipped with the rest.
+    if (tablet_hint && old_tablet_map == new_tablet_map
+            && old_erm && old_erm->get_topology().get_location() == erm.get_topology().get_location()) {
+        return;
+    }
+    auto rack_uuid = erm.get_topology().get_rack_uuid();
 
     size_t old_tablet_count = old_tablet_map->tablet_count();
     size_t new_tablet_count = new_tablet_map->tablet_count();
@@ -3907,7 +3923,7 @@ void tablet_storage_group_manager::update_effective_replication_map(
         if (utils::get_local_injector().is_enabled("tablet_force_tablet_count_decrease_once")) {
             utils::get_local_injector().disable("tablet_force_tablet_count_decrease");
         }
-        handle_tablet_merge_completion(old_erm, *old_tablet_map, *new_tablet_map);
+        handle_tablet_merge_completion(old_erm, *old_tablet_map, *new_tablet_map, rack_uuid);
     } else if (new_tablet_map->needs_split() && !old_tablet_map->needs_split()) {
         // A resize decision was added without changing the tablet count (the "split initiated"
         // entry).  Storage groups already allocated at this point were created before
@@ -3933,7 +3949,7 @@ void tablet_storage_group_manager::update_effective_replication_map(
         auto transition_info = transition.second;
         if (!_storage_groups.contains(tid.value()) && tablet_migrates_in(transition_info)) {
             auto range = new_tablet_map->get_token_range(tid);
-            _storage_groups[tid.value()] = allocate_storage_group(*new_tablet_map, tid, std::move(range), erm.get_topology().get_rack_uuid());
+            _storage_groups[tid.value()] = allocate_storage_group(*new_tablet_map, tid, std::move(range), rack_uuid);
             tablet_migrating_in = true;
         } else if (_storage_groups.contains(tid.value()) && locator::is_post_cleanup(this_replica, new_tablet_map->get_tablet_info(tid), transition_info)) {
             // The storage group should be cleaned up and stopped at this point usually by the tablet cleanup stage,
@@ -3950,10 +3966,15 @@ void tablet_storage_group_manager::update_effective_replication_map(
         }
     }
 
-    // update the per compaction group tombstone GC enabled flag
+    // Update the per compaction group tombstone GC enabled flag and counter id.
+    // There is a single replica in a rack, so we can reuse a single counter id for all replicas
+    // in a rack. Replicas in different racks use different counter ids.
+    // During migration there are two active counter replicas in a rack, then the pending
+    // replica uses a variation of the rack's counter id, so there are at most two distinct
+    // counter ids per rack.
     for_each_storage_group([&] (size_t group_id, storage_group& sg) {
         const locator::tablet_id tid = static_cast<locator::tablet_id>(group_id);
-        auto [tombstone_gc_enabled, cid] = tombstone_gc_and_counter_id(*new_tablet_map, tid, erm.get_topology().get_rack_uuid());
+        auto [tombstone_gc_enabled, cid] = tombstone_gc_and_counter_id(*new_tablet_map, tid, rack_uuid);
         sg.for_each_compaction_group([tombstone_gc_enabled, cid] (const compaction_group_ptr& cg_ptr) {
             cg_ptr->set_tombstone_gc_enabled(tombstone_gc_enabled);
             cg_ptr->set_counter_id(cid);
@@ -4012,7 +4033,8 @@ future<> table::update_repaired_at_for_merge() {
     }
 }
 
-void table::update_effective_replication_map(locator::effective_replication_map_ptr erm) {
+void table::update_effective_replication_map(locator::effective_replication_map_ptr erm,
+        const locator::tablet_metadata_change_hint* tablet_hint) {
     auto old_erm = std::exchange(_erm, std::move(erm));
 
     auto refresh_mutation_source = [this] {
@@ -4021,7 +4043,7 @@ void table::update_effective_replication_map(locator::effective_replication_map_
     };
 
     if (uses_tablets()) {
-        _sg_manager->update_effective_replication_map(old_erm, *_erm, refresh_mutation_source);
+        _sg_manager->update_effective_replication_map(old_erm, *_erm, refresh_mutation_source, tablet_hint);
     }
     if (old_erm) {
         old_erm->invalidate();
