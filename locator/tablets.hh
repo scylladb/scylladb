@@ -558,9 +558,6 @@ struct table_load_stats {
     resize_decision::seq_number_t split_ready_seq_number = std::numeric_limits<resize_decision::seq_number_t>::max();
 
     table_load_stats& operator+=(const table_load_stats& s) noexcept;
-    friend table_load_stats operator+(table_load_stats a, const table_load_stats& b) {
-        return a += b;
-    }
 };
 
 // Deprecated, use load_stats instead.
@@ -577,8 +574,11 @@ struct tablet_load_stats {
     // The token ranges must be in the form (a, b] and only such ranges are allowed
     std::unordered_map<table_id, std::unordered_map<dht::token_range, uint64_t>> tablet_sizes;
 
-    // returns the aggregated size of all the tablets added
-    uint64_t add_tablet_sizes(const tablet_load_stats& tls);
+    // Adds tablet sizes from tls, returning their aggregated size.
+    // Preemptible: tls and *this must outlive the returned future.
+    future<uint64_t> add_tablet_sizes(const tablet_load_stats& tls);
+
+    future<> clear_gently() noexcept;
 };
 
 // Used as a return value for functions returning both table and tablet stats
@@ -602,18 +602,40 @@ struct load_stats {
     tablet_load_stats_map tablet_stats;
 
     // Distinguishes a default-constructed (null) load_stats from one that has
-    // been aggregated via operator+=.  A null element contributes nothing when
-    // merged, while an aggregated-but-empty stats (e.g. from a node that
+    // been aggregated via apply().  A null element contributes nothing when
+    // applied to, while an aggregated-but-empty stats (e.g. from a node that
     // reports no tables) must still invalidate split readiness for tables
     // reported by other nodes.
     bool _aggregated = false;
 
+    load_stats() = default;
+    // Built field by field by the IDL deserializer, which knows nothing about
+    // _aggregated. Keep the parameters in sync with idl/storage_service.idl.hh.
+    load_stats(std::unordered_map<table_id, table_load_stats> tables,
+               std::unordered_map<host_id, uint64_t> capacity,
+               std::unordered_map<locator::host_id, bool> critical_disk_utilization,
+               tablet_load_stats_map tablet_stats);
+
+    // Copying walks every tablet replica in the cluster. Use clone_gently().
+    load_stats(const load_stats&) = delete;
+    load_stats& operator=(const load_stats&) = delete;
+    load_stats(load_stats&&) = default;
+    load_stats& operator=(load_stats&&) = default;
+
+    ~load_stats();
+
     static load_stats from_v1(load_stats_v1&&);
 
-    load_stats& operator+=(const load_stats& s);
-    friend load_stats operator+(load_stats a, const load_stats& b) {
-        return a += b;
-    }
+    // Preemptible deep copy.
+    future<load_stats> clone_gently() const;
+
+    // Applies s on top of *this. Preemptible.
+    //
+    // Call sequentially: let one call resolve before starting the next on the
+    // same destination, and don't modify *this or s meanwhile. Both must
+    // outlive the returned future. Interleaved calls lose the split readiness
+    // invalidation and rehash `tables` under each other.
+    future<> apply(const load_stats& s);
 
     std::optional<uint64_t> get_tablet_size(host_id host, const range_based_tablet_id& rb_tid) const;
 
@@ -629,8 +651,9 @@ struct load_stats {
     // Modifies the tablet sizes in load_stats for the given table after a split or merge. The old_tm argument has
     // to contain the token_metadata pre-resize. The function returns load_stats with tablet token ranges
     // corresponding to the post-resize tablet_map.
-    // In case any pre-resize tablet replica is not found, the function returns nullptr
-    lw_shared_ptr<load_stats> reconcile_tablets_resize(const std::unordered_set<table_id>& tables, const token_metadata& old_tm, const token_metadata& new_tm) const;
+    // In case any pre-resize tablet replica is not found, the function returns nullptr.
+    // Preemptible; *this and both token_metadata must outlive the returned future.
+    future<lw_shared_ptr<load_stats>> reconcile_tablets_resize(const std::unordered_set<table_id>& tables, const token_metadata& old_tm, const token_metadata& new_tm) const;
 
     // Modifies the tablet sizes in load_stats by moving the size of a tablet from leaving to pending host.
     // The function returns modified load_stats if the tablet size was successfully migrated.
@@ -639,7 +662,16 @@ struct load_stats {
     // - tablet was found on the pending host
     // - pending and leaving hosts are equal (in case of intranode migration)
     // - pending host is not found in load_stats.tablet_stats
-    lw_shared_ptr<load_stats> migrate_tablet_size(locator::host_id leaving, locator::host_id pending, locator::global_tablet_id gid, const dht::token_range trange) const;
+    // Preemptible; *this must outlive the returned future.
+    future<lw_shared_ptr<load_stats>> migrate_tablet_size(locator::host_id leaving, locator::host_id pending, locator::global_tablet_id gid, const dht::token_range trange) const;
+
+    // Whether move_tablet_size() would move anything.
+    bool can_move_tablet_size(locator::host_id leaving, locator::host_id pending, locator::global_tablet_id gid, const dht::token_range& trange) const;
+
+    // Moves the size of a tablet from leaving to pending in place. Returns false
+    // and changes nothing when migrate_tablet_size() would return nullptr. Lets a
+    // caller with many tablets to move pay for a single copy.
+    bool move_tablet_size(locator::host_id leaving, locator::host_id pending, locator::global_tablet_id gid, const dht::token_range& trange);
 };
 
 using load_stats_v2 = load_stats;

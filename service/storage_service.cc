@@ -6305,7 +6305,7 @@ future<locator::load_stats> storage_service::load_stats_for_tablet_based_tables(
 
     // Each node combines a per-table load map from all of its shards and returns it to the coordinator.
     // So if there are 1k nodes, there will be 1k RPCs in total.
-    auto load_stats = co_await _db.map_reduce0([&table_ids, &this_host, &tablet_sizes_per_shard] (replica::database& db) -> future<locator::load_stats> {
+    auto per_shard_stats = co_await _db.map([&table_ids, &this_host, &tablet_sizes_per_shard] (replica::database& db) -> future<locator::load_stats> {
         locator::load_stats load_stats{};
         auto& tables_metadata = db.get_tables_metadata();
 
@@ -6317,13 +6317,21 @@ future<locator::load_stats> storage_service::load_stats_for_tablet_based_tables(
 
             locator::combined_load_stats combined_ls { table->table_load_stats() };
             load_stats.tables.emplace(id, std::move(combined_ls.table_ls));
-            tablet_sizes_per_shard[this_shard_id()].size += load_stats.tablet_stats[this_host].add_tablet_sizes(combined_ls.tablet_ls);
+            tablet_sizes_per_shard[this_shard_id()].size +=
+                    co_await load_stats.tablet_stats[this_host].add_tablet_sizes(combined_ls.tablet_ls);
 
             co_await coroutine::maybe_yield();
         }
 
         co_return std::move(load_stats);
-    }, locator::load_stats{}, std::plus<locator::load_stats>());
+    });
+
+    // map_reduce0() insists on a synchronous reducer, so fold here.
+    locator::load_stats load_stats;
+    for (const auto& shard_stats : per_shard_stats) {
+        co_await load_stats.apply(shard_stats);
+    }
+    per_shard_stats.clear();
 
     load_stats.capacity[this_host] = _disk_space_monitor->space().capacity;
     load_stats.critical_disk_utilization[this_host] = _disk_space_monitor->disk_utilization() > _db.local().get_config().critical_disk_utilization_level();

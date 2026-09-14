@@ -27,7 +27,7 @@ struct shared_load_stats {
     locator::load_stats stats;
 
     locator::load_stats_ptr get() const {
-        return make_lw_shared(stats);
+        return make_lw_shared(stats.clone_gently().get());
     }
 
     void set_size(table_id table, size_t size_in_bytes) {
