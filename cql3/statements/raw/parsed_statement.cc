@@ -20,6 +20,10 @@ namespace cql3 {
 
 namespace statements {
 
+future<prepare_result> prepare_allocations::result(std::unique_ptr<prepared_statement> statement) const {
+    return make_ready_future<prepare_result>(std::move(statement), _allocated.value());
+}
+
 namespace raw {
 
 parsed_statement::~parsed_statement()

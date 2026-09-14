@@ -28,10 +28,11 @@ bool attach_service_level_statement::needs_guard(query_processor& qp, service::q
     return true;
 }
 
-std::unique_ptr<cql3::statements::prepared_statement>
+future<cql3::statements::prepare_result>
 cql3::statements::attach_service_level_statement::prepare(
         data_dictionary::database db, cql_stats &stats, const cql_config& cfg) {
-    return std::make_unique<prepared_statement>(audit_info(), ::make_shared<attach_service_level_statement>(*this));
+    prepare_allocations allocations;
+    return allocations.result(std::make_unique<prepared_statement>(audit_info(), ::make_shared<attach_service_level_statement>(*this)));
 }
 
 future<> attach_service_level_statement::check_access(query_processor& qp, const service::client_state &state) const {

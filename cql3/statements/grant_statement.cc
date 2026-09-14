@@ -14,9 +14,10 @@
 #include "service/query_state.hh"
 #include "service/raft/raft_group0_client.hh"
 
-std::unique_ptr<cql3::statements::prepared_statement> cql3::statements::grant_statement::prepare(
+future<cql3::statements::prepare_result> cql3::statements::grant_statement::prepare(
                 data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
-    return std::make_unique<prepared_statement>(audit_info(), ::make_shared<grant_statement>(*this));
+    prepare_allocations allocations;
+    return allocations.result(std::make_unique<prepared_statement>(audit_info(), ::make_shared<grant_statement>(*this)));
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>>

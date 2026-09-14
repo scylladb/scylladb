@@ -336,9 +336,10 @@ cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_proce
     std::unreachable();
 }
 
-std::unique_ptr<cql3::statements::prepared_statement>
+future<cql3::statements::prepare_result>
 cql3::statements::alter_keyspace_statement::prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
-    return std::make_unique<prepared_statement>(audit_info(), make_shared<alter_keyspace_statement>(*this));
+    prepare_allocations allocations;
+    return allocations.result(std::make_unique<prepared_statement>(audit_info(), make_shared<alter_keyspace_statement>(*this)));
 }
 
 

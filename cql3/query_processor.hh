@@ -348,7 +348,7 @@ public:
             std::optional<service::group0_guard> guard,
             cql3::cql_warnings_vec warnings);
 
-    statements::prepared_statement::checked_weak_ptr prepare_internal(sstring query);
+    future<statements::prepared_statement::checked_weak_ptr> prepare_internal(sstring query);
 
     /*!
      * \brief iterate over all cql results using paging
@@ -539,7 +539,7 @@ public:
 
     // pinned_plan and forced_keyspace re-derive a statement continuing a
     // paged query: same plan, same keyspace it was prepared against.
-    std::unique_ptr<statements::prepared_statement> get_statement(
+    future<std::unique_ptr<statements::prepared_statement>> get_statement(
             utils::chunked_string query,
             const service::client_state& client_state,
             dialect d,
@@ -602,6 +602,14 @@ private:
     future<::shared_ptr<cql_transport::messages::result_message>>
     process_authorized_statement(const ::shared_ptr<cql_statement> statement, service::query_state& query_state, const query_options& options, std::optional<service::group0_guard> guard);
 
+    // The last step of get_statement(): prepares a parsed statement.
+    // allocated_before_prepare: the bytes the statement allocated so far.
+    future<std::unique_ptr<statements::prepared_statement>> prepare_parsed_statement(
+            std::unique_ptr<statements::raw::parsed_statement> statement,
+            uint64_t allocated_before_prepare,
+            utils::chunked_string query,
+            prepared_for_driver for_driver);
+
     // What get_statement() sets on a statement after prepare(). Takes the query.
     static void finish_prepare(statements::prepared_statement& p, utils::chunked_string&& query, prepared_for_driver for_driver);
 
@@ -610,7 +618,7 @@ private:
      *
      * When using paging internally a state object is needed.
      */
-    internal_query_state create_paged_state(
+    future<internal_query_state> create_paged_state(
             sstring query_string,
             db::consistency_level,
             query_data_vector values,

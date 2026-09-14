@@ -66,9 +66,10 @@ static auth::authentication_options extract_authentication_options(const cql3::r
 // `create_role_statement`
 //
 
-std::unique_ptr<prepared_statement> create_role_statement::prepare(
+future<prepare_result> create_role_statement::prepare(
                 data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
-    return std::make_unique<prepared_statement>(audit_info(), ::make_shared<create_role_statement>(*this));
+    prepare_allocations allocations;
+    return allocations.result(std::make_unique<prepared_statement>(audit_info(), ::make_shared<create_role_statement>(*this)));
 }
 
 future<> create_role_statement::grant_permissions_to_creator(const service::client_state& cs, ::service::group0_batch& mc) const {
@@ -204,9 +205,10 @@ void create_role_statement::sanitize_audit_info() {
 // `alter_role_statement`
 //
 
-std::unique_ptr<prepared_statement> alter_role_statement::prepare(
+future<prepare_result> alter_role_statement::prepare(
                 data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
-    return std::make_unique<prepared_statement>(audit_info(), ::make_shared<alter_role_statement>(*this));
+    prepare_allocations allocations;
+    return allocations.result(std::make_unique<prepared_statement>(audit_info(), ::make_shared<alter_role_statement>(*this)));
 }
 
 future<> alter_role_statement::check_access(query_processor& qp, const service::client_state& state) const {
@@ -293,9 +295,10 @@ void alter_role_statement::sanitize_audit_info() {
 // `drop_role_statement`
 //
 
-std::unique_ptr<prepared_statement> drop_role_statement::prepare(
+future<prepare_result> drop_role_statement::prepare(
                 data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
-    return std::make_unique<prepared_statement>(audit_info(), ::make_shared<drop_role_statement>(*this));
+    prepare_allocations allocations;
+    return allocations.result(std::make_unique<prepared_statement>(audit_info(), ::make_shared<drop_role_statement>(*this)));
 }
 
 void drop_role_statement::validate(query_processor& qp, const service::client_state& state) const {
@@ -348,9 +351,10 @@ drop_role_statement::execute(query_processor&, service::query_state& state, cons
 // `list_roles_statement`
 //
 
-std::unique_ptr<prepared_statement> list_roles_statement::prepare(
+future<prepare_result> list_roles_statement::prepare(
                 data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
-    return std::make_unique<prepared_statement>(audit_info(), ::make_shared<list_roles_statement>(*this));
+    prepare_allocations allocations;
+    return allocations.result(std::make_unique<prepared_statement>(audit_info(), ::make_shared<list_roles_statement>(*this)));
 }
 
 shared_ptr<const cql3::metadata> list_roles_statement::get_result_metadata() const {
@@ -478,9 +482,10 @@ list_roles_statement::execute(query_processor& qp, service::query_state& state, 
 // `grant_role_statement`
 //
 
-std::unique_ptr<prepared_statement> grant_role_statement::prepare(
+future<prepare_result> grant_role_statement::prepare(
                 data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
-    return std::make_unique<prepared_statement>(audit_info(), ::make_shared<grant_role_statement>(*this));
+    prepare_allocations allocations;
+    return allocations.result(std::make_unique<prepared_statement>(audit_info(), ::make_shared<grant_role_statement>(*this)));
 }
 
 future<> grant_role_statement::check_access(query_processor& qp, const service::client_state& state) const {
@@ -508,9 +513,10 @@ grant_role_statement::execute(query_processor&, service::query_state& state, con
 // `revoke_role_statement`
 //
 
-std::unique_ptr<prepared_statement> revoke_role_statement::prepare(
+future<prepare_result> revoke_role_statement::prepare(
                 data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
-    return std::make_unique<prepared_statement>(audit_info(), ::make_shared<revoke_role_statement>(*this));
+    prepare_allocations allocations;
+    return allocations.result(std::make_unique<prepared_statement>(audit_info(), ::make_shared<revoke_role_statement>(*this)));
 }
 
 future<> revoke_role_statement::check_access(query_processor& qp, const service::client_state& state) const {

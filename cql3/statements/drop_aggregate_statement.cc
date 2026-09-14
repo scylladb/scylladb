@@ -19,8 +19,9 @@ namespace cql3 {
 
 namespace statements {
 
-std::unique_ptr<prepared_statement> drop_aggregate_statement::prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
-    return std::make_unique<prepared_statement>(audit_info(), make_shared<drop_aggregate_statement>(*this));
+future<prepare_result> drop_aggregate_statement::prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
+    prepare_allocations allocations;
+    return allocations.result(std::make_unique<prepared_statement>(audit_info(), make_shared<drop_aggregate_statement>(*this)));
 }
 
 future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, cql3::cql_warnings_vec>> drop_aggregate_statement::prepare_schema_mutations(query_processor& qp, service::query_state& state, const query_options& options, service::group0_batch& mc) const {

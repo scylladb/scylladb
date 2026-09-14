@@ -606,10 +606,10 @@ SEASTAR_TEST_CASE(test_statement_prepared_before_table_recreation_is_rejected) {
 
         auto select_stmt = qp.get_statement("select * from ks.tbl where pk = 0;",
                 qs.get_client_state(), cql3::internal_dialect(),
-                cql3::query_processor::prepared_for_driver::no)->statement;
+                cql3::query_processor::prepared_for_driver::no).get()->statement;
         auto insert_stmt = qp.get_statement("insert into ks.tbl (pk, v) values (0, 0);",
                 qs.get_client_state(), cql3::internal_dialect(),
-                cql3::query_processor::prepared_for_driver::no)->statement;
+                cql3::query_processor::prepared_for_driver::no).get()->statement;
 
         e.execute_cql("drop table ks.tbl;").get();
         e.execute_cql("create table ks.tbl (pk int primary key, v int);").get();
