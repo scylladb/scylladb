@@ -66,6 +66,7 @@ public:
     std::vector<sstring> warnings;
 private:
     cql_metadata_id_type _metadata_id;
+    size_t _memory_cost = 0;
 
 public:
     prepared_statement(audit::audit_info_ptr&& audit_info, seastar::shared_ptr<cql_statement> statement_, std::vector<seastar::lw_shared_ptr<column_specification>> bound_names_,
@@ -85,6 +86,13 @@ public:
     void calculate_metadata_id();
 
     cql_metadata_id_type get_metadata_id() const;
+
+    /// Bytes this statement retains, measured by query_processor::get_statement()
+    /// as the growth in live memory during preparation. Page-granular, so it is
+    /// floored at one page and rounds up; it is also capped there.
+    /// Zero for statements not built through get_statement().
+    size_t memory_cost() const noexcept { return _memory_cost; }
+    void set_memory_cost(size_t cost) noexcept { _memory_cost = cost; }
 };
 
 }
