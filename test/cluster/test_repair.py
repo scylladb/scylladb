@@ -177,8 +177,9 @@ async def do_batchlog_flush_in_repair(manager, cache_time_in_ms):
     total_repair_duration = 0
 
     cfg = { 'tablets_mode_for_new_keyspaces': 'disabled' }
-    cmdline = ["--repair-hints-batchlog-flush-cache-time-in-ms", str(cache_time_in_ms), "--smp", "1", "--logger-log-level", "api=trace"]
+    cmdline = ["--repair-hints-batchlog-flush-cache-time-in-ms", str(cache_time_in_ms), "--smp", "1", "--logger-log-level", "api=trace", "--logger-log-level", "repair=debug"]
     node1, node2 = await manager.servers_add(2, config=cfg, cmdline=cmdline, auto_rack_dc="dc1")
+    log1 = await manager.server_open_log(node1.server_id)
 
     cql = manager.get_cql()
     cql.execute("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}")
@@ -202,6 +203,7 @@ async def do_batchlog_flush_in_repair(manager, cache_time_in_ms):
 
     await asyncio.sleep(1 + (cache_time_in_ms / 1000))
 
+    mark = await log1.mark()
     count_before = await manager.api.get_injection_enter_count(node1.ip_addr, "repair_flush_hints_batchlog_handler")
     duration = await repair("Second")
     total_repair_duration += duration
@@ -209,8 +211,12 @@ async def do_batchlog_flush_in_repair(manager, cache_time_in_ms):
 
     # Each repair sends flush requests to all nodes, so node1 receives nr_repairs
     # requests per round. With cache, only the first triggers an actual replay.
-    replays_per_round = 1 if cache_time_in_ms > 0 else nr_repairs
-    assert count_after - count_before == replays_per_round
+    replays = count_after - count_before
+    if cache_time_in_ms > 0:
+        assert replays == 1
+    else:
+        reused = len(await log1.grep("with a flush that started after it arrived", from_mark=mark))
+        assert replays + reused == nr_repairs
 
     logger.debug(f"Repair nr_repairs={nr_repairs} cache_time_in_ms={cache_time_in_ms} total_repair_duration={total_repair_duration}")
 

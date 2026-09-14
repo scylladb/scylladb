@@ -2860,7 +2860,24 @@ future<repair_flush_hints_batchlog_response> repair_service::repair_flush_hints_
     }
     rlogger.debug("repair[{}]: Started to process repair_flush_hints_batchlog_request from node={} hints_timeout={}s batchlog_timeout={}s",
             req.repair_uuid, from, req.hints_timeout.count(), req.batchlog_timeout.count());
-    auto permit = co_await seastar::get_units(_flush_hints_batchlog_sem, 1);
+    auto arrival = gc_clock::now();
+    auto queue_timeout = std::min(req.hints_timeout, req.batchlog_timeout);
+    lowres_clock::time_point deadline = lowres_clock::now() + req.hints_timeout;
+    db::timeout_clock::time_point batchlog_deadline = db::timeout_clock::now() + req.batchlog_timeout;
+    auto permit = co_await coroutine::as_future(seastar::get_units(_flush_hints_batchlog_sem, 1, queue_timeout));
+    if (permit.failed()) {
+        auto ex = permit.get_exception();
+        rlogger.warn("repair[{}]: Failed to process repair_flush_hints_batchlog_request from node={}: still queued behind earlier flush requests after {}s: {}",
+                req.repair_uuid, from, queue_timeout.count(), ex);
+        co_return coroutine::exception(std::move(ex));
+    }
+    auto units = permit.get();
+    // gc_clock counts whole seconds, so only a later second proves the flush started after arrival.
+    if (_flush_hints_batchlog_time > arrival) {
+        rlogger.debug("repair[{}]: Finished to process repair_flush_hints_batchlog_request from node={} with a flush that started after it arrived, flush_hints_batchlog_time={}",
+                req.repair_uuid, from, _flush_hints_batchlog_time);
+        co_return repair_flush_hints_batchlog_response{ .flush_time = _flush_hints_batchlog_time };
+    }
     bool updated = false;
     auto now = gc_clock::now();
     auto cache_time = std::chrono::milliseconds(_config.repair_hints_batchlog_flush_cache_time_in_ms());
@@ -2870,8 +2887,6 @@ future<repair_flush_hints_batchlog_response> repair_service::repair_flush_hints_
     if (cache_disabled || (now - _flush_hints_batchlog_time > cache_time)) {
         // Empty targets meants all nodes
         db::hints::sync_point sync_point = co_await _sp.local().create_hint_sync_point(std::vector<locator::host_id>{});
-        lowres_clock::time_point deadline = lowres_clock::now() + req.hints_timeout;
-        db::timeout_clock::time_point batchlog_deadline = db::timeout_clock::now() + req.batchlog_timeout;
         try {
             bool bm_throw = utils::get_local_injector().enter("repair_flush_hints_batchlog_handler_bm_uninitialized");
             if (!_bm.local_is_initialized() || bm_throw) {
