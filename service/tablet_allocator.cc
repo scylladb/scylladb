@@ -1118,7 +1118,7 @@ public:
         }
 
         if (rack_list_colocation) {
-            plan.merge(co_await make_rack_list_colocation_plan(plan));
+            plan.merge(co_await make_rack_list_colocation_plan());
         }
 
         // Merge table-wide resize decisions, may emit new decisions, revoke or finalize ongoing ones.
@@ -1256,16 +1256,6 @@ public:
 
         const locator::topology& topo = _tm->get_topology();
 
-        node_load_map nodes;
-        // TODO: share code with make_plan()
-        topo.for_each_node([&] (const locator::node& node) {
-            bool is_drained = node.get_state() == locator::node::state::being_decommissioned
-                              || node.get_state() == locator::node::state::being_removed;
-            if (node.get_state() == locator::node::state::normal || is_drained) {
-                ensure_node(nodes, node.host_id());
-            }
-        });
-
         service::auto_repair_stats auto_repair_stats;
 
         utils::chunked_vector<repair_plan> plans;
@@ -1394,8 +1384,7 @@ public:
     future<migration_plan> make_rack_list_colocation_plan_for_dc(
             const sstring& dc,
             const std::map<sstring, colocation_source_set>& racks,
-            const std::unordered_map<sstring, std::unordered_set<utils::UUID>>& requests_for_dc,
-            const migration_plan& mplan) {
+            const std::unordered_map<sstring, std::unordered_set<utils::UUID>>& requests_for_dc) {
         migration_plan plan;
         const locator::topology& topo = _tm->get_topology();
 
@@ -1490,7 +1479,7 @@ public:
         co_return plan;
     }
 
-    future<migration_plan> make_rack_list_colocation_plan(const migration_plan& mplan) {
+    future<migration_plan> make_rack_list_colocation_plan() {
         lblogger.debug("In make_rack_list_colocation_plan");
 
         migration_plan plan;
@@ -1503,7 +1492,7 @@ public:
 
         for (auto& [dc, racks] : colocation_state.dst_dc_rack_to_tablets) {
             auto requests_it = colocation_state.dst_to_requests.find(dc);
-            plan.merge(co_await make_rack_list_colocation_plan_for_dc(dc, racks, requests_it != colocation_state.dst_to_requests.end() ? requests_it->second : std::unordered_map<sstring, std::unordered_set<utils::UUID>>{}, mplan));
+            plan.merge(co_await make_rack_list_colocation_plan_for_dc(dc, racks, requests_it != colocation_state.dst_to_requests.end() ? requests_it->second : std::unordered_map<sstring, std::unordered_set<utils::UUID>>{}));
         }
 
         if (colocation_state.request_to_resume) {
