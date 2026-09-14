@@ -9,6 +9,7 @@
 #pragma once
 
 #include <cstdint>
+#include <iosfwd>
 #include <optional>
 #include <unordered_map>
 
@@ -17,13 +18,18 @@
 
 #include "seastarx.hh"
 
+namespace YAML {
+class Node;
+}
+
 namespace db {
 
 class config;
 
 /// Description of a single client-facing listening socket.
 ///
-/// A listener is derived from the per-protocol configuration options
+/// A listener is either spelled out by the user in the "listeners"
+/// configuration option, or derived from the legacy per-protocol options
 /// (native_transport_port, alternator_https_port, and friends).
 struct listener_config {
     enum class protocol_type {
@@ -55,17 +61,39 @@ struct listener_config {
     std::optional<bool> keepalive;
 
     bool operator==(const listener_config&) const = default;
+
+    static listener_config decode(const YAML::Node&);
 };
 
 /// A set of listeners, keyed by the name that they are known - and referred
 /// to - by.
 using listener_configs = std::unordered_map<sstring, listener_config>;
 
-/// The listeners the given protocol is to serve, as derived from the
-/// per-protocol configuration options.
-listener_configs get_listeners(const config&, listener_config::protocol_type);
+/// The listeners the given protocol is to serve.
+///
+/// `configured` is the set of listeners the "listeners" cluster config option resolved to
+/// for this node. When it is non-empty it is the sole source of truth and the per-protocol
+/// options in scylla.yaml are ignored; when it is empty the listeners are derived from
+/// those options instead, so a cluster that never set the option keeps the listeners it
+/// has always had.
+listener_configs get_listeners(const config&, const listener_configs& configured, listener_config::protocol_type);
+
+/// Parse a set of listeners out of its stored cluster-config form: a YAML mapping of
+/// listener name to listener, in flow style, as canonicalize_listeners() writes it.
+listener_configs decode_listeners(std::string_view);
+
+/// The cluster-config codec of the "listeners" option. Declared here, next to what they
+/// describe, and handed to the registry by db/cluster_config_registry.cc.
+///
+/// The stored form is flow-style YAML - which is to say it is also JSON - so that a value
+/// stays on the one line a cluster config value is allowed, and so that the listeners a
+/// user writes and the listeners a node reads back go through one parser.
+std::optional<sstring> validate_listeners(std::string_view);
+sstring canonicalize_listeners(std::string_view);
 
 std::string_view to_string(listener_config::protocol_type);
+
+std::istream& operator>>(std::istream&, listener_config&);
 
 }
 
