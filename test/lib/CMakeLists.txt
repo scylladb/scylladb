@@ -24,6 +24,7 @@ target_sources(test-lib
     eventually.cc
     proc_utils.cc
     gcs_fixture.cc
+    s3_fixture.cc
     aws_kms_fixture.cc
     azure_kms_fixture.cc
     gcp_kms_fixture.cc

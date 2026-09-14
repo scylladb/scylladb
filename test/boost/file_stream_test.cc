@@ -7,6 +7,7 @@
  */
 
 #include "test/lib/cql_test_env.hh"
+#include "test/lib/s3_fixture.hh"
 #include "test/lib/cql_assertions.hh"
 #include "streaming/stream_blob.hh"
 #include "message/messaging_service.hh"
@@ -631,7 +632,8 @@ SEASTAR_TEST_CASE(test_stream_sink_write_local) {
     return test_stream_sink_write(sstables::test_env_config{});
 }
 
-SEASTAR_TEST_CASE(test_stream_sink_write_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_TEST_CASE(test_stream_sink_write_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     return test_stream_sink_write(sstables::test_env_config{ .storage = make_test_object_storage_options("S3") });
 }
 
@@ -641,12 +643,14 @@ SEASTAR_FIXTURE_TEST_CASE(test_stream_sink_write_gs, gcs_fixture, *tests::check_
 
 // S3 variants: exercise reading SSTables from object storage.  Corruption
 // tests are omitted because the corruption helpers use local-filesystem I/O.
-SEASTAR_THREAD_TEST_CASE(test_sstable_stream_compressed_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_THREAD_TEST_CASE(test_sstable_stream_compressed_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     auto so = make_test_object_storage_options("S3");
     test_sstable_stream(compress_sstable::yes, nullptr, "", make_object_storage_test_config(so), make_storage_clause(so));
 }
 
-SEASTAR_THREAD_TEST_CASE(test_sstable_stream_uncompressed_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_THREAD_TEST_CASE(test_sstable_stream_uncompressed_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     auto so = make_test_object_storage_options("S3");
     test_sstable_stream(compress_sstable::no, nullptr, "", make_object_storage_test_config(so), make_storage_clause(so));
 }
@@ -739,7 +743,8 @@ do_test_clone_path_stream(cql_test_env& env, compress_sstable compress, sstring 
 }
 
 // S3 clone-path test (compressed)
-SEASTAR_THREAD_TEST_CASE(test_clone_path_stream_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_THREAD_TEST_CASE(test_clone_path_stream_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     auto so = make_test_object_storage_options("S3");
     auto cfg = make_object_storage_test_config(so);
     cfg.ms_listen = true;
@@ -750,7 +755,8 @@ SEASTAR_THREAD_TEST_CASE(test_clone_path_stream_s3, *boost::unit_test::precondit
 }
 
 // S3 clone-path test (uncompressed)
-SEASTAR_THREAD_TEST_CASE(test_clone_path_stream_uncompressed_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
+SEASTAR_THREAD_TEST_CASE(test_clone_path_stream_uncompressed_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
     auto so = make_test_object_storage_options("S3");
     auto cfg = make_object_storage_test_config(so);
     cfg.ms_listen = true;

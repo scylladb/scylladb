@@ -63,12 +63,30 @@ class LRUCache:
                 del self.cache[key]
 
 
-# Simple proxy between s3 client and minio to randomly inject errors and simulate cases when the request succeeds but the wire got "broken"
+# Simple proxy between s3 client and the S3 server to randomly inject errors and simulate cases when the request succeeds but the wire got "broken"
 def true_or_false():
     return random.choice([True, False])
 
 
 class InjectingHandler(BaseHTTPRequestHandler):
+    # (connect, read) timeouts for the request we forward, so that an S3 server
+    # that accepts the connection and then goes quiet turns into a retryable
+    # error instead of wedging the handler forever. Deliberately generous: the
+    # tests should never fail because a reply was merely slow, we only want to
+    # rule out waiting for one that will never come.
+    forward_timeout = (30, 300)
+    # These describe the connection we forwarded over rather than the payload, so they
+    # must not be relayed to the client. Transfer-Encoding matters most: we hand the
+    # body to the client with a Content-Length of our own, and a chunked one inherited
+    # from the S3 server would make the client parse that body as a chunk header.
+    hop_by_hop_headers = frozenset(('CONNECTION',
+                                    'KEEP-ALIVE',
+                                    'PROXY-AUTHENTICATE',
+                                    'PROXY-AUTHORIZATION',
+                                    'TE',
+                                    'TRAILER',
+                                    'TRANSFER-ENCODING',
+                                    'UPGRADE'))
     retryable_codes = list((408, 419, 429, 440, 500)) + list(range(502, 599))
     error_names = list(("InternalFailureException",
                         "InternalFailure",
@@ -94,8 +112,8 @@ class InjectingHandler(BaseHTTPRequestHandler):
                         "ExpiredTokenException",
                         ))
 
-    def __init__(self, policies, logger, minio_uri, max_retries, *args, **kwargs):
-        self.minio_uri = minio_uri
+    def __init__(self, policies, logger, s3_uri, max_retries, *args, **kwargs):
+        self.s3_uri = s3_uri
         self.policies = policies
         self.logger = logger
         self.max_retries = max_retries
@@ -158,7 +176,7 @@ class InjectingHandler(BaseHTTPRequestHandler):
 
                                 <Error>
                                     <Code>{error_name}</Code>
-                                    <Message>Minio proxy injected error. {"The provided token has expired." if error_name == "ExpiredTokenException" else "Client should retry."}</Message>
+                                    <Message>S3 proxy injected error. {"The provided token has expired." if error_name == "ExpiredTokenException" else "Client should retry."}</Message>
                                     <RequestId>{req_uuid}</RequestId>
                                     <HostId>Uuag1LuByRx9e6j5Onimru9pO4ZVKnJ2Qz7/C1NPcfTWAtRPfTaOFg==</HostId>
                                 </Error>""".encode('utf-8')
@@ -183,13 +201,14 @@ class InjectingHandler(BaseHTTPRequestHandler):
                 body = self.rfile.read(int(content_length))
 
             if policy.should_forward:
-                target_url = self.minio_uri + self.path
+                target_url = self.s3_uri + self.path
                 headers = {key: value for key, value in self.headers.items()}
                 try:
-                    response = requests.request(self.command, target_url, headers=headers, data=body)
+                    response = requests.request(self.command, target_url, headers=headers, data=body,
+                                                timeout=self.forward_timeout)
                 except requests.exceptions.RequestException as e:
-                    # Forwarding to minio failed (e.g. connection reset while minio is under
-                    # load from concurrent requests). Nothing has been written to the client
+                    # Forwarding to the S3 server failed (e.g. connection reset while it is
+                    # under load from concurrent requests). Nothing has been written to the client
                     # yet, so respond with a well-formed retryable error instead of letting the
                     # client hang until it eventually observes a bare connection drop.
                     self.logger.warning("Failed to forward request to %s: %s", target_url, e)
@@ -204,11 +223,15 @@ class InjectingHandler(BaseHTTPRequestHandler):
                 self.policies.remove(self.path)
                 self.send_response(response.status_code)
                 for key, value in response.headers.items():
-                    if key.upper() != 'CONTENT-LENGTH':
+                    if key.upper() != 'CONTENT-LENGTH' and key.upper() not in self.hop_by_hop_headers:
                         self.send_header(key, value)
 
                 if self.command == 'HEAD':
-                    self.send_header("Content-Length", response.headers['Content-Length'])
+                    # `requests` hands us no body for a HEAD reply, so the length has to
+                    # come from the S3 server. It may not have sent one - S3Mock omits it
+                    # on error replies - and a HEAD body is empty either way, so fall back
+                    # to zero rather than throwing the response away.
+                    self.send_header("Content-Length", response.headers.get('Content-Length', '0'))
                 else:
                     self.send_header("Content-Length", str(len(response.content)))
                 self.end_headers()
@@ -235,14 +258,14 @@ class InjectingHandler(BaseHTTPRequestHandler):
 # Proxy server to setup `ThreadingHTTPServer` instance with custom request handler (see above), managing requests state
 # in the `self.req_states`, adding custom logger, etc. This server will be started automatically from `test.py`. In
 # addition, it is possible just to start this server using another script - `start_s3_proxy.py` to run it locally to
-# provide proxy between tests and minio
+# provide proxy between tests and the S3 server
 class S3ProxyServer:
-    def __init__(self, host: str, port: int, minio_uri: str, max_retries: int, seed: int, logger):
+    def __init__(self, host: str, port: int, s3_uri: str, max_retries: int, seed: int, logger):
         self.logger = logger
-        self.logger.info('Setting minio proxy random seed to %s', seed)
+        self.logger.info('Setting S3 proxy random seed to %s', seed)
         random.seed(seed)
         self.req_states = LRUCache(10000)
-        handler = partial(InjectingHandler, self.req_states, logger, minio_uri, max_retries)
+        handler = partial(InjectingHandler, self.req_states, logger, s3_uri, max_retries)
         self.server = ThreadingHTTPServer((host, port), handler)
         self.server_thread = None
         self.server.request_queue_size = 1000

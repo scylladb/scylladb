@@ -39,7 +39,8 @@ class _PortInUseError(RuntimeError):
 class DockerizedServer:
     """class for running an external dockerized service image, typically mock server
 
-    The container's stderr is written to ``<log_dir>/<logfilenamebase>-<uuid>.log``.
+    The container's output (stdout and stderr merged, since a containerized service
+    may log to either) is written to ``<log_dir>/<logfilenamebase>-<uuid>.log``.
     Callers must point ``log_dir`` at a directory CI archives (i.e. somewhere under
     ``--tmpdir``/testlog), otherwise the container log is lost with the per-test
     temporary directory and post-mortem analysis of a container failure is impossible.
@@ -103,7 +104,7 @@ class DockerizedServer:
         self.logfile = logfilename.open("wb")
         # Logged at INFO so the archived pytest log always points at the container
         # log file, even when the container starts fine and only misbehaves later.
-        logger.info("Container %s stderr is captured in %s", name, logfilename)
+        logger.info("Container %s output is captured in %s", name, logfilename)
 
         docker_args = self.docker_args(self.host, self.service_port)
         image_args = self.image_args(self.host, self.service_port)
@@ -133,7 +134,11 @@ class DockerizedServer:
         # background thread (execution pool) for the processing.
         # This way we know the pipe reader will not suddenly get
         # blocked at inconvenient times.
-        proc = subprocess.Popen(args, stderr=subprocess.PIPE)
+        # Merge stderr into stdout: some images (e.g. Spring Boot based ones) log to
+        # stdout, others to stderr, and podman itself reports launch failures on stderr.
+        # Reading a single stream keeps the success/failure matching below unaware of
+        # which one the image happens to use.
+        proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         loop = asyncio.get_running_loop()
         ready_fut = loop.create_future()
 
@@ -141,7 +146,7 @@ class DockerizedServer:
             f = ready_fut
             try:
                 while True:
-                    data = proc.stderr.readline()
+                    data = proc.stdout.readline()
                     if not data:
                         rc = proc.poll()
                         level = logging.DEBUG

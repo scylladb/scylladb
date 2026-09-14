@@ -308,27 +308,6 @@ go_arch() {
     echo ${GO_ARCH["$(arch)"]}
 }
 
-MINIO_BINARIES_DIR=/usr/local/bin
-
-minio_server_url() {
-    echo "https://dl.minio.io/server/minio/release/linux-$(go_arch)/minio"
-}
-
-minio_client_url() {
-    echo "https://dl.min.io/client/mc/release/linux-$(go_arch)/mc"
-}
-
-minio_download_jobs() {
-    cfile=$(mktemp)
-    echo "$(curl -sL "$(minio_server_url).sha256sum" | cut -f1 -d' ') ${MINIO_BINARIES_DIR}/minio" > "$cfile"
-    echo "$(curl -sL "$(minio_client_url).sha256sum" | cut -f1 -d' ') ${MINIO_BINARIES_DIR}/mc" >> "$cfile"
-    sha256sum -c $cfile | grep -F FAILED | sed \
-        -e 's/:.*$//g' \
-        -e "s#${MINIO_BINARIES_DIR}/minio#$(minio_server_url) -o ${MINIO_BINARIES_DIR}/minio#" \
-        -e "s#${MINIO_BINARIES_DIR}/mc#$(minio_client_url) -o ${MINIO_BINARIES_DIR}/mc#"
-    rm -f ${cfile}
-}
-
 print_usage() {
     echo "Usage: install-dependencies.sh [OPTION]..."
     echo ""
@@ -481,15 +460,6 @@ fi
 # breaks linking (unresolved cxxbridge symbols). Bumping one requires bumping the
 # other (and rebuilding the toolchain image).
 cargo --config net.git-fetch-with-cli=true install cxxbridge-cmd --version 1.0.83 --root /usr/local
-
-CURL_ARGS=$(minio_download_jobs)
-if [ ! -z "${CURL_ARGS}" ]; then
-    curl -fSL --remove-on-error --parallel --parallel-immediate ${CURL_ARGS}
-    chmod +x "${MINIO_BINARIES_DIR}/minio"
-    chmod +x "${MINIO_BINARIES_DIR}/mc"
-else
-    echo "Minio server and client are up-to-date, skipping download"
-fi
 
 toxyproxy_version="v2.12.0"
 for bin in toxiproxy-cli toxiproxy-server; do
