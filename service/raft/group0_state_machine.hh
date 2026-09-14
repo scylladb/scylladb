@@ -18,6 +18,7 @@
 #include "service/raft/group0_state_id_handler.hh"
 #include "mutation/canonical_mutation.hh"
 #include "mutation/mutation.hh"
+#include "mutation/small_mutation.hh"
 #include "service/raft/raft_state_machine.hh"
 #include "gms/feature.hh"
 #include "gms/inet_address.hh"
@@ -112,6 +113,10 @@ public:
     /// Like add() but assumes the mutation is small-enough to not need yielding.
     /// For places which don't want to defer due to future<>.
     void add_small(mutation);
+
+    /// Same, for a mutation whose type already says it is small enough to
+    /// merge without yielding.
+    void add(small_mutation sm) { add_small(std::move(sm)); }
 
     /// Like add() but assumes the mutation is large-enough to not need merging.
     /// It may be split later in collect().
