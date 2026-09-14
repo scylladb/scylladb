@@ -12,6 +12,7 @@
 
 #include <vector>
 
+#include <seastar/core/future.hh>
 #include <seastar/core/sstring.hh>
 
 #include "cql3/column_identifier.hh"
@@ -93,6 +94,11 @@ sstring quote(const std::string_view s);
 /// character itself is quoted by doubling it.
 /// Single quoting is necessary for dates, IP addresses or string literals.
 sstring single_quote(const std::string_view s);
+
+// Delays a step of a statement when the error injection injection_name is
+// enabled. Its parameter spin_us burns that many microseconds of CPU, and
+// pause waits for a message.
+future<> inject_delay(std::string_view injection_name);
 
 // Check whether timestamp is not too far in the future as this probably
 // indicates its incorrectness (for example using other units than microseconds).

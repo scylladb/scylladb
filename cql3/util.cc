@@ -11,6 +11,9 @@
 #include "db_clock.hh"
 #include "utils/chunked_string.hh"
 #include "utils/reusable_buffer.hh"
+#include "utils/error_injection.hh"
+
+#include <seastar/core/thread_cputime_clock.hh>
 
 #ifdef DEBUG
 
@@ -184,6 +187,18 @@ void do_with_parser_impl(utils::chunked_string_view cql, dialect d, noncopyable_
 }
 
 #endif
+
+future<> inject_delay(std::string_view injection_name) {
+    return utils::get_local_injector().inject(injection_name, [] (auto& handler) -> future<> {
+        if (auto us = handler.template get<unsigned>("spin_us")) {
+            auto until = seastar::thread_cputime_clock::now() + std::chrono::microseconds(*us);
+            while (seastar::thread_cputime_clock::now() < until) {}
+        }
+        if (handler.get("pause")) {
+            co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes(1));
+        }
+    });
+}
 
 void validate_timestamp(const cql_config& cql_cfg, const query_options& options, const std::unique_ptr<attributes>& attrs) {
     if (attrs->is_timestamp_set() && cql_cfg.restrict_future_timestamp()) {
