@@ -34,8 +34,11 @@ value set at a broader one:
 * ``NODE`` overrides ``RACK``, which overrides ``DATACENTER``, which overrides ``CLUSTER``.
 
 Each option supports a fixed set of scopes. Options that describe a table (such as
-``auto_repair_enabled``) can be set at ``TABLE``, ``KEYSPACE`` and ``CLUSTER`` scope. No option
-currently supports the ``DATACENTER``, ``RACK`` or ``NODE`` scopes.
+``auto_repair_enabled``) can be set at ``TABLE``, ``KEYSPACE`` and ``CLUSTER`` scope. An option
+that describes how CQL statements are read (such as
+``cql_parentheses_around_a_single_term_make_a_tuple``) can be set at ``CLUSTER`` scope only, a
+statement not belonging to any one table or node. No option currently supports the
+``DATACENTER``, ``RACK`` or ``NODE`` scopes.
 
 Each scope stores only the values that were explicitly set there. The *effective* value of an
 option for a table is the value stored at the narrowest scope that has one: the table's own value
@@ -161,3 +164,9 @@ Available options
      - boolean
      - ``CLUSTER``, ``KEYSPACE``, ``TABLE``
      - Enable automatic repair for tablet-based tables. Default: ``false``.
+   * - ``cql_parentheses_around_a_single_term_make_a_tuple``
+     - boolean
+     - ``CLUSTER``
+     - Read ``(x)`` in a CQL statement as a one-element :ref:`tuple <tuples>`, the reading CQL
+       has always had; when ``false``, as a parenthesized ``x``. ``tuple(x)`` is the one-element
+       tuple either way. Default: ``true``.

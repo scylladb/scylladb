@@ -639,9 +639,12 @@ constructor says which is meant, the way SQL's ``ROW(x)`` does::
 
     INSERT INTO durations (event, duration) VALUES ('ev1', tuple(3, 'hours'));
 
-``(x)`` itself keeps the reading CQL has always had, a one-element tuple.
-Parentheses around two or more terms are a tuple in any reading, and
-``tuple()`` is not a value — a tuple has at least one element.
+How ``(x)`` itself is read is the ``cql_parentheses_around_a_single_term_make_a_tuple``
+:ref:`cluster configuration option <cluster-config>`: as a one-element tuple by
+default, the reading CQL has always had, or as a parenthesized ``x``. ``tuple(x)``
+is the one-element tuple under either setting, parentheses around two or more
+terms are a tuple under either setting, and ``tuple()`` is not a value — a tuple
+has at least one element.
 
 .. _vectors:
 

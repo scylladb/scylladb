@@ -32,6 +32,7 @@ controller::controller(sharded<auth::service>& auth, sharded<service::migration_
         sharded<gms::gossiper>& gossiper, sharded<cql3::query_processor>& qp, sharded<service::memory_limiter>& ml,
         sharded<qos::service_level_controller>& sl_controller, sharded<service::endpoint_lifecycle_notifier>& elc_notif,
         sharded<netw::messaging_service>& ms, sharded<updateable_timeout_config>& timeout_config,
+        sharded<db::cluster_config_manager>& cluster_config,
         const db::config& cfg, scheduling_group_key cql_opcode_stats_key, maintenance_socket_enabled used_by_maintenance_socket,
         seastar::scheduling_group sg)
     : protocol_server(sg)
@@ -46,6 +47,7 @@ controller::controller(sharded<auth::service>& auth, sharded<service::migration_
     , _sl_controller(sl_controller)
     , _messaging(ms)
     , _timeout_config(timeout_config)
+    , _cluster_config(cluster_config)
     , _config(cfg)
     , _cql_opcode_stats_key(cql_opcode_stats_key)
     , _used_by_maintenance_socket(used_by_maintenance_socket)
@@ -273,7 +275,7 @@ future<> controller::do_start_server() {
             };
         });
 
-        cserver->start(std::ref(_qp), std::ref(_auth_service), std::ref(_mem_limiter), std::move(get_cql_server_config), std::ref(_sl_controller), std::ref(_gossiper), _cql_opcode_stats_key, _used_by_maintenance_socket, std::ref(_messaging)).get();
+        cserver->start(std::ref(_qp), std::ref(_auth_service), std::ref(_mem_limiter), std::move(get_cql_server_config), std::ref(_sl_controller), std::ref(_gossiper), _cql_opcode_stats_key, _used_by_maintenance_socket, std::ref(_messaging), std::ref(_cluster_config)).get();
         auto on_error = defer([&cserver] noexcept { cserver->stop().get(); });
 
         subscribe_server(*cserver).get();

@@ -77,6 +77,25 @@ def test_tuple_constructor(cql, table2):
     # Spelling is not case-sensitive, as for any other unquoted name.
     assert list(cql.execute(f"SELECT TUPLE(1) FROM {table2} WHERE p={p}")) == [((1,),)]
 
+# Which of the two readings of "(x)" is in force is a cluster configuration
+# option, so that the reading CQL has always had can be kept.
+def test_parentheses_around_a_single_term(cql, table2, scylla_only):
+    p = unique_key_int()
+    cql.execute(f"INSERT INTO {table2}(p) VALUES ({p})")
+    # By default "(1)" is the one-element tuple...
+    assert list(cql.execute(f"SELECT (1) FROM {table2} WHERE p={p}")) == [((1,),)]
+    cql.execute("ALTER CLUSTER WITH cql_parentheses_around_a_single_term_make_a_tuple = false")
+    try:
+        # ... and read the other way it is simply 1.
+        assert list(cql.execute(f"SELECT (1) FROM {table2} WHERE p={p}")) == [(1,)]
+        # The constructor builds the tuple in either reading, and parentheses
+        # around two or more terms are a tuple in either reading.
+        assert list(cql.execute(f"SELECT tuple(1) FROM {table2} WHERE p={p}")) == [((1,),)]
+        assert list(cql.execute(f"SELECT (1, 2) FROM {table2} WHERE p={p}")) == [((1, 2),)]
+    finally:
+        cql.execute("ALTER CLUSTER WITH cql_parentheses_around_a_single_term_make_a_tuple = NULL")
+    assert list(cql.execute(f"SELECT (1) FROM {table2} WHERE p={p}")) == [((1,),)]
+
 # A tuple has at least one element; "tuple()" is not an empty one.
 def test_tuple_constructor_needs_an_element(cql, table2):
     with pytest.raises(SyntaxException, match='at least one element'):
