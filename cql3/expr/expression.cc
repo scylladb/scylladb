@@ -2457,6 +2457,17 @@ verify_no_aggregate_functions(const expression& expr, std::string_view context_f
     }
 }
 
+void
+verify_no_column_on_rhs(const expression& expr, std::string_view context_for_errors) {
+    for_each_expression<binary_operator>(expr, [&] (const binary_operator& binop) {
+        if (auto* col = find_in_expression<column_value>(binop.rhs, [] (const column_value&) { return true; })) {
+            throw exceptions::invalid_request_exception(fmt::format(
+                    "Column {} cannot be compared against in the {}: a relation compares a column with a value",
+                    col->col->name_as_text(), context_for_errors));
+        }
+    });
+}
+
 unsigned
 aggregation_depth(const cql3::expr::expression& e) {
     static constexpr auto max_over_range = [] (std::ranges::range auto&& rng) -> unsigned {

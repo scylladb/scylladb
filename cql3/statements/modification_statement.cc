@@ -630,6 +630,7 @@ expr::expression
 column_condition_prepare(const expr::expression& expr, data_dictionary::database db, const sstring& keyspace, const schema& schema, const dialect& d){
     auto prepared = expr::prepare_expression_allowing_relations(expr, db, keyspace, &schema, make_lw_shared<column_specification>("", "", make_shared<column_identifier>("IF condition", true), boolean_type), d);
     expr::verify_no_aggregate_functions(prepared, "IF clause");
+    expr::verify_no_column_on_rhs(prepared, "IF clause");
 
     expr::for_each_expression<expr::column_value>(prepared, [] (const expr::column_value& cval) {
       auto def = cval.col;
