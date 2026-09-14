@@ -39,6 +39,7 @@
 #include <seastar/core/gate.hh>
 #include <seastar/util/defer.hh>
 #include <seastar/core/metrics_registration.hh>
+#include <seastar/core/abort_on_expiry.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/coroutine/as_future.hh>
@@ -454,6 +455,26 @@ static future<std::list<locator::host_id>> get_hosts_participating_in_repair(
 }
 
 
+future<gc_clock::time_point> flush_hints_batchlog_on_node(netw::messaging_service& ms, locator::host_id node, const repair_flush_hints_batchlog_request& req) {
+    auto start_time = gc_clock::now();
+    auto timeout = std::max(req.hints_timeout, req.batchlog_timeout) + std::chrono::seconds(30);
+    abort_on_expiry expiry(lowres_clock::now() + timeout);
+    repair_flush_hints_batchlog_response resp;
+    try {
+        resp = co_await ser::repair_rpc_verbs::send_repair_flush_hints_batchlog(&ms, node, expiry.abort_source(), req);
+    } catch (const abort_requested_exception&) {
+        // The rpc layer reports every abort the same way; the expiry knows why.
+        std::rethrow_exception(expiry.abort_source().abort_requested_exception_ptr());
+    }
+    // A node too old to report its flush time returns epoch. The time the
+    // flush was asked for is earlier than the flush, so it is safe to use.
+    if (resp.flush_time == gc_clock::time_point()) {
+        rlogger.debug("Got empty flush_time from node={}. Please upgrade the node.", node);
+        co_return start_time;
+    }
+    co_return resp.flush_time;
+}
+
 future<std::tuple<bool, bool, gc_clock::time_point>> repair_service::flush_hints(repair_uniq_id id,
         sstring keyspace, std::vector<sstring> cfs,
         std::unordered_set<locator::host_id> ignore_nodes) {
@@ -496,19 +517,12 @@ future<std::tuple<bool, bool, gc_clock::time_point>> repair_service::flush_hints
                         uuid, nodes_down);
                 co_return std::make_tuple(needs_flush_before_repair, hints_batchlog_flushed, flush_time);
             }
-            co_await parallel_for_each(waiting_nodes, [this, uuid, start_time, &times, &req] (locator::host_id node) -> future<> {
+            co_await parallel_for_each(waiting_nodes, [this, uuid, &times, &req] (locator::host_id node) -> future<> {
                 rlogger.debug("repair[{}]: Sending repair_flush_hints_batchlog to node={}, started",
                         uuid, node);
                 try {
                     auto& ms = get_messaging();
-                    auto resp = co_await ser::repair_rpc_verbs::send_repair_flush_hints_batchlog(&ms, node, req);
-                    if (resp.flush_time == gc_clock::time_point()) {
-                        // This means the node does not support sending flush_time back. Use the time when the flush is requested for flush_time.
-                        rlogger.debug("repair[{}]: Got empty flush_time from node={}. Please upgrade the node={}.", uuid, node, node);
-                        times.push_back(start_time);
-                    } else {
-                        times.push_back(resp.flush_time);
-                    }
+                    times.push_back(co_await flush_hints_batchlog_on_node(ms, node, req));
                 } catch (...) {
                     rlogger.warn("repair[{}]: Sending repair_flush_hints_batchlog to node={}, failed: {}",
                             uuid, node, std::current_exception());
