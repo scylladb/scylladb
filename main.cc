@@ -2987,14 +2987,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
 
             auth_service.local().ensure_superuser_is_created().get();
-            // Don't register the CQL server if the configuration gave it nothing to
-            // listen on - as an explicit "listeners" option consisting of Alternator
-            // listeners only does. Starting it would open no socket, yet gossip
-            // RPC_READY=true, telling the other nodes that a CQL endpoint nobody can
-            // reach is up.
-            if (!cql_listeners.empty()) {
-                ss.local().register_protocol_server(cql_server_ctl, cfg->start_native_transport()).get();
-            }
+            // Registered even when the configuration gives it nothing to listen on - as an
+            // explicit "listeners" option consisting of Alternator listeners only does - so
+            // that it starts as soon as a later change gives it a listener. Until then the
+            // controller holds off starting it.
+            ss.local().register_protocol_server(cql_server_ctl, cfg->start_native_transport()).get();
             api::set_transport_controller(ctx, cql_server_ctl).get();
             auto stop_transport_controller = defer_verbose_shutdown("transport controller API", [&ctx] {
                 api::unset_transport_controller(ctx).get();

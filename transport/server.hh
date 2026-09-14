@@ -42,6 +42,7 @@
 #include "db/operation_type.hh"
 #include "service/maintenance_mode.hh"
 #include "service/client_routes.hh"
+#include "transport/cql_listener_config.hh"
 #include "utils/estimated_histogram.hh"
 #include "transport/forward.hh"
 #include "service/qos/service_level_controller.hh"
@@ -125,16 +126,6 @@ struct cql_server_config {
     utils::updateable_value<bool> cql_in_bind_variable_name_uses_uppercase_operator;
     utils::updateable_value<uint32_t> uninitialized_connections_semaphore_cpu_concurrency;
     utils::updateable_value<uint32_t> request_timeout_on_shutdown_in_seconds;
-};
-
-// The properties of a single listening socket that the connections accepted on
-// it need to know about.
-struct cql_listener_config {
-    // The shard-aware listener that clients of this listener are to be handed
-    // over to, and whether it is encrypted. Advertised in the SUPPORTED
-    // message. Disengaged when this listener offers no shard-aware port.
-    std::optional<uint16_t> shard_aware_port;
-    bool shard_aware_port_tls = false;
 };
 
 /**
@@ -285,7 +276,8 @@ public:
 
     // Listen on one more socket, serving the connections accepted on it
     // according to \c listener_config.
-    future<> listen(socket_address addr, cql_listener_config listener_config,
+    future<> unlisten(const sstring& name);
+    future<> listen(const sstring& name, socket_address addr, cql_listener_config listener_config,
             std::shared_ptr<seastar::tls::credentials_builder> creds,
             bool is_shard_aware, bool keepalive,
             std::optional<file_permissions> unix_domain_socket_permissions,
