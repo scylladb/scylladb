@@ -5080,10 +5080,8 @@ SEASTAR_THREAD_TEST_CASE(test_size_based_load_balancing_table_load) {
                 load.populate(std::nullopt, table).get();
 
                 const double ideal_table_load = double(table_size) / total_capacity;
-                min_max_tracker<double> table_load;
                 for (auto h : hosts) {
                     auto shard_minmax_load = load.get_shard_minmax(h);
-                    table_load.update(shard_minmax_load);
                     testlog.info("Table: {} ideal_load: {} host: {} load: {} min_shard_load: {} max_shard_load: {}",
                                     table, ideal_table_load, h, load.get_load(h), shard_minmax_load.min(), shard_minmax_load.max());
 
