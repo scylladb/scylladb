@@ -37,6 +37,9 @@ class recent_entries_map {
     using entries_map = std::unordered_map<Key, typename recent_entries::iterator>;
 
 private:
+    // Ordered by `_last_visit`, newest first: entries are created at the front and
+    // `touch()` splices them back to it, so the least recently visited one is always
+    // at the back. `remove_least_recent_entries()` depends on this.
     recent_entries _recent_entries;
     entries_map _entries_map;
 
@@ -79,16 +82,17 @@ public:
     }
 
     // Removes recent_entries not younger than the specified interval.
+    //
+    // The entries are ordered by `_last_visit` (see the member declaration), so the
+    // ones to remove are a suffix of the list. Costs a single comparison when there
+    // is nothing to collect, and O(removed entries) otherwise.
     void remove_least_recent_entries(std::chrono::milliseconds interval) {
         const auto now = Clock::now();
 
-        auto it = std::find_if(_recent_entries.begin(), _recent_entries.end(), [now, interval](const recent_entry& entry) {
-            return now - entry._last_visit >= interval;
-        });
-
-        for (; it != _recent_entries.end(); ) {
-            _entries_map.erase(it->_key);
-            it = _recent_entries.erase(it);
+        while (!_recent_entries.empty() && now - _recent_entries.back()._last_visit >= interval) {
+            // Erase from the map first: the key it looks up lives in the list node.
+            _entries_map.erase(_recent_entries.back()._key);
+            _recent_entries.pop_back();
         }
     }
 };
