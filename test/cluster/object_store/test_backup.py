@@ -304,8 +304,10 @@ async def test_simple_backup_and_restore(manager: ScyllaClusterManager, object_s
                             "WHERE value IS NOT NULL AND name IS NOT NULL PRIMARY KEY (value, name)")
             await wait_for_view(cql, view, 1)
 
-        def list_sstables():
-            return [f for f in os.scandir(f'{workdir}/data/{ks}/{cf_dir}') if f.is_file()]
+        def list_sstables(include_staging=False):
+            table_dir = f'{workdir}/data/{ks}/{cf_dir}'
+            dirs = [table_dir, f'{table_dir}/staging'] if include_staging else [table_dir]
+            return [f for d in dirs for f in os.scandir(d) if f.is_file()]
 
         orig_res = cql.execute(f"SELECT * FROM {ks}.{cf}")
         orig_rows = {x.name: x.value for x in orig_res}
@@ -359,7 +361,11 @@ async def test_simple_backup_and_restore(manager: ScyllaClusterManager, object_s
             assert status['progress_completed'] > 0
 
         print('Check that sstables came back')
-        files = list_sstables()
+        # A restore into a table that has a view streams the sstables with
+        # stream_reason::repair, so they land in staging/ and only move into the table's
+        # own directory once the view update generator has processed them, which is after
+        # the restore task reports done.
+        files = list_sstables(include_staging=with_view)
 
         sstable_names = [f'{entry.name}' for entry in files if entry.name.endswith('.db')]
         db_objects = [object for object in objects if object.endswith('.db')]
