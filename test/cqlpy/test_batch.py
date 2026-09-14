@@ -7,6 +7,7 @@
 #############################################################################
 from cassandra import InvalidRequest
 from cassandra.cluster import NoHostAvailable
+from cassandra.protocol import SyntaxException
 from .util import new_test_table
 from .rest_api import scylla_inject_error
 
@@ -74,3 +75,29 @@ def test_batch_with_error(cql, table1):
         # exceptions::exception_code::SERVER_ERROR, it gets converted to NoHostAvailable by the driver
         with pytest.raises(NoHostAvailable, match="Value too large"):
             cql.execute(generate_big_batch(table1, 100) + injection_key)
+
+# A large textual batch is parsed and prepared with yields in between
+# (SCYLLADB-219). Run a batch of many statements as an unprepared QUERY and as
+# a PREPARE followed by an EXECUTE, and check that every statement took effect.
+def test_large_batch_query(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "k int primary key, t text") as table:
+        n = 1000
+        inserts = "\n".join(f"INSERT INTO {table} (k, t) VALUES ({i}, 'q')" for i in range(n))
+        cql.execute("BEGIN UNLOGGED BATCH\n" + inserts + "\nAPPLY BATCH")
+        assert cql.execute(f"SELECT COUNT(*) FROM {table}").one()[0] == n
+
+def test_large_batch_prepared(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "k int primary key, t text") as table:
+        n = 1000
+        inserts = "\n".join(f"INSERT INTO {table} (k, t) VALUES (?, ?)" for _ in range(n))
+        prepared = cql.prepare("BEGIN UNLOGGED BATCH\n" + inserts + "\nAPPLY BATCH")
+        cql.execute(prepared, [v for i in range(n) for v in (i, 'p')])
+        assert cql.execute(f"SELECT COUNT(*) FROM {table}").one()[0] == n
+
+# A syntax error at the end of a large textual batch is reported as usual,
+# though such a batch is parsed in a thread that yields (SCYLLADB-219).
+def test_large_batch_syntax_error(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "k int primary key, t text") as table:
+        inserts = "\n".join(f"INSERT INTO {table} (k, t) VALUES ({i}, 'q')" for i in range(1000))
+        with pytest.raises(SyntaxException):
+            cql.execute("BEGIN UNLOGGED BATCH\n" + inserts + "\nAPPLY")

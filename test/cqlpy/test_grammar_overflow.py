@@ -48,6 +48,10 @@ def nested_relation(depth):
     """Build (((... p=1 ...)))"""
     return "(" * depth + "p=1" + ")" * depth
 
+def nested_type(depth):
+    """Build list<list<... int ...>>"""
+    return "list<" * depth + "int" + ">" * depth
+
 # The default max_function_call_nesting is 12.  Use a depth large enough
 # to overflow the evaluator stack before the fix is in place.
 DEPTH = 100000
@@ -128,3 +132,15 @@ def test_reasonable_number_of_relations_allowed(cql, table1, scylla_only):
     # Should not raise - we just need it to parse successfully.
     # The query itself may return no rows, that's fine.
     cql.execute(f"SELECT * FROM {table1} WHERE {where} ALLOW FILTERING")
+
+
+def test_deeply_nested_type(cql, test_keyspace, scylla_only):
+    """A type nested deeper than the parser's stack must be rejected, and the
+    node must keep serving. Such a statement is large, so it is parsed in a
+    thread that checks its stack (SCYLLADB-219)."""
+    build_mode = cql.execute("SELECT build_mode FROM system.versions").one().build_mode
+    if build_mode in ("debug", "sanitize"):
+        pytest.skip("debug builds parse without the stack check")
+    with pytest.raises(SyntaxException, match="nested too deeply"):
+        cql.execute(f"CREATE TABLE {test_keyspace}.deep (k int PRIMARY KEY, v frozen<{nested_type(DEPTH)}>)")
+    cql.execute("SELECT * FROM system.local")
