@@ -11,7 +11,6 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional, Tuple
 
-import pytest
 
 if TYPE_CHECKING:
     from asyncio import AbstractEventLoop
@@ -74,7 +73,7 @@ class ScyllaLogFile:
         self.thread_pool = thread_pool  # used for asynchronous IO operations
         self.file = Path(logfile_path)
         if not self.file.is_file():
-            pytest.fail(f"Log file {self.file.name} does not exist")
+            raise FileNotFoundError(f"Log file {self.file.name} does not exist")
 
     async def _run_in_executor[T, **P](self,
                                        func: Callable[P, T],
