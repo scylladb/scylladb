@@ -127,19 +127,29 @@ def parse_string_multimap(body: bytes) -> dict[str, list[str]]:
     return result
 
 
+async def cql_options_on(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> dict[str, list[str]]:
+    """Perform a CQL OPTIONS/SUPPORTED exchange over a connection that is already
+    open, and return what the server says it supports.
+
+    Separate from cql_options() so that a test can hold a connection across a
+    reconfiguration and then ask whether it still works.
+    """
+    writer.write(CQL_HEADER.pack(0x04, 0x00, 0, CQL_OPCODE_OPTIONS, 0))
+    await writer.drain()
+    version, _, _, opcode, length = CQL_HEADER.unpack(await reader.readexactly(CQL_HEADER.size))
+    body = await reader.readexactly(length)
+    assert version == 0x84, f"Not a CQL v4 response frame: {version:#x}"
+    assert opcode == CQL_OPCODE_SUPPORTED, f"Expected SUPPORTED, got opcode {opcode:#x}: {body!r}"
+    return parse_string_multimap(body)
+
+
 async def cql_options(endpoint: Endpoint, **kwargs) -> dict[str, list[str]]:
     """Perform a CQL OPTIONS/SUPPORTED exchange, and return what the server says
     it supports. Doubles as a check that the listener speaks CQL.
     """
     reader, writer = await connect(endpoint, **kwargs)
     try:
-        writer.write(CQL_HEADER.pack(0x04, 0x00, 0, CQL_OPCODE_OPTIONS, 0))
-        await writer.drain()
-        version, _, _, opcode, length = CQL_HEADER.unpack(await reader.readexactly(CQL_HEADER.size))
-        body = await reader.readexactly(length)
-        assert version == 0x84, f"Not a CQL v4 response frame: {version:#x}"
-        assert opcode == CQL_OPCODE_SUPPORTED, f"Expected SUPPORTED, got opcode {opcode:#x}: {body!r}"
-        return parse_string_multimap(body)
+        return await cql_options_on(reader, writer)
     finally:
         writer.close()
 
