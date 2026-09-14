@@ -15,6 +15,7 @@
 #include "utils/scoped_item_list.hh"
 
 #include <cstdint>
+#include <unordered_map>
 
 #include <seastar/core/file-types.hh>
 #include <seastar/core/future.hh>
@@ -23,6 +24,7 @@
 #include <seastar/net/api.hh>
 #include <seastar/net/tls.hh>
 #include <seastar/core/semaphore.hh>
+#include <seastar/core/shared_future.hh>
 #include <seastar/core/scheduling.hh>
 
 namespace generic_server {
@@ -120,7 +122,27 @@ protected:
     future<> _listeners_stopped = make_ready_future<>();
     utils::scoped_item_list<std::reference_wrapper<connection>> _connections_list;
     std::vector<server_socket> _listeners;
-    shared_ptr<seastar::tls::server_credentials> _credentials;
+    // Server credentials, one per credentials_builder listen() was given.
+    // Listeners sharing a builder share the credentials built out of it.
+    //
+    // The entry is inserted before the credentials are built, and holds a
+    // promise rather than the credentials themselves, because building them
+    // suspends: listeners sharing a builder are started concurrently, so a
+    // listener that finds an entry has to wait for whoever inserted it to
+    // finish building, instead of building a second set of credentials. That
+    // second set would not be the one the certificate reload callback rebuilds,
+    // so its certificate would silently stop reloading.
+    //
+    // The key is the builder's address, so that the reload callback can look
+    // the entry up on the other shards without copying a shared_ptr across
+    // shards. The entry holds the builder as well, since nothing else keeps it
+    // alive once listen() returned - without that the keys would dangle, and a
+    // later builder allocated at the same address would alias this one.
+    struct credentials_entry {
+        std::shared_ptr<seastar::tls::credentials_builder> builder;
+        shared_promise<shared_ptr<seastar::tls::server_credentials>> credentials;
+    };
+    std::unordered_map<const seastar::tls::credentials_builder*, credentials_entry> _credentials;
     seastar::abort_source _abort_source;
 private:
     utils::updateable_value<uint32_t> _conns_cpu_concurrency;
