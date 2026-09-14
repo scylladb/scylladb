@@ -83,6 +83,7 @@ public:
 
     impl(encryption_context*, const std::string& name, const host_options& options);
     future<> init();
+    future<> stop();
     const host_options& options() const;
     future<key_and_id_type> get_or_create_key(const key_info&, const option_override* = nullptr);
     future<key_ptr> get_key_by_id(const id_type&, const key_info&);
@@ -211,6 +212,11 @@ future<> azure_host::impl::init() {
         }
         _initialized = true;
     });
+}
+
+future<> azure_host::impl::stop() {
+    co_await _attr_cache.stop();
+    co_await _id_cache.stop();
 }
 
 const azure_host::host_options& azure_host::impl::options() const {
@@ -534,6 +540,10 @@ azure_host::~azure_host() = default;
 
 future<> azure_host::init() {
     return _impl->init();
+}
+
+future<> azure_host::stop() {
+    return _impl->stop();
 }
 
 const azure_host::host_options& azure_host::options() const {

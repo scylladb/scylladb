@@ -488,6 +488,7 @@ public:
             };
             co_await stop_all(_per_thread_kms_host_cache[this_shard_id()]);
             co_await stop_all(_per_thread_gcp_host_cache[this_shard_id()]);
+            co_await stop_all(_per_thread_azure_host_cache[this_shard_id()]);
 
             _per_thread_provider_cache[this_shard_id()].clear();
             _per_thread_system_key_cache[this_shard_id()].clear();
