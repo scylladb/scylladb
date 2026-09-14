@@ -82,25 +82,30 @@ async def do_test_tablet_repair_progress_split_merge(manager: ScyllaClusterManag
     # 12 out of 16 tablets should finish
     await wait_task_progress(nr_tablets_repaired, nr_tablets)
 
-    if do_split:
-        await get_task_status_and_check("before_split")
+    async def resize_and_check(op, resize_injection):
+        # Hold back repair scheduling until the progress is checked. A resize
+        # renumbers the tablets, so tablet_repair_skip_sched keeps a different
+        # set of tablets unrepaired afterwards, and repairing one of the new
+        # tablets covers the token range of a tablet that was skipped before
+        # the resize, which moves the progress counter.
+        await inject_error_on(manager, "tablet_skip_repair_plan", servers)
 
         s1_mark = await logs[0].mark()
-        await inject_error_on(manager, "tablet_force_tablet_count_increase", servers)
-        await logs[0].wait_for('Detected tablet split for table', from_mark=s1_mark)
-        await inject_error_off(manager, "tablet_force_tablet_count_increase", servers)
+        await inject_error_on(manager, resize_injection, servers)
+        await logs[0].wait_for(f'Detected tablet {op} for table', from_mark=s1_mark)
+        await inject_error_off(manager, resize_injection, servers)
 
-        await get_task_status_and_check("after_split")
+        await get_task_status_and_check(f"after_{op}")
+
+        await inject_error_off(manager, "tablet_skip_repair_plan", servers)
+
+    if do_split:
+        await get_task_status_and_check("before_split")
+        await resize_and_check("split", "tablet_force_tablet_count_increase")
 
     if do_merge:
         await get_task_status_and_check("before_merge")
-
-        s1_mark = await logs[0].mark()
-        await inject_error_on(manager, "tablet_force_tablet_count_decrease", servers)
-        await logs[0].wait_for('Detected tablet merge for table', from_mark=s1_mark)
-        await inject_error_off(manager, "tablet_force_tablet_count_decrease", servers)
-
-        await get_task_status_and_check("after_merge")
+        await resize_and_check("merge", "tablet_force_tablet_count_decrease")
 
     # Wait for all repair to finish after all tablets can be scheduled to run repair
     await inject_error_off(manager, "tablet_repair_skip_sched", servers)
