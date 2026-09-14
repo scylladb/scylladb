@@ -1779,15 +1779,26 @@ setOrMapLiteral[uexpression t] returns [collection_constructor value]
       { $value = collection_constructor{collection_constructor::style_type::set, std::move(e)}; }
     ;
 
-collectionLiteral returns [uexpression value]
+// '[' opens a list literal, but it is also the subscript operator, so a term
+// will have to offer a list literal only where a subscript cannot follow.  Keep
+// it apart from the brace-delimited literals, which have no such problem.
+listLiteral returns [uexpression value]
 	@init{ std::vector<expression> l; }
     : '['
           ( t1=term { l.push_back(std::move(t1)); } ( ',' tn=term { l.push_back(std::move(tn)); } )* )?
       ']' { $value = collection_constructor{collection_constructor::style_type::list_or_vector, std::move(l)}; }
-    | '{' t=term v=setOrMapLiteral[t] { $value = std::move(v); } '}'
+    ;
+
+braceCollectionLiteral returns [uexpression value]
+    : '{' t=term v=setOrMapLiteral[t] { $value = std::move(v); } '}'
     // Note that we have an ambiguity between maps and set for "{}". So we force it to a set literal,
     // and deal with it later based on the type of the column (SetLiteral.java).
     | '{' '}' { $value = collection_constructor{collection_constructor::style_type::set, {}}; }
+    ;
+
+collectionLiteral returns [uexpression value]
+    : l=listLiteral            { $value = std::move(l); }
+    | b=braceCollectionLiteral { $value = std::move(b); }
     ;
 
 usertypeLiteral returns [uexpression ut]
