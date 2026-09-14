@@ -293,8 +293,7 @@ void raft_group0_client::validate_change(const Command& change) {
     replica::validate_tablet_metadata_change(_token_metadata.get()->tablets(), change.mutations);
 }
 
-template<typename Command>
-group0_command raft_group0_client::make_command(Command change, group0_guard& guard, std::string_view description) {
+group0_command raft_group0_client::make_command(group0_change change, group0_guard& guard, std::string_view description) {
     group0_command group0_cmd {
         .change{std::move(change)},
         .history_append{db::system_keyspace::make_group0_history_state_id_mutation(
@@ -310,6 +309,39 @@ group0_command raft_group0_client::make_command(Command change, group0_guard& gu
     };
 
     return group0_cmd;
+}
+
+future<> raft_group0_client::validate_and_collect(group0_change& change, group0_update_collector& updates) {
+    auto tm = _token_metadata.get();
+    co_await updates.for_each_mutation([&tm] (const mutation& m) {
+        replica::validate_tablet_metadata_change(tm->tablets(), m);
+    });
+    auto mutations = co_await updates.collect();
+    std::visit([&mutations] (auto& c) { c.mutations = std::move(mutations); }, change);
+}
+
+future<group0_command> raft_group0_client::prepare_command(group0_change change, group0_update_collector&& updates,
+        group0_guard& guard, std::string_view description) {
+    co_await validate_and_collect(change, updates);
+    co_return make_command(std::move(change), guard, description);
+}
+
+future<group0_command> raft_group0_client::prepare_command(group0_change change, group0_update_collector&& updates,
+        std::string_view description) {
+    co_await validate_and_collect(change, updates);
+    const auto new_group0_state_id = generate_group0_state_id(utils::UUID{});
+
+    co_return group0_command {
+        .change{std::move(change)},
+        .history_append{db::system_keyspace::make_group0_history_state_id_mutation(
+            new_group0_state_id, _history_gc_duration, description)},
+
+        .prev_state_id{std::nullopt},
+        .new_state_id{new_group0_state_id},
+
+        .creator_addr{_sys_ks.local_db().get_token_metadata().get_topology().my_address()},
+        .creator_id{_raft_gr.group0().id()}
+    };
 }
 
 template<typename Command>

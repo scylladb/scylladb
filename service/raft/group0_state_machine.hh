@@ -165,8 +165,12 @@ public:
     }
 };
 
+// The change a group0 command carries. Every alternative holds the command's
+// mutations, so the alternative alone says how they are applied.
+using group0_change = std::variant<schema_change, unused, topology_change, write_mutations, mixed_change>;
+
 struct group0_command {
-    std::variant<schema_change, unused, topology_change, write_mutations, mixed_change> change;
+    group0_change change;
 
     // Mutation of group0 history table, appending a new state ID and optionally a description.
     canonical_mutation history_append;
