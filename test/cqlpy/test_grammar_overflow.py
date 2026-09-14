@@ -48,6 +48,10 @@ def nested_relation(depth):
     """Build (((... p=1 ...)))"""
     return "(" * depth + "p=1" + ")" * depth
 
+def nested_type(depth):
+    """Build list<list<... int ...>>"""
+    return "list<" * depth + "int" + ">" * depth
+
 # The default max_function_call_nesting is 12.  Use a depth large enough
 # to overflow the evaluator stack before the fix is in place.
 DEPTH = 100000
@@ -128,3 +132,26 @@ def test_reasonable_number_of_relations_allowed(cql, table1, scylla_only):
     # Should not raise - we just need it to parse successfully.
     # The query itself may return no rows, that's fine.
     cql.execute(f"SELECT * FROM {table1} WHERE {where} ALLOW FILTERING")
+
+
+def test_deeply_nested_type(cql, test_keyspace, scylla_only):
+    """A type nested deeper than the parser's stack must be rejected, and the
+    node must keep serving. Such a statement is large, so it is parsed in a
+    thread that checks its stack (SCYLLADB-219)."""
+    with pytest.raises(SyntaxException, match="nested too deeply"):
+        cql.execute(f"CREATE TABLE {test_keyspace}.deep (k int PRIMARY KEY, v frozen<{nested_type(DEPTH)}>)")
+    cql.execute("SELECT * FROM system.local")
+
+# Scylla parses a statement this large in a thread (SCYLLADB-219).
+LARGE = 16 * 1024
+
+def test_nested_expressions_in_large_statement(cql, table1, scylla_only):
+    """A statement of 16 KiB or more is parsed in a thread, on a smaller stack
+    than a smaller statement (SCYLLADB-219). Expressions nested as deep as the
+    tests above accept must fit that stack too."""
+    padding = f"/* {'x' * LARGE} */"
+    cql.execute(f"SELECT {nested_function_selector(SHALLOW_DEPTH)} FROM {table1} {padding}")
+    cql.execute(f"SELECT {nested_cast_selector(SHALLOW_DEPTH)} FROM {table1} {padding}")
+    cql.execute(f"SELECT * FROM {table1} WHERE v = {nested_function_term(SHALLOW_DEPTH-1)} ALLOW FILTERING {padding}")
+    cql.execute(f"SELECT * FROM {table1} WHERE v = {nested_c_cast_term(SHALLOW_DEPTH)} ALLOW FILTERING {padding}")
+    cql.execute(f"SELECT * FROM {table1} WHERE {nested_relation(SHALLOW_DEPTH)} ALLOW FILTERING {padding}")
