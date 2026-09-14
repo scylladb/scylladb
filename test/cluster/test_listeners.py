@@ -16,11 +16,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Any, NamedTuple, TYPE_CHECKING
 
 import pytest
+from cassandra.connection import UnixSocketEndPoint
+from cassandra.policies import WhiteListRoundRobinPolicy
 
 from test.cluster.listener_utils import (
+    connect,
+    cql_options_on,
     Endpoint,
     TLS_OPTIONS,
     alternator_list_tables,
@@ -29,6 +34,9 @@ from test.cluster.listener_utils import (
     cql_options,
 )
 from test.cluster.util import reconnect_driver
+from test.pylib.driver_utils import safe_driver_shutdown
+from test.pylib.rest_client import read_barrier
+from test.pylib.util import wait_for
 from test.pylib.host_registry import HostRegistry
 
 if TYPE_CHECKING:
@@ -53,6 +61,7 @@ CQL_SHARD_AWARE_TLS_PORT = 26591
 CQL_PROXY_PORT = 27653
 ALTERNATOR_PORT = 28711
 ALTERNATOR_TLS_PROXY_PORT = 29819
+CQL_SHARD_AWARE_PROXY_PORT = 30187
 # Configured through a per-protocol option, which the "listeners" option
 # overrides - nothing may listen on it.
 IGNORED_LEGACY_PORT = 31063
@@ -309,3 +318,143 @@ async def test_plaintext_listeners_refuse_tls(deployment: Deployment) -> None:
     await assert_request_refused(cql_options(deployment.endpoints['cql'], tls=True))
     await assert_request_refused(cql_options(deployment.endpoints['cql_default'], tls=True))
     await assert_request_refused(alternator_list_tables(deployment.endpoints['alternator'], tls=True))
+
+async def set_listeners_live(manager: ScyllaClusterManager, server: ServerInfo,
+                             listeners: dict[str, dict[str, Any]], cql=None) -> None:
+    """Change the listeners of a running node, without restarting it.
+
+    The change goes through the harness's own session unless another is given -
+    as it has to be when the change leaves that session nothing to connect to.
+    """
+    host_id = await manager.get_host_id(server.server_id)
+    cql = cql or manager.get_cql()
+    await cql.run_async(
+            f"ALTER NODE {host_id} WITH listeners = '{as_cluster_config_value(listeners)}'")
+    await read_barrier(manager.api, server.ip_addr)
+
+
+async def test_listeners_change_without_a_restart(manager: ScyllaClusterManager,
+                                                  deployment: Deployment,
+                                                  leased_addresses: tuple[str, str]) -> None:
+    """A listener added to the option starts serving, and one taken out of it stops,
+    on a node that keeps running throughout.
+    """
+    first, _ = leased_addresses
+    added = Endpoint(first, IGNORED_LEGACY_PORT)
+
+    listeners = dict(deployment.listeners)
+    listeners['cql_added'] = {'protocol': 'cql', 'address': added.address, 'port': added.port}
+    removed = deployment.endpoints['cql_proxy_protocol']
+    del listeners['cql_proxy_protocol']
+
+    await set_listeners_live(manager, deployment.server, listeners)
+
+    async def added_is_serving() -> bool | None:
+        try:
+            return 'CQL_VERSION' in await cql_options(added) or None
+        except Exception:
+            return None
+
+    await wait_for(added_is_serving, time.time() + 60)
+    await assert_not_listening(removed)
+    # The listeners nobody touched carried on serving.
+    assert 'CQL_VERSION' in await cql_options(deployment.endpoints['cql'])
+    assert 'CQL_VERSION' in await cql_options(deployment.endpoints['cql_ssl'])
+
+
+async def test_a_listener_that_did_not_change_keeps_its_connections(
+        manager: ScyllaClusterManager, deployment: Deployment,
+        leased_addresses: tuple[str, str]) -> None:
+    """Changing one listener leaves the connections of the others alone."""
+    first, _ = leased_addresses
+    kept = deployment.endpoints['cql']
+
+    reader, writer = await connect(kept)
+    try:
+        listeners = dict(deployment.listeners)
+        listeners['cql_added'] = {'protocol': 'cql', 'address': first, 'port': IGNORED_LEGACY_PORT}
+        await set_listeners_live(manager, deployment.server, listeners)
+
+        # The connection opened before the change still answers afterwards.
+        assert 'CQL_VERSION' in await cql_options_on(reader, writer)
+    finally:
+        writer.close()
+
+
+async def served_addresses(cql, protocol_server: str) -> list[str]:
+    """Where system.protocol_servers says a protocol server listens - nowhere,
+    when it isn't running."""
+    rows = await cql.run_async(
+            f"SELECT listen_addresses FROM system.protocol_servers WHERE name = '{protocol_server}'")
+    return list(rows[0].listen_addresses or []) if rows else []
+
+
+async def wait_until_served(cql, protocol_server: str, served: bool) -> None:
+    async def done() -> bool | None:
+        return (bool(await served_addresses(cql, protocol_server)) == served) or None
+    await wait_for(done, time.time() + 60)
+
+
+async def test_shard_aware_listener_must_agree_on_proxy_protocol(
+        manager: ScyllaClusterManager, deployment: Deployment,
+        leased_addresses: tuple[str, str]) -> None:
+    """A listener can't hand its clients over to a shard-aware listener that
+    disagrees with it about the PROXY protocol header: a client reconnects the way
+    it connected, through the proxy or not, and the shard-aware listener would
+    refuse it. A set of listeners that asks for that is rejected as a whole, and
+    the node keeps serving the set it had.
+    """
+    first, _ = leased_addresses
+    log = await manager.server_open_log(deployment.server.server_id)
+    mark = await log.mark()
+
+    listeners = dict(deployment.listeners)
+    listeners['cql_shard_aware_proxy_protocol'] = {'protocol': 'cql', 'address': first,
+                                                   'port': CQL_SHARD_AWARE_PROXY_PORT,
+                                                   'shard_aware': True, 'proxy_protocol': True}
+    listeners['cql'] = {**listeners['cql'], 'shard_aware_listener': 'cql_shard_aware_proxy_protocol'}
+    await set_listeners_live(manager, deployment.server, listeners)
+
+    await log.wait_for("names a listener that expects a PROXY protocol header",
+                       from_mark=mark, timeout=60)
+    await assert_not_listening(Endpoint(first, CQL_SHARD_AWARE_PROXY_PORT))
+    # Still handing its clients over to the shard-aware listener it had.
+    supported = await cql_options(deployment.endpoints['cql'])
+    assert supported['SCYLLA_SHARD_AWARE_PORT'] == [str(CQL_SHARD_AWARE_PORT)]
+
+
+async def test_cql_server_follows_its_first_and_last_listener(
+        manager: ScyllaClusterManager, deployment: Deployment) -> None:
+    """Taking every CQL listener away stops the CQL server, rather than leave it
+    running with nothing to listen on while gossip tells the cluster it serves
+    CQL; giving it a listener again starts it, on a node that keeps running
+    throughout.
+
+    With no CQL listener left, the option is changed back over the maintenance
+    socket.
+    """
+    server = deployment.server
+    socket_endpoint = UnixSocketEndPoint(await manager.server_get_maintenance_socket_path(server.server_id))
+    cluster = manager.con_gen([socket_endpoint],
+                              load_balancing_policy=WhiteListRoundRobinPolicy([socket_endpoint]))
+    try:
+        maintenance_cql = cluster.connect()
+        cql_endpoints = [endpoint for name, endpoint in deployment.endpoints.items()
+                         if deployment.listeners[name]['protocol'] == 'cql']
+
+        no_cql = {name: listener for name, listener in deployment.listeners.items()
+                  if listener['protocol'] != 'cql'}
+        await set_listeners_live(manager, server, no_cql, cql=maintenance_cql)
+        await wait_until_served(maintenance_cql, 'native transport', False)
+        for endpoint in cql_endpoints:
+            await assert_not_listening(endpoint)
+        # The other protocol carried on regardless.
+        assert 'TableNames' in await alternator_list_tables(deployment.endpoints['alternator'])
+
+        await set_listeners_live(manager, server, deployment.listeners, cql=maintenance_cql)
+        await wait_until_served(maintenance_cql, 'native transport', True)
+        for endpoint in cql_endpoints:
+            assert 'CQL_VERSION' in await cql_options(endpoint)
+    finally:
+        safe_driver_shutdown(cluster)
+    await reconnect_driver(manager)
