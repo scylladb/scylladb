@@ -285,6 +285,14 @@ struct repair_flush_hints_batchlog_response {
     gc_clock::time_point flush_time;
 };
 
+// Asks node to flush its hints and batchlog and returns the time of that
+// flush. Waits for the longer of the request's timeouts plus a margin, then
+// fails with timed_out_error. The replica bounds itself by the timeouts in
+// the request and logs its failure, so with the margin that failure wins
+// over the caller's, and the caller times out only on a replica that is
+// stuck or unreachable.
+future<gc_clock::time_point> flush_hints_batchlog_on_node(netw::messaging_service& ms, locator::host_id node, const repair_flush_hints_batchlog_request& req);
+
 // The timeout a flush request gives each node for its hints and for its
 // batchlog, from the repair_hints_batchlog_flush_timeout_in_seconds cluster
 // config option.
