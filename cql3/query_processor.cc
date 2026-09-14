@@ -646,10 +646,10 @@ std::optional<service::pager::query_plan> query_processor::pinned_plan_from_pagi
 }
 
 future<::shared_ptr<result_message>>
-query_processor::execute_direct_without_checking_exception_message(utils::chunked_string_view query_string, service::query_state& query_state, dialect d, query_options& options) {
+query_processor::execute_direct_without_checking_exception_message(utils::chunked_string query_string, service::query_state& query_state, dialect d, query_options& options) {
     log.trace("execute_direct: \"{}\"", query_string);
     tracing::trace(query_state.get_trace_state(), "Parsing a statement");
-    auto p = get_statement(query_string, query_state.get_client_state(), d, pinned_plan_from_paging_state(options.get_paging_state()));
+    auto p = get_statement(std::move(query_string), query_state.get_client_state(), d, pinned_plan_from_paging_state(options.get_paging_state()));
     return execute_direct_statement_without_checking_exception_message(std::move(p), query_state, options);
 }
 
@@ -808,7 +808,7 @@ prepared_cache_key_type query_processor::compute_id(
 }
 
 std::unique_ptr<prepared_statement>
-query_processor::get_statement(utils::chunked_string_view query, const service::client_state& client_state, dialect d, std::optional<service::pager::query_plan> pinned_plan, std::optional<std::string_view> forced_keyspace) {
+query_processor::get_statement(utils::chunked_string query, const service::client_state& client_state, dialect d, std::optional<service::pager::query_plan> pinned_plan, std::optional<std::string_view> forced_keyspace) {
     // Measuring allocation cost requires that no yield points exist
     // between bytes_before and bytes_after. It needs fixing if this
     // function is ever futurized.
@@ -831,12 +831,12 @@ query_processor::get_statement(utils::chunked_string_view query, const service::
     }
     ++_stats.prepare_invocations;
     auto p = statement->prepare(_db, _cql_stats, _cql_config);
-    p->statement->raw_cql_statement = utils::chunked_string(query);
     auto audit_info = p->statement->get_audit_info();
     if (audit_info) {
         audit_info->set_query_string(query.linearize()); // Audit system may need linearized form
         p->statement->sanitize_audit_info();
     }
+    p->statement->raw_cql_statement = std::move(query);
     auto bytes_after = seastar::memory::stats().total_bytes_allocated();
     _parsing_cost_tracker.add_sample(bytes_after - bytes_before);
     return p;
@@ -943,7 +943,7 @@ query_options query_processor::make_internal_options(
             });
 }
 
-statements::prepared_statement::checked_weak_ptr query_processor::prepare_internal(const sstring& query_string) {
+statements::prepared_statement::checked_weak_ptr query_processor::prepare_internal(sstring query_string) {
     auto& p = _internal_statements[query_string];
     if (p == nullptr) {
         auto np = parse_statement(query_string, internal_dialect())->prepare(_db, _cql_stats, _cql_config);
@@ -979,9 +979,9 @@ static void set_deadline_query_state(internal_query_state& state) {
 }
 
 internal_query_state query_processor::create_paged_state(
-        const sstring& query_string,
+        sstring query_string,
         db::consistency_level cl,
-        const query_data_params& values,
+        query_data_vector values,
         int32_t page_size,
         std::optional<service::query_state> qs,
         db::timeout_clock::time_point deadline) {
@@ -990,7 +990,7 @@ internal_query_state query_processor::create_paged_state(
     if (!qs) {
         qs.emplace(query_state_for_internal_call());
     }
-    internal_query_state state{query_string, std::make_unique<cql3::query_options>(std::move(opts)), std::move(p), std::move(qs), true};
+    internal_query_state state{std::move(query_string), std::make_unique<cql3::query_options>(std::move(opts)), std::move(p), std::move(qs), true};
     if (deadline != db::no_timeout) {
         state.deadline = deadline;
         set_deadline_query_state(state);
@@ -1059,20 +1059,20 @@ query_processor::execute_paged_internal(internal_query_state& state) {
 
 future<::shared_ptr<untyped_result_set>>
 query_processor::execute_internal(
-        const sstring& query_string,
+        sstring query_string,
         db::consistency_level cl,
-        const query_data_params& values,
+        query_data_vector values,
         cache_internal cache) {
     auto qs = query_state_for_internal_call();
-    co_return co_await execute_internal(query_string, cl, qs, values, cache);
+    co_return co_await execute_internal(std::move(query_string), cl, qs, std::move(values), cache);
 }
 
 future<::shared_ptr<untyped_result_set>>
 query_processor::execute_internal(
-        const sstring& query_string,
+        sstring query_string,
         db::consistency_level cl,
         service::query_state& query_state,
-        const query_data_params& values,
+        query_data_vector values,
         cache_internal cache) {
 
     if (log.is_enabled(logging::log_level::trace)) {
@@ -1347,31 +1347,31 @@ bool query_processor::migration_subscriber::should_invalidate(
 }
 
 future<> query_processor::query_internal(
-        const sstring& query_string,
+        sstring query_string,
         db::consistency_level cl,
-        const query_data_params& values,
+        query_data_vector values,
         int32_t page_size,
         noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)> f,
         std::optional<service::query_state> qs) {
-    auto query_state = create_paged_state(query_string, cl, values, page_size, std::move(qs));
+    auto query_state = create_paged_state(std::move(query_string), cl, std::move(values), page_size, std::move(qs));
     co_return co_await for_each_cql_result(query_state, std::move(f));
 }
 
 future<> query_processor::query_internal(
-        const sstring& query_string,
+        sstring query_string,
         db::consistency_level cl,
-        const query_data_params& values,
+        query_data_vector values,
         int32_t page_size,
         db::timeout_clock::time_point deadline,
         noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)> f) {
-    auto query_state = create_paged_state(query_string, cl, values, page_size, std::nullopt, deadline);
+    auto query_state = create_paged_state(std::move(query_string), cl, std::move(values), page_size, std::nullopt, deadline);
     co_return co_await for_each_cql_result(query_state, std::move(f));
 }
 
 future<> query_processor::query_internal(
-        const sstring& query_string,
+        sstring query_string,
         noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)> f) {
-    return query_internal(query_string, db::consistency_level::ONE, {}, default_internal_page_size, std::move(f));
+    return query_internal(std::move(query_string), db::consistency_level::ONE, {}, default_internal_page_size, std::move(f));
 }
 
 shared_ptr<cql_transport::messages::result_message> query_processor::bounce_to_shard(unsigned shard, cql3::computed_function_values cached_fn_calls, bool track) {
