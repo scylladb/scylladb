@@ -585,16 +585,16 @@ future<utils::chunked_vector<description>> aggregate(replica::database& db, cons
         throw exceptions::invalid_request_exception(format("Aggregate '{}' not found in keyspace '{}'", name, ks));
     }
 
-    auto describer = [] (shared_ptr<const functions::user_aggregate> uda) {
-        return uda->describe(with_create_statement::yes);
+    auto describer = [&db] (shared_ptr<const functions::user_aggregate> uda) {
+        return uda->describe(with_create_statement::yes, db.features().tuple_constructor);
     };
     co_return co_await generate_descriptions(udas, describer, true);
 }
 
 future<utils::chunked_vector<description>> aggregates(replica::database& db, const sstring& ks, with_create_statement with_stmt) {
     auto udas = functions::instance().get_user_aggregates(ks);
-    auto describer = [with_stmt] (shared_ptr<const functions::user_aggregate> uda) {
-        return uda->describe(with_stmt);
+    auto describer = [with_stmt, &db] (shared_ptr<const functions::user_aggregate> uda) {
+        return uda->describe(with_stmt, db.features().tuple_constructor);
     };
     co_return co_await generate_descriptions(udas, describer, true);
 }
@@ -1257,8 +1257,8 @@ future<std::vector<std::vector<managed_bytes_opt>>> generic_describe_statement::
             return f != nullptr;
         });
 
-        auto uda_describer = [] (shared_ptr<const functions::user_aggregate> uda) {
-            return uda->describe(with_create_statement::yes);
+        auto uda_describer = [&db] (shared_ptr<const functions::user_aggregate> uda) {
+            return uda->describe(with_create_statement::yes, db.features().tuple_constructor);
         };
 
         if (!udas.empty()) {

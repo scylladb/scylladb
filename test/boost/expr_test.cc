@@ -3,6 +3,7 @@
 
 #include "cql3/column_identifier.hh"
 #include "cql3/util.hh"
+#include "cql3/dialect.hh"
 #include <seastar/core/shared_ptr.hh>
 #include "types/types.hh"
 #include "types/list.hh"
@@ -369,10 +370,40 @@ BOOST_AUTO_TEST_CASE(expr_printer_parse_and_print_test) {
 
     for(const char* test : tests) {
         expression parsed_where = cql3::util::where_clause_to_relations(test, cql3::dialect{});
-        sstring printed_where = cql3::util::relations_to_where_clause(parsed_where);
+        sstring printed_where = cql3::util::relations_to_where_clause(parsed_where, false);
 
         BOOST_REQUIRE_EQUAL(sstring(test), printed_where);
     }
+}
+
+// A stored WHERE clause spells a one-element tuple "(x)" or tuple(x) depending on
+// whether the TUPLE_CONSTRUCTOR feature is enabled, and stored_statement_dialect()
+// reads it back accordingly.  Either way round the expression survives the trip,
+// and text without a one-element tuple is the same under both spellings.
+BOOST_AUTO_TEST_CASE(expr_printer_one_element_tuple_spelling_test) {
+    const auto before_feature = cql3::stored_statement_dialect(false);
+    const auto after_feature = cql3::stored_statement_dialect(true);
+
+    expression parsed = cql3::util::where_clause_to_relations("(c) > (1) AND (c) IN ((2), (3))", before_feature);
+    BOOST_REQUIRE_EQUAL(cql3::util::relations_to_where_clause(parsed, false), "(c) > (1) AND (c) IN ((2), (3))");
+    BOOST_REQUIRE_EQUAL(cql3::util::relations_to_where_clause(parsed, true), "tuple(c) > tuple(1) AND tuple(c) IN (tuple(2), tuple(3))");
+
+    expression reparsed = cql3::util::where_clause_to_relations(cql3::util::relations_to_where_clause(parsed, true), after_feature);
+    BOOST_REQUIRE_EQUAL(cql3::util::relations_to_where_clause(reparsed, false), cql3::util::relations_to_where_clause(parsed, false));
+
+    // Read under the old dialect, the new spelling is a tuple as well.
+    expression reparsed_old = cql3::util::where_clause_to_relations(cql3::util::relations_to_where_clause(parsed, true), before_feature);
+    BOOST_REQUIRE_EQUAL(cql3::util::relations_to_where_clause(reparsed_old, false), cql3::util::relations_to_where_clause(parsed, false));
+
+    expression no_singletons = cql3::util::where_clause_to_relations("(c1, c2) IN ((1, 2), (3, 4)) AND col > 5", before_feature);
+    BOOST_REQUIRE_EQUAL(cql3::util::relations_to_where_clause(no_singletons, true), cql3::util::relations_to_where_clause(no_singletons, false));
+
+    // The values of an IN are a list, not a tuple, however many there are.
+    expression in_lists = cql3::util::where_clause_to_relations("col IN (2) AND (c) IN ((2)) AND (c1, c2) IN ((1, 2))", before_feature);
+    BOOST_REQUIRE_EQUAL(cql3::util::relations_to_where_clause(in_lists, true), "col IN (2) AND tuple(c) IN (tuple(2)) AND (c1, c2) IN ((1, 2))");
+    BOOST_REQUIRE_EQUAL(cql3::util::relations_to_where_clause(in_lists, false), "col IN (2) AND (c) IN ((2)) AND (c1, c2) IN ((1, 2))");
+    expression in_lists_reparsed = cql3::util::where_clause_to_relations(cql3::util::relations_to_where_clause(in_lists, true), after_feature);
+    BOOST_REQUIRE_EQUAL(cql3::util::relations_to_where_clause(in_lists_reparsed, false), cql3::util::relations_to_where_clause(in_lists, false));
 }
 
 BOOST_AUTO_TEST_CASE(boolean_factors_test) {

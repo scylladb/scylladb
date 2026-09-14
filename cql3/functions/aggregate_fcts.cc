@@ -357,7 +357,7 @@ user_aggregate::user_aggregate(function_name fname, bytes_opt initcond, ::shared
 
 bool user_aggregate::has_finalfunc() const { return _agg.state_to_result_function != nullptr; }
 
-description user_aggregate::describe(with_create_statement with_stmt) const {
+description user_aggregate::describe(with_create_statement with_stmt, bool one_element_tuple_as_constructor) const {
     auto maybe_create_statement = std::invoke([&] -> std::optional<managed_string> {
         if (!with_stmt) {
             return std::nullopt;
@@ -387,7 +387,7 @@ description user_aggregate::describe(with_create_statement with_stmt) const {
             os << "\n" << "FINALFUNC " << cql3::util::maybe_quote(_agg.state_to_result_function->name().name);
         }
         if (_agg.initial_state) {
-            os << "\n" << "INITCOND " << _agg.aggregation_function->return_type()->deserialize(bytes_view(*_agg.initial_state)).to_parsable_string();
+            os << "\n" << "INITCOND " << _agg.aggregation_function->return_type()->deserialize(bytes_view(*_agg.initial_state)).to_parsable_string(one_element_tuple_as_constructor);
         }
         os << ";";
 

@@ -292,7 +292,9 @@ std::vector<schema_ptr> do_load_schemas(const db::config& cfg, std::string_view 
 
     std::vector<std::unique_ptr<cql3::statements::raw::parsed_statement>> raw_statements;
     try {
-        raw_statements = cql3::query_processor::parse_statements(schema_str, cql3::internal_dialect());
+        // The schema text may have been written by a cluster of any version, so a
+        // one-element tuple in it may be spelled either way; "(x)" is a tuple.
+        raw_statements = cql3::query_processor::parse_statements(schema_str, cql3::stored_statement_dialect(false));
     } catch (...) {
         throw std::runtime_error(format("tools:do_load_schemas(): failed to parse CQL statements: {:t}", std::current_exception()));
     }

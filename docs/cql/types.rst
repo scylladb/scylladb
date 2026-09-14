@@ -646,6 +646,12 @@ is the one-element tuple under either setting, parentheses around two or more
 terms are a tuple under either setting, and ``tuple()`` is not a value — a tuple
 has at least one element.
 
+The CQL that ScyllaDB itself writes — a materialized view's ``WHERE`` clause as
+stored in ``system_schema.views``, an aggregate's ``INITCOND`` in
+``system_schema.aggregates``, and the output of ``DESCRIBE`` — spells a
+one-element tuple ``tuple(x)`` once every node in the cluster understands the
+constructor, so that it means the same thing under either setting.
+
 .. _vectors:
 
 Vectors

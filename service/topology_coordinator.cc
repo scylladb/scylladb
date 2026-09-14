@@ -55,6 +55,13 @@
 #include "service/tablet_operation.hh"
 #include "service/topology_state_machine.hh"
 #include "db/view/view_building_coordinator.hh"
+#include "db/schema_tables.hh"
+#include "view_info.hh"
+#include "cql3/dialect.hh"
+#include "cql3/util.hh"
+#include "cql3/functions/functions.hh"
+#include "cql3/functions/user_aggregate.hh"
+#include "schema/schema_builder.hh"
 #include "topology_mutation.hh"
 #include "utils/UUID.hh"
 #include "utils/assert.hh"
@@ -1619,12 +1626,86 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 {_raft.id()},
                 drop_guard_and_retake::no);
 
+        utils::chunked_vector<canonical_mutation> updates;
+        bool changes_schema = false;
+        if (features_to_enable.contains(_feature_service.tuple_constructor.name())) {
+            changes_schema = co_await respell_one_element_tuples_in_schema(guard.write_timestamp(), updates);
+        }
+
         topology_mutation_builder builder(guard.write_timestamp());
         builder.add_enabled_features(features_to_enable);
+        updates.push_back(builder.build());
         auto reason = ::format("enabling features: {}", features_to_enable);
-        co_await update_topology_state(std::move(guard), {builder.build()}, reason);
+        if (changes_schema) {
+            // The schema rewrite and the feature that says it happened have to
+            // land together; see respell_one_element_tuples_in_schema().
+            co_await update_topology_state_with_mixed_change(std::move(guard), std::move(updates), reason);
+        } else {
+            co_await update_topology_state(std::move(guard), std::move(updates), reason);
+        }
 
         rtlogger.info("enabled features: {}", features_to_enable);
+    }
+
+    // Every view WHERE clause and aggregate INITCOND the database stored so far
+    // spells a one-element tuple "(x)".  From the moment TUPLE_CONSTRUCTOR is
+    // enabled they spell it tuple(x), and readers take "(x)" for a plain x - so
+    // the stored text has to change in the very command that enables the
+    // feature, or some node would read a tuple wrongly.  This produces the
+    // schema mutations for that command: every stored text that contains a
+    // one-element tuple, reprinted.  Text without one is left alone, the two
+    // spellings being identical for it.
+    //
+    // Nothing here depends on whether it ran before.  A row already reprinted
+    // has no "(x)" tuple left, so reading it as the old dialect does is still
+    // right, and reprinting it changes nothing.
+    //
+    // Returns whether any mutation was added.
+    future<bool> respell_one_element_tuples_in_schema(api::timestamp_type ts, utils::chunked_vector<canonical_mutation>& updates) {
+        const auto old_dialect = cql3::stored_statement_dialect(false);
+        size_t before = updates.size();
+
+        for (const auto& view : _db.get_views()) {
+            const auto& where = view->view_info()->where_clause();
+            if (where.empty()) {
+                continue;
+            }
+            auto relations = cql3::util::where_clause_to_relations(where, old_dialect);
+            auto respelled = cql3::util::relations_to_where_clause(relations, true);
+            if (respelled == cql3::util::relations_to_where_clause(relations, false)) {
+                continue;
+            }
+            rtlogger.info("respelling one-element tuples in the WHERE clause of view {}.{}: {}", view->ks_name(), view->cf_name(), respelled);
+            auto& ks = _db.find_keyspace(view->ks_name());
+            schema_builder builder(view);
+            builder.with_view_info(_db.find_schema(view->view_info()->base_id()), view->view_info()->include_all_columns(), std::move(respelled));
+            for (auto& m : db::schema_tables::make_update_view_mutations(ks.metadata(), view, view_ptr(builder.build()), ts, false)) {
+                updates.emplace_back(m);
+            }
+            co_await coroutine::maybe_yield();
+        }
+
+        // The printer consults the schema features for the spelling, and the
+        // feature is not enabled yet; say what the cluster is about to become.
+        auto schema_features = _feature_service.cluster_schema_features();
+        schema_features.set<db::schema_feature::TUPLE_CONSTRUCTOR>();
+        for (const auto& ks_name : _db.get_all_keyspaces()) {
+            for (const auto& aggregate : cql3::functions::instance().get_user_aggregates(ks_name)) {
+                if (!aggregate->initcond()) {
+                    continue;
+                }
+                auto initcond = aggregate->sfunc()->arg_types()[0]->deserialize(*aggregate->initcond());
+                if (initcond.to_parsable_string(true) == initcond.to_parsable_string(false)) {
+                    continue;
+                }
+                rtlogger.info("respelling one-element tuples in the INITCOND of aggregate {}: {}", aggregate->name(), initcond.to_parsable_string(true));
+                for (auto& m : db::schema_tables::make_create_aggregate_mutations(schema_features, aggregate, ts)) {
+                    updates.emplace_back(m);
+                }
+                co_await coroutine::maybe_yield();
+            }
+        }
+        co_return updates.size() != before;
     }
 
     future<group0_guard> global_token_metadata_barrier(group0_guard&& guard, std::unordered_set<raft::server_id> exclude_nodes = {}, bool* fenced = nullptr, bool drain_all_nodes = false) {

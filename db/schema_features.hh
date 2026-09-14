@@ -46,6 +46,11 @@ enum class schema_feature {
     // feature is not yet enabled does not perturb the schema digest relative to
     // a node that predates cluster config. See #4457 and the cluster-config design.
     CLUSTER_CONFIG_TABLES,
+
+    // When enabled, a one-element tuple in the CQL text the schema tables store -
+    // a view's where_clause, an aggregate's initcond - is spelled tuple(x) rather
+    // than (x), which a reader may take for a parenthesized x.
+    TUPLE_CONSTRUCTOR,
 };
 
 using schema_features = enum_set<super_enum<schema_feature,
@@ -58,7 +63,8 @@ using schema_features = enum_set<super_enum<schema_feature,
     schema_feature::IN_MEMORY_TABLES,
     schema_feature::TABLET_OPTIONS,
     schema_feature::KEYSPACE_MULTI_RF_CHANGE,
-    schema_feature::CLUSTER_CONFIG_TABLES
+    schema_feature::CLUSTER_CONFIG_TABLES,
+    schema_feature::TUPLE_CONSTRUCTOR
     >>;
 
 }

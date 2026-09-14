@@ -4026,14 +4026,14 @@ data_value::data_value(cql_duration d) : data_value(make_new(duration_type, d)) 
 data_value::data_value(empty_type_representation e) : data_value(make_new(empty_type, e)) {
 }
 
-sstring data_value::to_parsable_string() const {
+sstring data_value::to_parsable_string(bool one_element_tuple_as_constructor) const {
     if (is_null()) {
         return "null";
     }
 
     // For some reason trying to do it using fmt::format refuses to compile
     // auto to_parsable_str_transform = std::views::transform([](const data_value& dv) -> sstring {
-    //     return dv.to_parsable_string();
+    //     return dv.to_parsable_string(one_element_tuple_as_constructor);
     // });
 
     if (_type->without_reversed().is_list()) {
@@ -4045,7 +4045,7 @@ sstring data_value::to_parsable_string() const {
                 result << ", ";
             }
 
-            result << (*the_list)[i].to_parsable_string();
+            result << (*the_list)[i].to_parsable_string(one_element_tuple_as_constructor);
         }
         result << "]";
         return std::move(result).str();
@@ -4061,7 +4061,7 @@ sstring data_value::to_parsable_string() const {
                 result << ", ";
             }
 
-            result << (*the_set)[i].to_parsable_string();
+            result << (*the_set)[i].to_parsable_string(one_element_tuple_as_constructor);
         }
         result << "}";
         return std::move(result).str();
@@ -4077,13 +4077,13 @@ sstring data_value::to_parsable_string() const {
                 result << ", ";
             }
 
-            result << (*the_map)[i].first.to_parsable_string() << ":" << (*the_map)[i].second.to_parsable_string();
+            result << (*the_map)[i].first.to_parsable_string(one_element_tuple_as_constructor) << ":" << (*the_map)[i].second.to_parsable_string(one_element_tuple_as_constructor);
         }
         result << "}";
         return std::move(result).str();
         //auto to_map_elem_transform = std::views::transform(
         //    [](const std::pair<data_value, data_value>& map_elem) -> sstring {
-        //        return fmt::format("{{{}:{}}}", map_elem.first.to_parsable_string(), map_elem.second.to_parsable_string());
+        //        return fmt::format("{{{}:{}}}", map_elem.first.to_parsable_string(one_element_tuple_as_constructor), map_elem.second.to_parsable_string(one_element_tuple_as_constructor));
         //    }
         //);
         //
@@ -4100,7 +4100,7 @@ sstring data_value::to_parsable_string() const {
             if (i != 0) {
                 result << ", ";
             }
-            result << user_typ->string_field_names().at(i) << ":" << (*field_values)[i].to_parsable_string();
+            result << user_typ->string_field_names().at(i) << ":" << (*field_values)[i].to_parsable_string(one_element_tuple_as_constructor);
         }
         result << "}";
         return std::move(result).str();
@@ -4109,13 +4109,16 @@ sstring data_value::to_parsable_string() const {
     if (_type->without_reversed().is_tuple()) {
         const tuple_type_impl::native_type* tuple_elements = (const tuple_type_impl::native_type*)_value;
         std::ostringstream result;
+        if (one_element_tuple_as_constructor && tuple_elements->size() == 1) {
+            result << "tuple";
+        }
         result << "(";
 
         for (std::size_t i = 0; i < tuple_elements->size(); i++) {
             if (i != 0) {
                 result << ", ";
             }
-            result << (*tuple_elements)[i].to_parsable_string();
+            result << (*tuple_elements)[i].to_parsable_string(one_element_tuple_as_constructor);
         }
         result << ")";
         return std::move(result).str();
@@ -4129,7 +4132,7 @@ sstring data_value::to_parsable_string() const {
             if (i != 0) {
                 result << ", ";
             }
-            result << (*vector_elements)[i].to_parsable_string();
+            result << (*vector_elements)[i].to_parsable_string(one_element_tuple_as_constructor);
         }
         result << "]";
         return std::move(result).str();

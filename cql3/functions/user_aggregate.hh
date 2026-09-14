@@ -21,7 +21,9 @@ public:
     user_aggregate(function_name fname, bytes_opt initcond, ::shared_ptr<scalar_function> sfunc, ::shared_ptr<scalar_function> reducefunc, ::shared_ptr<scalar_function> finalfunc);
     bool has_finalfunc() const;
 
-    description describe(with_create_statement) const;
+    // `one_element_tuple_as_constructor`: spell a one-element INITCOND tuple(x);
+    // the TUPLE_CONSTRUCTOR feature says whether the cluster reads that.
+    description describe(with_create_statement, bool one_element_tuple_as_constructor) const;
 
     seastar::shared_ptr<scalar_function> sfunc() const {
         return _agg.aggregation_function;

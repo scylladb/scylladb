@@ -198,6 +198,10 @@ public:
     gms::feature small_table_optimization_size_probe { *this, "SMALL_TABLE_OPTIMIZATION_SIZE_PROBE"sv };
     gms::feature alternator_composite_gsi_keys { *this, "ALTERNATOR_COMPOSITE_GSI_KEYS"sv };
     gms::feature cluster_config_registry_v0 { *this, "CLUSTER_CONFIG_REGISTRY_V0"sv };
+    // Enabled only once every view WHERE clause and aggregate INITCOND the
+    // database stored spells a one-element tuple tuple(x); see
+    // topology_coordinator::enable_features and cql3::stored_statement_dialect.
+    gms::feature tuple_constructor { *this, "TUPLE_CONSTRUCTOR"sv };
 public:
 
     const std::unordered_map<sstring, std::reference_wrapper<feature>>& registered_features() const;

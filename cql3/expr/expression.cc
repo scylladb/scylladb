@@ -654,6 +654,7 @@ auto fmt::formatter<cql3::expr::expression::printer>::format(const cql3::expr::e
             .expr_to_print = expr,
             .debug_mode = pr.debug_mode,
             .for_metadata = pr.for_metadata,
+            .one_element_tuple_as_constructor = pr.one_element_tuple_as_constructor,
         };
     };
 
@@ -668,7 +669,7 @@ auto fmt::formatter<cql3::expr::expression::printer>::format(const cql3::expr::e
                     } else {
                         v.value.view().with_value([&](const FragmentedView auto& bytes_view) {
                             data_value deser_val = v.type->deserialize(bytes_view);
-                            out = fmt::format_to(out, "{}", deser_val.to_parsable_string());
+                            out = fmt::format_to(out, "{}", deser_val.to_parsable_string(pr.one_element_tuple_as_constructor));
                         });
                     }
                 }
@@ -683,18 +684,22 @@ auto fmt::formatter<cql3::expr::expression::printer>::format(const cql3::expr::e
                         out = fmt::format_to(out, " [[lwt_nulls]]");
                     }
                 } else {
+                    // The values of an IN are written as a parenthesized list, "IN (1, 2)".
+                    // It looks like a tuple but is not one, so it is printed here rather
+                    // than as a tuple_constructor: a list of one value stays "IN (1)".
+                    auto print_in_list = [&] (const std::vector<expression>& values) {
+                        out = fmt::format_to(out, "{} {} ({})", to_printer(opr.lhs), opr.op,
+                                fmt::join(values | std::views::transform(to_printer), ", "));
+                    };
                     if ((opr.op == oper_t::IN || opr.op == oper_t::NOT_IN) && is<collection_constructor>(opr.rhs)) {
-                        tuple_constructor rhs_tuple {
-                            .elements = as<collection_constructor>(opr.rhs).elements
-                        };
-                        out = fmt::format_to(out, "{} {} {}", to_printer(opr.lhs), opr.op, to_printer(rhs_tuple));
+                        print_in_list(as<collection_constructor>(opr.rhs).elements);
                     } else if ((opr.op == oper_t::IN || opr.op == oper_t::NOT_IN) && is<constant>(opr.rhs) && as<constant>(opr.rhs).type->without_reversed().is_list()) {
-                        tuple_constructor rhs_tuple;
+                        std::vector<expression> values;
                         const list_type_impl* list_typ = dynamic_cast<const list_type_impl*>(&as<constant>(opr.rhs).type->without_reversed());
                         for (const managed_bytes_opt& elem : get_list_elements(as<constant>(opr.rhs).value)) {
-                            rhs_tuple.elements.push_back(constant(cql3::raw_value::make_value(elem), list_typ->get_elements_type()));
+                            values.push_back(constant(cql3::raw_value::make_value(elem), list_typ->get_elements_type()));
                         }
-                        out = fmt::format_to(out, "{} {} {}", to_printer(opr.lhs), opr.op, to_printer(rhs_tuple));
+                        print_in_list(values);
                     } else {
                         out = fmt::format_to(out, "{} {} {}", to_printer(opr.lhs), opr.op, to_printer(opr.rhs));
                     }
@@ -800,6 +805,9 @@ auto fmt::formatter<cql3::expr::expression::printer>::format(const cql3::expr::e
                 }
             },
             [&] (const tuple_constructor& tc) {
+                if (pr.one_element_tuple_as_constructor && tc.elements.size() == 1) {
+                    out = fmt::format_to(out, "tuple");
+                }
                 out = fmt::format_to(out, "({})", fmt::join(tc.elements | std::views::transform(to_printer), ", "));
             },
             [&] (const collection_constructor& cc) {
