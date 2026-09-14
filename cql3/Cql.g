@@ -2069,7 +2069,10 @@ relation returns [uexpression e]
               .style = collection_constructor::style_type::list_or_vector,
               .elements = std::move(in_values)
           }); }
-      | K_CONTAINS { rt = oper_t::CONTAINS; } (K_KEY { rt = oper_t::CONTAINS_KEY; })?
+      // "key" is an unreserved keyword, so once a term can be a bare column name
+      // "a CONTAINS key" reads both as CONTAINS KEY and as a comparison against a
+      // column named key.  Take KEY as part of the operator.
+      | K_CONTAINS { rt = oper_t::CONTAINS; } ((K_KEY)=> K_KEY { rt = oper_t::CONTAINS_KEY; })?
           t=term { $e = binary_operator(unresolved_identifier{std::move(name)}, rt, std::move(t)); }
       | '[' key=term ']' type=relationType t=term { $e = binary_operator(subscript{.val = unresolved_identifier{std::move(name)}, .sub = std::move(key)}, type, std::move(t)); }
       )
