@@ -20,6 +20,11 @@ precisely to keep testing the per-protocol options that "listeners" supersedes; 
 must keep passing unchanged both before and after the introduction of
 "listeners", and it must therefore never mention that option. Tests for the
 "listeners" option live in test_listeners.py.
+
+The one test here that is NOT a regression test is
+test_shard_aware_port_advertisement, which is marked as such: what a listener
+advertises in its SUPPORTED reply is the one thing the "listeners" work did
+change. See its docstring.
 """
 
 from __future__ import annotations
@@ -381,6 +386,49 @@ async def test_alternator_https_port_alone(manager: ScyllaClusterManager) -> Non
         ALTERNATOR_HTTPS_PROXY_PORT,
         CUSTOMARY_ALTERNATOR_PORT,
     ])
+
+
+async def test_shard_aware_port_advertisement(manager: ScyllaClusterManager) -> None:
+    """Each listener hands its clients over to the shard-aware listener it can
+    actually reach - the one that agrees with it on both encryption and the
+    proxy protocol - and says so under the SUPPORTED key matching its own
+    encryption.
+
+    NOT A REGRESSION TEST, and the only such test in this file. Before the
+    "listeners" option, SCYLLA_SHARD_AWARE_PORT and SCYLLA_SHARD_AWARE_PORT_SSL
+    were a property of the node rather than of the listener: both were taken
+    straight from native_shard_aware_transport_port(_ssl), advertised only if
+    the option had been set explicitly, and advertised identically by every
+    listener - the shard-aware ones, and the proxy-protocol ones which no plain
+    shard-aware port could serve. So this test would have failed before the
+    patch, on purpose: it pins down the behaviour that replaced that.
+    """
+    server = await manager.server_add(config=ALL_CQL_PORTS)
+
+    async def advertised(endpoint: Endpoint) -> dict[str, list[str]]:
+        supported = await cql_options(endpoint)
+        return {key: value for key, value in supported.items()
+                if key in ('SCYLLA_SHARD_AWARE_PORT', 'SCYLLA_SHARD_AWARE_PORT_SSL')}
+
+    address = server.ip_addr
+
+    assert await advertised(Endpoint(address, DEFAULT_CQL_PORT)) == \
+            {'SCYLLA_SHARD_AWARE_PORT': [str(DEFAULT_SHARD_AWARE_PORT)]}
+    assert await advertised(Endpoint(address, CQL_SSL_PORT, tls=True)) == \
+            {'SCYLLA_SHARD_AWARE_PORT_SSL': [str(SHARD_AWARE_SSL_PORT)]}
+    assert await advertised(Endpoint(address, CQL_PROXY_PORT, proxy_protocol=True)) == \
+            {'SCYLLA_SHARD_AWARE_PORT': [str(SHARD_AWARE_PROXY_PORT)]}
+    assert await advertised(Endpoint(address, CQL_SSL_PROXY_PORT, tls=True, proxy_protocol=True)) == \
+            {'SCYLLA_SHARD_AWARE_PORT_SSL': [str(SHARD_AWARE_SSL_PROXY_PORT)]}
+
+    # A shard-aware listener has nobody to hand its clients over to.
+    for endpoint in (Endpoint(address, DEFAULT_SHARD_AWARE_PORT),
+                     Endpoint(address, SHARD_AWARE_SSL_PORT, tls=True),
+                     Endpoint(address, SHARD_AWARE_PROXY_PORT, proxy_protocol=True),
+                     Endpoint(address, SHARD_AWARE_SSL_PROXY_PORT, tls=True, proxy_protocol=True)):
+        assert await advertised(endpoint) == {}
+
+
 async def test_shard_aware_port_is_not_advertised_when_there_is_none(
         manager: ScyllaClusterManager) -> None:
     """A listener with no shard-aware sibling of its own kind advertises no
