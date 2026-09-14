@@ -497,7 +497,7 @@ db::snapshot::backup_sstables(cql3::query_processor& qp, table_id table_id, std:
     snap_log.debug("backup_sstables: found {} SSTables consisting of {} component files", base_names.size(), num_components);
 
     auto chunks = base_names 
-            | std::views::chunk(size_t(std::ceil(double(base_names.size())/this_smp_shard_count())))
+            | std::views::chunk(std::max(size_t(1), size_t(std::ceil(double(base_names.size())/this_smp_shard_count()))))
             | std::ranges::to<std::vector>()
             ;
 
