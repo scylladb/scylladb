@@ -1289,9 +1289,9 @@ SEASTAR_TEST_CASE(test_a_parsed_statement_gets_only_the_markers_of_its_text) {
         auto stmts = cql3::query_processor::parse_statements(
                 "INSERT INTO ks.tbl (pk) VALUES (?); SELECT * FROM ks.tbl;", cql3::internal_dialect());
         BOOST_REQUIRE_EQUAL(stmts.size(), 2);
-        auto insert = stmts[0]->prepare(qp.db(), qp.get_cql_stats(), qp.get_cql_config());
+        auto insert = stmts[0]->prepare(qp.db(), qp.get_cql_stats(), qp.get_cql_config()).get();
         BOOST_REQUIRE_EQUAL(insert->bound_names.size(), 1);
-        auto select = stmts[1]->prepare(qp.db(), qp.get_cql_stats(), qp.get_cql_config());
+        auto select = stmts[1]->prepare(qp.db(), qp.get_cql_stats(), qp.get_cql_config()).get();
         BOOST_REQUIRE_EQUAL(select->bound_names.size(), 0);
 
         // A marker name is only a name within its own statement: reused in a
@@ -1301,7 +1301,7 @@ SEASTAR_TEST_CASE(test_a_parsed_statement_gets_only_the_markers_of_its_text) {
                 "INSERT INTO ks.tbl (pk) VALUES (:a); INSERT INTO ks.tbl (pk) VALUES (:a);", cql3::internal_dialect());
         BOOST_REQUIRE_EQUAL(named.size(), 2);
         for (auto& stmt : named) {
-            BOOST_REQUIRE_EQUAL(stmt->prepare(qp.db(), qp.get_cql_stats(), qp.get_cql_config())->bound_names.size(), 1);
+            BOOST_REQUIRE_EQUAL(stmt->prepare(qp.db(), qp.get_cql_stats(), qp.get_cql_config()).get()->bound_names.size(), 1);
         }
     });
 }

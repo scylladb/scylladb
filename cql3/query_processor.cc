@@ -649,8 +649,10 @@ future<::shared_ptr<result_message>>
 query_processor::execute_direct_without_checking_exception_message(utils::chunked_string query_string, service::query_state& query_state, dialect d, query_options& options) {
     log.trace("execute_direct: \"{}\"", query_string);
     tracing::trace(query_state.get_trace_state(), "Parsing a statement");
-    auto p = get_statement(std::move(query_string), query_state.get_client_state(), d, pinned_plan_from_paging_state(options.get_paging_state()));
-    return execute_direct_statement_without_checking_exception_message(std::move(p), query_state, options);
+    return get_statement(std::move(query_string), query_state.get_client_state(), d, pinned_plan_from_paging_state(options.get_paging_state()))
+            .then([this, &query_state, &options] (std::unique_ptr<statements::prepared_statement> p) {
+        return execute_direct_statement_without_checking_exception_message(std::move(p), query_state, options);
+    });
 }
 
 future<::shared_ptr<result_message>>
@@ -765,17 +767,18 @@ query_processor::prepare(utils::chunked_string query_string, const service::clie
     try {
         auto key = compute_id(query_string, client_state.get_raw_keyspace(), d);
         auto prep_entry = co_await _prepared_cache.get_pinned(key, [this, &query_string, &client_state, d] {
-                auto prepared = get_statement(query_string, client_state, d);
-                prepared->calculate_metadata_id();
-                auto bound_terms = prepared->statement->get_bound_terms();
-                if (bound_terms > std::numeric_limits<uint16_t>::max()) {
-                    throw exceptions::invalid_request_exception(
-                            format("Too many markers(?). {:d} markers exceed the allowed maximum of {:d}",
-                                bound_terms,
-                                std::numeric_limits<uint16_t>::max()));
-                }
-                throwing_assert(bound_terms == prepared->bound_names.size());
-                return make_ready_future<std::unique_ptr<statements::prepared_statement>>(std::move(prepared));
+                return get_statement(query_string, client_state, d).then([] (std::unique_ptr<statements::prepared_statement> prepared) {
+                    prepared->calculate_metadata_id();
+                    auto bound_terms = prepared->statement->get_bound_terms();
+                    if (bound_terms > std::numeric_limits<uint16_t>::max()) {
+                        throw exceptions::invalid_request_exception(
+                                format("Too many markers(?). {:d} markers exceed the allowed maximum of {:d}",
+                                    bound_terms,
+                                    std::numeric_limits<uint16_t>::max()));
+                    }
+                    throwing_assert(bound_terms == prepared->bound_names.size());
+                    return prepared;
+                });
             });
 
         co_await utils::get_local_injector().inject(
@@ -807,11 +810,10 @@ prepared_cache_key_type query_processor::compute_id(
     return prepared_cache_key_type(md5_hasher::calculate(hash_target(query_string, keyspace).data()), d);
 }
 
-std::unique_ptr<prepared_statement>
+future<std::unique_ptr<prepared_statement>>
 query_processor::get_statement(utils::chunked_string query, const service::client_state& client_state, dialect d, std::optional<service::pager::query_plan> pinned_plan, std::optional<std::string_view> forced_keyspace) {
-    // Measuring allocation cost requires that no yield points exist
-    // between bytes_before and bytes_after. It needs fixing if this
-    // function is ever futurized.
+    // The parsing cost tracker counts only this statement's bytes, so no
+    // other task may run inside a measured span.
     auto bytes_before = seastar::memory::stats().total_bytes_allocated();
     std::unique_ptr<raw::parsed_statement> statement = parse_statement(query, d);
 
@@ -830,7 +832,9 @@ query_processor::get_statement(utils::chunked_string query, const service::clien
         }
     }
     ++_stats.prepare_invocations;
-    auto p = statement->prepare(_db, _cql_stats, _cql_config);
+    // Every prepare() returns a ready future, and awaiting it without a
+    // preemption check adds no yield point.
+    auto p = co_await coroutine::without_preemption_check(statement->prepare(_db, _cql_stats, _cql_config));
     auto audit_info = p->statement->get_audit_info();
     if (audit_info) {
         audit_info->set_query_string(query.linearize()); // Audit system may need linearized form
@@ -839,7 +843,7 @@ query_processor::get_statement(utils::chunked_string query, const service::clien
     p->statement->raw_cql_statement = std::move(query);
     auto bytes_after = seastar::memory::stats().total_bytes_allocated();
     _parsing_cost_tracker.add_sample(bytes_after - bytes_before);
-    return p;
+    co_return p;
 }
 
 std::unique_ptr<raw::parsed_statement>
@@ -943,14 +947,17 @@ query_options query_processor::make_internal_options(
             });
 }
 
-statements::prepared_statement::checked_weak_ptr query_processor::prepare_internal(sstring query_string) {
-    auto& p = _internal_statements[query_string];
-    if (p == nullptr) {
-        auto np = parse_statement(query_string, internal_dialect())->prepare(_db, _cql_stats, _cql_config);
+future<statements::prepared_statement::checked_weak_ptr> query_processor::prepare_internal(sstring query_string) {
+    auto it = _internal_statements.find(query_string);
+    if (it == _internal_statements.end()) {
+        auto parsed = parse_statement(query_string, internal_dialect());
+        auto np = co_await parsed->prepare(_db, _cql_stats, _cql_config);
         np->statement->raw_cql_statement = utils::chunked_string(query_string);
-        p = std::move(np); // inserts it into map
+        // Another caller may have cached the same statement while prepare()
+        // was suspended. Keep theirs: weak pointers to it are handed out.
+        it = _internal_statements.try_emplace(std::move(query_string), std::move(np)).first;
     }
-    return p->checked_weak_from_this();
+    co_return it->second->checked_weak_from_this();
 }
 
 struct internal_query_state {
@@ -978,14 +985,14 @@ static void set_deadline_query_state(internal_query_state& state) {
     state.deadline_client_state = std::move(cs);
 }
 
-internal_query_state query_processor::create_paged_state(
+future<internal_query_state> query_processor::create_paged_state(
         sstring query_string,
         db::consistency_level cl,
         query_data_vector values,
         int32_t page_size,
         std::optional<service::query_state> qs,
         db::timeout_clock::time_point deadline) {
-    auto p = prepare_internal(query_string);
+    auto p = co_await prepare_internal(query_string);
     auto opts = make_internal_options(p, values, cl, page_size);
     if (!qs) {
         qs.emplace(query_state_for_internal_call());
@@ -995,7 +1002,7 @@ internal_query_state query_processor::create_paged_state(
         state.deadline = deadline;
         set_deadline_query_state(state);
     }
-    return state;
+    co_return state;
 }
 
 bool query_processor::has_more_results(cql3::internal_query_state& state) const {
@@ -1026,9 +1033,9 @@ query_processor::execute_paged_internal(internal_query_state& state) {
 
     class visitor : public result_message::visitor_base {
         internal_query_state& _state;
-        query_processor& _qp;
     public:
-        visitor(internal_query_state& state, query_processor& qp) : _state(state), _qp(qp) {
+        bool next_page = false;
+        visitor(internal_query_state& state) : _state(state) {
         }
         virtual ~visitor() = default;
         void visit(const result_message::rows& rmrs) override {
@@ -1040,18 +1047,21 @@ query_processor::execute_paged_internal(internal_query_state& state) {
                     _state.more_results = false;
                 } else {
                     _state.opts = std::make_unique<query_options>(std::move(_state.opts), rs.get_metadata().paging_state());
-                    // Carries a recorded plan forward without pinning it, safe
-                    // only because the cache hands back the same statement.
-                    _state.p = _qp.prepare_internal(_state.query_string);
+                    next_page = true;
                 }
             } else {
                 _state.more_results = false;
             }
         }
     };
-    visitor v(state, *this);
+    visitor v(state);
     if (msg != nullptr) {
         msg->accept(v);
+    }
+    if (v.next_page) {
+        // Carries a recorded plan forward without pinning it, safe
+        // only because the cache hands back the same statement.
+        state.p = co_await prepare_internal(state.query_string);
     }
 
     co_return ::make_shared<untyped_result_set>(msg);
@@ -1079,14 +1089,14 @@ query_processor::execute_internal(
         log.trace("execute_internal: {}\"{}\" ({})", cache ? "(cached) " : "", query_string, fmt::join(values, ", "));
     }
     if (cache) {
-        auto p = prepare_internal(query_string);
-        return execute_with_params(std::move(p), cl, query_state, values);
+        auto p = co_await prepare_internal(std::move(query_string));
+        co_return co_await execute_with_params(std::move(p), cl, query_state, values);
     } else {
         // For internal queries, we want the default dialect, not the user provided one
-        auto p = parse_statement(query_string, dialect{})->prepare(_db, _cql_stats, _cql_config);
+        auto parsed = parse_statement(query_string, dialect{});
+        auto p = co_await parsed->prepare(_db, _cql_stats, _cql_config);
         p->statement->raw_cql_statement = utils::chunked_string(query_string);
-        auto checked_weak_ptr = p->checked_weak_from_this();
-        return execute_with_params(std::move(checked_weak_ptr), cl, query_state, values).finally([p = std::move(p)] {});
+        co_return co_await execute_with_params(p->checked_weak_from_this(), cl, query_state, values);
     }
 }
 
@@ -1096,7 +1106,7 @@ future<utils::chunked_vector<mutation>> query_processor::get_mutations_internal(
         api::timestamp_type timestamp,
         std::vector<data_value_or_unset> values) {
     log.debug("get_mutations_internal: \"{}\" ({})", query_string, fmt::join(values, ", "));
-    auto stmt = prepare_internal(query_string);
+    auto stmt = co_await prepare_internal(query_string);
     auto mod_stmt = dynamic_pointer_cast<cql3::statements::modification_statement>(stmt->statement);
     if (!mod_stmt) {
         on_internal_error(log, "Only modification statement is supported in get_mutations_internal");
@@ -1353,7 +1363,7 @@ future<> query_processor::query_internal(
         int32_t page_size,
         noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)> f,
         std::optional<service::query_state> qs) {
-    auto query_state = create_paged_state(std::move(query_string), cl, std::move(values), page_size, std::move(qs));
+    auto query_state = co_await create_paged_state(std::move(query_string), cl, std::move(values), page_size, std::move(qs));
     co_return co_await for_each_cql_result(query_state, std::move(f));
 }
 
@@ -1364,7 +1374,7 @@ future<> query_processor::query_internal(
         int32_t page_size,
         db::timeout_clock::time_point deadline,
         noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)> f) {
-    auto query_state = create_paged_state(std::move(query_string), cl, std::move(values), page_size, std::nullopt, deadline);
+    auto query_state = co_await create_paged_state(std::move(query_string), cl, std::move(values), page_size, std::nullopt, deadline);
     co_return co_await for_each_cql_result(query_state, std::move(f));
 }
 

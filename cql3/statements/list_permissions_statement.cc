@@ -37,9 +37,9 @@ cql3::statements::list_permissions_statement::list_permissions_statement(
             , _recursive(recursive) {
 }
 
-std::unique_ptr<cql3::statements::prepared_statement> cql3::statements::list_permissions_statement::prepare(
+future<std::unique_ptr<cql3::statements::prepared_statement>> cql3::statements::list_permissions_statement::prepare(
                 data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
-    return std::make_unique<prepared_statement>(audit_info(), ::make_shared<list_permissions_statement>(*this));
+    return make_ready_future<std::unique_ptr<prepared_statement>>(std::make_unique<prepared_statement>(audit_info(), ::make_shared<list_permissions_statement>(*this)));
 }
 
 void cql3::statements::list_permissions_statement::validate(
