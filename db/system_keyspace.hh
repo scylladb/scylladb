@@ -725,14 +725,14 @@ public:
 
     virtual_tables_registry& get_virtual_tables_registry() { return _virtual_tables_registry; }
 private:
-    future<::shared_ptr<cql3::untyped_result_set>> execute_cql(const sstring& query_string, const query_data_params& values);
+    future<::shared_ptr<cql3::untyped_result_set>> execute_cql(sstring query_string, query_data_vector values);
     template <typename... Args>
     future<::shared_ptr<cql3::untyped_result_set>> execute_cql_with_timeout(sstring req, db::timeout_clock::time_point timeout, Args&&... args);
 
 public:
     template <typename... Args>
     future<::shared_ptr<cql3::untyped_result_set>> execute_cql(sstring req, Args&&... args) {
-        return execute_cql(req, { data_value(std::forward<Args>(args))... });
+        return execute_cql(std::move(req), { data_value(std::forward<Args>(args))... });
     }
 
     // Apply write as mutation to the system keyspace.
