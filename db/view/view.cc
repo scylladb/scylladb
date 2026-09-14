@@ -59,6 +59,7 @@
 #include "keys/keys.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "locator/network_topology_strategy.hh"
+#include "locator/tablet_replication_strategy.hh"
 #include "mutation/mutation.hh"
 #include "mutation/mutation_partition.hh"
 #include <seastar/core/on_internal_error.hh>
@@ -3557,14 +3558,20 @@ void validate_view_keyspace(const data_dictionary::database& db, std::string_vie
     const auto& rs = db.find_keyspace(keyspace_name).get_replication_strategy();
 
     if (rs.uses_tablets() && !db.features().views_with_tablets) {
-        throw std::logic_error("Materialized views and secondary indexes are not supported on base tables with tablets. "
+        throw exceptions::invalid_request_exception("Materialized views and secondary indexes are not supported on base tables with tablets. "
                 "To be able to use them, make sure all nodes in the cluster are upgraded.");
+    }
+
+    const auto* tablet_rs = rs.maybe_as_tablet_aware();
+    if (tablet_rs && tablet_rs->get_consistency() != data_dictionary::consistency_config_option::eventual) {
+        throw exceptions::invalid_request_exception(
+                "Materialized views and secondary indexes are not supported on tables in strongly consistent keyspaces");
     }
 
     try {
         locator::assert_rf_rack_valid_keyspace(keyspace_name, tmptr, rs);
     } catch (const std::invalid_argument& e) {
-        throw std::logic_error(fmt::format(
+        throw exceptions::invalid_request_exception(fmt::format(
             "Materialized views and secondary indexes are not supported on the keyspace '{}': {}",
             keyspace_name, e.what()));
     }

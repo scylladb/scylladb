@@ -190,6 +190,7 @@ public:
     // True if any of update operations of this statement requires
     // a prefetch of the old cell.
     bool requires_read() const { return _requires_read; }
+    bool has_column_operations() const { return !_column_operations.empty(); }
 
     // True if any of the update operations requires LWT for atomicity.
     bool requires_lwt() const { return _requires_lwt; }

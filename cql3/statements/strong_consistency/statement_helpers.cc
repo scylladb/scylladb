@@ -8,6 +8,7 @@
 
 #include "statement_helpers.hh"
 
+#include "exceptions/exceptions.hh"
 #include "transport/messages/result_message_base.hh"
 #include "cql3/query_processor.hh"
 #include "replica/database.hh"
@@ -36,6 +37,12 @@ future<::shared_ptr<cql_transport::messages::result_message>> redirect_statement
 bool is_strongly_consistent(data_dictionary::database db, std::string_view ks_name) {
     const auto* tablet_aware_rs = db.find_keyspace(ks_name).get_replication_strategy().maybe_as_tablet_aware();
     return tablet_aware_rs && tablet_aware_rs->get_consistency() != data_dictionary::consistency_config_option::eventual;
+}
+
+void validate_write_consistency_level(const db::consistency_level& cl) {
+    if (cl != db::consistency_level::QUORUM && cl != db::consistency_level::LOCAL_QUORUM) {
+        throw exceptions::invalid_request_exception("Strongly consistent writes must use QUORUM/LOCAL_QUORUM consistency level");
+    }
 }
 
 }
