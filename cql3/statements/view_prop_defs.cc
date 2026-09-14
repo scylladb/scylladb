@@ -19,7 +19,7 @@ namespace cql3::statements {
 void view_prop_defs::validate_raw(op_type op, const data_dictionary::database db, sstring ks_name,
         const schema::extensions_map& exts) const
 {
-    cf_properties::validate(db, std::move(ks_name), exts);
+    cf_properties::validate(db, std::move(ks_name), exts, cf_prop_defs::is_alter(op == op_type::alter));
 
     // Registry-backed cluster-config properties (e.g. auto_repair_enabled) are recognized at
     // scope::table by cf_prop_defs::validate(), which cf_properties::validate() above delegates
@@ -43,6 +43,13 @@ void view_prop_defs::validate_raw(op_type op, const data_dictionary::database db
 
     if (properties()->get_cdc_options(exts)) {
         throw exceptions::invalid_request_exception("Cannot enable CDC for a materialized view");
+    }
+
+    // create_table_statement.cc rejects logstor on tables with clustering columns,
+    // but views don't go through that check and normally have clustering columns
+    // of their own, so reject storage_engine on views outright instead.
+    if (properties()->has_property(cf_prop_defs::KW_STORAGE_ENGINE)) {
+        throw exceptions::invalid_request_exception("Cannot set storage_engine for a materialized view");
     }
 
     if (op == op_type::create) {

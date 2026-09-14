@@ -382,6 +382,13 @@ create_index_statement::validate(query_processor& qp, const service::client_stat
             format("You cannot use view properties with a {}", *_idx_properties->custom_class));
     }
 
+    // Mixing storage engines between a base table and its index is impractical:
+    // logstor doesn't support any of the features indexes rely on. Checked before
+    // validate_raw() below, which rejects storage_engine on views with a different message.
+    if (_view_properties.properties()->has_property(cf_prop_defs::KW_STORAGE_ENGINE)) {
+        throw exceptions::invalid_request_exception("Cannot set storage_engine on an index");
+    }
+
     const schema::extensions_map exts = _view_properties.properties()->make_schema_extensions(qp.db().extensions());
     _view_properties.validate_raw(view_prop_defs::op_type::create, qp.db(), keyspace(), exts);
 
