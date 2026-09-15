@@ -2234,27 +2234,39 @@ void db::commitlog::segment_manager::flush_segments(uint64_t size_to_remove) {
         }
 
         auto rp = replay_position(s->_desc.id, db::position_type(s->size_on_disk()));
-        if (rp <= _flush_position) {
-            // already requested.
-            continue;
-        }
 
-        auto size = s->size_on_disk();
-        auto waste = s->_waste;
-
-        flushing += size - waste;
-
-        for (auto& id : s->_cf_dirty |  std::views::keys) {
+        // Collect the dirty tables of every closed segment, including ones
+        // already named in a previous request round: a flush request only
+        // releases commitlog references whose data already sits in a memtable,
+        // and a reference obtained from add() can reach a memtable long after
+        // the segment's first request round (e.g. a raft log entry is applied
+        // to the memtable only once its raft group commits it; until then the
+        // reference is held by the raft layer). Repeating a request is cheap:
+        // the table skips it unless its memtable holds data at or below the
+        // requested position.
+        for (auto& id : s->_cf_dirty | std::views::keys) {
             auto& target_high = ids[id];
             target_high = std::max(target_high, rp);
         }
+
+        if (rp <= _flush_position) {
+            // Already counted toward a previous round's size_to_remove target,
+            // so it must not contribute to the byte accounting or the
+            // watermark again.
+            continue;
+        }
+
+        const auto size = s->size_on_disk();
+        const auto waste = s->_waste;
+
+        flushing += size - waste;
 
         if (size_to_remove != 0) {
             if (n <= size) {
                 high = rp;
                 break;
             }
-            n -= s->size_on_disk();
+            n -= size;
         }
     }
 
@@ -2288,10 +2300,12 @@ void db::commitlog::segment_manager::check_no_data_older_than_allowed() {
 
     for (auto& s : _segments) {
         auto rp = replay_position(s->_desc.id, db::position_type(s->size_on_disk()));
-        if (rp <= _flush_position) {
-            // already requested.
-            continue;
-        }
+        // Deliberately no _flush_position cut-off here: a segment named in an
+        // earlier request round can still be dirty, because commitlog references
+        // may reach the memtables only after that round has passed (see
+        // flush_segments above). Without a repeated request, such a segment
+        // would stay on disk until some later write of the same table lands
+        // above the watermark - for a quiescent table, indefinitely.
 
         bool any_found = false;
 
@@ -2342,7 +2356,11 @@ void db::commitlog::segment_manager::check_no_data_older_than_allowed() {
                 }
             }
         }
-        _flush_position = *high;
+        // high can now point below _flush_position, since old, still-dirty
+        // segments are re-examined. The watermark must never move backwards,
+        // or flush_segments would count those segments' sizes toward
+        // size_to_remove a second time.
+        _flush_position = std::max(_flush_position, *high);
     }
 }
 
