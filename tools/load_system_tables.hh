@@ -13,6 +13,8 @@
 #include <seastar/core/future.hh>
 
 #include "data_dictionary/storage_options.hh"
+#include "db_clock.hh"
+#include "gc_clock.hh"
 #include "reader_permit.hh"
 #include "dht/token.hh"
 #include "locator/host_id.hh"
@@ -28,7 +30,16 @@ class config;
 
 namespace tools {
 
-using tablets_t = std::map<dht::token, locator::tablet_replica_set>;
+/// A row of "system.tablets": the replicas of one tablet, and when it was last repaired
+struct tablet {
+    locator::tablet_replica_set replicas;
+    std::optional<db_clock::time_point> repair_time;
+};
+
+using tablets_t = std::map<dht::token, tablet>;
+
+/// The token ranges of a table which were repaired, and when
+using repaired_ranges_t = std::vector<std::pair<dht::token_range, gc_clock::time_point>>;
 
 /// A row of "system.sstables_registry": one sstable of a table on object storage
 struct sstables_registry_entry {
@@ -60,6 +71,18 @@ future<tablets_t> load_system_tablets(const db::config& dbcfg,
                                       table_id table,
                                       reader_permit permit,
                                       std::optional<std::filesystem::path> tablets_directory = std::nullopt);
+
+/// Load the rows of given table in "system.repair_history" from its sstables
+///
+/// Only vnode-based tables are recorded there: the repair time of a tablet is
+/// kept in "system.tablets" instead, see tablets_t.
+///
+/// @returns the token ranges of \p table which were repaired, and when. Empty
+///          when the table has no repair history at all
+future<repaired_ranges_t> load_system_repair_history(const db::config& dbcfg,
+                                      std::filesystem::path scylla_data_path,
+                                      table_id table,
+                                      reader_permit permit);
 
 /// Load the storage options of a keyspace from "system_schema.scylla_keyspaces"
 ///

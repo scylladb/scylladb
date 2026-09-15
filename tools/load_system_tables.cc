@@ -88,13 +88,45 @@ future<tablets_t> load_system_tablets(const db::config& dbcfg,
                 if (!replica_set) {
                     return;
                 }
-                tablets.emplace(last_token, replica::tablet_replica_set_from_cell(*replica_set));
+                tablet tablet{.replicas = replica::tablet_replica_set_from_cell(*replica_set)};
+                // absent until the tablet is repaired for the first time
+                if (auto repair_time = row.get<db_clock::time_point>("repair_time")) {
+                    tablet.repair_time = *repair_time;
+                }
+                tablets.emplace(last_token, std::move(tablet));
             },
             std::move(tablets_directory));
     if (tablets.empty()) {
         throw std::runtime_error(fmt::format("failed to find tablets for table {}", table));
     }
     co_return tablets;
+}
+
+future<repaired_ranges_t> load_system_repair_history(const db::config& dbcfg,
+                                      std::filesystem::path scylla_data_path,
+                                      table_id table,
+                                      reader_permit permit) {
+    repaired_ranges_t repaired_ranges;
+    co_await query_system_table_offline(dbcfg, scylla_data_path, db::system_keyspace::repair_history(),
+            {data_value(table.uuid())}, std::nullopt, permit,
+            [&repaired_ranges] (const query::result_set_row& row) {
+                auto repair_time = row.get<db_clock::time_point>("repair_time");
+                auto range_start = row.get<int64_t>("range_start");
+                auto range_end = row.get<int64_t>("range_end");
+                if (!repair_time || !range_start || !range_end) {
+                    return;
+                }
+                // the recorded range is (range_start, range_end], with the minimum
+                // int64 standing for the end of the ring on either side
+                auto start = *range_start == std::numeric_limits<int64_t>::min()
+                        ? dht::minimum_token() : dht::token::from_int64(*range_start);
+                auto end = *range_end == std::numeric_limits<int64_t>::min()
+                        ? dht::maximum_token() : dht::token::from_int64(*range_end);
+                repaired_ranges.emplace_back(
+                        dht::token_range(dht::token_range::bound(start, false), dht::token_range::bound(end, true)),
+                        to_gc_clock(*repair_time));
+            });
+    co_return repaired_ranges;
 }
 
 future<std::optional<data_dictionary::storage_options>> load_keyspace_storage_options(const db::config& dbcfg,
