@@ -1888,12 +1888,33 @@ future<> gossiper::apply_new_states(endpoint_state local_state, const endpoint_s
 
             const versioned_value* local_val = local_state.get_application_state_ptr(remote_key);
             if (!local_val || remote_value.version() > local_val->version()) {
+                // The copies below allocate, so the loop can tear local_state.
+                // SCHEMA only: it moves just on DDL, so a test can stop
+                // bumping it and watch the dropped value never come back.
+                if (remote_key == application_state::SCHEMA) {
+                    utils::get_local_injector().inject("apply_new_states_fail",
+                            [] { throw std::runtime_error("injected apply failure"); });
+                }
                 changed.emplace(remote_key, remote_value);
                 local_state.add_application_state(remote_key, remote_value);
             }
         }
     } catch (...) {
         ep = std::current_exception();
+    }
+
+    // Never replicate a state the loop failed to build. Outside a shadow
+    // round the heartbeat was already raised above it, so storing it would
+    // advertise a max over states we never got, and nobody re-sends below
+    // that max. Apply the delta whole or not at all.
+    if (ep) {
+        if (shadow_round) {
+            // A shadow round always discarded this, and its caller applies
+            // every node in one loop with no per-node handling, so throwing
+            // would skip the rest. Returning still avoids storing the tear.
+            co_return;
+        }
+        maybe_rethrow_exception(std::move(ep));
     }
 
     auto addr = local_state.get_ip();
@@ -1921,8 +1942,6 @@ future<> gossiper::apply_new_states(endpoint_state local_state, const endpoint_s
             on_fatal_internal_error(logger, msg);
         }
     }
-
-    maybe_rethrow_exception(std::move(ep));
 }
 
 future<> gossiper::do_on_change_notifications(inet_address addr, locator::host_id id, const gms::application_state_map& states, permit_id pid) const {
