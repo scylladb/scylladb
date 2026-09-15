@@ -201,13 +201,87 @@ Alternator has no shard-aware variant.
 Applying changes
 ================
 
-Changes to the CQL listeners take effect on a running node, without a restart.
-A listener that did not change is left alone, so its clients notice nothing. A
-listener that was removed is drained: its connections receive no further
-requests, the requests already in flight are answered, and the connections are
-then closed. A listener whose settings changed is drained the same way and
-reopened with its new settings. The whole new set is resolved before anything
-is touched - addresses looked up, certificates read - so a set that cannot be
-served leaves the node serving the set it had.
+Changes to the listeners take effect on a running node, without a restart, for
+CQL and Alternator alike. A listener that did not change is left alone, so its
+clients notice nothing. A listener that was removed is drained: its connections
+receive no further requests, the requests already in flight are answered, and
+the connections are then closed. A listener whose socket is affected by the
+change is drained the same way and reopened with its new settings; other changes
+take effect on the open listener. :ref:`listeners-reopen` lists which is which.
 
-Changes to the Alternator listeners take effect when the node next starts.
+Whatever can be checked ahead of time is checked before anything is touched.
+Setting the option fails right away if two listeners spell out the same address
+and the same port, if two listeners of one protocol both leave the address out
+and share a port, or if a ``shard_aware_listener`` names a listener that does
+not exist, is not a shard-aware CQL listener, or disagrees about
+``proxy_protocol``. Listeners whose addresses are spelled differently, or that
+leave it out for different protocols, may still turn out to share an address on
+a node; that is only found out when the second one fails to open.
+
+Each node then resolves the new listeners of each protocol - addresses looked
+up, certificates read, shard-aware listeners checked to be on the same address -
+before touching that protocol's listeners, and if that fails, the node logs the
+error and keeps serving that protocol's listeners as they were. The protocols are
+resolved and changed one after the other, CQL first, so a change can take effect
+for CQL and be rejected for Alternator.
+
+Whether a port can be bound, though, is only known by binding it, and by then
+the listeners that were removed or changed have already been closed. So opening
+the new set is best effort: a listener that cannot be opened - its port taken by
+another process, or its address not one of the node's - is logged as an error
+and left out, and the rest of the set is opened regardless. The node does not
+retry it until the listeners change again. Choose addresses and ports that the
+node can bind.
+
+A protocol that is left with no listeners stops being served altogether, and is
+served again once a change gives it a listener. That includes a protocol that had
+none when the node started, so Alternator can be enabled on a running node by
+adding an ``alternator`` listener. This holds while the option still has a
+listener of the other protocol: a change that leaves ``listeners`` with none at
+all - set to an empty map, or removed at every scope - brings back the listeners
+of the per-protocol options in ``scylla.yaml``, plaintext ones included, rather
+than stopping both protocols.
+
+A listener that could not be opened stays in the set the node was asked to
+serve. Only the start of a protocol server with the node insists on every
+listener opening; when a protocol server is stopped and started again on a
+running node, such as with ``nodetool disablebinary`` and
+``nodetool enablebinary``, it opens what it can and logs the rest, just as when
+the listeners change.
+
+.. _listeners-reopen:
+
+What reopens a listener
+-----------------------
+
+A listener is reopened, dropping its connections once they are drained, when
+the change alters the socket it listens on, or how that socket accepts
+connections:
+
+* its ``address``, as resolved on the node. Spelling the same address
+  differently, or giving a network that picks the same address, is not a change;
+* its ``port``;
+* its ``protocol``;
+* ``shard_aware``;
+* ``tls``: turning encryption on or off, or changing the encryption options in
+  effect - the ``tls`` map spelled out for the listener, or, for ``tls: true``,
+  the protocol-wide options as they are when the listeners change. Two ways of arriving at the same options, such as
+  ``tls: true`` and a map identical to the protocol-wide options, are not a change;
+* ``proxy_protocol``;
+* ``keepalive`` (CQL);
+* its name (CQL). Renaming a CQL listener removes the listener under its old name
+  and adds one under the new name. An Alternator listener is known by its address
+  rather than its name, so renaming it changes nothing.
+
+The following take effect without reopening the listener, so its connections
+stay open:
+
+* the shard-aware port a CQL listener advertises: the listener named in
+  ``shard_aware_listener`` moving to another port or becoming encrypted, or the
+  listener naming another shard-aware listener, or none. The new port is offered
+  to existing connections and new ones alike;
+* certificate, key and truststore files changing on disk: they are reloaded in
+  place, and new TLS handshakes use them, while established sessions continue;
+* a change to the value that leaves the listeners the same, such as reordered
+  keys or a default written out explicitly;
+* any change to the other listeners.
