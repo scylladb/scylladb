@@ -36,16 +36,10 @@ debian_base_packages=(
     cargo
     wabt
     liblua5.3-dev
-    python3-aiohttp
     python3-pyparsing
-    python3-colorama
     python3-dev
     python3-tabulate
-    python3-pytest
-    python3-pytest-asyncio
-    python3-pytest-timeout
-    python3-pytest-sugar
-    python3-pexpect
+    python3-pip
     libsnappy-dev
     libjsoncpp-dev
     rapidjson-dev
@@ -92,22 +86,11 @@ fedora_packages=(
     sudo
     patchelf
     python3
-    python3-aiohttp
     python3-devel
     python3-pip
     python3-file-magic
-    python3-colorama
     python3-tabulate
-    python3-boto3
-    python3-pytest
-    python3-pytest-asyncio
-    python3-pytest-timeout
-    python3-unidiff
-    python3-humanfriendly
     python3-jinja2
-    python3-deepdiff
-    python3-cryptography
-    python3-pexpect
     dnf-utils
     pigz
     net-tools
@@ -180,18 +163,21 @@ fedora_python3_packages=(
 )
 
 # an associative array from packages to constrains
+#
+# These are packages also needed outside of test.py (e.g. by cqlsh, or by the
+# shipped python3 relocatable package / dist/common/scripts). test.py's own
+# dependencies (scylla-driver and everything else it or pytest needs to run)
+# live in test/pyproject.toml / test/uv.lock instead: test.py re-execs itself
+# under `uv run --locked` on startup (see _ensure_running_under_uv() in
+# test.py), so their versions stay decoupled from this frozen toolchain
+# image, and any invocation that needs them directly (e.g. bare pytest) is
+# expected to also go through `uv run --project test --locked` rather than
+# relying on this image.
 declare -A pip_packages=(
     [scylla-driver]="==$(cat tools/cqlsh/requirements.txt | grep scylla-driver | cut -d= -f3)"
     [geomet]=""
     [traceback-with-variables]=""
     [scylla-api-client]=""
-    [treelib]=""
-    [allure-pytest]=""
-    [pytest-xdist]=""
-    [pykmip]=""
-    [universalasync]=""
-    [boto3-stubs[dynamodb]]=""
-    [setuptools_scm]=""
 )
 
 pip_symlinks=(
@@ -212,6 +198,7 @@ centos_packages=(
     openldap-servers
     openldap-devel
     cpp-jwt-devel
+    python3-pip
 )
 
 # 1) glibc 2.30-3 has sys/sdt.h (systemtap include)
@@ -231,6 +218,7 @@ arch_packages=(
     glibc
     jsoncpp
     lua
+    python-pip
     python-pyparsing
     python3
     rapidjson
@@ -314,14 +302,12 @@ print_usage() {
     echo "  --print-python3-runtime-packages Print required python3 packages for Scylla"
     echo "  --print-pip-runtime-packages Print required pip packages for Scylla"
     echo "  --print-pip-symlinks Print list of pip provided commands which need to install to /usr/bin"
-    echo "  --future Install dependencies for future toolchain (Fedora rawhide based)"
     exit 1
 }
 
 PRINT_PYTHON3=false
 PRINT_PIP=false
 PRINT_PIP_SYMLINK=false
-FUTURE=false
 while [ $# -gt 0 ]; do
     case "$1" in
         "--print-python3-runtime-packages")
@@ -334,10 +320,6 @@ while [ $# -gt 0 ]; do
             ;;
         "--print-pip-symlinks")
             PRINT_PIP_SYMLINK=true
-            shift 1
-            ;;
-        "--future")
-            FUTURE=true
             shift 1
             ;;
          *)
@@ -363,12 +345,6 @@ fi
 if $PRINT_PIP_SYMLINK; then
     echo "${pip_symlinks[@]}"
     exit 0
-fi
-
-if ! $FUTURE; then
-    fedora_packages+=(
-        python3-pytest-sugar
-    )
 fi
 
 umask 0022
@@ -453,6 +429,13 @@ elif [ "$ID" == "arch" ]; then
     fi
     echo -e "Configure example:\n\t./configure.py\n\tninja release"
 fi
+
+# uv has no package in the official Debian/Ubuntu/CentOS repos (only Fedora
+# and Arch carry one), so install it the one way that works identically
+# everywhere: from PyPI, via the pip3 each branch above already installed.
+# test.py re-execs itself under `uv run --locked` against test/pyproject.toml
+# (see _ensure_running_under_uv() in test.py), so uv is required on PATH.
+pip3 install --upgrade --no-cache-dir uv==0.12.0
 
 # Keep this version in lockstep with the `cxx` crate pinned in rust/inc/Cargo.toml
 # and rust/wasmtime_bindings/Cargo.toml: the cxxbridge CLI generates the C++ side
