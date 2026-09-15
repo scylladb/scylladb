@@ -381,6 +381,16 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_request) {
                 BOOST_REQUIRE(!keys);
                 BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(keys.error()));
 
+                // with routing explicitly disabled (as Alternator does), "routing":false
+                // must be sent; with the default (routing enabled, as CQL relies on),
+                // the field is omitted entirely, as checked above.
+                keys = co_await vs.ann(
+                        "ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset(), /*routing=*/false);
+                BOOST_REQUIRE(!server->ann_requests().empty());
+                BOOST_REQUIRE_EQUAL(server->ann_requests().back().body, R"({"vector":[0.1,0.2,0.3],"limit":2,"routing":false})");
+                BOOST_REQUIRE(!keys);
+                BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(keys.error()));
+
                 // missing similarity_scores in the reply - service should return format error
                 server->next_ann_response({status_type::ok, R"({"primary_keys":{"pk1":[5,6],"pk2":[7,8],"ck1":[9,1],"ck2":[2,3]},"similarity_scores1":[0.1,0.2]})"});
                 keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
@@ -420,6 +430,97 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_request) {
                 BOOST_CHECK_EQUAL(seastar::format("{}", keys->at(0).clustering.explode()), "[09, 02]");
                 BOOST_CHECK_EQUAL(seastar::format("{}", keys->at(1).partition.key().explode()), "[06, 08]");
                 BOOST_CHECK_EQUAL(seastar::format("{}", keys->at(1).clustering.explode()), "[01, 03]");
+            },
+            cfg)
+            .finally([&server] {
+                return server->stop();
+            });
+}
+
+/// ann()'s return_columns parameter, and the "column_values" member the
+/// vector store replies with for it.
+SEASTAR_TEST_CASE(vector_store_client_test_ann_column_values) {
+    auto server = co_await make_vs_mock_server();
+    auto cfg = make_config();
+    cfg.db_config->vector_store_primary_uri.set(format("http://good.authority.here:{}", server->port()));
+    co_await do_with_cql_env(
+            [&server](cql_test_env& env) -> future<> {
+                auto schema = co_await create_test_table(env, "ks", "idx");
+                auto as = abort_source_timeout();
+                auto& vs = env.vector_store_client().local();
+                configure(vs).with_dns_refresh_interval(seconds(1)).with_dns({{"good.authority.here", "127.0.0.1"}});
+
+                vs.start_background_tasks();
+
+                // The two-row "primary_keys"/"similarity_scores" part shared by
+                // all the replies below - only their "column_values" differs.
+                constexpr auto KEYS_AND_SCORES = R"("primary_keys":{"pk1":[5,6],"pk2":[7,8],"ck1":[9,1],"ck2":[2,3]},"similarity_scores":[0.1,0.2])";
+                auto const return_columns = std::vector<std::string>{"a", "b"};
+                auto ann = [&](const sstring& column_values) {
+                    server->next_ann_response({status_type::ok, format("{{{},{}}}", KEYS_AND_SCORES, column_values)});
+                    return vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset(),
+                            /*routing=*/false, return_columns);
+                };
+
+                // correct reply - the requested columns are sent in the request,
+                // and their values returned in each key's column_values. A null
+                // (here, "a" in the second row) means the column had no stored
+                // value for that row, and is left out of the map.
+                auto keys = co_await ann(R"("column_values":{"a":["x",null],"b":[1,2]})");
+                BOOST_REQUIRE(!server->ann_requests().empty());
+                BOOST_REQUIRE_EQUAL(
+                        server->ann_requests().back().body, R"({"vector":[0.1,0.2,0.3],"limit":2,"routing":false,"return_columns":["a","b"]})");
+                BOOST_REQUIRE(keys);
+                BOOST_REQUIRE_EQUAL(keys->size(), 2);
+                BOOST_REQUIRE_EQUAL(keys->at(0).column_values.size(), 2);
+                BOOST_CHECK_EQUAL(rjson::print(keys->at(0).column_values.at("a")), R"("x")");
+                BOOST_CHECK_EQUAL(rjson::print(keys->at(0).column_values.at("b")), "1");
+                BOOST_REQUIRE_EQUAL(keys->at(1).column_values.size(), 1);
+                BOOST_CHECK_EQUAL(rjson::print(keys->at(1).column_values.at("b")), "2");
+
+                // a requested column missing from "column_values" entirely means
+                // it had no stored value in any of the rows - not an error.
+                keys = co_await ann(R"("column_values":{"b":[1,2]})");
+                BOOST_REQUIRE(keys);
+                BOOST_REQUIRE_EQUAL(keys->size(), 2);
+                BOOST_REQUIRE_EQUAL(keys->at(0).column_values.size(), 1);
+                BOOST_CHECK_EQUAL(rjson::print(keys->at(0).column_values.at("b")), "1");
+
+                // but a column which *is* there must be an array with an entry
+                // for every row - anything else is a malformed reply, and must
+                // not be silently read as "no value for this row".
+                keys = co_await ann(R"("column_values":{"a":42,"b":[1,2]})");
+                BOOST_REQUIRE(!keys);
+                BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(keys.error()));
+
+                keys = co_await ann(R"("column_values":{"a":{"x":1},"b":[1,2]})");
+                BOOST_REQUIRE(!keys);
+                BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(keys.error()));
+
+                keys = co_await ann(R"("column_values":{"a":["x"],"b":[1,2]})");
+                BOOST_REQUIRE(!keys);
+                BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(keys.error()));
+
+                // "column_values" is required when return_columns isn't empty,
+                // and must be an object
+                keys = co_await ann(R"("column_values1":{"a":["x","y"],"b":[1,2]})");
+                BOOST_REQUIRE(!keys);
+                BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(keys.error()));
+
+                keys = co_await ann(R"("column_values":[])");
+                BOOST_REQUIRE(!keys);
+                BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(keys.error()));
+
+                // with no return_columns (CQL's use of ann()) nothing is asked
+                // for and nothing is parsed, even if the reply does have a
+                // (here, malformed) "column_values"
+                server->next_ann_response({status_type::ok, format(R"({{{},"column_values":{{"a":42}}}})", KEYS_AND_SCORES)});
+                keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, rjson::empty_object(), as.reset());
+                BOOST_REQUIRE_EQUAL(server->ann_requests().back().body, R"({"vector":[0.1,0.2,0.3],"limit":2})");
+                BOOST_REQUIRE(keys);
+                BOOST_REQUIRE_EQUAL(keys->size(), 2);
+                BOOST_CHECK(keys->at(0).column_values.empty());
+                BOOST_CHECK(keys->at(1).column_values.empty());
             },
             cfg)
             .finally([&server] {
