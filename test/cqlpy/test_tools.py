@@ -1665,7 +1665,10 @@ def test_scylla_sstable_shard_of_tablets(cql, test_keyspace_tablets, scylla_path
     for shard_id, key in shard_to_key.items():
         table_factory = functools.partial(_simple_table_with_keys, keys=[key])
         with scylla_sstable(table_factory, cql, test_keyspace_tablets, scylla_data_dir) as (_, schema_file, sstables):
-            with nodetool.no_autocompaction_context(cql, "system.tablets"):
+            # the tool reads the tablet map from system.tablets and the identity
+            # of the node from system.local and system.topology; none of them may
+            # be compacted away between being listed and being loaded
+            with nodetool.no_autocompaction_context(cql, "system.tablets", "system.local", "system.topology"):
                 nodetool.flush_keyspace(cql, "system")
                 out = subprocess.check_output([scylla_path,
                                                "sstable", "shard-of",
@@ -2406,3 +2409,207 @@ def test_scylla_sstable_split(cql, test_keyspace, scylla_path, scylla_data_dir):
             all_output_pks = output_pks[0] | output_pks[1]
             assert all_output_pks == sstable_pks, "Split sstables should contain all original partitions"
             assert len(output_pks[0] & output_pks[1]) == 0, "Output sstables should not overlap"
+
+
+def _layout_sstables(out):
+    """Collects the sstables of a `scylla sstable layout --output-format json` output, by bucket."""
+    buckets = {}
+    for group in json.loads(out)["compaction_groups"]:
+        for bucket in group["buckets"]:
+            buckets.setdefault(bucket["name"], []).extend(bucket["sstables"])
+    return buckets
+
+
+def test_scylla_sstable_layout(cql, test_keyspace, scylla_path, scylla_data_dir):
+    with scylla_sstable(simple_no_clustering_table, cql, test_keyspace, scylla_data_dir) as (table, schema_file, sstables):
+        def layout(*args):
+            cmd = [scylla_path, "sstable", "layout", "--schema-file", schema_file,
+                   "--output-format", "json"] + list(args)
+            return _layout_sstables(subprocess.check_output(cmd, text=True))
+
+        # the table uses NullCompactionStrategy, whose layout is described in runs
+        buckets = layout(*sstables)
+        assert all(name.startswith("RUN ") for name in buckets), f"expected runs, got {list(buckets)}"
+        laid_out = [sst["name"] for ssts in buckets.values() for sst in ssts]
+        assert sorted(laid_out) == sorted(os.path.basename(sst) for sst in sstables)
+
+        # the table directory can be passed in place of the individual sstables
+        table_dir = os.path.dirname(sstables[0])
+        assert sorted(sst["name"] for ssts in layout(table_dir).values() for sst in ssts) == sorted(laid_out)
+
+        # sstables which are not sealed yet cannot be loaded, they are left out
+        # of the table directory's content
+        unsealed = os.path.join(table_dir, "mc-999-big-")
+        try:
+            for component in ("Data.db", "TOC.txt.tmp"):
+                shutil.copy(sstables[0], unsealed + component)
+            assert sorted(sst["name"] for ssts in layout(table_dir).values() for sst in ssts) == sorted(laid_out)
+        finally:
+            for component in ("Data.db", "TOC.txt.tmp"):
+                os.unlink(unsealed + component)
+
+        # an sstable can be deleted by the running scylla between being listed
+        # and being loaded, leaving components of it missing; it is left out
+        # rather than failing the whole operation
+        deleted = os.path.join(table_dir, "mc-998-big-")
+        try:
+            # a sealed sstable, but the components its TOC lists are gone
+            shutil.copy(sstables[0], deleted + "Data.db")
+            shutil.copy(sstables[0].replace("-Data.db", "-TOC.txt"), deleted + "TOC.txt")
+            assert sorted(sst["name"] for ssts in layout(table_dir).values() for sst in ssts) == sorted(laid_out)
+        finally:
+            for component in ("Data.db", "TOC.txt"):
+                os.unlink(deleted + component)
+
+        # only the selected columns are reported, in the order they were selected
+        for sst in [sst for ssts in layout("--columns", "size,name", *sstables).values() for sst in ssts]:
+            assert list(sst.keys()) == ["size", "name"]
+
+        subprocess_check_error([scylla_path, "sstable", "layout", "--schema-file", schema_file,
+                                "--columns", "no-such-column"] + sstables, "unknown column: no-such-column")
+
+        # a path which isn't there is reported as such, rather than as a schema
+        # which could not be autodetected
+        subprocess_check_error([scylla_path, "sstable", "layout", "--schema-file", schema_file,
+                                os.path.join(table_dir, "no-such-directory")],
+                               "no such file or directory: .*no-such-directory")
+
+        # the sstables of each bucket are ordered by the requested columns
+        for ssts in layout("--columns", "all", "--sort", "size:desc,name:asc", *sstables).values():
+            keys = [(-sst["size"], sst["name"]) for sst in ssts]
+            assert keys == sorted(keys)
+
+        # the strategy the layout is described in the terms of can be overridden,
+        # by a short name in any case
+        assert all(name.startswith("LEVEL ") for name in layout("--strategy", "lcs", *sstables))
+        windows = layout("--strategy", "TWCS", "--strategy-option", "compaction_window_unit=HOURS",
+                         "--strategy-option", "compaction_window_size=1", *sstables)
+        assert all(name.startswith("WINDOW ") for name in windows)
+
+        subprocess_check_error([scylla_path, "sstable", "layout", "--schema-file", schema_file,
+                                "--strategy", "no-such-strategy"] + sstables,
+                               "invalid value for option strategy: no-such-strategy")
+
+
+def test_scylla_sstable_layout_default_tombstone_gc(cql, test_keyspace, scylla_path, scylla_data_dir):
+    """A table created without a tombstone_gc option still has the mode it uses reported.
+
+    The default of the keyspace is resolved when the table is created and
+    recorded as a schema extension, so the schema tables have the mode the table
+    actually uses -- repair, for a keyspace which is not on a local strategy."""
+    table = util.unique_name()
+    cql.execute(f"CREATE TABLE {test_keyspace}.{table} (pk int PRIMARY KEY, v int)")
+    try:
+        cql.execute(f"INSERT INTO {test_keyspace}.{table} (pk, v) VALUES (0, 0)")
+        nodetool.flush(cql, f"{test_keyspace}.{table}")
+        nodetool.flush_keyspace(cql, "system_schema")
+        # the schema is read off the disk of a running node, which must not
+        # compact away the sstables of the schema tables while it is
+        with nodetool.no_autocompaction_context(cql, "system_schema"):
+                header = subprocess.check_output([scylla_path, "sstable", "layout", "--scylla-data-dir", scylla_data_dir,
+                                              "--keyspace", test_keyspace, "--table", table],
+                                             text=True).splitlines()
+        assert [l for l in header if l.startswith("tombstone_gc: repair,")], header
+    finally:
+        cql.execute(f"DROP TABLE {test_keyspace}.{table}")
+
+
+def test_scylla_sstable_layout_keyspace_and_table(cql, test_keyspace, scylla_path, scylla_data_dir):
+    """With no sstables to describe, the table --keyspace and --table name is."""
+    with scylla_sstable(simple_no_clustering_table, cql, test_keyspace, scylla_data_dir) as (table, schema_file, sstables):
+        nodetool.flush_keyspace(cql, "system_schema")
+
+        def layout(*args):
+            cmd = [scylla_path, "sstable", "layout", "--scylla-data-dir", scylla_data_dir,
+                   "--output-format", "json"] + list(args)
+            # the keyspace and the table are looked up in the schema tables of a
+            # running node, which must not compact their sstables away meanwhile
+            with nodetool.no_autocompaction_context(cql, "system_schema"):
+                return _layout_sstables(subprocess.check_output(cmd, text=True))
+
+        def names(buckets):
+            return sorted(sst["name"] for ssts in buckets.values() for sst in ssts)
+
+        # the table's own sstables are the ones its paths name
+        assert names(layout("--keyspace", test_keyspace, "--table", table)) == \
+               names(layout("--schema-file", schema_file, *sstables))
+
+        # a table which isn't there has no schema to describe it with
+        subprocess_check_error([scylla_path, "sstable", "layout", "--scylla-data-dir", scylla_data_dir,
+                                "--keyspace", test_keyspace, "--table", "no_such_table"],
+                               "Failed to autodetect and load schema")
+
+        # sstables named on the command line are the ones described, the
+        # keyspace and the table then only say which schema to load
+        assert names(layout("--keyspace", test_keyspace, "--table", table, sstables[0])) == \
+               [os.path.basename(sstables[0])]
+
+
+def test_scylla_sstable_layout_tombstone_gc(cql, test_keyspace, scylla_path, scylla_data_dir):
+    # Every mode says which tombstones are expired: the schema alone for the
+    # first three, the repair history of the token range for the repair mode.
+    # The schema has to come from the schema tables: a schema file cannot
+    # express the repair mode, the keyspace the loader makes up for it uses a
+    # replication strategy the mode is rejected for.
+    for mode in ("timeout", "disabled", "immediate", "repair"):
+        table = util.unique_name()
+        cql.execute(f"CREATE TABLE {test_keyspace}.{table} (pk int PRIMARY KEY, v int) "
+                    f"WITH tombstone_gc = {{'mode': '{mode}'}} AND gc_grace_seconds = 600")
+        try:
+            for pk in range(10):
+                cql.execute(f"DELETE FROM {test_keyspace}.{table} WHERE pk = {pk}")
+            nodetool.flush(cql, f"{test_keyspace}.{table}")
+            nodetool.flush_keyspace(cql, "system_schema")
+            table_dir = glob.glob(os.path.join(scylla_data_dir, test_keyspace, table + '-*'))[0]
+
+            def layout(*args):
+                return subprocess.check_output([scylla_path, "sstable", "layout", "--schema-tables",
+                                                *args, table_dir], text=True)
+
+            # the schema and, in the repair mode, the repair history are read off
+            # the disk of a running node, which must not compact them away
+            with nodetool.no_autocompaction_context(cql, "system_schema", "system.repair_history"):
+                # the mode is reported, and the gc grace period only means something in the timeout mode
+                header = [l for l in layout().splitlines() if l.startswith("tombstone_gc:")]
+                assert header == [l for l in header if l.startswith(f"tombstone_gc: {mode},")], header
+                assert ("gc grace seconds" in header[0]) == (mode == "timeout"), header
+                # the repair mode reports what it found in the repair history
+                assert ("repaired ranges" in header[0]) == (mode == "repair"), header
+
+                ssts = [sst for ssts in _layout_sstables(
+                            layout("--columns", "tombstones,expired", "--output-format", "json")).values()
+                        for sst in ssts]
+            assert ssts
+            for sst in ssts:
+                # every mode reports a count, and it is a share of the tombstones
+                assert sst["expired"] is not None, (mode, sst)
+                assert 0 <= sst["expired"] <= sst["tombstones"], (mode, sst)
+            if mode in ("disabled", "repair"):
+                # the disabled mode never purges anything, and nothing here was
+                # repaired; how many of the freshly dropped tombstones the other
+                # two modes count depends on which second they landed in
+                assert all(sst["expired"] == 0 for sst in ssts), (mode, ssts)
+        finally:
+            cql.execute(f"DROP TABLE {test_keyspace}.{table}")
+
+
+def test_scylla_sstable_layout_tablets(cql, test_keyspace_tablets, scylla_path, scylla_data_dir):
+    # the token for 0 is mapped to shard 0, 142 is mapped to shard 1
+    shard_to_key = {0: 0, 1: 142}
+    for shard_id, key in shard_to_key.items():
+        table_factory = functools.partial(_simple_table_with_keys, keys=[key])
+        with scylla_sstable(table_factory, cql, test_keyspace_tablets, scylla_data_dir) as (_, schema_file, sstables):
+            with nodetool.no_autocompaction_context(cql, "system.tablets", "system.local", "system.topology"):
+                nodetool.flush_keyspace(cql, "system")
+                # the sstables of a tablet-based table are grouped by the tablet
+                # owning them, which is looked up in system.tablets, and are
+                # attributed to the shard this node represents that tablet on
+                out = subprocess.check_output([scylla_path, "sstable", "layout", "--schema-file", schema_file,
+                                               "--columns", "name,tablet,shard", "--output-format", "json"] +
+                                              sstables, text=True)
+                groups = json.loads(out)["compaction_groups"]
+                assert len(groups) == 1, f"expected a single tablet to own the sstables, got {groups}"
+                for sst in groups[0]["buckets"][0]["sstables"]:
+                    assert sst["tablet"] is not None
+                    assert sst["shard"] == shard_id
+                assert groups[0]["name"] == f"TABLET #{sst['tablet']}, SHARD #{shard_id}"
