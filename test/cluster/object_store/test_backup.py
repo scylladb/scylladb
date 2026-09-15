@@ -2371,7 +2371,7 @@ async def test_cluster_snapshot_repair_set_unique(manager: ScyllaClusterManager,
 async def test_queued_backup_task_is_abortable(manager: ScyllaClusterManager, object_storage):
     """A backup task waiting for the snapshot lock must honour abort_task.
 
-    backup_task_impl::run() takes snapshot_ctl's write lock around the whole
+    backup_state::run() takes snapshot_ctl's write lock around the whole
     upload, and only subscribes to the task's abort_source afterwards, inside
     do_backup(). A task still waiting for that lock therefore ignores
     abort_task: the call answers 200 and the task stays running.

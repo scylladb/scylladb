@@ -42,6 +42,8 @@ class snapshot_ctl;
 
 namespace snapshot {
 
+inline constexpr auto backup_task_type = "backup";
+
 class backup_state {
     snapshot_ctl& _snap_ctl;
     sharded<sstables::storage_manager>& _sstm;
@@ -121,30 +123,6 @@ public:
     // Must be called on the shard the state was created on.
     future<> run(abort_source& as);
     future<tasks::task_manager::task::progress> get_progress() const;
-};
-
-class backup_task_impl : public tasks::task_manager::task::impl {
-    backup_state _state;
-
-protected:
-    virtual future<> run() override;
-
-public:
-    backup_task_impl(tasks::task_manager::module_ptr module,
-                     snapshot_ctl& ctl,
-                     sharded<sstables::storage_manager>& sstm,
-                     sstring endpoint,
-                     sstring bucket,
-                     sstring prefix,
-                     sstring ks,
-                     std::filesystem::path snapshot_dir,
-                     bool move_files) noexcept;
-
-    virtual std::string type() const override;
-    virtual tasks::is_internal is_internal() const noexcept override;
-    virtual tasks::is_abortable is_abortable() const noexcept override;
-    virtual future<tasks::task_manager::task::progress> get_progress() const override;
-    virtual tasks::is_user_task is_user_task() const noexcept override;
 };
 
 } // snapshot namespace
