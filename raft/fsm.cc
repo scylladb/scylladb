@@ -91,6 +91,37 @@ future<semaphore_units<>> fsm::wait_for_memory_permit(seastar::abort_source* as,
     return as ? get_units(sm, size, *as) : get_units(sm, size);
 }
 
+bool fsm::memory_permit_available(size_t size) const {
+    check_is_leader();
+
+    const auto& sm = *leader_state().log_limiter_semaphore;
+    return sm.waiters() == 0 && sm.available_units() >= ssize_t(size);
+}
+
+blocked_followers fsm::count_blocked_followers() const {
+    blocked_followers result;
+    if (!is_leader()) {
+        return result;
+    }
+    for (const auto& [id, progress] : leader_state().tracker) {
+        if (id == _my_id || progress.can_send_to()) {
+            continue;
+        }
+        switch (progress.state) {
+        case follower_progress::state::PROBE:
+            result.probe++;
+            break;
+        case follower_progress::state::PIPELINE:
+            result.pipeline_full++;
+            break;
+        case follower_progress::state::SNAPSHOT:
+            result.snapshot++;
+            break;
+        }
+    }
+    return result;
+}
+
 const configuration& fsm::get_configuration() const {
     return _log.get_configuration();
 }

@@ -497,6 +497,8 @@ public:
     size_t state_to_metric() const {
         return _state.index();
     }
+    // All zeros when this server is not the leader.
+    blocked_followers count_blocked_followers() const;
     index_t log_last_idx() const {
         return _log.last_idx();
     }
@@ -546,6 +548,9 @@ public:
     // Can only be called on a leader.
     // On abort throws `semaphore_aborted`.
     future<semaphore_units<>> wait_for_memory_permit(seastar::abort_source* as, size_t size);
+    // Whether wait_for_memory_permit() for this size would not block.
+    // Can only be called on a leader.
+    bool memory_permit_available(size_t size) const;
 
     // Return current configuration.
     const configuration& get_configuration() const;

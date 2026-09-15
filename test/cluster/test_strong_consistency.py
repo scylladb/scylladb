@@ -18,7 +18,7 @@ from cassandra.policies import FallthroughRetryPolicy
 from cassandra.protocol import InvalidRequest
 from cassandra.query import SimpleStatement, BoundStatement
 from test.pylib.tablets import get_all_tablet_replicas, get_tablet_replicas
-from test.pylib.rest_client import read_barrier
+from test.pylib.rest_client import read_barrier, ScyllaMetrics, ScyllaMetricsLine
 
 import asyncio
 import pytest
@@ -1652,3 +1652,179 @@ async def test_stepdown_on_graceful_shutdown(manager: ScyllaClusterManager):
             # The new leader can serve writes right away.
             cql, _ = await manager.get_ready_cql(others)
             await cql.run_async(f"INSERT INTO {table} (pk, c) VALUES (2, 2)")
+
+
+SC_RAFT_METRICS_PREFIX = 'scylla_strong_consistency_raft_'
+
+def sc_raft_metric_lines(metrics: ScyllaMetrics) -> list[ScyllaMetricsLine]:
+    return [line for l in metrics.lines_by_prefix(SC_RAFT_METRICS_PREFIX)
+            if (line := ScyllaMetricsLine.from_string(l)) is not None]
+
+async def get_host_ids(manager: ScyllaClusterManager, servers: list[ServerInfo]) -> list[str]:
+    return [str(host_id) for host_id in await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])]
+
+async def wait_for_sc_raft_series_gone(manager: ScyllaClusterManager, server: ServerInfo):
+    async def series_gone():
+        metrics = await manager.metrics.query(server.ip_addr)
+        return True if not sc_raft_metric_lines(metrics) else None
+    await wait_for(series_gone, time.time() + 60)
+
+async def test_sc_raft_metrics_aggregated_per_table(manager: ScyllaClusterManager):
+    servers = await manager.servers_add(3, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
+    cql = manager.get_cql()
+    host_ids = await get_host_ids(manager, servers)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+        group_id = await get_table_raft_group_id(manager, ks, 'test')
+        leader_host_id = str(await wait_for_leader(manager, servers[0], group_id))
+        leader = servers[host_ids.index(leader_host_id)]
+        follower = next(s for s in servers if s.server_id != leader.server_id)
+        labels = {'ks': ks, 'cf': 'test'}
+        commands = labels | {'log_entry_type': 'command'}
+
+        logger.info(f"Group {group_id} is led by {leader}, reading its metrics before writing")
+        before = await manager.metrics.query(leader.ip_addr)
+        commands_before = before.get(f'{SC_RAFT_METRICS_PREFIX}add_entries', commands) or 0
+
+        writes = 10
+        for i in range(writes):
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({i}, {i})")
+
+        logger.info("The writes show up in the counters of the table on the leader")
+        after = await manager.metrics.query(leader.ip_addr)
+        commands_after = after.get(f'{SC_RAFT_METRICS_PREFIX}add_entries', commands) or 0
+        assert commands_after - commands_before >= writes
+        assert after.get(f'{SC_RAFT_METRICS_PREFIX}leaders', labels) == 1
+        follower_metrics = await manager.metrics.query(follower.ip_addr)
+        assert follower_metrics.get(f'{SC_RAFT_METRICS_PREFIX}leaders', labels) == 0
+
+        logger.info("The series are labelled with the table and aggregated over the shards")
+        lines = sc_raft_metric_lines(after)
+        assert lines
+        for line in lines:
+            assert line.labels['ks'] == ks
+            assert line.labels['cf'] == 'test'
+            assert 'shard' not in line.labels
+
+        logger.info("The group0 metrics keep their own series")
+        group0_lines = [ScyllaMetricsLine.from_string(l) for l in after.lines_by_prefix('scylla_raft_add_entries')]
+        assert group0_lines
+        for line in group0_lines:
+            assert 'id' in line.labels
+            assert 'ks' not in line.labels
+
+        logger.info("Dropping the table removes its series")
+        await cql.run_async(f"DROP TABLE {ks}.test")
+        await wait_for_sc_raft_series_gone(manager, leader)
+
+async def test_sc_raft_metrics_rpc_memory(manager: ScyllaClusterManager):
+    servers = await manager.servers_add(3, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
+    cql = manager.get_cql()
+    host_ids = await get_host_ids(manager, servers)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+        group_id = await get_table_raft_group_id(manager, ks, 'test')
+        leader_host_id = str(await wait_for_leader(manager, servers[0], group_id))
+        leader = servers[host_ids.index(leader_host_id)]
+        labels = {'ks': ks, 'cf': 'test'}
+
+        writes = 50
+        logger.info(f"Writing {writes} rows concurrently through the leader {leader}")
+        await gather_safely(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({i}, {i})") for i in range(writes)])
+
+        logger.info("The memory charged for the append requests is released once they are sent")
+        async def memory_released():
+            metrics = await manager.metrics.query(leader.ip_addr)
+            values = {
+                'table in flight': metrics.get(f'{SC_RAFT_METRICS_PREFIX}append_entries_in_flight_bytes', labels),
+                'table waiters': metrics.get(f'{SC_RAFT_METRICS_PREFIX}append_entries_memory_waiters', labels),
+                'group0 in flight': metrics.get('scylla_raft_group0_append_entries_in_flight_bytes'),
+                'group0 waiters': metrics.get('scylla_raft_group0_append_entries_memory_waiters'),
+            }
+            logger.info(f"{values}")
+            return True if all(value == 0 for value in values.values()) else None
+        await wait_for(memory_released, time.time() + 60)
+
+        logger.info("Group 0 exports the wait counter too, the table only once it has waited")
+        metrics = await manager.metrics.query(leader.ip_addr)
+        assert metrics.get('scylla_raft_group0_append_entries_memory_waits') is not None
+
+async def test_sc_raft_metrics_per_shard(manager: ScyllaClusterManager):
+    config = DEFAULT_CONFIG | {'enable_strong_consistency_per_shard_metrics': True}
+    servers = await manager.servers_add(3, config=config, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
+    cql = manager.get_cql()
+    host_ids = await get_host_ids(manager, servers)
+    await manager.disable_tablet_balancing()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 4} AND consistency = 'global'") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+        table_id = await manager.get_table_id(ks, 'test')
+        rows = await cql.run_async(f"SELECT raft_group_id FROM system.tablets WHERE table_id = {table_id}")
+        group_ids = [str(row.raft_group_id) for row in rows]
+        assert len(group_ids) == 4
+
+        leaders_per_host = {host_id: 0 for host_id in host_ids}
+        for group_id in group_ids:
+            leaders_per_host[str(await wait_for_leader(manager, servers[0], group_id))] += 1
+        logger.info(f"Groups led per host: {leaders_per_host}")
+
+        for i in range(10):
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({i}, {i})")
+
+        labels = {'ks': ks, 'cf': 'test'}
+        tablets = await get_all_tablet_replicas(manager, servers[0], ks, 'test')
+        for server, host_id in zip(servers, host_ids):
+            logger.info(f"Checking the metrics of {server}, which leads {leaders_per_host[host_id]} groups")
+            metrics = await manager.metrics.query(server.ip_addr)
+            lines = sc_raft_metric_lines(metrics)
+            assert lines
+            for line in lines:
+                assert line.labels['ks'] == ks
+                assert line.labels['cf'] == 'test'
+                assert 'shard' in line.labels
+            assert metrics.get(f'{SC_RAFT_METRICS_PREFIX}leaders', labels) == leaders_per_host[host_id]
+
+            replica_shards = {str(shard) for tablet in tablets for host, shard in tablet.replicas if str(host) == host_id}
+            reporting_shards = {line.labels['shard'] for line in lines if line.name == f'{SC_RAFT_METRICS_PREFIX}leaders'}
+            assert reporting_shards == replica_shards
+
+async def test_sc_raft_metrics_survive_intra_node_migration(manager: ScyllaClusterManager):
+    servers = await manager.servers_add(3, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE + ['--smp=2'], auto_rack_dc='my_dc')
+    cql = manager.get_cql()
+    host_ids = await get_host_ids(manager, servers)
+    await manager.disable_tablet_balancing()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+        group_id = await get_table_raft_group_id(manager, ks, 'test')
+        leader_host_id = str(await wait_for_leader(manager, servers[0], group_id))
+        leader = servers[host_ids.index(leader_host_id)]
+        commands = {'ks': ks, 'cf': 'test', 'log_entry_type': 'command'}
+        applied = {'ks': ks, 'cf': 'test'}
+
+        writes = 10
+        for i in range(writes):
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({i}, {i})")
+        before = await manager.metrics.query(leader.ip_addr)
+        commands_before = before.get(f'{SC_RAFT_METRICS_PREFIX}add_entries', commands) or 0
+        applied_before = before.get(f'{SC_RAFT_METRICS_PREFIX}applied_entries', applied) or 0
+        assert commands_before >= writes
+        assert applied_before >= writes
+
+        tablet = (await get_all_tablet_replicas(manager, servers[0], ks, 'test'))[0]
+        shard = next(shard for host, shard in tablet.replicas if str(host) == leader_host_id)
+        logger.info(f"Moving the only tablet of the table from shard {shard} to shard {1 - shard} of {leader}")
+        await manager.api.move_tablet(leader.ip_addr, ks, 'test', leader_host_id, shard, leader_host_id, 1 - shard, tablet.last_token)
+
+        logger.info("The counters summed over the shards of the node do not go backwards")
+        after = await manager.metrics.query(leader.ip_addr)
+        commands_after = after.get(f'{SC_RAFT_METRICS_PREFIX}add_entries', commands) or 0
+        applied_after = after.get(f'{SC_RAFT_METRICS_PREFIX}applied_entries', applied) or 0
+        assert commands_after >= commands_before
+        assert applied_after >= applied_before
+
+        logger.info("Dropping the table removes the series of both shards, including the one without a tablet")
+        await cql.run_async(f"DROP TABLE {ks}.test")
+        await wait_for_sc_raft_series_gone(manager, leader)

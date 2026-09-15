@@ -452,6 +452,7 @@ public:
     named_value<bool> enable_deprecated_partitioners;
     named_value<bool> enable_keyspace_column_family_metrics;
     named_value<bool> enable_node_aggregated_table_metrics;
+    named_value<bool> enable_strong_consistency_per_shard_metrics;
     named_value<bool> enable_sstable_data_integrity_check;
     named_value<bool> enable_sstable_key_validation;
     named_value<bool> ignore_component_digest_mismatch;

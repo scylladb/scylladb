@@ -435,6 +435,7 @@ BOOST_AUTO_TEST_CASE(test_snapshot_follower_is_quiet) {
     fsm.step(id2, raft::append_reply{fsm.get_current_term(), raft::index_t{1}, raft::append_reply::rejected{raft::index_t{1000}, raft::index_t{1}}});
 
     BOOST_CHECK(fsm.get_progress(id2).state == raft::follower_progress::state::SNAPSHOT);
+    BOOST_CHECK_EQUAL(fsm.count_blocked_followers().snapshot, 1u);
 
     // clear output
     (void) fsm.get_output();
@@ -1771,6 +1772,47 @@ BOOST_AUTO_TEST_CASE(test_non_voter_stays_pipeline) {
     BOOST_CHECK_EQUAL(A.get_configuration().is_joint(), false);
     BOOST_CHECK_EQUAL(A.get_configuration().current.find(config_member_from_id(B_id))->can_vote, is_voter::no);
     BOOST_CHECK(A.get_progress(B_id).state == raft::follower_progress::state::PIPELINE);
+}
+
+BOOST_AUTO_TEST_CASE(test_blocked_followers) {
+    // The leader reports the followers it cannot send entries to, by reason.
+    server_id A_id = id(), B_id = id();
+    raft::config_member_set addrset{
+        raft::config_member{server_addr_from_id(A_id), is_voter::yes},
+        raft::config_member{server_addr_from_id(B_id), is_voter::no}};
+    raft::configuration cfg(addrset);
+    raft::log log(raft::snapshot_descriptor{.idx = index_t{0}, .config = cfg});
+    auto A = create_follower(A_id, log);
+    auto B = create_follower(B_id, log);
+    BOOST_CHECK_EQUAL(A.count_blocked_followers().probe, 0u);
+    election_timeout(A);
+    communicate(A);
+    BOOST_CHECK(A.is_leader());
+    // The probe sent to B has not been answered
+    BOOST_CHECK(A.get_progress(B_id).state == raft::follower_progress::state::PROBE);
+    BOOST_CHECK_EQUAL(A.count_blocked_followers().probe, 1u);
+    BOOST_CHECK_EQUAL(A.count_blocked_followers().pipeline_full, 0u);
+    A.add_entry(log_entry::dummy{});
+    A.tick();
+    communicate(A, B);
+    BOOST_CHECK(A.get_progress(B_id).state == raft::follower_progress::state::PIPELINE);
+    BOOST_CHECK_EQUAL(A.count_blocked_followers().probe, 0u);
+    BOOST_CHECK_EQUAL(A.count_blocked_followers().pipeline_full, 0u);
+    // Hold the append requests back so that B cannot acknowledge them yet
+    raft_routing_map routes{{A.id(), &A}, {B.id(), &B}};
+    std::vector<raft::fsm_output> outputs;
+    for (size_t i = 0; i < raft::follower_progress::max_in_flight; i++) {
+        A.add_entry(log_entry::dummy{});
+        outputs.push_back(A.get_output());
+    }
+    BOOST_CHECK_EQUAL(A.get_progress(B_id).in_flight, raft::follower_progress::max_in_flight);
+    BOOST_CHECK_EQUAL(A.count_blocked_followers().pipeline_full, 1u);
+    for (auto& output : outputs) {
+        deliver(routes, A.id(), std::move(output.messages));
+    }
+    communicate(A, B);
+    BOOST_CHECK_EQUAL(A.get_progress(B_id).in_flight, 0u);
+    BOOST_CHECK_EQUAL(A.count_blocked_followers().pipeline_full, 0u);
 }
 
 BOOST_AUTO_TEST_CASE(test_leader_change_to_non_voter) {

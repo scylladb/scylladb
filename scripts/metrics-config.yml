@@ -13,6 +13,12 @@
 "replica/dirty_memory_manager.cc":
   params:
     namestr: ["regular", "system"]
+"raft/server.cc":
+  params:
+    options.group_name: ["raft", "strong_consistency_raft"]
+"service/raft/raft_rpc.cc":
+  params:
+    options.group_name: ["raft_group0", "strong_consistency_raft"]
 "replica/table.cc":
   params:
     stat_name: ["exclusive_row", "shared_row", "exclusive_partition", "shared_partition"]
