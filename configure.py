@@ -1768,6 +1768,7 @@ deps['test/boost/combined_tests'] += [
     'test/boost/role_manager_test.cc',
     'test/boost/row_cache_test.cc',
     'test/boost/schema_change_test.cc',
+    'test/boost/schema_change_cross_shard_test.cc',
     'test/boost/schema_registry_test.cc',
     'test/boost/scrub_test.cc',
     'test/boost/secondary_index_test.cc',
