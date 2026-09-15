@@ -185,13 +185,11 @@ Alternator has no shard-aware variant.
 Applying changes
 ================
 
-Changes to the CQL listeners take effect on a running node, without a restart.
-A listener that did not change is left alone, so its clients notice nothing. A
-listener that was removed is drained: its connections receive no further
-requests, the requests already in flight are answered, and the connections are
-then closed. A listener whose settings changed is drained the same way and
-reopened with its new settings. The whole new set is resolved before anything
-is touched - addresses looked up, certificates read - so a set that cannot be
-served leaves the node serving the set it had.
-
-Changes to the Alternator listeners take effect when the node next starts.
+Changes to the listeners take effect on a running node, without a restart, for
+CQL and Alternator alike. A listener that did not change is left alone, so its
+clients notice nothing. A listener that was removed is drained: its connections
+receive no further requests, the requests already in flight are answered, and
+the connections are then closed. A listener whose settings changed is drained
+the same way and reopened with its new settings. The whole new set is resolved
+before anything is touched - addresses looked up, certificates read - so a set
+that cannot be served leaves the node serving the set it had.

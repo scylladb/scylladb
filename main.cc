@@ -2982,16 +2982,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                     co_return;
                 }
 
-                auto wanted_alternator = db::get_listeners(*cfg, configured, db::listener_config::protocol_type::alternator);
-                if (wanted_alternator != alternator_ctl.listeners()) {
-                    // The Alternator listeners are served by an http_server, which cannot
-                    // be told to give up one of its listening sockets, so there is nothing
-                    // to apply them to short of restarting the server under its clients.
-                    startlog.warn("The Alternator listeners changed; the change will take effect when this node is restarted");
-                }
-
                 co_await cql_server_ctl.apply_listeners(
                         db::get_listeners(*cfg, configured, db::listener_config::protocol_type::cql));
+                co_await alternator_ctl.apply_listeners(
+                        db::get_listeners(*cfg, configured, db::listener_config::protocol_type::alternator));
             });
 
             // Register at_exit last, so that storage_service::drain_on_shutdown will be called first

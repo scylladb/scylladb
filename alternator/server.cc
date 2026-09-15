@@ -1093,6 +1093,7 @@ static std::optional<sstring> sanitize_header_value(const sstring& v, std::strin
 }
 
 future<> server::init(std::vector<listener> listeners, std::vector<tls::credentials_builder> credentials,
+        std::vector<std::unordered_map<sstring, sstring>> credentials_options,
         utils::updateable_value<bool> enforce_authorization, utils::updateable_value<bool> warn_authorization, utils::updateable_value<uint64_t> max_users_query_size_in_trace_output,
         semaphore* memory_limiter, utils::updateable_value<uint32_t> max_concurrent_requests) {
     _memory_limiter = memory_limiter;
@@ -1104,7 +1105,8 @@ future<> server::init(std::vector<listener> listeners, std::vector<tls::credenti
         return make_exception_future<>(std::runtime_error("At least one listener"
                 " must be specified in order to init an alternator HTTP server instance"));
     }
-    return seastar::async([this, listeners = std::move(listeners), credentials = std::move(credentials)] () mutable {
+    return seastar::async([this, listeners = std::move(listeners), credentials = std::move(credentials),
+            credentials_options = std::move(credentials_options)] () mutable {
         _executor.start().get();
 
         // Bound the request line and headers which Seastar's HTTP server
@@ -1151,6 +1153,7 @@ future<> server::init(std::vector<listener> listeners, std::vector<tls::credenti
             _https_server.set_request_scheduling_group(default_scheduling_group());
 
             _credentials.resize(credentials.size());
+            _credentials_options = std::move(credentials_options);
             for (size_t i = 0; i != credentials.size(); ++i) {
                 if (this_shard_id() == 0) {
                     _credentials[i] = credentials[i].build_reloadable_server_credentials([this, i](const tls::credentials_builder& b, const std::unordered_set<sstring>& files, std::exception_ptr ep) -> future<> {
@@ -1182,30 +1185,111 @@ future<> server::init(std::vector<listener> listeners, std::vector<tls::credenti
             _enabled_servers.push_back(std::ref(_https_server));
         }
 
-        auto https_accept_sg = _sl_controller.get_driver_scheduling_group().value_or(default_scheduling_group());
         for (auto& l : listeners) {
-            listen_options lo;
-            lo.reuse_address = true;
-            lo.proxy_protocol = l.proxy_protocol;
-            if (l.credentials_idx) {
-                // Returned rather than waited for with get(): the lambda does not run
-                // in a seastar thread, and listen() may return a future that is not
-                // resolved yet. The accept loop that listen() starts runs in
-                // https_accept_sg.
-                with_scheduling_group(https_accept_sg, [&] {
-                    return _https_server.listen(l.addr, lo, _credentials[*l.credentials_idx]);
-                }).get();
-            } else {
-                _http_server.listen(l.addr, lo).get();
-            }
+            serve(l).get();
         }
     });
+}
+
+future<> server::serve(const listener& l) {
+    listen_options lo;
+    lo.reuse_address = true;
+    lo.proxy_protocol = l.proxy_protocol;
+
+    // The abort_source is what ends this listener, so it has to outlive the call and
+    // keep its address: the future below holds a reference to it.
+    auto stop = std::make_unique<abort_source>();
+    future<> served = make_ready_future<>();
+    if (l.credentials_idx) {
+        // Bound before serving, so that a failure to bind reaches the caller here rather
+        // than in the future of the listener's whole life.
+        auto bound = co_await _https_server.bind(l.addr, lo, _credentials[*l.credentials_idx]);
+        // The HTTPS accept loop runs in sl:driver, which covers the TLS handshake.
+        auto https_accept_sg = _sl_controller.get_driver_scheduling_group().value_or(default_scheduling_group());
+        co_await with_scheduling_group(https_accept_sg, [&] {
+            // Assigned rather than returned: what serve() hands back is this listener's
+            // whole life, which with_scheduling_group() would otherwise wait out.
+            served = bound.serve(*stop);
+            return make_ready_future<>();
+        });
+    } else {
+        auto bound = co_await _http_server.bind(l.addr, lo);
+        served = bound.serve(*stop);
+    }
+    _listeners.emplace(l.addr, serving_listener{l, std::move(stop), std::move(served)});
+}
+
+future<> server::stop_serving(serving_listener& listener) {
+    listener.stop->request_abort();
+    co_await std::move(listener.served);
+}
+
+future<> server::apply_listeners(std::vector<listener> listeners,
+        std::vector<tls::credentials_builder> credentials,
+        std::vector<std::unordered_map<sstring, sstring>> credentials_options) {
+    // Translate the caller's credentials indexes into this server's. A set of options it
+    // is already serving with keeps the credentials it has, so a listener that did not
+    // change is not disturbed and the file-reload watch set up for those credentials
+    // stays the one in use; anything new is appended, never reindexed.
+    std::unordered_map<size_t, size_t> translated;
+    for (size_t i = 0; i != credentials_options.size(); ++i) {
+        auto existing = std::ranges::find(_credentials_options, credentials_options[i]);
+        if (existing != _credentials_options.end()) {
+            translated[i] = existing - _credentials_options.begin();
+            continue;
+        }
+        _credentials.push_back(credentials[i].build_server_credentials());
+        _credentials_options.push_back(credentials_options[i]);
+        translated[i] = _credentials.size() - 1;
+    }
+
+    std::unordered_map<socket_address, listener> wanted;
+    for (auto& l : listeners) {
+        if (l.credentials_idx) {
+            l.credentials_idx = translated.at(*l.credentials_idx);
+        }
+        wanted.emplace(l.addr, l);
+    }
+
+    auto same = [] (const listener& a, const listener& b) {
+        return a.proxy_protocol == b.proxy_protocol && a.credentials_idx == b.credentials_idx;
+    };
+
+    // Stop the listeners that are gone or have changed. Stopping one drains it, which is
+    // why the ones that did not change are left alone: their clients should not pay for a
+    // change to a different listener.
+    for (auto& [addr, l] : _listeners) {
+        auto it = wanted.find(addr);
+        if (it != wanted.end() && same(it->second, l.config)) {
+            continue;
+        }
+        co_await stop_serving(l);
+    }
+
+    // Whatever was stopped above is gone from _listeners; what is left is what stays.
+    std::erase_if(_listeners, [&] (const auto& e) {
+        auto it = wanted.find(e.first);
+        return it == wanted.end() || !same(it->second, e.second.config);
+    });
+
+    for (const auto& [addr, l] : wanted) {
+        if (_listeners.contains(addr)) {
+            continue;
+        }
+        co_await serve(l);
+    }
 }
 
 future<> server::stop() {
     co_await parallel_for_each(_enabled_servers, [] (http_server& server) {
         return server.stop();
     });
+    // Stopping the servers ends every listener they hold, so these are resolved by now;
+    // take them rather than leave a future unwaited.
+    for (auto& [addr, listener] : _listeners) {
+        co_await std::move(listener.served);
+    }
+    _listeners.clear();
     co_await _pending_requests.close();
     co_await _json_parser.stop();
 }

@@ -354,6 +354,34 @@ async def test_listeners_change_without_a_restart(manager: ScyllaClusterManager,
     assert 'CQL_VERSION' in await cql_options(deployment.endpoints['cql_ssl'])
 
 
+async def test_alternator_listeners_change_without_a_restart(manager: ScyllaClusterManager,
+                                                             deployment: Deployment,
+                                                             leased_addresses: tuple[str, str]) -> None:
+    """The Alternator listeners follow the option too, on a running node."""
+    first, _ = leased_addresses
+    added = Endpoint(first, IGNORED_LEGACY_PORT)
+
+    listeners = dict(deployment.listeners)
+    listeners['alternator_added'] = {'protocol': 'alternator', 'address': added.address,
+                                     'port': added.port}
+    removed = deployment.endpoints['alternator']
+    del listeners['alternator']
+
+    await set_listeners_live(manager, deployment.server, listeners)
+
+    async def added_is_serving() -> bool | None:
+        try:
+            return 'TableNames' in await alternator_list_tables(added) or None
+        except Exception:
+            return None
+
+    await wait_for(added_is_serving, time.time() + 60)
+    await assert_not_listening(removed)
+    # The encrypted Alternator listener nobody touched carried on serving.
+    assert 'TableNames' in await alternator_list_tables(
+            deployment.endpoints['alternator_https_proxy_protocol'])
+
+
 async def test_a_listener_that_did_not_change_keeps_its_connections(
         manager: ScyllaClusterManager, deployment: Deployment,
         leased_addresses: tuple[str, str]) -> None:

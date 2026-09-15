@@ -11,6 +11,7 @@
 #include <seastar/core/sharded.hh>
 #include <seastar/core/smp.hh>
 
+#include "alternator/server.hh"
 #include "db/listener_config.hh"
 #include "transport/protocol_server.hh"
 
@@ -81,9 +82,22 @@ class controller : public protocol_server {
     std::vector<socket_address> _listen_addresses;
     sharded<executor> _executor;
     sharded<server> _server;
+    // Whether _server has been started, and so whether there are listeners to reconcile
+    // against rather than simply to remember.
+    bool _serving = false;
     std::optional<smp_service_group> _ssg;
 
     std::unordered_map<sstring, sstring> listener_tls_options(const db::listener_config&) const;
+
+    // A set of listeners worked out into what it takes to serve them.
+    struct resolved_listeners {
+        std::vector<server::listener> listeners;
+        std::vector<seastar::tls::credentials_builder> credentials;
+        // What each entry of `credentials` was built from, so that the server can tell
+        // credentials it already holds from ones it has to build.
+        std::vector<std::unordered_map<sstring, sstring>> tls_options;
+    };
+    resolved_listeners resolve_listeners(const db::listener_configs&) const;
 
 public:
     controller(
@@ -108,6 +122,10 @@ public:
     virtual sstring protocol_version() const override;
     // The listeners this controller was given, so that a change to them can be noticed.
     const db::listener_configs& listeners() const noexcept { return _listeners; }
+
+    // Serve `listeners` from now on instead of whatever is being served, draining the
+    // connections of any listener that goes away. See cql_transport::controller.
+    future<> apply_listeners(db::listener_configs listeners);
 
     virtual std::vector<socket_address> listen_addresses() const override;
     virtual future<> start_server() override;
