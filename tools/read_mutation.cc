@@ -12,6 +12,7 @@
 #include "partition_slice_builder.hh"
 #include "gms/feature_service.hh"
 #include "db/extensions.hh"
+#include "sstables/exceptions.hh"
 
 #include <algorithm>
 #include <seastar/util/closeable.hh>
@@ -113,7 +114,7 @@ mutation_opt read_mutation_from_table_offline(sharded<sstable_manager_service>& 
             std::move(table_schema), std::move(pk), std::move(ck));
 }
 
-mutation_opt read_mutation_from_table_offline(sharded<sstable_manager_service>& sst_man,
+static mutation_opt do_read_mutation_from_table_offline(sharded<sstable_manager_service>& sst_man,
                                               reader_permit permit,
                                               std::filesystem::path table_path,
                                               std::string_view keyspace,
@@ -136,7 +137,7 @@ mutation_opt read_mutation_from_table_offline(sharded<sstable_manager_service>& 
     using open_infos_t = std::vector<sstables::foreign_sstable_open_info>;
     auto sstable_open_infos = sst_dirs.map_reduce0(
         [] (sstables::sstable_directory& sst_dir) -> future<std::vector<sstables::foreign_sstable_open_info>> {
-            co_await sst_dir.process_sstable_dir(sstables::sstable_directory::process_flags{ .sort_sstables_according_to_owner = false });
+            co_await sst_dir.process_sstable_dir(sstables::sstable_directory::process_flags::read_only());
             const auto& unsorted_ssts = sst_dir.get_unsorted_sstables();
             open_infos_t open_infos;
             open_infos.reserve(unsorted_ssts.size());
@@ -179,4 +180,27 @@ mutation_opt read_mutation_from_table_offline(sharded<sstable_manager_service>& 
     auto close_reader = deferred_close(reader);
 
     return read_mutation_from_mutation_reader(reader).get();
+}
+
+mutation_opt read_mutation_from_table_offline(sharded<sstable_manager_service>& sst_man,
+                                              reader_permit permit,
+                                              std::filesystem::path table_path,
+                                              std::string_view keyspace,
+                                              std::function<schema_ptr()> table_schema,
+                                              partition_key pk,
+                                              std::optional<clustering_key> ck) {
+    // The directory of a running node is a moving target: its compaction can
+    // remove an sstable the scan listed. Leaving that sstable out would miss the
+    // rows moved to the compaction output, which is sealed by the time its
+    // inputs are removed, so read the directory again to find it.
+    constexpr int max_attempts = 10;
+    for (int attempt = 1; ; ++attempt) {
+        try {
+            return do_read_mutation_from_table_offline(sst_man, permit, table_path, keyspace, table_schema, pk, ck);
+        } catch (...) {
+            if (attempt == max_attempts || !sstables::components_are_missing(std::current_exception())) {
+                throw;
+            }
+        }
+    }
 }

@@ -84,7 +84,24 @@ public:
         bool sort_sstables_according_to_owner = true;
         bool garbage_collect = false;
         bool allow_numerical_generations = true;
+        // Leave out an sstable whose components are gone instead of failing the
+        // whole scan. The data dir of a running node is a moving target: it can
+        // delete an sstable between the moment the scan lists it and the moment
+        // the scan loads it.
+        bool skip_vanished_sstables = false;
         sstables::sstable_open_config sstable_open_config;
+
+        // The flags of a caller which must not modify the storage it processes,
+        // like the offline tools: nothing is rewritten or collected, and every
+        // sstable found is handed to the caller instead of being distributed
+        // among the shards owning it.
+        static process_flags read_only() {
+            return process_flags{
+                .need_mutate_level = false,
+                .sort_sstables_according_to_owner = false,
+                .garbage_collect = false,
+            };
+        }
     };
 
     class components_lister {
@@ -214,6 +231,9 @@ private:
     future<> process_descriptor(sstables::entry_descriptor desc,
             process_flags flags,
             noncopyable_function<data_dictionary::storage_options()>&& get_storage_options);
+    future<> do_process_descriptor(sstables::entry_descriptor desc,
+            process_flags flags,
+            noncopyable_function<data_dictionary::storage_options()>&& get_storage_options);
     void validate(sstables::shared_sstable sst, process_flags flags) const;
     future<sstables::shared_sstable> load_sstable(sstables::entry_descriptor desc,
             const data_dictionary::storage_options& storage_opts, sstables::sstable_open_config cfg = {}) const;
@@ -224,13 +244,16 @@ private:
     future<std::vector<shard_id>> get_shards_for_this_sstable(
             const sstables::entry_descriptor& desc, const data_dictionary::storage_options& storage_opts, process_flags flags) const;
 
+public:
+    // Scans wherever the given storage options put the sstables of the table:
+    // a local directory, an object storage prefix, or the registry of a table
+    // living in object storage.
     sstable_directory(sstables_manager& manager,
           schema_ptr schema,
           std::variant<std::unique_ptr<dht::sharder>, const dht::sharder*> sharder,
           lw_shared_ptr<const data_dictionary::storage_options> storage_opts,
           sstable_state state,
           io_error_handler_gen error_handler_gen);
-public:
     sstable_directory(replica::table& table,
             sstable_state state,
             io_error_handler_gen error_handler_gen);
