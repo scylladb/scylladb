@@ -2700,8 +2700,15 @@ future<repair_service::tablet_repair_result> repair_service::run_tablet_repair(
                     throw abort_requested_exception();
                 }
 
+                // A test which arms this injection can hold it across a raft topology
+                // operation - cancelling a repair to let a queued global request through
+                // does - and under CI load that takes much longer than a few seconds. A
+                // short timeout here would make wait_for_message time out and escalate to
+                // on_internal_error, aborting the node instead of failing the test. Use the
+                // generous timeout convention used for topology-gated injection sync points;
+                // the abort source still releases it promptly on shutdown or a task abort.
                 co_await utils::get_local_injector().inject("repair_tablet_repair_task_impl_run",
-                        utils::wait_for_message(10s, &rs.get_repair_module().abort_source()));
+                        utils::wait_for_message(5min, &rs.get_repair_module().abort_source()));
 
                 std::unordered_map<dht::token_range, repair_neighbors> neighbors;
                 neighbors[m.range] = m.neighbors;
