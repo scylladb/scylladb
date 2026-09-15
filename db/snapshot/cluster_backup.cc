@@ -33,72 +33,14 @@
 
 extern logging::logger snap_log;
 
+static constexpr auto cluster_backup_task_type = "cluster backup";
+
 template<> 
 struct std::hash<db::snapshot_dc_location> {
     size_t operator()(const db::snapshot_dc_location& a) const {
         return utils::tuple_hash{}(std::tie(a.endpoint, a.bucket, a.prefix));
     }
 };
-
-class cluster_backup_task : public tasks::task_manager::task::impl {
-    db::snapshot_ctl& _snap_ctl;
-    std::string _snapshot;
-    std::unordered_multimap<sstring, sstring> _ks_tables;
-    std::unordered_map<sstring, db::snapshot_dc_location> _locations;
-    bool _remove_on_uploaded;
-    tasks::task_manager::task::progress _total_progress;
-
-    future<> do_backup();
-protected:
-    future<> run() override;
-public:
-    cluster_backup_task(tasks::task_manager::module_ptr module
-        , db::snapshot_ctl& ctl
-        , std::string snapshot
-        , std::unordered_multimap<sstring, sstring> ks_tables
-        , std::unordered_map<sstring, db::snapshot_dc_location> locations
-        , bool move_files) noexcept;
-
-    std::string type() const override {
-        return "cluster backup";
-    }
-    tasks::is_internal is_internal() const noexcept override {
-        return tasks::is_internal::no;
-    }
-    tasks::is_abortable is_abortable() const noexcept override {
-        return tasks::is_abortable::yes;
-    }
-    future<tasks::task_manager::task::progress> get_progress() const override {
-        co_return _total_progress;
-    }
-    tasks::is_user_task is_user_task() const noexcept override {
-        return tasks::is_user_task::yes;
-    }
-};
-
-cluster_backup_task::cluster_backup_task(tasks::task_manager::module_ptr module
-    , db::snapshot_ctl& ctl
-    , std::string snapshot
-    , std::unordered_multimap<sstring, sstring> ks_tables
-    , std::unordered_map<sstring, db::snapshot_dc_location> locations
-    , bool move_files) noexcept
-    : tasks::task_manager::task::impl(module, tasks::task_id::create_random_id(), 0, "datacenter", ks_tables.begin()->first, ks_tables.begin()->second, "", tasks::task_id::create_null_id())
-    , _snap_ctl(ctl)
-    , _snapshot(std::move(snapshot))
-    , _ks_tables(std::move(ks_tables))
-    , _locations(std::move(locations))
-    , _remove_on_uploaded(move_files)
-{}
-
-
-future<> cluster_backup_task::run() {
-    // this is mainly to prevent a drain from stopping us while we are running.
-    // however, it will not prevent the nodes doing actual sending from being
-    // unalived, but...
-    co_await _snap_ctl.run_snapshot_gate_operation([this] {
-        return do_backup();
-    });
-}
 
 static std::string format_snapshot_location(std::string_view prefix, std::string_view what, const replica::table&, std::string_view appendix = {}) {
     auto pp = prefix.empty() ? "" : "/";
@@ -114,33 +56,33 @@ std::string db::snapshot::snapshot_meta_location(std::string_view prefix, const 
     return format_snapshot_location(prefix, "snapshots", t, snapshot_name);
 }
 
-future<> cluster_backup_task::do_backup() {
+static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string& snapshot_name, const std::unordered_multimap<sstring, sstring>& ks_tables, std::unordered_map<sstring, db::snapshot_dc_location>& dc_locations, bool remove_on_uploaded, tasks::task_manager::task::progress& total_progress, abort_source& as) {
     using namespace db::snapshot;
 
-    snap_log.info("Begin processing {} {}", _snapshot, _ks_tables);
+    snap_log.info("Begin processing {} {}", snapshot_name, ks_tables);
 
-    db::snapshot_table_helper sth(_snap_ctl.qp().local());
-    auto snapshot = co_await sth.get_snapshot(_snapshot);
+    db::snapshot_table_helper sth(snap_ctl.qp().local());
+    auto snapshot = co_await sth.get_snapshot(snapshot_name);
     if (!snapshot) {
-        snap_log.info("No snapshot named {} in snapshot table. Creating...", _snapshot);
-        co_await _snap_ctl.sp().local().snapshot_keyspace(_ks_tables, _snapshot, {});
-        snapshot = co_await sth.get_snapshot(_snapshot);
+        snap_log.info("No snapshot named {} in snapshot table. Creating...", snapshot_name);
+        co_await snap_ctl.sp().local().snapshot_keyspace(ks_tables, snapshot_name, {});
+        snapshot = co_await sth.get_snapshot(snapshot_name);
         if (!snapshot) {
-            snap_log.error("Could not create snapshot {}.", _snapshot);
+            snap_log.error("Could not create snapshot {}.", snapshot_name);
             co_return; // throw?
         }
     }
 
-    auto locations = co_await sth.get_snapshot_remote_locations(_snapshot);
+    auto locations = co_await sth.get_snapshot_remote_locations(snapshot_name);
     std::unordered_map<std::string, db::snapshot_state> state_filter;
 
-    for (auto& dc : _locations | std::views::keys) {
+    for (auto& dc : dc_locations | std::views::keys) {
         state_filter[dc] = db::snapshot_state::remote_and_local;
     }
 
     for (auto& loc : locations) {
-        auto i = _locations.find(loc.datacenter);
-        if (i == _locations.end()) {
+        auto i = dc_locations.find(loc.datacenter);
+        if (i == dc_locations.end()) {
             continue;
         }
 
@@ -152,16 +94,16 @@ future<> cluster_backup_task::do_backup() {
             filter = db::snapshot_state::remote;
         }
         if (loc.state >= db::snapshot_state::remote_and_local) {
-            snap_log.warn("Snapshot {} for {} is already backed up: {}:{}", _snapshot, loc.datacenter, loc.bucket, loc.prefix);
-            _locations.erase(loc.datacenter);
+            snap_log.warn("Snapshot {} for {} is already backed up: {}:{}", snapshot_name, loc.datacenter, loc.bucket, loc.prefix);
+            dc_locations.erase(loc.datacenter);
         }
 
         state_filter[loc.datacenter] = filter;
     }
 
-    auto new_locations = _locations | std::views::transform([&](auto& p) {
+    auto new_locations = dc_locations | std::views::transform([&](auto& p) {
         return db::snapshot_remote_location_entry {
-            .snapshot_name = _snapshot,
+            .snapshot_name = snapshot_name,
             .datacenter = p.first,
             .endpoint = p.second.endpoint,
             .bucket = p.second.bucket,
@@ -172,19 +114,19 @@ future<> cluster_backup_task::do_backup() {
 
     // We are already on shard 0. Can use all objects fine. Just need to acquire snap locks.
     // Mainly for semantic consistency. Maybe all this should be a raft op.
-    co_await _snap_ctl.run_snapshot_modify_operation([&]() -> future<> {
+    co_await snap_ctl.run_snapshot_modify_operation([&]() -> future<> {
         co_await sth.insert_snapshot_remote_locations(new_locations); // update status
     });
 
-    auto nodes = co_await sth.get_snapshot_nodes(_snapshot);
-    auto nodes_for_location = nodes | std::views::filter([&](auto& n) { return _locations.count(n.datacenter); });
-    auto& db = _snap_ctl.db().local();
+    auto nodes = co_await sth.get_snapshot_nodes(snapshot_name);
+    auto nodes_for_location = nodes | std::views::filter([&](auto& n) { return dc_locations.count(n.datacenter); });
+    auto& db = snap_ctl.db().local();
 
-    _total_progress.total = (std::distance(nodes_for_location.begin(), nodes_for_location.end()) + _locations.size() /* manifests */) * _ks_tables.size();
+    total_progress.total = (std::distance(nodes_for_location.begin(), nodes_for_location.end()) + dc_locations.size() /* manifests */) * ks_tables.size();
 
-    co_await coroutine::parallel_for_each(_ks_tables, [&](const std::pair<sstring, sstring>& pair) -> future<>{
+    co_await coroutine::parallel_for_each(ks_tables, [&](const std::pair<sstring, sstring>& pair) -> future<>{
         auto [keyspace, table] = pair;
-        snap_log.info("Processing {}, {}:{}", _snapshot, keyspace, table);
+        snap_log.info("Processing {}, {}:{}", snapshot_name, keyspace, table);
 
         auto& t = db.find_column_family(keyspace, table);
         auto schema = t.schema();
@@ -198,25 +140,25 @@ future<> cluster_backup_task::do_backup() {
         std::unordered_map<db::snapshot_dc_location, dst_data> dst_mapping;
         // redundant since we don't support per-dc tablets, but why not complicate things
         std::unordered_map<std::string, utils::chunked_vector<db::snapshot_tablet_entry>> dc_tablets;
-        for (auto& dc : _locations | std::views::keys) {
-            dc_tablets.emplace(dc, co_await sth.get_snapshot_tablets(_snapshot, keyspace, table, dc));
+        for (auto& dc : dc_locations | std::views::keys) {
+            dc_tablets.emplace(dc, co_await sth.get_snapshot_tablets(snapshot_name, keyspace, table, dc));
         }
         std::unordered_map<db::snapshot_dc_location, std::unordered_map<dht::token, locator::host_id>> repair_masters;
         std::unordered_map<locator::host_id, std::pair<size_t, size_t>> node_sstables;
 
         for (const db::snapshot_node_entry& node : nodes_for_location) {
-            if (auto e = _as.abort_requested_exception_ptr(); e) {
-                snap_log.warn("Abort {} requested when processing {}, {}:{}", _snapshot, node.node, keyspace, table);
+            if (auto e = as.abort_requested_exception_ptr(); e) {
+                snap_log.warn("Abort {} requested when processing {}, {}:{}", snapshot_name, node.node, keyspace, table);
                 std::rethrow_exception(e);
             }
-            snap_log.info("Calculating sstable set for {} node {}, {}:{}", _snapshot, node.node, keyspace, table);
+            snap_log.info("Calculating sstable set for {} node {}, {}:{}", snapshot_name, node.node, keyspace, table);
 
             assert(state_filter.count(node.datacenter));
-            assert(_locations.count(node.datacenter));
+            assert(dc_locations.count(node.datacenter));
 
-            auto& dst = _locations.at(node.datacenter);
+            auto& dst = dc_locations.at(node.datacenter);
             auto& repair_master = repair_masters[dst];
-            auto sstables = co_await sth.get_snapshot_sstables(_snapshot, keyspace, table, node.datacenter, node.rack);
+            auto sstables = co_await sth.get_snapshot_sstables(snapshot_name, keyspace, table, node.datacenter, node.rack);
             auto& tablets = dc_tablets.at(node.datacenter);
             auto ti = tablets.begin();
             auto te = tablets.end();
@@ -251,20 +193,20 @@ future<> cluster_backup_task::do_backup() {
         }
 
         co_await coroutine::parallel_for_each(nodes_for_location, [&](const db::snapshot_node_entry& node) -> future<>{
-            if (auto e = _as.abort_requested_exception_ptr(); e) {
+            if (auto e = as.abort_requested_exception_ptr(); e) {
                 // note the point at which we aborted
-                snap_log.warn("Abort {} requested when processing {}, {}:{}", _snapshot, node.node, keyspace, table);
+                snap_log.warn("Abort {} requested when processing {}, {}:{}", snapshot_name, node.node, keyspace, table);
                 std::rethrow_exception(e);
             }
 
-            snap_log.info("Processing {} node {}, {}:{}", _snapshot, node.node, keyspace, table);
+            snap_log.info("Processing {} node {}, {}:{}", snapshot_name, node.node, keyspace, table);
 
             assert(state_filter.count(node.datacenter));
-            assert(_locations.count(node.datacenter));
+            assert(dc_locations.count(node.datacenter));
 
             auto [off, n]= node_sstables.at(node.node);
             auto filter = state_filter.at(node.datacenter);
-            auto& dst = _locations.at(node.datacenter);
+            auto& dst = dc_locations.at(node.datacenter);
             auto& dst_info = dst_mapping[dst];
 
             // filter out sstables already backed up
@@ -273,8 +215,8 @@ future<> cluster_backup_task::do_backup() {
             }) | std::ranges::to<utils::chunked_vector<db::snapshot_sstable_entry>>();
 
             if (sstables.empty()) {
-                snap_log.info("All sstables for {} node {}, {}:{} already backed up", _snapshot, node.node, keyspace, table);
-                _total_progress.completed += 1;
+                snap_log.info("All sstables for {} node {}, {}:{} already backed up", snapshot_name, node.node, keyspace, table);
+                total_progress.completed += 1;
                 co_return;
             }
             if (filter > db::snapshot_state::remote_and_local) {
@@ -282,7 +224,7 @@ future<> cluster_backup_task::do_backup() {
                 for (auto& sst : sstables) {
                     sst.state = db::snapshot_state::local;
                 }
-                co_await sth.insert_snapshot_sstables(_snapshot, keyspace, table, node.datacenter, node.rack, sstables);
+                co_await sth.insert_snapshot_sstables(snapshot_name, keyspace, table, node.datacenter, node.rack, sstables);
             }
 
             // we don't really need/use this atm, but...
@@ -298,22 +240,22 @@ future<> cluster_backup_task::do_backup() {
             snap_log.info("Requesting backup of {}: {}", node.node, sstable_ids);
 
             try {
-                auto prefix = db::snapshot::sstables_location(dst.prefix, t, _snapshot);
-                co_await ser::snapshot_backup_rpc_verbs::send_backup_snapshot_sstables(&_snap_ctl.ms(), node.node, tid, _snapshot, dst.endpoint, dst.bucket, prefix, first_token, last_token, std::move(sstable_ids), _remove_on_uploaded);
-                _total_progress.completed += 1;
+                auto prefix = db::snapshot::sstables_location(dst.prefix, t, snapshot_name);
+                co_await ser::snapshot_backup_rpc_verbs::send_backup_snapshot_sstables(&snap_ctl.ms(), node.node, tid, snapshot_name, dst.endpoint, dst.bucket, prefix, first_token, last_token, std::move(sstable_ids), remove_on_uploaded);
+                total_progress.completed += 1;
             } catch (...) {
-                snap_log.error("Exception requesting backup of {}:{} from {}", _snapshot, sstable_ids, node.node);
+                snap_log.error("Exception requesting backup of {}:{} from {}", snapshot_name, sstable_ids, node.node);
                 throw; // fail the whole process already
             }
         });
 
-        snap_log.info("Generate manifests for {} {}:{}", _snapshot, keyspace, table);
+        snap_log.info("Generate manifests for {} {}:{}", snapshot_name, keyspace, table);
 
         // Note: atm, tablet mapping is same across all dcs. If this changes, we need to get this per dc,
         // each of which can shared dest with others. Thus we also need to change manifest grammar to allow
         // tablet info per dc.
-        auto tablets = co_await sth.get_snapshot_tablets(_snapshot, keyspace, table, _locations.begin()->first);
-        auto tables = co_await sth.get_snapshot_tables(_snapshot, keyspace, table);
+        auto tablets = co_await sth.get_snapshot_tablets(snapshot_name, keyspace, table, dc_locations.begin()->first);
+        auto tables = co_await sth.get_snapshot_tables(snapshot_name, keyspace, table);
 
         auto& manager = db.get_sstables_manager(*schema);
 
@@ -321,7 +263,7 @@ future<> cluster_backup_task::do_backup() {
         co_await coroutine::parallel_for_each(dst_mapping, [&](const auto& pair) -> future<> {
             auto& [dst, info] = pair;
 
-            snap_log.info("Generate manifest for {} {}:{} ({}:{}/{})", _snapshot, keyspace, table, dst.endpoint, dst.bucket, dst.prefix);
+            snap_log.info("Generate manifest for {} {}:{} ({}:{}/{})", snapshot_name, keyspace, table, dst.endpoint, dst.bucket, dst.prefix);
 
             manifest_json manifest;
 
@@ -331,7 +273,7 @@ future<> cluster_backup_task::do_backup() {
             manifest.manifest = std::move(minfo);
 
             manifest_json::snapshot_info snapshot_info;
-            snapshot_info.name = _snapshot;
+            snapshot_info.name = snapshot_name;
             snapshot_info.created_at = decltype(snapshot->created_at)::clock::to_time_t(snapshot->created_at);
             snapshot_info.expires_at = decltype(snapshot->expires_at)::clock::to_time_t(snapshot->expires_at);
             manifest.snapshot = std::move(snapshot_info);
@@ -355,21 +297,21 @@ future<> cluster_backup_task::do_backup() {
             }
 
             auto client = manager.get_endpoint_client(dst.endpoint);
-            auto prefix = db::snapshot::snapshot_meta_location(dst.prefix, t, _snapshot);
-            output_stream<char> out(client->make_upload_sink(sstables::object_name(dst.bucket, prefix, "manifest.json"), sstables::object_storage_attributes{}, &_as));
+            auto prefix = db::snapshot::snapshot_meta_location(dst.prefix, t, snapshot_name);
+            output_stream<char> out(client->make_upload_sink(sstables::object_name(dst.bucket, prefix, "manifest.json"), sstables::object_storage_attributes{}, &as));
             auto streamer = json::stream_object(std::move(manifest));
             co_await streamer(std::move(out));
-            _total_progress.completed += 1;
+            total_progress.completed += 1;
         });
 
     });
 
     for (auto& loc : new_locations) {
-        loc.state = _remove_on_uploaded ? db::snapshot_state::remote : db::snapshot_state::remote_and_local;
+        loc.state = remove_on_uploaded ? db::snapshot_state::remote : db::snapshot_state::remote_and_local;
     }
 
     // See above.
-    co_await _snap_ctl.run_snapshot_modify_operation([&]() -> future<> {
+    co_await snap_ctl.run_snapshot_modify_operation([&]() -> future<> {
         co_await sth.insert_snapshot_remote_locations(new_locations); // update status
     });
 }
@@ -379,7 +321,25 @@ db::snapshot::start_global_backup(db::snapshot_ctl& ctl, tasks::task_manager::mo
     if (ks_tables.empty()) {
         throw std::invalid_argument("No tables provided for backup");
     }
-    auto task = co_await tm->make_and_start_task<cluster_backup_task>(tasks::make_empty_task_info(), ctl, std::move(snapshot_name), std::move(ks_tables), std::move(locations), move_files);
+    auto progress = make_lw_shared<tasks::task_manager::task::progress>();
+    tasks::task_manager::task_builder task_builder{std::move(tm), cluster_backup_task_type};
+    task_builder.set_scope("datacenter")
+                .set_keyspace(ks_tables.begin()->first)
+                .set_table(ks_tables.begin()->second)
+                .set_is_abortable(tasks::is_abortable::yes)
+                .set_is_internal(tasks::is_internal::no)
+                .set_is_user_task(tasks::is_user_task::yes)
+                .set_progress_fn([progress] {
+                    return make_ready_future<tasks::task_manager::task::progress>(*progress);
+                });
+    auto task = co_await std::move(task_builder).build([&ctl, snapshot_name = std::move(snapshot_name), ks_tables = std::move(ks_tables), locations = std::move(locations), move_files, progress] (tasks::task_manager::task::impl& self) mutable {
+        // this is mainly to prevent a drain from stopping us while we are running.
+        // however, it will not prevent the nodes doing actual sending from being
+        // unalived, but...
+        return ctl.run_snapshot_gate_operation([&ctl, &snapshot_name, &ks_tables, &locations, move_files, progress, &as = self.get_abort_source()] {
+            return do_cluster_backup(ctl, snapshot_name, ks_tables, locations, move_files, *progress, as);
+        });
+    });
     co_return task->id();
 }
 
