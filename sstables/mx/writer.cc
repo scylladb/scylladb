@@ -537,6 +537,11 @@ private:
     std::unique_ptr<file_writer> _index_writer;
     std::unique_ptr<file_writer> _rows_writer;
     std::unique_ptr<file_writer> _partitions_writer;
+    // Accumulates the per-component digests (CRC32) as each component is
+    // written; serialized into the Scylla metadata's ComponentsDigests map at
+    // the end of the write. Lives here rather than on the sstable so that
+    // read-only sstables don't carry this write-only state.
+    scylla_metadata::components_digests _components_digests;
     optimized_optional<trie::bti_row_index_writer> _bti_row_index_writer;
     optimized_optional<trie::bti_partition_index_writer> _bti_partition_index_writer;
     // The key of the last `consume_new_partition` call.
@@ -1042,18 +1047,22 @@ uint32_t writer::close_digest_writer(std::unique_ptr<file_writer>& w) {
 
 void writer::close_data_writer() {
     auto writer = close_writer(_data_writer);
-    if (!_compression_enabled) {
+    const uint32_t full_checksum = [&] {
+        if (_compression_enabled) {
+            return _sst._components->compression.get_full_checksum();
+        }
         auto chksum_wr = static_cast<crc32_checksummed_file_writer*>(writer.get());
-        _sst.write_digest(chksum_wr->full_checksum());
+        auto checksum = chksum_wr->full_checksum();
         _sst.write_crc(chksum_wr->finalize_checksum());
-    } else {
-        _sst.write_digest(_sst._components->compression.get_full_checksum());
-    }
+        return checksum;
+    }();
+    _sst.write_digest(full_checksum);
+    _components_digests.map[component_type::Data] = full_checksum;
 }
 
 void writer::close_index_writer() {
     if (_index_writer) {
-        _sst.get_components_digests().map[component_type::Index] = close_digest_writer(_index_writer);
+        _components_digests.map[component_type::Index] = close_digest_writer(_index_writer);
     }
 }
 
@@ -1062,13 +1071,13 @@ void writer::close_partitions_writer() {
         _sst._partitions_db_footer = std::move(*_bti_partition_index_writer).finish(
             _first_key.value(),
             _last_key.value());
-        _sst.get_components_digests().map[component_type::Partitions] = close_digest_writer(_partitions_writer);
+        _components_digests.map[component_type::Partitions] = close_digest_writer(_partitions_writer);
     }
 }
 
 void writer::close_rows_writer() {
     if (_rows_writer) {
-        _sst.get_components_digests().map[component_type::Rows] = close_digest_writer(_rows_writer);
+        _components_digests.map[component_type::Rows] = close_digest_writer(_rows_writer);
     }
 }
 
@@ -1796,6 +1805,12 @@ stop_iteration writer::consume_end_of_partition() {
 }
 
 void writer::consume_end_of_stream() {
+    // The TOC digest was computed when the TOC was written (during open_sstable,
+    // in the writer ctor). Record it first, before the other components, so the
+    // ComponentsDigests map is populated in the same order as the components are
+    // written - keeping the serialized (unordered_map iteration) order stable.
+    _components_digests.map[component_type::TOC] = _sst._toc_digest;
+
     _cfg.monitor->on_data_write_completed();
 
   if (_sst._components->summary) {
@@ -1824,7 +1839,7 @@ void writer::consume_end_of_stream() {
     close_data_writer();
 
   if (_sst._components->summary) {
-    _sst.write_summary();
+    _components_digests.map[component_type::Summary] = _sst.write_summary();
   }
 
     if (_delayed_filter) {
@@ -1832,9 +1847,13 @@ void writer::consume_end_of_stream() {
     } else {
         _sst.maybe_rebuild_filter_from_index(_num_partitions_consumed);
     }
-    _sst.write_filter();
-    _sst.write_statistics();
-    _sst.write_compression();
+    if (auto digest = _sst.write_filter()) {
+        _components_digests.map[component_type::Filter] = *digest;
+    }
+    _components_digests.map[component_type::Statistics] = _sst.write_statistics();
+    if (auto digest = _sst.write_compression()) {
+        _components_digests.map[component_type::CompressionInfo] = *digest;
+    }
     // Note: during the SSTable write, the `compressor` object in `_sst._components->compression`
     // can only compress, not decompress. We have to create a decompressing `compressor` here.
     // (The reason we split the two is that we don't want to keep the compressor-specific compression
@@ -1880,7 +1899,8 @@ void writer::consume_end_of_stream() {
             ld_records = scylla_metadata::large_data_records{.elements = std::move(records)};
         }
     }
-    _sst.write_scylla_metadata(_shard, std::move(identifier), std::move(ld_stats), std::move(ts_stats), std::move(ld_records));
+    // The TOC digest was recorded at the top of this function.
+    _sst.write_scylla_metadata(_shard, std::move(identifier), std::move(_components_digests), std::move(ld_stats), std::move(ts_stats), std::move(ld_records));
     if (!_cfg.leave_unsealed) {
         _sst.seal_sstable(_cfg.backup).get();
     }
