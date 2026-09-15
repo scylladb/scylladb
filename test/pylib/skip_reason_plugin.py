@@ -99,6 +99,16 @@ class SkipReasonPlugin:
             return mark.kwargs.get("reason") or (mark.args[0] if mark.args else "")
         return handler(mark, context)
 
+    def _applies(self, mark: pytest.Mark, *, marker_name: str, item: pytest.Item) -> bool:
+        """Ask the skip type whether *mark* covers this particular item.
+
+        A skip type may cover only some parametrizations of a test. Without an
+        ``applies_<marker_name>`` handler the marker covers every item it is
+        attached to.
+        """
+        applies = getattr(self._skip_types, f"applies_{marker_name}", None)
+        return applies is None or applies(mark, item)
+
     @staticmethod
     def _parse_skip_type(longrepr) -> tuple[str, str] | None:
         """Try to extract ``(skip_type, reason)`` from a ``[type] reason`` message.
@@ -146,6 +156,8 @@ class SkipReasonPlugin:
                             f"Marker @pytest.mark.{st.marker_name} on {item.nodeid} "
                             f"requires a 'reason' argument."
                         ))
+                        continue
+                    if not self._applies(mark, marker_name=st.marker_name, item=item):
                         continue
                     item.add_marker(pytest.mark.skip(reason=f"[{st}] {reason}"))
                     item.stash[SKIP_TYPE_KEY] = str(st)

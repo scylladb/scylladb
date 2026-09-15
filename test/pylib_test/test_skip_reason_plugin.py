@@ -389,3 +389,105 @@ def test_bare_skip_with_skip_mode_no_rejection(skippytest):
     result = skippytest.runpytest()
     result.assert_outcomes(skipped=1)
     assert "Untyped skip" not in result.stderr.str()
+
+
+# -- Conditional markers (skip_storage) --------------------------------------
+
+# The project's own SkipType, so these exercise the shipped skip_storage
+# definition rather than a stand-in, plus the storage fixture it selects on.
+_STORAGE_CONFTEST = textwrap.dedent("""\
+    import pytest
+    from test.pylib.skip_reason_plugin import SkipReasonPlugin
+    from test.pylib.skip_types import SkipType
+
+    def pytest_configure(config):
+        config.pluginmanager.register(SkipReasonPlugin(SkipType))
+
+    @pytest.fixture(params=[None, "s3", "gs"], ids=["local", "s3", "gs"])
+    def storage(request):
+        return request.param
+""")
+
+
+@pytest.fixture
+def storagepytest(pytester: pytest.Pytester) -> pytest.Pytester:
+    pytester.makeconftest(_STORAGE_CONFTEST)
+    pytester.makeini(
+        "[pytest]\n"
+        "addopts = -p no:sugar -p no:xdist\n"
+        "asyncio_default_fixture_loop_scope = session\n"
+    )
+    return pytester
+
+
+def test_skip_storage_skips_only_the_named_flavor(storagepytest):
+    storagepytest.makepyfile("""
+        import pytest
+        @pytest.mark.skip_storage('gs', reason='GCS gets stuck')
+        def test_t(storage):
+            pass
+    """)
+    result = storagepytest.runpytest()
+    result.assert_outcomes(passed=2, skipped=1)
+
+
+def test_skip_storage_skips_every_named_flavor(storagepytest):
+    """Local is not a named flavor, so it keeps running."""
+    storagepytest.makepyfile("""
+        import pytest
+        @pytest.mark.skip_storage('s3', 'gs', reason='both backends abort')
+        def test_t(storage):
+            pass
+    """)
+    result = storagepytest.runpytest()
+    result.assert_outcomes(passed=1, skipped=2)
+
+
+def test_skip_storage_reports_the_storage_type(storagepytest):
+    storagepytest.makepyfile("""
+        import pytest
+        @pytest.mark.skip_storage('gs', reason='GCS gets stuck')
+        def test_t(storage):
+            pass
+    """)
+    result = storagepytest.runpytest("-rs")
+    result.stdout.fnmatch_lines(["*[[]storage[]] GCS gets stuck*"])
+
+
+def test_skip_storage_validated_on_flavors_it_does_not_name(storagepytest):
+    """Validation precedes the predicate, so a malformed marker cannot hide
+    behind the parametrizations it would not have skipped.
+    """
+    storagepytest.makepyfile("""
+        import pytest
+        @pytest.mark.skip_storage('gs')
+        def test_t(storage):
+            pass
+    """)
+    result = storagepytest.runpytest()
+    result.stderr.fnmatch_lines(["*requires a 'reason' keyword argument*"])
+    assert result.ret != 0
+
+
+def test_skip_storage_requires_positional_flavors(storagepytest):
+    storagepytest.makepyfile("""
+        import pytest
+        @pytest.mark.skip_storage(reason='no flavors named')
+        def test_t(storage):
+            pass
+    """)
+    result = storagepytest.runpytest()
+    result.stderr.fnmatch_lines(["*takes the storage flavors positionally*"])
+    assert result.ret != 0
+
+
+def test_skip_storage_without_the_storage_fixture_skips_nothing(storagepytest):
+    """A test with no storage parametrization has no flavor to match."""
+    storagepytest.makepyfile("""
+        import pytest
+        @pytest.mark.skip_storage('gs', reason='GCS gets stuck')
+        def test_t():
+            pass
+    """)
+    result = storagepytest.runpytest()
+    result.assert_outcomes(passed=1)
