@@ -10,6 +10,7 @@
 
 #include "messaging_service_fwd.hh"
 #include "msg_addr.hh"
+#include <seastar/core/gate.hh>
 #include <seastar/core/sharded.hh>
 #include <seastar/core/sstring.hh>
 #include "gms/inet_address.hh"
@@ -363,6 +364,8 @@ private:
     std::vector<clients_map_host_id> _clients_with_host_id;
     uint64_t _dropped_messages[static_cast<int32_t>(messaging_verb::LAST)] = {};
     bool _shutting_down = false;
+    // Held while a TLS certificate reload is in progress; see start().
+    seastar::gate _reload_gate;
     connection_drop_signal_t _connection_dropped;
     scheduling_config _scheduling_config;
     std::vector<scheduling_info_for_connection_index> _scheduling_info_for_connection_index;
