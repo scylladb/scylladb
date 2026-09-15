@@ -486,7 +486,14 @@ future<> sstable_directory::restore_components_lister::scan(sstable_directory& d
 }
 
 future<> sstable_directory::restore_components_lister::process(sstable_directory& directory, process_flags flags) {
-    co_await coroutine::parallel_for_each(_toc_filenames, [flags, &directory] (sstring toc_filename) -> future<> {
+    // A backup which left the components where a live table keeps them is addressed by
+    // the sstable identifier, not by the component file names, so its entries name the
+    // identifier as the directory of the TOC: "{sstable_id}/{toc_name}". The name still
+    // carries the generation, version and format, which the identifier does not.
+    auto* os = std::get_if<data_dictionary::storage_options::object_storage>(&directory._storage_opts->value);
+    bool live_layout = os && os->layout == data_dictionary::storage_options::object_storage_layout::live;
+
+    co_await coroutine::parallel_for_each(_toc_filenames, [flags, live_layout, &directory] (sstring toc_filename) -> future<> {
         std::filesystem::path sst_path{toc_filename};
         auto result = sstables::parse_path(sst_path, "", "");
         if (!result) {
@@ -494,6 +501,18 @@ future<> sstable_directory::restore_components_lister::process(sstable_directory
         }
         entry_descriptor desc = std::move(*result);
         if (!sstable_generation_generator::maybe_owned_by_this_shard(desc.generation)) {
+            co_return;
+        }
+        if (live_layout) {
+            auto dir = sst_path.parent_path().filename().native();
+            try {
+                desc.sid = sstable_id(utils::UUID(std::string_view(dir)));
+            } catch (...) {
+                throw_malformed_sstable_exception(seastar::format("{}: '{}' is not an sstable identifier", toc_filename, dir));
+            }
+            dirlog.debug("Processing {} entry from {} under sstable_id={}", desc.generation, toc_filename, desc.sid);
+            co_await directory.process_descriptor(std::move(desc), flags,
+                    [&directory] { return *directory._storage_opts; });
             co_return;
         }
         dirlog.debug("Processing {} entry from {}", desc.generation, toc_filename);
