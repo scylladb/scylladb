@@ -675,6 +675,13 @@ future<> sstables_loader::load_and_stream(sstring ks_name, sstring cf_name,
 // in there.
 future<> sstables_loader::load_new_sstables(sstring ks_name, sstring cf_name,
     bool load_and_stream, bool primary, bool skip_cleanup, bool skip_reshape, stream_scope scope) {
+    // With scope=node the sstables of the upload directory are loaded into the table
+    // directly, which for a table on object storage would mean cloning them from a
+    // filesystem. Only streaming can carry them there.
+    if (scope == stream_scope::node && _db.local().find_column_family(ks_name, cf_name).get_storage_options().is_object_storage_type()) {
+        throw std::invalid_argument(format("Cannot load new sstables into {}.{} with scope=node: the table keeps its sstables on object storage",
+                ks_name, cf_name));
+    }
     if (_loading_new_sstables) {
         throw std::runtime_error("Already loading SSTables. Try again later");
     } else {
@@ -925,6 +932,15 @@ future<tasks::task_id> sstables_loader::download_new_sstables(sstring ks_name, s
             sstring endpoint, sstring bucket, stream_scope scope, bool primary_replica) {
     if (!_storage_manager.is_known_endpoint(endpoint)) {
         throw std::invalid_argument(format("endpoint {} not found", endpoint));
+    }
+    // With scope=node the sstables are cloned into the table instead of being
+    // streamed to it, and an object storage clones within one endpoint only.
+    if (scope == stream_scope::node) {
+        const auto& dst_opts = _db.local().find_column_family(ks_name, cf_name).get_storage_options();
+        if (auto* os = std::get_if<data_dictionary::storage_options::object_storage>(&dst_opts.value); os && os->endpoint != endpoint) {
+            throw std::invalid_argument(format("Cannot restore {}.{} from endpoint {} with scope=node: the table keeps its sstables on endpoint {}, and an object storage cannot copy across endpoints",
+                    ks_name, cf_name, endpoint, os->endpoint));
+        }
     }
     llog.info("Restore sstables from {}({}) to {}.{} using scope={}, primary_replica={}", endpoint, prefix, ks_name, cf_name, scope, primary_replica);
 
