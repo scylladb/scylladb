@@ -829,6 +829,10 @@ query_processor::get_statement(utils::chunked_string_view query, const service::
         }
     }
     ++_stats.prepare_invocations;
+    // Charge the prepared-statements cache what preparation retains, as the net
+    // growth in live memory. Gross allocation would count transients freed inside
+    // prepare(), over-charging a complex statement by an order of magnitude.
+    auto live_before_prepare = seastar::memory::stats().allocated_memory();
     auto p = statement->prepare(_db, _cql_stats, _cql_config);
     p->statement->raw_cql_statement = utils::chunked_string(query);
     auto audit_info = p->statement->get_audit_info();
@@ -836,8 +840,14 @@ query_processor::get_statement(utils::chunked_string_view query, const service::
         audit_info->set_query_string(query.linearize()); // Audit system may need linearized form
         p->statement->sanitize_audit_info();
     }
-    auto bytes_after = seastar::memory::stats().total_bytes_allocated();
-    _parsing_cost_tracker.add_sample(bytes_after - bytes_before);
+    auto live_after = seastar::memory::stats().allocated_memory();
+    // Floored at a page: the counter is page-granular, and always constant in
+    // debug/sanitize builds, which use the default allocator. Capped so that one
+    // huge statement can neither fail PREPARE nor evict the whole cache.
+    constexpr size_t min_charge = seastar::memory::page_size;
+    auto charge = std::max(live_after - std::min(live_before_prepare, live_after), min_charge);
+    p->set_memory_cost(std::min(charge, _mcfg.prepared_statment_cache_size / 4));
+    _parsing_cost_tracker.add_sample(seastar::memory::stats().total_bytes_allocated() - bytes_before);
     return p;
 }
 

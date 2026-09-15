@@ -7829,4 +7829,50 @@ SEASTAR_THREAD_TEST_CASE(test_twcs_reversed_restricted_query_regular) {
     test_twcs_reversed_restricted_query(false);
 }
 
+// The prepared statements cache charges each entry what preparing it retained.
+// Verify the charge tracks statement size rather than being a constant.
+SEASTAR_TEST_CASE(test_prepared_statement_memory_cost) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("CREATE TABLE tbl (pk int, ck int, v1 int, v2 text, v3 text, PRIMARY KEY (pk, ck))").get();
+
+        auto cost = [&e](sstring query) {
+            auto prepared = e.local_qp().get_prepared(e.prepare(query).get());
+            BOOST_REQUIRE(bool(prepared));
+            return prepared->memory_cost();
+        };
+
+        // The charge is page-granular, so the two statements must differ by much
+        // more than a page for the comparison below to mean anything.
+        sstring markers;
+        for (int i = 0; i < 2000; i++) {
+            markers += (i ? ", ?" : "?");
+        }
+
+        auto small = cost("SELECT pk FROM tbl WHERE pk = ?");
+        auto large = cost(format("SELECT * FROM tbl WHERE pk IN ({})", markers));
+
+        BOOST_REQUIRE_GT(small, 0);
+#ifndef SEASTAR_DEFAULT_ALLOCATOR
+        // The default allocator (debug/sanitize) reports no live memory, so every
+        // statement gets the same floored charge and cannot be compared.
+        BOOST_REQUIRE_GT(large, small);
+#endif
+    });
+}
+
+// The charge is capped at a quarter of the cache budget: one big statement must
+// neither fail PREPARE nor evict everything else on the next insertion.
+SEASTAR_TEST_CASE(test_prepared_statement_memory_cost_is_capped) {
+    constexpr size_t budget = 4096;
+    cql_test_config cfg;
+    cfg.qp_mcfg = {budget, budget};
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("CREATE TABLE tbl (pk int, ck int, v1 int, v2 text, PRIMARY KEY (pk, ck))").get();
+        auto prepared = e.local_qp().get_prepared(
+                e.prepare("SELECT * FROM tbl WHERE pk IN (?, ?, ?, ?) AND ck > ? AND v2 = ? ALLOW FILTERING").get());
+        BOOST_REQUIRE(bool(prepared));
+        BOOST_REQUIRE_EQUAL(prepared->memory_cost(), budget / 4);
+    }, cfg);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

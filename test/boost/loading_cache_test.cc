@@ -742,13 +742,34 @@ SEASTAR_THREAD_TEST_CASE(test_loading_cache_remove_leaves_no_old_entries_behind)
 }
 
 SEASTAR_TEST_CASE(test_prepared_statement_small_cache) {
-    // CQL prepared statement cache uses loading_cache
-    // internally.
-    constexpr auto CACHE_SIZE = 950000;
+    // CQL prepared statement cache uses loading_cache internally.
+    // Each entry is charged what preparing it retained, so derive the cache size from
+    // a measurement instead of hardcoding it; the assertions below need a cache that
+    // holds well over half, but not all, of the 100 statements.
+    constexpr int CACHE_CAPACITY_IN_STATEMENTS = 70;
+    constexpr int SAMPLES = 20;
+
+    // The charge is page-granular, so average it: a single statement rounds to a
+    // whole page and would size the cache up to 2x off.
+    size_t entry_size = 0;
+    co_await do_with_cql_env_thread([&entry_size](cql_test_env& e) {
+        e.execute_cql("CREATE TABLE tbl1 (a int, b int, PRIMARY KEY (a))").get();
+        size_t total = 0;
+        for (int i = 0; i < SAMPLES; i++) {
+            auto prepared = e.local_qp().get_prepared(e.prepare(format("SELECT * FROM tbl1 WHERE a = {}", i)).get());
+            BOOST_REQUIRE(bool(prepared));
+            total += prepared->memory_cost();
+        }
+        entry_size = total / SAMPLES;
+        BOOST_REQUIRE_GT(entry_size, 0);
+    });
+
+    const auto CACHE_SIZE = entry_size * CACHE_CAPACITY_IN_STATEMENTS;
+    testlog.info("prepared statement charged {} bytes, using cache size {}", entry_size, CACHE_SIZE);
 
     cql_test_config small_cache_config;
     small_cache_config.qp_mcfg = {CACHE_SIZE, CACHE_SIZE};
-    return do_with_cql_env_thread([](cql_test_env& e) {
+    co_await do_with_cql_env_thread([](cql_test_env& e) {
         e.execute_cql("CREATE TABLE tbl1 (a int, b int, PRIMARY KEY (a))").get();
 
         auto current_uid = 0;
