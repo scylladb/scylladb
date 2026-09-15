@@ -974,6 +974,12 @@ future<sstables::shared_sstable> sstables_loader::attach_sstable(table_id tid, c
     co_return sst;
 }
 
+// The prefix an object-storage table keeps its sstables under. Mirrors what
+// sstables::object_storage_base::prefix() resolves to.
+static std::string_view managed_sstables_prefix(const data_dictionary::storage_options::object_storage& os) {
+    return os.location ? std::string_view(*os.location) : "sstables";
+}
+
 // Joins a backup location's prefix with a path that is relative to it, the same
 // way cluster-wide backup composes its object keys (db/snapshot/cluster_backup.cc).
 static sstring join_path(std::string_view prefix, std::string_view relative_path) {
@@ -1041,8 +1047,27 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
         co_return;
     }
 
+    // A backup of a table which already keeps its sstables in this bucket copies
+    // nothing: the components stay where the table wrote them, under the location of
+    // the table itself, and the references of the snapshot hold them there. Such a
+    // backup is addressed by the sstable identifier, so name its entries
+    // "{sstable_id}/{toc_name}" and read them with the layout of a live table. Any
+    // other backup keeps the components under a prefix of its own, named after the
+    // generation. Being in the location of the table is what tells the two apart,
+    // because it is the only case in which a backup has nothing to copy; a backup
+    // which was uploaded into that location instead would not be found.
+    const auto* dst_os = std::get_if<data_dictionary::storage_options::object_storage>(&_db.local().find_column_family(tid.table).get_storage_options().value);
+    const bool in_place = dst_os
+            && snapshot_info.endpoint == dst_os->endpoint
+            && snapshot_info.bucket == dst_os->bucket
+            && snapshot_info.prefix == managed_sstables_prefix(*dst_os);
+
     std::unordered_map<sstring, std::vector<sstring>> toc_names_by_prefix;
     for (const auto& e : fully) {
+        if (in_place) {
+            toc_names_by_prefix[snapshot_info.prefix].emplace_back(seastar::format("{}/{}", e.sstable_id, e.toc_name));
+            continue;
+        }
         // e.prefix is relative to the backup location's own prefix (snapshot_remote_locations.prefix).
         toc_names_by_prefix[join_path(snapshot_info.prefix, e.prefix)].emplace_back(e.toc_name);
     }
@@ -1063,7 +1088,8 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
         return replica::distributed_loader::get_sstables_from_object_store(_db, s->ks_name(), s->cf_name(),
                 std::move(ent.second), snapshot_info.endpoint, ep_type, snapshot_info.bucket, std::move(ent.first), cfg, [&] {
                     return &shard_aborts[this_shard_id()];
-                }).then_unpack([] (table_id, auto sstables) {
+                }, in_place ? data_dictionary::storage_options::object_storage_layout::live
+                            : data_dictionary::storage_options::object_storage_layout::foreign).then_unpack([] (table_id, auto sstables) {
                     return make_ready_future<std::vector<sstables_col>>(std::move(sstables));
                 });
     }, std::vector<prefix_sstables>(this_smp_shard_count()), [&] (std::vector<prefix_sstables> a, std::vector<sstables_col> b) {
