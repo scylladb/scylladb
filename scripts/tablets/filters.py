@@ -196,6 +196,13 @@ def get_tablet_filter(args, topo: Topology) -> TabletFilter:
     return accepts
 
 
+def is_table_id(topo: Topology, table_arg: str) -> bool:
+    try:
+        return topo.has_table(parse_uuid(table_arg))
+    except ValueError:
+        return False
+
+
 def resolve_table_filter_id(args, topo: Topology) -> TableId | None:
     """
     Resolves --table to the one table it names, or None when it was not given.
@@ -203,7 +210,8 @@ def resolve_table_filter_id(args, topo: Topology) -> TableId | None:
     if args.table is None:
         return None
 
-    if "." not in args.table and args.keyspace is not None:
+    # A table id has no dot either, but names its table without the keyspace.
+    if "." not in args.table and args.keyspace is not None and not is_table_id(topo, args.table):
         return resolve_table_id(topo, f"{args.keyspace}.{args.table}")
 
     table_id = resolve_table_id(topo, args.table)

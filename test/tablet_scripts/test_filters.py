@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from tablets.filters import filter_args
 from tablets.filters import get_table_filter
 from tablets.filters import get_tablet_filter
@@ -147,6 +149,21 @@ def test_resolve_table_filter_id_uses_keyspace_to_disambiguate_bare_table_name()
     resolved = resolve_table_filter_id(filter_args(table="users", keyspace="ks1"), topology)
 
     assert resolved == TABLE1_ID
+
+
+def test_resolve_table_filter_id_accepts_table_id_with_keyspace() -> None:
+    # A table id has no dot either, but it names the table on its own: the keyspace only
+    # has to agree with it, not be prepended to it.
+    topology = build_topology({HOST1_ID: HostSpec("10.0.0.1", "dc1", "rack1")}, tables={
+        TABLE1_ID: ("ks1", "users"),
+        TABLE2_ID: ("ks2", "users"),
+    })
+
+    resolved = resolve_table_filter_id(filter_args(table=str(TABLE2_ID), keyspace="ks2"), topology)
+
+    assert resolved == TABLE2_ID
+    with pytest.raises(Exception, match=f"Table {TABLE2_ID} is not in keyspace ks1"):
+        resolve_table_filter_id(filter_args(table=str(TABLE2_ID), keyspace="ks1"), topology)
 
 
 def test_filter_table_id_respects_keyspace() -> None:
