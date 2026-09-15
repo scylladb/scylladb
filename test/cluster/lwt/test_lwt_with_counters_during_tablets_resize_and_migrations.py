@@ -86,7 +86,7 @@ async def tablet_migration_ops(
     tester: BaseLWTTester,
     table: str,
     num_ops: int,
-    pause_range=(0.5, 2.0),
+    pause_range=(0.05, 0.2),
     *,
     server_properties,
 ) -> None:
@@ -192,7 +192,7 @@ async def run_random_resizes(
     table: str,
     counter_table: str,
     target_steps: int = TARGET_RESIZE_COUNT,
-    pause_range=(0.5, 2.0),
+    pause_range=(0.05, 0.2),
 ):
     """
     Perform randomized tablet count changes (splits/merges) on the main LWT table
@@ -369,7 +369,7 @@ async def test_multi_column_lwt_migrate_and_random_resizes(manager: ScyllaCluste
                     stop_event_,
                     manager, servers, tester,
                     num_ops=NUM_MIGRATIONS,
-                    pause_range=(0.3, 1.0),
+                    pause_range=(0.03, 0.1),
                     server_properties=properties,
                     table=table,
                 )
@@ -379,7 +379,7 @@ async def test_multi_column_lwt_migrate_and_random_resizes(manager: ScyllaCluste
                     stop_event_,
                     manager, servers, tester,
                     num_ops=NUM_MIGRATIONS,
-                    pause_range=(0.3, 1.0),
+                    pause_range=(0.03, 0.1),
                     server_properties=properties,
                     table=cnt_table
                 )
