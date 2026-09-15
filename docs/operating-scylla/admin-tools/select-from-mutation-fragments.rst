@@ -338,3 +338,18 @@ Count range tombstone changes:
          2
 
     (1 rows)
+
+Count fragments per mutation source:
+
+.. code-block:: console
+
+    cqlsh> SELECT mutation_source, COUNT(*) FROM MUTATION_FRAGMENTS(ks.tbl) WHERE pk = 1 GROUP BY pk, mutation_source;
+
+     mutation_source                                                                                                  | count
+    ------------------------------------------------------------------------------------------------------------------+-------
+                                                                                                            row-cache |     3
+     sstable:/var/lib/scylla/data/ks/tbl-259b2520104011ee822ed2e489876007/me-3g79_0ur3_48e402ejkwsvj7viqr-big-Data.db |     3
+
+    (2 rows)
+
+``GROUP BY`` takes a prefix of the output primary key: the partition key, then ``mutation_source``, ``partition_region``, the clustering key and ``position_weight``.
