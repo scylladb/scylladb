@@ -23,7 +23,7 @@ def table_int_desc(cql, test_keyspace):
 
 @pytest.fixture(scope="module")
 def table2(cql, test_keyspace):
-    schema="p int, c1 int, c2 int, PRIMARY KEY (p, c1, c2)"
+    schema="p int, c1 int, c2 int, v int, PRIMARY KEY (p, c1, c2)"
     order="WITH CLUSTERING ORDER BY (c1 ASC, c2 DESC)"
     with new_test_table(cql, test_keyspace, schema, order) as table:
         yield table
@@ -65,3 +65,58 @@ def test_multi_column_relation_desc(cql, table2):
     cql.execute(stmt, [k, 1, 1])
     cql.execute(stmt, [k, 1, 2])
     assert [(1, 2), (1, 1)] == list(cql.execute(f'SELECT c1,c2 FROM {table2} WHERE p = {k} AND (c1, c2) >= (1, 1)'))
+
+@pytest.fixture(scope="module")
+def table_all_asc(cql, test_keyspace):
+    schema="p int, c1 int, c2 int, v int, PRIMARY KEY (p, c1, c2)"
+    with new_test_table(cql, test_keyspace, schema) as table:
+        yield table
+
+@pytest.fixture(scope="module")
+def table_all_desc(cql, test_keyspace):
+    schema="p int, c1 int, c2 int, v int, PRIMARY KEY (p, c1, c2)"
+    order="WITH CLUSTERING ORDER BY (c1 DESC, c2 DESC)"
+    with new_test_table(cql, test_keyspace, schema, order) as table:
+        yield table
+
+# A multi-column equality names a single row, and UPDATE and DELETE are
+# allowed to use it. The clustering bounds of a table whose clustering
+# columns are all descending are computed in the natural column order and
+# then reversed, and it is easy for the reversal to lose the fact that the
+# bounds name a single row rather than a range of them - which is all these
+# statements have to go by when they decide to accept the WHERE clause.
+def test_multi_column_eq_write_all_desc(cql, table_all_desc):
+    p = unique_key_int()
+    cql.execute(f'UPDATE {table_all_desc} SET v = 1 WHERE p = {p} AND (c1, c2) = (1, 2)')
+    assert [(1, 2, 1)] == list(cql.execute(f'SELECT c1, c2, v FROM {table_all_desc} WHERE p = {p}'))
+    cql.execute(f'DELETE FROM {table_all_desc} WHERE p = {p} AND (c1, c2) = (1, 2)')
+    assert [] == list(cql.execute(f'SELECT c1, c2, v FROM {table_all_desc} WHERE p = {p}'))
+
+# Same as test_multi_column_eq_write_all_desc(), for a multi-column IN
+# naming several single rows.
+def test_multi_column_in_write_all_desc(cql, table_all_desc):
+    p = unique_key_int()
+    cql.execute(f'UPDATE {table_all_desc} SET v = 1 WHERE p = {p} AND (c1, c2) IN ((1, 2), (3, 4))')
+    assert [(3, 4, 1), (1, 2, 1)] == list(cql.execute(f'SELECT c1, c2, v FROM {table_all_desc} WHERE p = {p}'))
+    cql.execute(f'DELETE FROM {table_all_desc} WHERE p = {p} AND (c1, c2) IN ((1, 2), (3, 4))')
+    assert [] == list(cql.execute(f'SELECT c1, c2, v FROM {table_all_desc} WHERE p = {p}'))
+
+# Same as test_multi_column_eq_write_all_desc(), for a table that mixes
+# ascending and descending clustering columns, and so computes its bounds
+# in yet another way.
+def test_multi_column_eq_write_mixed_order(cql, table2):
+    p = unique_key_int()
+    cql.execute(f'UPDATE {table2} SET v = 1 WHERE p = {p} AND (c1, c2) = (1, 2)')
+    assert [(1, 2, 1)] == list(cql.execute(f'SELECT c1, c2, v FROM {table2} WHERE p = {p}'))
+    cql.execute(f'DELETE FROM {table2} WHERE p = {p} AND (c1, c2) = (1, 2)')
+    assert [] == list(cql.execute(f'SELECT c1, c2, v FROM {table2} WHERE p = {p}'))
+
+# Same as test_multi_column_eq_write_all_desc(), for a table whose
+# clustering columns are all ascending, so that no reordering of the
+# bounds is needed at all.
+def test_multi_column_eq_write_all_asc(cql, table_all_asc):
+    p = unique_key_int()
+    cql.execute(f'UPDATE {table_all_asc} SET v = 1 WHERE p = {p} AND (c1, c2) = (1, 2)')
+    assert [(1, 2, 1)] == list(cql.execute(f'SELECT c1, c2, v FROM {table_all_asc} WHERE p = {p}'))
+    cql.execute(f'DELETE FROM {table_all_asc} WHERE p = {p} AND (c1, c2) = (1, 2)')
+    assert [] == list(cql.execute(f'SELECT c1, c2, v FROM {table_all_asc} WHERE p = {p}'))
