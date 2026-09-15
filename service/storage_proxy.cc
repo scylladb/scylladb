@@ -3298,7 +3298,7 @@ void storage_proxy_stats::split_stats::register_metrics_for(sstring dc) {
     namespace sm = seastar::metrics;
 
     // if this is the first time we see an endpoint from this DC - add a
-    // corresponding collectd metric
+    // corresponding metric
     if (auto [ignored, added] = _dc_stats.try_emplace(dc); added) {
         _metrics.add_group(_category, {
             sm::make_counter(_short_description_prefix + sstring("_remote_node"), [this, dc] { return _dc_stats[dc].val; },
