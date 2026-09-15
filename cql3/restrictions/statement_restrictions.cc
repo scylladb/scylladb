@@ -2373,7 +2373,11 @@ build_get_multi_column_clustering_bounds_fn(
         }
         if (all_reverse) {
             for (auto& crange : bounds) {
-                crange = query::clustering_range(crange.end(), crange.start());
+                // A singular range names a single row, so it reads the same in
+                // either order; reversing it would only lose its singularity.
+                if (!crange.is_singular()) {
+                    crange = query::clustering_range(crange.end(), crange.start());
+                }
             }
         }
         return bounds;
