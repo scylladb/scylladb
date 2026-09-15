@@ -11,6 +11,7 @@
 #include <vector>
 #include "gms/gossip_address_map.hh"
 #include "gms/inet_address.hh"
+#include "node_ops/node_ops_ctl.hh"
 #include "repair/repair.hh"
 #include "repair/task_manager_module.hh"
 #include "service/topology_guard.hh"
@@ -222,6 +223,14 @@ public:
     future<> cleanup_history(tasks::task_id repair_id);
     future<> load_history();
 
+    // Repair a single local range, multiple column families.
+    // Comparable to RepairSession in Origin
+    future<> repair_range(repair_info& ri, const dht::token_range& range, table_info table, gc_clock::time_point flush_time);
+
+    // Repair the given repair_info's ranges for all its tables, in limited
+    // parallelism.
+    future<> do_repair_ranges(repair_info& ri, gc_clock::time_point flush_time);
+
     future<int> do_repair_start(gms::gossip_address_map& addr_map, sstring keyspace, std::unordered_map<sstring, sstring> options_map);
 
     // The tokens are the tokens assigned to the bootstrap node.
@@ -356,10 +365,9 @@ class repair_row;
 class repair_hasher;
 class repair_writer;
 
-future<> repair_cf_range_row_level(repair::shard_repair_task_impl& shard_task,
+future<> repair_cf_range_row_level(repair_info& ri,
         sstring cf_name, table_id table_id, dht::token_range range,
-        const std::vector<locator::host_id>& all_peer_nodes, bool small_table_optimization, gc_clock::time_point flush_time,
-        service::frozen_topology_guard topo_guard);
+        const std::vector<locator::host_id>& all_peer_nodes, gc_clock::time_point flush_time);
 future<std::list<repair_row>> to_repair_rows_list(repair_rows_on_wire rows,
         schema_ptr s, uint64_t seed, repair_master is_master,
         reader_permit permit, repair_hasher hasher);
