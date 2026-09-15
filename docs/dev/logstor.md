@@ -15,7 +15,9 @@ Logstor consists of several key components:
 
 #### Primary Index
 
-The primary index is entirely in memory and it maps a partition key to its location in the log segments. It consists of a B-tree per each table that is ordered token.
+The primary index is entirely in memory and it maps a partition key to its location in the log segments. It consists of a B-tree per each table that is ordered by token.
+
+An index entry does not hold the partition key itself but a `primary_index_key`: the token and a 128-bit XXH3 hash of the key's internal representation, seeded with a value drawn at random when the process starts. This keeps every entry the same small size regardless of the key length. Keys that share a token are ordered by their hash rather than by ring order; the range reader restores ring order after reading the records, which carry the full key. The hash exists only in memory: records store the partition key, and recovery recomputes the hash from it, so the seed is never persisted. A read verifies the key found in the record against the requested key, so a hash collision surfaces as an error rather than as another partition's data.
 
 #### Segment Manager
 

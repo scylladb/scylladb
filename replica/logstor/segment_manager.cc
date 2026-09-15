@@ -2167,7 +2167,7 @@ struct compaction_buffer {
     // to ensure all pending updates complete.
     future<> rewrite_record(primary_index& index, log_location read_location, const log_record_header& record_header, log_record_bytes_view record_bytes) {
         auto* index_ptr = &index;
-        auto key = record_header.key;
+        auto key = record_header.index_key();
 
         auto writer = log_record_bytes_writer(record_header, record_bytes);
 
@@ -2236,7 +2236,7 @@ future<> compaction_manager_impl::do_compaction(logstor_group& cg, abort_source&
             [this, &index, &nonempty_segments] (compaction_buffer& cb) -> future<compaction_buffer_stats> {
         co_await _sm.for_each_record(nonempty_segments,
             [&index, &cb] (log_location read_location, const log_record_header& record_header) -> want_data {
-                if (!index.is_record_alive(record_header.key, read_location)) {
+                if (!index.is_record_alive(record_header.index_key(), read_location)) {
                     cb.stats.records_skipped++;
                     return want_data::no;
                 }
@@ -2350,7 +2350,7 @@ future<> compaction_manager_impl::do_split_compaction(logstor_group& src, mutati
                 [this, &index, &classifier, &nonempty_segments] (split_buffer_pair& bufs) -> future<compaction_buffer_stats> {
             co_await _sm.for_each_record(nonempty_segments,
                 [&index] (log_location read_location, const log_record_header& record_header) -> want_data {
-                    if (!index.is_record_alive(record_header.key, read_location)) {
+                    if (!index.is_record_alive(record_header.index_key(), read_location)) {
                         return want_data::no;
                     }
                     return want_data::yes;
@@ -2417,7 +2417,7 @@ future<> segment_manager_impl::write_to_separator(std::vector<write_buffer::reco
 
     co_await seastar::max_concurrent_for_each(groups, separator_group_write_concurrency, [seg_ref, segment_seq_num] (separator_group_records& group) -> future<> {
         for (auto* record : group.records) {
-            auto key = record->writer.record().header.key;
+            auto key = record->writer.record().header.index_key();
             log_location prev_loc = co_await std::move(record->loc);
             auto* index_ptr = &group.cg->logstor_index();
 
@@ -2648,7 +2648,7 @@ future<> segment_manager_impl::recover_segment(replica::database& db, log_segmen
                 if (!t.uses_logstor()) {
                     return want_data::no;
                 }
-                t.logstor_index().insert(header.key, new_entry, cmp);
+                t.logstor_index().insert(header.index_key(), new_entry, cmp);
             } catch (const replica::no_such_column_family&) {
                 // ignore record
             }
@@ -2705,7 +2705,7 @@ future<> segment_manager_impl::add_segment_to_compaction_group(replica::database
             [&db] (log_location prev_loc, const log_record_header& record_header) -> want_data {
                 try {
                     auto& t = db.find_column_family(record_header.table);
-                    return t.uses_logstor() && t.logstor_index().is_record_alive(record_header.key, prev_loc)
+                    return t.uses_logstor() && t.logstor_index().is_record_alive(record_header.index_key(), prev_loc)
                             ? want_data::yes : want_data::no;
                 } catch (const replica::no_such_column_family&) {
                     return want_data::no;
@@ -2714,7 +2714,7 @@ future<> segment_manager_impl::add_segment_to_compaction_group(replica::database
             [seg_ref, &db] (log_location prev_loc, const log_record_header& record_header, log_record_bytes_view record_bytes) -> future<> {
                 try {
                     auto& t = db.find_column_family(record_header.table);
-                    auto key = record_header.key;
+                    auto key = record_header.index_key();
                     auto& cg = t.get_logstor_group(key.token());
                     auto* index_ptr = &cg.logstor_index();
                     auto writer = log_record_bytes_writer(record_header, record_bytes);
