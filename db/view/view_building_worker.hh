@@ -14,7 +14,6 @@
 #include <seastar/core/shared_future.hh>
 #include <unordered_map>
 #include <unordered_set>
-#include <flat_set>
 #include "locator/abstract_replication_strategy.hh"
 #include "locator/tablets.hh"
 #include "raft/raft.hh"
@@ -116,7 +115,6 @@ class view_building_worker : public seastar::peering_sharded_service<view_buildi
         table_id table_id;
         shard_id shard;
         dht::token last_token;
-        foreign_ptr<sstables::shared_sstable> sst_foreign_ptr;
     };
 
     class consumer;
@@ -139,7 +137,6 @@ private:
     condition_variable _sstables_to_register_event;
     semaphore _staging_sstables_mutex = semaphore(1);
     std::unordered_map<table_id, std::vector<staging_sstable_task_info>> _sstables_to_register;
-    std::unordered_map<table_id, std::vector<sstables::shared_sstable>> _staging_sstables;
     semaphore _started_staging_tasks_mutex = semaphore(1);
     std::unordered_map<locator::tablet_replica, std::set<std::pair<table_id, utils::UUID>>> _started_staging_tasks;
     future<> _staging_sstables_registrator = make_ready_future<>();
@@ -159,8 +156,6 @@ public:
     virtual void on_update_view(const sstring& ks_name, const sstring& view_name, bool columns_changed) override {};
     virtual void on_drop_view(const sstring& ks_name, const sstring& view_name) override;
 
-    // Used ONLY to load staging sstables migrated during intra-node tablet migration.
-    void load_sstables(table_id table_id, std::vector<sstables::shared_sstable> ssts);
     // Used in cleanup/cleanup-target tablet transition stage
     future<> cleanup_staging_sstables(locator::effective_replication_map_ptr erm, table_id table_id, locator::tablet_id tid);
 
@@ -177,15 +172,10 @@ private:
     future<> do_process_staging(table_id base_id, dht::token last_token);
 
     future<> run_staging_sstables_registrator();
-    // Acquires `_staging_sstables_mutex` on all shards internally,
-    // so callers must not hold `_staging_sstables_mutex` when invoking it.
+    // Acquires `_staging_sstables_mutex` internally, so callers must not hold it when invoking it.
     future<> create_staging_sstable_tasks();
     future<> discover_existing_staging_sstables();
     std::unordered_map<table_id, std::vector<staging_sstable_task_info>> discover_local_staging_sstables(building_tasks building_tasks);
-    // Acquire `_staging_sstables_mutex` on multiple shards in parallel.
-    // Must be called only from shard 0.
-    // Must be called ONLY by `create_staging_sstable_tasks()` and only once at a time to avoid deadlock.
-    future<std::vector<foreign_ptr<semaphore_units<>>>> lock_staging_mutex_on_multiple_shards(std::flat_set<shard_id> shards);
 
     void init_messaging_service();
     future<> uninit_messaging_service();
