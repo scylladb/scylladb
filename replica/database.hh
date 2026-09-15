@@ -1770,6 +1770,12 @@ private:
 
     flat_hash_map<sstring, keyspace> _keyspaces;
     tables_metadata _tables_metadata;
+    // Engaged while a schema change is being committed on all shards; see begin_schema_change_commit().
+    struct schema_change_commit {
+        std::unordered_set<table_id> tables;
+        shared_promise<> committed;
+    };
+    std::optional<schema_change_commit> _schema_change_commit;
     std::unique_ptr<db::commitlog> _commitlog;
     std::unique_ptr<db::commitlog> _schema_commitlog;
     utils::updateable_value_source<table_schema_version> _version;
@@ -1863,6 +1869,25 @@ private:
     auto sum_read_concurrency_sem_var(std::invocable<reader_concurrency_semaphore&> auto member);
     auto sum_read_concurrency_sem_stat(std::invocable<reader_concurrency_semaphore::stats&> auto stats_member);
 
+    // Slow path of table_for_write(). If a schema change affecting the table is being committed
+    // on all shards, waits for this shard to commit it before looking the table up.
+    future<lw_shared_ptr<table>> table_for_write_slow_path(table_id, db::timeout_clock::time_point timeout);
+    // Returns the table a mutation with schema `s` is to be applied to, throwing no_such_column_family
+    // if there is none. A schema change is committed shard by shard (see schema_applier::commit()),
+    // so a mutation built on a shard which already committed it may reach this shard before it did.
+    // Applying it then would fail for a new table, or silently drop the cells of columns the old
+    // schema doesn't know for an altered one. Such a mutation stands out by its schema version not
+    // matching the local table's, and while the affected table is in a pending commit, we wait for
+    // the commit to reach this shard instead. With no commit pending there is nothing to wait for,
+    // and a version mismatch on its own is the normal state of a table while a schema change
+    // propagates across the cluster, so don't leave the fast path for it.
+    future<lw_shared_ptr<table>> table_for_write(const schema& s, table_id id, db::timeout_clock::time_point timeout) {
+        auto t = _tables_metadata.get_table_if_exists(id);
+        if (!t || (_schema_change_commit && t->schema()->version() != s.version())) [[unlikely]] {
+            return table_for_write_slow_path(id, timeout);
+        }
+        return make_ready_future<lw_shared_ptr<table>>(std::move(t));
+    }
     future<db::large_data_violation_type> do_apply(schema_ptr, const frozen_mutation&, tracing::trace_state_ptr tr_state, db::timeout_clock::time_point timeout, db::commitlog_force_sync sync, db::per_partition_rate_limit::info rate_limit_info, bool skip_large_data_guardrails);
     future<> do_apply_many(const utils::chunked_vector<frozen_mutation>&, db::timeout_clock::time_point timeout);
     future<> apply_with_commitlog(column_family& cf, const mutation& m, db::timeout_clock::time_point timeout);
@@ -2054,6 +2079,14 @@ public:
     future<counter_update_guard> acquire_counter_locks(schema_ptr s, const frozen_mutation& fm, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state);
     future<mutation> prepare_counter_update(schema_ptr s, const frozen_mutation& fm, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state);
     future<> apply_counter_update(schema_ptr, const frozen_mutation& fm, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state);
+
+    // Brackets the commit of a schema change on all shards, see schema_applier::commit().
+    // Called on every shard before the change is committed on any shard, with the ids of the
+    // tables it creates or alters, and again on every shard after all shards committed it.
+    // In between, writes to those tables which don't match this shard's schema version wait
+    // for the commit instead of being applied, see table_for_write().
+    void begin_schema_change_commit(std::unordered_set<table_id> tables);
+    void end_schema_change_commit() noexcept;
 
     const sstring& get_snitch_name() const;
     /*!

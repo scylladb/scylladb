@@ -48,6 +48,7 @@
 #include "query/query-result-writer.hh"
 #include "utils/map_difference.hh"
 #include <seastar/coroutine/all.hh>
+#include <unordered_set>
 #include "utils/log.hh"
 #include "schema/frozen_schema.hh"
 #include "system_keyspace.hh"
@@ -1066,6 +1067,19 @@ void schema_applier::commit_on_shard(replica::database& db) {
     }
 }
 
+static std::unordered_set<table_id> created_and_altered_table_ids(const affected_tables_and_views_per_shard& diff) {
+    std::unordered_set<table_id> ids;
+    for (const auto* d : {&diff.tables, &diff.cdc, &diff.views}) {
+        for (const auto& s : d->created) {
+            ids.insert(s->id());
+        }
+        for (const auto& altered : d->altered) {
+            ids.insert(altered.new_schema->id());
+        }
+    }
+    return ids;
+}
+
 // TODO: move per shard logic directly to raft so that all subsystems can be updated together
 // (requires switching all affected subsystems to 'applier' interface first)
 future<> schema_applier::commit() {
@@ -1078,6 +1092,16 @@ future<> schema_applier::commit() {
     // otherwise, such iteration would deadlock.
     _metadata_locks = std::make_unique<replica::tables_metadata_lock_on_all_shards>(
             co_await replica::database::lock_tables_metadata(sharded_db));
+    // The change is committed shard by shard, so until the last commit_on_shard() the
+    // shards disagree about the tables it creates or alters, and a write built on a shard
+    // which has committed may reach one which hasn't. Announce the affected tables on
+    // every shard first, so such a write waits for the commit rather than failing (new
+    // table) or getting downgraded to the old schema (altered table); see
+    // database::table_for_write(). Only tables/views/cdc logs are announced: keyspaces,
+    // types and functions are not looked up by the write path.
+    co_await sharded_db.invoke_on_all([this] (replica::database& db) {
+        db.begin_schema_change_commit(created_and_altered_table_ids(_affected_tables_and_views.tables_and_views.local()));
+    });
     // Run func first on shard 0
     // to allow "seeding" of the effective_replication_map
     // with a new e_r_m instance.
@@ -1085,6 +1109,9 @@ future<> schema_applier::commit() {
     commit_on_shard(sharded_db.local());
     co_await sharded_db.invoke_on_others([this] (replica::database& db) {
         commit_on_shard(db);
+    });
+    co_await sharded_db.invoke_on_all([] (replica::database& db) {
+        db.end_schema_change_commit();
     });
     // unlock as some functions in post_commit() may read data under those locks
     _metadata_locks = nullptr;

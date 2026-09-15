@@ -1587,6 +1587,33 @@ const column_family& database::find_column_family(const table_id& uuid) const {
     }
 }
 
+void database::begin_schema_change_commit(std::unordered_set<table_id> tables) {
+    if (_schema_change_commit) {
+        on_internal_error(dblog, "begin_schema_change_commit: a schema change commit is already in progress");
+    }
+    _schema_change_commit.emplace();
+    _schema_change_commit->tables = std::move(tables);
+}
+
+void database::end_schema_change_commit() noexcept {
+    if (!_schema_change_commit) {
+        return;
+    }
+    _schema_change_commit->committed.set_value();
+    _schema_change_commit.reset();
+}
+
+future<lw_shared_ptr<table>> database::table_for_write_slow_path(table_id id, db::timeout_clock::time_point timeout) {
+    if (_schema_change_commit && _schema_change_commit->tables.contains(id)) {
+        co_await _schema_change_commit->committed.get_shared_future(timeout);
+    }
+    auto t = _tables_metadata.get_table_if_exists(id);
+    if (!t) {
+        co_await coroutine::return_exception(no_such_column_family(id));
+    }
+    co_return t;
+}
+
 bool database::column_family_exists(const table_id& uuid) const {
     return _tables_metadata.contains(uuid);
 }
@@ -2228,7 +2255,8 @@ future<> database::apply_in_memory(const mutation& m, column_family& cf, db::rp_
 }
 
 future<counter_update_guard> database::acquire_counter_locks(schema_ptr s, const frozen_mutation& fm, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state) {
-    auto& cf = find_column_family(fm.column_family_id());
+    auto cf_ptr = co_await update_write_metrics_if_failed(table_for_write(*s, fm.column_family_id(), timeout));
+    auto& cf = *cf_ptr;
 
     auto m = fm.unfreeze(s);
     m.upgrade(cf.schema());
@@ -2237,36 +2265,33 @@ future<counter_update_guard> database::acquire_counter_locks(schema_ptr s, const
 
     tracing::trace(trace_state, "Acquiring counter locks");
 
-    return do_with(std::move(m), [this, &cf, op = std::move(op), timeout] (mutation& m) mutable {
-        return update_write_metrics_if_failed([&m, &cf, op = std::move(op), timeout] mutable -> future<counter_update_guard> {
-            return cf.lock_counter_cells(m, timeout).then([op = std::move(op)] (std::vector<locked_cell> locks) mutable {
-                return counter_update_guard{std::move(op), std::move(locks)};
-            });
-        }());
-    });
+    auto locks = co_await update_write_metrics_if_failed(cf.lock_counter_cells(m, timeout));
+    co_return counter_update_guard{std::move(op), std::move(locks)};
 }
 
 future<mutation> database::prepare_counter_update(schema_ptr s, const frozen_mutation& fm, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state) {
     if (timeout <= db::timeout_clock::now() || utils::get_local_injector().is_enabled("database_apply_counter_update_force_timeout")) {
         update_write_metrics_for_timed_out_write();
-        return make_exception_future<mutation>(timed_out_error{});
+        co_await coroutine::return_exception(timed_out_error{});
     }
 
-    auto& cf = find_column_family(fm.column_family_id());
+    auto cf_ptr = co_await update_write_metrics_if_failed(table_for_write(*s, fm.column_family_id(), timeout));
+    auto& cf = *cf_ptr;
     if (is_in_critical_disk_utilization_mode() && cf.is_eligible_to_write_rejection_on_critical_disk_utilization()) {
         update_write_metrics_for_rejected_writes();
-        return make_exception_future<mutation>(replica::critical_disk_utilization_exception{"rejected counter update mutation"});
+        co_await coroutine::return_exception(replica::critical_disk_utilization_exception{"rejected counter update mutation"});
     }
 
     auto m = fm.unfreeze(s);
     m.upgrade(cf.schema());
 
-    return update_write_metrics_if_failed(
+    co_return co_await update_write_metrics_if_failed(
         read_and_transform_counter_mutation_to_shards(std::move(m), cf, std::move(trace_state), timeout));
 }
 
 future<> database::apply_counter_update(schema_ptr s, const frozen_mutation& fm, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state) {
-    auto& cf = find_column_family(fm.column_family_id());
+    auto cf_ptr = co_await update_write_metrics_if_failed(table_for_write(*s, fm.column_family_id(), timeout));
+    auto& cf = *cf_ptr;
 
     auto m = fm.unfreeze(s);
     m.upgrade(cf.schema());
@@ -2434,7 +2459,8 @@ future<db::large_data_violation_type> database::do_apply(schema_ptr s, const fro
     // is a little in flux and commitlog is created only when db is
     // initied from datadir.
     auto uuid = m.column_family_id();
-    auto& cf = find_column_family(uuid);
+    auto cf_ptr = co_await table_for_write(*s, uuid, timeout);
+    auto& cf = *cf_ptr;
 
     if (is_in_critical_disk_utilization_mode() && cf.is_eligible_to_write_rejection_on_critical_disk_utilization()) {
         ++_stats->total_writes_rejected_due_to_out_of_space_prevention;
