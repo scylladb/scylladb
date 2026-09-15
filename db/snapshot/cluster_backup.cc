@@ -103,18 +103,14 @@ future<> cluster_backup_task::run() {
     });
 }
 
-static std::string format_snapshot_location(std::string_view prefix, std::string_view what, const replica::table&, std::string_view appendix = {}) {
-    auto pp = prefix.empty() ? "" : "/";
-    auto ap = appendix.empty() ? "" : "/";
-    return fmt::format("{}{}{}{}{}",  prefix, pp, what, ap, appendix);
-}
-
 std::string db::snapshot::sstables_location(std::string_view prefix, const replica::table& t, std::string_view snapshot_name) {
-    return format_snapshot_location(prefix, "sstables", t);
+    auto pp = prefix.empty() ? "" : "/";
+    return fmt::format("{}{}{}",  prefix, pp, "sstables");
 }
 
 std::string db::snapshot::snapshot_meta_location(std::string_view prefix, const replica::table& t, std::string_view snapshot_name) {
-    return format_snapshot_location(prefix, "snapshots", t, snapshot_name);
+    auto pp = prefix.empty() ? "" : "/";
+    return fmt::format("{}{}{}/{}/{}/{}",  prefix, pp, "snapshots", t.schema()->ks_name(), t.schema()->cf_name(), snapshot_name);
 }
 
 future<> cluster_backup_task::do_backup() {
