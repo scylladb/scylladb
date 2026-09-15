@@ -154,10 +154,6 @@ public:
     };
 
 private:
-    enum class notification_event_type {
-        // Note: other event types like "added" may be needed in the future
-        deleted
-    };
     using signal_type = boost::signals2::signal_type<void (sstables::generation_type, notification_event_type), boost::signals2::keywords::mutex_type<boost::signals2::dummy_mutex>>::type;
 
     storage_manager* _storage;
