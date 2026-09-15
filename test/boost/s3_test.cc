@@ -945,6 +945,52 @@ SEASTAR_THREAD_TEST_CASE(test_creds) {
     BOOST_REQUIRE_EQUAL(creds.session_token, "");
 }
 
+namespace {
+
+// Always fails, and counts how many times it was invoked.
+class always_failing_provider final : public aws::aws_credentials_provider {
+    unsigned& _calls;
+
+public:
+    explicit always_failing_provider(unsigned& calls) : _calls(calls) {}
+    const char* get_name() const override { return "always_failing_provider"; }
+
+protected:
+    future<> reload() override {
+        ++_calls;
+        throw std::runtime_error("simulated total credential-provider failure");
+    }
+};
+
+} // anonymous namespace
+
+// Documents aws_credentials_provider_chain::get_aws_credentials()'s contract: on total
+// failure it returns falsy credentials instead of throwing (never caches or backs off).
+// client::update_credentials_and_rearm() relies on this to tell "never tried" from "tried
+// and failed" and avoid clobbering still-valid credentials on a transient refresh failure;
+// that method is private and hardcoded to real AWS/IMDS hosts, so it isn't exercised here.
+SEASTAR_THREAD_TEST_CASE(test_credentials_chain_returns_falsy_on_total_failure) {
+    unsigned calls = 0;
+    aws::aws_credentials_provider_chain provider_chain;
+    provider_chain.add_credentials_provider(std::make_unique<always_failing_provider>(calls));
+
+    constexpr unsigned attempts = 5;
+    s3::aws_credentials credentials{
+        .access_key_id = "STILL_VALID_ACCESS_KEY",
+        .secret_access_key = "STILL_VALID_SECRET_KEY",
+    };
+    for (unsigned i = 0; i < attempts; i++) {
+        auto new_creds = provider_chain.get_aws_credentials().get();
+        BOOST_REQUIRE(!new_creds); // total failure -> falsy creds, not an exception
+        if (new_creds) {
+            credentials = std::move(new_creds);
+        }
+    }
+    BOOST_REQUIRE_EQUAL(calls, attempts);
+    BOOST_REQUIRE_EQUAL(credentials.access_key_id, "STILL_VALID_ACCESS_KEY");
+    BOOST_REQUIRE_EQUAL(credentials.secret_access_key, "STILL_VALID_SECRET_KEY");
+}
+
 BOOST_AUTO_TEST_CASE(s3_fqn_manipulation) {
     std::string bucket_name, object_name;
     // Empty input
