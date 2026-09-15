@@ -19,6 +19,7 @@
 #include "db/large_data_handler.hh"
 #include "db/corrupt_data_handler.hh"
 #include "keys/keys.hh"
+#include "query/query-result-set.hh"
 #include "schema/schema_fwd.hh"
 #include "sstables/sstable_directory.hh"
 #include "sstables/sstables_manager.hh"
@@ -46,6 +47,22 @@ struct sstable_manager_service {
         return sst_man.close();
     }
 };
+
+/// Read the rows of one partition of a system table, from the sstables of a data dir
+///
+/// Everything an offline reader of a system table needs: brings up an sstables
+/// manager of its own, locates the directory of the table under \p scylla_data_path
+/// unless \p table_directory names it, reads the partition and hands each of its
+/// rows to \p consumer. A table with no sstables, or without that partition,
+/// yields no rows.
+future<> query_system_table_offline(const db::config& dbcfg,
+                                    std::filesystem::path scylla_data_path,
+                                    schema_ptr schema,
+                                    partition_key pk,
+                                    std::optional<clustering_key> ck,
+                                    reader_permit permit,
+                                    std::function<void(const query::result_set_row&)> consumer,
+                                    std::optional<std::filesystem::path> table_directory = std::nullopt);
 
 mutation_opt read_mutation_from_table_offline(sharded<sstable_manager_service>& sst_man,
                                               reader_permit permit,
