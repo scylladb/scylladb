@@ -166,6 +166,31 @@ def test_resolve_table_filter_id_accepts_table_id_with_keyspace() -> None:
         resolve_table_filter_id(filter_args(table=str(TABLE2_ID), keyspace="ks1"), topology)
 
 
+def test_resolve_table_filter_id_prefers_keyspace_table_name_over_table_id() -> None:
+    # A table may be named after another table's id written without dashes. Within the
+    # given keyspace that name still wins, as it does when --keyspace is not given.
+    table2_hex = TABLE2_ID.hex
+    topology = build_topology({HOST1_ID: HostSpec("10.0.0.1", "dc1", "rack1")}, tables={
+        TABLE1_ID: ("ks1", table2_hex),
+        TABLE2_ID: ("ks2", "users"),
+        TABLE3_ID: ("ks2", table2_hex),
+    })
+
+    assert resolve_table_filter_id(filter_args(table=table2_hex, keyspace="ks1"), topology) == TABLE1_ID
+    assert resolve_table_filter_id(filter_args(table=table2_hex, keyspace="ks2"), topology) == TABLE3_ID
+
+
+def test_resolve_table_filter_id_uses_table_id_when_keyspace_has_no_such_name() -> None:
+    # The id's spelling names a table in another keyspace only, so it must not shadow the id.
+    table2_hex = TABLE2_ID.hex
+    topology = build_topology({HOST1_ID: HostSpec("10.0.0.1", "dc1", "rack1")}, tables={
+        TABLE1_ID: ("ks1", table2_hex),
+        TABLE2_ID: ("ks2", "users"),
+    })
+
+    assert resolve_table_filter_id(filter_args(table=table2_hex, keyspace="ks2"), topology) == TABLE2_ID
+
+
 def test_filter_table_id_respects_keyspace() -> None:
     topology = build_topology({HOST1_ID: HostSpec("10.0.0.1", "dc1", "rack1")}, tables={
         TABLE1_ID: ("ks1", "users"),

@@ -196,11 +196,12 @@ def get_tablet_filter(args, topo: Topology) -> TabletFilter:
     return accepts
 
 
-def is_table_id(topo: Topology, table_arg: str) -> bool:
+def known_table_id(topo: Topology, table_arg: str) -> TableId | None:
     try:
-        return topo.has_table(parse_uuid(table_arg))
+        table_id = parse_uuid(table_arg)
     except ValueError:
-        return False
+        return None
+    return table_id if topo.has_table(table_id) else None
 
 
 def resolve_table_filter_id(args, topo: Topology) -> TableId | None:
@@ -210,11 +211,16 @@ def resolve_table_filter_id(args, topo: Topology) -> TableId | None:
     if args.table is None:
         return None
 
-    # A table id has no dot either, but names its table without the keyspace.
-    if "." not in args.table and args.keyspace is not None and not is_table_id(topo, args.table):
-        return resolve_table_id(topo, f"{args.keyspace}.{args.table}")
+    if "." not in args.table and args.keyspace is not None:
+        qualified_name = f"{args.keyspace}.{args.table}"
+        # A table id has no dot either, but names its table without the keyspace. A table
+        # in that keyspace named like the id still wins, as it would without --keyspace.
+        table_id = known_table_id(topo, args.table)
+        if table_id is None or any(name == qualified_name for _, name in topo.iter_tables()):
+            return resolve_table_id(topo, qualified_name)
+    else:
+        table_id = resolve_table_id(topo, args.table)
 
-    table_id = resolve_table_id(topo, args.table)
     if args.keyspace is not None and topo.get_keyspace_name(table_id) != args.keyspace:
         raise Exception(f"Table {args.table} is not in keyspace {args.keyspace}")
     return table_id
