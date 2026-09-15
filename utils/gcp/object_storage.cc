@@ -46,6 +46,10 @@ static constexpr char GCP_OBJECT_SCOPE_FULL_CONTROL[] = "https://www.googleapis.
 
 static constexpr char STORAGE_APIS_URI[] = "https://storage.googleapis.com";
 static constexpr char APPLICATION_JSON[] = "application/json";
+// A cancelled resumable upload is answered with 499, which seastar's status_type
+// does not name.
+static constexpr int CLIENT_CLOSED_REQUEST = 499;
+
 static constexpr char LOCATION[] = "Location";
 static constexpr char CONTENT_RANGE[] = "Content-Range";
 static constexpr char RANGE[] = "Range";
@@ -120,9 +124,16 @@ public:
             } catch (...) {
                 _exception = std::current_exception();
             }
-            if (auto ex = std::exchange(_exception, {})) {
-                co_await remove_upload();
-                std::rethrow_exception(ex);
+            if (_exception) {
+                // Cancelling is best effort: whether it fails in remove_upload() itself or
+                // in the request under it, the upload's own error is the one the caller
+                // needs, so hold it across the cancel and rethrow it below.
+                try {
+                    co_await remove_upload();
+                } catch (...) {
+                    gcp_storage.warn("Could not cancel upload of {}:{}: {}", _bucket, _object_name, std::current_exception());
+                }
+                std::rethrow_exception(std::exchange(_exception, {}));
             }
         }
     }
@@ -131,9 +142,15 @@ public:
         return min_gcp_storage_chunk_size;
     }
 
+    struct session_status {
+        bool completed = false;   // the service finalized the object while we asked
+        uint64_t committed = 0;
+    };
+
     future<> acquire_session();
     future<> do_single_upload(std::deque<temporary_buffer<char>>, size_t offset, size_t len, bool final);
     future<> check_upload();
+    future<session_status> query_session();
     future<> remove_upload();
     future<> adjust_memory_limit(size_t);
     future<> maybe_do_upload(bool force) {
@@ -598,7 +615,7 @@ utils::gcp::storage::client::impl::send_with_retry(const std::string& path, cons
              * resumable upload protocol works.
              */
             if (status_class != reply::status_class::informational && status_class != reply::status_class::success &&
-                rep._status != status_type::permanent_redirect) {
+                rep._status != status_type::permanent_redirect && int(rep._status) != CLIENT_CLOSED_REQUEST) {
                 if (rep._status == status_type::unauthorized) {
                     gcp_storage.warn("Request to failed with status {}. Refreshing credentials.", rep._status);
                     co_await authorize(req, scope);
@@ -770,10 +787,23 @@ future<> utils::gcp::storage::client::object_data_sink::do_single_upload(std::de
     // Enforce our concurrency constraints
     auto sem_units = co_await seastar::get_units(_semaphore, 1);
 
+    if (_exception) {
+        // An earlier chunk failed while this one waited its turn, so the session is not
+        // where this chunk expects it to be.
+        gcp_storage.debug("{}:{} skipping the chunk at {} after an earlier failure", _bucket, _object_name, offset);
+        co_return;
+    }
+
     // our file range. if the sink was closed, we can set the
     // final size, otherwise, leave it open (*)
     auto last = offset + std::max(len, size_t(1)) - 1; // inclusive.
     auto end = offset + len;
+
+    // A server that keeps not advancing would otherwise spin here. The bound covers the
+    // whole loop, so it does not matter which branch below decided not to move `offset`.
+    constexpr unsigned max_stalled = 10;
+    unsigned stalled = 0;
+    auto progress_at = offset;
 
     for (;;) {
         // A zero-length chunk names no bytes, so it must not name a last byte:
@@ -791,6 +821,15 @@ future<> utils::gcp::storage::client::object_data_sink::do_single_upload(std::de
             );
 
         try {
+            if (offset != progress_at) {
+                progress_at = offset;
+                stalled = 0;
+            } else if (stalled++ == max_stalled) {
+                throw failed_upload_error(308, fmt::format("{}:{} made no progress at offset {} in {} attempts"
+                    , _bucket, _object_name, offset, stalled
+                ));
+            }
+
             if (_session_path.empty()) {
                 co_await acquire_session();
             }
@@ -822,12 +861,45 @@ future<> utils::gcp::storage::client::object_data_sink::do_single_upload(std::de
                 co_return; // done and happy
             default:
                 if (int(res.result()) == 308) {
+                    // A Range on a 308 reports what the session holds, counted from byte 0. It
+                    // never describes this chunk, so its absence says only that we do not know
+                    // where the session stands - ask instead of assuming the chunk was dropped.
+                    // https://docs.cloud.google.com/storage/docs/performing-resumable-uploads
                     uint64_t first = 0, new_last = 0;
-                    auto acknowledged = parse_response_range(res.reply, first, new_last);
-                    if (acknowledged && last != new_last) {
-                        auto written = (new_last + 1) - offset;
+                    uint64_t committed = 0;
 
-                        gcp_storage.debug("{}:{} partial upload ({} bytes)", _bucket, _object_name, written);
+                    if (parse_response_range(res.reply, first, new_last)) {
+                        committed = new_last + 1;
+                    } else if (len == 0) {
+                        // the "bytes */<total>" finalize names no chunk to resend; leave the
+                        // session where it is and let check_upload() settle the object
+                        committed = offset;
+                    } else {
+                        auto status = co_await query_session();
+                        if (status.completed) {
+                            _impl->count_write_bytes(len);
+                            co_return;
+                        }
+                        committed = status.committed;
+                    }
+
+                    if (committed < offset) {
+                        // The session lost bytes it had already acknowledged, and
+                        // maybe_do_upload() released the buffers holding them, so the upload
+                        // can never be made contiguous again.
+                        throw failed_upload_error(int(res.result()), fmt::format("{}:{} session holds {} bytes, behind the chunk at offset {}"
+                            , _bucket, _object_name, committed, offset
+                        ));
+                    }
+
+                    auto acknowledged = committed - offset;
+
+                    if (acknowledged < len) {
+                        auto written = acknowledged;
+
+                        gcp_storage.debug("{}:{} session holds {} bytes, {} of the chunk at {}"
+                            , _bucket, _object_name, committed, acknowledged, offset
+                        );
 
                         if (!final && (len - written) < min_gcp_storage_chunk_size) {
                             written = len - std::min(min_gcp_storage_chunk_size, len);
@@ -856,13 +928,8 @@ future<> utils::gcp::storage::client::object_data_sink::do_single_upload(std::de
                         assert(len == total);
                         continue;
                     }
-                    // incomplete. ok for partial
-                    if (acknowledged) {
-                        // Acknowledged through our last byte. A 308 without a
-                        // Range header means GCS persisted none of this chunk,
-                        // and then there is nothing to count.
-                        _impl->count_write_bytes(len);
-                    }
+                    // the whole chunk landed
+                    _impl->count_write_bytes(len);
                     gcp_storage.debug("{}:{} chunk {}:{} done", _bucket, _object_name, offset, offset+len);
                     co_return;
                 }
@@ -910,6 +977,39 @@ future<> utils::gcp::storage::client::object_data_sink::check_upload() {
     }
 }
 
+// Ask the service where the session stands. Unlike an upload reply, a 308 here with no
+// Range does mean the session holds nothing.
+// https://docs.cloud.google.com/storage/docs/performing-resumable-uploads#status-check
+future<utils::gcp::storage::client::object_data_sink::session_status>
+utils::gcp::storage::client::object_data_sink::query_session() {
+    auto res = co_await _impl->send_with_retry(_session_path
+        , GCP_OBJECT_SCOPE_READ_WRITE
+        , ""s
+        , APPLICATION_JSON
+        , httpclient::method_type::PUT
+        , rest::key_values({ { CONTENT_RANGE, "bytes */*"s } })
+        , _as
+    );
+
+    switch (res.result()) {
+    case status_type::ok:
+    case status_type::created:
+        // the service finalized the object while we were asking
+        _completed = true;
+        gcp_storage.debug("{}:{} completed while querying the session", _bucket, _object_name);
+        co_return session_status{.completed = true};
+    case status_type::permanent_redirect: {
+        uint64_t first = 0, last = 0;
+        auto held = parse_response_range(res.reply, first, last) ? last + 1 : 0;
+        gcp_storage.debug("{}:{} session holds {} bytes", _bucket, _object_name, held);
+        co_return session_status{.committed = held};
+    }
+    default:
+        throw failed_upload_error(int(res.result()),
+                                  fmt::format("{}:{} could not query the session: {}", _bucket, _object_name, get_gcp_error_message(res.body())));
+    }
+}
+
 // https://cloud.google.com/storage/docs/performing-resumable-uploads#cancel-upload
 future<> utils::gcp::storage::client::object_data_sink::remove_upload() {
     if (_completed || _session_path.empty()) {
@@ -928,19 +1028,15 @@ future<> utils::gcp::storage::client::object_data_sink::remove_upload() {
     );
 
     switch (int(res.result())) {
-    case 499: // not in enum yet
+    case CLIENT_CLOSED_REQUEST:
         gcp_storage.debug("Upload of {}:{} removed ({})", _bucket, _object_name, _session_path);
         co_return; // done and happy
-    default: {
-        auto msg = get_gcp_error_message(res.body());
-        gcp_storage.warn("Failed to remove broken upload of {}:{} ({})", _bucket, _object_name, msg);
-        if (!_exception) {
-            throw failed_upload_error(int(res.result()), fmt::format("{}:{} incomplete. ({}): {}"
-                , _bucket, _object_name, res.reply._headers[RANGE]
-                , msg
-            ));
-        }
-    }
+    default:
+        // Only close() cancels, and only once the upload has already failed, so there is
+        // no caller left for this status to be reported to. Warn and let the upload's own
+        // error stand.
+        gcp_storage.warn("Failed to remove broken upload of {}:{} ({})", _bucket, _object_name, get_gcp_error_message(res.body()));
+        break;
     }
 }
 
