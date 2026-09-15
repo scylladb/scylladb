@@ -12,12 +12,14 @@
 #include <seastar/util/closeable.hh>
 
 #include "utils/log.hh"
+#include "db/schema_tables.hh"
 #include "db/system_keyspace.hh"
 #include "mutation/mutation.hh"
 #include "readers/combined.hh"
 #include "replica/tablets.hh"
 #include "tools/read_mutation.hh"
 #include "types/list.hh"
+#include "types/map.hh"
 #include "types/tuple.hh"
 
 namespace tools {
@@ -43,6 +45,29 @@ future<tablets_t> load_system_tablets(const db::config& dbcfg,
         throw std::runtime_error(fmt::format("failed to find tablets for table {}", table));
     }
     co_return tablets;
+}
+
+future<std::optional<data_dictionary::storage_options>> load_keyspace_storage_options(const db::config& dbcfg,
+                                      std::filesystem::path scylla_data_path,
+                                      std::string_view keyspace,
+                                      reader_permit permit) {
+    std::optional<data_dictionary::storage_options> options;
+    co_await query_system_table_offline(dbcfg, scylla_data_path, db::schema_tables::scylla_keyspaces(),
+            {data_value(sstring(keyspace))}, std::nullopt, permit,
+            [&options] (const query::result_set_row& row) {
+                auto storage_type = row.get<sstring>("storage_type");
+                auto storage_options = row.get<map_type_impl::native_type>("storage_options");
+                if (options || !storage_type || !storage_options) {
+                    return;
+                }
+                std::map<sstring, sstring> values;
+                for (const auto& [key, value] : *storage_options) {
+                    values.emplace(value_cast<sstring>(key), value_cast<sstring>(value));
+                }
+                options.emplace();
+                options->value = data_dictionary::storage_options::from_map(*storage_type, values);
+            });
+    co_return options;
 }
 
 future<std::optional<local_node_info>> load_local_node_info(const db::config& dbcfg,
