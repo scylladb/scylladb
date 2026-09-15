@@ -11,7 +11,16 @@ env:
   CLEANER_OUTPUT_PATH: build/clang-include-cleaner.log
   # the "idl" subdirectory does not contain C++ source code. the .hh files in it are
   # supposed to be processed by idl-compiler.py, so we don't check them using the cleaner
+<<<<<<< HEAD
   CLEANER_DIRS: test/unit exceptions alternator api auth cdc compaction db dht gms index lang message mutation mutation_writer node_ops redis replica
+||||||| parent of 99f4121cd8 (ci: pin GitHub Actions to commit SHAs and migrate to Node.js 24)
+  CLEANER_DIRS: test/unit exceptions alternator api auth cdc compaction db dht gms index lang message mutation mutation_writer node_ops raft redis replica service
+  SEASTAR_BAD_INCLUDE_OUTPUT_PATH: build/seastar-bad-include.log
+=======
+  CLEANER_DIRS: test/unit exceptions alternator api auth cdc compaction db dht gms index lang message mutation mutation_writer node_ops raft redis replica service
+  SEASTAR_BAD_INCLUDE_OUTPUT_PATH: build/seastar-bad-include.log
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+>>>>>>> 99f4121cd8 (ci: pin GitHub Actions to commit SHAs and migrate to Node.js 24)
 
 permissions: {}
 
@@ -30,7 +39,7 @@ jobs:
     runs-on: ubuntu-latest
     container: ${{ needs.read-toolchain.outputs.image }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: true
       - run: |
@@ -80,7 +89,31 @@ jobs:
           done
       - run: |
           echo "::remove-matcher owner=clang-include-cleaner::"
+<<<<<<< HEAD
       - uses: actions/upload-artifact@v4
+||||||| parent of 99f4121cd8 (ci: pin GitHub Actions to commit SHAs and migrate to Node.js 24)
+      - run: |
+          echo "::add-matcher::.github/seastar-bad-include.json"
+      - name: check for seastar includes
+        run: |
+          git -c safe.directory="$PWD"    \
+            grep -nE '#include +"seastar/' \
+            | tee "$SEASTAR_BAD_INCLUDE_OUTPUT_PATH"
+      - run: |
+          echo "::remove-matcher owner=seastar-bad-include::"
+      - uses: actions/upload-artifact@v4
+=======
+      - run: |
+          echo "::add-matcher::.github/seastar-bad-include.json"
+      - name: check for seastar includes
+        run: |
+          git -c safe.directory="$PWD"    \
+            grep -nE '#include +"seastar/' \
+            | tee "$SEASTAR_BAD_INCLUDE_OUTPUT_PATH"
+      - run: |
+          echo "::remove-matcher owner=seastar-bad-include::"
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+>>>>>>> 99f4121cd8 (ci: pin GitHub Actions to commit SHAs and migrate to Node.js 24)
         with:
           name: Logs (clang-include-cleaner)
           path: "./${{ env.CLEANER_OUTPUT_PATH }}"
