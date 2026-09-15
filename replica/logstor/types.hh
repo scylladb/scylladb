@@ -72,6 +72,13 @@ struct log_record_header {
     primary_index_key index_key() const {
         return primary_index_key(key);
     }
+
+    bool operator==(const log_record_header& other) const noexcept {
+        return key.token() == other.key.token()
+            && key.key().representation() == other.key.key().representation()
+            && timestamp == other.timestamp
+            && table == other.table;
+    }
 };
 
 struct log_record {

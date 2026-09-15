@@ -540,9 +540,43 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_ondisk_serialized_sizes) {
     });
 
     check_serialized_size("record_header", ondisk::record_header {
-        .header_size = 0x0a0b0c0d,
+        .key_size = 0x0a0b0c0d,
         .data_size = 0xcafebabe,
     });
+}
+
+// Checks that the log record header encoding round-trips, including a key longer than the inline size of
+// managed_bytes, and that its size is the fixed part plus the key.
+SEASTAR_THREAD_TEST_CASE(test_logstor_log_record_header_round_trip) {
+    auto schema = make_kv_schema();
+    auto m = make_kv_mutation(schema, sstring(100, 'k'), "v");
+    log_record_header header {
+        .key = m.decorated_key(),
+        .timestamp = api::timestamp_type(0x0f0e0d0c0b0a0908),
+        .table = table_id(utils::UUID(int64_t(0x1122334455667788), int64_t(0x99aabbccddeeff00))),
+    };
+    // The representation is the key bytes plus their length prefix.
+    const auto key_size = header.key.key().representation().size();
+    BOOST_REQUIRE_GE(key_size, 100u);
+
+    const auto expected_size = ondisk::log_record_header_fixed_size + key_size;
+    BOOST_REQUIRE_EQUAL(ondisk::log_record_header_size(header), expected_size);
+
+    seastar::measuring_output_stream ms;
+    ondisk::write_log_record_header(ms, header);
+    BOOST_REQUIRE_EQUAL(ms.size(), expected_size);
+
+    std::vector<char> buf(expected_size);
+    seastar::simple_memory_output_stream out(buf.data(), buf.size());
+    ondisk::write_log_record_header(out, header);
+    BOOST_REQUIRE_EQUAL(out.size(), 0u);
+
+    seastar::simple_memory_input_stream in(buf.data(), buf.size());
+    auto read_back = ondisk::read_log_record_header(in, key_size);
+    BOOST_REQUIRE_EQUAL(in.size(), 0u);
+    BOOST_REQUIRE(read_back == header);
+    BOOST_REQUIRE(read_back.key.equal(*schema, header.key));
+    BOOST_REQUIRE(read_back.index_key() == header.index_key());
 }
 
 // Checks that the index key hashes the internal representation of the partition key and keeps its token.
@@ -1175,6 +1209,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_range_erase_and_clear_space_
 // Checks that scan_segment() returns mixed-buffer log locations that can be used to read back the expected records.
 SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_mixed_buffers_report_readable_log_locations) {
     auto schema = make_kv_schema();
+    // A key well past the inline size of managed_bytes, so the variable part of the record header is exercised.
+    const sstring long_pk(100, 'k');
 
     raw_write_buffer wb0(64 * 1024, segment_kind::mixed);
     raw_write_buffer wb1(64 * 1024, segment_kind::mixed);
@@ -1182,12 +1218,12 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_mixed_buffers_report_readable
     auto expected0 = make_kv_mutation(schema, "pk0", "value0", api::timestamp_type(11));
     auto expected1 = make_kv_mutation(schema, "pk1", "value1-longer", api::timestamp_type(12));
     auto expected2 = make_kv_mutation(schema, "pk2", "v2", api::timestamp_type(13));
-    auto expected3 = make_kv_mutation(schema, "pk3", "value-three-is-even-longer-than-before", api::timestamp_type(14));
+    auto expected3 = make_kv_mutation(schema, long_pk, "value-three-is-even-longer-than-before", api::timestamp_type(14));
 
     wb0.append(log_record_writer(make_log_record(schema, "pk0", "value0", api::timestamp_type(11))));
     wb0.append(log_record_writer(make_log_record(schema, "pk1", "value1-longer", api::timestamp_type(12))));
     wb1.append(log_record_writer(make_log_record(schema, "pk2", "v2", api::timestamp_type(13))));
-    wb1.append(log_record_writer(make_log_record(schema, "pk3", "value-three-is-even-longer-than-before", api::timestamp_type(14))));
+    wb1.append(log_record_writer(make_log_record(schema, long_pk, "value-three-is-even-longer-than-before", api::timestamp_type(14))));
 
     wb0.seal(segment_sequence{23}, std::nullopt, ondisk::block_alignment);
     wb1.seal(segment_sequence{23}, std::nullopt, ondisk::block_alignment);
@@ -1236,6 +1272,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_mixed_buffers_report_readable
     BOOST_REQUIRE_EQUAL(seen_record_headers[1].table, schema->id());
     BOOST_REQUIRE_EQUAL(seen_record_headers[2].table, schema->id());
     BOOST_REQUIRE_EQUAL(seen_record_headers[3].table, schema->id());
+    BOOST_REQUIRE(seen_record_headers[0].key.equal(*schema, expected0.decorated_key()));
+    BOOST_REQUIRE(seen_record_headers[3].key.equal(*schema, expected3.decorated_key()));
 
     BOOST_REQUIRE_EQUAL(seen_locations.size(), 4u);
     assert_that(read_record_at_location(segment_copy, seen_locations[0]).mut.to_mutation(schema)).is_equal_to(expected0);
@@ -1248,6 +1286,57 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_mixed_buffers_report_readable
     BOOST_REQUIRE(maybe_header->kind == segment_kind::mixed);
     BOOST_REQUIRE_EQUAL(maybe_header->segment_seq.value, 23u);
     BOOST_REQUIRE(std::holds_alternative<segment_header::mixed>(maybe_header->v));
+}
+
+// Checks that scan_segment() stops at a record whose key_size is corrupt instead of trusting it, and
+// resumes with the next buffer of a mixed segment.
+SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_rejects_corrupt_key_size) {
+    auto schema = make_kv_schema();
+
+    auto scan_with_corrupt_key_size = [&] (uint32_t key_size) {
+        raw_write_buffer wb0(64 * 1024, segment_kind::mixed);
+        raw_write_buffer wb1(64 * 1024, segment_kind::mixed);
+        wb0.append(log_record_writer(make_log_record(schema, "pk0", "value0", api::timestamp_type(31))));
+        wb0.append(log_record_writer(make_log_record(schema, "pk1", "value1", api::timestamp_type(32))));
+        wb1.append(log_record_writer(make_log_record(schema, "pk2", "value2", api::timestamp_type(33))));
+        wb0.seal(segment_sequence{29}, std::nullopt, ondisk::block_alignment);
+        wb1.seal(segment_sequence{29}, std::nullopt, ondisk::block_alignment);
+
+        auto serialized0 = make_serialized_buffer_copy(wb0);
+        auto serialized1 = make_serialized_buffer_copy(wb1);
+        // The first record_header of the first buffer follows the buffer header; key_size is its first field.
+        seastar::simple_memory_output_stream out(serialized0.get_write() + ondisk::buffer_header_size, sizeof(uint32_t));
+        ser::serialize(out, key_size);
+
+        auto segment = concat_serialized_buffers({&serialized0, &serialized1});
+        const auto segment_size = segment.size();
+        auto in = seastar::util::as_input_stream(std::move(segment));
+
+        std::vector<api::timestamp_type> seen;
+        scan_segment(in, log_segment_id{5}, segment_size,
+            [] (const segment_header&) {
+                return make_ready_future<>();
+            },
+            [&seen] (log_location, const log_record_header& rh) {
+                seen.push_back(rh.timestamp);
+                return want_data::no;
+            },
+            [] (log_location, log_record) {
+                return make_ready_future<>();
+            }).get();
+        in.close().get();
+        return seen;
+    };
+
+    // Above the partition key size cap: rejected by validate_record_header().
+    auto seen = scan_with_corrupt_key_size(ondisk::max_key_size + 1);
+    BOOST_REQUIRE_EQUAL(seen.size(), 1u);
+    BOOST_REQUIRE_EQUAL(seen[0], api::timestamp_type(33));
+
+    // Within the cap but past the end of the buffer: rejected by the size check.
+    seen = scan_with_corrupt_key_size(ondisk::max_key_size);
+    BOOST_REQUIRE_EQUAL(seen.size(), 1u);
+    BOOST_REQUIRE_EQUAL(seen[0], api::timestamp_type(33));
 }
 
 // Checks that scan_segment() only delivers records whose headers were accepted with want_data::yes.
