@@ -193,7 +193,6 @@ def test_count(cql, test_table, scylla_only):
     check_count('partition end', 1)
 
 
-@pytest.mark.xfail(reason="SCYLLADB-4509: GROUP BY is ignored, one global row comes back")
 @pytest.mark.parametrize("test_keyspace", ["tablets", "vnodes"], indirect=True)
 def test_group_by(cql, test_table, scylla_only):
     """ GROUP BY works on a primary key prefix of the output schema, like on any table.
@@ -226,7 +225,6 @@ def test_group_by(cql, test_table, scylla_only):
     assert sorted((r.mutation_source, r.count) for r in rows) == expected
 
 
-@pytest.mark.xfail(reason="SCYLLADB-4509: an aggregate returns one row per internal page")
 @pytest.mark.parametrize("test_keyspace", ["tablets", "vnodes"], indirect=True)
 def test_aggregate_paging(cql, test_table, scylla_only):
     """ An aggregate is paged internally and still returns one result set.
