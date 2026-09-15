@@ -156,7 +156,7 @@ public:
     future<> stop();
 
     virtual void on_create_view(const sstring& ks_name, const sstring& view_name) override {};
-    virtual void on_update_view(const sstring& ks_name, const sstring& view_name, bool columns_changed) override {};
+    virtual void on_update_view(const sstring& ks_name, const sstring& view_name, bool columns_changed, bool indexes_changed) override {};
     virtual void on_drop_view(const sstring& ks_name, const sstring& view_name) override;
 
     // Used ONLY to load staging sstables migrated during intra-node tablet migration.
