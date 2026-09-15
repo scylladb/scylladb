@@ -53,3 +53,12 @@ mutation_opt read_mutation_from_table_offline(sharded<sstable_manager_service>& 
                                               std::function<schema_ptr()> table_schema,
                                               data_value primary_key,
                                               std::optional<data_value> clustering_key);
+
+/// Same, for a table whose partition key has more than one component
+mutation_opt read_mutation_from_table_offline(sharded<sstable_manager_service>& sst_man,
+                                              reader_permit permit,
+                                              std::filesystem::path table_path,
+                                              std::string_view keyspace,
+                                              std::function<schema_ptr()> table_schema,
+                                              std::vector<data_value> primary_key,
+                                              std::optional<data_value> clustering_key);

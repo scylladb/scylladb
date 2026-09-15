@@ -75,6 +75,17 @@ mutation_opt read_mutation_from_table_offline(sharded<sstable_manager_service>& 
                                               std::function<schema_ptr()> table_schema,
                                               data_value primary_key,
                                               std::optional<data_value> clustering_key) {
+    return read_mutation_from_table_offline(sst_man, std::move(permit), std::move(table_path), keyspace,
+            std::move(table_schema), std::vector<data_value>{std::move(primary_key)}, std::move(clustering_key));
+}
+
+mutation_opt read_mutation_from_table_offline(sharded<sstable_manager_service>& sst_man,
+                                              reader_permit permit,
+                                              std::filesystem::path table_path,
+                                              std::string_view keyspace,
+                                              std::function<schema_ptr()> table_schema,
+                                              std::vector<data_value> primary_key,
+                                              std::optional<data_value> clustering_key) {
     sharded<sstables::sstable_directory> sst_dirs;
     sst_dirs.start(
         sharded_parameter([&sst_man] { return std::ref(sst_man.local().sst_man); }),
@@ -117,7 +128,7 @@ mutation_opt read_mutation_from_table_offline(sharded<sstable_manager_service>& 
     }
 
     auto schema = table_schema();
-    auto pk = partition_key::from_deeply_exploded(*schema, {std::move(primary_key)});
+    auto pk = partition_key::from_deeply_exploded(*schema, std::move(primary_key));
     auto dk = dht::decorate_key(*schema, pk);
     auto pr = dht::partition_range::make_singular(dk);
     auto pb = partition_slice_builder(*schema);
