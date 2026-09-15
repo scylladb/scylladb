@@ -847,13 +847,20 @@ static future<std::tuple<foreign_ptr<lw_shared_ptr<typename ResultBuilder::resul
         db::timeout_clock::time_point timeout,
         bool tombstone_gc_enabled,
         std::function<ResultBuilder(query::result_memory_accounter&&)> result_builder_factory) {
+    auto& local_db = db.local();
+
+    // The shard readers look the table up on their shards synchronously (read_context::create_reader()),
+    // so a shard which hasn't committed a pending schema change yet cannot wait for it there. Wait here
+    // instead: this shard's pending commit resolves once all shards have committed. The wait comes before
+    // the empty-result shortcut below, which looks the table up on this shard too.
+    co_await local_db.wait_for_schema_change_commit(s->id(), timeout);
+
     if (cmd.get_row_limit() == 0 || cmd.slice.partition_row_limit() == 0 || cmd.partition_limit == 0) {
         co_return std::tuple(
                 make_foreign(make_lw_shared<typename ResultBuilder::result_type>()),
-                db.local().find_column_family(s).get_global_cache_hit_rate());
+                local_db.find_column_family(s).get_global_cache_hit_rate());
     }
 
-    auto& local_db = db.local();
     auto& stats = local_db.get_stats();
     const auto short_read_allowed = query::short_read(cmd.slice.options.contains<query::partition_slice::option::allow_short_read>());
 
