@@ -1128,6 +1128,12 @@ future<> schema_applier::finalize_tables_and_views() {
             co_await db.make_column_family_directory(created_cdc);
         }
         for (auto& created_table : tables.created) {
+            // First logstor table created at runtime on a shard that booted with
+            // none: start the engine lazily instead of never (recover_logstor() only
+            // runs once, at boot).
+            if (created_table->logstor_enabled()) {
+                co_await db.ensure_logstor_started();
+            }
             co_await db.make_column_family_directory(created_table);
         }
         for (auto& created_view : views.created) {
