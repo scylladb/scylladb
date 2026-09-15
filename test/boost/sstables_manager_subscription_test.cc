@@ -41,7 +41,7 @@ struct notification_probe {
     bool resumed_after_destruction = false;
 };
 
-// Mimics db::snapshot::backup_task_impl::worker: the deleted_sstable callback
+// Mimics db::snapshot::backup_state::worker: the deleted_sstable callback
 // suspends and then uses the handler.
 class test_event_handler final : public sstables::sstables_manager_event_handler {
     notification_probe& _probe;
@@ -57,13 +57,13 @@ public:
 
     virtual future<> deleted_sstable(sstables::generation_type gen) const override {
         // Read the handler's state before suspending, the way
-        // backup_task_impl::worker::deleted_sstable captures `this`
+        // backup_state::worker::deleted_sstable captures `this`
         // in the lambda it passes to smp::submit_to.
         auto& probe = _probe;
         probe.notified = true;
 
-        // backup_task_impl::worker::deleted_sstable suspends here, on
-        // smp::submit_to(_task._backup_shard, ...). Suspend on a promise the
+        // backup_state::worker::deleted_sstable suspends here, on
+        // smp::submit_to(_state._backup_shard, ...). Suspend on a promise the
         // test controls, so that the handler can be destroyed while the
         // notification is in flight, deterministically.
         co_await probe.resume.get_future();
@@ -114,7 +114,7 @@ SEASTAR_TEST_CASE(test_deleted_sstable_notification_does_not_outlive_the_handler
 
         // Stop the handler with the notification still in flight, the way
         // sharded<worker>::stop() does at the end of
-        // db::snapshot::backup_task_impl::do_backup().
+        // db::snapshot::backup_state::do_backup().
         auto stopped = handler->stop();
         {
             // Resume the notification and wait for stop() when leaving this

@@ -32,7 +32,7 @@ enum class notification_event_type {
 };
 
 // Notifications are delivered asynchronously: the handler callback may suspend
-// (backup_task_impl::worker, for example, hops to the backup shard using
+// (backup_state::worker, for example, hops to the backup shard using
 // smp::submit_to), and the future it returns is discarded by the signal that
 // invokes it. Therefore disconnecting the subscription does not mean that no
 // callback is still in flight, and destroying the handler right after
