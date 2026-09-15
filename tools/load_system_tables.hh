@@ -12,6 +12,7 @@
 #include <map>
 #include <seastar/core/future.hh>
 
+#include "data_dictionary/storage_options.hh"
 #include "reader_permit.hh"
 #include "dht/token.hh"
 #include "locator/host_id.hh"
@@ -50,6 +51,18 @@ future<tablets_t> load_system_tablets(const db::config& dbcfg,
                                       table_id table,
                                       reader_permit permit,
                                       std::optional<std::filesystem::path> tablets_directory = std::nullopt);
+
+/// Load the storage options of a keyspace from "system_schema.scylla_keyspaces"
+///
+/// Says where the sstables of the tables of \p keyspace live: a local
+/// directory, or a bucket of an object store.
+///
+/// @returns the storage options, or nothing when the keyspace has no row there,
+///          which is how a keyspace on local storage is recorded
+future<std::optional<data_dictionary::storage_options>> load_keyspace_storage_options(const db::config& dbcfg,
+                                      std::filesystem::path scylla_data_path,
+                                      std::string_view keyspace,
+                                      reader_permit permit);
 
 /// Load the identity of the local node from "system.local" and "system.topology"
 ///
