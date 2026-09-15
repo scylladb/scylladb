@@ -22,8 +22,8 @@ READ_BUFF = 'input_buffer'
 WRITE_BUFF = 'output_buffer'
 SERIALIZER = 'serialize'
 DESERIALIZER = 'deserialize'
-SETSIZE = 'set_size'
 SIZETYPE = 'size_type'
+FRAME_VAR = '_frame'
 
 
 def reindent(indent, text):
@@ -318,12 +318,24 @@ class ClassDef(ASTBase):
 template <typename Output>
 void serializer<{full_name}>::write(Output& buf, const {full_name}& obj) {{""")
         if not self.final:
-            fprintln(cout, f"""  {SETSIZE}(buf, obj);""")
+            # Reserve the size field with a place holder and backpatch it once the
+            # members are written, instead of pre-computing the size with a full
+            # extra measuring pass over `obj` (which the outer serialize_to_buffer
+            # measuring pass already accounted for).
+            fprintln(cout, f"""  auto {FRAME_VAR} = start_frame(buf);""")
         for member in self.members:
             if isinstance(member, ClassDef) or isinstance(member, EnumDef):
                 continue
-            fprintln(cout, f"""  static_assert(is_equivalent<decltype(obj.{member.name}), {param_type(member.type)}>::value, "member value has a wrong type");
+            if is_range_of(member.type):
+                # range_of<T> is a concept, not a type: is_equivalent doesn't type-check against it.
+                element_type = param_type(member.type.template_parameters[0])
+                fprintln(cout, f"""  static_assert(utils::range_of<decltype(obj.{member.name}), {element_type}>, "member value has a wrong type");
   {SERIALIZER}(buf, obj.{member.name});""")
+            else:
+                fprintln(cout, f"""  static_assert(is_equivalent<decltype(obj.{member.name}), {param_type(member.type)}>::value, "member value has a wrong type");
+  {SERIALIZER}(buf, obj.{member.name});""")
+        if not self.final:
+            fprintln(cout, f"""  {FRAME_VAR}.end(buf);""")
         fprintln(cout, "}")
 
 
@@ -351,16 +363,34 @@ template <typename Input>
                 continue
             local_param = "__local_" + str(index)
             local_names[param.name] = local_param
-            if param.attribute:
-                deflt = param_type(param.type) + "()"
+            reconstruct_as = None
+            if param.attribute and param.attribute.startswith("reconstruct_as="):
+                reconstruct_as = param.attribute.split("=", 1)[1]
+            if is_range_of(param.type):
+                # range_of<T> defaults to reconstructing into utils::small_vector<T, 4>, using
+                # range_of<T>'s own element type T (no special affinity to `bytes`; it's just
+                # the common case). A `[[reconstruct_as=Type]]` attribute on the member overrides
+                # it when T itself isn't deserializable (e.g. a *_view element type, whose owning
+                # counterpart is what should actually be reconstructed).
+                if reconstruct_as:
+                    read_type = reconstruct_as
+                else:
+                    element_type = param_type(param.type.template_parameters[0])
+                    read_type = f"utils::small_vector<{element_type}, 4>"
+            else:
+                read_type = param_type(param.type)
+            # a reconstruct_as attribute only picks the read type above; it's not an
+            # "optional member" marker, so it must not trigger the optional-read codegen below.
+            if param.attribute and not reconstruct_as:
+                deflt = read_type + "()"
                 if param.default_value:
                     deflt = param.default_value
                 if deflt in local_names:
                     deflt = local_names[deflt]
                 fprintln(cout, f"""  auto {local_param} = (in.size()>0) ?
-    {DESERIALIZER}(in, std::type_identity<{param_type(param.type)}>()) : {deflt};""")
+    {DESERIALIZER}(in, std::type_identity<{read_type}>()) : {deflt};""")
             else:
-                fprintln(cout, f"""  auto {local_param} = {DESERIALIZER}(in, std::type_identity<{param_type(param.type)}>());""")
+                fprintln(cout, f"""  auto {local_param} = {DESERIALIZER}(in, std::type_identity<{read_type}>());""")
             params.append("std::move(" + local_param + ")")
         fprintln(cout, f"""
   {name}{self.template_param_names_str} res {{{", ".join(params)}}};
@@ -733,6 +763,7 @@ def parse_file(file_name):
     lbrack = pp.Literal("[").suppress()
     rbrack = pp.Literal("]").suppress()
     struct = pp.Keyword('struct').suppress()
+    auto_kw = pp.Keyword('auto').suppress()
     template = pp.Keyword('template').suppress()
     final = pp.Keyword('final')
     stub = pp.Keyword('stub')
@@ -775,7 +806,8 @@ def parse_file(file_name):
 
     default_value = equals - pp.SkipTo(';')
     member_name = pp.Combine(identifier - pp.Optional(lparen - rparen)("function_marker"))
-    class_member = type("type") - member_name("name") - opt_attributes - pp.Optional(default_value)("default") - semi
+    # trailing "auto" mirrors C++'s constrained-auto return type (e.g. utils::range_of<T> auto), purely documentational to the compiler
+    class_member = type("type") - pp.Optional(auto_kw) - member_name("name") - opt_attributes - pp.Optional(default_value)("default") - semi
     class_member.setParseAction(class_member_parse_action)
 
     template_param = pp.Group(identifier("type") - identifier("name"))
@@ -916,6 +948,10 @@ def is_variant(t):
 
 def is_optional(t):
     return isinstance(t, TemplateType) and t.name == "std::optional"
+
+
+def is_range_of(t):
+    return isinstance(t, TemplateType) and t.name == "utils::range_of"
 
 
 created_writers = set()
@@ -1158,6 +1194,9 @@ def add_param_write(current, base_state, vector=False, root_node=False):
                 res = res + add_param_writer_object(name, base_state, p, '_' + "variant", idx, root_node)
             elif is_local_writable_type(p):
                 res = res + add_param_writer_object(name, base_state, p, '_' + param_type(p), idx, root_node)
+    elif is_range_of(typ):
+        raise TypeError(f"range_of<T> member '{name}' is not supported on [[writable]] classes yet "
+                         "(only plain, non-writable classes are); see idl-compiler.py's is_range_of handling")
     else:
         print("something is wrong with type", typ)
     return res

@@ -16,6 +16,8 @@
 #include "utils/utf8.hh"
 #include "replica/database_fwd.hh"
 #include "schema/schema_fwd.hh"
+#include "utils/range_of.hh"
+#include "utils/small_vector.hh"
 #include <compare>
 #include <span>
 
@@ -103,13 +105,11 @@ public:
         return end();
     }
 
-    // Returns a range of managed_bytes_view
-    auto components() const {
+    utils::range_of<managed_bytes_view> auto components() const {
         return TopLevelView::compound::element_type::components(representation());
     }
 
-    // Returns a range of managed_bytes_view
-    auto components(const schema& s) const {
+    utils::range_of<managed_bytes_view> auto components(const schema& s) const {
         return components();
     }
 
@@ -306,13 +306,11 @@ public:
         return is_empty();
     }
 
-    // Returns a range of managed_bytes_view
-    auto components() const {
+    utils::range_of<managed_bytes_view> auto components() const {
         return TopLevelView::compound::element_type::components(representation());
     }
 
-    // Returns a range of managed_bytes_view
-    auto components(const schema& s) const {
+    utils::range_of<managed_bytes_view> auto components(const schema& s) const {
         return components();
     }
 
@@ -510,6 +508,11 @@ public:
     };
 };
 
+// idl-compiler.py's [[reconstruct_as=Type]] attribute value can't contain a top-level comma
+// (the .idl grammar splits attributes on it), so components()'s reconstruction type needs a
+// comma-free alias rather than utils::small_vector<bytes, 4> written out directly.
+using components_reconstruction_type = utils::small_vector<bytes, 4>;
+
 class partition_key_view : public compound_view_wrapper<partition_key_view> {
 public:
     using c_type = compound_type<allow_prefixes::no>;
@@ -595,7 +598,15 @@ public:
     partition_key(std::vector<bytes> v)
         : compound_wrapper(managed_bytes(c_type::serialize_value(std::move(v))))
     { }
-    partition_key(std::initializer_list<bytes> v) : partition_key(std::vector(v)) {}    
+    // accepts the same range shape components() returns, so a key can be rebuilt without materializing an intermediate std::vector
+    partition_key(utils::range_of<managed_bytes_view> auto&& v)
+        : compound_wrapper(managed_bytes(c_type::serialize_value(std::forward<decltype(v)>(v))))
+    { }
+    // matches components()'s [[reconstruct_as=components_reconstruction_type]] in keys.idl.hh
+    partition_key(utils::small_vector<bytes, 4> v)
+        : compound_wrapper(managed_bytes(c_type::serialize_value(std::move(v))))
+    { }
+    partition_key(std::initializer_list<bytes> v) : partition_key(std::vector(v)) {}
 
     partition_key(partition_key&& v) = default;
     partition_key(const partition_key& v) = default;
@@ -754,6 +765,14 @@ public:
         : prefix_compound_wrapper(compound::element_type::serialize_value(std::move(v)))
     { }
     clustering_key_prefix(std::vector<managed_bytes> v)
+        : prefix_compound_wrapper(compound::element_type::serialize_value(std::move(v)))
+    { }
+    // accepts the same range shape components() returns, so a key can be rebuilt without materializing an intermediate std::vector
+    clustering_key_prefix(utils::range_of<managed_bytes_view> auto&& v)
+        : prefix_compound_wrapper(compound::element_type::serialize_value(std::forward<decltype(v)>(v)))
+    { }
+    // matches components()'s [[reconstruct_as=components_reconstruction_type]] in keys.idl.hh
+    clustering_key_prefix(utils::small_vector<bytes, 4> v)
         : prefix_compound_wrapper(compound::element_type::serialize_value(std::move(v)))
     { }
     clustering_key_prefix(std::initializer_list<bytes> v) : clustering_key_prefix(std::vector(v)) {}
