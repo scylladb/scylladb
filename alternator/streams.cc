@@ -298,7 +298,11 @@ shard_id::shard_id(const sstring& s) {
     }
 
     time = db_clock::time_point(db_clock::duration(std::stoull(s.substr(1, i - 1), nullptr, 16)));
-    id = cdc::stream_id(from_hex(s.substr(i + 1)));
+    auto id_bytes = from_hex(s.substr(i + 1));
+    if (id_bytes.size() != 2 * sizeof(int64_t)) {
+        throw api_error::validation(fmt::format("Invalid ShardId: {}", s));
+    }
+    id = cdc::stream_id(std::move(id_bytes));
 }
 
 struct sequence_number {

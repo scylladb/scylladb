@@ -629,6 +629,29 @@ def test_get_shard_iterator_for_nonexistent_shard(dynamodb, dynamodbstreams):
                     StreamArn=arn, ShardId='adfasdasdasdasdasdasdasdasdasasdasd', ShardIteratorType='LATEST'
                 )
 
+# A malformed ShardId or ShardIterator must be a client error, never a node abort:
+# on Scylla the stream-id part used to decode to a blob shorter than a CDC stream id
+# and trip a SCYLLA_ASSERT (SCYLLADB-4383). GetShardIterator and GetRecords parse it
+# through the same code. The ShardId is padded past DynamoDB's 28-char minimum so both
+# back ends answer ResourceNotFoundException; a corrupted ShardIterator gives
+# ValidationException. Error codes confirmed against DynamoDB. The crash is storage-
+# independent, so this overrides the module's vnodes/tablets fixture to run once.
+@pytest.mark.parametrize('tags_param', [[{'Key': 'system:initial_tablets', 'Value': 'none'}]], indirect=True, ids=[''])
+def test_get_shard_iterator_malformed_shard_id(dynamodb, dynamodbstreams):
+    with create_stream_test_table(dynamodb, StreamViewType='KEYS_ONLY') as table:
+        (arn, label) = wait_for_active_stream(dynamodbstreams, table)
+        with pytest.raises(ClientError, match='ResourceNotFoundException'):
+            dynamodbstreams.get_shard_iterator(
+                    StreamArn=arn, ShardId='H0000000000000000000000000:00', ShardIteratorType='LATEST')
+        # A real iterator with its trailing stream-id replaced by '00'.
+        desc = dynamodbstreams.describe_stream(StreamArn=arn)
+        good_shard = desc['StreamDescription']['Shards'][0]['ShardId']
+        it = dynamodbstreams.get_shard_iterator(
+                StreamArn=arn, ShardId=good_shard, ShardIteratorType='TRIM_HORIZON')['ShardIterator']
+        bad_it = it[:it.rfind(':') + 1] + '00'
+        with pytest.raises(ClientError, match='ValidationException'):
+            dynamodbstreams.get_records(ShardIterator=bad_it)
+
 def test_get_records(dynamodb, dynamodbstreams):
     # TODO: add tests for storage/transactionable variations and global/local index
     with create_stream_test_table(dynamodb, StreamViewType='NEW_AND_OLD_IMAGES') as table:
