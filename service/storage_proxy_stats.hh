@@ -32,9 +32,9 @@ private:
     stats_counter _local;
     // counters of operations performed on external Nodes aggregated per Nodes' DCs
     std::unordered_map<sstring, stats_counter> _dc_stats;
-    // collectd registrations container
+    // metrics registrations container
     seastar::metrics::metric_groups _metrics;
-    // a prefix string that will be used for a collectd counters' description
+    // a prefix string that will be used for a metric's description
     sstring _short_description_prefix;
     sstring _long_description_prefix;
     // a statistics category, e.g. "client" or "replica"

@@ -242,7 +242,7 @@ class rates_moving_average {
     latency_counter::time_point start_time;
     moving_average rates[3] = {{std::chrono::minutes(1), meter_timer::tick_interval()}, {std::chrono::minutes(5), meter_timer::tick_interval()}, {std::chrono::minutes(15), meter_timer::tick_interval()}};
 public:
-    // _count is public so the collectd will be able to use it.
+    // _count is public so the metrics layer can use it.
     // for all other cases use the count() method
     uint64_t _count = 0;
     rates_moving_average() : start_time(latency_counter::now()) {
