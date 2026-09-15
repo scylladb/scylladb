@@ -1344,7 +1344,7 @@ future<> client::multipart_upload::finalize_upload() {
         }
         // If we reach this point it means the request succeeded. However, the body payload was already consumed, so no response handler was invoked. At
         // this point it is ok since we are not interested in parsing this particular response
-    }, http::reply::status_type::ok);
+    }, http::reply::status_type::ok, _as);
     _upload_id = ""; // now upload_started() returns false
 }
 
@@ -1397,7 +1397,7 @@ public:
             if (!upload_started()) {
                 s3l.trace("Sink fallback to plain PUT for {}", _object_name);
                 _object_produced = true;
-                co_return co_await _client->put_object(_object_name, std::move(_bufs), std::move(_metadata));
+                co_return co_await _client->put_object(_object_name, std::move(_bufs), std::move(_metadata), _as);
             }
 
             if (_bufs.size() != 0) {
@@ -1440,7 +1440,10 @@ future<> client::multipart_upload::upload_part(std::unique_ptr<upload_sink> piec
     // flushed and closed. After the object is copied, it can be removed. If copy
     // goes wrong, the object should be removed anyway.
     auto gh = _bg_flushes.hold();
-    (void)piece.flush().then([&piece] () {
+    (void)piece.flush().finally([&piece] () {
+        // Aborts the piece's own multipart upload if flush() left it
+        // unfinished, and drains its background part uploads before the
+        // piece is destroyed below.        
         return piece.close();
     }).then([this, part_number, req = std::move(req)] () mutable {
         return _client->make_request(std::move(req), [this, part_number] (const http::reply& rep, input_stream<char>&& in_) mutable -> future<> {
@@ -1477,7 +1480,7 @@ class client::upload_jumbo_sink final : public upload_sink_base {
 
     future<> maybe_flush() {
         if (_current->parts_count() >= _maximum_parts_in_piece) {
-            auto next = std::make_unique<upload_sink>(_client, format("{}_{}", _object_name, parts_count() + 1), object_metadata{}, piece_tag);
+            auto next = std::make_unique<upload_sink>(_client, format("{}_{}", _object_name, parts_count() + 1), object_metadata{}, piece_tag, _as);
             co_await upload_part(std::exchange(_current, std::move(next)));
             s3l.trace("Initiated {} piece (upload_id {})", parts_count(), _upload_id);
         }
@@ -1487,7 +1490,7 @@ public:
     upload_jumbo_sink(shared_ptr<client> cln, sstring object_name, object_metadata metadata, std::optional<unsigned> max_parts_per_piece, seastar::abort_source* as)
         : upload_sink_base(std::move(cln), std::move(object_name), std::move(metadata), std::nullopt, as)
         , _maximum_parts_in_piece(max_parts_per_piece.value_or(maximum_parts_in_piece))
-        , _current(std::make_unique<upload_sink>(_client, format("{}_{}", _object_name, parts_count()), object_metadata{}, piece_tag))
+        , _current(std::make_unique<upload_sink>(_client, format("{}_{}", _object_name, parts_count()), object_metadata{}, piece_tag, _as))
     {}
 
     virtual future<> put(std::span<temporary_buffer<char>> data) override {
