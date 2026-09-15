@@ -1477,7 +1477,7 @@ class client::upload_jumbo_sink final : public upload_sink_base {
 
     future<> maybe_flush() {
         if (_current->parts_count() >= _maximum_parts_in_piece) {
-            auto next = std::make_unique<upload_sink>(_client, format("{}_{}", _object_name, parts_count() + 1), object_metadata{}, piece_tag);
+            auto next = std::make_unique<upload_sink>(_client, format("{}_{}", _object_name, parts_count() + 1), object_metadata{}, piece_tag, _as);
             co_await upload_part(std::exchange(_current, std::move(next)));
             s3l.trace("Initiated {} piece (upload_id {})", parts_count(), _upload_id);
         }
@@ -1487,7 +1487,7 @@ public:
     upload_jumbo_sink(shared_ptr<client> cln, sstring object_name, object_metadata metadata, std::optional<unsigned> max_parts_per_piece, seastar::abort_source* as)
         : upload_sink_base(std::move(cln), std::move(object_name), std::move(metadata), std::nullopt, as)
         , _maximum_parts_in_piece(max_parts_per_piece.value_or(maximum_parts_in_piece))
-        , _current(std::make_unique<upload_sink>(_client, format("{}_{}", _object_name, parts_count()), object_metadata{}, piece_tag))
+        , _current(std::make_unique<upload_sink>(_client, format("{}_{}", _object_name, parts_count()), object_metadata{}, piece_tag, _as))
     {}
 
     virtual future<> put(std::span<temporary_buffer<char>> data) override {
