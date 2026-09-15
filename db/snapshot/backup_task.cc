@@ -45,40 +45,6 @@ backup_state::backup_state(snapshot_ctl& ctl,
     , _remove_on_uploaded(move_files)
 {}
 
-backup_task_impl::backup_task_impl(tasks::task_manager::module_ptr module,
-                                   snapshot_ctl& ctl,
-                                   sharded<sstables::storage_manager>& sstm,
-                                   sstring endpoint,
-                                   sstring bucket,
-                                   sstring prefix,
-                                   sstring ks,
-                                   std::filesystem::path snapshot_dir,
-                                   bool move_files) noexcept
-    : tasks::task_manager::task::impl(module, tasks::task_id::create_random_id(), 0, "node", ks, "", "", tasks::task_id::create_null_id())
-    , _state(ctl, sstm, std::move(endpoint), std::move(bucket), std::move(prefix), std::move(ks), std::move(snapshot_dir), move_files) {
-    _status.progress_units = "bytes";
-}
-
-std::string backup_task_impl::type() const {
-    return "backup";
-}
-
-tasks::is_internal backup_task_impl::is_internal() const noexcept {
-    return tasks::is_internal::no;
-}
-
-tasks::is_abortable backup_task_impl::is_abortable() const noexcept {
-    return tasks::is_abortable::yes;
-}
-
-future<tasks::task_manager::task::progress> backup_task_impl::get_progress() const {
-    return _state.get_progress();
-}
-
-tasks::is_user_task backup_task_impl::is_user_task() const noexcept {
-    return tasks::is_user_task::yes;
-}
-
 future<tasks::task_manager::task::progress> backup_state::get_progress() const {
     auto p = co_await _sstm.map_reduce0(
         [this](const auto&) {
@@ -354,10 +320,6 @@ future<> backup_state::run(abort_source& as) {
         return do_backup(as);
     });
     snap_log.info("Finished backup");
-}
-
-future<> backup_task_impl::run() {
-    return _state.run(_as);
 }
 
 } // db::snapshot namespace
