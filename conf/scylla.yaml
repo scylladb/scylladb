@@ -998,13 +998,28 @@ rf_rack_valid_keyspaces: false
 # 
 # Background IO rate limiting
 # When setting this value to be non-zero scylla throttles disk throughput for
-# background activities such as backup, repair, tablet migration and more.
-# This limit is useful for user queries so the network interface does 
-# not get saturated by streaming activities.
+# all the background activities together -- streaming, maintenance compaction
+# and backup. Throttling it slows down tablet migration and tablet view
+# building, so it is recommended to be left at 0 (not throttled) and only the
+# backup to be capped with the option below.
+# maintenance_io_throughput_mb_per_sec: 0
+#
+# Streaming IO rate limiting
+# When setting this value to be non-zero scylla throttles disk throughput for
+# streaming alone -- the one performed by repair and by topology operations
+# such as adding or removing a node. Throttling it slows down tablet migration
+# and tablet view building, so it is recommended to be left at 0 (not
+# throttled) and only the backup to be capped with the option below.
+# stream_io_throughput_mb_per_sec: 0
+#
+# Backup IO rate limiting
+# When setting this value to be non-zero scylla throttles disk throughput for
+# the native backup upload alone. This limit is useful for user queries so the
+# network interface does not get saturated by the backup activity.
 # The recommended value is 75% of network bandwidth
 # E.g for i4i.8xlarge (https://github.com/scylladb/scylla-machine-image/tree/next/common/aws_net_params.json):
 # network: 18.75 GiB/s --> 18750 Mib/s --> 1875 MB/s (from network bits to network bytes: divide by 10, not 8)
 # Converted to disk bytes: 1875 * 1000 / 1024 = 1831 MB/s (disk wise)
 # 75% of disk bytes is: 0.75 * 1831 = 1373 megabytes/s
-# maintenance_io_throughput_mb_per_sec: 1373
+# backup_io_throughput_mb_per_sec: 1373
 # 

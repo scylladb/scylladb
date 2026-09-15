@@ -1045,7 +1045,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , inter_dc_stream_throughput_outbound_megabits_per_sec(this, "inter_dc_stream_throughput_outbound_megabits_per_sec", value_status::Unused, 0,
         "Throttles all streaming file transfer between the data centers. This setting allows throttles streaming throughput betweens data centers in addition to throttling all network stream traffic as configured with stream_throughput_outbound_megabits_per_sec.")
     , stream_io_throughput_mb_per_sec(this, "stream_io_throughput_mb_per_sec", liveness::LiveUpdate, value_status::Used, 0,
-        "Throttles streaming I/O to the specified total throughput (in MiBs/s) across the entire system. Streaming I/O includes the one performed by repair and both RBNO and legacy topology operations such as adding or removing a node. Setting the value to 0 disables stream throttling. It is recommended to set the value for this parameter to be 75% of network bandwidth")
+        "Throttles streaming I/O to the specified total throughput (in MiBs/s) across the entire system. Streaming I/O includes the one performed by repair and both RBNO and legacy topology operations such as adding or removing a node. Setting the value to 0 disables stream throttling.")
     , stream_plan_ranges_fraction(this, "stream_plan_ranges_fraction", liveness::LiveUpdate, value_status::Used, 0.1,
         "Specify the fraction of ranges to stream in a single stream plan. Value is between 0 and 1.")
     , enable_file_stream(this, "enable_file_stream", liveness::LiveUpdate, value_status::Used, true, "Set true to use file based stream for tablet instead of mutation based stream")
@@ -1848,9 +1848,10 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "This option is useful for maximizing tombstone garbage collection by releasing all active commitlog segments."
         "Set to 0 to disable automatic flushing all tables before major compaction.")
     , maintenance_io_throughput_mb_per_sec(this, "maintenance_io_throughput_mb_per_sec", liveness::LiveUpdate, value_status::Used, 0,
-        "Throttles background I/O to the specified total throughput (in MiBs/s) across the entire system. Background I/O includes the one performed by repair and both RBNO and legacy topology operations such as adding or removing a node. Setting the value to 0 disables background IO throttling. It is recommended to set the value for this parameter to be 75% of network bandwidth")
+        "Throttles background I/O to the specified total throughput (in MiBs/s) across the entire system. Background I/O is the sum of all low-priority activities -- streaming performed by repair and by both RBNO and legacy topology operations such as adding or removing a node, maintenance compaction and backup. Setting the value to 0 disables background IO throttling.")
     , backup_io_throughput_mb_per_sec(this, "backup_io_throughput_mb_per_sec", liveness::LiveUpdate, value_status::Used, 0,
-        "Throttles backup I/O to the specified total throughput (in MiBs/s) across the entire system")
+        "Throttles backup I/O to the specified total throughput (in MiBs/s) across the entire system. Setting the value to 0 disables backup throttling. "
+        "It is recommended to set the value for this parameter to be 75% of network bandwidth, so that native backup does not saturate the network interface and interfere with the user workload.")
     , force_effective_capacity_to_raw_disk_capacity(this, "force_effective_capacity_to_raw_disk_capacity", liveness::LiveUpdate, value_status::Used, false,
         "Forces effective_capacity used in tablets load balancing to be the equal to the raw disk capacity instead of the sum of tablet "
         "sizes and available disk space.")
