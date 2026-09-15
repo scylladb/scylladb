@@ -47,6 +47,7 @@
 #include "query/query-result-set.hh"
 #include "query/query-result-writer.hh"
 #include "utils/map_difference.hh"
+#include "utils/error_injection.hh"
 #include <seastar/coroutine/all.hh>
 #include <unordered_set>
 #include "utils/log.hh"
@@ -1103,6 +1104,7 @@ future<> schema_applier::commit() {
     // with a new e_r_m instance.
     SCYLLA_ASSERT(this_shard_id() == 0);
     commit_on_shard(sharded_db.local());
+    co_await utils::get_local_injector().inject("schema_applier_pause_before_commit_on_other_shards", utils::wait_for_message(std::chrono::minutes(1)));
     co_await sharded_db.invoke_on_others([this] (replica::database& db) {
         commit_on_shard(db);
     });
