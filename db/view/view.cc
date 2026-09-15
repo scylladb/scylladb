@@ -2306,6 +2306,19 @@ void view_builder::setup_shard_build_step(
     }
 }
 
+static future<> flush_base(lw_shared_ptr<replica::column_family> base, abort_source& as) {
+    struct empty_state { };
+    return exponential_backoff_retry::do_until_value(1s, 1min, as, [base = std::move(base)] {
+        return base->flush().then_wrapped([base] (future<> f) -> std::optional<empty_state> {
+            if (f.failed()) {
+                vlogger.error("Error flushing base table {}.{}: {}; retrying", base->schema()->ks_name(), base->schema()->cf_name(), f.get_exception());
+                return { };
+            }
+            return { empty_state{} };
+        });
+    }).discard_result();
+}
+
 future<> view_builder::calculate_shard_build_step(view_builder_init_state& vbi) {
     std::unordered_set<table_id> loaded_views;
     if (vbi.status_per_shard.size() != smp::count) {
@@ -2494,19 +2507,6 @@ future<> view_builder::add_new_view(view_ptr view, build_step& step) {
     }
     co_await _sys_ks.register_view_for_building(view->ks_name(), view->cf_name(), step.current_token());
     step.build_status.emplace(step.build_status.begin(), view_build_status{view, step.current_token(), std::nullopt});
-}
-
-static future<> flush_base(lw_shared_ptr<replica::column_family> base, abort_source& as) {
-    struct empty_state { };
-    return exponential_backoff_retry::do_until_value(1s, 1min, as, [base = std::move(base)] {
-        return base->flush().then_wrapped([base] (future<> f) -> std::optional<empty_state> {
-            if (f.failed()) {
-                vlogger.error("Error flushing base table {}.{}: {}; retrying", base->schema()->ks_name(), base->schema()->cf_name(), f.get_exception());
-                return { };
-            }
-            return { empty_state{} };
-        });
-    }).discard_result();
 }
 
 void view_builder::on_create_view(const sstring& ks_name, const sstring& view_name) {
