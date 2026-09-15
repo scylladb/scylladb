@@ -25,7 +25,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/do_with.hh>
-#include <seastar/core/scollectd_api.hh>
+#include <seastar/core/metrics_api.hh>
 #include <seastar/core/file.hh>
 #include <seastar/core/seastar.hh>
 #include <seastar/util/noncopyable_function.hh>
@@ -876,10 +876,17 @@ SEASTAR_TEST_CASE(test_commitlog_reader_produce_exception){
 
 SEASTAR_TEST_CASE(test_commitlog_counters) {
     auto count_cl_counters = []() -> size_t {
-        auto ids = scollectd::get_collectd_ids();
-        return std::count_if(ids.begin(), ids.end(), [](const scollectd::type_instance_id& id) {
-            return id.plugin() == "commitlog";
-        });
+        size_t count = 0;
+        for (const auto& [name, family] : seastar::metrics::impl::get_value_map()) {
+            for (const auto& [labels, metric] : family) {
+                // Need to check for a null registered_metric, since unregistration
+                // is two-stage, and we want only the currently active metrics.
+                if (metric && metric->get_id().group_name() == "commitlog") {
+                    ++count;
+                }
+            }
+        }
+        return count;
     };
     BOOST_CHECK_EQUAL(count_cl_counters(), 0);
     return cl_test([count_cl_counters](commitlog& log) {

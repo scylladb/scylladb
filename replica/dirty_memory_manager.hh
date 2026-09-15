@@ -430,7 +430,7 @@ class dirty_memory_manager {
 
     seastar::metrics::metric_groups _metrics;
 public:
-    void setup_collectd(sstring namestr);
+    void setup_metrics(sstring namestr);
 
     future<> shutdown();
 

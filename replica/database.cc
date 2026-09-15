@@ -599,8 +599,8 @@ database::sum_read_concurrency_sem_stat(std::invocable<reader_concurrency_semaph
 
 void
 database::setup_metrics() {
-    _dirty_memory_manager.setup_collectd("regular");
-    _system_dirty_memory_manager.setup_collectd("system");
+    _dirty_memory_manager.setup_metrics("regular");
+    _system_dirty_memory_manager.setup_metrics("system");
 
     namespace sm = seastar::metrics;
 

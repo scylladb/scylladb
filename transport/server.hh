@@ -51,12 +51,6 @@ class query_processor;
 
 }
 
-namespace scollectd {
-
-class registrations;
-
-}
-
 namespace service {
 class memory_limiter;
 }
