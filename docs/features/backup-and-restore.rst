@@ -40,8 +40,12 @@ Backup Process
 
 #. **Native Configuration**: 
 
-   * For `native` backup to work without interference to users' workload, it is
-     best to limit io-scheduling. See :ref:`stream_io_throughput_mb_per_sec <confprop_stream_io_throughput_mb_per_sec>` for details.     
+   * To prevent native backup from saturating the network and affecting user
+     workloads, limit background I/O throughput with
+     :ref:`maintenance_io_throughput_mb_per_sec <confprop_maintenance_io_throughput_mb_per_sec>`.
+     This limit applies to all background activities together, including backup,
+     streaming, and maintenance compaction. To limit only the backup upload, use
+     :ref:`backup_io_throughput_mb_per_sec <confprop_backup_io_throughput_mb_per_sec>`.
    * For `native` backup to work, ScyllaDB node must have access to the S3 bucket.
      See :ref:`Configuring Object Storage <object-storage-configuration>` for details.
 
