@@ -112,4 +112,9 @@ seastar::future<bool> default_aws_retry_strategy::should_retry(std::exception_pt
     co_return should_retry;
 }
 
+seastar::future<bool> chunked_download_pacing_strategy::should_retry(std::exception_ptr error, unsigned) const {
+    co_await default_aws_retry_strategy::should_retry(std::move(error), _current_retry);
+    co_return false;
+}
+
 } // namespace aws
