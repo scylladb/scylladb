@@ -136,7 +136,9 @@ mutation_opt read_mutation_from_table_offline(sharded<sstable_manager_service>& 
     using open_infos_t = std::vector<sstables::foreign_sstable_open_info>;
     auto sstable_open_infos = sst_dirs.map_reduce0(
         [] (sstables::sstable_directory& sst_dir) -> future<std::vector<sstables::foreign_sstable_open_info>> {
-            co_await sst_dir.process_sstable_dir(sstables::sstable_directory::process_flags{ .sort_sstables_according_to_owner = false });
+            auto flags = sstables::sstable_directory::process_flags::read_only();
+            flags.skip_vanished_sstables = true;
+            co_await sst_dir.process_sstable_dir(flags);
             const auto& unsorted_ssts = sst_dir.get_unsorted_sstables();
             open_infos_t open_infos;
             open_infos.reserve(unsorted_ssts.size());
