@@ -71,13 +71,6 @@ static future<json::json_return_type>  get_cf_stats(sharded<replica::database>& 
     }, std::plus<int64_t>());
 }
 
-static future<json::json_return_type>  get_cf_stats(sharded<replica::database>& db,
-        std::function<int64_t(const replica::column_family_stats&)> f) {
-    return map_reduce_cf(db, int64_t(0), [f](const replica::column_family& cf) {
-        return f(cf.get_stats());
-    }, std::plus<int64_t>());
-}
-
 static future<json::json_return_type> for_tables_on_all_shards(sharded<replica::database>& db, std::vector<table_info> tables, std::function<future<>(replica::table&)> set) {
     return do_with(std::move(tables), [&db, set] (const std::vector<table_info>& tables) {
         return db.invoke_on_all([&tables, set] (replica::database& db) {
@@ -261,28 +254,41 @@ static integral_ratio_holder mean_partition_size(replica::column_family& cf) {
     return res;
 }
 
-static auto count_bytes_on_disk(const replica::column_family& cf, bool total) {
+// The space the storage of a table takes: its sstables, summed by walking them rather than read off
+// the statistics the table keeps as sstables come and go, so that a drift in those cannot reach
+// this, plus the logstor segments the table owns, which are counted as its groups take them.
+static uint64_t disk_space_used(const replica::column_family& cf, bool total) {
     uint64_t bytes_on_disk = 0;
-    auto sstables = (total) ? cf.get_sstables_including_compacted_undeleted() : cf.get_sstables();
-    for (auto t : *sstables) {
-        bytes_on_disk += t->bytes_on_disk();
+    auto sstables = total ? cf.get_sstables_including_compacted_undeleted() : cf.get_sstables();
+    for (const auto& sst : *sstables) {
+        bytes_on_disk += sst->bytes_on_disk();
     }
-    return bytes_on_disk;
+    return bytes_on_disk + cf.logstor_disk_space_used();
 }
 
-static future<json::json_return_type>  sum_sstable(sharded<replica::database>& db, const sstring name, bool total) {
+static future<json::json_return_type>  sum_disk_space_used(sharded<replica::database>& db, const sstring name, bool total) {
     return map_reduce_cf_raw(db, name, uint64_t(0), [total](replica::column_family& cf) {
-        return count_bytes_on_disk(cf, total);
+        return disk_space_used(cf, total);
     }, std::plus<>()).then([] (uint64_t val) {
         return make_ready_future<json::json_return_type>(val);
     });
 }
 
 
-static future<json::json_return_type> sum_sstable(sharded<replica::database>& db, bool total) {
+static future<json::json_return_type> sum_disk_space_used(sharded<replica::database>& db, bool total) {
     return map_reduce_cf_raw(db, uint64_t(0), [total](replica::column_family& cf) {
-        return count_bytes_on_disk(cf, total);
+        return disk_space_used(cf, total);
     }, std::plus<>()).then([] (uint64_t val) {
+        return make_ready_future<json::json_return_type>(val);
+    });
+}
+
+// The load of the node, which is asked of the database rather than summed over the tables because
+// the space logstor takes is not all owned by tables.
+static future<json::json_return_type> node_disk_space_used(sharded<replica::database>& db) {
+    return db.map_reduce0([] (const replica::database& db) {
+        return db.disk_space_used();
+    }, uint64_t(0), std::plus<>()).then([] (uint64_t val) {
         return make_ready_future<json::json_return_type>(val);
     });
 }
@@ -654,19 +660,19 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
     });
 
     cf::get_live_disk_space_used.set(r, [&db] (std::unique_ptr<http::request> req) {
-        return sum_sstable(db, req->get_path_param("name"), false);
+        return sum_disk_space_used(db, req->get_path_param("name"), false);
     });
 
     cf::get_all_live_disk_space_used.set(r, [&db] (std::unique_ptr<http::request> req) {
-        return sum_sstable(db, false);
+        return sum_disk_space_used(db, false);
     });
 
     cf::get_total_disk_space_used.set(r, [&db] (std::unique_ptr<http::request> req) {
-        return sum_sstable(db, req->get_path_param("name"), true);
+        return sum_disk_space_used(db, req->get_path_param("name"), true);
     });
 
     cf::get_all_total_disk_space_used.set(r, [&db] (std::unique_ptr<http::request> req) {
-        return sum_sstable(db, true);
+        return sum_disk_space_used(db, true);
     });
 
     // FIXME: this refers to partitions, not rows.
@@ -1132,14 +1138,10 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
     });
 
     ss::get_load.set(r, [&db] (std::unique_ptr<http::request> req) {
-        return get_cf_stats(db, [](const replica::column_family_stats& stats) {
-            return stats.live_disk_space_used.on_disk;
-        });
+        return node_disk_space_used(db);
     });
     ss::get_metrics_load.set(r, [&db] (std::unique_ptr<http::request> req) {
-        return get_cf_stats(db, [](const replica::column_family_stats& stats) {
-            return stats.live_disk_space_used.on_disk;
-        });
+        return node_disk_space_used(db);
     });
 
     ss::get_keyspaces.set(r, [&db] (const_req req) {

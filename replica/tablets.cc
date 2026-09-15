@@ -1128,7 +1128,7 @@ class tablet_sstable_set : public sstables::sstable_set_impl {
     // which provides faster lookup time.
     std::set<size_t> _sstable_set_ids;
     size_t _size = 0;
-    sstables::file_size_stats _file_size_stats;
+    utils::file_size_stats _file_size_stats;
 
 public:
     tablet_sstable_set(const tablet_sstable_set& o)
@@ -1174,7 +1174,7 @@ public:
     virtual size_t size() const noexcept override {
         return _size;
     }
-    virtual sstables::file_size_stats get_file_size_stats() const noexcept override {
+    virtual utils::file_size_stats get_file_size_stats() const noexcept override {
         return _file_size_stats;
     }
     virtual selector_and_schema_t make_incremental_selector() const override;

@@ -12,7 +12,7 @@
 #include "readers/mutation_reader.hh"
 #include "sstables/progress_monitor.hh"
 #include "sstables/types_fwd.hh"
-#include "sstables/file_size_stats.hh"
+#include "utils/file_size_stats.hh"
 #include "shared_sstable.hh"
 #include "dht/ring_position.hh"
 #include <seastar/core/shared_ptr.hh>
@@ -81,10 +81,10 @@ const sstable_predicate& default_sstable_predicate();
 
 class sstable_set_impl {
 protected:
-    file_size_stats _file_size_stats;
+    utils::file_size_stats _file_size_stats;
 
     // for cloning
-    explicit sstable_set_impl(file_size_stats bytes_on_disk) noexcept : _file_size_stats(bytes_on_disk) {}
+    explicit sstable_set_impl(utils::file_size_stats bytes_on_disk) noexcept : _file_size_stats(bytes_on_disk) {}
 public:
     sstable_set_impl() = default;
     sstable_set_impl(const sstable_set_impl&) = default;
@@ -103,13 +103,13 @@ public:
     uint64_t bytes_on_disk() const noexcept {
         return get_file_size_stats().on_disk;
     }
-    virtual file_size_stats get_file_size_stats() const noexcept {
+    virtual utils::file_size_stats get_file_size_stats() const noexcept {
         return _file_size_stats;
     }
-    void add_file_size_stats(const file_size_stats& delta) noexcept {
+    void add_file_size_stats(const utils::file_size_stats& delta) noexcept {
         _file_size_stats += delta;
     }
-    void sub_file_size_stats(const file_size_stats& delta) noexcept {
+    void sub_file_size_stats(const utils::file_size_stats& delta) noexcept {
         _file_size_stats -= delta;
     }
     using selector_and_schema_t = std::tuple<std::unique_ptr<incremental_selector_impl>, const schema&>;
@@ -171,7 +171,7 @@ public:
     bool erase(shared_sstable sst);
     size_t size() const noexcept;
     uint64_t bytes_on_disk() const noexcept;
-    file_size_stats get_file_size_stats() const noexcept;
+    utils::file_size_stats get_file_size_stats() const noexcept;
 
     // Used to incrementally select sstables from sstable set using ring-position.
     // sstable set must be alive during the lifetime of the selector.
