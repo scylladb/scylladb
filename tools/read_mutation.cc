@@ -68,6 +68,35 @@ future<std::filesystem::path> get_table_directory(std::filesystem::path scylla_d
     co_return system_tables_path / found.c_str();
 }
 
+future<> query_system_table_offline(const db::config& dbcfg,
+                                    std::filesystem::path scylla_data_path,
+                                    schema_ptr schema,
+                                    partition_key pk,
+                                    std::optional<clustering_key> ck,
+                                    reader_permit permit,
+                                    std::function<void(const query::result_set_row&)> consumer,
+                                    std::optional<std::filesystem::path> table_directory) {
+    return async([=, pk = std::move(pk), ck = std::move(ck), consumer = std::move(consumer), &dbcfg] () mutable {
+        sharded<sstable_manager_service> sst_man;
+        auto scf = make_sstable_compressor_factory_for_tests_in_thread();
+        sst_man.start(std::ref(dbcfg), std::ref(*scf)).get();
+        auto stop_sst_man_service = deferred_stop(sst_man);
+
+        auto directory = table_directory
+                ? *table_directory
+                : get_table_directory(scylla_data_path, schema->ks_name(), schema->cf_name()).get();
+        auto mut = read_mutation_from_table_offline(sst_man, std::move(permit), std::move(directory),
+                schema->ks_name(), [schema] { return schema; }, std::move(pk), std::move(ck));
+        if (!mut) {
+            return;
+        }
+        query::result_set result_set{*mut};
+        for (const auto& row : result_set.rows()) {
+            consumer(row);
+        }
+    });
+}
+
 mutation_opt read_mutation_from_table_offline(sharded<sstable_manager_service>& sst_man,
                                               reader_permit permit,
                                               std::filesystem::path table_path,

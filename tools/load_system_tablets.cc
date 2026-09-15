@@ -20,62 +20,30 @@
 #include "types/list.hh"
 #include "types/tuple.hh"
 
-namespace {
-
-logging::logger logger{"load_sys_tablets"};
-
-tools::tablets_t do_load_system_tablets(const db::config& dbcfg,
-                                        std::filesystem::path scylla_data_path,
-                                        table_id table,
-                                        reader_permit permit,
-                                        std::optional<std::filesystem::path> tablets_directory) {
-    sharded<sstable_manager_service> sst_man;
-    auto scf = make_sstable_compressor_factory_for_tests_in_thread();
-    sst_man.start(std::ref(dbcfg), std::ref(*scf)).get();
-    auto stop_sst_man_service = deferred_stop(sst_man);
-
-    auto schema = db::system_keyspace::tablets();
-    auto tablets_table_directory = tablets_directory
-            ? *tablets_directory
-            : get_table_directory(scylla_data_path,
-                                  db::system_keyspace::NAME,
-                                  schema->cf_name()).get();
-    auto mut = read_mutation_from_table_offline(sst_man,
-                                                permit,
-                                                tablets_table_directory,
-                                                db::system_keyspace::NAME,
-                                                db::system_keyspace::tablets,
-                                                data_value(table.uuid()),
-                                                {});
-    if (!mut || mut->partition().row_count() == 0) {
-        throw std::runtime_error(fmt::format("failed to find tablets for table {}", table));
-    }
-
-    tools::tablets_t tablets;
-    query::result_set result_set{*mut};
-    for (auto& row : result_set.rows()) {
-        auto last_token = row.get_nonnull<int64_t>("last_token");
-        auto replica_set = row.get_data_value("replicas");
-        if (replica_set) {
-            tablets.emplace(last_token,
-                            replica::tablet_replica_set_from_cell(*replica_set));
-        }
-    }
-    return tablets;
-}
-
-} // anonymous namespace
-
 namespace tools {
 
-future<tablets_t> load_system_tablets(const db::config &dbcfg,
+future<tablets_t> load_system_tablets(const db::config& dbcfg,
                                       std::filesystem::path scylla_data_path,
                                       table_id table,
                                       reader_permit permit,
                                       std::optional<std::filesystem::path> tablets_directory) {
-    return async([=, &dbcfg] {
-        return do_load_system_tablets(dbcfg, scylla_data_path, table, permit, tablets_directory);
-    });
+    tablets_t tablets;
+    auto schema = db::system_keyspace::tablets();
+    co_await query_system_table_offline(dbcfg, scylla_data_path, schema,
+            partition_key::from_singular(*schema, table.uuid()), std::nullopt, permit,
+            [&tablets] (const query::result_set_row& row) {
+                auto last_token = row.get_nonnull<int64_t>("last_token");
+                auto replica_set = row.get_data_value("replicas");
+                if (!replica_set) {
+                    return;
+                }
+                tablets.emplace(last_token, replica::tablet_replica_set_from_cell(*replica_set));
+            },
+            std::move(tablets_directory));
+    if (tablets.empty()) {
+        throw std::runtime_error(fmt::format("failed to find tablets for table {}", table));
+    }
+    co_return tablets;
 }
 
 } // namespace tools
