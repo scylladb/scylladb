@@ -16,6 +16,8 @@ namespace db {
     class system_distributed_keyspace;
     namespace view {
         class view_update_generator;
+        class view_builder;
+        class view_building_worker;
     }
 }
 
@@ -154,10 +156,10 @@ private:
 
 lw_shared_ptr<repair_writer> make_repair_writer(
             schema_ptr schema,
+            std::optional<int64_t> repaired_at,
             reader_permit permit,
             streaming::stream_reason reason,
             sharded<replica::database>& db,
-            sharded<db::system_distributed_keyspace>& sys_dist_ks,
-            sharded<db::view::view_update_generator>& view_update_generator,
+            db::view::view_builder& view_builder,
+            sharded<db::view::view_building_worker>& view_building_worker,
             service::frozen_topology_guard topo_guard);
-
