@@ -25,6 +25,9 @@ namespace service {
     class storage_proxy;
     class storage_proxy_coordinator_query_options;
     class storage_proxy_coordinator_query_result;
+    namespace pager {
+        class query_pager;
+    }
 } // namespace service
 
 namespace cql3 {
@@ -153,9 +156,32 @@ public:
     db::timeout_clock::duration get_timeout(const service::client_state& state, const query_options& options) const;
 
 protected:
+<<<<<<< HEAD
     using get_limit_result = bo::result<uint64_t, exceptions::invalid_request_exception>;
     get_limit_result get_limit(const query_options& options, const std::optional<expr::expression>& limit, bool is_per_partition_limit = false) const;
     static uint64_t get_inner_loop_limit(const select_statement::get_limit_result& limit, bool is_aggregate);
+||||||| parent of 0ea5bac78e (cql3: honor GROUP BY and paging in MUTATION_FRAGMENTS() aggregates)
+    uint64_t get_limit(const query_options& options, const std::optional<expr::expression>& limit, bool is_per_partition_limit = false) const;
+    static uint64_t get_inner_loop_limit(uint64_t limit, bool is_aggregate);
+
+    virtual bool needs_post_filtering() const {
+        return _restrictions_need_filtering;
+    }
+=======
+    uint64_t get_limit(const query_options& options, const std::optional<expr::expression>& limit, bool is_per_partition_limit = false) const;
+    static uint64_t get_inner_loop_limit(uint64_t limit, bool is_aggregate);
+
+    // Drains the pager into one result set, grouped by _group_by_cell_indices.
+    // For the cases where the client must get the whole result at once:
+    // aggregates, GROUP BY included, and filtering without paging.
+    future<::shared_ptr<cql_transport::messages::result_message>> execute_aggregate_or_nonpaged_filtering(
+        std::unique_ptr<service::pager::query_pager> pager, const query_options& options, gc_clock::time_point now,
+        int32_t page_size, db::timeout_clock::time_point timeout, uint64_t limit) const;
+
+    virtual bool needs_post_filtering() const {
+        return _restrictions_need_filtering;
+    }
+>>>>>>> 0ea5bac78e (cql3: honor GROUP BY and paging in MUTATION_FRAGMENTS() aggregates)
 
     bool needs_post_query_ordering() const;
     virtual void update_stats_rows_read(int64_t rows_read) const {
