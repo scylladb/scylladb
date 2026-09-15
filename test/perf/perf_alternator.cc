@@ -386,6 +386,31 @@ static future<> batch_get_item(const test_config& c, http::client& cli, uint64_t
     co_await make_request(cli, "BatchGetItem", std::move(body));
 }
 
+// Writes c.batch_size items in one BatchWriteItem. Every item sets all five
+// GSI key attributes plus two plain ones, so each attribute goes through the
+// GSI key validation path. Keys are distinct within a batch, since
+// BatchWriteItem rejects duplicates.
+static future<> batch_write_item_gsi(const test_config& c, http::client& cli, uint64_t seq) {
+    fmt::memory_buffer items;
+    for (unsigned i = 0; i < c.batch_size; ++i) {
+        const uint64_t key = seq * c.batch_size + i;
+        fmt::format_to(std::back_inserter(items), R"({}{{
+            "PutRequest": {{ "Item": {{
+                "p": {{"S": "{}"}}, "c": {{"S": "{}"}},
+                "C0": {{"S": "{}"}}, "C1": {{"S": "{}"}}, "C2": {{"S": "{}"}},
+                "C3": {{"S": "{}"}}, "C4": {{"S": "{}"}},
+                "d0": {{"S": "{}"}}, "d1": {{"S": "{}"}}
+            }} }}
+        }})",
+            items.size() ? "," : "", key, key,
+            key, key >> 1, key >> 2, key >> 3, key >> 4, key, key);
+    }
+    co_await make_request(cli, "BatchWriteItem", format(R"({{
+        "RequestItems": {{ "workloads_test": [{}] }},
+        "ReturnConsumedCapacity": "TOTAL"
+    }})", fmt::to_string(items)));
+}
+
 static future<> scan(const test_config& c, http::client& cli, uint64_t seq) {
     // This uses "parallel scan" feature, see https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Scan.html#Scan.ParallelScan
     auto body = format(R"({{
@@ -438,10 +463,10 @@ void workload_main(const test_config& c, sharded<abort_source>* as) {
         delete_alternator_table(cli);
         cli.close().get();
     });
-    if (c.workload != "write_gsi") {
-        create_alternator_table(cli);
-    } else {
+    if (c.workload == "write_gsi" || c.workload == "batch_write_gsi") {
         create_alternator_table_with_gsi(cli);
+    } else {
+        create_alternator_table(cli);
     }
 
     using fun_t = std::function<future<>(const test_config&, http::client&, uint64_t)>;
@@ -451,6 +476,7 @@ void workload_main(const test_config& c, sharded<abort_source>* as) {
         {"scan", scan},
         {"write", update_item},
         {"write_gsi", update_item_gsi},
+        {"batch_write_gsi", batch_write_item_gsi},
         // needs to be executed together with --alternator-write-isolation only_rmw_uses_lwt
         // for realistic scenario
         {"write_rmw", update_item_rmw},
@@ -527,7 +553,7 @@ std::function<int(int, char**)> alternator(std::function<int(int, char**)> scyll
             ("remote-host", bpo::value<std::string>()->default_value(""), "address of remote alternator service, use localhost by default")
             ("remote-port", bpo::value<unsigned>()->default_value(8000), "address of remote alternator port")
             ("scan-total-segments", bpo::value<unsigned>()->default_value(10), "single scan operation will retrieve 1/scan-total-segments portion of a table")
-            ("batch-size", bpo::value<unsigned>()->default_value(32), "number of keys read by a single request in the batch_read workload")
+            ("batch-size", bpo::value<unsigned>()->default_value(32), "number of items in a single request in the batch_read and batch_write_gsi workloads")
             ("continue-after-error", bpo::value<bool>()->default_value(false), "continue test after failed request")
             ("json-result", bpo::value<std::string>()->default_value(""), "file to write json results to")
         ;
