@@ -27,7 +27,7 @@ using namespace cql3;
 namespace {
 
 /// Helper to create statement_restrictions from a WHERE clause string
-shared_ptr<const restrictions::statement_restrictions> make_restrictions(
+shared_ptr<const restrictions::select_restrictions> make_restrictions(
         std::string_view where_clause, cql_test_env& env, const sstring& table_name = "t", const sstring& keyspace_name = "ks") {
     prepare_context ctx;
 
@@ -41,11 +41,10 @@ shared_ptr<const restrictions::statement_restrictions> make_restrictions(
     std::vector<shared_ptr<cql3::column_identifier>> bind_names(has_bind_markers ? max_bind_index + 1 : 0);
     ctx.set_bound_variables(bind_names, cql3::internal_dialect());
 
-    return restrictions::analyze_statement_restrictions(env.data_dictionary(), env.local_db().find_schema(keyspace_name, table_name),
-            statements::statement_type::SELECT, where_expr,
+    return restrictions::analyze_select_restrictions(env.data_dictionary(), env.local_db().find_schema(keyspace_name, table_name),
+            where_expr,
             ctx,
             /*selects_only_static_columns=*/false,
-            /*for_view=*/false,
             /*allow_filtering=*/true, restrictions::check_indexes::yes);
 }
 
@@ -54,7 +53,7 @@ query_options make_query_options(std::vector<raw_value> values) {
 }
 
 /// Helper to get JSON string from restrictions
-sstring get_restrictions_json(const restrictions::statement_restrictions& restr, bool allow_filtering = false) {
+sstring get_restrictions_json(const restrictions::select_restrictions& restr, bool allow_filtering = false) {
     return rjson::print(statements::external_search::prepare_filter(restr, allow_filtering).to_json(query_options({})));
 }
 
@@ -65,7 +64,7 @@ SEASTAR_TEST_CASE(to_json_empty_restrictions) {
         cquery_nofail(e, "create table ks.t(pk int, ck int, v vector<float, 3>, primary key(pk, ck))");
 
         auto schema = e.local_db().find_schema("ks", "t");
-        shared_ptr<const restrictions::statement_restrictions> restr = restrictions::make_trivial_statement_restrictions(schema, false);
+        shared_ptr<const restrictions::select_restrictions> restr = restrictions::make_empty_select_restrictions(schema);
         auto json = rjson::print(statements::external_search::prepare_filter(*restr, false).to_json(query_options({})));
 
         BOOST_CHECK_EQUAL(json, "{}");

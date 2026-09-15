@@ -12,6 +12,7 @@
 
 #include "data_dictionary/data_dictionary.hh"
 #include "delete_statement.hh"
+#include "validation.hh"
 #include "raw/delete_statement.hh"
 #include "mutation/mutation.hh"
 #include "cql3/expr/expression.hh"
@@ -27,15 +28,86 @@ delete_statement::delete_statement(audit::audit_info_ptr&& audit_info, statement
     set_audit_info(std::move(audit_info));
 }
 
-bool delete_statement::require_full_clustering_key() const {
-    return false;
+dht::partition_range_vector
+delete_statement::build_partition_keys(const query_options& options, const json_cache_opt& json_cache) const {
+    auto keys = _restrictions->get_partition_key_ranges(options);
+    for (auto const& k : keys) {
+        validation::validate_cql_key(*s, *k.start()->value().key());
+    }
+    return keys;
 }
 
-bool delete_statement::allow_clustering_key_slices() const {
-    return true;
+query::clustering_row_ranges
+delete_statement::create_clustering_ranges(const query_options& options, const json_cache_opt& json_cache) const {
+    return _restrictions->clustering_ranges(options);
 }
 
-void delete_statement::add_update_for_key(mutation& m, const query::clustering_range& range, const update_parameters& params, const json_cache_opt& json_cache) const {
+void delete_statement::validate_primary_key(const query_options& options) const {
+    _restrictions->validate_primary_key(options);
+}
+
+void delete_statement::process_where_clause(data_dictionary::database db, expr::expression where_clause, prepare_context& ctx) {
+    _restrictions = restrictions::analyze_delete_restrictions(db, s, where_clause, ctx,
+            applies_only_to_static_columns());
+    classify_exists_condition(_restrictions->has_clustering_columns_restriction());
+    // A DELETE may name a range of rows, so it need not name the whole clustering
+    // key - but it cannot then delete a particular regular column of them.
+    if (auto* missing = _restrictions->clustering_column_required_for_regular_columns(
+                applies_only_to_static_columns())) {
+        for (auto&& op : _column_operations) {
+            if (!op->column.is_static()) {
+                throw exceptions::invalid_request_exception(format("Primary key column '{}' must be specified in order to modify column '{}'",
+                    missing->name_as_text(), op->column.name_as_text()));
+            }
+        }
+    }
+    _restrictions->reject_incomplete_partition_key();
+    if (has_conditions()) {
+        validate_where_clause_for_conditions();
+    }
+}
+
+void delete_statement::validate_where_clause_for_conditions() const {
+    reject_in_relations_with_conditions(_restrictions->key_is_in_relation(),
+            _restrictions->clustering_key_restrictions_has_IN());
+
+    if (_restrictions->addresses_exact_rows()) {
+        return;
+    }
+    bool deletes_regular_columns = _column_operations.empty() ||
+        std::any_of(_column_operations.begin(), _column_operations.end(), [] (auto&& op) {
+            return !op->column.is_static();
+        });
+    // For example, primary key is (a, b, c), only a and b are restricted
+    if (deletes_regular_columns) {
+        throw exceptions::invalid_request_exception(
+                "DELETE statements must restrict all PRIMARY KEY columns with equality relations"
+                " in order to delete non static columns");
+    }
+
+    // All primary key parts must be specified, unless this statement has only static column conditions
+    if (has_regular_column_conditions()) {
+        throw exceptions::invalid_request_exception(
+                "DELETE statements must restrict all PRIMARY KEY columns with equality relations"
+                " in order to use IF condition on non static columns");
+    }
+}
+
+utils::chunked_vector<mutation> delete_statement::apply_updates(
+        const std::vector<dht::partition_range>& keys,
+        const std::vector<query::clustering_range>& ranges,
+        const update_parameters& params,
+        const json_cache_opt& json_cache) const {
+    auto mutations = make_mutations(keys);
+    for (auto& m : mutations) {
+        for (auto&& range : ranges) {
+            delete_row_range(m, range, params);
+        }
+    }
+    return mutations;
+}
+
+void delete_statement::delete_row_range(mutation& m, const query::clustering_range& range, const update_parameters& params) const {
     if (_column_operations.empty()) {
         if (s->clustering_key_size() == 0 || range.is_full()) {
             m.partition().apply(params.make_tombstone());
@@ -82,7 +154,7 @@ delete_statement::prepare_internal(data_dictionary::database db, schema_ptr sche
     }
     prepare_conditions(db, *schema, ctx, *stmt);
     stmt->process_where_clause(db, _where_clause, ctx);
-    if (has_slice(stmt->restrictions().get_clustering_columns_restrictions())) {
+    if (stmt->restrictions().deletes_a_range()) {
         if (!schema->is_compound()) {
             throw exceptions::invalid_request_exception("Range deletions on \"compact storage\" schemas are not supported");
         }

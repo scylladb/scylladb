@@ -35,7 +35,6 @@
 #include "mutation/canonical_mutation.hh"
 #include "replica/database.hh"
 #include "keys/clustering_bounds_comparator.hh"
-#include "cql3/statements/select_statement.hh"
 #include "cql3/cql_config.hh"
 #include "cql3/util.hh"
 #include "cql3/restrictions/statement_restrictions.hh"
@@ -109,39 +108,68 @@ view_info::view_info(const schema& schema, const raw_view_info& raw_view_info, d
         , _base_info(std::move(base_info))
 { }
 
-cql3::statements::select_statement& view_info::select_statement(data_dictionary::database db) const {
-    if (!_select_statement) {
-        std::unique_ptr<cql3::statements::raw::select_statement> raw;
-        // FIXME(sarna): legacy code, should be removed after "computed_columns" feature is guaranteed
-        // to be available on every node. Then, we won't need to check if this view is backing a secondary index.
-        const column_definition* legacy_token_column = nullptr;
-        if (db.find_column_family(base_id()).get_index_manager().is_global_index(_schema)) {
-           if (!_schema.clustering_key_columns().empty()) {
-               legacy_token_column = &_schema.clustering_key_columns().front();
-           }
-        }
-
-        if (legacy_token_column || std::ranges::any_of(_schema.all_columns(), std::mem_fn(&column_definition::is_computed))) {
-            auto real_columns = _schema.all_columns() | std::views::filter([legacy_token_column] (const column_definition& cdef) {
-                return &cdef != legacy_token_column && !cdef.is_computed();
-            });
-            schema::columns_type columns = std::ranges::to<schema::columns_type>(std::move(real_columns));
-            raw = cql3::util::build_select_statement(base_name(), where_clause(), include_all_columns(), columns);
-        } else {
-            raw = cql3::util::build_select_statement(base_name(), where_clause(), include_all_columns(), _schema.all_columns());
-        }
-        raw->prepare_keyspace(_schema.ks_name());
-        raw->set_bound_variables({}, cql3::internal_dialect());
-        cql3::cql_stats ignored;
-        auto prepared = raw->prepare(db, ignored, cql3::default_cql_config, true);
-        _select_statement = static_pointer_cast<cql3::statements::select_statement>(prepared->statement);
+const cql3::restrictions::view_restrictions& view_info::restrictions(data_dictionary::database db) const {
+    if (!_restrictions) {
+        cql3::prepare_context ctx;
+        ctx.set_bound_variables({}, cql3::internal_dialect());
+        // A view backing a secondary index has no WHERE clause at all, and an
+        // empty string is not a parseable one.
+        auto where = where_clause().empty()
+                ? cql3::expr::expression(cql3::expr::conjunction{})
+                : cql3::util::where_clause_to_relations(where_clause(), cql3::internal_dialect());
+        _restrictions = cql3::restrictions::analyze_view_restrictions(
+                db, db.find_schema(base_id()), where, ctx);
     }
-    return *_select_statement;
+    return *_restrictions;
+}
+
+// The base columns a view reads, in the order the SELECT built from its
+// definition names them.
+std::vector<const column_definition*> view_info::selected_base_columns(data_dictionary::database db) const {
+    schema_ptr base_schema = db.find_schema(base_id());
+    if (include_all_columns()) {
+        return cql3::selection::selection::wildcard_columns(base_schema);
+    }
+    // FIXME(sarna): legacy code, should be removed after "computed_columns" feature is guaranteed
+    // to be available on every node. Then, we won't need to check if this view is backing a secondary index.
+    const column_definition* legacy_token_column = nullptr;
+    if (db.find_column_family(base_id()).get_index_manager().is_global_index(_schema)) {
+        if (!_schema.clustering_key_columns().empty()) {
+            legacy_token_column = &_schema.clustering_key_columns().front();
+        }
+    }
+    std::vector<const column_definition*> columns;
+    for (const column_definition& view_def : _schema.all_columns()) {
+        if (&view_def == legacy_token_column || view_def.is_computed()) {
+            continue;
+        }
+        if (const column_definition* base_def = base_schema->get_column_definition(view_def.name())) {
+            columns.push_back(base_def);
+        }
+    }
+    return columns;
 }
 
 const query::partition_slice& view_info::partition_slice(data_dictionary::database db) const {
     if (!_partition_slice) {
-        _partition_slice = select_statement(db).make_partition_slice(cql3::query_options({ }));
+        query::column_id_vector static_columns;
+        query::column_id_vector regular_columns;
+        query::partition_slice::option_set opts;
+        for (const column_definition* col : selected_base_columns(db)) {
+            if (col->is_static()) {
+                static_columns.push_back(col->id);
+            } else if (col->is_regular()) {
+                regular_columns.push_back(col->id);
+            }
+            opts.set_if<query::partition_slice::option::send_partition_key>(col->is_partition_key());
+            opts.set_if<query::partition_slice::option::send_clustering_key>(col->is_clustering_key());
+        }
+        // The other options a SELECT would set are all off for a view: it selects
+        // plain columns, so no timestamps or TTLs, and it is neither DISTINCT,
+        // nor reversed, nor cache-bypassing.
+        _partition_slice = query::partition_slice(
+                restrictions(db).clustering_ranges(cql3::query_options({ })),
+                std::move(static_columns), std::move(regular_columns), opts, nullptr, query::max_rows);
     }
     return *_partition_slice;
 }
@@ -159,7 +187,7 @@ const column_definition* view_info::view_column(const column_definition& base_de
 
 void view_info::reset_view_info() {
     // Forget the cached objects which may refer to the base schema.
-    _select_statement = nullptr;
+    _restrictions = nullptr;
     _partition_slice = std::nullopt;
 }
 
@@ -257,7 +285,7 @@ void stats::register_stats() {
 }
 
 bool partition_key_matches(data_dictionary::database db, const schema& base, const view_info& view, const dht::decorated_key& key) {
-    const cql3::expr::expression& pk_restrictions = view.select_statement(db).get_restrictions()->get_partition_key_restrictions();
+    const cql3::expr::expression& pk_restrictions = view.restrictions(db).get_partition_key_restrictions();
     std::vector<bytes> exploded_pk = key.key().explode();
     std::vector<bytes> exploded_ck;
     std::vector<const column_definition*> pk_columns;
@@ -282,7 +310,7 @@ bool partition_key_matches(data_dictionary::database db, const schema& base, con
 }
 
 bool clustering_prefix_matches(data_dictionary::database db, const schema& base, const view_info& view, const partition_key& key, const clustering_key_prefix& ck) {
-    const cql3::expr::expression& r = view.select_statement(db).get_restrictions()->get_clustering_columns_restrictions();
+    const cql3::expr::expression& r = view.restrictions(db).get_clustering_columns_restrictions();
     std::vector<bytes> exploded_pk = key.explode();
     std::vector<bytes> exploded_ck = ck.explode();
     std::vector<const column_definition*> ck_columns;
@@ -367,7 +395,7 @@ public:
     bool check_if_matches(const clustering_key& key, const query::result_row_view& static_row, const query::result_row_view& row) const {
         std::vector<bytes> ck = key.explode();
         return std::ranges::all_of(
-            _view.select_statement(_db).get_restrictions()->get_non_pk_restriction() | std::views::values,
+            _view.restrictions(_db).get_non_pk_restriction() | std::views::values,
             [&] (auto&& r) {
                 // FIXME: move outside all_of(). However, crashes.
                 auto static_and_regular_columns = cql3::expr::get_non_pk_values(*_selection, static_row, &row);
@@ -1643,7 +1671,7 @@ future<query::clustering_row_ranges> calculate_affected_clustering_ranges(data_d
     if (mp.partition_tombstone() || !mp.row_tombstones().empty()) {
         for (auto&& v : views) {
             // FIXME: #2371
-            if (v->view_info()->select_statement(db).get_restrictions()->has_unrestricted_clustering_columns()) {
+            if (v->view_info()->restrictions(db).has_unrestricted_clustering_columns()) {
                 view_row_ranges.push_back(interval<clustering_key_prefix_view>::make_open_ended_both_sides());
                 break;
             }

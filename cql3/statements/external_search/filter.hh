@@ -17,7 +17,7 @@ class query_options;
 
 namespace restrictions {
 
-class statement_restrictions;
+class select_restrictions;
 
 }
 } // namespace cql3
@@ -57,6 +57,6 @@ public:
 /// Prepares a filter from CQL statement restrictions for use in Vector Store service.
 /// This function extracts restrictions from the statement_restrictions
 /// and prepares them for serialization to JSON compatible to Vector Store service filtering API.
-prepared_filter prepare_filter(const cql3::restrictions::statement_restrictions& restrictions, bool allow_filtering);
+prepared_filter prepare_filter(const cql3::restrictions::select_restrictions& restrictions, bool allow_filtering);
 
 } // namespace cql3::statements::external_search
