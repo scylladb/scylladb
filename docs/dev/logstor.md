@@ -178,6 +178,9 @@ zero_padding            -- to align the entire buffer to block_alignment (4096 b
 
 buffer_header, segment_header, and records are aligned by `record_alignment` (8 bytes).
 
+All integer fields in the structures below are serialized little-endian, including the two
+64-bit halves of a UUID.
+
 #### Buffer Header
 
 A serialized form of `write_buffer::buffer_header`.
@@ -212,24 +215,28 @@ Each record within the buffer is structured as:
 
 ```
 record_header        (8 bytes)
-log_record_header    (header_size bytes)
+log_record_header    (32 + key_size bytes)
 canonical_mutation   (data_size bytes)
 zero_padding         -- to align to record_alignment (8 bytes)
 ```
 
-**Record Header** (`write_buffer::record_header`):
+**Record Header** (`ondisk::record_header`):
 
-| Offset | Size | Field         | Description |
-|--------|------|---------------|-------------|
-| 0      | 4    | `header_size` | Size in bytes of the serialized `log_record_header` that follows. |
-| 4      | 4    | `data_size`   | Size in bytes of the serialized `canonical_mutation` that follows `log_record_header`. |
+| Offset | Size | Field       | Description |
+|--------|------|-------------|-------------|
+| 0      | 4    | `key_size`  | Size in bytes of the partition key at the end of the `log_record_header` that follows. |
+| 4      | 4    | `data_size` | Size in bytes of the serialized `canonical_mutation` that follows the `log_record_header`. |
 
 **Log Record Header** (`log_record_header`):
 
-The `header_size` bytes immediately following the record header are the IDL-serialized form of `log_record_header`, which contains:
-- `key`: the partition key (`primary_index_key`), including a `decorated_key` with a token and partition key bytes.
-- `timestamp`: the timestamp of the record, used to resolve conflicts by keeping the record with the latest timestamp.
-- `table`: UUID of the table this record belongs to.
+Written by `ondisk::write_log_record_header()`. The fixed fields come first, at constant offsets, and the partition key is the only variable part.
+
+| Offset | Size       | Field       | Description |
+|--------|------------|-------------|-------------|
+| 0      | 8          | `token`     | Raw token number of the partition key. |
+| 8      | 8          | `timestamp` | `api::timestamp_type` — timestamp used for conflict resolution. |
+| 16     | 16         | `table`     | `table_id` (UUID) — the table this record belongs to, written as its most significant and then its least significant 64-bit half. |
+| 32     | `key_size` | `key`       | The partition key in its internal representation (`partition_key::representation()`). |
 
 **Mutation Data**:
 
