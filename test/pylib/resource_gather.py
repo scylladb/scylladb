@@ -26,6 +26,7 @@ import psutil
 
 from threading import Event
 from test import HOST_ID, TOP_SRC_DIR
+from test.pylib.internal_types import SeastarIOMetric
 from test.pylib.db.model import HostInfo, Metric, SystemResourceMetric, CgroupMetric, Test
 from test.pylib.db.writer import (
     CGROUP_MEMORY_METRICS_TABLE,
@@ -76,7 +77,7 @@ class ResourceGather(ABC):
     def put_process_to_cgroup(self) -> None:
         pass
 
-    def get_test_metrics(self) -> Metric:
+    def get_test_metrics(self, seastar_io: dict[str, int] | None = None) -> Metric:
         pass
 
     def write_metrics_to_db(self, metrics: Metric, success: bool = False) -> None:
@@ -119,8 +120,13 @@ class ResourceGatherRecord(ResourceGather):
             ),
             TESTS_TABLE)
 
-    def get_test_metrics(self) -> Metric:
+    def get_test_metrics(self, seastar_io: dict[str, int] | None = None) -> Metric:
         test_metrics = Metric(test_id=self.test_id, host_id=HOST_ID, worker_id=self.worker_id)
+        if seastar_io:
+            test_metrics.seastar_read_bytes = seastar_io.get(SeastarIOMetric.READ_BYTES)
+            test_metrics.seastar_read_ops = seastar_io.get(SeastarIOMetric.READ_OPS)
+            test_metrics.seastar_write_bytes = seastar_io.get(SeastarIOMetric.WRITE_BYTES)
+            test_metrics.seastar_write_ops = seastar_io.get(SeastarIOMetric.WRITE_OPS)
         test_metrics.time_taken = self.test.time_end - self.test.time_start
         test_metrics.time_start = datetime.fromtimestamp(self.test.time_start)
         test_metrics.time_end = datetime.fromtimestamp(self.test.time_end)
@@ -181,12 +187,28 @@ class ResourceGatherOn(ResourceGatherRecord):
             sqlite_writer.close()
 
     def setup_test_tracking(self) -> None:
-        # Open a fresh FD on memory.peak so the kernel resets its per-FD peak tracker
-        # to the current memory. Reading this FD later returns the peak memory since it
-        # was opened, i.e., the peak during this test only.
+        # memory.peak's per-FD tracker is reset by *writing* a non-empty string to the
+        # FD, not by opening it: a read-only open returns the cgroup's lifetime
+        # watermark, which for an xdist worker is whatever the heaviest test before
+        # this one reached.  Reset here so later reads through this FD give the peak
+        # during this test alone.  Kernels without the writable memory.peak keep the
+        # old watermark semantics -- an upper bound rather than a per-test figure.
+        #
+        # The write is unbuffered: on such a kernel the file has no write handler,
+        # and cgroupfs reports that only once the write reaches it.  A buffered
+        # write would keep the payload pending, so the error would surface from
+        # flush() *and again* from close() in the except branch below, escaping it.
         memory_peak_path = self.cgroup_path / 'memory.peak'
         if memory_peak_path.exists():
-            self._memory_peak_fd = open(memory_peak_path, 'r')
+            try:
+                self._memory_peak_fd = open(memory_peak_path, 'rb+', buffering=0)
+                self._memory_peak_fd.write(b'reset')
+            except OSError as e:
+                self.logger.debug("Could not reset %s, memory_peak will be a cgroup "
+                                  "lifetime watermark: %s", memory_peak_path, e)
+                if self._memory_peak_fd is not None:
+                    self._memory_peak_fd.close()
+                self._memory_peak_fd = open(memory_peak_path, 'rb', buffering=0)
 
         # Snapshot cpu.stat at the start of the test. Unlike memory.peak, cpu.stat
         # has no per-FD reset mechanism — values are cumulative for the cgroup's
@@ -197,8 +219,8 @@ class ResourceGatherOn(ResourceGatherRecord):
             with open(cpu_stat_path, 'r') as f:
                 self._cpu_stat_start = self._read_cpu_stat(f)
 
-    def get_test_metrics(self) -> Metric:
-        test_metrics = super().get_test_metrics()
+    def get_test_metrics(self, seastar_io: dict[str, int] | None = None) -> Metric:
+        test_metrics = super().get_test_metrics(seastar_io)
         if self._memory_peak_fd is not None:
             try:
                 self._memory_peak_fd.seek(0)
@@ -243,18 +265,33 @@ class ResourceGatherOn(ResourceGatherRecord):
         return result
 
 
-def gather_host_info() -> HostInfo:
-    """Collect static hardware information about the current host."""
+def _get_cpu_model() -> str:
     try:
-        cpu_model = "unknown"
         with open("/proc/cpuinfo") as f:
             for line in f:
                 if line.startswith("model name"):
-                    cpu_model = line.split(":", 1)[1].strip()
-                    break
+                    return line.split(":", 1)[1].strip()
     except OSError:
-        cpu_model = platform.processor() or "unknown"
+        pass
+    # aarch64 /proc/cpuinfo has no "model name" line; lscpu decodes the
+    # implementer/part ids into one (e.g. "Neoverse-N1").  LC_ALL=C keeps the
+    # label we match untranslated: lscpu calls setlocale() and its labels go
+    # through gettext, so "Model name" is localized where util-linux
+    # translations are installed.
+    try:
+        lscpu = subprocess.run(["lscpu"], capture_output=True, text=True, check=True,
+                               env={**os.environ, "LC_ALL": "C"})
+        for line in lscpu.stdout.splitlines():
+            if line.startswith("Model name"):
+                return line.split(":", 1)[1].strip()
+    except (OSError, subprocess.CalledProcessError):
+        pass
+    return platform.processor() or "unknown"
 
+
+def gather_host_info() -> HostInfo:
+    """Collect static hardware information about the current host."""
+    cpu_model = _get_cpu_model()
     cpu_cores = psutil.cpu_count(logical=False) or os.cpu_count() or 0
     ram_bytes = psutil.virtual_memory().total
     return HostInfo(host_id=HOST_ID, cpu_model=cpu_model, cpu_cores=cpu_cores, ram_bytes=ram_bytes)

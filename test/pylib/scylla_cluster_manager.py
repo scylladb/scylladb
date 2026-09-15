@@ -46,7 +46,7 @@ from cassandra.policies import (
 )
 
 from test.pylib.driver_utils import safe_driver_shutdown
-from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo, ServerUpState
+from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo, ServerUpState, SeastarIOMetric
 from test.pylib.log_browsing import ScyllaLogFile
 from test.pylib.rest_client import HTTPError, ScyllaMetricsClient, ScyllaRESTAPIClient
 from test.pylib.scylla_cluster import ReplaceConfig, ScyllaCluster
@@ -334,15 +334,43 @@ class ScyllaClusterManager:
         except Exception as exc:
             raise RuntimeError(f"Failed to get local host id address for server {server_id}") from exc
 
+    # A wedged or paused server still counts as running, and the REST client's
+    # default budget is 300s -- five minutes of teardown per such server.  Cap
+    # the scrape instead, generously enough that a debug-mode node rendering
+    # /metrics for many shards is not dropped from the sum.
+    SEASTAR_IO_SCRAPE_TIMEOUT = 15.0
+
+    async def _scrape_seastar_io(self) -> dict[str, int]:
+        """Sum the reactor IO counters of every running server, across shards.
+
+        The cluster is created per test, so the counters start at zero with it
+        and their current value is this test's total -- no baseline needed.
+
+        Best effort, erring towards an undercount rather than charging a test
+        for IO it did not do: a server the test stopped takes its counters
+        with it, and one that does not answer the scrape is left out.
+        """
+        totals: dict[str, int] = dict.fromkeys(SeastarIOMetric, 0)
+        for srv in self.cluster.running_servers():
+            try:
+                metrics = await self.metrics.query(srv.ip_addr,
+                                                   timeout=self.SEASTAR_IO_SCRAPE_TIMEOUT)
+            except Exception as e:
+                self.logger.debug("Could not scrape IO metrics from %s: %s", srv.ip_addr, e)
+                continue
+            for name in SeastarIOMetric:
+                totals[name] += int(metrics.get(name) or 0)
+        return totals
+
     # timeout=None: the drain below carries its own budget, which scales with
     # the build mode and so can exceed DEFAULT_OP_TIMEOUT.  A bridge cap
     # shorter than the drain would abandon the cleanup half-way through.
     @manager_op(timeout=None)
-    async def after_test(self, success: bool) -> dict[str, Any]:
+    async def after_test(self, success: bool, gather_io: bool = True) -> dict[str, Any]:
         """After-test hook of the manager fixture.
 
         Drains the operations the test left running and returns what the test
-        leaked.
+        leaked, plus this test's IO totals unless gather_io says otherwise.
         """
         tasks_leaked = ""
         self.logger.info(self.repr_tasks_history())
@@ -383,10 +411,16 @@ class ScyllaClusterManager:
             self.logger.error("%s, test case %s", tasks_leaked, self.test_name)
         self.logger.info("Test %s %s, cluster: %s", self.test_name, "SUCCEEDED" if success else "FAILED", self.cluster)
 
+        # Scrape before the fixture tears the cluster down: stopped servers
+        # take their counters with them.  Skipped under --no-gather-metrics,
+        # which is there to keep measurement off the test's critical path.
+        seastar_io = await self._scrape_seastar_io() if gather_io else None
+
         return {
             "cluster_str": str(self.cluster),
             "tasks_leaked": bool(tasks_leaked),
             "message": tasks_leaked,
+            "seastar_io": seastar_io,
         }
 
     @manager_op
