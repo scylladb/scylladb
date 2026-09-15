@@ -1241,12 +1241,7 @@ static sstring map_to_string(const std::vector<std::pair<data_value, data_value>
     }
 
     fmt::print(out, "{}", fmt::join(v | std::views::transform([] (const std::pair<data_value, data_value>& p) {
-        std::ostringstream out;
-        const auto& k = p.first;
-        const auto& v = p.second;
-        out << "{" << k.type()->to_string_impl(k) << " : ";
-        out << v.type()->to_string_impl(v) << "}";
-        return std::move(out).str();
+        return fmt::format("{{{} : {}}}", p.first, p.second);
     }), ", "));
 
     if (include_frozen_type) {
@@ -1545,17 +1540,16 @@ list_type_impl::deserialize(View in) const {
             auto e = _elements->deserialize(*serialized_value_opt);
             s.push_back(std::move(e));
         } else {
-            s.push_back(data_value::make_null(data_type(shared_from_this())));
+            s.push_back(data_value::make_null(_elements));
         }
     }
     return make_value(std::move(s));
 }
 template data_value list_type_impl::deserialize<>(ser::buffer_view<bytes_ostream::fragment_iterator>) const;
 
+// Elements can be null on the wire; data_value's formatter renders those as "null".
 static sstring vector_to_string(const std::vector<data_value>& v, std::string_view sep) {
-    return fmt::to_string(fmt::join(
-            v | std::views::transform([] (const data_value& e) { return e.type()->to_string_impl(e); }),
-            sep));
+    return fmt::to_string(fmt::join(v, sep));
 }
 
 template <typename F>
@@ -3157,7 +3151,8 @@ static sstring tuple_to_string(const tuple_type_impl &t, const tuple_type_impl::
 template <typename N, typename A, typename F>
 static sstring format_if_not_empty(
         const concrete_type<N, A>& type, const typename concrete_type<N, A>::native_type* b, F&& f) {
-    if (b->empty()) {
+    // b is null for a null value, which every concrete type can be handed.
+    if (!b || b->empty()) {
         return {};
     }
     return f(static_cast<const N&>(*b));
