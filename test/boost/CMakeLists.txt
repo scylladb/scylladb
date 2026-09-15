@@ -401,6 +401,7 @@ add_scylla_test(combined_tests
     restrictions_test.cc
     row_cache_test.cc
     schema_change_test.cc
+    schema_change_cross_shard_test.cc
     schema_registry_test.cc
     scrub_test.cc
     secondary_index_test.cc
