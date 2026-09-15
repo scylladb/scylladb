@@ -214,6 +214,11 @@ public:
     future<> insert_snapshot_tables(std::span<const snapshot_table_entry> tables, db::consistency_level cl = db::consistency_level::EACH_QUORUM);
 
     /**
+     * Helper to build a snapshot_table_entry describing the current schema of the given table
+     */
+    snapshot_table_entry make_snapshot_table_entry(std::string_view snapshot_name, const replica::table& table) const;
+
+    /**
      * Get all tables in snapshot, optionally restricted by keyspace
      */
     future<utils::chunked_vector<snapshot_table_entry>> get_snapshot_tables(std::string_view snapshot_name, std::string_view keyspace = {}, std::string_view table = {}, db::consistency_level cl = db::consistency_level::LOCAL_QUORUM);
