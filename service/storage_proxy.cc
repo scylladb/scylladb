@@ -81,7 +81,6 @@
 #include "service/paxos/paxos_state.hh"
 #include "gms/feature_service.hh"
 #include "db/virtual_table.hh"
-#include "mutation/canonical_mutation.hh"
 #include "idl/frozen_schema.dist.hh"
 #include "idl/frozen_schema.dist.impl.hh"
 #include "idl/storage_proxy.dist.hh"
@@ -1208,8 +1207,10 @@ private:
                 trbuilder.set("request_type", req);
             }
 
-            topology_change change{{builder.build(), trbuilder.build()}};
-            group0_command g0_cmd = _group0_client.prepare_command(std::move(change), guard, reason);
+            group0_update_collector updates;
+            updates.add(builder.build());
+            updates.add(trbuilder.build());
+            group0_command g0_cmd = co_await _group0_client.prepare_command<topology_change>(std::move(updates), guard, reason);
             try {
                 co_await _group0_client.add_entry(std::move(g0_cmd), std::move(guard), _group0_as, raft_timeout{});
                 co_await utils::get_local_injector().inject("do_topology_request/request_added", utils::wait_for_message(5min));

@@ -13,7 +13,6 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/sharded.hh>
 
-#include "mutation/canonical_mutation.hh"
 #include "mutation/timestamp.hh"
 #include "utils/exponential_backoff_retry.hh"
 #include "cql3/query_processor.hh"
@@ -66,18 +65,13 @@ future<> do_after_system_ready(seastar::abort_source& as, seastar::noncopyable_f
 
 static future<> announce_mutations_with_guard(
         ::service::raft_group0_client& group0_client,
-        utils::chunked_vector<canonical_mutation> muts,
+        ::service::group0_update_collector muts,
         ::service::group0_guard group0_guard,
         seastar::abort_source& as,
         std::optional<::service::raft_timeout> timeout) {
-    auto group0_cmd = group0_client.prepare_command(
-        ::service::write_mutations{
-            .mutations{std::move(muts)},
-        },
-        group0_guard,
-        "auth: modify internal data"
-    );
-    return group0_client.add_entry(std::move(group0_cmd), std::move(group0_guard), as, timeout);
+    auto group0_cmd = co_await group0_client.prepare_command<::service::write_mutations>(
+            std::move(muts), group0_guard, "auth: modify internal data");
+    co_await group0_client.add_entry(std::move(group0_cmd), std::move(group0_guard), as, timeout);
 }
 
 future<> announce_mutations(
@@ -94,8 +88,11 @@ future<> announce_mutations(
             internal_distributed_query_state(),
             timestamp,
             std::move(values));
-    utils::chunked_vector<canonical_mutation> cmuts = {muts.begin(), muts.end()};
-    co_await announce_mutations_with_guard(group0_client, std::move(cmuts), std::move(group0_guard), as, timeout);
+    ::service::group0_update_collector updates;
+    for (auto& m : muts) {
+        co_await updates.add(std::move(m));
+    }
+    co_await announce_mutations_with_guard(group0_client, std::move(updates), std::move(group0_guard), as, timeout);
 }
 
 future<> collect_mutations(

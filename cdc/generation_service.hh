@@ -73,10 +73,13 @@ public:
     // stream enablement if no in-progress tablet merges remain.
     // Returns schema mutations that transition enable_requested -> enabled,
     // including CDC log table creation side effects.
-    future<utils::chunked_vector<canonical_mutation>> maybe_finalize_pending_stream_enables(const locator::token_metadata& tm, api::timestamp_type ts);
+    // Returns the number of tables whose stream enablement was finalized, appending the
+    // updates to `muts`.
+    future<size_t> maybe_finalize_pending_stream_enables(const locator::token_metadata& tm, api::timestamp_type ts,
+            service::group0_update_collector& muts);
 
     future<utils::chunked_vector<mutation>> garbage_collect_cdc_streams_for_table(table_id table, std::optional<std::chrono::seconds> ttl, api::timestamp_type ts);
-    future<> garbage_collect_cdc_streams(utils::chunked_vector<canonical_mutation>& muts, api::timestamp_type ts);
+    future<> garbage_collect_cdc_streams(service::group0_update_collector& muts, api::timestamp_type ts);
 
 };
 

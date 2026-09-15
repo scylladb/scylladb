@@ -2024,7 +2024,7 @@ future<group0_guard> save_token_metadata(cql_test_env& e, group0_guard guard,
     utils::chunked_vector<frozen_mutation> muts;
     muts.push_back(freeze(topology_mutation_builder(guard.write_timestamp())
                                   .set_version(tm->get_version())
-                                  .build().to_mutation(db::system_keyspace::topology())));
+                                  .build()));
     co_await e.local_db().apply(muts, db::no_timeout);
     co_await e.get_storage_service().local().update_tablet_metadata(hint);
 
