@@ -27,7 +27,9 @@
 #include "locator/load_sketch.hh"
 #include "replica/database.hh"
 #include "gms/feature_service.hh"
+#include <algorithm>
 #include <bit>
+#include <cmath>
 #include <iterator>
 #include <ranges>
 #include <utility>
@@ -957,6 +959,11 @@ class load_balancer {
     size_t max_write_streaming_load;
     size_t max_read_streaming_load;
 
+    // Upper bound on the fraction of a table's token space which batching may keep in transition, to
+    // limit how many requests pay the double-quorum overhead. Only bounds how far above the tablet
+    // count limits batching may go, never below them.
+    double max_token_space_fraction;
+
     replica::database& _db;
     token_metadata_ptr _tm;
     service::topology* _topology;
@@ -964,6 +971,12 @@ class load_balancer {
     std::optional<locator::load_sketch> _load_sketch;
     // Holds the set of tablets already scheduled for transition during plan-making.
     std::unordered_set<global_tablet_id> _scheduled_tablets;
+    // Per-table tablet counts used by the token space cap. The first two are recomputed by
+    // count_tablets_in_transition() before plan-making, the third accumulates over the whole
+    // plan-making round alongside _scheduled_tablets. All keyed by co-location group base table.
+    absl::flat_hash_map<table_id, size_t> _tablets_in_transition_per_table;
+    absl::flat_hash_map<table_id, size_t> _max_tablets_in_transition_per_table;
+    absl::flat_hash_map<table_id, size_t> _scheduled_tablets_per_table;
     // Holds tablet replica count per table in the balanced node set (within a single DC).
     absl::flat_hash_map<table_id, size_t> _tablet_count_per_table;
     // Holds total used storage per table in the DC
@@ -1095,6 +1108,9 @@ public:
         }
         max_read_streaming_load = db.get_config().tablet_streaming_read_concurrency_per_shard();
         max_write_streaming_load = db.get_config().tablet_streaming_write_concurrency_per_shard();
+        auto token_space_pct = db.get_config().tablet_streaming_max_token_space_percentage();
+        // Live-updatable, so guard the double -> size_t conversion in count_tablets_in_transition().
+        max_token_space_fraction = std::isnan(token_space_pct) ? 0.0 : std::clamp(token_space_pct, 0.0, 100.0) / 100.0;
     }
 
     bool ongoing_rack_list_colocation() const {
@@ -1296,8 +1312,24 @@ public:
         return migration_tablet_set{gid, get_tablet_group_size(tmap, table, tid, replica.host)};
     }
 
+    // Tablets scheduled during plan-making are counted separately, by mark_as_scheduled().
+    future<> count_tablets_in_transition() {
+        _tablets_in_transition_per_table.clear();
+        _max_tablets_in_transition_per_table.clear();
+        for (auto&& [table, tables] : _tm->tablets().all_table_groups()) {
+            co_await coroutine::maybe_yield();
+            if (is_migrating_table(table)) {
+                continue;
+            }
+            const auto& tmap = _tm->tablets().get_tablet_map(table);
+            _tablets_in_transition_per_table[table] = tmap.transitions().size();
+            _max_tablets_in_transition_per_table[table] = size_t(tmap.tablet_count() * max_token_space_fraction);
+        }
+    }
+
     future<> consider_scheduled_load(node_load_map& nodes) {
         const locator::topology& topo = _tm->get_topology();
+        co_await count_tablets_in_transition();
         for (auto&& [table, tables] : _tm->tablets().all_table_groups()) {
             if (is_migrating_table(table)) {
                 continue;
@@ -3017,6 +3049,26 @@ public:
         co_return std::move(resize_plan);
     }
 
+    // In transition according to tablet metadata, plus scheduled during this plan-making round.
+    size_t tablets_in_transition(table_id table) const {
+        size_t result = 0;
+        if (auto i = _tablets_in_transition_per_table.find(table); i != _tablets_in_transition_per_table.end()) {
+            result += i->second;
+        }
+        if (auto i = _scheduled_tablets_per_table.find(table); i != _scheduled_tablets_per_table.end()) {
+            result += i->second;
+        }
+        return result;
+    }
+
+    // Zero, disabling batching, for tables not seen by count_tablets_in_transition() and for those
+    // with fewer than 1/max_token_space_fraction tablets. The latter is intended: the tablet count
+    // limits already allow a larger fraction of such a table to be in transition than the cap would.
+    size_t max_tablets_in_transition(table_id table) const {
+        auto i = _max_tablets_in_transition_per_table.find(table);
+        return i != _max_tablets_in_transition_per_table.end() ? i->second : 0;
+    }
+
     void apply_load(node_load_map& nodes, const tablet_migration_streaming_info& info, const migration_tablet_set& tablets) {
         for (auto&& replica : info.read_from) {
             if (nodes.contains(replica.host)) {
@@ -3437,7 +3489,9 @@ public:
     }
 
     void mark_as_scheduled(const tablet_migration_info& mig) {
-        _scheduled_tablets.insert(mig.tablet);
+        if (_scheduled_tablets.insert(mig.tablet).second) {
+            _scheduled_tablets_per_table[_tm->tablets().get_base_table(mig.tablet.table)] += 1;
+        }
     }
 
     void mark_as_scheduled(const migration_plan::migrations_vector& migs) {
@@ -4608,6 +4662,7 @@ public:
 
         _tablet_count_per_table.clear();
         _disk_used_per_table.clear();
+        co_await count_tablets_in_transition();
 
         for (auto&& [table, tables] : _tm->tablets().all_table_groups()) {
             if (is_migrating_table(table)) {
