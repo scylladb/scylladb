@@ -13,6 +13,8 @@
 #include "schema/schema_fwd.hh"
 #include "tasks/task_manager.hh"
 
+#include <optional>
+
 namespace sstables {
 class sstable_directory;
 }
@@ -25,7 +27,7 @@ namespace compaction {
 
 class compaction_task_impl : public tasks::task_manager::task::impl {
 protected:
-    mutable uint64_t _expected_workload = 0;
+    mutable std::optional<uint64_t> _expected_workload;
 public:
     compaction_task_impl(tasks::task_manager::module_ptr module,
             tasks::task_id id,
