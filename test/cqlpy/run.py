@@ -280,7 +280,6 @@ def run_scylla_cmd(pid, dir):
         '--api-doc-dir', source_path + '/api/api-doc/',
         '--developer-mode', '1',
         '--ring-delay-ms', '0',
-        '--collectd', '0',
         '--smp', '2',
         '-m', '1G',
         '--overprovisioned',

@@ -55,7 +55,7 @@ display various sums - e.g., the sum on all shards of each node, or the total
 sum of all shards and all nodes.
 
 The "type" label should be ignored - it appears for historic reasons
-(it was used by collectd) and is planned to be removed in the future.
+and is planned to be removed in the future.
 
 ## Additional metric labels
 In some cases, we have several metrics which measure the same thing but for
@@ -136,11 +136,10 @@ subtracting the "total number of requests" values queried one second apart,
 we can show the number of requests handled during that second.
 
 > In some contexts, we call counter metrics "derive" metrics. We do this
-> mainly for historic reasons, because our previous focus on the "collectd"
-> metric collection daemon - which Scylla still supports but is no longer
-> our recommended choice. Collectd has both "derive" and "counter" metrics
-> with a subtle difference: Both indicate cumulative values, but "counter"
-> is a sum of non-negative values, while "derive" is a sum of values which
+> for historic reasons: an older metric collection protocol Scylla used to
+> support had both "derive" and "counter" metrics with a subtle difference:
+> Both indicate cumulative values, but "counter" is a sum of non-negative
+> values, while "derive" is a sum of values which
 > may be negative. This distinction is not important in Scylla: all our
 > cumulative metrics are sums of non-negative values, and are monotonically
 > increasing. So in this document we picked the term "counter" and use it
