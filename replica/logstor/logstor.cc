@@ -10,21 +10,53 @@
 #include <seastar/util/log.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/metrics.hh>
-#include "dht/decorated_key.hh"
 #include "query/query-request.hh"
 #include "readers/from_mutations.hh"
 #include "readers/forwardable.hh"
 #include "keys/keys.hh"
+#include "replica/logstor/key_utils.hh"
 #include "replica/logstor/segment_manager.hh"
 #include "replica/logstor/types.hh"
 #include <seastar/core/when_all.hh>
 #include "utils/managed_bytes.hh"
-#include <openssl/ripemd.h>
-#include <openssl/evp.h>
+#include <algorithm>
+#include <queue>
+#include <random>
+#include <vector>
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Warray-bounds"
+#include <xxhash.h>
+#pragma GCC diagnostic pop
 
 namespace replica::logstor {
 
 seastar::logger logstor_logger("logstor");
+
+const uint64_t key_hash_seed = [] {
+    std::random_device rd;
+    return (uint64_t(rd()) << 32) | uint64_t(rd());
+}();
+
+key_hash compute_key_hash(managed_bytes_view key) {
+    XXH128_hash_t digest;
+    if (!key.is_linearized()) [[unlikely]] {
+        XXH3_state_t state;
+        XXH3_128bits_reset_withSeed(&state, key_hash_seed);
+        for (bytes_view frag : fragment_range(key)) {
+            XXH3_128bits_update(&state, frag.data(), frag.size());
+        }
+        digest = XXH3_128bits_digest(&state);
+    } else {
+        auto frag = key.current_fragment();
+        digest = XXH3_128bits_withSeed(frag.data(), frag.size(), key_hash_seed);
+    }
+    return key_hash{.low64 = digest.low64, .high64 = digest.high64};
+}
+
+primary_index_key::primary_index_key(const dht::decorated_key& dk)
+    : primary_index_key(dk.token(), compute_key_hash(dk.key())) {
+}
 
 static api::timestamp_type extract_logstor_record_timestamp(const mutation& m) {
     const auto& partition = m.partition();
@@ -115,8 +147,8 @@ const compaction_manager& logstor::get_compaction_manager() const noexcept {
     return _segment_manager.get_compaction_manager();
 }
 
-std::unique_ptr<primary_index> logstor::make_primary_index(schema_ptr schema, bool cache_enabled) {
-    return std::make_unique<primary_index>(schema, _segment_manager, cache_enabled ? &_cache_tracker : nullptr);
+std::unique_ptr<primary_index> logstor::make_primary_index(bool cache_enabled) {
+    return std::make_unique<primary_index>(_segment_manager, cache_enabled ? &_cache_tracker : nullptr);
 }
 
 future<> logstor::write(const mutation& m, write_target target, db::timeout_clock::time_point timeout) {
@@ -131,7 +163,7 @@ future<> logstor::write(const mutation& m, write_target target, db::timeout_cloc
 
     log_record record {
         .header = {
-            .key = key,
+            .key = m.decorated_key(),
             .timestamp = ts,
             .table = table,
         },
@@ -175,13 +207,17 @@ future<std::optional<mutation>> logstor::read(schema_ptr s, const primary_index&
     }
 
     if (lookup->cached_mutation) {
-        co_return std::move(*lookup->cached_mutation);
+        auto& cached = *lookup->cached_mutation;
+        if (cached.decorated_key().key() != dk.key()) [[unlikely]] {
+            co_await coroutine::return_exception(key_mismatch_error(dk.key(), cached.decorated_key().key(), key_mismatch_error::cache_location{}));
+        }
+        co_return std::move(cached);
     }
 
     auto record = co_await _segment_manager.read(lookup->entry.location);
 
-    if (record.mut.key() != dk.key()) [[unlikely]] {
-        on_internal_error(logstor_logger, format("Key mismatch reading log entry: expected {}, got {}", dk.key(), record.mut.key()));
+    if (record.header.key.key() != dk.key()) [[unlikely]] {
+        co_await coroutine::return_exception(key_mismatch_error(dk.key(), record.header.key.key(), lookup->entry.location));
     }
 
     mutation m = record.mut.to_mutation(s);
@@ -447,11 +483,11 @@ mutation_reader logstor::make_reader(schema_ptr schema, const primary_index& ind
             co_return mutations;
         }
 
-        // Scan order is the index's own key order: by token, and within a token by whatever the
-        // index key compares by. Partition ranges and reader output use ring order instead: by
-        // token, then by the full partition key. The two coincide only while the index key is the
-        // decorated key, so restore ring order explicitly, which is possible only once the
-        // records are read and the full key is known.
+        // Primary-index scan order is by (token, key hash). That means the batch already arrives
+        // in token order, but entries that share a token are only ordered by the hash stored in
+        // the index. Partition ranges and reader output use ring order instead: first by token,
+        // then by the full partition key. We can only restore that order after reading the log
+        // records, because only then do we have the full decorated key rather than just its hash.
         //
         // The batch is also coarser than the requested range, because
         // partition_range_to_token_range() keeps the whole token of a key-bearing bound. Sorting

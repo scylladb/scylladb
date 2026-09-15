@@ -74,7 +74,7 @@ public:
     compaction_manager& get_compaction_manager() noexcept;
     const compaction_manager& get_compaction_manager() const noexcept;
 
-    std::unique_ptr<primary_index> make_primary_index(schema_ptr schema, bool cache_enabled);
+    std::unique_ptr<primary_index> make_primary_index(bool cache_enabled);
 
     future<> write(const mutation&, write_target target, db::timeout_clock::time_point timeout);
 

@@ -52,7 +52,7 @@ schema_ptr make_kv_schema() {
             .build();
 }
 
-primary_index_key make_index_key(const schema& s, const dht::decorated_key& dk) {
+primary_index_key make_index_key(const schema&, const dht::decorated_key& dk) {
     return primary_index_key{dk};
 }
 
@@ -71,7 +71,7 @@ log_record make_log_record(schema_ptr schema, sstring pk, sstring value, api::ti
     auto m = make_kv_mutation(schema, std::move(pk), std::move(value), ts);
     return log_record {
         .header = {
-            .key = make_index_key(*schema, m.decorated_key()),
+            .key = m.decorated_key(),
             .timestamp = ts,
             .table = schema->id(),
         },
@@ -355,7 +355,7 @@ class test_compaction_group_handle final : public logstor_group {
 public:
     test_compaction_group_handle(schema_ptr schema, logstor& ls)
         : _table_id(schema->id())
-        , _owned_index(ls.make_primary_index(schema, false))
+        , _owned_index(ls.make_primary_index(false))
         , _index(*_owned_index)
         , _cm(ls.get_compaction_manager()) {
         _cm.add(*this);
@@ -543,6 +543,22 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_ondisk_serialized_sizes) {
         .header_size = 0x0a0b0c0d,
         .data_size = 0xcafebabe,
     });
+}
+
+// Checks that the index key hashes the internal representation of the partition key and keeps its token.
+SEASTAR_THREAD_TEST_CASE(test_logstor_index_key_hashes_key_representation) {
+    auto schema = make_kv_schema();
+    auto dk0 = make_kv_mutation(schema, "pk0", "v0").decorated_key();
+    auto dk1 = make_kv_mutation(schema, "pk1", "v1").decorated_key();
+
+    auto key0 = primary_index_key(dk0);
+    BOOST_REQUIRE_EQUAL(key0.token(), dk0.token());
+    BOOST_REQUIRE(key0.hash() == compute_key_hash(dk0.key().representation()));
+    BOOST_REQUIRE(key0 == primary_index_key(dk0));
+
+    auto key1 = primary_index_key(dk1);
+    BOOST_REQUIRE(key1.hash() != key0.hash());
+    BOOST_REQUIRE(key1 != key0);
 }
 
 // Checks that sealing a full raw write buffer writes the expected header fields.
@@ -937,7 +953,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_space_accounting) {
         }
     } accounting;
 
-    primary_index index(schema, accounting, nullptr);
+    primary_index index(accounting, nullptr);
 
     const auto pk0 = make_index_key(*schema, make_kv_mutation(schema, "pk0", "v0").decorated_key());
     const auto pk1 = make_index_key(*schema, make_kv_mutation(schema, "pk1", "v1").decorated_key());
@@ -1093,7 +1109,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_range_erase_and_clear_space_
         }
     } accounting;
 
-    primary_index index(schema, accounting, nullptr);
+    primary_index index(accounting, nullptr);
 
     struct entry {
         primary_index_key key;

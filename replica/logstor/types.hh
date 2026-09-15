@@ -10,7 +10,7 @@
 #include <cstdint>
 #include <fmt/format.h>
 #include "dht/decorated_key.hh"
-#include "dht/ring_position.hh"
+#include "replica/logstor/key_utils.hh"
 #include "mutation/canonical_mutation.hh"
 #include "mutation/timestamp.hh"
 
@@ -32,9 +32,27 @@ struct log_location {
 };
 
 struct primary_index_key {
-    dht::decorated_key dk;
+    dht::token _token;
+    key_hash _hash;
 
-    const dht::token& token() const noexcept { return dk.token(); }
+    primary_index_key() = default;
+
+    primary_index_key(dht::token token, key_hash hash)
+        : _token(std::move(token))
+        , _hash(std::move(hash)) {}
+
+    explicit primary_index_key(const dht::decorated_key& dk);
+
+    const dht::token& token() const noexcept {
+        return _token;
+    }
+
+    const key_hash& hash() const noexcept {
+        return _hash;
+    }
+
+    bool operator==(const primary_index_key& other) const noexcept = default;
+    auto operator<=>(const primary_index_key& other) const noexcept = default;
 };
 
 struct index_entry {
@@ -45,9 +63,15 @@ struct index_entry {
 };
 
 struct log_record_header {
-    primary_index_key key;
+    dht::decorated_key key;
     api::timestamp_type timestamp;
     table_id table;
+
+    // The key as the primary index knows it. Compaction and recovery derive it from the header,
+    // since a record carries the partition key itself and never its hash.
+    primary_index_key index_key() const {
+        return primary_index_key(key);
+    }
 };
 
 struct log_record {
@@ -118,7 +142,7 @@ template <>
 struct fmt::formatter<replica::logstor::primary_index_key> : fmt::formatter<string_view> {
     template <typename FormatContext>
     auto format(const replica::logstor::primary_index_key& key, FormatContext& ctx) const {
-        return fmt::format_to(ctx.out(), "{}", key.dk);
+        return fmt::format_to(ctx.out(), "{{token: {}, key_hash: {:016x}{:016x}}}", key.token(), key.hash().high64, key.hash().low64);
     }
 };
 
