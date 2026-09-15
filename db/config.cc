@@ -1757,6 +1757,12 @@ db::config::config(std::shared_ptr<db::extensions> exts)
          "Maximum number of tablets which may be leaving a shard at the same time. Effecting only on topology coordinator. Set to the same value on all nodes.")
     , tablet_streaming_write_concurrency_per_shard(this, "tablet_streaming_write_concurrency_per_shard", liveness::LiveUpdate, value_status::Used, 2,
          "Maximum number of tablets which may be pending on a shard at the same time. Effecting only on topology coordinator. Set to the same value on all nodes.")
+    , tablet_streaming_min_batch_size_in_bytes(this, "tablet_streaming_min_batch_size_in_bytes", liveness::LiveUpdate, value_status::Used, 1073741824,
+         "Amount of tablet data (in bytes) which has to be streaming to or from a shard before the per-shard tablet count " \
+         "concurrency limits are enforced for it, or 0 to always enforce them.")
+    , tablet_streaming_max_token_space_percentage(this, "tablet_streaming_max_token_space_percentage", liveness::LiveUpdate, value_status::Used, 5.0,
+         "Maximum percentage of a table's token space which may be migrating at the same time as a result of " \
+         "tablet_streaming_min_batch_size_in_bytes relaxing the per-shard tablet count concurrency limits.")
     , service_levels_interval(this, "service_levels_interval_ms", liveness::LiveUpdate, value_status::Used, 10000, "Controls how often service levels module polls configuration table")
 
     , audit(this, "audit", value_status::Used, "table",
