@@ -18,3 +18,7 @@
 [submodule "fmt"]
 	path = fmt
 	url = ../fmt
+[submodule "clock-bound"]
+	path = clock-bound
+	url = https://github.com/aws/clock-bound.git
+	ignore = dirty
