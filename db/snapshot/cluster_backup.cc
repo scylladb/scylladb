@@ -44,18 +44,14 @@ struct std::hash<db::snapshot_dc_location> {
     }
 };
 
-static std::string format_snapshot_location(std::string_view prefix, std::string_view what, const replica::table&, std::string_view appendix = {}) {
-    auto pp = prefix.empty() ? "" : "/";
-    auto ap = appendix.empty() ? "" : "/";
-    return fmt::format("{}{}{}{}{}",  prefix, pp, what, ap, appendix);
-}
-
 std::string db::snapshot::sstables_location(std::string_view prefix, const replica::table& t, std::string_view snapshot_name) {
-    return format_snapshot_location(prefix, "sstables", t);
+    auto pp = prefix.empty() ? "" : "/";
+    return fmt::format("{}{}{}",  prefix, pp, "sstables");
 }
 
 std::string db::snapshot::snapshot_meta_location(std::string_view prefix, const replica::table& t, std::string_view snapshot_name) {
-    return format_snapshot_location(prefix, "snapshots", t, snapshot_name);
+    auto pp = prefix.empty() ? "" : "/";
+    return fmt::format("{}{}{}/{}/{}/{}",  prefix, pp, "snapshots", t.schema()->ks_name(), t.schema()->cf_name(), snapshot_name);
 }
 
 static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string& snapshot_name, const std::unordered_multimap<sstring, sstring>& ks_tables, std::unordered_map<sstring, db::snapshot_dc_location>& dc_locations, bool remove_on_uploaded, tasks::task_manager::task::progress& total_progress, abort_source& as) {
