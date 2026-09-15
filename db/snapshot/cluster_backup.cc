@@ -7,6 +7,8 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
+#include <array>
+
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/seastar.hh>
 #include <seastar/coroutine/maybe_yield.hh>
@@ -556,7 +558,11 @@ db::snapshot::backup_sstables(db::snapshot_ctl& snap, table_id table_id, std::st
                 snap_log.info("Marking {} as uploaded", id);
                 db::snapshot_table_helper sth(snap.qp().local());
                 info.sstable.state = use_move ? db::snapshot_state::remote : db::snapshot_state::remote_and_local;
-                co_await sth.insert_snapshot_sstables(tag, ksname, cfname, local.dc, local.rack, { info.sstable });
+                // Spell out the single-element array instead of passing a
+                // braced list, which would be ambiguous between the two
+                // insert_snapshot_sstables() overloads.
+                std::array sstables{info.sstable};
+                co_await sth.insert_snapshot_sstables(tag, ksname, cfname, local.dc, local.rack, sstables);
             } catch (...) {
                 snap_log.error("Error marking {} as uploaded: {:t}", id, std::current_exception());
             }

@@ -1161,7 +1161,10 @@ using query_data_vector = std::vector<data_value_or_unset>;
 class query_data_params : public query_data_values {
 public:
     using query_data_values::query_data_values;
-    query_data_params(const data_value_list& params)
+    // By value, not by const reference - this must keep the same signature as
+    // std::span's own initializer_list constructor, to hide it instead of
+    // being ambiguous with it.
+    query_data_params(data_value_list params)
         : query_data_values(params)
     {}
 };
