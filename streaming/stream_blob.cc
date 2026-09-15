@@ -794,7 +794,8 @@ future<stream_files_response> tablet_stream_files_handler(replica::database& db,
 
     if (is_logstor_table) {
         auto segments = co_await table.take_logstor_snapshot(req.range);
-        co_await utils::get_local_injector().inject("wait_before_tablet_stream_files_after_snapshot", utils::wait_for_message(std::chrono::seconds(60)));
+        // Tests hold this across topology operations; an expired wait aborts the node.
+        co_await utils::get_local_injector().inject("wait_before_tablet_stream_files_after_snapshot", utils::wait_for_message(std::chrono::minutes(5)));
         for (auto& seg : segments) {
             auto& info = files.emplace_back();
             info.filename = format("logstor_segment_{}", seg.segment_id); // used only for logging
@@ -807,7 +808,7 @@ future<stream_files_response> tablet_stream_files_handler(replica::database& db,
                 req.ops_id, segments.size(), req.range);
     } else {
         auto sstables = co_await table.take_storage_snapshot(req.range);
-        co_await utils::get_local_injector().inject("wait_before_tablet_stream_files_after_snapshot", utils::wait_for_message(std::chrono::seconds(60)));
+        co_await utils::get_local_injector().inject("wait_before_tablet_stream_files_after_snapshot", utils::wait_for_message(std::chrono::minutes(5)));
         if (auto shadowed_file = utils::get_local_injector().inject_parameter<std::string_view>("order_sstables_for_streaming", "shadowed_file");
                 shadowed_file && sstables.size() == 3) {
             // make sure the sstables are ordered so that the sstable containing shadowed data is streamed last
