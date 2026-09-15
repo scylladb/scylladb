@@ -1871,6 +1871,8 @@ private:
     auto sum_read_concurrency_sem_var(std::invocable<reader_concurrency_semaphore&> auto member);
     auto sum_read_concurrency_sem_stat(std::invocable<reader_concurrency_semaphore::stats&> auto stats_member);
 
+    // Called by schema_change_commit_guard's destructor.
+    void end_schema_change_commit() noexcept;
     // Slow path of table_for_request(): waits for a pending schema change commit affecting the
     // table to reach this shard, then looks the table up.
     future<lw_shared_ptr<table>> table_for_request_slow_path(table_id, db::timeout_clock::time_point timeout);
@@ -2088,16 +2090,28 @@ public:
     future<mutation> prepare_counter_update(schema_ptr s, const frozen_mutation& fm, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state);
     future<> apply_counter_update(schema_ptr, const frozen_mutation& fm, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state);
 
-    // Brackets the commit of a schema change on all shards, see schema_applier::commit().
-    // Called on every shard before the change is committed on any shard, with the ids of the
-    // tables it creates or alters and of those it drops, and again on every shard after all
-    // shards committed it. In between, requests to the created or altered tables which don't
-    // match this shard's schema version wait for the commit instead of being served, see
-    // table_for_request(). Requests to the dropped tables are not held back, but a shard which
-    // still has such a table can tell that a failure to reach it elsewhere is expected, see
-    // is_table_being_dropped().
-    void begin_schema_change_commit(std::unordered_set<table_id> tables, std::unordered_set<table_id> dropped_tables);
-    void end_schema_change_commit() noexcept;
+    // RAII handle for a schema change commit announced on this shard, see begin_schema_change_commit().
+    // Destroying it, which has to happen on this shard, ends the announcement and releases the
+    // requests waiting for the commit.
+    class schema_change_commit_guard {
+        database& _db;
+    public:
+        explicit schema_change_commit_guard(database& db) noexcept : _db(db) {}
+        schema_change_commit_guard(const schema_change_commit_guard&) = delete;
+        schema_change_commit_guard& operator=(const schema_change_commit_guard&) = delete;
+        ~schema_change_commit_guard() {
+            _db.end_schema_change_commit();
+        }
+    };
+    // Announces a schema change commit on this shard, see schema_applier::commit(). Called on
+    // every shard before the change is committed on any shard, with the ids of the tables it
+    // creates or alters and of those it drops. Until the returned guard is destroyed, which the
+    // applier does on every shard once all shards have committed, or on any failure, requests to
+    // the created or altered tables which don't match this shard's schema version wait for the
+    // commit instead of being served, see table_for_request(). Requests to the dropped tables are
+    // not held back, but a shard which still has such a table can tell that a failure to reach it
+    // elsewhere is expected, see is_table_being_dropped().
+    std::unique_ptr<schema_change_commit_guard> begin_schema_change_commit(std::unordered_set<table_id> tables, std::unordered_set<table_id> dropped_tables);
     // Whether a schema change dropping table `id` is being committed on all shards.
     bool is_table_being_dropped(table_id id) const {
         return _schema_change_commit && _schema_change_commit->dropped_tables.contains(id);

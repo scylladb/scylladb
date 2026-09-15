@@ -1109,10 +1109,11 @@ future<> schema_applier::commit() {
     // database::table_for_request(). Dropped tables are announced too, so a shard which
     // still has one knows a failure to reach it on another shard is expected. Only
     // tables/views/cdc logs are announced: keyspaces, types and functions are not looked
-    // up by the request paths.
-    co_await sharded_db.invoke_on_all([this] (replica::database& db) {
+    // up by the request paths. The announcement lasts as long as the guards do, so a
+    // failure anywhere below releases the waiting requests as well.
+    _schema_change_commit_guards = co_await sharded_db.map([this] (replica::database& db) {
         auto ids = table_ids_of(_affected_tables_and_views.tables_and_views.local());
-        db.begin_schema_change_commit(std::move(ids.created_or_altered), std::move(ids.dropped));
+        return make_foreign(db.begin_schema_change_commit(std::move(ids.created_or_altered), std::move(ids.dropped)));
     });
     // Run func first on shard 0
     // to allow "seeding" of the effective_replication_map
@@ -1123,11 +1124,16 @@ future<> schema_applier::commit() {
     co_await sharded_db.invoke_on_others([this] (replica::database& db) {
         commit_on_shard(db);
     });
-    co_await sharded_db.invoke_on_all([] (replica::database& db) {
-        db.end_schema_change_commit();
-    });
+    co_await release_schema_change_commit_guards();
     // unlock as some functions in post_commit() may read data under those locks
     _metadata_locks = nullptr;
+}
+
+future<> schema_applier::release_schema_change_commit_guards() {
+    auto guards = std::exchange(_schema_change_commit_guards, {});
+    co_await coroutine::parallel_for_each(guards, [] (auto& guard) {
+        return guard.destroy();
+    });
 }
 
 future<> schema_applier::finalize_tables_and_views() {
@@ -1251,6 +1257,8 @@ future<> schema_applier::post_commit() {
 }
 
 future<> schema_applier::destroy() {
+    // A no-op after a successful commit(); releases the waiting requests if it failed.
+    co_await release_schema_change_commit_guards();
     co_await _affected_user_types.stop();
     co_await _affected_tables_and_views.tables_and_views.stop();
     co_await _pending_token_metadata.destroy();

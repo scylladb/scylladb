@@ -1590,13 +1590,14 @@ const column_family& database::find_column_family(const table_id& uuid) const {
     }
 }
 
-void database::begin_schema_change_commit(std::unordered_set<table_id> tables, std::unordered_set<table_id> dropped_tables) {
+std::unique_ptr<database::schema_change_commit_guard> database::begin_schema_change_commit(std::unordered_set<table_id> tables, std::unordered_set<table_id> dropped_tables) {
     if (_schema_change_commit) {
         on_internal_error(dblog, "begin_schema_change_commit: a schema change commit is already in progress");
     }
     _schema_change_commit.emplace();
     _schema_change_commit->tables = std::move(tables);
     _schema_change_commit->dropped_tables = std::move(dropped_tables);
+    return std::make_unique<schema_change_commit_guard>(*this);
 }
 
 void database::end_schema_change_commit() noexcept {

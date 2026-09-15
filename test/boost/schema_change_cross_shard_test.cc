@@ -301,4 +301,28 @@ SEASTAR_TEST_CASE(test_drop_view_update_during_shard_commit) {
     });
 }
 
+// The announcement of a commit lives as long as its guard: destroying the guard, which the applier
+// does on every exit path, releases the waiting requests and clears the dropped-table set.
+SEASTAR_TEST_CASE(test_schema_change_commit_guard_releases_waiters) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto& db = e.local_db();
+        auto created = table_id::create_random_id();
+        auto dropped = table_id::create_random_id();
+        auto timeout = db::timeout_clock::now() + std::chrono::seconds(30);
+
+        BOOST_REQUIRE(db.wait_for_schema_change_commit(created, timeout).available());
+
+        auto guard = db.begin_schema_change_commit({created}, {dropped});
+        auto waiter = db.wait_for_schema_change_commit(created, timeout);
+        BOOST_REQUIRE(!waiter.available());
+        BOOST_REQUIRE(db.wait_for_schema_change_commit(dropped, timeout).available());
+        BOOST_REQUIRE(db.is_table_being_dropped(dropped));
+
+        guard.reset();
+        waiter.get();
+        BOOST_REQUIRE(db.wait_for_schema_change_commit(created, timeout).available());
+        BOOST_REQUIRE(!db.is_table_being_dropped(dropped));
+    });
+}
+
 BOOST_AUTO_TEST_SUITE_END()
