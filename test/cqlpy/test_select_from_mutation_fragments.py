@@ -205,7 +205,6 @@ def write_rows(cql, table, pk1, pk2, count):
         cql.execute(f"BEGIN UNLOGGED BATCH {inserts}APPLY BATCH")
 
 
-@pytest.mark.xfail(reason="SCYLLADB-4509: GROUP BY is ignored, the result does not match the groups")
 @pytest.mark.parametrize("test_keyspace", ["tablets", "vnodes"], indirect=True)
 def test_group_by(cql, test_table, scylla_only):
     """ GROUP BY groups a dump by a prefix of its primary key, like on any table.
@@ -233,7 +232,6 @@ def test_group_by(cql, test_table, scylla_only):
     assert {r.mutation_fragment_kind for r in rows} == {'partition start'}
 
 
-@pytest.mark.xfail(reason="SCYLLADB-4509: GROUP BY is ignored, one global row comes back")
 @pytest.mark.parametrize("test_keyspace", ["tablets", "vnodes"], indirect=True)
 def test_group_by_count(cql, test_table, scylla_only):
     """ COUNT() over a GROUP BY counts the fragments of each group.
@@ -257,7 +255,6 @@ def test_group_by_count(cql, test_table, scylla_only):
     assert sorted((r.mutation_source, r.count) for r in rows) == expected
 
 
-@pytest.mark.xfail(reason="SCYLLADB-4509: an aggregate returns one row per internal page")
 @pytest.mark.parametrize("test_keyspace", ["tablets", "vnodes"], indirect=True)
 def test_aggregate_paging(cql, test_keyspace, scylla_only):
     """ An aggregate is read in internal pages, the client gets a single page.
@@ -283,7 +280,6 @@ def test_aggregate_paging(cql, test_keyspace, scylla_only):
             assert not res.has_more_pages
 
 
-@pytest.mark.xfail(reason="SCYLLADB-4509: a group is counted per internal page, not as a whole")
 @pytest.mark.parametrize("test_keyspace", ["tablets", "vnodes"], indirect=True)
 def test_group_by_paging(cql, test_keyspace, scylla_only):
     """ A group spanning internal pages comes back as a single row.
