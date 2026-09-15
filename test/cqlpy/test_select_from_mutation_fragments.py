@@ -9,6 +9,7 @@
 
 import cassandra.protocol
 import cassandra.query
+import collections
 import glob
 import json
 import os
@@ -190,6 +191,73 @@ def test_count(cql, test_table, scylla_only):
     check_count('clustering row', 10)
     check_count('range tombstone change', 11)
     check_count('partition end', 1)
+
+
+@pytest.mark.xfail(reason="SCYLLADB-4509: GROUP BY is ignored, one global row comes back")
+@pytest.mark.parametrize("test_keyspace", ["tablets", "vnodes"], indirect=True)
+def test_group_by(cql, test_table, scylla_only):
+    """ GROUP BY works on a primary key prefix of the output schema, like on any table.
+
+    The output primary key is the table's partition key, then mutation_source,
+    partition_region, the table's clustering key and position_weight. Grouping
+    by the partition key counts fragments per partition, adding mutation_source
+    counts them per source. Regression test for SCYLLADB-4509.
+    """
+    pk1 = util.unique_key_int()
+    for pk2 in range(2):
+        for ck in range(2):
+            cql.execute(f"INSERT INTO {test_table} (pk1, pk2, ck1, ck2, v) VALUES ({pk1}, {pk2}, 0, {ck}, 'vv')")
+    # Puts both partitions in an sstable and the row cache, then one of them in the memtable too.
+    nodetool.flush(cql, f"{test_table}")
+    cql.execute(f"INSERT INTO {test_table} (pk1, pk2, ck1, ck2, v) VALUES ({pk1}, 1, 0, 2, 'vv')")
+
+    def fragments(pk2):
+        return list(cql.execute(f"SELECT pk2, mutation_source FROM MUTATION_FRAGMENTS({test_table}) WHERE pk1 = {pk1} AND pk2 = {pk2}"))
+
+    # Per partition. The table is shared with other tests, so the scan is filtered to pk1.
+    expected = sorted((pk2, len(fragments(pk2))) for pk2 in range(2))
+    rows = cql.execute(f"SELECT pk1, pk2, COUNT(*) FROM MUTATION_FRAGMENTS({test_table}) GROUP BY pk1, pk2")
+    assert sorted((r.pk2, r.count) for r in rows if r.pk1 == pk1) == expected
+
+    # Per source within a partition.
+    expected = sorted(collections.Counter(r.mutation_source for r in fragments(1)).items())
+    assert len(expected) >= 2
+    rows = cql.execute(f"SELECT mutation_source, COUNT(*) FROM MUTATION_FRAGMENTS({test_table}) WHERE pk1 = {pk1} AND pk2 = 1 GROUP BY pk1, pk2, mutation_source")
+    assert sorted((r.mutation_source, r.count) for r in rows) == expected
+
+
+@pytest.mark.xfail(reason="SCYLLADB-4509: an aggregate returns one row per internal page")
+@pytest.mark.parametrize("test_keyspace", ["tablets", "vnodes"], indirect=True)
+def test_aggregate_paging(cql, test_table, scylla_only):
+    """ An aggregate is paged internally and still returns one result set.
+
+    The internal page size is lowered so that the fragments span several
+    pages. The page size the client sends must not matter. Regression test
+    for SCYLLADB-4509.
+    """
+    pk1 = util.unique_key_int()
+    pk2 = util.unique_key_int()
+    for ck in range(10):
+        cql.execute(f"INSERT INTO {test_table} (pk1, pk2, ck1, ck2, v) VALUES ({pk1}, {pk2}, 0, {ck}, 'vv')")
+    where = f"WHERE pk1 = {pk1} AND pk2 = {pk2}"
+    expected = len(list(cql.execute(f"SELECT * FROM MUTATION_FRAGMENTS({test_table}) {where}")))
+    assert expected >= 12  # partition start, 10 rows, partition end, from one source at least
+    queries = (f"SELECT COUNT(*) FROM MUTATION_FRAGMENTS({test_table}) {where}",
+               f"SELECT pk2, COUNT(*) FROM MUTATION_FRAGMENTS({test_table}) {where} GROUP BY pk1, pk2")
+
+    def check(query, fetch_size):
+        res = cql.execute(cassandra.query.SimpleStatement(query, fetch_size=fetch_size))
+        assert [r.count for r in res.current_rows] == [expected], f"fetch_size={fetch_size}: {query}"
+        assert not res.has_more_pages
+
+    with util.config_value_context(cql, 'select_internal_page_size', '5'):
+        for fetch_size in (0, 1, 5, expected, 1000):
+            for query in queries:
+                check(query, fetch_size)
+        # A range scan pages through the other partitions of the shared table too.
+        res = cql.execute(f"SELECT pk1, COUNT(*) FROM MUTATION_FRAGMENTS({test_table}) GROUP BY pk1, pk2")
+        assert [r.count for r in res.current_rows if r.pk1 == pk1] == [expected]
+        assert not res.has_more_pages
 
 
 @pytest.mark.parametrize("test_keyspace", ["tablets", "vnodes"], indirect=True)
