@@ -1068,14 +1068,22 @@ void schema_applier::commit_on_shard(replica::database& db) {
     }
 }
 
-static std::unordered_set<table_id> created_and_altered_table_ids(const affected_tables_and_views_per_shard& diff) {
-    std::unordered_set<table_id> ids;
+struct affected_table_ids {
+    std::unordered_set<table_id> created_or_altered;
+    std::unordered_set<table_id> dropped;
+};
+
+static affected_table_ids table_ids_of(const affected_tables_and_views_per_shard& diff) {
+    affected_table_ids ids;
     for (const auto* d : {&diff.tables, &diff.cdc, &diff.views}) {
         for (const auto& s : d->created) {
-            ids.insert(s->id());
+            ids.created_or_altered.insert(s->id());
         }
         for (const auto& altered : d->altered) {
-            ids.insert(altered.new_schema->id());
+            ids.created_or_altered.insert(altered.new_schema->id());
+        }
+        for (const auto& s : d->dropped) {
+            ids.dropped.insert(s->id());
         }
     }
     return ids;
@@ -1098,10 +1106,13 @@ future<> schema_applier::commit() {
     // which has committed may reach one which hasn't. Announce the affected tables on
     // every shard first, so such a write waits for the commit rather than failing (new
     // table) or getting downgraded to the old schema (altered table); see
-    // database::table_for_write(). Only tables/views/cdc logs are announced: keyspaces,
-    // types and functions are not looked up by the write path.
+    // database::table_for_request(). Dropped tables are announced too, so a shard which
+    // still has one knows a failure to reach it on another shard is expected. Only
+    // tables/views/cdc logs are announced: keyspaces, types and functions are not looked
+    // up by the request paths.
     co_await sharded_db.invoke_on_all([this] (replica::database& db) {
-        db.begin_schema_change_commit(created_and_altered_table_ids(_affected_tables_and_views.tables_and_views.local()));
+        auto ids = table_ids_of(_affected_tables_and_views.tables_and_views.local());
+        db.begin_schema_change_commit(std::move(ids.created_or_altered), std::move(ids.dropped));
     });
     // Run func first on shard 0
     // to allow "seeding" of the effective_replication_map

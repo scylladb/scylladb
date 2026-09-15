@@ -68,6 +68,12 @@ uint64_t writes_on_shard(cql_test_env& e, shard_id shard) {
     }).get();
 }
 
+uint64_t view_updates_failed_local_on_shard(cql_test_env& e, shard_id shard) {
+    return e.db().invoke_on(shard, [] (replica::database& db) {
+        return db.cf_stats()->total_view_updates_failed_local;
+    }).get();
+}
+
 // Requests which have waited for a schema change commit, summed over all shards.
 uint64_t schema_change_commit_waits(cql_test_env& e) {
     return e.db().map_reduce0([] (replica::database& db) {
@@ -267,6 +273,31 @@ SEASTAR_TEST_CASE(test_create_view_update_during_shard_commit) {
 
         assert_that(e.execute_cql(format("SELECT pk FROM ks.tv WHERE v = {}", v)).get())
             .is_rows().with_rows({{int32_type->decompose(pk)}});
+    });
+}
+
+// The mirror image of the above: a base write on shard 1, which still has the view, generates
+// an update for shard 0, which has already dropped it. The update is moot, so it must neither
+// fail the (synchronous) write nor count as a failed view update.
+SEASTAR_TEST_CASE(test_drop_view_update_during_shard_commit) {
+    if (!can_run()) {
+        return make_ready_future<>();
+    }
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE ks.t (pk int PRIMARY KEY, v int)").get();
+        e.execute_cql("CREATE MATERIALIZED VIEW ks.tv AS SELECT * FROM ks.t WHERE v IS NOT NULL PRIMARY KEY (v, pk) WITH synchronous_updates = true").get();
+        auto pk = key_on_shard(e, e.local_db().find_schema("ks", "t"), 1);
+        auto v = key_on_shard(e, e.local_db().find_schema("ks", "tv"), 0);
+        auto failed_before = view_updates_failed_local_on_shard(e, 1);
+
+        auto drop = start_paused_schema_change(e, "DROP MATERIALIZED VIEW ks.tv", [] (replica::database& db) {
+            return !db.has_schema("ks", "tv");
+        });
+        // The update to shard 0 fails right away, so the write completes without releasing the drop.
+        write_to_shard_1(e, format("INSERT INTO ks.t (pk, v) VALUES ({}, {})", pk, v)).get();
+        BOOST_REQUIRE_EQUAL(view_updates_failed_local_on_shard(e, 1), failed_before);
+
+        drop.get();
     });
 }
 

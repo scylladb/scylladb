@@ -1774,6 +1774,7 @@ private:
     // Engaged while a schema change is being committed on all shards; see begin_schema_change_commit().
     struct schema_change_commit {
         std::unordered_set<table_id> tables;
+        std::unordered_set<table_id> dropped_tables;
         shared_promise<> committed;
     };
     std::optional<schema_change_commit> _schema_change_commit;
@@ -2089,11 +2090,18 @@ public:
 
     // Brackets the commit of a schema change on all shards, see schema_applier::commit().
     // Called on every shard before the change is committed on any shard, with the ids of the
-    // tables it creates or alters, and again on every shard after all shards committed it.
-    // In between, writes to those tables which don't match this shard's schema version wait
-    // for the commit instead of being applied, see table_for_write().
-    void begin_schema_change_commit(std::unordered_set<table_id> tables);
+    // tables it creates or alters and of those it drops, and again on every shard after all
+    // shards committed it. In between, requests to the created or altered tables which don't
+    // match this shard's schema version wait for the commit instead of being served, see
+    // table_for_request(). Requests to the dropped tables are not held back, but a shard which
+    // still has such a table can tell that a failure to reach it elsewhere is expected, see
+    // is_table_being_dropped().
+    void begin_schema_change_commit(std::unordered_set<table_id> tables, std::unordered_set<table_id> dropped_tables);
     void end_schema_change_commit() noexcept;
+    // Whether a schema change dropping table `id` is being committed on all shards.
+    bool is_table_being_dropped(table_id id) const {
+        return _schema_change_commit && _schema_change_commit->dropped_tables.contains(id);
+    }
     // Waits for a pending schema change commit affecting table `id` to complete on all shards.
     // Returns a ready future if there is none. For paths which resolve the table on other shards
     // synchronously, such as the multishard reader, and so cannot use table_for_request() there.
