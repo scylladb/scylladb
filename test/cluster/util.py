@@ -44,10 +44,13 @@ class FeatureConfig:
     - ``table_opts``: appended to the ``CREATE TABLE ...`` statement.
     - ``cluster_cfg``: merged into the per-server config dict passed to
       ``manager.server_add``.
+    - ``on_object_storage``: the keyspace lives on S3 or GCS rather than on the
+      local filesystem.
     """
     ks_opts: str = ""
     table_opts: str = ""
     cluster_cfg: dict = field(default_factory=dict)
+    on_object_storage: bool = False
 
     @property
     def strongly_consistent(self) -> bool:
