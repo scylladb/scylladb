@@ -22,7 +22,6 @@ def parse():
     parser.add_argument('--alternator-port', default=None, dest='alternatorPort', help="Alternator API port to listen to. Disabled by default.")
     parser.add_argument('--alternator-https-port', default=None, dest='alternatorHttpsPort', help="Alternator API TLS port to listen to. Disabled by default.")
     parser.add_argument('--alternator-write-isolation', default=None, dest='alternatorWriteIsolation', help="Alternator default write isolation policy.")
-    parser.add_argument('--disable-version-check', default=False, action='store_true', dest='disable_housekeeping', help="Disable version check")
     parser.add_argument('--authenticator', default=None, dest='authenticator', help="Set authenticator class")
     parser.add_argument('--authorizer', default=None, dest='authorizer', help="Set authorizer class")
     parser.add_argument('--cluster-name', default=None, dest='clusterName', help="Set cluster name")
