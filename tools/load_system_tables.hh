@@ -19,6 +19,8 @@
 #include "locator/tablets.hh"
 #include "schema/schema_fwd.hh"
 #include "seastarx.hh"
+#include "sstables/open_info.hh"
+#include "sstables/sstables_registry.hh"
 
 namespace db {
 class config;
@@ -27,6 +29,13 @@ class config;
 namespace tools {
 
 using tablets_t = std::map<dht::token, locator::tablet_replica_set>;
+
+/// A row of "system.sstables_registry": one sstable of a table on object storage
+struct sstables_registry_entry {
+    sstring status;
+    sstables::sstable_state state;
+    sstables::entry_descriptor desc;
+};
 
 /// The identity of the node the data directory belongs to, as recorded in "system.local"
 struct local_node_info {
@@ -62,6 +71,34 @@ future<tablets_t> load_system_tablets(const db::config& dbcfg,
 future<std::optional<data_dictionary::storage_options>> load_keyspace_storage_options(const db::config& dbcfg,
                                       std::filesystem::path scylla_data_path,
                                       std::string_view keyspace,
+                                      reader_permit permit);
+
+/// Load the sstables a node owns of a table on object storage, from
+/// "system.sstables_registry"
+///
+/// The sstables of such a table are not listable: the bucket is shared by the
+/// whole cluster, so which of the objects in it make up the table on this node
+/// is only recorded in the registry.
+///
+/// @returns the registry entries of \p table owned by \p node_owner
+future<std::vector<sstables_registry_entry>> load_system_sstables_registry(const db::config& dbcfg,
+                                      std::filesystem::path scylla_data_path,
+                                      table_id table,
+                                      locator::host_id node_owner,
+                                      reader_permit permit);
+
+/// The sstables registry of a node which is not running
+///
+/// "system.sstables_registry" records which objects of a bucket make up a table
+/// on a node, which is the only way to enumerate the sstables of a table living
+/// in object storage: the bucket is shared by the whole cluster, and nothing in
+/// it says which sstable belongs to which table. This reads the registry from
+/// the sstables of the data dir, where a running node reads it through CQL.
+///
+/// Only listing is supported. The other operations throw: a tool must not write
+/// to the registry of a node.
+std::unique_ptr<sstables::sstables_registry> make_offline_sstables_registry(const db::config& dbcfg,
+                                      std::filesystem::path scylla_data_path,
                                       reader_permit permit);
 
 /// Load the identity of the local node from "system.local" and "system.topology"
