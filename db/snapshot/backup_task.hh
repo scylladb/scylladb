@@ -42,12 +42,13 @@ class snapshot_ctl;
 
 namespace snapshot {
 
-class backup_task_impl : public tasks::task_manager::task::impl {
+class backup_state {
     snapshot_ctl& _snap_ctl;
     sharded<sstables::storage_manager>& _sstm;
     sstring _endpoint;
     sstring _bucket;
     sstring _prefix;
+    sstring _keyspace;
     std::filesystem::path _snapshot_dir;
     bool _remove_on_uploaded;
     tasks::task_manager::task::progress _total_progress;
@@ -63,13 +64,13 @@ class backup_task_impl : public tasks::task_manager::task::impl {
 
     class worker : sstables::sstables_manager_event_handler {
         sstables::sstables_manager& _manager;
-        backup_task_impl& _task;
+        backup_state& _state;
         shared_ptr<sstables::object_storage_client> _client;
         abort_source _as;
         std::exception_ptr _ex;
 
     public:
-        worker(const replica::database& db, backup_task_impl& task);
+        worker(const replica::database& db, backup_state& state);
         ~worker();
 
         future<> start_uploading();
@@ -92,12 +93,30 @@ class backup_task_impl : public tasks::task_manager::task::impl {
     sharded<worker> _sharded_worker;
     std::vector<utils::upload_progress> _progress_per_shard{this_smp_shard_count()};
 
-    future<> do_backup();
+    future<> do_backup(abort_source& as);
     future<> process_snapshot_dir();
     // Returns a disengaged optional when done
     std::optional<std::string> dequeue();
     void dequeue_sstable();
     void on_sstable_deletion(sstables::generation_type gen);
+
+public:
+    backup_state(snapshot_ctl& ctl,
+                 sharded<sstables::storage_manager>& sstm,
+                 sstring endpoint,
+                 sstring bucket,
+                 sstring prefix,
+                 sstring ks,
+                 std::filesystem::path snapshot_dir,
+                 bool move_files) noexcept;
+
+    // Must be called on the shard the state was created on.
+    future<> run(abort_source& as);
+    future<tasks::task_manager::task::progress> get_progress() const;
+};
+
+class backup_task_impl : public tasks::task_manager::task::impl {
+    backup_state _state;
 
 protected:
     virtual future<> run() override;
