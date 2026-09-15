@@ -41,6 +41,7 @@ data_type get_tablet_info_type();
 data_type get_tablet_info_v2_type();
 
 void set_strongly_consistent_tables_enabled(bool enabled);
+bool is_strongly_consistent_tables_enabled();
 
 schema_ptr make_tablets_schema();
 
