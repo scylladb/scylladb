@@ -91,7 +91,7 @@ ninja build/<mode>/scylla
 
 ## Test Philosophy
 - Performance matters. Tests should run as quickly as possible. Sleeps in the code are highly discouraged and should be avoided, to reduce run time and flakiness.
-- Stability matters. Tests should be stable. New tests should be executed 100 times at least to ensure they pass 100 out of 100 times. (use --repeat 100 --max-failures 1 when running it)
+- Stability matters. Tests should be stable. New tests should be executed many times to ensure they pass consistently. For tests that run in under 10 seconds, repeat 1000 times (`--repeat 1000 --max-failures 1`); for slower tests, repeat 100 times (`--repeat 100 --max-failures 1`). Repeat in the mode (debug/dev/release) where the test failed.
 - Unit tests should ideally test one thing only.
 - Tests for bug fixes should run before the fix - and show the failure and after the fix - and show they now pass.
 - Tests for bug fixes should have in their comments which bug fixes (GitHub or JIRA issue) they test.
