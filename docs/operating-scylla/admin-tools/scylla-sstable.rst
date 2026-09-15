@@ -23,6 +23,12 @@ The command syntax is as follows:
 
 You can specify more than one SSTable.
 
+A single directory can be passed in place of the individual SSTables in it --
+typically the table directory -- in which case all the SSTables found in it are
+processed. Note that the data directory of a running node is a moving target:
+SSTables which are not sealed yet are left out, and ones deleted while being
+loaded are reported and skipped.
+
 Additionally, the path to SSTable can point to an object storage fully qualified
 path in the form of ``s3://bucket-name/prefix/of/your/sstable/sstable-TOC.txt``
 or ``gs://bucket-name/prefix/of/your/sstable/sstable-TOC.txt``. This also
@@ -1037,6 +1043,101 @@ Split multiple SSTables as a combined stream:
    scylla sstable split --merge -t 100 -t 500 /path/to/md-123456-big-Data.db /path/to/md-123457-big-Data.db
 
 This will merge both input SSTables first, then split the combined data, creating 3 output SSTables.
+
+layout
+^^^^^^
+
+Describes how the SSTables of a table are organized by its compaction strategy.
+Incremental and size-tiered compaction organize SSTables into runs, leveled
+compaction into levels and time-window compaction into time windows. The
+SSTables are grouped accordingly, and each group is annotated with the aggregate
+of the SSTables in it.
+
+The compaction strategy, its options and the ``tombstone_gc`` mode are the ones
+of the schema. ``--strategy`` (one of ``ics``, ``stcs``, ``lcs``, ``twcs``, or a
+compaction strategy class name) and ``--strategy-option`` are shortcuts for
+describing the layout in the terms of another strategy, which is useful when the
+schema is not available -- in which case the schema loader falls back to the
+default, incremental compaction. Everything the description depends on is a
+property of the schema, so overriding the schema itself, with ``--schema-file``,
+customizes all of it.
+
+SSTables belonging to different compaction groups are described separately, as
+compaction only ever considers SSTables of the same compaction group. For a
+tablet-based table the compaction group is the tablet, which is looked up in
+``system.tablets``, located in the data dir. If ``system.tablets`` lives
+elsewhere, its directory can be provided with ``--system-tablets-dir``, which
+only a tablet-based table has any use for. For a vnode-based table the
+compaction group is the shard, which is derived from the sharding parameters of
+the node, read from ``system.topology``. ``--shards`` and ``--ignore-msb-bits``
+provide them when they cannot be read; they describe the sharding of a
+vnode-based table, and are rejected for a tablet-based one, whose sharding is
+its tablet map.
+
+The columns to include are selected with ``--columns``, which takes a
+comma-separated list of column names, or ``all`` for all of them. The order of
+the SSTables within each group is selected with ``--sort``, which takes a
+comma-separated list of ``column[:asc|desc]``, in decreasing order of relevance.
+Run ``scylla sstable layout --help`` for the list of supported columns.
+
+Whether a tombstone counts as expired depends on the ``tombstone_gc`` mode of
+the table, which is reported in the header. The mode is the one the table
+actually uses: a table created without a ``tombstone_gc`` option has the default
+of its keyspace resolved and recorded when it is created, which is ``repair``
+unless the keyspace uses a local replication strategy. In the ``timeout`` mode
+the gc grace period of the schema is what decides it. In the ``repair`` mode it
+depends on when the token range
+of the SSTable was last repaired, less the propagation delay: the repair history
+is read from ``system.tablets`` for a tablet-based table and from
+``system.repair_history`` for a vnode-based one. A range which was never
+repaired has nothing to purge.
+
+The layout of a table is what the operation is for, so with no SSTable arguments
+it describes the SSTables of the table ``--keyspace`` and ``--table`` name:
+
+.. code-block:: console
+
+   scylla sstable layout --keyspace <keyspace> --table <table>
+
+They are resolved through the storage options of the keyspace, which say whether
+they live in a directory of the data dir or in a bucket of an object store. The
+data dir is the one ``--scylla-data-dir`` names, or the one the scylla.yaml
+configures. The system tables the SSTables of a table are looked up in have to
+be on disk: ``nodetool flush system_schema``, and for a table on object storage
+``nodetool flush system sstables`` as well. SSTables named on the command line
+are the ones described, ``--keyspace`` and ``--table`` then only saying which
+schema to load.
+
+Supports both a text and a JSON output, selected with ``--output-format``. The
+JSON output reports the raw, unformatted value of each column.
+
+**Examples:**
+
+Describe the layout of a table:
+
+.. code-block:: console
+
+   scylla sstable layout --keyspace my_keyspace --table my_table
+
+Describe the layout of the SSTables of a directory, which does not have to be
+the one the table of this node keeps its SSTables in:
+
+.. code-block:: console
+
+   scylla sstable layout /var/lib/scylla/data/my_keyspace/my_table-8ff5d0a0a41411f0a8a1e2ba0e1e0b21
+
+Describe it in the terms of time-window compaction, with 6 hour windows:
+
+.. code-block:: console
+
+   scylla sstable layout --strategy twcs --strategy-option compaction_window_unit=HOURS \
+       --strategy-option compaction_window_size=6 /path/to/table_dir
+
+Include all the columns, ordered by the share of expired tombstones:
+
+.. code-block:: console
+
+   scylla sstable layout --columns all --sort expired-pctg:desc /path/to/table_dir
 
 Examples
 --------
