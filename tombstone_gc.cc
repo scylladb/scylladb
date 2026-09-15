@@ -73,6 +73,11 @@ tombstone_gc_state::get_gc_before_for_range_result tombstone_gc_state::get_gc_be
         return {gc_before, gc_before, knows_entire_range};
     }
 
+    if (s->is_view() && _shared_state && _shared_state->is_view_being_built(s->id())) {
+        dblog.trace("Get gc_before for ks={}, table={}, range={}: view is being built, no gc", s->ks_name(), s->cf_name(), range);
+        return {gc_clock::time_point::min(), gc_clock::time_point::min(), knows_entire_range};
+    }
+
     const auto& options = s->tombstone_gc_options();
     switch (options.mode()) {
     case tombstone_gc_mode::timeout: {
@@ -165,6 +170,11 @@ gc_clock::time_point tombstone_gc_state::get_gc_before_for_key(schema_ptr s, con
         return gc_before;
     }
 
+    if (s->is_view() && _shared_state && _shared_state->is_view_being_built(s->id())) {
+        dblog.trace("Get gc_before for ks={}, table={}, dk={}: view is being built, no gc", s->ks_name(), s->cf_name(), dk);
+        return gc_clock::time_point::min();
+    }
+
     // if mode = timeout    // default option, if user does not specify tombstone_gc options
     // if mode = disabled   // never gc tombstone
     // if mode = immediate  // can gc tombstone immediately
@@ -216,11 +226,12 @@ shared_tombstone_gc_state::shared_tombstone_gc_state()
  { }
 
 shared_tombstone_gc_state::shared_tombstone_gc_state(gc_time_min_source gc_min_source, lw_shared_ptr<const per_table_history_maps> reconcile_history_maps,
-        gc_clock::time_point group0_gc_time, std::unordered_set<table_id> rf_one_tables)
+        gc_clock::time_point group0_gc_time, std::unordered_set<table_id> rf_one_tables, std::unordered_set<table_id> views_being_built)
     : _gc_min_source(std::move(gc_min_source))
     , _reconcile_history_maps(std::move(reconcile_history_maps))
     , _group0_gc_time(group0_gc_time)
     , _rf_one_tables(std::move(rf_one_tables))
+    , _views_being_built(std::move(views_being_built))
 { }
 
 shared_tombstone_gc_state::shared_tombstone_gc_state(shared_tombstone_gc_state&&) = default;
@@ -305,7 +316,7 @@ void shared_tombstone_gc_state::update_group0_refresh_time(gc_clock::time_point 
 }
 
 tombstone_gc_state_snapshot shared_tombstone_gc_state::snapshot() const noexcept {
-    return tombstone_gc_state_snapshot(shared_tombstone_gc_state(_gc_min_source, _reconcile_history_maps, _group0_gc_time, _rf_one_tables));
+    return tombstone_gc_state_snapshot(shared_tombstone_gc_state(_gc_min_source, _reconcile_history_maps, _group0_gc_time, _rf_one_tables, _views_being_built));
 }
 
 tombstone_gc_state_snapshot::tombstone_gc_state_snapshot(shared_tombstone_gc_state&& shared_state)
