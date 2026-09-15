@@ -939,7 +939,7 @@ future<> table_resharding_compaction_task_impl::run() {
 }
 
 future<std::optional<double>> table_resharding_compaction_task_impl::expected_total_workload() const {
-    co_return _expected_workload ? std::make_optional<double>(_expected_workload) : std::nullopt;
+    co_return _expected_workload;
 }
 
 shard_resharding_compaction_task_impl::shard_resharding_compaction_task_impl(tasks::task_manager::module_ptr module,
