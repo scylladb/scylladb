@@ -24,6 +24,7 @@
 #include <boost/intrusive/list.hpp>
 #include <seastar/net/tls.hh>
 #include <seastar/core/metrics_registration.hh>
+#include "bytes_ostream.hh"
 #include "utils/fragmented_temporary_buffer.hh"
 #include "utils/result.hh"
 #include "service_permit.hh"
@@ -129,6 +130,7 @@ struct cql_server_config {
     utils::updateable_value<uint32_t> max_concurrent_requests;
     utils::updateable_value<bool> cql_duplicate_bind_variable_names_refer_to_same_variable;
     utils::updateable_value<uint32_t> max_relations_in_where_clause;
+    utils::updateable_value<uint32_t> response_compression_threshold;
     utils::updateable_value<bool> cql_in_bind_variable_name_uses_uppercase_operator;
     utils::updateable_value<uint32_t> uninitialized_connections_semaphore_cpu_concurrency;
     utils::updateable_value<uint32_t> request_timeout_on_shutdown_in_seconds;
@@ -243,6 +245,8 @@ private:
     std::unique_ptr<event_notifier> _notifier;
 private:
     client_options_cache_type _connection_options_keys_and_values;
+    bytes_ostream _supported_body; // cached serialized body for SUPPORTED responses
+    cql_protocol_extension_enum_set _supported_protocol_extensions;
     transport_stats _stats;
     auth::service& _auth_service;
     qos::service_level_controller& _sl_controller;
@@ -283,6 +287,8 @@ public:
     future<std::vector<connection_service_level_params>> get_connections_service_level_params();
 private:
     class fmt_visitor;
+    void build_supported_body();
+    cql_protocol_extension_enum_set supported_cql_protocol_extensions() const;
     friend class connection;
     friend std::unique_ptr<cql_server::response> make_result(int16_t stream, messages::result_message& msg,
             const tracing::trace_state_ptr& tr_state, cql_protocol_version_type version, cql_metadata_id_wrapper&& metadata_id, bool skip_metadata);
@@ -346,7 +352,6 @@ private:
         service::client_state& get_client_state() { return _client_state; }
         scheduling_group get_scheduling_group() const { return _current_scheduling_group; }
     private:
-        cql_protocol_extension_enum_set supported_cql_protocol_extensions() const;
         friend class process_request_executor;
 
         future<foreign_ptr<std::unique_ptr<cql_server::response>>> process_request_one(fragmented_temporary_buffer::istream buf, uint8_t op, uint16_t stream, uint8_t flags, service::client_state& client_state, tracing_request_type tracing_request, service_permit permit, api::timestamp_type request_start_timestamp);
