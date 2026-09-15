@@ -50,7 +50,7 @@ protected:
     virtual seastar::future<std::vector<std::vector<managed_bytes_opt>>> describe(cql3::query_processor& qp, const service::client_state& client_state) const = 0;
 public:
     virtual uint32_t get_bound_terms() const override;
-    virtual bool depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const override;
+    virtual std::vector<dependent_table> dependent_tables() const override { return {}; }
     virtual seastar::future<> check_access(query_processor& qp, const service::client_state& state) const override;
     virtual seastar::shared_ptr<const metadata> get_result_metadata() const override;
 

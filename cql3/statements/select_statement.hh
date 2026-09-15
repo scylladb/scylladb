@@ -125,7 +125,7 @@ public:
     virtual ::shared_ptr<const cql3::metadata> get_result_metadata() const override;
     virtual uint32_t get_bound_terms() const override;
     virtual future<> check_access(query_processor& qp, const service::client_state& state) const override;
-    virtual bool depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const override;
+    virtual std::vector<dependent_table> dependent_tables() const override;
 
     virtual std::optional<service::pager::query_plan> query_plan_for_paging() const override {
         return scanned_plan();
@@ -243,6 +243,10 @@ public:
                                    const secondary_index::index& index,
                                    schema_ptr view_schema,
                                    std::unique_ptr<cql3::attributes> attrs);
+
+    // Also depends on the underlying view/index table: a schema change there
+    // (e.g. altering the index table) must invalidate this statement too.
+    std::vector<dependent_table> dependent_tables() const override;
 
 protected:
     virtual service::pager::query_plan scanned_plan() const override;
@@ -365,6 +369,9 @@ public:
 
     // This statement has a schema that is different from that of the underlying table.
     static schema_ptr generate_output_schema(schema_ptr underlying_schema);
+
+    // The output schema is synthetic; the real dependency is the underlying table.
+    std::vector<dependent_table> dependent_tables() const override;
 
 private:
     future<exceptions::coordinator_result<service::storage_proxy_coordinator_query_result>>
