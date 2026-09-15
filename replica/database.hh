@@ -1774,6 +1774,7 @@ private:
     // Engaged while a schema change is being committed on all shards; see begin_schema_change_commit().
     struct schema_change_commit {
         std::unordered_set<table_id> tables;
+        std::unordered_set<table_id> dropped_tables;
         shared_promise<> committed;
     };
     std::optional<schema_change_commit> _schema_change_commit;
@@ -2104,11 +2105,17 @@ public:
     };
     // Announces a schema change commit on this shard, see schema_applier::commit(). Called on
     // every shard before the change is committed on any shard, with the ids of the tables it
-    // creates or alters. Until the returned guard is destroyed, which the applier does on every
-    // shard once all shards have committed, or on any failure, requests to those tables which
-    // don't match this shard's schema version wait for the commit instead of being served, see
-    // table_for_request().
-    std::unique_ptr<schema_change_commit_guard> begin_schema_change_commit(std::unordered_set<table_id> tables);
+    // creates or alters and of those it drops. Until the returned guard is destroyed, which the
+    // applier does on every shard once all shards have committed, or on any failure, requests to
+    // the created or altered tables which don't match this shard's schema version wait for the
+    // commit instead of being served, see table_for_request(). Requests to the dropped tables are
+    // not held back, but a shard which still has such a table can tell that a failure to reach it
+    // elsewhere is expected, see is_table_being_dropped().
+    std::unique_ptr<schema_change_commit_guard> begin_schema_change_commit(std::unordered_set<table_id> tables, std::unordered_set<table_id> dropped_tables);
+    // Whether a schema change dropping table `id` is being committed on all shards.
+    bool is_table_being_dropped(table_id id) const {
+        return _schema_change_commit && _schema_change_commit->dropped_tables.contains(id);
+    }
     // Waits for a pending schema change commit affecting table `id` to complete on all shards.
     // Returns a ready future if there is none. For paths which resolve the table on other shards
     // synchronously, such as the multishard reader, and so cannot use table_for_request() there.
