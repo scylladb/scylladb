@@ -2997,14 +2997,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                     co_return;
                 }
 
-                auto wanted_alternator = db::get_listeners(*cfg, configured, db::listener_config::protocol_type::alternator);
-                if (wanted_alternator != alternator_ctl.listeners()) {
-                    // The Alternator listeners are served by an http_server, which cannot
-                    // be told to give up one of its listening sockets, so there is nothing
-                    // to apply them to short of restarting the server under its clients.
-                    startlog.warn("The Alternator listeners changed; the change will take effect when this node is restarted");
-                }
-
                 // A set that cannot be served is left unapplied, with the server still
                 // serving what it was. Don't let the failure escape: it would fail the
                 // whole cluster config refresh, which would then retry forever.
@@ -3013,6 +3005,13 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                             db::get_listeners(*cfg, configured, db::listener_config::protocol_type::cql));
                 } catch (...) {
                     startlog.error("Failed to apply the CQL listeners, keeping the previous ones: {}",
+                            std::current_exception());
+                }
+                try {
+                    co_await alternator_ctl.apply_listeners(
+                            db::get_listeners(*cfg, configured, db::listener_config::protocol_type::alternator));
+                } catch (...) {
+                    startlog.error("Failed to apply the Alternator listeners, keeping the previous ones: {}",
                             std::current_exception());
                 }
             });
@@ -3045,9 +3044,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
 #endif
 
-            if (bool enabled = !alternator_listeners.empty()) {
-                ss.local().register_protocol_server(alternator_ctl, enabled).get();
-            }
+            // Registered, and asked to start, even when there is nothing for it to listen
+            // on yet: the controller holds off starting the server until a change to the
+            // listeners gives it one.
+            ss.local().register_protocol_server(alternator_ctl, true).get();
 
             stop_signal.ready();
             supervisor::notify("serving");

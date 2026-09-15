@@ -110,14 +110,108 @@ std::unordered_map<sstring, sstring> controller::listener_tls_options(const db::
     return opts;
 }
 
+
+// Work out what it takes to serve a set of listeners: the address of each resolved, and
+// one set of credentials per distinct set of TLS options. Everything that can fail
+// happens here, so a set that cannot be served is rejected before any socket is touched.
+controller::resolved_listeners controller::resolve_listeners(const db::listener_configs& listeners) const {
+    auto preferred = _config.listen_interface_prefer_ipv6() ? std::make_optional(net::inet_address::family::INET6) : std::nullopt;
+    auto family = _config.enable_ipv6_dns_lookup() || preferred ? std::nullopt : std::make_optional(net::inet_address::family::INET);
+
+    resolved_listeners resolved;
+    // Listeners sharing the same address, or the same set of TLS options, share the
+    // resolved address and the credentials built out of those options.
+    std::unordered_map<sstring, net::inet_address> resolved_addresses;
+
+    for (auto& [name, l] : listeners) {
+        auto addr_name = l.address.empty() ? _config.alternator_address() : l.address;
+        auto [addr_it, inserted] = resolved_addresses.try_emplace(addr_name);
+        if (inserted) {
+            addr_it->second = utils::resolve_listen_address(addr_name, "listener address", family, preferred).get();
+        }
+
+        std::optional<size_t> credentials_idx;
+        if (l.tls) {
+            auto opts = listener_tls_options(l);
+            auto it = std::ranges::find(resolved.tls_options, opts);
+            credentials_idx = it - resolved.tls_options.begin();
+            if (it == resolved.tls_options.end()) {
+                resolved.tls_options.push_back(opts);
+                utils::configure_tls_creds_builder(resolved.credentials.emplace_back(), std::move(opts)).get();
+            }
+        }
+
+        resolved.listeners.push_back(server::listener{
+            .addr = socket_address{addr_it->second, l.port},
+            .proxy_protocol = l.proxy_protocol,
+            .credentials_idx = credentials_idx,
+        });
+    }
+    return resolved;
+}
+
+future<> controller::apply_listeners(db::listener_configs listeners) {
+    auto units = co_await get_units(_ops_sem, 1);
+
+    if (!_serving) {
+        // Nothing is being served, so there is nothing to reconcile: remember the set. If
+        // the server is meant to run, it was only waiting for something to listen on, so
+        // start it now; otherwise start_server() opens the set when it runs.
+        auto previous = std::exchange(_listeners, std::move(listeners));
+        if (_wanted) {
+            try {
+                co_await do_start_server();
+            } catch (...) {
+                _listeners = std::move(previous);
+                throw;
+            }
+        }
+        co_return;
+    }
+
+    if (listeners.empty()) {
+        // Don't keep an Alternator server around that nobody can reach. It is still
+        // wanted, and starts again with the next set that has a listener in it.
+        logger.info("No Alternator listeners are left, stopping the Alternator server");
+        _listeners = std::move(listeners);
+        co_await do_stop_server();
+        co_return;
+    }
+
+    // resolve_listeners() blocks on futures, so it needs a thread of its own.
+    auto resolved = co_await seastar::async([this, &listeners] { return resolve_listeners(listeners); });
+
+    co_await _server.invoke_on_all([&resolved] (server& s) {
+        return s.apply_listeners(resolved.listeners, resolved.credentials, resolved.tls_options);
+    });
+
+    _listeners = std::move(listeners);
+    _listen_addresses.clear();
+    for (const auto& l : resolved.listeners) {
+        _listen_addresses.push_back(l.addr);
+    }
+    logger.info("Alternator server listening on {}", _listeners);
+}
+
 future<> controller::start_server() {
+    auto units = co_await get_units(_ops_sem, 1);
+    _wanted = true;
+    co_await do_start_server();
+}
+
+future<> controller::do_start_server() {
+    if (_serving) {
+        return make_ready_future<>();
+    }
+    if (_listeners.empty()) {
+        logger.info("No Alternator listeners are configured, the Alternator server will start when one is");
+        return make_ready_future<>();
+    }
+
     seastar::thread_attributes attr;
     attr.sched_group = _sched_group;
     return seastar::async(std::move(attr), [this] {
         _listen_addresses.clear();
-
-        auto preferred = _config.listen_interface_prefer_ipv6() ? std::make_optional(net::inet_address::family::INET6) : std::nullopt;
-        auto family = _config.enable_ipv6_dns_lookup() || preferred ? std::nullopt : std::make_optional(net::inet_address::family::INET);
 
         // Create an smp_service_group to be used for limiting the
         // concurrency when forwarding Alternator request between
@@ -137,53 +231,27 @@ future<> controller::start_server() {
                         sharded_parameter(get_timeout_in_ms, std::ref(_config))).get();
         _server.start(std::ref(_executor), std::ref(_proxy), std::ref(_gossiper), std::ref(_auth_service), std::ref(_sl_controller), std::ref(_timeout_config)).get();
         // Note: from this point on, if start_server() throws for any reason,
-        // it must first call stop_server() to stop the executor and server
+        // it must first call do_stop_server() to stop the executor and server
         // services we just started - or Scylla will cause an assertion
         // failure when the controller object is destroyed in the exception
         // unwinding.
 
-        // Listeners sharing the same address, or the same set of TLS options,
-        // share the resolved address and the credentials built out of those
-        // options.
-        std::unordered_map<sstring, net::inet_address> resolved_addresses;
-        std::vector<std::unordered_map<sstring, sstring>> tls_options;
-        std::vector<tls::credentials_builder> credentials;
-        std::vector<server::listener> listeners;
-
+        resolved_listeners resolved;
         try {
-            for (auto& [name, l] : _listeners) {
-                auto addr_name = l.address.empty() ? _config.alternator_address() : l.address;
-                auto [addr_it, inserted] = resolved_addresses.try_emplace(addr_name);
-                if (inserted) {
-                    addr_it->second = utils::resolve_listen_address(addr_name, "listener address", family, preferred).get();
-                }
-
-                std::optional<size_t> credentials_idx;
-                if (l.tls) {
-                    auto opts = listener_tls_options(l);
-                    auto it = std::ranges::find(tls_options, opts);
-                    credentials_idx = it - tls_options.begin();
-                    if (it == tls_options.end()) {
-                        tls_options.push_back(opts);
-                        utils::configure_tls_creds_builder(credentials.emplace_back(), std::move(opts)).get();
-                    }
-                }
-
-                listeners.push_back(server::listener{
-                    .addr = socket_address{addr_it->second, l.port},
-                    .proxy_protocol = l.proxy_protocol,
-                    .credentials_idx = credentials_idx,
-                });
-                _listen_addresses.push_back(listeners.back().addr);
-            }
+            resolved = resolve_listeners(_listeners);
         } catch (...) {
             logger.error("Failed to set up Alternator listeners: {:t}", std::current_exception());
-            stop_server().get();
+            do_stop_server().get();
             std::throw_with_nested(std::runtime_error("Failed to set up Alternator listeners"));
         }
+        auto& listeners = resolved.listeners;
+        auto& credentials = resolved.credentials;
+        for (const auto& l : listeners) {
+            _listen_addresses.push_back(l.addr);
+        }
 
-        _server.invoke_on_all([this, &listeners, &credentials] (server& server) mutable {
-            return server.init(listeners, credentials,
+        _server.invoke_on_all([this, &listeners, &credentials, &resolved] (server& server) mutable {
+            return server.init(listeners, credentials, resolved.tls_options,
                     _config.alternator_enforce_authorization,
                     _config.alternator_warn_authorization,
                     _config.alternator_max_users_query_size_in_trace_output,
@@ -191,22 +259,32 @@ future<> controller::start_server() {
                     _config.max_concurrent_requests_per_shard);
         }).handle_exception([this] (std::exception_ptr ep) {
             logger.error("Failed to set up Alternator HTTP server on {}: {}", _listeners, ep);
-            return stop_server().then([ep = std::move(ep)] { return make_exception_future<>(ep); });
+            return do_stop_server().then([ep = std::move(ep)] { return make_exception_future<>(ep); });
         }).then([this] {
+            _serving = true;
             logger.info("Alternator server listening on {}", _listeners);
         }).get();
     });
 }
 
 future<> controller::stop_server() {
+    auto units = co_await get_units(_ops_sem, 1);
+    _wanted = false;
+    co_await do_stop_server();
+}
+
+// Safe to call when nothing is running, and leaves the controller able to start the
+// server again: the listeners can take it down and bring it back.
+future<> controller::do_stop_server() {
     return seastar::async([this] {
         if (!_ssg) {
             return;
         }
+        _serving = false;
         _server.stop().get();
         _executor.stop().get();
         _listen_addresses.clear();
-        destroy_smp_service_group(_ssg.value()).get();
+        destroy_smp_service_group(std::exchange(_ssg, std::nullopt).value()).get();
     });
 }
 
@@ -217,7 +295,8 @@ future<> controller::request_stop_server() {
 }
 
 future<utils::chunked_vector<foreign_ptr<std::unique_ptr<client_data>>>> controller::get_client_data() {
-    return _server.local().get_client_data();
+    // The server is not started while there is nothing for it to listen on.
+    return _serving ? _server.local().get_client_data() : protocol_server::get_client_data();
 }
 
 }

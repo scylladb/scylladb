@@ -30,6 +30,17 @@ namespace alternator {
 using chunked_content = rjson::chunked_content;
 
 class server : public peering_sharded_service<server> {
+public:
+    // A single resolved socket the server is to listen on.
+    struct listener {
+        socket_address addr;
+        bool proxy_protocol = false;
+        // Index into the credentials vector passed to init(), or nullopt for
+        // an unencrypted listener.
+        std::optional<size_t> credentials_idx;
+    };
+
+private:
     // The maximum size of a request body that Alternator will accept,
     // in bytes. This is a safety measure to prevent Alternator from
     // running out of memory when a client sends a very large request.
@@ -85,6 +96,19 @@ class server : public peering_sharded_service<server> {
     // Server credentials, one per distinct set of TLS options, as passed to
     // init(). Indexed by listener::credentials_idx.
     std::vector<::shared_ptr<seastar::tls::server_credentials>> _credentials;
+    // What each entry of _credentials was built from. Only ever appended to, so that an
+    // index handed out earlier keeps meaning the same credentials - the reload callback
+    // rebuilds _credentials[i] by index on the other shards.
+    std::vector<std::unordered_map<sstring, sstring>> _credentials_options;
+    // Each listener being served, by the address it is bound to, with the handle on its
+    // life: aborting the source ends that listener and drains it, and the future is its
+    // end of that.
+    struct serving_listener {
+        listener config;
+        std::unique_ptr<abort_source> stop;
+        future<> served = make_ready_future<>();
+    };
+    std::unordered_map<socket_address, serving_listener> _listeners;
 
     class json_parser {
         static constexpr size_t yieldable_parsing_threshold = 16*KB;
@@ -124,20 +148,30 @@ class server : public peering_sharded_service<server> {
     std::optional<utils::observer<bool>> _date_header_observer;
 
 public:
-    // A single resolved socket the server is to listen on.
-    struct listener {
-        socket_address addr;
-        bool proxy_protocol = false;
-        // Index into the credentials vector passed to init(), or nullopt for
-        // an unencrypted listener.
-        std::optional<size_t> credentials_idx;
-    };
-
     server(executor& executor, service::storage_proxy& proxy, gms::gossiper& gossiper, auth::service& service, qos::service_level_controller& sl_controller, updateable_timeout_config& timeout_config);
 
+    // `credentials_options` says what each of `credentials` was built from, as in
+    // apply_listeners(), so that applying the same set later finds them in use.
     future<> init(std::vector<listener> listeners, std::vector<tls::credentials_builder> credentials,
+            std::vector<std::unordered_map<sstring, sstring>> credentials_options,
             utils::updateable_value<bool> enforce_authorization, utils::updateable_value<bool> warn_authorization, utils::updateable_value<uint64_t> max_users_query_size_in_trace_output,
             semaphore* memory_limiter, utils::updateable_value<uint32_t> max_concurrent_requests);
+
+    // Serve `listeners` from now on instead of whatever is being served: open the ones
+    // that are new, and stop the ones that are gone, draining their connections. The
+    // listeners that appear in both are left alone, so their clients notice nothing.
+    //
+    // `credentials` is indexed by listener::credentials_idx, as in init(), and
+    // `credentials_options` says what each of them was built from, so that a listener
+    // asking for encryption it already has keeps the credentials it is using - including
+    // the reloading that watches their files - rather than getting a second set.
+private:
+    future<> serve(const listener&);
+    future<> stop_serving(serving_listener&);
+public:
+    future<> apply_listeners(std::vector<listener> listeners,
+            std::vector<tls::credentials_builder> credentials,
+            std::vector<std::unordered_map<sstring, sstring>> credentials_options);
     future<> stop();
     // get_client_data() is called (on each shard separately) when the virtual
     // table "system.clients" is read. It is expected to generate a list of
