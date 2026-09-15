@@ -14,6 +14,7 @@
 #include "dht/token.hh"
 #include "sstables/generation_type.hh"
 #include "sstables/shared_sstable.hh"
+#include "sstables/types.hh"
 #include "sstables/version.hh"
 #include "utils/log.hh"
 
@@ -29,6 +30,15 @@ struct minimal_sst_info {
     sstables::generation_type generation;
     sstables::sstable_version_types version;
     sstables::sstable_format_types format;
+    // Identifier of the restored sstable. Set only for an object-storage
+    // destination, where the identifier is the prefix of the component object
+    // names, so it has to be known before the sstable can be opened. A filesystem
+    // destination takes it from the streamed Scylla component.
+    optimized_optional<sstables::sstable_id> sid;
+    // Identifier of the backup sstable this one was restored from. It keys the
+    // system_distributed.snapshot_sstables rows which say what a restore already
+    // fetched, so that a retried restore skips them.
+    sstables::sstable_id source_sid;
 };
 
 future<minimal_sst_info> download_sstable(replica::database& db, replica::table& table, sstables::shared_sstable sstable, logging::logger& logger);
