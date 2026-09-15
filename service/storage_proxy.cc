@@ -1298,7 +1298,7 @@ private:
 using namespace exceptions;
 
 static inline
-query::digest_algorithm digest_algorithm(service::storage_proxy& proxy) {
+query::digest_algorithm digest_algorithm() {
     return query::digest_algorithm::xxHash;
 }
 
@@ -2408,7 +2408,7 @@ future<paxos::prepare_summary> paxos_response_handler::prepare_ballot(utils::UUI
                 // To generate less network traffic, only the closest replica (first one in the list of participants)
                 // sends query result content while other replicas send digests needed to check consistency.
                 bool only_digest = peer != _live_endpoints[0];
-                auto da = digest_algorithm(*_proxy);
+                auto da = digest_algorithm();
                 const auto& topo = get_effective_replication_map()->get_topology();
                 if (topo.is_me(peer)) {
                     tracing::trace(tr_state, "prepare_ballot: prepare {} locally", ballot);
@@ -5716,7 +5716,7 @@ protected:
     future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>> make_data_request(locator::host_id ep, clock_type::time_point timeout, bool want_digest) {
         ++_proxy->get_stats().data_read_attempts.get_ep_stat(get_topology(), ep);
         auto opts = want_digest
-                  ? query::result_options{query::result_request::result_and_digest, digest_algorithm(*_proxy)}
+                  ? query::result_options{query::result_request::result_and_digest, digest_algorithm()}
                   : query::result_options{query::result_request::only_result, query::digest_algorithm::none};
         auto fence = storage_proxy::get_fence(*_effective_replication_map_ptr);
         if (_proxy->is_me(*_effective_replication_map_ptr, ep)) {
@@ -5735,12 +5735,12 @@ protected:
         if (_proxy->is_me(*_effective_replication_map_ptr, ep)) {
             tracing::trace(_trace_state, "read_digest: querying locally");
             return _proxy->apply_fence_on_ready(_proxy->query_result_local_digest(_effective_replication_map_ptr, _schema, _cmd, _partition_range, _trace_state,
-                        timeout, digest_algorithm(*_proxy), adjust_rate_limit_for_local_operation(_rate_limit_info)), fence, _proxy->my_host_id(*_effective_replication_map_ptr));
+                        timeout, digest_algorithm(), adjust_rate_limit_for_local_operation(_rate_limit_info)), fence, _proxy->my_host_id(*_effective_replication_map_ptr));
         } else {
             tracing::trace(_trace_state, "read_digest: sending a message to /{}", ep);
             const bool format_reverse_required = _cmd->slice.is_reversed() && !_native_reversed_queries_enabled;
             auto cmd = format_reverse_required ? reversed(::make_lw_shared(*_cmd)) : _cmd;
-            return _proxy->remote().send_read_digest(ep, timeout, _trace_state, *cmd, _partition_range, digest_algorithm(*_proxy), _rate_limit_info, fence);
+            return _proxy->remote().send_read_digest(ep, timeout, _trace_state, *cmd, _partition_range, digest_algorithm(), _rate_limit_info, fence);
         }
     }
     void make_mutation_data_requests(lw_shared_ptr<query::read_command> cmd, data_resolver_ptr resolver, targets_iterator begin, targets_iterator end, clock_type::time_point timeout) {
