@@ -51,7 +51,7 @@
 #include "test/lib/cql_test_env.hh"
 #include "tools/json_writer.hh"
 #include "tools/json_mutation_stream_parser.hh"
-#include "tools/load_system_tablets.hh"
+#include "tools/load_system_tables.hh"
 #include "tools/lua_sstable_consumer.hh"
 #include "tools/schema_loader.hh"
 #include "tools/sstable_consumer.hh"

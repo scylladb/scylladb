@@ -6,7 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
-#include "tools/load_system_tablets.hh"
+#include "tools/load_system_tables.hh"
 
 #include <seastar/core/thread.hh>
 #include <seastar/util/closeable.hh>
