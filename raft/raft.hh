@@ -273,6 +273,12 @@ struct dropped_entry : public error {
     dropped_entry() : error("Entry was dropped because of a leader change") {}
 };
 
+struct term_changed : public error {
+    term_changed(term_t wanted, term_t got)
+            : error(fmt::format("The entry could not be appended in the requested term because the term has changed: wanted {}, got {}",
+                                wanted, got)) {}
+};
+
 struct commit_status_unknown : public error {
     commit_status_unknown() : error("Commit status of the entry is unknown") {}
 };
