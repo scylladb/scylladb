@@ -18,6 +18,7 @@
 #include "db/config.hh"
 #include "db/large_data_handler.hh"
 #include "db/corrupt_data_handler.hh"
+#include "keys/keys.hh"
 #include "schema/schema_fwd.hh"
 #include "sstables/sstable_directory.hh"
 #include "sstables/sstables_manager.hh"
@@ -53,3 +54,12 @@ mutation_opt read_mutation_from_table_offline(sharded<sstable_manager_service>& 
                                               std::function<schema_ptr()> table_schema,
                                               data_value primary_key,
                                               std::optional<data_value> clustering_key);
+
+/// Same, for a caller which has the keys of the row it wants already
+mutation_opt read_mutation_from_table_offline(sharded<sstable_manager_service>& sst_man,
+                                              reader_permit permit,
+                                              std::filesystem::path table_path,
+                                              std::string_view keyspace,
+                                              std::function<schema_ptr()> table_schema,
+                                              partition_key pk,
+                                              std::optional<clustering_key> ck);

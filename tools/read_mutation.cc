@@ -75,6 +75,22 @@ mutation_opt read_mutation_from_table_offline(sharded<sstable_manager_service>& 
                                               std::function<schema_ptr()> table_schema,
                                               data_value primary_key,
                                               std::optional<data_value> clustering_key) {
+    auto schema = table_schema();
+    auto pk = partition_key::from_deeply_exploded(*schema, {std::move(primary_key)});
+    auto ck = clustering_key
+            ? std::optional(clustering_key::from_deeply_exploded(*schema, {std::move(*clustering_key)}))
+            : std::nullopt;
+    return read_mutation_from_table_offline(sst_man, std::move(permit), std::move(table_path), keyspace,
+            std::move(table_schema), std::move(pk), std::move(ck));
+}
+
+mutation_opt read_mutation_from_table_offline(sharded<sstable_manager_service>& sst_man,
+                                              reader_permit permit,
+                                              std::filesystem::path table_path,
+                                              std::string_view keyspace,
+                                              std::function<schema_ptr()> table_schema,
+                                              partition_key pk,
+                                              std::optional<clustering_key> ck) {
     sharded<sstables::sstable_directory> sst_dirs;
     sst_dirs.start(
         sharded_parameter([&sst_man] { return std::ref(sst_man.local().sst_man); }),
@@ -117,14 +133,11 @@ mutation_opt read_mutation_from_table_offline(sharded<sstable_manager_service>& 
     }
 
     auto schema = table_schema();
-    auto pk = partition_key::from_deeply_exploded(*schema, {std::move(primary_key)});
     auto dk = dht::decorate_key(*schema, pk);
     auto pr = dht::partition_range::make_singular(dk);
     auto pb = partition_slice_builder(*schema);
-    if (clustering_key.has_value()) {
-        auto ck = clustering_key::from_deeply_exploded(*schema, {clustering_key.value()});
-        auto cr = query::clustering_range::make({ck, true}, {ck, true});
-        pb.with_range(cr);
+    if (ck) {
+        pb.with_range(query::clustering_range::make({*ck, true}, {*ck, true}));
     }
     auto ps = pb.build();
 
