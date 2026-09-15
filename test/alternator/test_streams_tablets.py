@@ -7,7 +7,7 @@
 import time, random, collections
 
 import pytest
-from test.alternator.test_streams import create_stream_test_table, wait_for_active_stream
+from test.alternator.test_streams import create_stream_test_table, wait_for_active_stream, read_shard_from_start, write_two_batches_and_wait, assert_cdc_batches
 
 TABLET_TAGS = [{'Key': 'system:initial_tablets', 'Value': '0'}]
 
@@ -543,3 +543,41 @@ def test_get_records_with_alternating_tablets_count(dynamodb, dynamodbstreams, r
                 path = get_path(r)
                 siblings_count = count_map[get_generation_from_shard(r)]
                 assert siblings_count == init_table_count * tablet_multipliers[len(path) - 1]
+
+# A shard closed by a tablet split still has to deliver everything it holds,
+# whatever Limit the client passes. GetRecords reads at most Limit times a
+# small factor of CDC log rows and only emits a record once it has read the
+# end-of-batch row of its batch, so a Limit smaller than the batch used to
+# return no record - and, the shard being closed, no NextShardIterator either,
+# which tells the consumer that the shard is drained.
+def test_get_records_small_limit_on_closed_shard(dynamodb, dynamodbstreams, rest_api, cql):
+    with create_stream_test_table(dynamodb, StreamViewType='KEYS_ONLY', Tags=TABLET_TAGS) as table:
+        (arn, label) = wait_for_active_stream(dynamodbstreams, table)
+        p, cs = write_two_batches_and_wait(table, dynamodbstreams, arn)
+        assert_cdc_batches(cql, table, 2, 5)
+        end_ts = time.time() + 30
+        for shard in iterate_over_describe_stream(dynamodbstreams, arn, end_ts):
+            records, _ = read_shard_from_start(dynamodbstreams, arn, shard['ShardId'], 1000)
+            if any(r['dynamodb']['Keys']['p']['S'] == p for r in records):
+                shard_id = shard['ShardId']
+                break
+        else:
+            pytest.fail(f'no shard holds the records of partition {p}')
+
+        ks = f'alternator_{table.name}'
+        cdc_log_table_name = f'{table.name}_scylla_cdc_log'
+        init_table_count = get_tablet_count_for_base_table_of_table(rest_api, cql, ks, cdc_log_table_name)
+        set_tablet_count_and_wait(rest_api, cql, ks, table.name, cdc_log_table_name, init_table_count * 2, timeout=30)
+
+        end_ts = time.time() + 30
+        while True:
+            assert time.time() < end_ts, f'shard {shard_id} was never reported closed'
+            if any(shard['ShardId'] == shard_id and 'EndingSequenceNumber' in shard['SequenceNumberRange']
+                   for shard in iterate_over_describe_stream(dynamodbstreams, arn, end_ts)):
+                break
+            time.sleep(0.2)
+
+        records, has_next = read_shard_from_start(dynamodbstreams, arn, shard_id, 1)
+        assert not has_next
+        assert sorted(r['dynamodb']['Keys']['c']['S'] for r in records
+                      if r['dynamodb']['Keys']['p']['S'] == p) == cs

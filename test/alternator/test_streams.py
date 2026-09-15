@@ -5,6 +5,7 @@
 # Tests for stream operations: ListStreams, DescribeStream, GetShardIterator,
 # GetRecords.
 
+import collections
 import time
 import urllib.request
 from contextlib import contextmanager, ExitStack
@@ -2496,6 +2497,95 @@ def test_streams_multiple_items_one_partition(dynamodb, dynamodbstreams, scylla_
                 table.name: [{'PutRequest': {'Item': {'p': p, 'c': cc, 'x': cc}}} for cc in cs]})
             return [['INSERT', {'p': p, 'c': cc}, None, {'p': p, 'c': cc, 'x': cc}] for cc in cs]
         do_test(stream, dynamodb, dynamodbstreams, do_updates, 'NEW_AND_OLD_IMAGES')
+
+# Read one shard from TRIM_HORIZON with the given Limit until it stops
+# producing records. Returns the records and whether the shard is still open.
+# A GetRecords call which returns no record and the very same iterator it was
+# given cannot make progress, so stop there instead of spinning.
+def read_shard_from_start(dynamodbstreams, arn, shard_id, limit, max_calls=20):
+    iter = dynamodbstreams.get_shard_iterator(StreamArn=arn, ShardId=shard_id,
+        ShardIteratorType='TRIM_HORIZON')['ShardIterator']
+    records = []
+    for _ in range(max_calls):
+        response = dynamodbstreams.get_records(ShardIterator=iter, Limit=limit)
+        records.extend(response['Records'])
+        if 'NextShardIterator' not in response:
+            return records, False
+        if not response['Records'] and response['NextShardIterator'] == iter:
+            return records, True
+        iter = response['NextShardIterator']
+    return records, True
+
+# The sorted range keys of the records of partition p, read from every shard
+# of the stream with the given Limit.
+def read_partition_keys(dynamodbstreams, arn, p, limit):
+    keys = []
+    for shard_id in list_shards(dynamodbstreams, arn):
+        records, _ = read_shard_from_start(dynamodbstreams, arn, shard_id, limit)
+        keys.extend(r['dynamodb']['Keys']['c']['S'] for r in records
+                    if r['dynamodb']['Keys']['p']['S'] == p)
+    return sorted(keys)
+
+# Write two BatchWriteItems of five items each into one partition and wait
+# until all ten show up on the stream. In always_use_lwt write isolation a
+# whole BatchWriteItem is written with one timestamp, so each becomes a single
+# five-row CDC batch - which the caller checks with assert_cdc_batches(),
+# because everything these tests do rests on that.
+def write_two_batches_and_wait(table, dynamodbstreams, arn):
+    table_arn = table.meta.client.describe_table(TableName=table.name)['Table']['TableArn']
+    table.meta.client.tag_resource(ResourceArn=table_arn,
+        Tags=[{'Key': 'system:write_isolation', 'Value': 'always_use_lwt'}])
+    p = random_string()
+    cs = sorted(f'c{b}_{i}' for b in range(2) for i in range(5))
+    for b in range(2):
+        table.meta.client.batch_write_item(RequestItems={
+            table.name: [{'PutRequest': {'Item': {'p': p, 'c': f'c{b}_{i}'}}}
+                         for i in range(5)]})
+    exp = time.time() + 60
+    while read_partition_keys(dynamodbstreams, arn, p, 1000) != cs:
+        assert time.time() < exp, 'the batches never showed up on the stream'
+        time.sleep(0.5)
+    return p, cs
+
+# The tests below are only meaningful if the writes really formed the expected
+# CDC batches: the right number of them, and each one wider than the limit * mul
+# rows GetRecords reads. Neither is visible through the DynamoDB API, so check
+# both in the log table itself.
+def assert_cdc_batches(cql, table, expected, rows_per_batch):
+    ks = 'alternator_' + table.name
+    log = table.name + '_scylla_cdc_log'
+    sizes = collections.Counter(row[0] for row in
+        cql.execute(f'SELECT "cdc$time" FROM "{ks}"."{log}"'))
+    assert sorted(sizes.values()) == [rows_per_batch] * expected, \
+        f'expected {expected} CDC batches of {rows_per_batch} rows, found {sorted(sizes.values())}'
+
+# GetRecords bounds the number of CDC log rows it reads by the requested Limit,
+# but a record can only be emitted once the end-of-batch row of its CDC batch
+# has been read, and a shard iterator cannot point inside a batch. A Limit
+# smaller than the batch therefore used to return no record at all, together
+# with the very same shard iterator - so the consumer polled that position
+# forever and never saw the rest of the shard either.
+# Two batches are written, so the test also covers that the iterator advances
+# past a batch which had to be re-read, and that the second batch, cut by the
+# same row limit, is picked up by the following call.
+# Scylla-only because it needs the write isolation tag.
+@pytest.mark.parametrize('limit', [1, 2, 3])
+def test_streams_get_records_small_limit(dynamodb, dynamodbstreams, cql, scylla_only, limit):
+    with create_table_ss(dynamodb, dynamodbstreams, 'KEYS_ONLY') as (table, arn):
+        p, cs = write_two_batches_and_wait(table, dynamodbstreams, arn)
+        assert_cdc_batches(cql, table, 2, 5)
+        assert read_partition_keys(dynamodbstreams, arn, p, limit) == cs
+
+# The same, on a disabled stream. Its records stay readable (#7239), but all of
+# its shards are closed, so a GetRecords which returns nothing also returns no
+# NextShardIterator and the consumer concludes the shard is drained - the batch
+# is not merely delayed but lost.
+def test_streams_get_records_small_limit_disabled_stream(dynamodb, dynamodbstreams, cql, scylla_only):
+    with create_table_ss(dynamodb, dynamodbstreams, 'KEYS_ONLY') as (table, arn):
+        p, cs = write_two_batches_and_wait(table, dynamodbstreams, arn)
+        assert_cdc_batches(cql, table, 2, 5)
+        disable_stream(dynamodbstreams, table)
+        assert read_partition_keys(dynamodbstreams, arn, p, 1) == cs
 
 # Test the CHILD_SHARDS shard filter. In a simple case where the table
 # hasn't been modified since the stream was created, there is just one
