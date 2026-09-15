@@ -2438,8 +2438,8 @@ void shard_of_with_tablets(const std::vector<sstables::shared_sstable>& sstables
             fmt::print(std::cerr, "unable to find replica set for sstable: {}\n", sst->get_filename());
             continue;
         }
-        auto& [token, replica_set] = *tablet;
-        for (auto& replica : replica_set) {
+        auto& [token, tablet_row] = *tablet;
+        for (auto& replica : tablet_row.replicas) {
             writer.StartObject();
             writer.Key("host");
             writer.String(fmt::to_string(replica.host));
