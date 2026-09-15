@@ -153,6 +153,32 @@ struct sstable_path_info {
     table_id id;
 };
 
+// The table a directory holds the sstables of, deduced from its path:
+// <data dir>/<keyspace>/<table>-<id>, with the sstables of a state like upload
+// or staging one level below that.
+sstable_path_info extract_from_table_directory(std::filesystem::path directory) {
+    directory = directory.lexically_normal();
+    // a trailing separator leaves an empty filename behind
+    if (directory.filename().empty()) {
+        directory = directory.parent_path();
+    }
+    // a table directory is named "<table>-<id>", the id being 32 hex characters
+    auto is_table_directory = [] (const std::filesystem::path& path) {
+        constexpr size_t id_size = 32;
+        const auto name = path.filename().native();
+        return name.size() > id_size + 1 && name[name.size() - id_size - 1] == '-';
+    };
+    const auto table_directory = is_table_directory(directory) ? directory : directory.parent_path();
+    if (!is_table_directory(table_directory)) {
+        throw std::invalid_argument(fmt::format("cannot extract information from the path of {}: it is neither the"
+                " directory of a table nor one of its sub-directories", directory));
+    }
+    auto [table, id] = replica::parse_table_directory_name(table_directory.filename().native());
+    return sstable_path_info{
+            directory, table_directory.parent_path().parent_path(),
+            table_directory.parent_path().filename().native(), std::move(table), id};
+}
+
 sstable_path_info extract_from_sstable_path(const bpo::variables_map& app_config) {
     if (!app_config.count("sstables")) {
         throw std::invalid_argument("cannot extract information from sstable path, no sstable arguments");
@@ -162,7 +188,9 @@ sstable_path_info extract_from_sstable_path(const bpo::variables_map& app_config
     sstring keyspace, table;
     auto result = sstables::parse_path(sst_path);
     if (!result) {
-        throw std::invalid_argument(fmt::format("cannot extract information from sstable path, sstable has invalid path: {}", sst_path));
+        // the argument can be the directory holding the sstables instead of one
+        // of them, and a directory names its table just as well
+        return extract_from_table_directory(std::move(sst_path));
     }
     auto [_, ks, tbl] = std::move(*result);
     keyspace = std::move(ks);
@@ -330,6 +358,85 @@ std::optional<schema_with_source> try_load_schema_autodetect(const bpo::variable
     fmt::print(std::cerr, "Failed to autodetect and load schema, try again with --logger-log-level scylla-sstable=debug to learn more or provide the schema source manually.\n"
             "If the schema is expected to come from the schema tables of a running node, they have to be on disk: nodetool flush system_schema\n");
     return {};
+}
+
+// An object storage path is not a local file, it cannot be a directory and it
+// does not name a keyspace.
+bool is_object_storage_path(const std::filesystem::path& path) {
+    using osp = db::object_storage_endpoint_param;
+    static const auto types = { osp::s3_type, osp::gs_type };
+    return std::ranges::any_of(types, std::bind_front(&data_dictionary::is_object_storage_fqn, path));
+}
+
+// The argument which names a directory of sstables -- typically a table
+// directory -- rather than an sstable, if that is what the tool was given.
+//
+// A single directory at a time: the sstables of a directory are enumerated as
+// scylla enumerates them, which is neither something to mix with sstables named
+// one by one, nor something to do for several tables at once, as they do not
+// have to share a schema.
+std::optional<sstring> get_sstable_directory_argument(const bpo::variables_map& app_config) {
+    if (!app_config.count("sstables")) {
+        return std::nullopt;
+    }
+    std::optional<sstring> directory;
+    size_t files = 0;
+    for (const auto& argument : app_config["sstables"].as<std::vector<sstring>>()) {
+        if (is_object_storage_path(std::filesystem::path(argument))) {
+            ++files;
+            continue;
+        }
+        const auto ftype = file_type(argument, follow_symlink::yes).get();
+        if (!ftype) {
+            // say so here: further down the line the path is only reported as a
+            // schema which could not be autodetected, or as an sstable whose
+            // components are missing
+            throw std::invalid_argument(fmt::format("no such file or directory: {}", argument));
+        }
+        if (*ftype != directory_entry_type::directory) {
+            ++files;
+        } else if (directory) {
+            throw std::invalid_argument(fmt::format("only a single directory of sstables can be processed at a time,"
+                    " got {} and {}", *directory, argument));
+        } else {
+            directory = argument;
+        }
+    }
+    if (directory && files) {
+        throw std::invalid_argument("sstables arguments cannot be a mix of directories and sstable files, provide a"
+                " single directory or a list of sstable files");
+    }
+    return directory;
+}
+
+// The sstables the given storage options hold, enumerated the way scylla
+// enumerates them: a directory listing for local storage, the sstables registry
+// of the node for a table living in object storage.
+//
+// Only sealed sstables are picked up, and an sstable the node deletes while the
+// scan is running is left out, as the data dir of a running node is a moving
+// target.
+std::vector<sstables::shared_sstable> load_sstables_of_storage(schema_ptr schema, sstables::sstables_manager& sst_man,
+        lw_shared_ptr<const data_dictionary::storage_options> storage_options) {
+    // sstable_directory validates the sstables it loads from a coroutine, which
+    // cannot wait on the system tables the local host id is resolved from. So
+    // resolve it here, while still in a seastar thread.
+    sst_man.get_local_host_id();
+
+    sstables::sstable_directory sst_dir(sst_man, schema, &schema->get_sharder(), std::move(storage_options),
+            sstables::sstable_state::normal, default_io_error_handler_gen());
+    auto flags = sstables::sstable_directory::process_flags::read_only();
+    flags.skip_vanished_sstables = true;
+    sst_dir.scan_sstable_dir().get();
+    sst_dir.process_sstable_dir(flags).get();
+    return std::move(sst_dir.get_unsorted_sstables());
+}
+
+// The sstables of a directory -- typically the table directory of a node.
+std::vector<sstables::shared_sstable> load_sstables_of_directory(schema_ptr schema, sstables::sstables_manager& sst_man,
+        const std::filesystem::path& directory) {
+    return load_sstables_of_storage(schema, sst_man, make_lw_shared<const data_dictionary::storage_options>(
+            data_dictionary::make_local_options(directory)));
 }
 
 const std::vector<sstables::shared_sstable> load_sstables(schema_ptr schema, sstables::sstables_manager& sst_man, sstables::storage_manager& sstm,
@@ -3113,6 +3220,16 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
     tool_app_template app(std::move(app_cfg));
 
     return app.run_async(argc, argv, [&app] (const operation& operation, const bpo::variables_map& app_config) {
+        // The sstables to work on can be named one by one, or by the directory
+        // holding them. Tell which it is before anything looks at the arguments.
+        std::optional<sstring> sstable_directory;
+        try {
+            sstable_directory = get_sstable_directory_argument(app_config);
+        } catch (std::invalid_argument& e) {
+            fmt::print(std::cerr, "error processing arguments: {}\n", e.what());
+            return 1;
+        }
+
         schema_ptr schema;
         std::optional<schema_with_source> schema_with_source;
 
@@ -3251,7 +3368,15 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
         auto close_sst_man = deferred_close(sst_man);
 
         std::vector<sstables::shared_sstable> sstables;
-        if (app_config.count("sstables")) {
+        if (sstable_directory) {
+            try {
+                sstables = load_sstables_of_directory(schema, sst_man, std::filesystem::path(*sstable_directory));
+            } catch (...) {
+                fmt::print(std::cerr, "error loading the sstables of {}: {:t}\n",
+                        *sstable_directory, std::current_exception());
+                return 1;
+            }
+        } else if (app_config.count("sstables")) {
             const auto sstable_names = app_config["sstables"].as<std::vector<sstring>>();
             if (std::set(sstable_names.begin(), sstable_names.end()).size() != sstable_names.size()) {
                 fmt::print(std::cerr, "error processing arguments: duplicate sstable arguments found\n");
