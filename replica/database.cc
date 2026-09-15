@@ -681,6 +681,9 @@ database::setup_metrics() {
         sm::make_counter("total_reads_rate_limited", _stats->total_reads_rate_limited,
                        sm::description("Counts read operations which were rejected on the replica side because the per-partition limit was reached.")),
 
+        sm::make_counter("schema_change_commit_waits", _stats->schema_change_commit_waits,
+                       sm::description("Counts requests which reached this shard ahead of a schema change commit affecting their table, and waited for it.")).set_skip_when_empty(),
+
         sm::make_current_bytes("view_update_backlog", [this] { return get_view_update_backlog().get_current_bytes(); },
                        sm::description("Holds the current size in bytes of the pending view updates for all tables"))(basic_level),
 
@@ -1604,10 +1607,16 @@ void database::end_schema_change_commit() noexcept {
     _schema_change_commit.reset();
 }
 
-future<lw_shared_ptr<table>> database::table_for_write_slow_path(table_id id, db::timeout_clock::time_point timeout) {
-    if (_schema_change_commit && _schema_change_commit->tables.contains(id)) {
-        co_await _schema_change_commit->committed.get_shared_future(timeout);
+future<> database::wait_for_schema_change_commit(table_id id, db::timeout_clock::time_point timeout) {
+    if (!_schema_change_commit || !_schema_change_commit->tables.contains(id)) {
+        return make_ready_future<>();
     }
+    ++_stats->schema_change_commit_waits;
+    return _schema_change_commit->committed.get_shared_future(timeout);
+}
+
+future<lw_shared_ptr<table>> database::table_for_request_slow_path(table_id id, db::timeout_clock::time_point timeout) {
+    co_await wait_for_schema_change_commit(id, timeout);
     auto t = _tables_metadata.get_table_if_exists(id);
     if (!t) {
         co_await coroutine::return_exception(no_such_column_family(id));
@@ -1889,7 +1898,8 @@ static db::rate_limiter::can_proceed account_singular_ranges_to_rate_limit(
 future<std::tuple<lw_shared_ptr<query::result>, cache_temperature>>
 database::query(schema_ptr query_schema, const query::read_command& cmd, query::result_options opts, const dht::partition_range_vector& ranges,
                 tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout, db::per_partition_rate_limit::info rate_limit_info) {
-    column_family& cf = find_column_family(cmd.cf_id);
+    auto cf_ptr = co_await table_for_request(*query_schema, cmd.cf_id, timeout);
+    column_family& cf = *cf_ptr;
 
     if (account_singular_ranges_to_rate_limit(_rate_limiter, cf, ranges, _dbcfg, rate_limit_info) == db::rate_limiter::can_proceed::no) {
         ++_stats->total_reads_rate_limited;
@@ -1960,8 +1970,11 @@ database::query_mutations(schema_ptr query_schema, const query::read_command& cm
     const auto short_read_allwoed = query::short_read(cmd.slice.options.contains<query::partition_slice::option::allow_short_read>());
     auto& semaphore = get_reader_concurrency_semaphore();
     auto max_result_size = cmd.max_result_size ? *cmd.max_result_size : get_query_max_result_size();
+    // Resolve the table first: waiting for a pending schema change commit while holding a result
+    // memory reservation would keep it from reads which have nothing to wait for.
+    auto cf_ptr = co_await table_for_request(*query_schema, cmd.cf_id, timeout);
+    column_family& cf = *cf_ptr;
     auto accounter = co_await get_result_memory_limiter().new_mutation_read(max_result_size, short_read_allwoed);
-    column_family& cf = find_column_family(cmd.cf_id);
 
     std::optional<querier> querier_opt;
     reconcilable_result result;
@@ -2256,7 +2269,7 @@ future<> database::apply_in_memory(const mutation& m, column_family& cf, db::rp_
 }
 
 future<counter_update_guard> database::acquire_counter_locks(schema_ptr s, const frozen_mutation& fm, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state) {
-    auto cf_ptr = co_await update_write_metrics_if_failed(table_for_write(*s, fm.column_family_id(), timeout));
+    auto cf_ptr = co_await update_write_metrics_if_failed(table_for_request(*s, fm.column_family_id(), timeout));
     auto& cf = *cf_ptr;
 
     auto m = fm.unfreeze(s);
@@ -2276,7 +2289,7 @@ future<mutation> database::prepare_counter_update(schema_ptr s, const frozen_mut
         co_await coroutine::return_exception(timed_out_error{});
     }
 
-    auto cf_ptr = co_await update_write_metrics_if_failed(table_for_write(*s, fm.column_family_id(), timeout));
+    auto cf_ptr = co_await update_write_metrics_if_failed(table_for_request(*s, fm.column_family_id(), timeout));
     auto& cf = *cf_ptr;
     if (is_in_critical_disk_utilization_mode() && cf.is_eligible_to_write_rejection_on_critical_disk_utilization()) {
         update_write_metrics_for_rejected_writes();
@@ -2291,7 +2304,7 @@ future<mutation> database::prepare_counter_update(schema_ptr s, const frozen_mut
 }
 
 future<> database::apply_counter_update(schema_ptr s, const frozen_mutation& fm, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state) {
-    auto cf_ptr = co_await update_write_metrics_if_failed(table_for_write(*s, fm.column_family_id(), timeout));
+    auto cf_ptr = co_await update_write_metrics_if_failed(table_for_request(*s, fm.column_family_id(), timeout));
     auto& cf = *cf_ptr;
 
     auto m = fm.unfreeze(s);
@@ -2460,7 +2473,15 @@ future<db::large_data_violation_type> database::do_apply(schema_ptr s, const fro
     // is a little in flux and commitlog is created only when db is
     // initied from datadir.
     auto uuid = m.column_family_id();
-    auto cf_ptr = co_await table_for_write(*s, uuid, timeout);
+    auto cf_f = co_await coroutine::as_future(table_for_request(*s, uuid, timeout));
+    if (cf_f.failed()) {
+        auto ex = cf_f.get_exception();
+        if (is_timeout_exception(ex)) {
+            ++_stats->total_writes_timedout;
+        }
+        co_await coroutine::return_exception_ptr(std::move(ex));
+    }
+    auto cf_ptr = cf_f.get();
     auto& cf = *cf_ptr;
 
     if (is_in_critical_disk_utilization_mode() && cf.is_eligible_to_write_rejection_on_critical_disk_utilization()) {

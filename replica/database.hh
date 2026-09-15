@@ -1715,6 +1715,7 @@ private:
         uint64_t total_reads = 0;
         uint64_t total_reads_failed = 0;
         uint64_t total_reads_rate_limited = 0;
+        uint64_t schema_change_commit_waits = 0;
 
         uint64_t short_data_queries = 0;
         uint64_t short_mutation_queries = 0;
@@ -1871,22 +1872,28 @@ private:
 
     // Called by schema_change_commit_guard's destructor.
     void end_schema_change_commit() noexcept;
-    // Slow path of table_for_write(). If a schema change affecting the table is being committed
-    // on all shards, waits for this shard to commit it before looking the table up.
-    future<lw_shared_ptr<table>> table_for_write_slow_path(table_id, db::timeout_clock::time_point timeout);
-    // Returns the table a mutation with schema `s` is to be applied to, throwing no_such_column_family
+    // Slow path of table_for_request(): waits for a pending schema change commit affecting the
+    // table to reach this shard, then looks the table up.
+    future<lw_shared_ptr<table>> table_for_request_slow_path(table_id, db::timeout_clock::time_point timeout);
+    // Whether `local`, this shard's schema for a table, is the one a request carrying `request`
+    // was built against. A native reverse query carries the table's reversed schema, whose version
+    // is the negated one (see schema::make_reversed()), so that counts as a match too.
+    static bool serves_request_schema(const schema& local, const schema& request) noexcept {
+        return local.version() == request.version() || local.version() == reversed(request.version());
+    }
+    // Returns the table a request with schema `s` is to be served from, throwing no_such_column_family
     // if there is none. A schema change is committed shard by shard (see schema_applier::commit()),
-    // so a mutation built on a shard which already committed it may reach this shard before it did.
-    // Applying it then would fail for a new table, or silently drop the cells of columns the old
-    // schema doesn't know for an altered one. Such a mutation stands out by its schema version not
-    // matching the local table's, and while the affected table is in a pending commit, we wait for
-    // the commit to reach this shard instead. With no commit pending there is nothing to wait for,
-    // and a version mismatch on its own is the normal state of a table while a schema change
-    // propagates across the cluster, so don't leave the fast path for it.
-    future<lw_shared_ptr<table>> table_for_write(const schema& s, table_id id, db::timeout_clock::time_point timeout) {
+    // so a request built on a shard which already committed it may reach this shard before it did.
+    // Serving it then would fail for a new table, and applying a mutation to an altered one would
+    // silently drop the cells of columns the old schema doesn't know. Such a request stands out by
+    // its schema version not matching the local table's, and while the affected table is in a
+    // pending commit, we wait for the commit to reach this shard instead. With no commit pending
+    // there is nothing to wait for, and a version mismatch on its own is the normal state of a
+    // table while a schema change propagates across the cluster, so don't leave the fast path for it.
+    future<lw_shared_ptr<table>> table_for_request(const schema& s, table_id id, db::timeout_clock::time_point timeout) {
         auto t = _tables_metadata.get_table_if_exists(id);
-        if (!t || (_schema_change_commit && t->schema()->version() != s.version())) [[unlikely]] {
-            return table_for_write_slow_path(id, timeout);
+        if (!t || (_schema_change_commit && !serves_request_schema(*t->schema(), s))) [[unlikely]] {
+            return table_for_request_slow_path(id, timeout);
         }
         return make_ready_future<lw_shared_ptr<table>>(std::move(t));
     }
@@ -2084,7 +2091,7 @@ public:
 
     // RAII handle for a schema change commit announced on this shard, see begin_schema_change_commit().
     // Destroying it, which has to happen on this shard, ends the announcement and releases the
-    // writes waiting for the commit.
+    // requests waiting for the commit.
     class schema_change_commit_guard {
         database& _db;
     public:
@@ -2098,10 +2105,14 @@ public:
     // Announces a schema change commit on this shard, see schema_applier::commit(). Called on
     // every shard before the change is committed on any shard, with the ids of the tables it
     // creates or alters. Until the returned guard is destroyed, which the applier does on every
-    // shard once all shards have committed, or on any failure, writes to those tables which
-    // don't match this shard's schema version wait for the commit instead of being applied, see
-    // table_for_write().
+    // shard once all shards have committed, or on any failure, requests to those tables which
+    // don't match this shard's schema version wait for the commit instead of being served, see
+    // table_for_request().
     std::unique_ptr<schema_change_commit_guard> begin_schema_change_commit(std::unordered_set<table_id> tables);
+    // Waits for a pending schema change commit affecting table `id` to complete on all shards.
+    // Returns a ready future if there is none. For paths which resolve the table on other shards
+    // synchronously, such as the multishard reader, and so cannot use table_for_request() there.
+    future<> wait_for_schema_change_commit(table_id id, db::timeout_clock::time_point timeout);
 
     const sstring& get_snitch_name() const;
     /*!
