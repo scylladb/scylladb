@@ -9,9 +9,13 @@
 #pragma once
 
 #include <list>
+#include <limits>
 #include <unordered_set>
 
+#include <ranges>
+
 #include "serializer.hh"
+#include "serialization_visitors.hh"
 #include "utils/chunked_string.hh"
 #include "enum_set.hh"
 #include "utils/chunked_vector.hh"
@@ -583,6 +587,38 @@ struct serializer<bytes> {
     }
 };
 
+// Read-side reconstruction for a range_of<T> member (idl-compiler.py) whose element type
+// isn't itself deserializable (e.g. managed_bytes_view): each element is read as a view into
+// the input stream instead of an owned bytes/managed_bytes copy, so e.g. rebuilding a key's
+// components() from the wire costs one allocation (the key's own storage) instead of one per
+// component. bytes_view covers a plain contiguous stream; buffer_view<Iterator> covers a
+// fragmented one -- deserialized_bytes_proxy::view() picks between them, never anything else.
+template<typename View, typename Input>
+View deserialize_view(Input& in) {
+    return serializer<bytes>::read(in).view();
+}
+template<>
+struct serializer<bytes_view> {
+    template<typename Input>
+    static bytes_view read(Input& in) {
+        return deserialize_view<bytes_view>(in);
+    }
+};
+template<typename Iterator>
+struct serializer<buffer_view<Iterator>> {
+    template<typename Input>
+    static buffer_view<Iterator> read(Input& in) {
+        return deserialize_view<buffer_view<Iterator>>(in);
+    }
+};
+// decltype of whichever of the above actually applies for a given input stream type; the
+// resulting container type for a [[reconstruct_as=...]] attribute (evaluate at the point
+// where the local variable named `in` is in scope, i.e. `deserialized_view_range<decltype(in)>`).
+template<typename Input>
+using deserialized_view_t = decltype(serializer<bytes>::read(std::declval<Input&>()).view());
+template<typename Input>
+using deserialized_view_range = utils::small_vector<deserialized_view_t<Input>, 4>;
+
 template<typename Output>
 void serialize(Output& out, const bytes_view& v) {
     serializer<bytes>::write(out, v);
@@ -590,6 +626,10 @@ void serialize(Output& out, const bytes_view& v) {
 template<typename Output>
 void serialize(Output& out, const managed_bytes& v) {
     serializer<bytes>::write(out, v);
+}
+template<typename Output>
+void serialize(Output& out, const managed_bytes_view& v) {
+    serializer<bytes>::write_fragmented(out, fragment_range(v));
 }
 template<typename Output>
 void serialize(Output& out, const bytes_ostream& v) {
@@ -604,6 +644,52 @@ requires FragmentRange<FragmentedBuffer>
 void serialize_fragmented(Output& out, FragmentedBuffer&& v) {
     serializer<bytes>::write_fragmented(out, std::forward<FragmentedBuffer>(v));
 }
+
+// Associative ranges (std::map, absl maps, ...) have their own wire format (key/value
+// pairs) and must go through a dedicated serializer<T> specialization; excluded here so
+// one missing such a specialization is a compile error, not a silent wrong-format write.
+template<typename T>
+concept MapLikeRange = requires {
+    typename T::key_type;
+    typename T::mapped_type;
+};
+
+// Serializes any non-associative range (lazy or materialized) as the IDL vector-of-T wire
+// format: [uint32_t count][T...]. Loses to the more specific container specializations
+// above by partial-specialization ordering, so it only ever applies to ranges with no
+// dedicated serializer<T> of their own (e.g. idl-compiler.py's range_of<T> members).
+// Must come after the concrete overloads above: write()'s serialize(out, e) is a dependent
+// call resolved by ordinary (non-ADL) lookup, which only sees declarations already visible
+// at this point — ADL isn't a reliable fallback (e.g. plain scalar element types have no
+// associated namespace for it to search).
+template<typename R>
+requires std::ranges::forward_range<const R> && (!MapLikeRange<R>)
+struct serializer<R> {
+    // lets tests confirm a given type resolved to this generic specialization, not a dedicated one
+    static constexpr bool is_generic_range_serializer = true;
+
+    template<typename Output>
+    static void write(Output& out, const R& v) {
+        using T = std::ranges::range_value_t<R>;
+        if constexpr (std::ranges::sized_range<R>) {
+            safe_serialize_as_uint32(out, std::ranges::size(v));
+            for (const T& e : v) {
+                serialize(out, e);
+            }
+        } else {
+            auto count_ph = start_place_holder(out);
+            size_type count = 0;
+            for (const T& e : v) {
+                if (count == std::numeric_limits<size_type>::max()) [[unlikely]] {
+                    throw std::runtime_error("range has more than UINT32_MAX elements, cannot be serialized");
+                }
+                serialize(out, e);
+                ++count;
+            }
+            count_ph.set(out, count);
+        }
+    }
+};
 
 template<typename T>
 struct serializer<std::optional<T>> {
