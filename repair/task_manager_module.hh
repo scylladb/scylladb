@@ -101,7 +101,6 @@ public:
     void check_failed_ranges();
     void check_in_abort_or_shutdown();
     repair_neighbors get_repair_neighbors(const dht::token_range& range);
-    gc_clock::time_point get_flush_time() const { return _flush_time; }
     void update_statistics(const repair_stats& stats) {
         _stats.add(stats);
     }

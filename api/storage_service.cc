@@ -808,7 +808,7 @@ rest_cleanup_all(http_context& ctx, sharded<service::storage_service>& ss, std::
         // fall back to the local cleanup if local cleanup is requested
         auto& db = ctx.db;
         auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
-        auto task = co_await compaction_module.make_and_start_task<compaction::global_cleanup_compaction_task_impl>(tasks::make_empty_task_info(), db);
+        auto task = co_await compaction_module.start_global_cleanup_compaction(db);
         co_await task->done();
 
         // Mark this node as clean
@@ -819,7 +819,7 @@ rest_cleanup_all(http_context& ctx, sharded<service::storage_service>& ss, std::
         co_return json::json_return_type(0);
 }
 
-static future<shared_ptr<compaction::cleanup_keyspace_compaction_task_impl>> force_keyspace_cleanup(http_context& ctx, sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
+static future<tasks::task_manager::task_ptr> force_keyspace_cleanup(http_context& ctx, sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
         auto& db = ctx.db;
         auto [keyspace, table_infos] = parse_table_infos(ctx, *req);
         const auto& rs = db.local().find_keyspace(keyspace).get_replication_strategy();
@@ -836,8 +836,7 @@ static future<shared_ptr<compaction::cleanup_keyspace_compaction_task_impl>> for
         }
 
         auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
-        co_return co_await compaction_module.make_and_start_task<compaction::cleanup_keyspace_compaction_task_impl>(
-            tasks::make_empty_task_info(), std::move(keyspace), db, table_infos, compaction::flush_mode::all_tables, tasks::is_user_task::yes);
+        co_return co_await compaction_module.start_cleanup_keyspace_compaction(db, std::move(keyspace), table_infos, compaction::flush_mode::all_tables, tasks::is_user_task::yes);
 }
 
 static

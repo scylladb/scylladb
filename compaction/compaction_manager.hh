@@ -472,6 +472,9 @@ public:
 
     compaction_reenabler stop_and_disable_compaction_no_wait(compaction_group_view& t, sstring reason);
 
+    // Total size of the sstables that compaction would consider for a compaction group.
+    future<uint64_t> get_candidates_size(compaction::compaction_group_view& t) const;
+
     double backlog() {
         return _backlog_manager.backlog();
     }

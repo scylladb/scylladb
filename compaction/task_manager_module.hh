@@ -44,20 +44,24 @@ public:
     virtual tasks::is_abortable is_abortable() const noexcept override;
 protected:
     virtual future<> run() override = 0;
-    future<uint64_t> get_table_task_workload(replica::database& db, const table_info& ti) const;
-    future<uint64_t> get_shard_task_workload(replica::database& db, const std::vector<table_info>& tables) const;
-    future<uint64_t> get_keyspace_task_workload(sharded<replica::database>& db, const std::vector<table_info>& tables) const;
-
     future<tasks::task_manager::task::progress> get_progress(const compaction_data& cdata, const compaction_progress_monitor& progress_monitor) const;
 };
 
-using current_task_type = shared_ptr<compaction_task_impl>;
+using current_task_type = tasks::task_manager::task_ptr;
+
+// The state through which a task waits for its turn among its siblings.
+struct compaction_turn {
+    seastar::condition_variable& cv;
+    current_task_type& current_task;
+};
 
 enum class flush_mode {
     skip,               // Skip flushing.  Useful when application explicitly flushes all tables prior to compaction
     compacted_tables,   // Flush only the compacted keyspace/tables
     all_tables          // Flush all tables in the database prior to compaction
 };
+
+inline constexpr auto major_compaction_task_type = "major compaction";
 
 class major_compaction_task_impl : public compaction_task_impl {
 public:
@@ -77,7 +81,7 @@ public:
     {}
 
     virtual std::string type() const override {
-        return "major compaction";
+        return major_compaction_task_type;
     }
 
 protected:
@@ -87,108 +91,9 @@ protected:
     virtual future<> run() override = 0;
 };
 
-class global_major_compaction_task_impl : public major_compaction_task_impl {
-private:
-    sharded<replica::database>& _db;
-public:
-    global_major_compaction_task_impl(tasks::task_manager::module_ptr module,
-            sharded<replica::database>& db,
-            std::optional<flush_mode> fm = std::nullopt,
-            bool consider_only_existing_data = false) noexcept
-        : major_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), "global", "", "", "", tasks::task_id::create_null_id(),
-                fm.value_or(flush_mode::all_tables), consider_only_existing_data)
-        , _db(db)
-    {}
+inline constexpr auto cleanup_compaction_task_type = "cleanup compaction";
 
-    tasks::is_user_task is_user_task() const noexcept override;
-protected:
-    virtual future<> run() override;
-    virtual future<std::optional<double>> expected_total_workload() const override;
-};
-
-class major_keyspace_compaction_task_impl : public major_compaction_task_impl {
-private:
-    sharded<replica::database>& _db;
-    std::vector<table_info> _table_infos;
-    // _cvp and _current_task are engaged when the task is invoked from
-    // global_major_compaction_task_impl
-    seastar::condition_variable* _cv;
-    current_task_type* _current_task;
-public:
-    major_keyspace_compaction_task_impl(tasks::task_manager::module_ptr module,
-            std::string keyspace,
-            tasks::task_id parent_id,
-            sharded<replica::database>& db,
-            std::vector<table_info> table_infos,
-            std::optional<flush_mode> fm = std::nullopt,
-            bool consider_only_existing_data = false,
-            seastar::condition_variable* cv = nullptr,
-            current_task_type* current_task = nullptr) noexcept
-        : major_compaction_task_impl(module, tasks::task_id::create_random_id(),
-                parent_id ? 0 : module->new_sequence_number(),
-                "keyspace", std::move(keyspace), "", "", parent_id,
-                fm.value_or(flush_mode::all_tables), consider_only_existing_data)
-        , _db(db)
-        , _table_infos(std::move(table_infos))
-        , _cv(cv)
-        , _current_task(current_task)
-    {}
-
-    tasks::is_user_task is_user_task() const noexcept override;
-protected:
-    virtual future<> run() override;
-    virtual future<std::optional<double>> expected_total_workload() const override;
-};
-
-class shard_major_keyspace_compaction_task_impl : public major_compaction_task_impl {
-private:
-    replica::database& _db;
-    std::vector<table_info> _local_tables;
-public:
-    shard_major_keyspace_compaction_task_impl(tasks::task_manager::module_ptr module,
-            std::string keyspace,
-            tasks::task_id parent_id,
-            replica::database& db,
-            std::vector<table_info> local_tables,
-            flush_mode fm,
-            bool consider_only_existing_data) noexcept
-        : major_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, "shard", std::move(keyspace), "", "", parent_id, fm, consider_only_existing_data)
-        , _db(db)
-        , _local_tables(std::move(local_tables))
-    {}
-protected:
-    virtual future<> run() override;
-    virtual future<std::optional<double>> expected_total_workload() const override;
-};
-
-class table_major_keyspace_compaction_task_impl : public major_compaction_task_impl {
-private:
-    replica::database& _db;
-    table_info _ti;
-    seastar::condition_variable& _cv;
-    current_task_type& _current_task;
-public:
-    table_major_keyspace_compaction_task_impl(tasks::task_manager::module_ptr module,
-            std::string keyspace,
-            std::string table,
-            tasks::task_id parent_id,
-            replica::database& db,
-            table_info ti,
-            seastar::condition_variable& cv,
-            current_task_type& current_task,
-            flush_mode fm,
-            bool consider_only_existing_data) noexcept
-        : major_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, "table", std::move(keyspace), std::move(table), "", parent_id, fm, consider_only_existing_data)
-        , _db(db)
-        , _ti(std::move(ti))
-        , _cv(cv)
-        , _current_task(current_task)
-    {}
-protected:
-    virtual future<> run() override;
-    virtual future<std::optional<double>> expected_total_workload() const override;
-};
-
+inline constexpr auto global_cleanup_compaction_task_type = "global cleanup compaction";
 
 class cleanup_compaction_task_impl : public compaction_task_impl {
 public:
@@ -204,101 +109,13 @@ public:
     {}
 
     virtual std::string type() const override {
-        return "cleanup compaction";
+        return cleanup_compaction_task_type;
     }
 protected:
     virtual future<> run() override = 0;
 };
 
-class cleanup_keyspace_compaction_task_impl : public cleanup_compaction_task_impl {
-private:
-    sharded<replica::database>& _db;
-    std::vector<table_info> _table_infos;
-    const flush_mode _flush_mode;
-    tasks::is_user_task _is_user_task;
-public:
-    cleanup_keyspace_compaction_task_impl(tasks::task_manager::module_ptr module,
-            std::string keyspace,
-            sharded<replica::database>& db,
-            std::vector<table_info> table_infos,
-            flush_mode mode,
-            tasks::is_user_task is_user_task) noexcept
-        : cleanup_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), "keyspace", std::move(keyspace), "", "", tasks::task_id::create_null_id())
-        , _db(db)
-        , _table_infos(std::move(table_infos))
-        , _flush_mode(mode)
-        , _is_user_task(is_user_task)
-    {}
-
-    tasks::is_user_task is_user_task() const noexcept override;
-protected:
-    virtual future<> run() override;
-    virtual future<std::optional<double>> expected_total_workload() const override;
-};
-
-class global_cleanup_compaction_task_impl : public compaction_task_impl {
-private:
-    sharded<replica::database>& _db;
-public:
-    global_cleanup_compaction_task_impl(tasks::task_manager::module_ptr module,
-            sharded<replica::database>& db) noexcept
-        : compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), "global", "", "", "", tasks::task_id::create_null_id())
-        , _db(db)
-    {}
-    std::string type() const final {
-        return "global cleanup compaction";
-    }
-
-    tasks::is_user_task is_user_task() const noexcept override;
-private:
-    future<> run() final;
-    virtual future<std::optional<double>> expected_total_workload() const override;
-};
-
-class shard_cleanup_keyspace_compaction_task_impl : public cleanup_compaction_task_impl {
-private:
-    replica::database& _db;
-    std::vector<table_info> _local_tables;
-public:
-    shard_cleanup_keyspace_compaction_task_impl(tasks::task_manager::module_ptr module,
-            std::string keyspace,
-            tasks::task_id parent_id,
-            replica::database& db,
-            std::vector<table_info> local_tables) noexcept
-        : cleanup_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, "shard", std::move(keyspace), "", "", parent_id)
-        , _db(db)
-        , _local_tables(std::move(local_tables))
-    {}
-protected:
-    virtual future<> run() override;
-    virtual future<std::optional<double>> expected_total_workload() const override;
-};
-
-class table_cleanup_keyspace_compaction_task_impl : public cleanup_compaction_task_impl {
-private:
-    replica::database& _db;
-    table_info _ti;
-    seastar::condition_variable& _cv;
-    current_task_type& _current_task;
-public:
-    table_cleanup_keyspace_compaction_task_impl(tasks::task_manager::module_ptr module,
-            std::string keyspace,
-            std::string table,
-            tasks::task_id parent_id,
-            replica::database& db,
-            table_info ti,
-            seastar::condition_variable& cv,
-            current_task_type& current_task) noexcept
-        : cleanup_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, "table", std::move(keyspace), std::move(table), "", parent_id)
-        , _db(db)
-        , _ti(std::move(ti))
-        , _cv(cv)
-        , _current_task(current_task)
-    {}
-protected:
-    virtual future<> run() override;
-    future<std::optional<double>> expected_total_workload() const override;
-};
+inline constexpr auto offstrategy_compaction_task_type = "offstrategy compaction";
 
 class offstrategy_compaction_task_impl : public compaction_task_impl {
 public:
@@ -314,84 +131,10 @@ public:
     {}
 
     virtual std::string type() const override {
-        return "offstrategy compaction";
+        return offstrategy_compaction_task_type;
     }
 protected:
     virtual future<> run() override = 0;
-};
-
-class offstrategy_keyspace_compaction_task_impl : public offstrategy_compaction_task_impl {
-private:
-    sharded<replica::database>& _db;
-    std::vector<table_info> _table_infos;
-    bool* _needed;
-public:
-    offstrategy_keyspace_compaction_task_impl(tasks::task_manager::module_ptr module,
-            std::string keyspace,
-            sharded<replica::database>& db,
-            std::vector<table_info> table_infos,
-            bool* needed) noexcept
-        : offstrategy_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), "keyspace", std::move(keyspace), "", "", tasks::task_id::create_null_id())
-        , _db(db)
-        , _table_infos(std::move(table_infos))
-        , _needed(needed)
-    {}
-
-    tasks::is_user_task is_user_task() const noexcept override;
-protected:
-    virtual future<> run() override;
-    virtual future<std::optional<double>> expected_total_workload() const override;
-};
-
-class shard_offstrategy_keyspace_compaction_task_impl : public offstrategy_compaction_task_impl {
-private:
-    replica::database& _db;
-    std::vector<table_info> _table_infos;
-    bool& _needed;
-public:
-    shard_offstrategy_keyspace_compaction_task_impl(tasks::task_manager::module_ptr module,
-            std::string keyspace,
-            tasks::task_id parent_id,
-            replica::database& db,
-            std::vector<table_info> table_infos,
-            bool& needed) noexcept
-        : offstrategy_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, "shard", std::move(keyspace), "", "", parent_id)
-        , _db(db)
-        , _table_infos(std::move(table_infos))
-        , _needed(needed)
-    {}
-protected:
-    virtual future<> run() override;
-    virtual future<std::optional<double>> expected_total_workload() const override;
-};
-
-class table_offstrategy_keyspace_compaction_task_impl : public offstrategy_compaction_task_impl {
-private:
-    replica::database& _db;
-    table_info _ti;
-    seastar::condition_variable& _cv;
-    current_task_type& _current_task;
-    bool& _needed;
-public:
-    table_offstrategy_keyspace_compaction_task_impl(tasks::task_manager::module_ptr module,
-            std::string keyspace,
-            std::string table,
-            tasks::task_id parent_id,
-            replica::database& db,
-            table_info ti,
-            seastar::condition_variable& cv,
-            current_task_type& current_task,
-            bool& needed) noexcept
-        : offstrategy_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, "table", std::move(keyspace), std::move(table), "", parent_id)
-        , _db(db)
-        , _ti(std::move(ti))
-        , _cv(cv)
-        , _current_task(current_task)
-        , _needed(needed)
-    {}
-protected:
-    virtual future<> run() override;
-    virtual future<std::optional<double>> expected_total_workload() const override;
 };
 
 class sstables_compaction_task_impl : public compaction_task_impl {
@@ -743,6 +486,42 @@ protected:
 class task_manager_module : public tasks::task_manager::module {
 public:
     task_manager_module(tasks::task_manager& tm) noexcept : tasks::task_manager::module(tm, "compaction") {}
+
+    // Starts a major compaction of all the tables on the node.
+    future<tasks::task_manager::task_ptr> start_global_major_compaction(sharded<replica::database>& db, std::optional<flush_mode> fm, bool consider_only_existing_data);
+
+    // Starts a major compaction of the given tables of a keyspace on all the shards.
+    future<tasks::task_manager::task_ptr> start_major_keyspace_compaction(sharded<replica::database>& db, std::string keyspace, std::vector<table_info> table_infos, std::optional<flush_mode> fm, bool consider_only_existing_data, compaction_turn* turn = nullptr, tasks::task_info parent_info = tasks::make_empty_task_info());
+
+    // Starts a major compaction of the given tables of a keyspace on this shard.
+    future<tasks::task_manager::task_ptr> start_shard_major_compaction(replica::database& db, std::string keyspace, const std::vector<table_info>& table_infos, flush_mode fm, bool consider_only_existing_data, tasks::task_info parent_info);
+
+    // Starts a major compaction of a single table on this shard, once the turn is taken by the created task.
+    future<tasks::task_manager::task_ptr> start_table_major_compaction(replica::database& db, std::string keyspace, const table_info& info, compaction_turn& turn, flush_mode fm, bool consider_only_existing_data, tasks::task_info parent_info);
+
+    // Starts a cleanup compaction of all the vnode based keyspaces on the node.
+    future<tasks::task_manager::task_ptr> start_global_cleanup_compaction(sharded<replica::database>& db);
+
+    // Starts a cleanup compaction of the given tables of a keyspace on all the shards.
+    future<tasks::task_manager::task_ptr> start_cleanup_keyspace_compaction(sharded<replica::database>& db, std::string keyspace, const std::vector<table_info>& table_infos, flush_mode fm, tasks::is_user_task is_user_task);
+
+    // Starts a cleanup compaction of the given tables of a keyspace on this shard.
+    future<tasks::task_manager::task_ptr> start_shard_cleanup_compaction(replica::database& db, std::string keyspace, const std::vector<table_info>& table_infos, tasks::task_info parent_info);
+
+    // Starts a cleanup compaction of a single table on this shard, once the turn is taken by the created task.
+    future<tasks::task_manager::task_ptr> start_table_cleanup_compaction(replica::database& db, std::string keyspace, const table_info& info, compaction_turn& turn, tasks::task_info parent_info);
+
+    // Starts an offstrategy compaction of the given tables of a keyspace on all the shards.
+    // If needed is set, it receives whether any table had sstables to compact.
+    future<tasks::task_manager::task_ptr> start_offstrategy_keyspace_compaction(sharded<replica::database>& db, std::string keyspace, std::vector<table_info> table_infos, bool* needed);
+
+    // Starts an offstrategy compaction of the given tables of a keyspace on this shard.
+    // needed is set if any table had sstables to compact.
+    future<tasks::task_manager::task_ptr> start_shard_offstrategy_compaction(replica::database& db, std::string keyspace, const std::vector<table_info>& table_infos, bool& needed, tasks::task_info parent_info);
+
+    // Starts an offstrategy compaction of a single table on this shard, once the turn is taken by the created task.
+    // needed is set if the table had sstables to compact.
+    future<tasks::task_manager::task_ptr> start_table_offstrategy_compaction(replica::database& db, std::string keyspace, const table_info& info, compaction_turn& turn, bool& needed, tasks::task_info parent_info);
 };
 
 class regular_compaction_task_impl : public compaction_task_impl {
