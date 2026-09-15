@@ -7,8 +7,9 @@
  */
 
 #include "cql3/statements/external_search/fulltext_indexed_table_select_statement.hh"
+#include "cql3/statements/external_search/bm25_search.hh"
 #include "cql3/statements/external_search/external_function.hh"
-#include "cql3/statements/external_search/external_score_provider.hh"
+#include "cql3/statements/external_search/external_search_provider.hh"
 #include "cql3/statements/raw/select_statement.hh"
 #include "cql3/expr/evaluate.hh"
 #include "cql3/expr/expression.hh"
@@ -30,100 +31,14 @@ namespace cql3::statements {
 
 namespace {
 
-std::optional<expr::expression> validate_bm25_where_restriction(const expr::binary_operator& binop,
-        const bm25_ordering_info& ordering_info) {
-    const auto& fc = expr::as<expr::function_call>(binop.lhs);
-    auto [col, where_term] = external_search::extract_call_arguments(fc, "BM25");
-    if (col->name_as_text() != ordering_info.index.target_column()) {
-        throw exceptions::invalid_request_exception("Full-text search queries must reference the same column in both WHERE and ORDER BY clauses");
-    }
-
-    if (binop.op != expr::oper_t::GT) {
-        throw exceptions::invalid_request_exception(
-                seastar::format("Unsupported \"{}\" relation for BM25 function restriction, only \">\" is supported", binop.op));
-    }
-    const auto* rhs_const = expr::as_if<expr::constant>(&binop.rhs);
-    if (!rhs_const || rhs_const->is_null() || rhs_const->view().deserialize<float>(*float_type) != 0.0f) {
-        throw exceptions::invalid_request_exception("BM25 function comparison value must be the literal 0");
-    }
-
-    const auto terms_equal = external_search::unevaluated_equality(where_term, ordering_info.search_term);
-    if (terms_equal != external_search::equality::always) {
-        if (terms_equal == external_search::equality::never) {
-            throw exceptions::invalid_request_exception(
-                    "Full-text search queries must use the same search term in both WHERE and ORDER BY clauses");
-        }
-        return std::move(where_term);
-    }
-    return std::nullopt;
+/// The column the index is built on: the one the rows are ranked by and a fragment is generated from.
+const column_definition& ranked_column(const schema& schema, const secondary_index::index& index) {
+    const auto* cdef = schema.get_column_definition(to_bytes(index.target_column()));
+    throwing_assert(cdef);
+    return *cdef;
 }
 
 } // anonymous namespace
-
-void prepare_bm25_selectors(std::vector<selection::prepared_selector>& prepared_selectors, std::optional<bm25_ordering_info>& ordering_info,
-        expr::temporary_allocator& temporaries_allocator, prepare_context& ctx) {
-    for (auto& ps : prepared_selectors) {
-        ps.expr = expr::search_and_replace(ps.expr, [&](const expr::expression& candidate) -> std::optional<expr::expression> {
-            const auto* fc = expr::as_if<expr::function_call>(&candidate);
-            if (!fc || !expr::is_native_function_call(*fc, functions::BM25_FUNCTION_NAME)) {
-                return std::nullopt;
-            }
-
-            if (!ordering_info) {
-                throw exceptions::invalid_request_exception("BM25() is not supported in the SELECT clause without matching ORDER BY and WHERE clauses");
-            }
-
-            auto [col, sel_term] = external_search::extract_call_arguments(*fc, "BM25");
-            if (col->name_as_text() != ordering_info->index.target_column()) {
-                throw exceptions::invalid_request_exception("BM25() in SELECT must reference the same column as BM25() in WHERE and ORDER BY");
-            }
-
-            const auto terms_equal = external_search::unevaluated_equality(sel_term, ordering_info->search_term);
-            if (terms_equal != external_search::equality::always) {
-                if (terms_equal == external_search::equality::never) {
-                    throw exceptions::invalid_request_exception(
-                            "BM25() in SELECT must use the same search term as BM25() in WHERE and ORDER BY");
-                }
-                // Lifted out of the selector tree, so nothing else registers a bind marker in this term.
-                expr::fill_prepare_context(sel_term, ctx);
-                ordering_info->deferred_select_terms.push_back(std::move(sel_term));
-            }
-
-            // Every bm25() in the SELECT reports the same score, so one slot serves them all.
-            if (!ordering_info->temporary_index) {
-                ordering_info->temporary_index = temporaries_allocator.allocate();
-            }
-
-            return expr::expression(expr::temporary{
-                    .index = *ordering_info->temporary_index,
-                    .type = float_type,
-                    .replaced_expr = candidate,
-            });
-        });
-    }
-}
-
-std::optional<bm25_ordering_info> get_bm25_ordering_info(
-        data_dictionary::database db,
-        schema_ptr schema,
-        const expr::function_call& fc) {
-
-    if (!expr::is_native_function_call(fc, functions::BM25_FUNCTION_NAME)) {
-        return std::nullopt;
-    }
-    auto [column, search_term] = external_search::extract_call_arguments(fc, "BM25");
-
-    auto cf = db.find_column_family(schema);
-    auto& sim = cf.get_index_manager();
-
-    for (const auto& idx : sim.list_indexes()) {
-        if (idx.supports_bm25_expression(*column)) {
-            return bm25_ordering_info{idx, std::move(search_term)};
-        }
-    }
-
-    throw exceptions::invalid_request_exception("No fulltext index found for full-text search query");
-}
 
 ::shared_ptr<cql3::statements::select_statement> fulltext_indexed_table_select_statement::prepare(data_dictionary::database db,
         schema_ptr schema, uint32_t bound_terms, lw_shared_ptr<const parameters> parameters,
@@ -158,7 +73,8 @@ std::optional<bm25_ordering_info> get_bm25_ordering_info(
         throw exceptions::invalid_request_exception("Full-text search queries support only one WHERE BM25() restriction");
     }
 
-    ordering_info->deferred_where_term = validate_bm25_where_restriction(scoring_restrictions.front(), *ordering_info);
+    ordering_info->deferred_where_term = bm25_search::validate_restriction(
+            scoring_restrictions.front(), ordering_info->index, ordering_info->search_term);
 
     // Reject any WHERE restrictions beyond the single BM25 clause.
     // BM25 restrictions are excluded from `restrictions`.
@@ -169,8 +85,15 @@ std::optional<bm25_ordering_info> get_bm25_ordering_info(
                 "Full-text search queries do not support additional WHERE restrictions");
     }
 
-    if (ordering_info->temporary_index) {
+    // The score and the rank are matched to a row by primary key.
+    if (ordering_info->temporaries.score || ordering_info->temporaries.rank) {
         external_search::fetch_primary_key_columns(*selection, *schema);
+    }
+
+    // The index stores none of the text a fragment is generated from, so it has to be read from
+    // every row even when the query does not select the column.
+    if (ordering_info->temporaries.fragment) {
+        selection->add_column_for_post_processing(ranked_column(*schema, ordering_info->index));
     }
 
     return ::make_shared<cql3::statements::fulltext_indexed_table_select_statement>(
@@ -225,27 +148,60 @@ future<shared_ptr<cql_transport::messages::result_message>> fulltext_indexed_tab
     }
 
     for (const auto& sel_term : _bm25_ordering_info.deferred_select_terms) {
-        if (expr::evaluate(sel_term, options) != search_term_val) {
-            co_await coroutine::return_exception(exceptions::invalid_request_exception(
-                    "BM25() in SELECT must use the same search term as BM25() in WHERE and ORDER BY"));
+        if (expr::evaluate(sel_term.term, options) != search_term_val) {
+            co_await coroutine::return_exception(exceptions::invalid_request_exception(seastar::format(
+                    "{}() in SELECT must use the same search term as BM25() in WHERE and ORDER BY", sel_term.function_name)));
         }
     }
 
-    auto search_term_bytes = std::move(search_term_val).to_bytes();
-    sstring search_term_text = value_cast<sstring>(utf8_type->deserialize(search_term_bytes));
+    const auto search_term_text = bm25_search::query_term(search_term_val);
 
-    auto pkeys = co_await qp.vector_store_client().bm25(_schema->ks_name(), _index.metadata().name(), _schema, search_term_text, limit, aoe.abort_source());
-    if (!pkeys.has_value()) {
-        co_await coroutine::return_exception(
-                exceptions::invalid_request_exception(std::visit(vector_search::vector_store_client::fts_error_visitor{}, pkeys.error())));
+    auto pkeys = co_await bm25_search::ask(
+            qp.vector_store_client(), _schema->ks_name(), _index.metadata().name(), _schema, search_term_text, limit, aoe.abort_source());
+
+    throwing_assert(pkeys.size() <= limit);
+
+    auto table_results = co_await query_base_table(qp, state, options, timeout, pkeys);
+
+    const auto& temporaries = _bm25_ordering_info.temporaries;
+
+    auto provider = std::optional<external_search::external_search_provider>{};
+    if (table_results && temporaries.any()) {
+        // A fragment does not exist until the index has been sent the rows' text.
+        auto columns = std::vector<const column_definition*>{};
+        auto text_column = std::optional<size_t>{};
+        if (temporaries.fragment) {
+            text_column = columns.size();
+            columns.push_back(&ranked_column(*_schema, _bm25_ordering_info.index));
+        }
+        // The score and the rank are matched to a row by key; a fragment is matched by position,
+        // and the key columns are read only when the score or the rank is selected.
+        auto answers = std::vector<const vector_search::vector_store_client::primary_keys*>{};
+        if (temporaries.score || temporaries.rank) {
+            answers.push_back(&pkeys);
+        }
+        const auto& read = table_results.value();
+        auto rows = external_search::join_table_results(*read.rows, read.command->slice, *_schema, *_selection, answers, columns);
+
+        auto filled = std::vector<external_search::external_values>{};
+        external_search::drop_unscored_rows(rows, answers);
+        if (temporaries.score) {
+            filled.push_back(external_search::external_values{
+                    .temporary_index = *temporaries.score, .values = external_search::similarities_of(rows, 0, pkeys)});
+        }
+        if (temporaries.rank) {
+            filled.push_back(external_search::external_values{
+                    .temporary_index = *temporaries.rank, .values = external_search::ranks_of(rows, 0, pkeys)});
+        }
+        if (temporaries.fragment) {
+            auto fragments = co_await bm25_search::highlights_of(
+                    qp.vector_store_client(), *_schema, _index, search_term_text, rows, 0, aoe.abort_source());
+            filled.push_back(external_search::external_values{
+                    .temporary_index = *temporaries.fragment, .values = std::move(fragments)});
+        }
+        provider.emplace(std::move(filled), rows);
     }
-
-    throwing_assert(pkeys->size() <= limit);
-
-    auto provider = _bm25_ordering_info.temporary_index
-                            ? std::make_unique<external_score_provider>(pkeys.value(), *_bm25_ordering_info.temporary_index, *_schema)
-                            : nullptr;
-    co_return co_await query_base_table(qp, state, options, pkeys.value(), timeout, std::move(provider));
+    co_return co_await emit_result_set(std::move(table_results), options, provider ? &*provider : nullptr);
 }
 
 } // namespace cql3::statements

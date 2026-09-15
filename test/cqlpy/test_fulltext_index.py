@@ -486,6 +486,13 @@ def test_bm25_like_operator_rejected(cql, fulltext_table):
         cql.execute(f"SELECT * FROM {fulltext_table} WHERE BM25(content, 'hello') LIKE 'x' LIMIT 1")
 
 
+def test_bm25_bind_marker_as_threshold_rejected(cql, fulltext_table):
+    """The right-hand side must be the literal 0; a bind marker there is rejected with that message."""
+    with pytest.raises(InvalidRequest, match="BM25 function comparison value must be the literal 0"):
+        cql.prepare(f"SELECT * FROM {fulltext_table} WHERE BM25(content, 'hello') > ? "
+                    f"ORDER BY BM25(content, 'hello') LIMIT 1")
+
+
 def test_bm25_aggregation_rejected(cql, fulltext_table):
     """SELECT with aggregate functions must be rejected for full-text search queries."""
     with pytest.raises(InvalidRequest, match="cannot be run with aggregation"):
@@ -514,7 +521,7 @@ def test_bm25_on_nonexistent_column_fails(cql, fulltext_table):
 
 def test_bm25_where_only_rejected(cql, fulltext_table):
     """WHERE BM25 without an ORDER BY BM25 clause must be rejected."""
-    with pytest.raises(InvalidRequest, match="require an ORDER BY BM25"):
+    with pytest.raises(InvalidRequest, match="names a search that the ORDER BY clause does not run"):
         cql.execute(f"SELECT * FROM {fulltext_table} WHERE BM25(content, 'hello') > 0 LIMIT 1")
 
 
@@ -524,7 +531,7 @@ def test_bm25_multiple_where_restrictions_rejected(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, schema) as table:
         cql.execute(f"CREATE CUSTOM INDEX ON {table}(col1) USING 'fulltext_index'")
         cql.execute(f"CREATE CUSTOM INDEX ON {table}(col2) USING 'fulltext_index'")
-        with pytest.raises(InvalidRequest, match="only one WHERE BM25"):
+        with pytest.raises(InvalidRequest, match="names a search that the ORDER BY clause does not run"):
             cql.execute(f"SELECT * FROM {table} WHERE BM25(col1, 'hello') > 0 AND BM25(col2, 'hello') > 0 ORDER BY BM25(col1, 'hello') LIMIT 1")
 
 
@@ -550,7 +557,7 @@ def test_bm25_where_with_ann_order_by_rejected(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, schema) as table:
         cql.execute(f"CREATE CUSTOM INDEX ON {table}(content) USING 'fulltext_index'")
         cql.execute(f"CREATE CUSTOM INDEX ON {table}(vec) USING 'vector_index'")
-        with pytest.raises(InvalidRequest, match="BM25 and ANN cannot be combined in the same query"):
+        with pytest.raises(InvalidRequest, match="names a search that the ORDER BY clause does not run"):
             cql.execute(f"SELECT * FROM {table} WHERE BM25(content, 'hello') > 0 ORDER BY vec ANN OF [1.0, 2.0] LIMIT 1")
 
 
@@ -620,8 +627,8 @@ def test_bm25_on_clustering_key_with_fulltext_index(cql, test_keyspace):
 
 
 def test_non_scoring_function_in_order_by_rejected(cql, fulltext_table):
-    """A non-scoring function call in ORDER BY clause must be rejected."""
-    with pytest.raises(InvalidRequest, match="supported as scoring functions in ORDER BY"):
+    """A function call in ORDER BY that names no search must be rejected."""
+    with pytest.raises(InvalidRequest, match="must name at least one search"):
         cql.execute(f"SELECT * FROM {fulltext_table} ORDER BY now() LIMIT 1")
 
 
@@ -648,7 +655,7 @@ def test_bm25_different_columns_rejected(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, schema) as table:
         cql.execute(f"CREATE CUSTOM INDEX ON {table}(col1) USING 'fulltext_index'")
         cql.execute(f"CREATE CUSTOM INDEX ON {table}(col2) USING 'fulltext_index'")
-        with pytest.raises(InvalidRequest, match="same column"):
+        with pytest.raises(InvalidRequest, match="names a search that the ORDER BY clause does not run"):
             cql.execute(f"SELECT * FROM {table} WHERE BM25(col1, 'hello') > 0 ORDER BY BM25(col2, 'hello') LIMIT 1")
 
 
@@ -726,3 +733,135 @@ def test_bm25_rejected_in_non_select_statements(cql, fulltext_table):
         cql.execute(f"UPDATE {fulltext_table} SET content = 'x' WHERE p = 1 AND BM25(content, 'hello') > 0")
     with pytest.raises(InvalidRequest, match="only supported in SELECT statements"):
         cql.execute(f"DELETE FROM {fulltext_table} WHERE p = 1 AND BM25(content, 'hello') > 0")
+
+
+###############################################################################
+# Tests for the BM25_HIGHLIGHT() function
+#
+# BM25_HIGHLIGHT(col, 'term') reports a fragment of the searched text with the
+# matched terms marked. It describes the same search BM25() does, so it is only
+# accepted where BM25() is - in the SELECT clause of a query that already has
+# the required WHERE and ORDER BY clauses, naming the same column and the same
+# search term.
+#
+# Execution tests that require a running Vector Store are in
+# test_fulltext_search_with_mock.py.
+###############################################################################
+
+
+def test_highlight_in_select_with_where_order_by_accepted(cql, fulltext_table):
+    """BM25_HIGHLIGHT() in SELECT is accepted when the query has both a BM25 WHERE and ORDER BY."""
+    cql.prepare(f"SELECT BM25_HIGHLIGHT(content, 'hello') FROM {fulltext_table} "
+                f"WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT 10")
+
+
+def test_highlight_alongside_bm25_accepted(cql, fulltext_table):
+    """The score and the fragment may be selected together - they are two readings of one search."""
+    cql.prepare(f"SELECT BM25(content, 'hello'), BM25_HIGHLIGHT(content, 'hello') AS excerpt FROM {fulltext_table} "
+                f"WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT 10")
+
+
+def test_highlight_nested_accepted(cql, fulltext_table):
+    """A nested occurrence is replaced by the fragment like a top-level one."""
+    cql.prepare(f"SELECT textAsBlob(BM25_HIGHLIGHT(content, 'hello')) FROM {fulltext_table} "
+                f"WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT 10")
+
+
+def test_highlight_without_where_and_order_by_rejected(cql, fulltext_table):
+    """BM25_HIGHLIGHT() is rejected without both a BM25 WHERE and ORDER BY - there is no search to highlight."""
+    with pytest.raises(InvalidRequest, match=re.escape("BM25_HIGHLIGHT() is not supported in the SELECT clause")):
+        cql.prepare(f"SELECT BM25_HIGHLIGHT(content, 'hello') FROM {fulltext_table}")
+
+
+def test_highlight_without_order_by_rejected(cql, fulltext_table):
+    """A WHERE BM25 alone does not make a search to highlight either."""
+    with pytest.raises(InvalidRequest, match=re.escape("BM25_HIGHLIGHT() is not supported in the SELECT clause")):
+        cql.prepare(f"SELECT BM25_HIGHLIGHT(content, 'hello') FROM {fulltext_table} WHERE BM25(content, 'hello') > 0 LIMIT 10")
+
+
+def test_highlight_different_term_rejected(cql, fulltext_table):
+    """A fragment of a different search than the one driving the query must be rejected at prepare time."""
+    with pytest.raises(InvalidRequest, match=re.escape("BM25_HIGHLIGHT() in SELECT must use the same search term")):
+        cql.prepare(f"SELECT BM25_HIGHLIGHT(content, 'world') FROM {fulltext_table} "
+                    f"WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT 10")
+
+
+def test_highlight_different_column_rejected(cql, test_keyspace):
+    """A fragment of a different column than the one being searched must be rejected at prepare time."""
+    schema = 'p int primary key, col1 text, col2 text'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(col1) USING 'fulltext_index'")
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(col2) USING 'fulltext_index'")
+        with pytest.raises(InvalidRequest, match=re.escape("BM25_HIGHLIGHT() in SELECT must reference the same column")):
+            cql.prepare(f"SELECT BM25_HIGHLIGHT(col2, 'hello') FROM {table} "
+                        f"WHERE BM25(col1, 'hello') > 0 ORDER BY BM25(col1, 'hello') LIMIT 10")
+
+
+def test_highlight_without_fulltext_index_rejected(cql, test_keyspace):
+    """A column with no fulltext index cannot be searched, so it cannot be highlighted either."""
+    schema = 'p int primary key, content text'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        with pytest.raises(InvalidRequest, match="No fulltext index found"):
+            cql.prepare(f"SELECT BM25_HIGHLIGHT(content, 'hello') FROM {table} "
+                        f"WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT 10")
+
+
+def test_highlight_in_where_rejected(cql, fulltext_table):
+    """A fragment is text: there is nothing to restrict by, and it is not what selects the rows."""
+    with pytest.raises(InvalidRequest, match=re.escape("BM25_HIGHLIGHT() is not supported in the WHERE clause")):
+        cql.prepare(f"SELECT * FROM {fulltext_table} WHERE BM25_HIGHLIGHT(content, 'hello') > 'x' "
+                    f"ORDER BY BM25(content, 'hello') LIMIT 10")
+
+
+def test_highlight_in_where_with_integer_rejected(cql, fulltext_table):
+    """BM25_HIGHLIGHT() is rejected in WHERE before the right-hand side is type-checked."""
+    with pytest.raises(InvalidRequest, match=re.escape("BM25_HIGHLIGHT() is not supported in the WHERE clause")):
+        cql.prepare(f"SELECT * FROM {fulltext_table} WHERE BM25_HIGHLIGHT(content, 'hello') > 0 "
+                    f"ORDER BY BM25(content, 'hello') LIMIT 10")
+
+
+def test_highlight_in_order_by_rejected(cql, fulltext_table):
+    """The rows are ranked by relevance, never by a fragment."""
+    with pytest.raises(InvalidRequest, match="cannot rank rows"):
+        cql.prepare(f"SELECT * FROM {fulltext_table} WHERE BM25(content, 'hello') > 0 "
+                    f"ORDER BY BM25_HIGHLIGHT(content, 'hello') LIMIT 10")
+
+
+def test_highlight_outside_select_statement_rejected(cql, fulltext_table):
+    """BM25_HIGHLIGHT() is rejected in any WHERE clause, mutations included."""
+    for statement in [f"UPDATE {fulltext_table} SET content = 'x' WHERE p = 1 AND BM25_HIGHLIGHT(content, 'hello') > 'x'",
+                      f"DELETE FROM {fulltext_table} WHERE p = 1 AND BM25_HIGHLIGHT(content, 'hello') > 'x'"]:
+        with pytest.raises(InvalidRequest, match=re.escape("BM25_HIGHLIGHT() is not supported in the WHERE clause")):
+            cql.execute(statement)
+
+
+def test_highlight_wrong_argument_count_rejected(cql, fulltext_table):
+    """BM25_HIGHLIGHT() takes the column and the search term, like BM25()."""
+    for args in ["", "content", "content, 'hello', 'extra'"]:
+        with pytest.raises(InvalidRequest, match="Invalid number of arguments"):
+            cql.prepare(f"SELECT BM25_HIGHLIGHT({args}) FROM {fulltext_table} "
+                        f"WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT 10")
+
+
+def test_highlight_first_argument_must_be_a_column(cql, fulltext_table):
+    """The first argument names the column whose text is highlighted."""
+    with pytest.raises(InvalidRequest, match=re.escape("First argument to BM25_HIGHLIGHT() must be a column reference")):
+        cql.prepare(f"SELECT BM25_HIGHLIGHT('literal', 'hello') FROM {fulltext_table} "
+                    f"WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT 10")
+
+
+def test_highlight_second_argument_must_not_be_a_column(cql, fulltext_table):
+    """The search term is supplied by the caller, not read from the row being highlighted."""
+    with pytest.raises(InvalidRequest, match=re.escape("Second argument to BM25_HIGHLIGHT() must not be a column reference")):
+        cql.prepare(f"SELECT BM25_HIGHLIGHT(content, content) FROM {fulltext_table} "
+                    f"WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT 10")
+
+
+def test_highlight_with_group_by_rejected(cql, test_keyspace):
+    """A fragment is a per-row value, so it cannot be selected by an aggregating query."""
+    schema = 'p int, c int, content text, PRIMARY KEY (p, c)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(content) USING 'fulltext_index'")
+        with pytest.raises(InvalidRequest, match="cannot be run with aggregation"):
+            cql.prepare(f"SELECT BM25_HIGHLIGHT(content, 'hello') FROM {table} WHERE BM25(content, 'hello') > 0 "
+                        f"GROUP BY p ORDER BY BM25(content, 'hello') LIMIT 5")

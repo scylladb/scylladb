@@ -31,6 +31,11 @@ def bm25_response(ids, scores=None):
     return json.dumps({"primary_keys": {"id": ids}, "scores": scores})
 
 
+def highlight_response(fragments):
+    """A `/highlight` reply. Entries are positional and may be None, meaning no fragment for that document."""
+    return json.dumps({"highlights": fragments})
+
+
 @pytest.fixture(scope="module", autouse=True)
 def all_tests_are_tablets_and_scylla_only(scylla_only, has_tablets):
     if not has_tablets:
@@ -206,7 +211,7 @@ def test_bm25_in_select_returns_scores(cql, fts_table, vector_store_mock):
         [id for id, _ in mock_data], scores=[s for _, s in mock_data]))
 
     rows = list(cql.execute(
-        f"SELECT id, BM25(content, 'hello') AS score FROM {table} "
+        f"SELECT id, BM25_SCORE(content, 'hello') AS score FROM {table} "
         f"WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT {len(mock_data)}"))
 
     assert len(rows) == len(expected)
@@ -232,7 +237,7 @@ def test_bm25_in_select_skips_multiple_stale_keys(cql, fts_table, vector_store_m
         [id for id, _ in mock_data], scores=[s for _, s in mock_data]))
 
     rows = list(cql.execute(
-        f"SELECT id, BM25(content, 'hello') AS score FROM {table} "
+        f"SELECT id, BM25_SCORE(content, 'hello') AS score FROM {table} "
         f"WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT {len(mock_data)}"))
 
     assert len(rows) == len(expected)
@@ -260,7 +265,7 @@ def test_bm25_in_select_returns_correct_scores_with_clustering_key(cql, test_key
         }))
 
         rows = list(cql.execute(
-            f"SELECT pk, ck, BM25(content, 'hello') AS score FROM {table} "
+            f"SELECT pk, ck, BM25_SCORE(content, 'hello') AS score FROM {table} "
             f"WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT {len(mock_data)}"))
 
         assert len(rows) == len(expected)
@@ -275,7 +280,7 @@ def test_bm25_in_select_bind_marker_mismatch_raises(cql, fts_setup_with_mock, ve
     table, _ = fts_setup_with_mock
 
     stmt = cql.prepare(
-        f"SELECT id, BM25(content, ?) AS score FROM {table} "
+        f"SELECT id, BM25_SCORE(content, ?) AS score FROM {table} "
         f"WHERE BM25(content, ?) > 0 ORDER BY BM25(content, ?) LIMIT {NUM_ROWS}")
     # All three markers with the same value: OK
     vector_store_mock.set_next_bm25_response(200, bm25_response(RESPONSE_PK_REVERSED))
@@ -303,7 +308,7 @@ def test_bm25_in_select_nested_unaliased_column_name(cql, fts_setup_with_mock):
     table, _ = fts_setup_with_mock
 
     rows = list(cql.execute(
-        f"SELECT CAST(BM25(content, 'hello') AS double) FROM {table} "
+        f"SELECT CAST(BM25_SCORE(content, 'hello') AS double) FROM {table} "
         f"WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT {NUM_ROWS}"))
     assert len(rows) == NUM_ROWS
     col_names = rows[0]._fields
@@ -330,7 +335,7 @@ def test_bm25_hidden_pk_columns_not_leaked(cql, test_keyspace, vector_store_mock
         # PK/CK are added internally to match BM25 scores to rows, regardless of column
         # order or which other columns are selected. They must never leak into the
         # client-visible result, and each score must stay attached to the right row.
-        bm25_col = "BM25(content, 'hello') AS score"
+        bm25_col = "BM25_SCORE(content, 'hello') AS score"
         select_columns_variants = [
             [bm25_col],
             ["pk", bm25_col],
@@ -374,3 +379,370 @@ def test_bm25_in_select_with_aggregate_rejected(cql, fts_table, vector_store_moc
             cql.execute(
                 f"SELECT {select} FROM {table} "
                 f"WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT 5")
+
+
+###############################################################################
+# BM25() returns a (score, rank) tuple; BM25_SCORE() and BM25_RANK() return the
+# two values on their own. All three describe the same search, so a query using
+# several of them still makes one request.
+###############################################################################
+
+def test_bm25_reports_score_and_rank_as_a_pair(cql, fts_table, vector_store_mock):
+    """BM25() returns the score the index gave the row and the row's position in the index's response."""
+    table, _ = fts_table
+
+    mock_data = [(4, 2.25), (3, 1.75), (2, 1.25), (1, 0.75), (0, 0.25)]
+    vector_store_mock.set_next_bm25_response(200, bm25_response(
+        [id for id, _ in mock_data], scores=[s for _, s in mock_data]))
+
+    rows = list(cql.execute(
+        f"SELECT id, BM25(content, 'hello') AS score_and_rank FROM {table} "
+        f"WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT {len(mock_data)}"))
+
+    assert len(rows) == len(mock_data)
+    # The rank is the position in the index's answer, counted from 1.
+    for rank, (row, (rid, score)) in enumerate(zip(rows, mock_data), start=1):
+        assert row.id == rid
+        assert row.score_and_rank[0] == pytest.approx(score)
+        assert row.score_and_rank[1] == rank
+
+
+def test_bm25_score_and_rank_agree_with_the_tuple(cql, fts_table, vector_store_mock):
+    """BM25_SCORE() and BM25_RANK() return the two elements of the tuple BM25() returns."""
+    table, _ = fts_table
+
+    mock_data = [(2, 3.5), (0, 2.5), (4, 1.5)]
+    vector_store_mock.set_next_bm25_response(200, bm25_response(
+        [id for id, _ in mock_data], scores=[s for _, s in mock_data]))
+
+    rows = list(cql.execute(
+        f"SELECT id, BM25(content, 'hello') AS score_and_rank, BM25_SCORE(content, 'hello') AS s, "
+        f"BM25_RANK(content, 'hello') AS r FROM {table} "
+        f"WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT {len(mock_data)}"))
+
+    assert [row.id for row in rows] == [id for id, _ in mock_data]
+    for rank, (row, (_, score)) in enumerate(zip(rows, mock_data), start=1):
+        assert row.s == pytest.approx(score)
+        assert row.r == rank
+        assert row.score_and_rank[0] == pytest.approx(row.s)
+        assert row.score_and_rank[1] == row.r
+
+
+def test_bm25_every_function_costs_one_request(cql, fts_table, vector_store_mock):
+    """BM25(), BM25_SCORE() and BM25_RANK() describe the one search the rows are ranked by, so they are served by one request."""
+    table, _ = fts_table
+
+    vector_store_mock.set_next_bm25_response(200, bm25_response(RESPONSE_PK_REVERSED))
+    before = len(vector_store_mock.bm25_requests)
+
+    list(cql.execute(
+        f"SELECT id, BM25(content, 'hello'), BM25_SCORE(content, 'hello'), BM25_RANK(content, 'hello') "
+        f"FROM {table} WHERE BM25(content, 'hello') > 0 "
+        f"ORDER BY BM25(content, 'hello') LIMIT {NUM_ROWS}"))
+
+    assert len(vector_store_mock.bm25_requests) - before == 1
+
+
+def test_bm25_rank_skips_stale_keys(cql, fts_table, vector_store_mock):
+    """A key the index still knows but the base table no longer has takes a rank with it.
+
+    The rank is the position in the index's answer, not in the result set, so a row
+    following a stale key keeps the rank the index gave it rather than closing the gap.
+    """
+    table, _ = fts_table
+
+    # id=99 is not in the table. It occupies rank 3 all the same.
+    mock_data = [(4, 2.25), (3, 1.75), (99, 1.50), (2, 1.25), (0, 0.25)]
+    expected = [(4, 1), (3, 2), (2, 4), (0, 5)]
+    vector_store_mock.set_next_bm25_response(200, bm25_response(
+        [id for id, _ in mock_data], scores=[s for _, s in mock_data]))
+
+    rows = list(cql.execute(
+        f"SELECT id, BM25_RANK(content, 'hello') AS r FROM {table} "
+        f"WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT {len(mock_data)}"))
+
+    assert [(row.id, row.r) for row in rows] == expected
+
+
+def test_bm25_unaliased_column_names(cql, fts_setup_with_mock):
+    """An unaliased selector is named after the call the user wrote, not after what replaced it."""
+    table, _ = fts_setup_with_mock
+
+    rows = list(cql.execute(
+        f"SELECT BM25(content, 'hello'), BM25_SCORE(content, 'hello'), BM25_RANK(content, 'hello') "
+        f"FROM {table} WHERE BM25(content, 'hello') > 0 "
+        f"ORDER BY BM25(content, 'hello') LIMIT {NUM_ROWS}"))
+
+    names = rows[0]._fields
+    assert not any("temporary" in name for name in names), f"Internal name leaked: {names}"
+    assert len(names) == 3, names
+    assert "bm25_score" in names[1] and "bm25_rank" in names[2], names
+    # BM25() too, not the tuple of temporaries that replaced it.
+    assert "bm25" in names[0] and "score" not in names[0] and "rank" not in names[0], names
+
+
+def test_bm25_where_compares_the_score(cql, fts_setup_with_mock):
+    """WHERE BM25(c, t) > 0 and WHERE BM25_SCORE(c, t) > 0 mean the same thing."""
+    table, _ = fts_setup_with_mock
+
+    for lhs in ["BM25(content, 'hello')", "BM25_SCORE(content, 'hello')"]:
+        vector_store_mock_rows = list(cql.execute(
+            f"SELECT id FROM {table} WHERE {lhs} > 0 "
+            f"ORDER BY BM25(content, 'hello') LIMIT {NUM_ROWS}"))
+        assert len(vector_store_mock_rows) == NUM_ROWS
+
+
+def test_bm25_rank_cannot_be_compared(cql, fts_table):
+    """A rank cannot be used in a relation: a threshold on it would be a LIMIT, not a filter."""
+    table, _ = fts_table
+
+    with pytest.raises(InvalidRequest, match=r"BM25_RANK\(\) is not supported in the WHERE clause"):
+        cql.execute(f"SELECT id FROM {table} WHERE BM25_RANK(content, 'hello') > 3 "
+                    f"ORDER BY BM25(content, 'hello') LIMIT {NUM_ROWS}")
+
+
+def test_bm25_where_still_rejects_other_comparisons(cql, fts_table):
+    """Accepting BM25() in the relation as its score must not have loosened what it accepts."""
+    table, _ = fts_table
+
+    for where in ["BM25(content, 'hello') >= 0", "BM25(content, 'hello') > 1",
+                  "BM25_SCORE(content, 'hello') >= 0", "BM25_SCORE(content, 'hello') > 1"]:
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"SELECT id FROM {table} WHERE {where} "
+                        f"ORDER BY BM25(content, 'hello') LIMIT {NUM_ROWS}")
+
+
+# BM25_HIGHLIGHT() in the SELECT clause.
+#
+# The fragment is generated by the index from text the coordinator sends it, so
+# a query that selects it makes a second request - to `/highlight` - after the
+# base-table rows have been read. The reply is positional: entry i belongs to
+# the i-th document sent, which is the i-th row read.
+###############################################################################
+
+# A table whose rows have distinct text, so that the documents in the request
+# and the fragments in the reply can be told apart by position.
+DISTINCT_CONTENT = ["the quick brown fox", "jumped over", "the lazy dog", "nothing here"]
+
+
+@pytest.fixture(scope="function")
+def distinct_fts_table(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "id int primary key, content text") as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(content) USING 'fulltext_index'")
+        for i, content in enumerate(DISTINCT_CONTENT):
+            cql.execute(f"INSERT INTO {table} (id, content) VALUES ({i}, '{content}')")
+        yield table
+
+
+def select_highlight(table, ids, limit=None):
+    """A query selecting the fragment for the given ids, in the order the mock will return them."""
+    return (f"SELECT id, BM25_HIGHLIGHT(content, 'fox') AS excerpt FROM {table} "
+            f"WHERE BM25(content, 'fox') > 0 ORDER BY BM25(content, 'fox') LIMIT {limit or len(ids)}")
+
+
+def test_highlight_sends_one_request_with_the_rows_text(cql, distinct_fts_table, vector_store_mock):
+    """One `/highlight` request per query, carrying the search term and the base-table text of every row read, in result order."""
+    table = distinct_fts_table
+    ids = [2, 0, 3]
+    vector_store_mock.set_next_bm25_response(200, bm25_response(ids))
+    vector_store_mock.set_next_highlight_response(200, highlight_response(["a", "b", "c"]))
+
+    rows = list(cql.execute(select_highlight(table, ids)))
+    assert [row.id for row in rows] == ids
+
+    reqs = vector_store_mock.highlight_requests
+    assert len(reqs) == 1, f"expected exactly one highlight request, got {len(reqs)}"
+    assert reqs[0].path.endswith("/highlight")
+    body = json.loads(reqs[0].body)
+    assert body["query"] == "fox"
+    # The documents must be the rows' own text, in the order the rows came back.
+    assert body["documents"] == [DISTINCT_CONTENT[i] for i in ids]
+    assert [row.excerpt for row in rows] == ["a", "b", "c"]
+
+
+def test_no_highlight_in_select_makes_no_highlight_request(cql, fts_setup_with_mock, vector_store_mock):
+    """A query that does not select a fragment must not ask the index for one."""
+    table, _ = fts_setup_with_mock
+
+    cql.execute(f"SELECT id, BM25(content, 'hello') FROM {table} "
+                f"WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello') LIMIT {NUM_ROWS}")
+
+    assert vector_store_mock.highlight_requests == []
+
+
+def test_highlight_absent_fragment_is_null_and_keeps_the_row(cql, distinct_fts_table, vector_store_mock):
+    """A document the index found no fragment in yields a null column - never an empty string - and the row stays in the result."""
+    table = distinct_fts_table
+    ids = [0, 3, 2]
+    vector_store_mock.set_next_bm25_response(200, bm25_response(ids))
+    vector_store_mock.set_next_highlight_response(200, highlight_response(["the quick brown <b>fox</b>", None, ""]))
+
+    rows = list(cql.execute(select_highlight(table, ids)))
+
+    assert [row.id for row in rows] == ids, "a row without a fragment must not be dropped"
+    assert rows[0].excerpt == "the quick brown <b>fox</b>"
+    assert rows[1].excerpt is None
+    # An empty string is a fragment the index chose to return, and stays distinct from null.
+    assert rows[2].excerpt == ""
+
+
+def test_highlight_markers_are_returned_verbatim(cql, distinct_fts_table, vector_store_mock):
+    """Markers are the index's to choose and the client's to render, so the coordinator must not escape or rewrite them."""
+    table = distinct_fts_table
+    ids = [0]
+    marked = '<em class="hit">fox</em> & <b>dog</b>'
+    vector_store_mock.set_next_bm25_response(200, bm25_response(ids))
+    vector_store_mock.set_next_highlight_response(200, highlight_response([marked]))
+
+    rows = list(cql.execute(select_highlight(table, ids)))
+    assert rows[0].excerpt == marked
+
+
+def test_highlight_reply_of_wrong_length_fails_the_query(cql, distinct_fts_table, vector_store_mock):
+    """Fragments are matched to rows by position, so a reply of a different length must fail rather than misattribute them."""
+    table = distinct_fts_table
+    ids = [0, 3]
+    vector_store_mock.set_next_bm25_response(200, bm25_response(ids))
+    vector_store_mock.set_next_highlight_response(200, highlight_response(["only one"]))
+
+    with pytest.raises(InvalidRequest, match="Vector Store"):
+        cql.execute(select_highlight(table, ids))
+
+
+def test_highlight_request_failure_fails_the_query(cql, distinct_fts_table, vector_store_mock):
+    """A failed `/highlight` call is a query error - null is reserved for "no fragment exists for this row"."""
+    table = distinct_fts_table
+    ids = [0, 3]
+    vector_store_mock.set_next_bm25_response(200, bm25_response(ids))
+    vector_store_mock.set_next_highlight_response(int(HTTPStatus.INTERNAL_SERVER_ERROR), '"boom"')
+
+    with pytest.raises(InvalidRequest, match="Vector Store"):
+        cql.execute(select_highlight(table, ids))
+
+
+def test_highlight_makes_no_request_when_the_search_found_nothing(cql, distinct_fts_table, vector_store_mock):
+    """With no rows to highlight there is nothing to ask about."""
+    table = distinct_fts_table
+    vector_store_mock.set_next_bm25_response(200, bm25_response([]))
+
+    rows = list(cql.execute(select_highlight(table, [], limit=3)))
+
+    assert rows == []
+    assert vector_store_mock.highlight_requests == []
+
+
+def test_highlight_stays_aligned_when_a_stale_key_drops_a_row(cql, distinct_fts_table, vector_store_mock):
+    """A key the index still knows but the base table no longer has drops a row; the surviving fragments must not shift."""
+    table = distinct_fts_table
+    # id=99 is absent from the base table, so no document is collected for it and
+    # the score provider drops it.
+    vector_store_mock.set_next_bm25_response(200, bm25_response([0, 99, 3], scores=[3.0, 2.0, 1.0]))
+    vector_store_mock.set_next_highlight_response(200, highlight_response(["for id 0", "for id 3"]))
+
+    rows = list(cql.execute(
+        f"SELECT id, BM25_SCORE(content, 'fox') AS score, BM25_HIGHLIGHT(content, 'fox') AS excerpt FROM {table} "
+        f"WHERE BM25(content, 'fox') > 0 ORDER BY BM25(content, 'fox') LIMIT 3"))
+
+    assert [row.id for row in rows] == [0, 3]
+    assert [row.excerpt for row in rows] == ["for id 0", "for id 3"]
+    assert [row.score for row in rows] == [pytest.approx(3.0), pytest.approx(1.0)]
+    # Only the rows that survived were sent.
+    body = json.loads(vector_store_mock.highlight_requests[0].body)
+    assert body["documents"] == [DISTINCT_CONTENT[0], DISTINCT_CONTENT[3]]
+
+
+def test_highlight_with_clustering_key(cql, test_keyspace, vector_store_mock):
+    """Fragments stay attached to the right (pk, ck) - a table with clustering columns is read key by key and merged."""
+    schema = "pk int, ck int, content text, PRIMARY KEY (pk, ck)"
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(content) USING 'fulltext_index'")
+        rows_data = [(1, 10, "first text"), (1, 20, "second text"), (2, 30, "third text")]
+        for pk, ck, content in rows_data:
+            cql.execute(f"INSERT INTO {table} (pk, ck, content) VALUES ({pk}, {ck}, '{content}')")
+
+        order = [(2, 30), (1, 10), (1, 20)]
+        vector_store_mock.set_next_bm25_response(200, json.dumps({
+            "primary_keys": {"pk": [pk for pk, _ in order], "ck": [ck for _, ck in order]},
+            "scores": [3.0, 2.0, 1.0],
+        }))
+        vector_store_mock.set_next_highlight_response(200, highlight_response(["third!", "first!", "second!"]))
+
+        rows = list(cql.execute(
+            f"SELECT pk, ck, BM25_HIGHLIGHT(content, 'text') AS excerpt FROM {table} "
+            f"WHERE BM25(content, 'text') > 0 ORDER BY BM25(content, 'text') LIMIT 3"))
+
+        assert [(row.pk, row.ck) for row in rows] == order
+        assert [row.excerpt for row in rows] == ["third!", "first!", "second!"]
+        body = json.loads(vector_store_mock.highlight_requests[0].body)
+        assert body["documents"] == ["third text", "first text", "second text"]
+
+
+def test_highlight_on_a_clustering_key_column(cql, test_keyspace, vector_store_mock):
+    """A fulltext index may target a clustering-key column, and then the text comes from the key rather than from a cell."""
+    schema = "p int, c text, PRIMARY KEY (p, c)"
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(c) USING 'fulltext_index'")
+        rows_data = [(1, "the quick fox"), (2, "a lazy dog"), (3, "another fox")]
+        for p, c in rows_data:
+            cql.execute(f"INSERT INTO {table} (p, c) VALUES ({p}, '{c}')")
+
+        order = [(3, "another fox"), (1, "the quick fox")]
+        vector_store_mock.set_next_bm25_response(200, json.dumps({
+            "primary_keys": {"p": [p for p, _ in order], "c": [c for _, c in order]},
+            "scores": [2.0, 1.0],
+        }))
+        vector_store_mock.set_next_highlight_response(200, highlight_response(["another <b>fox</b>", "the quick <b>fox</b>"]))
+
+        rows = list(cql.execute(
+            f"SELECT p, BM25_HIGHLIGHT(c, 'fox') AS excerpt FROM {table} "
+            f"WHERE BM25(c, 'fox') > 0 ORDER BY BM25(c, 'fox') LIMIT 2"))
+
+        assert [row.p for row in rows] == [p for p, _ in order]
+        assert [row.excerpt for row in rows] == ["another <b>fox</b>", "the quick <b>fox</b>"]
+        # The documents are the clustering keys themselves, read from the key and not from a cell.
+        body = json.loads(vector_store_mock.highlight_requests[0].body)
+        assert body["documents"] == [c for _, c in order]
+
+
+def test_highlight_does_not_leak_the_fetched_column(cql, distinct_fts_table, vector_store_mock):
+    """The highlighted column has to be read to be sent, but a query that did not select it must not receive it."""
+    table = distinct_fts_table
+    ids = [0, 2]
+    vector_store_mock.set_next_bm25_response(200, bm25_response(ids))
+    vector_store_mock.set_next_highlight_response(200, highlight_response(["a", "b"]))
+
+    rows = list(cql.execute(select_highlight(table, ids)))
+
+    assert rows
+    assert set(rows[0]._fields) == {"id", "excerpt"}, f"unexpected columns: {rows[0]._fields}"
+
+
+def test_highlight_unaliased_column_name(cql, distinct_fts_table, vector_store_mock):
+    """An unaliased fragment selector is named by the call the user wrote, not by the internal temporary that replaced it."""
+    table = distinct_fts_table
+    ids = [0]
+    vector_store_mock.set_next_bm25_response(200, bm25_response(ids))
+    vector_store_mock.set_next_highlight_response(200, highlight_response(["a"]))
+
+    rows = list(cql.execute(
+        f"SELECT BM25_HIGHLIGHT(content, 'fox') FROM {table} "
+        f"WHERE BM25(content, 'fox') > 0 ORDER BY BM25(content, 'fox') LIMIT 1"))
+
+    col_names = rows[0]._fields
+    assert any("bm25_highlight" in name.lower() for name in col_names), f"Expected the call as the column name, got {col_names}"
+    assert not any("temporary" in name for name in col_names), f"Internal name leaked: {col_names}"
+
+
+def test_highlight_bind_marker_mismatch_raises(cql, distinct_fts_table, vector_store_mock):
+    """A bind marker that makes the fragment's term differ from the ordering's must raise, and the message must name BM25_HIGHLIGHT()."""
+    table = distinct_fts_table
+    stmt = cql.prepare(
+        f"SELECT id, BM25_HIGHLIGHT(content, ?) AS excerpt FROM {table} "
+        f"WHERE BM25(content, ?) > 0 ORDER BY BM25(content, ?) LIMIT 2")
+
+    vector_store_mock.set_next_bm25_response(200, bm25_response([0]))
+    vector_store_mock.set_next_highlight_response(200, highlight_response(["a"]))
+    cql.execute(stmt, ["fox", "fox", "fox"])
+
+    with pytest.raises(InvalidRequest, match="BM25_HIGHLIGHT\\(\\) in SELECT must use the same search term"):
+        cql.execute(stmt, ["dog", "fox", "fox"])
