@@ -103,7 +103,7 @@ struct layout_sstable {
     uint64_t partitions = 0;
     int64_t rows = 0;
     uint64_t tombstones = 0;
-    uint64_t expired_tombstones = 0;
+    std::optional<uint64_t> expired_tombstones;
     int64_t min_timestamp = 0;
     int64_t max_timestamp = 0;
     int64_t max_local_deletion_time = 0;
@@ -175,11 +175,12 @@ const std::vector<layout_column>& layout_columns() {
         "number of rows"},
     {"tombstones", cell_format::plain, [] (const layout_sstable& s) -> layout_cell { return int64_t(s.tombstones); },
         "estimated number of tombstones"},
-    {"expired", cell_format::plain, [] (const layout_sstable& s) -> layout_cell { return int64_t(s.expired_tombstones); },
-        "estimated number of tombstones which are past their gc grace period"},
+    {"expired", cell_format::plain, [] (const layout_sstable& s) -> layout_cell {
+            return s.expired_tombstones ? layout_cell(int64_t(*s.expired_tombstones)) : layout_cell(); },
+        "estimated number of tombstones which can already be purged"},
     {"expired-pctg", cell_format::percentage, [] (const layout_sstable& s) -> layout_cell {
-            return percentage_of(s.expired_tombstones, s.tombstones); },
-        "share of the tombstones which are past their gc grace period"},
+            return s.expired_tombstones ? layout_cell(percentage_of(*s.expired_tombstones, s.tombstones)) : layout_cell(); },
+        "share of the tombstones which can already be purged"},
     {"min-timestamp", cell_format::epoch_us, [] (const layout_sstable& s) -> layout_cell { return s.min_timestamp; },
         "smallest write timestamp in the sstable"},
     {"max-timestamp", cell_format::epoch_us, [] (const layout_sstable& s) -> layout_cell { return s.max_timestamp; },
@@ -339,7 +340,7 @@ struct layout_summary {
     uint64_t partitions = 0;
     int64_t rows = 0;
     uint64_t tombstones = 0;
-    uint64_t expired_tombstones = 0;
+    std::optional<uint64_t> expired_tombstones;
     int64_t min_timestamp = std::numeric_limits<int64_t>::max();
     int64_t max_timestamp = std::numeric_limits<int64_t>::min();
     int64_t first_token = std::numeric_limits<int64_t>::max();
@@ -351,7 +352,9 @@ struct layout_summary {
         partitions += sst.partitions;
         rows += sst.rows;
         tombstones += sst.tombstones;
-        expired_tombstones += sst.expired_tombstones;
+        if (sst.expired_tombstones) {
+            expired_tombstones = expired_tombstones.value_or(0) + *sst.expired_tombstones;
+        }
         min_timestamp = std::min(min_timestamp, sst.min_timestamp);
         max_timestamp = std::max(max_timestamp, sst.max_timestamp);
         first_token = std::min(first_token, sst.first_token);
@@ -360,11 +363,36 @@ struct layout_summary {
 };
 
 sstring describe(const layout_summary& summary) {
-    return fmt::format("sstables: {}, size: {:i}, partitions: {}, rows: {}, tombstones: {} (expired: {}, {}%), timestamp: [{}, {}], token: [{}, {}]",
+    const auto expired = summary.expired_tombstones
+            ? sstring(fmt::format("{}, {}%", *summary.expired_tombstones, percentage_of(*summary.expired_tombstones, summary.tombstones)))
+            : sstring("unknown");
+    return fmt::format("sstables: {}, size: {:i}, partitions: {}, rows: {}, tombstones: {} (expired: {}), timestamp: [{}, {}], token: [{}, {}]",
             summary.sstables, ::utils::pretty_printed_data_size(summary.size), summary.partitions, summary.rows,
-            summary.tombstones, summary.expired_tombstones, percentage_of(summary.expired_tombstones, summary.tombstones),
+            summary.tombstones, expired,
             format_epoch_seconds(summary.min_timestamp / 1000000), format_epoch_seconds(summary.max_timestamp / 1000000),
             summary.first_token, summary.last_token);
+}
+
+// gc grace seconds only says when tombstones expire in the timeout mode
+sstring describe(const tombstone_gc_options& options, std::chrono::seconds gc_grace_seconds,
+        std::optional<size_t> repaired_ranges) {
+    switch (options.mode()) {
+    case tombstone_gc_mode::timeout:
+        return fmt::format("gc grace seconds: {}, tombstones dropped more than that ago are counted as expired",
+                gc_grace_seconds.count());
+    case tombstone_gc_mode::immediate:
+        return "every tombstone which was dropped is counted as expired";
+    case tombstone_gc_mode::disabled:
+        return "no tombstone can be purged";
+    case tombstone_gc_mode::repair:
+        if (!repaired_ranges) {
+            return "expired tombstones are not reported: the repair history of the table could not be read";
+        }
+        return fmt::format("repaired ranges: {}, propagation delay: {}s, tombstones dropped before a range was"
+                " repaired, less the propagation delay, are counted as expired in it",
+                *repaired_ranges, options.propagation_delay_in_seconds().count());
+    }
+    std::abort();
 }
 
 // The sstables of a single run, level or time window.
@@ -502,6 +530,22 @@ public:
 
     size_t size() const { return _tablets.size(); }
 
+    // Each tablet owns the (last_token(i-1), last_token(i)] token range, and
+    // remembers when it was last repaired.
+    tools::repaired_ranges_t repaired_ranges() const {
+        tools::repaired_ranges_t repaired_ranges;
+        auto start = dht::minimum_token();
+        for (const auto& [last_token, tablet] : _tablets) {
+            if (tablet.repair_time) {
+                repaired_ranges.emplace_back(
+                        dht::token_range(dht::token_range::bound(start, false), dht::token_range::bound(last_token, true)),
+                        to_gc_clock(*tablet.repair_time));
+            }
+            start = last_token;
+        }
+        return repaired_ranges;
+    }
+
     // Each tablet owns the (last_token(i-1), last_token(i)] token range, so the
     // tablet owning an sstable is the first one whose range contains the
     // sstable's first token. The shard the sstable resides on is the shard this
@@ -519,7 +563,7 @@ public:
         if (!_host_id) {
             return;
         }
-        for (const auto& replica : tablet->second) {
+        for (const auto& replica : tablet->second.replicas) {
             if (replica.host == *_host_id) {
                 sst.shard = replica.shard;
             }
@@ -562,13 +606,8 @@ void layout_operation(schema_ptr schema, reader_permit permit, const std::vector
         return compaction::time_window_compaction_strategy::get_window_for(twcs_options, timestamp);
     };
 
-    const auto gc_grace_seconds = vm.count("gc-grace-seconds")
-            ? std::chrono::seconds(vm["gc-grace-seconds"].as<uint32_t>())
-            : std::chrono::duration_cast<std::chrono::seconds>(schema->gc_grace_seconds());
-    // FIXME: add tombstone_gc mode, this is only correct for the timeout mode.
-    // NOTE: the next patch replaces this with tombstone_gc_state, which is what
-    // decides whether a tombstone can be purged on a running node, in any mode.
-    const auto gc_before = gc_clock::now() - gc_grace_seconds;
+    const auto gc_grace_seconds = std::chrono::duration_cast<std::chrono::seconds>(schema->gc_grace_seconds());
+    const auto& gc_options = schema->tombstone_gc_options();
 
     // The layout of a tablet-based table is described per tablet, that of a
     // vnode-based one per shard, as those are the compaction groups its sstables
@@ -620,6 +659,41 @@ void layout_operation(schema_ptr schema, reader_permit permit, const std::vector
                     data_dir_path, schema->ks_name(), schema->cf_name());
         }
     }
+    // Which tombstones are expired is left to the tombstone_gc_state a node
+    // uses, so that every mode is interpreted exactly as it interprets them.
+    // Under the repair mode it answers out of the repair history, which lives in
+    // system.tablets for a tablet-based table and in system.repair_history for a
+    // vnode-based one -- a node merges both into this same state.
+    shared_tombstone_gc_state shared_gc_state;
+    std::optional<size_t> repaired_ranges;
+    if (gc_options.mode() == tombstone_gc_mode::repair) {
+        std::optional<tools::repaired_ranges_t> ranges;
+        if (tablets) {
+            ranges = tablets->repaired_ranges();
+        } else if (vnode_based && !data_dir_path.empty()) {
+            try {
+                ranges = tools::load_system_repair_history(dbcfg, data_dir_path, table, permit).get();
+            } catch (...) {
+                sst_log.warn("failed to read the repair history of {}.{} from {}, its expired tombstones are not"
+                        " reported: {:t}", schema->ks_name(), schema->cf_name(), data_dir_path, std::current_exception());
+            }
+        }
+        if (ranges) {
+            for (const auto& [range, repair_time] : *ranges) {
+                // the gc state is asked about the schema, so the history has to
+                // be registered under its id, which is the id of the table only
+                // when the schema came from the schema tables
+                shared_gc_state.update_repair_time(schema->id(), range, repair_time);
+            }
+            repaired_ranges = ranges->size();
+        }
+    }
+    // the commitlog check needs a running node, it has no bearing on an estimate
+    const auto gc_state = tombstone_gc_state(shared_gc_state).with_commitlog_check_disabled();
+    // nothing can be said about the expired tombstones of a table whose repair
+    // history is what decides them, when that history could not be read
+    const auto expiry_is_known = gc_options.mode() != tombstone_gc_mode::repair || repaired_ranges.has_value();
+
     // For a vnode-based table the shard owning an sstable is derived from the
     // sharding parameters of the node, which have to be provided if they
     // couldn't be read from system.topology.
@@ -675,12 +749,18 @@ void layout_operation(schema_ptr schema, reader_permit permit, const std::vector
             .compression_ratio = sst->get_compression_ratio(),
         };
         // A tombstone is expired if it was dropped before the point in time
-        // before which expiring data can be purged.
+        // before which the data of this sstable can be purged, which the sstable
+        // itself works out of the gc state, exactly as compaction does.
+        const auto gc_before = sst->get_gc_before_for_drop_estimation(gc_clock::now(), gc_state, schema);
+        uint64_t expired_tombstones = 0;
         for (const auto& [deletion_time, count] : stats.estimated_tombstone_drop_time.bin) {
             desc.tombstones += count;
             if (deletion_time < gc_before.time_since_epoch().count()) {
-                desc.expired_tombstones += count;
+                expired_tombstones += count;
             }
+        }
+        if (expiry_is_known) {
+            desc.expired_tombstones = expired_tombstones;
         }
         if (tablets) {
             tablets->assign(desc);
@@ -744,8 +824,7 @@ void layout_operation(schema_ptr schema, reader_permit permit, const std::vector
     fmt::print(std::cout, "table: {}.{}\ncompaction strategy: {} ({}), describing its {}\n",
             schema->ks_name(), schema->cf_name(), compaction::compaction_strategy::name(strategy),
             vm.count("strategy") ? "provided with --strategy" : "obtained from the schema", describe(grouping));
-    fmt::print(std::cout, "gc grace seconds: {}, tombstones dropped before {} are counted as expired\n",
-            gc_grace_seconds.count(), format_epoch_seconds(gc_before.time_since_epoch().count()));
+    fmt::print(std::cout, "tombstone_gc: {}, {}\n", gc_options.mode(), describe(gc_options, gc_grace_seconds, repaired_ranges));
     if (tablets) {
         fmt::print(std::cout, "tablets: {}, this node: {}\n", tablets->size(),
                 local_node ? fmt::to_string(local_node->host_id) : "unknown, sstables are not attributed to shards");
@@ -754,6 +833,7 @@ void layout_operation(schema_ptr schema, reader_permit permit, const std::vector
     fmt::print(std::cout, "\nNOTE: the number of partitions, tombstones and expired tombstones are estimates,"
             " read from the metadata of the sstables.\n");
 }
+
 
 sstring layout_columns_help() {
     return fmt::format("{}", fmt::join(layout_columns() | std::views::transform([] (const layout_column& c) {
