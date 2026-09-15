@@ -2286,7 +2286,7 @@ async def run_cluster_backup(object_storage, prefix: str, manager: ScyllaCluster
                   object_storage.get_resource().Bucket(object_storage.bucket_name).
                   objects.filter(Prefix=f"{prefix}/sstables"))
 
-    manifest_obj = object_storage.get_resource().Bucket(object_storage.bucket_name).Object(f"{prefix}/snapshots/{snapshot_name}/manifest.json").get()
+    manifest_obj = object_storage.get_resource().Bucket(object_storage.bucket_name).Object(f"{prefix}/snapshots/{ks}/{cf}/{snapshot_name}/manifest.json").get()
     manifest = json.load(manifest_obj['Body'])
 
     manifest_sstables = [sst['toc_name'] for sst in manifest['sstables']]
