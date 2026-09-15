@@ -407,6 +407,12 @@ create_index_statement::validate(query_processor& qp, const service::client_stat
     if (!_view_properties.defined_ordering().empty()) {
         throw exceptions::invalid_request_exception("Indexes do not allow for specifying the clustering order");
     }
+
+    // Mixing storage engines between a base table and its index is impractical:
+    // logstor doesn't support any of the features indexes rely on.
+    if (_view_properties.properties()->has_property(cf_prop_defs::KW_STORAGE_ENGINE)) {
+        throw exceptions::invalid_request_exception("Cannot set storage_engine on an index");
+    }
 }
 
 std::pair<std::vector<::shared_ptr<index_target>>, cql3::cql_warnings_vec>

@@ -19,7 +19,7 @@ namespace cql3::statements {
 void view_prop_defs::validate_raw(op_type op, const data_dictionary::database db, sstring ks_name,
         const schema::extensions_map& exts) const
 {
-    cf_properties::validate(db, std::move(ks_name), exts);
+    cf_properties::validate(db, std::move(ks_name), exts, cf_prop_defs::is_alter(op == op_type::alter));
 
     // Registry-backed cluster-config properties (e.g. auto_repair_enabled) are recognized at
     // scope::table by cf_prop_defs::validate(), which cf_properties::validate() above delegates
