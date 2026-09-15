@@ -7387,7 +7387,7 @@ SEASTAR_TEST_CASE(test_tablets_routing_strong_consistency) {
 
                 const auto local_schema = e.local_db().find_schema("ks_tablet", "tbl");
                 const auto& [coordinator_ref, _] = e.local_qp().acquire_strongly_consistent_coordinator();
-                const auto& groups_manager = coordinator_ref.get().get_groups_manager();
+                auto& groups_manager = coordinator_ref.get().get_groups_manager();
 
                 const auto get_tablet_version = [&] (const replica::table& table, const dht::token& token) -> std::optional<locator::tablet_version> {
                     const locator::tablet_version_block blocks[] = {
