@@ -1585,7 +1585,7 @@ scylla_tools = ['tools/scylla-local-file-key-generator.cc',
                 'tools/scylla-nodetool.cc',
                 'tools/json_mutation_stream_parser.cc',
                 'tools/schema_loader.cc',
-                'tools/load_system_tablets.cc',
+                'tools/load_system_tables.cc',
                 'tools/utils.cc',
                 'tools/lua_sstable_consumer.cc']
 scylla_perfs = ['test/perf/perf_alternator.cc',
