@@ -20,8 +20,10 @@
 #include "cdc/log.hh"
 #include "cdc/metadata.hh"
 #include "db/config.hh"
+#include "db/data_listeners.hh"
 #include "db/system_keyspace.hh"
 #include "db/virtual_table.hh"
+#include "exceptions/exceptions.hh"
 #include "partition_slice_builder.hh"
 #include "db/virtual_tables.hh"
 #include "db/size_estimates_virtual_reader.hh"
@@ -1497,6 +1499,239 @@ private:
     }
 };
 
+// Live sampling of top read/write partitions, backing `nodetool toppartitions`.
+// capacity/list_size ride as clustering columns (no other param-passing mechanism exists);
+// defaults match nodetool's own (256, 10).
+// Each page is a fresh sampling window (streaming virtual tables are stateless per page),
+// so callers should fetch results in one page: PAGING OFF or a LIMIT below the page size.
+// A partition-key IN runs one concurrent window (listeners on every shard) per table;
+// an unrestricted scan samples every table in a single window. Concurrent windows are
+// not capped; the superuser gate is the only limiter.
+class toppartitions_table : public streaming_virtual_table {
+    static constexpr int32_t default_capacity = 256;
+    static constexpr int32_t default_list_size = 10;
+    // The sampler tracks up to `capacity` keys per shard for the whole window, and gather()
+    // merges shards x capacity entries on shard 0 in one task; keep both bounded.
+    static constexpr int32_t max_capacity = 4096;
+
+    sharded<replica::database>& _db;
+
+    static schema_ptr build_schema() {
+        auto id = generate_legacy_id(system_keyspace::NAME, "toppartitions");
+        return schema_builder(this_smp_shard_count(), system_keyspace::NAME, "toppartitions", std::make_optional(id))
+            .with_column("keyspace_name", utf8_type, column_kind::partition_key)
+            .with_column("table_name", utf8_type, column_kind::partition_key)
+            .with_column("capacity", int32_type, column_kind::clustering_key)
+            .with_column("list_size", int32_type, column_kind::clustering_key)
+            .with_column("kind", utf8_type, column_kind::clustering_key)
+            .with_column("rank", int32_type, column_kind::clustering_key)
+            .with_column("partition_key", utf8_type)
+            .with_column("count", long_type)
+            .with_column("error", long_type)
+            .set_comment("Live sampling of top read/write partitions, backing nodetool toppartitions. "
+                         "Every page re-samples; query with PAGING OFF or a LIMIT that fits in one page. "
+                         "A partition-key IN samples each table in its own concurrent window; capacity/list_size "
+                         "still apply as sampler inputs even when keyspace/table is left unrestricted "
+                         "(ALLOW FILTERING); only a gap before them in the clustering key turns them into filters.")
+            .with_sharder(1, 0) // one sampling job per partition range, not per shard
+            .with_hash_version()
+            .build();
+    }
+
+    dht::decorated_key make_partition_key(const sstring& ks_name, const sstring& cf_name) {
+        return dht::decorate_key(*_s, partition_key::from_exploded(*_s, {
+            data_value(ks_name).serialize_nonnull(),
+            data_value(cf_name).serialize_nonnull()
+        }));
+    }
+
+    clustering_key make_clustering_key(int32_t capacity, int32_t list_size, std::string_view kind, int32_t rank) {
+        return clustering_key::from_exploded(*_s, {
+            int32_type->decompose(capacity),
+            int32_type->decompose(list_size),
+            data_value(sstring(kind)).serialize_nonnull(),
+            int32_type->decompose(rank)
+        });
+    }
+
+    // Left over for gather()/emit after the sampling sleep.
+    static constexpr std::chrono::milliseconds gather_margin{1000};
+    // Caps sampling window regardless of USING TIMEOUT (cross-shard listeners stay up this long).
+    static constexpr std::chrono::milliseconds max_duration{60000};
+
+    // Sampling window = remaining statement timeout (CQL always sets one: USING TIMEOUT or
+    // read_request_timeout_in_ms). No deadline only happens for internal callers.
+    static std::chrono::milliseconds resolve_duration(db::timeout_clock::time_point timeout) {
+        if (timeout == db::timeout_clock::time_point::max()) {
+            return std::chrono::milliseconds(5000);
+        }
+        auto now = db::timeout_clock::now();
+        auto remaining = timeout > now
+                ? std::chrono::duration_cast<std::chrono::milliseconds>(timeout - now)
+                : std::chrono::milliseconds(0);
+        auto duration = remaining > gather_margin ? remaining - gather_margin : std::chrono::milliseconds(0);
+        return std::min(duration, max_duration);
+    }
+
+public:
+    explicit toppartitions_table(sharded<replica::database>& db)
+            : streaming_virtual_table(build_schema())
+            , _db(db)
+    {
+        _shard_aware = true;
+    }
+
+    future<> execute(reader_permit permit, result_collector& result, const query_restrictions& qr) override {
+        // No shard check here: with_sharder(1,0) already routes each range to one shard, and a
+        // reversed read may land elsewhere (the registry-unfrozen reversed schema loses the sharder).
+
+        // TODO: validation runs on the replica (the only hook virtual tables have), so
+        // invalid_request_exception reaches clients as ReadFailure via exception_variant.
+        // capacity/list_size are a clustering-key prefix and must be equalities; kind/rank
+        // after them may be ranges (those are applied by the slicing reader downstream).
+        int32_t capacity = default_capacity;
+        int32_t list_size = default_list_size;
+        const auto& ranges = qr.clustering_row_ranges();
+        if (!ranges.empty() && !ranges.front().is_full()) {
+            auto reject = [] [[noreturn]] {
+                throw exceptions::invalid_request_exception(
+                        "capacity and list_size only support equality restrictions, not IN or range queries");
+            };
+            if (!ranges.front().start()) {
+                reject();
+            }
+            const auto& prefix = ranges.front().start()->value();
+            auto n = prefix.size(*_s);
+            // IN on kind/rank yields several ranges; every bound must fix the same
+            // (capacity, list_size) as the first, and anything shorter is a range on them.
+            auto same_prefix = [&] (const std::optional<query::clustering_range::bound_const_ref>& b) {
+                // n < 2 also guards get_component(1) on prefix below.
+                if (n < 2 || !b || b->value().size(*_s) < 2) {
+                    return false;
+                }
+                return prefix.get_component(*_s, 0) == b->value().get_component(*_s, 0)
+                        && prefix.get_component(*_s, 1) == b->value().get_component(*_s, 1);
+            };
+            for (const auto& r : ranges) {
+                if (&r == &ranges.front() && r.is_singular()) {
+                    continue;
+                }
+                if (!same_prefix(r.start()) || !same_prefix(r.end())) {
+                    reject();
+                }
+            }
+            if (n >= 1) {
+                capacity = value_cast<int32_t>(int32_type->deserialize(prefix.get_component(*_s, 0)));
+            }
+            if (n >= 2) {
+                list_size = value_cast<int32_t>(int32_type->deserialize(prefix.get_component(*_s, 1)));
+            }
+        }
+        if (capacity <= 0 || capacity > max_capacity) {
+            throw exceptions::invalid_request_exception(format("capacity must be in [1, {}]", max_capacity));
+        }
+        if (list_size <= 0) {
+            throw exceptions::invalid_request_exception("list_size must be positive");
+        }
+        if (list_size >= capacity) {
+            throw exceptions::invalid_request_exception(
+                    format("list_size ({}) must be smaller than capacity ({})", list_size, capacity));
+        }
+
+        // Unrestricted partition key = sample every table (nodetool's default).
+        // A point lookup decodes (ks, cf) from the key; other ranges scan the table list.
+        std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash> table_filters;
+        const auto& pr = qr.partition_range();
+        if (pr.is_singular() && pr.start()->value().has_key()) {
+            auto exploded = pr.start()->value().key()->explode(*_s);
+            auto ks = value_cast<sstring>(utf8_type->deserialize(exploded[0]));
+            auto cf = value_cast<sstring>(utf8_type->deserialize(exploded[1]));
+            if (!_db.local().has_schema(ks, cf)) {
+                co_return;
+            }
+            table_filters.emplace(std::move(ks), std::move(cf));
+        } else if (!pr.is_full()) {
+            _db.local().get_tables_metadata().for_each_table([&] (table_id, lw_shared_ptr<replica::table> tbl) {
+                auto s = tbl->schema();
+                if (contains_key(pr, make_partition_key(s->ks_name(), s->cf_name()))) {
+                    table_filters.emplace(s->ks_name(), s->cf_name());
+                }
+            });
+            if (table_filters.empty()) {
+                co_return;
+            }
+        }
+
+        auto duration = resolve_duration(permit.timeout());
+        if (duration.count() == 0) {
+            // Otherwise an empty result is indistinguishable from "no traffic".
+            throw exceptions::invalid_request_exception(
+                    format("timeout too short to sample; need more than {}ms", gather_margin.count()));
+        }
+        db::toppartitions_query q(_db, std::move(table_filters), {}, duration, list_size, capacity);
+        co_await q.scatter();
+        // scatter() installed listeners on every shard; gather() is the only thing that
+        // removes them, so it must run even if the sleep is aborted by the timeout.
+        std::exception_ptr sleep_ex;
+        try {
+            abort_on_expiry aoe(permit.timeout());
+            reader_permit::awaits_guard ag(permit);
+            co_await seastar::sleep_abortable(duration, aoe.abort_source());
+        } catch (...) {
+            sleep_ex = std::current_exception();
+        }
+        auto q_results = co_await q.gather(capacity);
+        if (sleep_ex) {
+            std::rethrow_exception(sleep_ex);
+        }
+
+        struct captured_row {
+            std::string_view kind;
+            sstring partition_key;
+            int64_t count;
+            int64_t error;
+        };
+        std::map<std::pair<sstring, sstring>, std::vector<captured_row>> by_table;
+        auto capture = [&] (const auto& top, std::string_view kind) {
+            for (auto& r : top) {
+                by_table[{r.item.schema->ks_name(), r.item.schema->cf_name()}].push_back(
+                        captured_row{kind, sstring(r.item), int64_t(r.count), int64_t(r.error)});
+            }
+        };
+        capture(q_results.read.top(list_size), "read");
+        capture(q_results.write.top(list_size), "write");
+
+        struct table_group {
+            dht::decorated_key key;
+            std::vector<captured_row> rows;
+        };
+        std::vector<table_group> groups;
+        groups.reserve(by_table.size());
+        for (auto& [table, rows] : by_table) {
+            groups.push_back(table_group{make_partition_key(table.first, table.second), std::move(rows)});
+        }
+        std::ranges::sort(groups, dht::ring_position_less_comparator(*_s), std::mem_fn(&table_group::key));
+
+        for (auto& g : groups) {
+            co_await result.emit_partition_start(g.key);
+            int32_t rank = 0;
+            std::string_view current_kind;
+            for (auto& row : g.rows) {
+                if (row.kind != current_kind) {
+                    rank = 0;
+                    current_kind = row.kind;
+                }
+                clustering_row cr(make_clustering_key(capacity, list_size, row.kind, rank++));
+                set_cell(cr.cells(), "partition_key", row.partition_key);
+                set_cell(cr.cells(), "count", row.count);
+                set_cell(cr.cells(), "error", row.error);
+                co_await result.emit_row(std::move(cr));
+            }
+            co_await result.emit_partition_end();
+        }
+    }
+};
+
 // Helper: convert bytes stored in a disk_string to sstring.
 // disk_string<uint32_t>::value is of type `bytes`.
 static sstring disk_string_to_sstring(const sstables::disk_string<uint32_t>& ds) {
@@ -2118,6 +2353,7 @@ future<> initialize_virtual_tables(
         co_await add_table(std::make_unique<tablet_sizes>(tablet_allocator, dist_db, dist_raft_gr, ms));
         co_await add_table(std::make_unique<cdc_timestamps_table>(db, dist_ss.local()));
         co_await add_table(std::make_unique<cdc_streams_table>(db, dist_ss.local()));
+        co_await add_table(std::make_unique<toppartitions_table>(dist_db));
 
         db.find_column_family(system_keyspace::size_estimates()).set_virtual_reader(mutation_source(db::size_estimates::virtual_reader(db, sys_ks.local())));
         db.find_column_family(system_keyspace::views_builds_in_progress()).set_virtual_reader(mutation_source(db::view::build_progress_virtual_reader(db)));
