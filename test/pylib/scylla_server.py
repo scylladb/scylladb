@@ -151,7 +151,6 @@ def make_scylla_conf(mode: str, host_addr: str, seed_addrs: List[str], cluster_n
 SCYLLA_CMDLINE_OPTIONS = [
     '--smp', '2',
     '-m', '1G',
-    '--collectd', '0',
     '--overprovisioned',
     '--max-networking-io-control-blocks', '1000',
     '--unsafe-bypass-fsync', '1',

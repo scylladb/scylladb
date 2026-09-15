@@ -234,7 +234,7 @@ void dirty_memory_manager::update_threshold(size_t threshold) {
 }
 
 void
-dirty_memory_manager::setup_collectd(sstring namestr) {
+dirty_memory_manager::setup_metrics(sstring namestr) {
     namespace sm = seastar::metrics;
 
     _metrics.add_group("memory", {
