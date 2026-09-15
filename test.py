@@ -215,6 +215,7 @@ class TestSuite(ABC):
         # Skip tests disabled in specific mode.
         self.disabled_tests.update(self.cfg.get("skip_in_" + mode, []))
         self.flaky_tests = set(self.cfg.get("flaky", []))
+        self.needs_ldap_tests = set(self.cfg.get("needs_ldap", []))
         # If this mode is one of the debug modes, and there are
         # tests disabled in a debug mode, add these tests to the skip list.
         if mode in debug_modes:
@@ -2202,7 +2203,9 @@ async def main() -> int:
     tp_server = None
     finalize = None
     try:
-        if [t for t in TestSuite.all_tests() if isinstance(t, LdapTest)]:
+        ldap_tests = [t for t in TestSuite.all_tests()
+                      if isinstance(t, LdapTest) or t.shortname in t.suite.needs_ldap_tests]
+        if ldap_tests:
             toxiproxy_host = await TestSuite.hosts.lease_host()
             toxiproxy_port = 8474
             ldap_host = await TestSuite.hosts.lease_host()
@@ -2221,7 +2224,7 @@ async def main() -> int:
             if not try_something_backoff(can_connect_to_toxiproxy):
                 raise Exception('Could not connect to toxiproxy')
             finalize, test_env = await start_ldap(ldap_host=ldap_host, toxiproxy_host=toxiproxy_host, toxiproxy_port=toxiproxy_port, options=options)
-            for t in [t for t in TestSuite.all_tests() if isinstance(t, LdapTest)]:
+            for t in ldap_tests:
                 t.env.update(test_env)
 
         try:
