@@ -23,6 +23,12 @@ The command syntax is as follows:
 
 You can specify more than one SSTable.
 
+A directory can be passed in place of the individual SSTables in it -- typically
+the table directory -- in which case all the SSTables found in it are processed.
+Note that the data directory of a running node is a moving target: SSTables
+which are not sealed yet are left out, and ones deleted while being loaded are
+reported and skipped.
+
 Additionally, the path to SSTable can point to an object storage fully qualified
 path in the form of ``s3://bucket-name/prefix/of/your/sstable/sstable-TOC.txt``
 or ``gs://bucket-name/prefix/of/your/sstable/sstable-TOC.txt``. This also
@@ -1037,6 +1043,64 @@ Split multiple SSTables as a combined stream:
    scylla sstable split --merge -t 100 -t 500 /path/to/md-123456-big-Data.db /path/to/md-123457-big-Data.db
 
 This will merge both input SSTables first, then split the combined data, creating 3 output SSTables.
+
+layout
+^^^^^^
+
+Describes how the SSTables of a table are organized by its compaction strategy.
+Incremental and size-tiered compaction organize SSTables into runs, leveled
+compaction into levels and time-window compaction into time windows. The
+SSTables are grouped accordingly, and each group is annotated with the aggregate
+of the SSTables in it.
+
+The compaction strategy is obtained from the schema. It can be overridden with
+``--strategy`` (one of ``ics``, ``stcs``, ``lcs``, ``twcs``, or a compaction
+strategy class name), which is useful when the schema is not available -- in
+which case the schema loader falls back to the default, incremental compaction.
+Compaction strategy options, like the window size of time-window compaction, can
+be overridden with ``--strategy-option``.
+
+SSTables belonging to different compaction groups are described separately, as
+compaction only ever considers SSTables of the same compaction group. For a
+tablet-based table the compaction group is the tablet, which is looked up in
+``system.tablets``, located in the data dir. If ``system.tablets`` lives
+elsewhere, its directory can be provided with ``--system-tablets-dir``. For a
+vnode-based table the compaction group is the shard, which is derived from the
+sharding parameters of the node, read from ``system.topology``, or provided with
+``--shards`` and ``--ignore-msb-bits``.
+
+The columns to include are selected with ``--columns``, which takes a
+comma-separated list of column names, or ``all`` for all of them. The order of
+the SSTables within each group is selected with ``--sort``, which takes a
+comma-separated list of ``column[:asc|desc]``, in decreasing order of relevance.
+Run ``scylla sstable layout --help`` for the list of supported columns.
+
+Tombstones are counted as expired if they were dropped before the gc grace
+period of the schema, which can be overridden with ``--gc-grace-seconds``.
+
+Supports both a text and a JSON output, selected with ``--output-format``. The
+JSON output reports the raw, unformatted value of each column.
+
+**Examples:**
+
+Describe the layout of a table:
+
+.. code-block:: console
+
+   scylla sstable layout /var/lib/scylla/data/my_keyspace/my_table-8ff5d0a0a41411f0a8a1e2ba0e1e0b21
+
+Describe it in the terms of time-window compaction, with 6 hour windows:
+
+.. code-block:: console
+
+   scylla sstable layout --strategy twcs --strategy-option compaction_window_unit=HOURS \
+       --strategy-option compaction_window_size=6 /path/to/table_dir
+
+Include all the columns, ordered by the share of expired tombstones:
+
+.. code-block:: console
+
+   scylla sstable layout --columns all --sort expired-pctg:desc /path/to/table_dir
 
 Examples
 --------

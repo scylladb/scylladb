@@ -42,6 +42,16 @@ inline void parse_assert(bool condition, std::optional<component_name> filename 
     }
 }
 
+// Thrown when a component of the sstable is not there at all, as opposed to
+// being there but malformed. A running ScyllaDB deletes the components of an
+// sstable it drops, so anything reading an sstable it doesn't own can see this
+// for an sstable which was deleted under it, and carry on with the rest.
+struct missing_sstable_component_exception : malformed_sstable_exception {
+    missing_sstable_component_exception(component_name filename) :
+        malformed_sstable_exception(format("{}: file not found", filename))
+    {}
+};
+
 struct bufsize_mismatch_exception : malformed_sstable_exception {
     bufsize_mismatch_exception(size_t size, size_t expected) :
         malformed_sstable_exception(format("Buffer improperly sized to hold requested data. Got: {:d}. Expected: {:d}", size, expected))
@@ -61,6 +71,7 @@ bool abort_on_malformed_sstable_error() noexcept;
 // abort the process (with logging) or throw the appropriate exception.
 [[noreturn]] void throw_malformed_sstable_exception(sstring msg);
 [[noreturn]] void throw_malformed_sstable_exception(sstring msg, component_name filename);
+[[noreturn]] void throw_missing_sstable_component_exception(component_name filename);
 [[noreturn]] void throw_bufsize_mismatch_exception(size_t size, size_t expected);
 
 // Disables aborting on malformed sstable errors for a scope.

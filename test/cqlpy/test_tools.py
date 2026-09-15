@@ -2406,3 +2406,105 @@ def test_scylla_sstable_split(cql, test_keyspace, scylla_path, scylla_data_dir):
             all_output_pks = output_pks[0] | output_pks[1]
             assert all_output_pks == sstable_pks, "Split sstables should contain all original partitions"
             assert len(output_pks[0] & output_pks[1]) == 0, "Output sstables should not overlap"
+
+
+def _layout_sstables(out):
+    """Collects the sstables of a `scylla sstable layout --output-format json` output, by bucket."""
+    buckets = {}
+    for group in json.loads(out)["compaction_groups"]:
+        for bucket in group["buckets"]:
+            buckets.setdefault(bucket["name"], []).extend(bucket["sstables"])
+    return buckets
+
+
+def test_scylla_sstable_layout(cql, test_keyspace, scylla_path, scylla_data_dir):
+    with scylla_sstable(simple_no_clustering_table, cql, test_keyspace, scylla_data_dir) as (table, schema_file, sstables):
+        def layout(*args):
+            cmd = [scylla_path, "sstable", "layout", "--schema-file", schema_file,
+                   "--output-format", "json"] + list(args)
+            return _layout_sstables(subprocess.check_output(cmd, text=True))
+
+        # the table uses NullCompactionStrategy, whose layout is described in runs
+        buckets = layout(*sstables)
+        assert all(name.startswith("RUN ") for name in buckets), f"expected runs, got {list(buckets)}"
+        laid_out = [sst["name"] for ssts in buckets.values() for sst in ssts]
+        assert sorted(laid_out) == sorted(os.path.basename(sst) for sst in sstables)
+
+        # the table directory can be passed in place of the individual sstables
+        table_dir = os.path.dirname(sstables[0])
+        assert sorted(sst["name"] for ssts in layout(table_dir).values() for sst in ssts) == sorted(laid_out)
+
+        # sstables which are not sealed yet cannot be loaded, they are left out
+        # of the table directory's content
+        unsealed = os.path.join(table_dir, "mc-999-big-")
+        try:
+            for component in ("Data.db", "TOC.txt.tmp"):
+                shutil.copy(sstables[0], unsealed + component)
+            assert sorted(sst["name"] for ssts in layout(table_dir).values() for sst in ssts) == sorted(laid_out)
+        finally:
+            for component in ("Data.db", "TOC.txt.tmp"):
+                os.unlink(unsealed + component)
+
+        # an sstable can be deleted by the running scylla between being listed
+        # and being loaded, leaving components of it missing; it is left out
+        # rather than failing the whole operation
+        deleted = os.path.join(table_dir, "mc-998-big-")
+        try:
+            # a sealed sstable, but the components its TOC lists are gone
+            shutil.copy(sstables[0], deleted + "Data.db")
+            shutil.copy(sstables[0].replace("-Data.db", "-TOC.txt"), deleted + "TOC.txt")
+            assert sorted(sst["name"] for ssts in layout(table_dir).values() for sst in ssts) == sorted(laid_out)
+        finally:
+            for component in ("Data.db", "TOC.txt"):
+                os.unlink(deleted + component)
+
+        # only the selected columns are reported, in the order they were selected
+        for sst in [sst for ssts in layout("--columns", "size,name", *sstables).values() for sst in ssts]:
+            assert list(sst.keys()) == ["size", "name"]
+
+        subprocess_check_error([scylla_path, "sstable", "layout", "--schema-file", schema_file,
+                                "--columns", "no-such-column"] + sstables, "unknown column: no-such-column")
+
+        # a path which isn't there is reported as such, rather than as a schema
+        # which could not be autodetected
+        subprocess_check_error([scylla_path, "sstable", "layout", "--schema-file", schema_file,
+                                os.path.join(table_dir, "no-such-directory")],
+                               "no such file or directory: .*no-such-directory")
+
+        # the sstables of each bucket are ordered by the requested columns
+        for ssts in layout("--columns", "all", "--sort", "size:desc,name:asc", *sstables).values():
+            keys = [(-sst["size"], sst["name"]) for sst in ssts]
+            assert keys == sorted(keys)
+
+        # the strategy the layout is described in the terms of can be overridden,
+        # by a short name in any case
+        assert all(name.startswith("LEVEL ") for name in layout("--strategy", "lcs", *sstables))
+        windows = layout("--strategy", "TWCS", "--strategy-option", "compaction_window_unit=HOURS",
+                         "--strategy-option", "compaction_window_size=1", *sstables)
+        assert all(name.startswith("WINDOW ") for name in windows)
+
+        subprocess_check_error([scylla_path, "sstable", "layout", "--schema-file", schema_file,
+                                "--strategy", "no-such-strategy"] + sstables,
+                               "invalid value for option strategy: no-such-strategy")
+
+
+def test_scylla_sstable_layout_tablets(cql, test_keyspace_tablets, scylla_path, scylla_data_dir):
+    # the token for 0 is mapped to shard 0, 142 is mapped to shard 1
+    shard_to_key = {0: 0, 1: 142}
+    for shard_id, key in shard_to_key.items():
+        table_factory = functools.partial(_simple_table_with_keys, keys=[key])
+        with scylla_sstable(table_factory, cql, test_keyspace_tablets, scylla_data_dir) as (_, schema_file, sstables):
+            with nodetool.no_autocompaction_context(cql, "system.tablets"):
+                nodetool.flush_keyspace(cql, "system")
+                # the sstables of a tablet-based table are grouped by the tablet
+                # owning them, which is looked up in system.tablets, and are
+                # attributed to the shard this node represents that tablet on
+                out = subprocess.check_output([scylla_path, "sstable", "layout", "--schema-file", schema_file,
+                                               "--columns", "name,tablet,shard", "--output-format", "json"] +
+                                              sstables, text=True)
+                groups = json.loads(out)["compaction_groups"]
+                assert len(groups) == 1, f"expected a single tablet to own the sstables, got {groups}"
+                for sst in groups[0]["buckets"][0]["sstables"]:
+                    assert sst["tablet"] is not None
+                    assert sst["shard"] == shard_id
+                assert groups[0]["name"] == f"TABLET #{sst['tablet']}, SHARD #{shard_id}"
