@@ -2480,6 +2480,7 @@ SEASTAR_TEST_CASE(test_commitlog_large_mutation_timeout) {
             db::rp_set handles;
             auto size = log.max_record_size();
             size_t tot = 0;
+            std::unordered_set<db::segment_id_type> segs;
 
             // Fill commitlog (partially) with normal allocations.
             for (;;) {
@@ -2488,12 +2489,14 @@ SEASTAR_TEST_CASE(test_commitlog_large_mutation_timeout) {
                         dst.write("A", 1);
                     }
                 });
-                tot += size;
+                tot += size + log.sector_overhead(h.rp().base_id(), size);
+                // count actual segments used, this deals with chunks etc.
+                segs.emplace(h.rp().base_id());
                 handles.put(std::move(h));
-                if (tot > (max_size_mb * 1024 * 1024)) {
+                if (segs.size() >= 3) { // we now hold to much/enough of space hostage
                     break;
                 }
-                BOOST_TEST_MESSAGE(fmt::format("Wrote {} bytes", tot));
+                BOOST_TEST_MESSAGE(fmt::format("Wrote {} ({}: {}) bytes", tot, size, segs));
             }
 
             BOOST_TEST_MESSAGE("Provoke timeout failure");
@@ -2531,6 +2534,21 @@ SEASTAR_TEST_CASE(test_commitlog_large_mutation_timeout) {
                 }
             });
 
+            // We release more than one segment. Ensure that timeouted new_segment et all maintain segment order.
+            BOOST_TEST_MESSAGE("Ensure segment order");
+            auto segments = log.get_active_segment_names() | std::views::transform([](auto& name) {
+                return commitlog::descriptor(name);
+            }) | std::ranges::to<std::vector>();
+
+            BOOST_REQUIRE_GT(segments.size(), 1); 
+
+            auto id = segments.front().id;
+            for (auto& dd : segments | std::views::drop(1)) {
+                BOOST_REQUIRE_GT(dd.id, id);
+                id = dd.id;
+            }
+
+            BOOST_TEST_MESSAGE("Clean up");
             log.discard_completed_segments(uuid);
 
             co_await log.force_new_active_segment();
