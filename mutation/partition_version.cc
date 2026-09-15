@@ -575,10 +575,15 @@ utils::coroutine partition_entry::apply_to_incomplete(const schema& s,
                         }
                         res.row.set_range_tombstone(cur.range_tombstone_for_row() + src_cur.range_tombstone());
 
+                        if (need_preempt()) {
+                            lb = position_in_partition(cur.position());
+                            ++tracker.get_stats().rows_covered_by_range_tombstones_from_memtable;
+                            return stop_iteration::no;
+                        }
+
                         // FIXME: Compact the row
                         ++tracker.get_stats().rows_covered_by_range_tombstones_from_memtable;
                         cur.next();
-                        // FIXME: preempt
                     }
                 }
                 {
