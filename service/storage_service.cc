@@ -3170,6 +3170,9 @@ future<> storage_service::reset_cleanup_needed() {
 }
 
 future<sstring> storage_service::wait_for_topology_request_completion(utils::UUID id, bool require_entry) {
+    if (this_shard_id() != 0) {
+        on_internal_error(slogger, "wait_for_topology_request_completion() must run on shard 0");
+    }
     co_return co_await _topology_state_machine.wait_for_request_completion(_sys_ks.local(), id, require_entry);
 }
 
