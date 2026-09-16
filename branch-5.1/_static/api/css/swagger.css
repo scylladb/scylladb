@@ -1,0 +1,258 @@
+/* Overrides */
+.swagger-section {
+    margin-bottom: 20px;
+    color: var(--text-color);
+}
+
+.swagger-section ul li:before {
+    content: initial !important;
+}
+
+.swagger-section .heading h2,
+.swagger-section .info,
+.swagger-section .sandbox_header,
+.swagger-section .swagger-footer {
+    display: none;
+}
+
+.swagger-section .options {
+    display: none;
+}
+
+.swagger-section .endpoints .options {
+    display: block;
+}
+
+.swagger-section .operations,
+.swagger-section .options {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.swagger-section .content {
+    min-height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    width: 100% !important;
+}
+
+.swagger-section .content > * {
+    margin-bottom: 20px;
+}
+
+.swagger-section br {
+    display: none;
+}
+
+.swagger-section .toggleOperation {
+    color: var(--text-color);
+    pointer-events: none;
+}
+
+.swagger-section .toggleOperation:hover {
+    color: var(--text-color);
+    font-weight: inherit;
+}
+
+/* Resources */
+.swagger-section #resources,
+.swagger-section  #resources .endpoints {
+    margin-left: 0;
+}
+
+.swagger-section .endpoint {
+    margin-bottom: 20px;
+}
+
+.swagger-section .endpoint h4 {
+    margin-bottom: 10px;
+    margin-top: 10px;
+}
+
+/* HTTP method */
+.swagger-section .http_method a {
+    padding: 5px;
+    text-transform: uppercase;
+    border-radius: 4px;
+    font-size: 14px;
+    background-color: #0f6ab4;
+    color: #fff;
+}
+
+.swagger-sectionli.operation.head .http_method a {
+    background-color: var(--warning);
+}
+
+.swagger-section li.operation.delete .http_method a {
+	background-color: var(--danger);
+}
+
+.swagger-section li.operation.post .http_method a {
+	background-color: var(--success);
+}
+
+
+.swagger-section li.operation.get .http_method a {
+	background-color: var(--info);
+}
+
+
+.swagger-section li.operation.put .http_method a {
+	background-color: #c5862b;
+}
+
+.swagger-section li.operation.patch .http_method a {
+	background-color: #fce9e3;
+    color: #000;
+}
+
+/* Forms */
+.swagger-section select,
+.swagger-section input,
+.swagger-section textarea {
+    border-radius: 4px;
+    margin: 0;
+    line-height: 28px;
+    font-size: 14px;
+    height: auto;
+    padding: 8px;
+    min-height: 0;
+    background-color: transparent;
+    color: var(--text-color)
+}
+
+.swagger-section select:focus,
+.swagger-section input:focus,
+.swagger-section textarea:focus {
+    background: transparent;
+    color: var(--text-color);
+}
+
+
+.swagger-section label {
+    line-height: 28px;
+    font-size: 14px;
+    color: var(--text-color);
+}
+
+/* Code */
+.swagger-section pre {
+    margin-top: 10px;
+    border-radius: 4px;
+    padding: 5px;
+    background-color: var(--well-bg);
+}
+
+.swagger-section pre code {
+    background: transparent;
+}
+
+
+.swagger-section .swagger-ui-wrap .model-signature {
+    font-size: 14px;
+}
+
+.swagger-section .swagger-ui-wrap .model-signature .signature-nav {
+    list-style: none;
+}
+
+/* Table */
+.swagger-section table {
+    border-radius: 4px;
+}
+
+.swagger-section table th{
+    width: initial !important;
+    max-width: initial !important;
+}
+
+.swagger-section table td strong{
+    font-weight: normal;
+}
+
+/* Signature */
+.swagger-section .swagger-ui-wrap .model-signature {
+	font-size: 14px;
+}
+
+.swagger-section .swagger-ui-wrap .model-signature .signature-nav a {
+	text-decoration: none;
+	color: var(--gray-400);
+}
+
+.swagger-section .swagger-ui-wrap .model-signature .signature-nav a:hover {
+	text-decoration: underline;
+	color: var(--text-color);
+}
+
+.swagger-section .swagger-ui-wrap .model-signature .signature-nav .selected {
+	color: var(--text-color);
+	text-decoration: none;
+}
+
+.swagger-section .swagger-ui-wrap .model-signature .propType {
+	color: var(--link-color);
+}
+
+.swagger-section .swagger-ui-wrap .model-signature ul.signature-nav {
+	display: flex;
+    list-style: none;
+	margin: 0;
+	padding: 0;
+}
+
+.swagger-section .swagger-ui-wrap .model-signature ul.signature-nav li:last-child {
+	padding-right: 0;
+	border-right: none;
+}
+
+.swagger-section .swagger-ui-wrap .model-signature ul.signature-nav li {
+	margin: 0 5px 5px 0;
+	padding: 2px 5px 2px 0;
+	border-right: 1px solid var(--gray-400);
+}
+
+.swagger-section .swagger-ui-wrap .model-signature .propOpt {
+	color: var(--gray-600);
+}
+
+.swagger-section .swagger-ui-wrap .model-signature .propOptKey {
+	font-style: italic;
+}
+
+.swagger-section .swagger-ui-wrap .model-signature .description .strong {
+	font-weight: 700;
+	color: var(--text-color);
+}
+
+.swagger-section .swagger-ui-wrap .model-signature .description div {
+	margin-left: 1em;
+}
+
+.swagger-section .swagger-ui-wrap .model-signature .description .stronger {
+	font-weight: 700;
+	color: var(--text-color);
+}
+
+.swagger-section .swagger-ui-wrap .model-signature .description .propWrap .optionsWrapper {
+	display: none;
+}
+
+.swagger-section .swagger-ui-wrap .model-signature .description .propDesc.markdown>p:first-child,
+.swagger-section .swagger-ui-wrap .model-signature .description .propDesc.markdown>p:last-child {
+	display: inline;
+}
+
+.swagger-section .swagger-ui-wrap .model-signature .description .propDesc.markdown>p:not(:first-child):before {
+	display: block;
+	content: '';
+}
+
+.swagger-section .swagger-ui-wrap .model-signature .description span:last-of-type.propDesc.markdown>p:only-child {
+	margin-right: -3px;
+}
+
+.swagger-section .swagger-ui-wrap .model-signature .propName {
+	font-weight: 700;
+}
