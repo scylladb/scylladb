@@ -21,7 +21,7 @@ from _pytest._code.code import ReprFileLocation
 from scripts import coverage as coverage_script
 from test import DEBUG_MODES, TEST_DIR, TOP_SRC_DIR, asan_options, path_to, ubsan_options
 from test.pylib.coverage_utils import coverage_dir
-from test.pylib.runner import BUILD_MODE, RUN_ID, TEST_SUITE
+from test.pylib.runner import BUILD_MODE, CPP_TEST_LOG, CPP_TEST_LOG_KEPT, RUN_ID, TEST_SUITE
 from test.pylib.scylla_server import merge_cmdline_options
 
 if TYPE_CHECKING:
@@ -204,8 +204,11 @@ class CppTestCase(pytest.Item):
             print('\n'.join(lines))
             print("=" * 70 + "\n")
 
-        if not self.config.getoption("--save-log-on-success") and not failures:
+        keep_log = bool(failures) or self.config.getoption("--save-log-on-success")
+        if not keep_log:
             output.unlink(missing_ok=True)
+        self.user_properties.append((CPP_TEST_LOG, str(output)))
+        self.user_properties.append((CPP_TEST_LOG_KEPT, keep_log))
 
         if failures:
             raise CppTestFailureList(failures)
