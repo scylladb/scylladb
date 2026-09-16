@@ -26,6 +26,7 @@ import psutil
 
 from threading import Event
 from test import HOST_ID, TOP_SRC_DIR
+from test.pylib.internal_types import SeastarIOMetricName
 from test.pylib.db.model import HostInfo, Metric, SystemResourceMetric, CgroupMetric, Test
 from test.pylib.db.writer import (
     CGROUP_MEMORY_METRICS_TABLE,
@@ -76,7 +77,7 @@ class ResourceGather(ABC):
     def put_process_to_cgroup(self) -> None:
         pass
 
-    def get_test_metrics(self) -> Metric:
+    def get_test_metrics(self, seastar_io: dict[str, int] | None = None) -> Metric:
         pass
 
     def write_metrics_to_db(self, metrics: Metric, success: bool = False) -> None:
@@ -119,8 +120,13 @@ class ResourceGatherRecord(ResourceGather):
             ),
             TESTS_TABLE)
 
-    def get_test_metrics(self) -> Metric:
+    def get_test_metrics(self, seastar_io: dict[str, int] | None = None) -> Metric:
         test_metrics = Metric(test_id=self.test_id, host_id=HOST_ID, worker_id=self.worker_id)
+        if seastar_io:
+            test_metrics.seastar_read_bytes = seastar_io.get(SeastarIOMetricName.READ_BYTES, 0)
+            test_metrics.seastar_read_ops = seastar_io.get(SeastarIOMetricName.READ_OPS, 0)
+            test_metrics.seastar_write_bytes = seastar_io.get(SeastarIOMetricName.WRITE_BYTES, 0)
+            test_metrics.seastar_write_ops = seastar_io.get(SeastarIOMetricName.WRITE_OPS, 0)
         test_metrics.time_taken = self.test.time_end - self.test.time_start
         test_metrics.time_start = datetime.fromtimestamp(self.test.time_start)
         test_metrics.time_end = datetime.fromtimestamp(self.test.time_end)
@@ -197,8 +203,8 @@ class ResourceGatherOn(ResourceGatherRecord):
             with open(cpu_stat_path, 'r') as f:
                 self._cpu_stat_start = self._read_cpu_stat(f)
 
-    def get_test_metrics(self) -> Metric:
-        test_metrics = super().get_test_metrics()
+    def get_test_metrics(self, seastar_io: dict[str, int] | None = None) -> Metric:
+        test_metrics = super().get_test_metrics(seastar_io)
         if self._memory_peak_fd is not None:
             try:
                 self._memory_peak_fd.seek(0)

@@ -825,8 +825,8 @@ class ScyllaMetricsClient:
     def __init__(self, port: int = 9180):
         self.client = TCPRESTClient(port)
 
-    async def query(self, server_ip: IPAddress) -> ScyllaMetrics:
-        data = await self.client.get_text('/metrics', host=server_ip)
+    async def query(self, server_ip: IPAddress, timeout: Optional[float] = None) -> ScyllaMetrics:
+        data = await self.client.get_text('/metrics', host=server_ip, timeout=timeout)
         return ScyllaMetrics(data.split('\n'))
 
 
