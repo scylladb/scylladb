@@ -334,7 +334,10 @@ available from the index itself — the base table's key columns,
 a special case, the vector attribute itself can always be requested
 explicitly even under `ProjectionType=KEYS_ONLY`, though the value returned
 is only as precise as the vector store's own storage of it (see
-[FLOAT32VECTOR](#the-float32vector-type-scylladb-extension) below). Naming
+[FLOAT32VECTOR](#the-float32vector-type-scylladb-extension) below), and
+comes back as a list (`L`) of numbers (`N`) — as it does in DynamoDB — even
+for an item whose attribute was written as a `FLOAT32VECTOR`, which the
+index keeps no record of. Naming
 an attribute that isn't actually available is not an error; it's simply
 left out of the result, the same as `ProjectionExpression` naming an
 attribute an item doesn't have. With `BaseRead=true`, this restriction is
@@ -358,7 +361,7 @@ accepts a boolean `BaseRead` parameter to lift that restriction:
 
 | `BaseRead` value | Behavior |
 |------------------|----------|
-| `false` (default) | The response is built entirely out of what's already projected into the index; no base-table reads. This is the *only* mode real DynamoDB's `SearchVectors` supports. Two things currently still force a base-table read even here, though neither is a deliberate restriction - they're missing features to fix later, not part of the design: `ProjectionType=ALL`'s default response (see [Projection](#projection)), and an explicit request for the vector attribute itself (the vector store can't yet reconstruct it on demand). |
+| `false` (default) | The response is built entirely out of what's already projected into the index; no base-table reads. This is the *only* mode real DynamoDB's `SearchVectors` supports. One thing currently still forces a base-table read even here, though it isn't a deliberate restriction - it's a missing feature to fix later, not part of the design: `ProjectionType=ALL`'s default response (see [Projection](#projection)). |
 | `true` | Unconditionally reads each matching item from the base table, returning whatever `ProjectionExpression` asked for — any base table attribute, not just projected ones, and the full item if it wasn't given (see above) — and giving `FilterExpression` access to the full item. As a minor optimization, this is skipped for an explicit `ProjectionExpression` naming only key columns (regardless of `ProjectionType`, even `ALL`), with no `FilterExpression` - keys can't differ between the index and the base table, so a base-table read couldn't tell us anything new there. |
 
 `BaseRead=true` does not change *which* items a search can find: candidate
@@ -529,4 +532,4 @@ metrics:
 |--------|-------------|
 | `vector_search_returned_items` | Total number of items actually returned in `SearchResults`, across all `SearchVectors` calls. |
 | `vector_search_items_from_vs` | Total number of nearest-neighbor candidates returned by the vector store itself. Can exceed `vector_search_returned_items` when a `FilterExpression` (a ScyllaDB extension) discards some of them. |
-| `vector_search_items_from_base_table` | Total number of items read from the base table to serve `SearchVectors` requests. `BaseRead=false` requests never need this - that's the fast path real DynamoDB always uses - with two known-gap exceptions: `ProjectionType=ALL`'s default response (see [Projection](#projection)) and an explicit request naming the vector attribute itself. `BaseRead=true` (a ScyllaDB extension) forces it, at a real latency cost - see `BaseRead` below for the one minor case it doesn't. |
+| `vector_search_items_from_base_table` | Total number of items read from the base table to serve `SearchVectors` requests. `BaseRead=false` requests never need this - that's the fast path real DynamoDB always uses - with one known-gap exception: `ProjectionType=ALL`'s default response (see [Projection](#projection)). `BaseRead=true` (a ScyllaDB extension) forces it, at a real latency cost - see `BaseRead` below for the one minor case it doesn't. |
