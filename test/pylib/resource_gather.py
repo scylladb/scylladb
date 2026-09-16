@@ -187,12 +187,28 @@ class ResourceGatherOn(ResourceGatherRecord):
             sqlite_writer.close()
 
     def setup_test_tracking(self) -> None:
-        # Open a fresh FD on memory.peak so the kernel resets its per-FD peak tracker
-        # to the current memory. Reading this FD later returns the peak memory since it
-        # was opened, i.e., the peak during this test only.
+        # memory.peak's per-FD tracker is reset by *writing* a non-empty string to the
+        # FD, not by opening it: a read-only open returns the cgroup's lifetime
+        # watermark, which for an xdist worker is whatever the heaviest test before
+        # this one reached.  Reset here so later reads through this FD give the peak
+        # during this test alone.  Kernels without the writable memory.peak keep the
+        # old watermark semantics -- an upper bound rather than a per-test figure.
+        #
+        # The write is unbuffered: on such a kernel the file has no write handler,
+        # and cgroupfs reports that only once the write reaches it.  A buffered
+        # write would keep the payload pending, so the error would surface from
+        # flush() *and again* from close() in the except branch below, escaping it.
         memory_peak_path = self.cgroup_path / 'memory.peak'
         if memory_peak_path.exists():
-            self._memory_peak_fd = open(memory_peak_path, 'r')
+            try:
+                self._memory_peak_fd = open(memory_peak_path, 'rb+', buffering=0)
+                self._memory_peak_fd.write(b'reset')
+            except OSError as e:
+                self.logger.debug("Could not reset %s, memory_peak will be a cgroup "
+                                  "lifetime watermark: %s", memory_peak_path, e)
+                if self._memory_peak_fd is not None:
+                    self._memory_peak_fd.close()
+                self._memory_peak_fd = open(memory_peak_path, 'rb', buffering=0)
 
         # Snapshot cpu.stat at the start of the test. Unlike memory.peak, cpu.stat
         # has no per-FD reset mechanism — values are cumulative for the cgroup's
