@@ -21,8 +21,6 @@
 #include "cql3/restrictions/statement_restrictions.hh"
 #include "cql3/statements/create_view_statement.hh"
 #include "cql3/statements/prepared_statement.hh"
-#include "cql3/statements/select_statement.hh"
-#include "cql3/statements/raw/select_statement.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/util.hh"
 #include "schema/schema_builder.hh"
@@ -73,7 +71,7 @@ static bool validate_primary_key(
         const column_definition* def,
         const std::unordered_set<const column_definition*>& base_pk,
         bool has_non_pk_column,
-        const restrictions::statement_restrictions& restrictions) {
+        const restrictions::view_restrictions& restrictions) {
 
     if (def->type->is_multi_cell()) {
         throw exceptions::invalid_request_exception(format("Cannot use MultiCell column '{}' in PRIMARY KEY of materialized view", def->name_as_text()));
@@ -202,17 +200,12 @@ std::pair<view_ptr, cql3::cql_warnings_vec> create_view_statement::prepare_view(
         return def;
     }) | std::ranges::to<std::unordered_set<const column_definition*>>();
 
-    auto parameters = make_lw_shared<raw::select_statement::parameters>(raw::select_statement::parameters::orderings_type(), false, true);
-    raw::select_statement raw_select(_base_name, std::move(parameters), _select_clause, _where_clause, std::nullopt, std::nullopt, {}, std::make_unique<cql3::attributes::raw>());
-    raw_select.prepare_keyspace(keyspace());
-    // The view definition is rebuilt from the schema and prepared again on every read,
-    // under the internal dialect, so validating it here under the dialect of the
+    prepare_context view_ctx;
+    // The view definition is rebuilt from the schema and analyzed again on every read,
+    // under the internal dialect, so analyzing it here under the dialect of the
     // connection that happens to create the view would validate something else.
-    raw_select.set_bound_variables({}, internal_dialect());
-
-    cql_stats ignored;
-    auto prepared = raw_select.prepare(db, ignored, default_cql_config, true);
-    auto restrictions = static_pointer_cast<statements::select_statement>(prepared->statement)->get_restrictions();
+    view_ctx.set_bound_variables({}, internal_dialect());
+    auto restrictions = restrictions::analyze_view_restrictions(db, schema, _where_clause, view_ctx);
 
     auto base_primary_key_cols =
             schema->primary_key_columns()

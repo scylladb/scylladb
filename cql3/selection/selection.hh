@@ -32,7 +32,7 @@ class metadata;
 class query_options;
 
 namespace restrictions {
-class statement_restrictions;
+class select_restrictions;
 }
 
 namespace selection {
@@ -274,7 +274,7 @@ public:
         }
     };
     class restrictions_filter {
-        const ::shared_ptr<const restrictions::statement_restrictions> _restrictions;
+        const ::shared_ptr<const restrictions::select_restrictions> _restrictions;
         const query_options& _options;
         const expr::expression& _partition_level_filter;
         const expr::expression& _clustering_row_level_filter;
@@ -288,7 +288,7 @@ public:
         mutable std::optional<partition_key> _last_pkey;
         mutable bool _is_first_partition_on_page = true;
     public:
-        explicit restrictions_filter(::shared_ptr<const restrictions::statement_restrictions> restrictions,
+        explicit restrictions_filter(::shared_ptr<const restrictions::select_restrictions> restrictions,
                 const query_options& options,
                 uint64_t remaining,
                 schema_ptr schema,

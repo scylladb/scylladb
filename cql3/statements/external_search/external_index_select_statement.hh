@@ -28,7 +28,7 @@ public:
     external_index_select_statement(schema_ptr schema, uint32_t bound_terms,
             lw_shared_ptr<const parameters> parameters,
             ::shared_ptr<selection::selection> selection,
-            ::shared_ptr<const restrictions::statement_restrictions> restrictions,
+            ::shared_ptr<const restrictions::select_restrictions> restrictions,
             ::shared_ptr<std::vector<size_t>> group_by_cell_indices,
             bool is_reversed,
             ordering_comparator_type ordering_comparator,

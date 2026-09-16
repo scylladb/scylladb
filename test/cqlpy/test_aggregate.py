@@ -11,7 +11,7 @@ import math
 from decimal import Decimal
 from .util import new_test_table, unique_key_int, project, new_type
 from cassandra.util import Date
-from cassandra.protocol import SyntaxException
+from cassandra.protocol import InvalidRequest, SyntaxException
 from .cassandra_tests.porting import assert_invalid_message
 
 @pytest.fixture(scope="module")
@@ -223,6 +223,18 @@ def test_avg_decimal_2(cql, table1, cassandra_bug):
 def test_reject_aggregates_in_where_clause(cql, table1):
     assert_invalid_message(cql, table1, 'Aggregation',
                            f'SELECT * FROM {table1} WHERE p = sum((int)4)')
+
+# An aggregate function has nothing to aggregate over in an INSERT, so the
+# statement must be rejected when it is prepared, rather than fail when the
+# aggregate is evaluated. This is as true of a primary-key column as it is of
+# a regular one. We deliberately call prepare(), and not execute(), so that
+# the test can only pass if it is the preparation that fails.
+def test_reject_aggregates_in_insert(cql, table1):
+    for insert in [f'INSERT INTO {table1} (p, c) VALUES (sum((int)4), 1)',
+                   f'INSERT INTO {table1} (p, c) VALUES (1, sum((int)4))',
+                   f'INSERT INTO {table1} (p, c, v) VALUES (1, 1, sum((int)4))']:
+        with pytest.raises(InvalidRequest, match='Aggregation'):
+            cql.prepare(insert)
 
 # Reproduces #13265
 # Aggregates must handle case-sensitive column names correctly.
