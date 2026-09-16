@@ -33,7 +33,7 @@ std::optional<int> get_int_attribute(const rjson::value& value, std::string_view
         return {};
     if (!attribute_value->IsInt()) {
         throw api_error::validation(fmt::format("Expected integer value for attribute {}, got: {}",
-                attribute_name, value));
+                attribute_name, *attribute_value));
     }
     return attribute_value->GetInt();
 }
@@ -50,7 +50,7 @@ std::string get_string_attribute(const rjson::value& value, std::string_view att
     }
     if (!attribute_value->IsString()) {
         throw api_error::validation(fmt::format("Expected string value for attribute {}, got: {}",
-                attribute_name, value));
+                attribute_name, *attribute_value));
     }
     return rjson::to_string(*attribute_value);
 }
@@ -68,7 +68,7 @@ std::string get_non_empty_string_attribute(const rjson::value& value, std::strin
     }
     if (!attribute_value->IsString()) {
         throw api_error::validation(fmt::format("Expected string value for attribute {}, got: {}",
-                attribute_name, value));
+                attribute_name, *attribute_value));
     }
     auto val = rjson::to_string(*attribute_value);
     if (val.empty()) {
@@ -84,7 +84,7 @@ bool get_bool_attribute(const rjson::value& value, std::string_view attribute_na
     }
     if (!attribute_value->IsBool()) {
         throw api_error::validation(fmt::format("Expected boolean value for attribute {}, got: {}",
-                attribute_name, value));
+                attribute_name, *attribute_value));
     }
     return attribute_value->GetBool();
 }
