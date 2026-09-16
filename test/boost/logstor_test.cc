@@ -26,6 +26,7 @@
 #include "replica/logstor/index.hh"
 #include "replica/logstor/logstor.hh"
 #include "replica/logstor/ondisk.hh"
+#include "replica/logstor/record_value.hh"
 #include "replica/logstor/write_buffer.hh"
 #include <seastar/testing/thread_test_case.hh>
 
@@ -77,7 +78,7 @@ log_record make_log_record(schema_ptr schema, sstring pk, sstring value, api::ti
             .timestamp = ts,
             .table = schema->id(),
         },
-        .mut = canonical_mutation(m)
+        .value = encode_record_value(m),
     };
 }
 
@@ -194,7 +195,7 @@ std::vector<scanned_record> scan_buffer_records(const temporary_buffer<char>& bu
 void assert_log_record_matches(schema_ptr schema, const log_record& actual, const log_record& expected) {
     BOOST_REQUIRE_EQUAL(actual.header.timestamp, expected.header.timestamp);
     BOOST_REQUIRE_EQUAL(actual.header.table, expected.header.table);
-    assert_that(actual.mut.to_mutation(schema)).is_equal_to(expected.mut.to_mutation(schema));
+    assert_that(to_mutation(actual, schema)).is_equal_to(to_mutation(expected, schema));
 }
 
 db::timeout_clock::time_point test_timeout() {
@@ -1201,10 +1202,10 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_mixed_buffers_report_readable
     BOOST_REQUIRE(seen_record_headers[3].key.equal(*schema, expected3.decorated_key()));
 
     BOOST_REQUIRE_EQUAL(seen_locations.size(), 4u);
-    assert_that(read_record_at_location(segment_copy, seen_locations[0]).mut.to_mutation(schema)).is_equal_to(expected0);
-    assert_that(read_record_at_location(segment_copy, seen_locations[1]).mut.to_mutation(schema)).is_equal_to(expected1);
-    assert_that(read_record_at_location(segment_copy, seen_locations[2]).mut.to_mutation(schema)).is_equal_to(expected2);
-    assert_that(read_record_at_location(segment_copy, seen_locations[3]).mut.to_mutation(schema)).is_equal_to(expected3);
+    assert_that(to_mutation(read_record_at_location(segment_copy, seen_locations[0]), schema)).is_equal_to(expected0);
+    assert_that(to_mutation(read_record_at_location(segment_copy, seen_locations[1]), schema)).is_equal_to(expected1);
+    assert_that(to_mutation(read_record_at_location(segment_copy, seen_locations[2]), schema)).is_equal_to(expected2);
+    assert_that(to_mutation(read_record_at_location(segment_copy, seen_locations[3]), schema)).is_equal_to(expected3);
 
     auto maybe_header = read_segment_header_from_bytes(segment_copy);
     BOOST_REQUIRE(maybe_header);
@@ -1315,8 +1316,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_returns_only_selected_records
     BOOST_REQUIRE_EQUAL(selected_records.size(), 2u);
     BOOST_REQUIRE_EQUAL(selected_records[0].header.timestamp, api::timestamp_type(72));
     BOOST_REQUIRE_EQUAL(selected_records[1].header.timestamp, api::timestamp_type(74));
-    assert_that(selected_records[0].mut.to_mutation(schema)).is_equal_to(expected1);
-    assert_that(selected_records[1].mut.to_mutation(schema)).is_equal_to(expected3);
+    assert_that(to_mutation(selected_records[0], schema)).is_equal_to(expected1);
+    assert_that(to_mutation(selected_records[1], schema)).is_equal_to(expected3);
 }
 
 // Checks that scan_segment() reads all records from a full buffer with varying serialized sizes.
@@ -1364,9 +1365,9 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_reads_full_buffer_records_wit
     BOOST_REQUIRE_EQUAL(seen_records[0].header.timestamp, api::timestamp_type(31));
     BOOST_REQUIRE_EQUAL(seen_records[1].header.timestamp, api::timestamp_type(32));
     BOOST_REQUIRE_EQUAL(seen_records[2].header.timestamp, api::timestamp_type(33));
-    assert_that(seen_records[0].mut.to_mutation(schema)).is_equal_to(expected0);
-    assert_that(seen_records[1].mut.to_mutation(schema)).is_equal_to(expected1);
-    assert_that(seen_records[2].mut.to_mutation(schema)).is_equal_to(expected2);
+    assert_that(to_mutation(seen_records[0], schema)).is_equal_to(expected0);
+    assert_that(to_mutation(seen_records[1], schema)).is_equal_to(expected1);
+    assert_that(to_mutation(seen_records[2], schema)).is_equal_to(expected2);
 
     BOOST_REQUIRE(maybe_header);
     BOOST_REQUIRE(maybe_header->kind == segment_kind::full);
@@ -1413,7 +1414,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_stops_on_mixed_buffer_lower_s
 
     std::vector<segment_header> seen_segment_headers;
     std::vector<log_record_header> seen_record_headers;
-    std::vector<canonical_mutation> seen_mutations;
+    std::vector<log_record> seen_records;
 
     scan_segment(in, log_segment_id{5}, segment_size,
         [&seen_segment_headers] (const segment_header& sh) {
@@ -1424,8 +1425,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_stops_on_mixed_buffer_lower_s
             seen_record_headers.push_back(rh);
             return want_data::yes;
         },
-        [&seen_mutations] (log_location, log_record rec) {
-            seen_mutations.push_back(std::move(rec.mut));
+        [&seen_records] (log_location, log_record rec) {
+            seen_records.push_back(std::move(rec));
             return make_ready_future<>();
         }).get();
     in.close().get();
@@ -1438,9 +1439,9 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_stops_on_mixed_buffer_lower_s
     BOOST_REQUIRE_EQUAL(seen_record_headers[0].timestamp, api::timestamp_type(51));
     BOOST_REQUIRE_EQUAL(seen_record_headers[1].timestamp, api::timestamp_type(52));
 
-    BOOST_REQUIRE_EQUAL(seen_mutations.size(), 2u);
-    assert_that(seen_mutations[0].to_mutation(schema)).is_equal_to(expected0);
-    assert_that(seen_mutations[1].to_mutation(schema)).is_equal_to(expected1);
+    BOOST_REQUIRE_EQUAL(seen_records.size(), 2u);
+    assert_that(to_mutation(seen_records[0], schema)).is_equal_to(expected0);
+    assert_that(to_mutation(seen_records[1], schema)).is_equal_to(expected1);
 }
 
 // Checks that scan_segment() stops after a later mixed buffer with a corrupted header crc.
@@ -1471,7 +1472,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_stops_on_corrupted_later_mixe
 
     std::vector<segment_header> seen_segment_headers;
     std::vector<log_record_header> seen_record_headers;
-    std::vector<canonical_mutation> seen_mutations;
+    std::vector<log_record> seen_records;
 
     scan_segment(in, log_segment_id{6}, segment_size,
         [&seen_segment_headers] (const segment_header& sh) {
@@ -1482,19 +1483,19 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_stops_on_corrupted_later_mixe
             seen_record_headers.push_back(rh);
             return want_data::yes;
         },
-        [&seen_mutations] (log_location, log_record rec) {
-            seen_mutations.push_back(std::move(rec.mut));
+        [&seen_records] (log_location, log_record rec) {
+            seen_records.push_back(std::move(rec));
             return make_ready_future<>();
         }).get();
     in.close().get();
 
     BOOST_REQUIRE_EQUAL(seen_segment_headers.size(), 1u);
     BOOST_REQUIRE_EQUAL(seen_record_headers.size(), 2u);
-    BOOST_REQUIRE_EQUAL(seen_mutations.size(), 2u);
+    BOOST_REQUIRE_EQUAL(seen_records.size(), 2u);
     BOOST_REQUIRE_EQUAL(seen_record_headers[0].timestamp, api::timestamp_type(91));
     BOOST_REQUIRE_EQUAL(seen_record_headers[1].timestamp, api::timestamp_type(92));
-    assert_that(seen_mutations[0].to_mutation(schema)).is_equal_to(expected0);
-    assert_that(seen_mutations[1].to_mutation(schema)).is_equal_to(expected1);
+    assert_that(to_mutation(seen_records[0], schema)).is_equal_to(expected0);
+    assert_that(to_mutation(seen_records[1], schema)).is_equal_to(expected1);
 }
 
 // Checks that the rewriter updates the initial full-buffer header sequence number.
@@ -1547,9 +1548,9 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_streamed_segment_rewriter_rewrites_initial
     BOOST_REQUIRE_EQUAL(seen_records[0].header.table, schema->id());
     BOOST_REQUIRE_EQUAL(seen_records[1].header.table, schema->id());
     BOOST_REQUIRE_EQUAL(seen_records[2].header.table, schema->id());
-    assert_that(seen_records[0].mut.to_mutation(schema)).is_equal_to(expected0);
-    assert_that(seen_records[1].mut.to_mutation(schema)).is_equal_to(expected1);
-    assert_that(seen_records[2].mut.to_mutation(schema)).is_equal_to(expected2);
+    assert_that(to_mutation(seen_records[0], schema)).is_equal_to(expected0);
+    assert_that(to_mutation(seen_records[1], schema)).is_equal_to(expected1);
+    assert_that(to_mutation(seen_records[2], schema)).is_equal_to(expected2);
 }
 
 // Checks that the rewriter can wait for a fragmented initial header before rewriting it.

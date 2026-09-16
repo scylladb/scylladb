@@ -72,7 +72,7 @@ struct segment_header {
 
 struct record_header {
     uint32_t key_size;  // size of the partition key inside the log_record_header that follows
-    uint32_t data_size; // size of the serialized canonical_mutation
+    uint32_t data_size; // size of the record value that follows the log_record_header
 
     bool operator==(const record_header& other) const noexcept = default;
 };

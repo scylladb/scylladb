@@ -35,7 +35,7 @@
 // What logstor adds to a read of a record, and what a write costs beyond the sum of its steps:
 //
 //   perf_logstor --test raw-read,segment-read
-//   perf_logstor --test build-mutation,freeze,record-sizes,append,index-insert,index-lookup,write
+//   perf_logstor --test build-mutation,encode,record-header,append,index-insert,index-lookup,write
 //
 // The cost of a row shape, which is what a change to the format of a record is measured against,
 // and what a buffer amortizes over the writes that share it:
@@ -105,22 +105,17 @@
 //   index-lookup     look one key up in the primary index, which hashes the key first
 //   index-insert     point the index of one key at a record, which is what a write does once its
 //                    record is in a segment. Includes the lookup
-//   deserialize      deserialize one record from a buffer, which copies out the bytes of its
-//                    `canonical_mutation`
-//   materialize      turn one `canonical_mutation` into the mutation a read returns
+//   deserialize      deserialize one record from a buffer, which copies out the bytes of its value
+//   decode           decode the value of one record into the mutation a read returns
 //   build-mutation   build the mutation one write is given. Not a step of a write: a node is handed
 //                    it by the layer above logstor, and only the `write` test builds one per
 //                    operation, so this is what has to come off `write` before its steps add up
-//   freeze           freeze one mutation into the `canonical_mutation` the record of a write carries
+//   encode           encode one mutation into the value the record of a write carries
 //   record-header    build the header of one record, which copies the decorated key of the
 //                    partition into it
-//   record-sizes     `record-header`, and then what `log_record_writer` does to know how much
-//                    room to ask the buffer for: the size of the header follows from the size of
-//                    the key, and the mutation is serialized into a stream that only counts its
-//                    bytes
-//   append           copy one record whose sizes are already known into the buffer of the writer
-//   serialize        what a write pays before its record reaches the buffer: `freeze`,
-//                    `record-header`, `record-sizes` and `append`
+//   append           copy one record whose value is already encoded into the buffer of the writer
+//   serialize        what a write pays before its record reaches the buffer: `encode`,
+//                    `record-header` and `append`
 //   cache-lookup     look one cached mutation up and copy its partition out of the cache region.
 //                    Includes the lookup of the index entry the cached partition hangs off. Draws
 //                    only from the keys the cache still holds after the warming, and says how
@@ -139,9 +134,9 @@
 //                    as `cache-lookup`. What it costs beyond `read-cached` is the reader that turns
 //                    the mutation into fragments, which a query pays and `read-cached` does not
 //   read-disk        a whole read that goes to a segment: index lookup, DMA read, deserialization,
-//                    materialization
+//                    decoding
 //   segment-read     the read of the record from its segment and its deserialization, without
-//                    materializing the mutation. Includes the lookup of the location, since a read
+//                    decoding the mutation. Includes the lookup of the location, since a read
 //                    starts from a key
 //   write            a whole write, up to and including the flush of the buffer its record went into
 //
@@ -156,21 +151,21 @@
 // ===================
 //
 // The steps are meant to add up, and that is the first thing to check. A whole read that goes to a
-// segment costs about what the read of its record costs plus the materialization of its mutation,
+// segment costs about what the read of its record costs plus the decoding of its mutation,
 // and a read the cache serves costs a fraction of either, since it copies a partition that is
 // already in memory rather than deserializing one:
 //
-//   read-disk      ~  segment-read + materialize
+//   read-disk      ~  segment-read + decode
 //   read-cached    ~  cache-lookup
 //   query-cached   ~  read-cached + the reader that fragments the mutation
 //   segment-read   ~  index-lookup + raw-read + deserialize + what the segment manager puts between
 //                     them
-//   serialize      ~  freeze + record-sizes + append
+//   serialize      ~  encode + record-header + append
 //   write          ~  build-mutation + serialize + (index-insert - index-lookup)
 //                     + the writer machinery and the separator
 //
 // What is left over on either side of one of these is a number in its own right: `serialize` beyond
-// `freeze`, `record-sizes` and `append` is nil, and `write` beyond the rest is what the machinery
+// `encode`, `record-header` and `append` is nil, and `write` beyond the rest is what the machinery
 // around the record costs. Two subtractions in that last relation are easy to get wrong.
 // `build-mutation` is the test's own work and has to come off `write` first - at thirty columns it
 // is a third of what the write test reads. And the write path inserts into the index without
@@ -259,7 +254,7 @@
 // profiled is not the run that was measured - under `perf record` the write test reads 56.8k
 // instructions and 31.9 polls per operation against 14.5k and 0.045 without it, and about seventy
 // percent of the samples are a poll loop the measured run does not have. Renormalizing what is left
-// onto the measured cost is not safe either: doing that put the sizing pass of a record at ~1900
+// onto the measured cost is not safe either: doing that put one step of a write at ~1900
 // instructions, and a test written to measure it directly said 291. Use the profile to find which
 // functions are on the path, then add a test here for the ones that look expensive - a method on
 // `logstor_bench` and a name in `test_kinds`.
@@ -288,13 +283,13 @@
 
 #include "dht/i_partitioner.hh"
 #include "keys/keys.hh"
-#include "mutation/canonical_mutation.hh"
 #include "mutation/mutation.hh"
 #include "mutation/mutation_partition_serializer.hh"
 #include "partition_slice_builder.hh"
 #include "reader_concurrency_semaphore.hh"
 #include "replica/logstor/index.hh"
 #include "replica/logstor/logstor.hh"
+#include "replica/logstor/record_value.hh"
 #include "replica/logstor/segment_io.hh"
 #include "replica/logstor/segment_manager.hh"
 #include "replica/logstor/write_buffer.hh"
@@ -305,11 +300,11 @@
 #include "test/perf/perf.hh"
 #include "types/types.hh"
 
-// The mutation of a record is serialized through the same generated code the write path uses, so that
-// what the size of a record costs to compute here is what it costs there.
+// The record size report measures the column mapping a record value carries through the serializer
+// the value is written with.
 #include "serializer_impl.hh"
-#include "idl/frozen_schema.dist.hh"
-#include "idl/frozen_schema.dist.impl.hh"
+#include "idl/mutation.dist.hh"
+#include "idl/mutation.dist.impl.hh"
 
 using namespace replica::logstor;
 
@@ -322,11 +317,10 @@ enum class test_kind {
     index_lookup,
     index_insert,
     deserialize,
-    materialize,
+    decode,
     build_mutation,
-    freeze,
+    encode,
     record_header,
-    record_sizes,
     append,
     serialize,
     cache_lookup,
@@ -343,11 +337,10 @@ const std::vector<std::pair<std::string_view, test_kind>> test_kinds = {
     {"index-lookup", test_kind::index_lookup},
     {"index-insert", test_kind::index_insert},
     {"deserialize", test_kind::deserialize},
-    {"materialize", test_kind::materialize},
+    {"decode", test_kind::decode},
     {"build-mutation", test_kind::build_mutation},
-    {"freeze", test_kind::freeze},
+    {"encode", test_kind::encode},
     {"record-header", test_kind::record_header},
-    {"record-sizes", test_kind::record_sizes},
     {"append", test_kind::append},
     {"serialize", test_kind::serialize},
     {"cache-lookup", test_kind::cache_lookup},
@@ -453,7 +446,7 @@ size_t serialized_size_of(const T& v) {
 // What one record is made of, all of it measured through the serializers the write path uses.
 struct record_sizes {
     size_t header{};    // the encoded log_record_header
-    size_t value{};     // the serialized canonical_mutation the record carries
+    size_t value{};     // the record value, the partition as encode_record_value() encodes it
     size_t mapping{};   // of the value, the column mapping of the schema
     size_t partition{}; // of the value, the partition itself
     size_t record{};    // the record header, the log record header and the value
@@ -471,14 +464,14 @@ record_sizes measure_record(const schema& s, const mutation& m) {
         .timestamp = api::new_timestamp(),
         .table = s.id(),
     };
-    // The partition as the canonical_mutation of the record writes it, which is the only part of a
-    // record that holds anything the write was given.
+    // The partition as the record value writes it, which is the only part of a record that holds
+    // anything the write was given.
     bytes_ostream partition;
     mutation_partition_serializer(s, m.partition()).write(partition);
 
     record_sizes sizes {
         .header = ondisk::log_record_header_size(header),
-        .value = serialized_size_of(canonical_mutation(m)),
+        .value = encode_record_value(m).size(),
         .mapping = serialized_size_of(s.get_column_mapping()),
         .partition = partition.size(),
     };
@@ -560,10 +553,10 @@ class logstor_bench {
     // the tests that measure a single step.
     std::unique_ptr<raw_write_buffer> _serialization_buffer;
     temporary_buffer<char> _serialized_record;
-    canonical_mutation _canonical_mutation;
     std::optional<mutation> _mutation;
-    // A record whose sizes have already been computed, for the append test, which is about what the
-    // copy into the buffer costs and not about what computing the sizes of a record costs.
+    std::optional<log_record> _record;
+    // A writer of that record, whose value is already encoded, for the append test, which is about
+    // what the copy into the buffer costs and not about what encoding the value costs.
     std::optional<log_record_writer> _record_writer;
     // Takes the result of a step whose result is otherwise unused, so that the step is not optimized
     // away and cannot be hoisted out of the loop of the test that repeats it. Volatile because that
@@ -669,7 +662,7 @@ public:
         }
     }
 
-    // The read of the record from its segment and its deserialization, without materializing the
+    // The read of the record from its segment and its deserialization, without decoding the
     // mutation the read returns. The lookup of the location is in it: a read starts from a key, and
     // holding a location from before the measurement would not survive compaction moving its record.
     future<> do_segment_read() {
@@ -721,14 +714,14 @@ public:
         }
     }
 
-    // What a write pays before its record reaches a buffer of the writer: the mutation is frozen
-    // into a canonical_mutation and the record is serialized into the buffer.
+    // What a write pays before its record reaches a buffer of the writer: the mutation is encoded
+    // into the value of a record and the record is serialized into the buffer.
     void do_serialize(unsigned count) {
         for (unsigned i = 0; i < count; ++i) {
             _serialization_buffer->reset();
             _serialization_buffer->append(log_record_writer(log_record{
                 .header = make_record_header(_mutation->decorated_key()),
-                .mut = canonical_mutation(*_mutation),
+                .value = encode_record_value(*_mutation),
             }));
         }
     }
@@ -743,16 +736,16 @@ public:
         }
     }
 
-    // The first half of what do_serialize() measures: the mutation is frozen into the
-    // canonical_mutation that the record of a write carries.
-    void do_freeze(unsigned count) {
+    // The first part of what do_serialize() measures: the mutation is encoded into the value that
+    // the record of a write carries.
+    void do_encode(unsigned count) {
         for (unsigned i = 0; i < count; ++i) {
-            auto frozen = canonical_mutation(*_mutation);
-            (void)frozen;
+            auto value = encode_record_value(*_mutation);
+            (void)value;
         }
     }
 
-    // The header of the record a write builds around its frozen mutation. It carries a copy of the
+    // The header of the record a write builds around its encoded value. It carries a copy of the
     // decorated key of the partition, which is what makes building it cost anything at all.
     void do_record_header(unsigned count) {
         for (unsigned i = 0; i < count; ++i) {
@@ -761,23 +754,8 @@ public:
         }
     }
 
-    // What log_record_writer does to know how much room to ask the buffer for: the size of the
-    // header follows from the size of its key, and the mutation is serialized once into a stream
-    // that only counts the bytes. Measured over the header building of do_record_header(), since the
-    // size of a header can only be taken of a header, and against a key that changes per operation,
-    // so that the measuring cannot be hoisted out of the loop.
-    void do_record_sizes(unsigned count) {
-        for (unsigned i = 0; i < count; ++i) {
-            auto header = make_record_header(random_key());
-            seastar::measuring_output_stream data_size;
-            ser::serialize(data_size, _canonical_mutation);
-            _sink += header.timestamp + ondisk::log_record_header_size(header) + data_size.size();
-        }
-    }
-
-    // And the last: the record, whose sizes are already known, is copied into the buffer of the
-    // writer. What do_serialize() costs beyond these two is the computation of those sizes, which
-    // serializes the mutation once more only to measure it.
+    // And the last: the record, whose value is already encoded, is copied into the buffer of the
+    // writer.
     void do_append(unsigned count) {
         for (unsigned i = 0; i < count; ++i) {
             _serialization_buffer->reset();
@@ -826,18 +804,17 @@ public:
     }
 
     // What a read pays once the record is in memory: the record is deserialized, which copies the
-    // bytes of its canonical_mutation out of the buffer read from the segment.
+    // bytes of its value out of the buffer read from the segment.
     void do_deserialize(unsigned count) {
         for (unsigned i = 0; i < count; ++i) {
             deserialize_log_record(simple_memory_input_stream(_serialized_record.begin(), _serialized_record.size()));
         }
     }
 
-    // And what it pays after that: the canonical_mutation is turned into the mutation the read
-    // returns.
-    void do_materialize(unsigned count) {
+    // And what it pays after that: the value is decoded into the mutation the read returns.
+    void do_decode(unsigned count) {
         for (unsigned i = 0; i < count; ++i) {
-            _canonical_mutation.to_mutation(_schema);
+            decode_record_value(_record->value, _schema, _record->header);
         }
     }
 
@@ -959,11 +936,11 @@ private:
 
     void prepare_single_step_inputs() {
         _mutation = make_mutation(_keys[0]);
-        _canonical_mutation = canonical_mutation(*_mutation);
-        _record_writer.emplace(log_record{
+        _record.emplace(log_record{
             .header = make_record_header(_mutation->decorated_key()),
-            .mut = _canonical_mutation,
+            .value = encode_record_value(*_mutation),
         });
+        _record_writer.emplace(*_record);
         _serialization_buffer->reset();
         auto appended = _serialization_buffer->append(*_record_writer);
         _serialized_record = temporary_buffer<char>(_serialization_buffer->data() + appended.record_header_offset,
@@ -1016,16 +993,14 @@ std::vector<perf_result_with_io> run_test(sharded<logstor_bench>& bench, test_ki
         return cpu_test(&logstor_bench::do_index_insert);
     case test_kind::deserialize:
         return cpu_test(&logstor_bench::do_deserialize);
-    case test_kind::materialize:
-        return cpu_test(&logstor_bench::do_materialize);
+    case test_kind::decode:
+        return cpu_test(&logstor_bench::do_decode);
     case test_kind::build_mutation:
         return cpu_test(&logstor_bench::do_build_mutation);
-    case test_kind::freeze:
-        return cpu_test(&logstor_bench::do_freeze);
+    case test_kind::encode:
+        return cpu_test(&logstor_bench::do_encode);
     case test_kind::record_header:
         return cpu_test(&logstor_bench::do_record_header);
-    case test_kind::record_sizes:
-        return cpu_test(&logstor_bench::do_record_sizes);
     case test_kind::append:
         return cpu_test(&logstor_bench::do_append);
     case test_kind::serialize:
