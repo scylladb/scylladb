@@ -744,6 +744,9 @@ CQL input format
 The input file is expected to contain ``;`` separated CQL statements, providing the content of the output SSTable(s).
 The following CQL statements are allowed: ``INSERT``, ``UPDATE`` and ``DELETE``.
 The statements can be in any order, the data will be sorted internally.
+The table lives in the ``scylla_sstable`` keyspace, which is already selected when
+the statements are run, so the table name doesn't have to be qualified with it
+(but it can be).
 Writes are internally applied to a memtable, which is flushed to disk once its size exceeds the memory limit, specified via the ``--memory-limit`` command line argument (defaults to ``1MiB``).
 
 Reading the statements from the input file happens via a streaming parser, it is
@@ -828,8 +831,10 @@ Custom queries can be provided either via the ``--query`` (on the command-line)
 or via ``--query-file`` (in a file).
 When writing queries by hand, there are some things to keep in in mind:
 
-* The keyspace of the table is changed to ``scylla_sstable.`` This is to avoid any
-  collisions in case the sstables belong to a system keyspace.
+* The keyspace of the table is changed to ``scylla_sstable``. This is to avoid any
+  collisions in case the sstables belong to a system keyspace. The query is run
+  with this keyspace already selected, so the table name doesn't have to be
+  qualified with it (but it can be).
 * If the schema is read from the sstable itself, partition key columns will be
   ``$pk0..$pkN`` and clustering key columns will be ``$ck0..$ckN``. This is because
   the in-sstable schema doesn't contain key column names.
@@ -891,7 +896,7 @@ Select a specific field in a specific partition using the command-line:
 
 .. code-block:: console
 
-    $ scylla sstable query --system-schema --query "SELECT replication FROM scylla_sstable.keyspaces WHERE keyspace_name='ks'" /path/to/data/system_schema/keyspaces-*/*-Data.db
+    $ scylla sstable query --system-schema --query "SELECT replication FROM keyspaces WHERE keyspace_name='ks'" /path/to/data/system_schema/keyspaces-*/*-Data.db
      replication
     -------------------------------------------------------------------------------------
      ({class : org.apache.cassandra.locator.NetworkTopologyStrategy}, {datacenter1 : 1})
@@ -900,7 +905,7 @@ Select a specific field in a specific partition using ``--query-file``:
 
 .. code-block:: console
 
-    $ echo "SELECT replication FROM scylla_sstable.keyspaces WHERE keyspace_name='ks';" > query.cql
+    $ echo "SELECT replication FROM keyspaces WHERE keyspace_name='ks';" > query.cql
     $ scylla sstable query --system-schema --query-file=./query.cql ./scylla-workdir/data/system_schema/keyspaces-*/*-Data.db
      replication
     -------------------------------------------------------------------------------------
