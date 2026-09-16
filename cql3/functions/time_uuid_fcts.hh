@@ -24,8 +24,8 @@ inline
 shared_ptr<function>
 make_now_fct() {
     return make_native_scalar_function<false>("now", timeuuid_type, {},
-            [] (std::span<const bytes_opt> values) -> bytes_opt {
-        return {to_bytes(utils::UUID_gen::get_time_UUID())};
+            [] (std::span<const managed_bytes_opt> values) -> managed_bytes_opt {
+        return managed_bytes(to_bytes(utils::UUID_gen::get_time_UUID()));
     });
 }
 
@@ -42,17 +42,17 @@ inline
 shared_ptr<function>
 make_min_timeuuid_fct() {
     return make_native_scalar_function<true>("mintimeuuid", timeuuid_type, { timestamp_type },
-            [] (std::span<const bytes_opt> values) -> bytes_opt {
+            [] (std::span<const managed_bytes_opt> values) -> managed_bytes_opt {
         auto& bb = values[0];
         if (!bb) {
             return {};
         }
-        auto ts_obj = timestamp_type->deserialize(*bb);
+        auto ts_obj = timestamp_type->deserialize(managed_bytes_view(*bb));
         if (ts_obj.is_null()) {
             return {};
         }
         auto uuid = utils::UUID_gen::min_time_UUID(get_valid_timestamp(ts_obj));
-        return {timeuuid_type->decompose(uuid)};
+        return managed_bytes(timeuuid_type->decompose(uuid));
     });
 }
 
@@ -60,25 +60,28 @@ inline
 shared_ptr<function>
 make_max_timeuuid_fct() {
     return make_native_scalar_function<true>("maxtimeuuid", timeuuid_type, { timestamp_type },
-            [] (std::span<const bytes_opt> values) -> bytes_opt {
+            [] (std::span<const managed_bytes_opt> values) -> managed_bytes_opt {
         auto& bb = values[0];
         if (!bb) {
             return {};
         }
-        auto ts_obj = timestamp_type->deserialize(*bb);
+        auto ts_obj = timestamp_type->deserialize(managed_bytes_view(*bb));
         if (ts_obj.is_null()) {
             return {};
         }
         auto uuid = utils::UUID_gen::max_time_UUID(get_valid_timestamp(ts_obj));
-        return {timeuuid_type->decompose(uuid)};
+        return managed_bytes(timeuuid_type->decompose(uuid));
     });
 }
 
-inline utils::UUID get_valid_timeuuid(bytes raw) {
-    if (!utils::UUID_gen::is_valid_UUID(raw)) {
-        throw exceptions::server_exception(format("invalid timeuuid: size={}", raw.size()));
+inline utils::UUID get_valid_timeuuid(managed_bytes_view raw) {
+    if (raw.size_bytes() != 16) {
+        throw exceptions::server_exception(format("invalid timeuuid: size={}", raw.size_bytes()));
     }
-    auto uuid = utils::UUID_gen::get_UUID(raw);
+    // A timeuuid is 16 bytes, so linearizing it costs nothing worth avoiding.
+    auto uuid = with_linearized(raw, [] (bytes_view linear_raw) {
+        return utils::UUID_gen::get_UUID(linear_raw.data());
+    });
     if (!uuid.is_timestamp()) {
         throw exceptions::server_exception(format("{}: Not a timeuuid: version={}", uuid, uuid.version()));
     }
@@ -89,14 +92,14 @@ inline
 shared_ptr<function>
 make_date_of_fct() {
     return make_native_scalar_function<true>("dateof", timestamp_type, { timeuuid_type },
-            [] (std::span<const bytes_opt> values) -> bytes_opt {
+            [] (std::span<const managed_bytes_opt> values) -> managed_bytes_opt {
         using namespace utils;
         auto& bb = values[0];
         if (!bb) {
             return {};
         }
-        auto ts = db_clock::time_point(db_clock::duration(UUID_gen::unix_timestamp(get_valid_timeuuid(*bb))));
-        return {timestamp_type->decompose(ts)};
+        auto ts = db_clock::time_point(db_clock::duration(UUID_gen::unix_timestamp(get_valid_timeuuid(managed_bytes_view(*bb)))));
+        return managed_bytes(timestamp_type->decompose(ts));
     });
 }
 
@@ -104,41 +107,41 @@ inline
 shared_ptr<function>
 make_unix_timestamp_of_fct() {
     return make_native_scalar_function<true>("unixtimestampof", long_type, { timeuuid_type },
-            [] (std::span<const bytes_opt> values) -> bytes_opt {
+            [] (std::span<const managed_bytes_opt> values) -> managed_bytes_opt {
         using namespace utils;
         auto& bb = values[0];
         if (!bb) {
             return {};
         }
-        return {long_type->decompose(UUID_gen::unix_timestamp(get_valid_timeuuid(*bb)).count())};
+        return managed_bytes(long_type->decompose(UUID_gen::unix_timestamp(get_valid_timeuuid(managed_bytes_view(*bb))).count()));
     });
 }
 
 inline shared_ptr<function>
 make_currenttimestamp_fct() {
     return make_native_scalar_function<false>("currenttimestamp", timestamp_type, {},
-            [] (std::span<const bytes_opt> values) -> bytes_opt {
-        return {timestamp_type->decompose(db_clock::now())};
+            [] (std::span<const managed_bytes_opt> values) -> managed_bytes_opt {
+        return managed_bytes(timestamp_type->decompose(db_clock::now()));
     });
 }
 
 inline shared_ptr<function>
 make_currenttime_fct() {
     return make_native_scalar_function<false>("currenttime", time_type, {},
-            [] (std::span<const bytes_opt> values) -> bytes_opt {
+            [] (std::span<const managed_bytes_opt> values) -> managed_bytes_opt {
         constexpr int64_t milliseconds_in_day = 3600 * 24 * 1000;
         int64_t milliseconds_since_epoch = std::chrono::duration_cast<std::chrono::milliseconds>(db_clock::now().time_since_epoch()).count();
         int64_t nanoseconds_today = (milliseconds_since_epoch % milliseconds_in_day) * 1000 * 1000;
-        return {time_type->decompose(time_native_type{nanoseconds_today})};
+        return managed_bytes(time_type->decompose(time_native_type{nanoseconds_today}));
     });
 }
 
 inline shared_ptr<function>
 make_currentdate_fct() {
     return make_native_scalar_function<false>("currentdate", simple_date_type, {},
-            [] (std::span<const bytes_opt> values) -> bytes_opt {
+            [] (std::span<const managed_bytes_opt> values) -> managed_bytes_opt {
         auto to_simple_date = get_castas_fctn(simple_date_type, timestamp_type);
-        return {simple_date_type->decompose(to_simple_date(db_clock::now()))};
+        return managed_bytes(simple_date_type->decompose(to_simple_date(db_clock::now())));
     });
 }
 
@@ -146,8 +149,8 @@ inline
 shared_ptr<function>
 make_currenttimeuuid_fct() {
     return make_native_scalar_function<false>("currenttimeuuid", timeuuid_type, {},
-            [] (std::span<const bytes_opt> values) -> bytes_opt {
-        return {timeuuid_type->decompose(timeuuid_native_type{utils::UUID_gen::get_time_UUID()})};
+            [] (std::span<const managed_bytes_opt> values) -> managed_bytes_opt {
+        return managed_bytes(timeuuid_type->decompose(timeuuid_native_type{utils::UUID_gen::get_time_UUID()}));
     });
 }
 
@@ -155,15 +158,15 @@ inline
 shared_ptr<function>
 make_timeuuidtodate_fct() {
     return make_native_scalar_function<true>("todate", simple_date_type, { timeuuid_type },
-            [] (std::span<const bytes_opt> values) -> bytes_opt {
+            [] (std::span<const managed_bytes_opt> values) -> managed_bytes_opt {
         using namespace utils;
         auto& bb = values[0];
         if (!bb) {
             return {};
         }
-        auto ts = db_clock::time_point(db_clock::duration(UUID_gen::unix_timestamp(get_valid_timeuuid(*bb))));
+        auto ts = db_clock::time_point(db_clock::duration(UUID_gen::unix_timestamp(get_valid_timeuuid(managed_bytes_view(*bb)))));
         auto to_simple_date = get_castas_fctn(simple_date_type, timestamp_type);
-        return {simple_date_type->decompose(to_simple_date(ts))};
+        return managed_bytes(simple_date_type->decompose(to_simple_date(ts)));
     });
 }
 
@@ -171,18 +174,18 @@ inline
 shared_ptr<function>
 make_timestamptodate_fct() {
     return make_native_scalar_function<true>("todate", simple_date_type, { timestamp_type },
-            [] (std::span<const bytes_opt> values) -> bytes_opt {
+            [] (std::span<const managed_bytes_opt> values) -> managed_bytes_opt {
         using namespace utils;
         auto& bb = values[0];
         if (!bb) {
             return {};
         }
-        auto ts_obj = timestamp_type->deserialize(*bb);
+        auto ts_obj = timestamp_type->deserialize(managed_bytes_view(*bb));
         if (ts_obj.is_null()) {
             return {};
         }
         auto to_simple_date = get_castas_fctn(simple_date_type, timestamp_type);
-        return {simple_date_type->decompose(to_simple_date(ts_obj))};
+        return managed_bytes(simple_date_type->decompose(to_simple_date(ts_obj)));
     });
 }
 
@@ -190,14 +193,14 @@ inline
 shared_ptr<function>
 make_timeuuidtotimestamp_fct() {
     return make_native_scalar_function<true>("totimestamp", timestamp_type, { timeuuid_type },
-            [] (std::span<const bytes_opt> values) -> bytes_opt {
+            [] (std::span<const managed_bytes_opt> values) -> managed_bytes_opt {
         using namespace utils;
         auto& bb = values[0];
         if (!bb) {
             return {};
         }
-        auto ts = db_clock::time_point(db_clock::duration(UUID_gen::unix_timestamp(get_valid_timeuuid(*bb))));
-        return {timestamp_type->decompose(ts)};
+        auto ts = db_clock::time_point(db_clock::duration(UUID_gen::unix_timestamp(get_valid_timeuuid(managed_bytes_view(*bb)))));
+        return managed_bytes(timestamp_type->decompose(ts));
     });
 }
 
@@ -205,18 +208,18 @@ inline
 shared_ptr<function>
 make_datetotimestamp_fct() {
     return make_native_scalar_function<true>("totimestamp", timestamp_type, { simple_date_type },
-            [] (std::span<const bytes_opt> values) -> bytes_opt {
+            [] (std::span<const managed_bytes_opt> values) -> managed_bytes_opt {
         using namespace utils;
         auto& bb = values[0];
         if (!bb) {
             return {};
         }
-        auto simple_date_obj = simple_date_type->deserialize(*bb);
+        auto simple_date_obj = simple_date_type->deserialize(managed_bytes_view(*bb));
         if (simple_date_obj.is_null()) {
             return {};
         }
         auto from_simple_date = get_castas_fctn(timestamp_type, simple_date_type);
-        return {timestamp_type->decompose(from_simple_date(simple_date_obj))};
+        return managed_bytes(timestamp_type->decompose(from_simple_date(simple_date_obj)));
     });
 }
 
@@ -224,31 +227,31 @@ inline
 shared_ptr<function>
 make_timeuuidtounixtimestamp_fct() {
     return make_native_scalar_function<true>("tounixtimestamp", long_type, { timeuuid_type },
-            [] (std::span<const bytes_opt> values) -> bytes_opt {
+            [] (std::span<const managed_bytes_opt> values) -> managed_bytes_opt {
         using namespace utils;
         auto& bb = values[0];
         if (!bb) {
             return {};
         }
-        return {long_type->decompose(UUID_gen::unix_timestamp(get_valid_timeuuid(*bb)).count())};
+        return managed_bytes(long_type->decompose(UUID_gen::unix_timestamp(get_valid_timeuuid(managed_bytes_view(*bb))).count()));
     });
 }
 
-inline bytes time_point_to_long(const data_value& v) {
-    return serialized(get_valid_timestamp(v).count());
+inline managed_bytes time_point_to_long(const data_value& v) {
+    return managed_bytes(serialized(get_valid_timestamp(v).count()));
 }
 
 inline
 shared_ptr<function>
 make_timestamptounixtimestamp_fct() {
     return make_native_scalar_function<true>("tounixtimestamp", long_type, { timestamp_type },
-            [] (std::span<const bytes_opt> values) -> bytes_opt {
+            [] (std::span<const managed_bytes_opt> values) -> managed_bytes_opt {
         using namespace utils;
         auto& bb = values[0];
         if (!bb) {
             return {};
         }
-        auto ts_obj = timestamp_type->deserialize(*bb);
+        auto ts_obj = timestamp_type->deserialize(managed_bytes_view(*bb));
         if (ts_obj.is_null()) {
             return {};
         }
@@ -260,13 +263,13 @@ inline
 shared_ptr<function>
 make_datetounixtimestamp_fct() {
     return make_native_scalar_function<true>("tounixtimestamp", long_type, { simple_date_type },
-            [] (std::span<const bytes_opt> values) -> bytes_opt {
+            [] (std::span<const managed_bytes_opt> values) -> managed_bytes_opt {
         using namespace utils;
         auto& bb = values[0];
         if (!bb) {
             return {};
         }
-        auto simple_date_obj = simple_date_type->deserialize(*bb);
+        auto simple_date_obj = simple_date_type->deserialize(managed_bytes_view(*bb));
         if (simple_date_obj.is_null()) {
             return {};
         }
