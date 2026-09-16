@@ -338,7 +338,7 @@ future<> backup_task_impl::run() {
     // mutating snapshots.
     co_await _snap_ctl.run_snapshot_modify_operation([this] {
         return do_backup();
-    });
+    }, &_as);
     snap_log.info("Finished backup");
 }
 
