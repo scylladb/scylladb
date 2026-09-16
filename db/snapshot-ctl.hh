@@ -118,7 +118,9 @@ private:
 
     future<> check_snapshot_not_exist(sstring ks_name, sstring name, std::optional<std::vector<sstring>> filter = {});
 
-    future<> run_snapshot_modify_operation(noncopyable_function<future<>()> &&);
+    // The lock lives on shard 0, so a caller that wants to abort the wait for
+    // it must run there too.
+    future<> run_snapshot_modify_operation(noncopyable_function<future<>()> &&, seastar::abort_source* = nullptr);
 
     template <typename Func>
     std::invoke_result_t<Func> run_snapshot_list_operation(Func&& f) {
