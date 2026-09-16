@@ -93,12 +93,18 @@ private:
 
 using object_metadata = std::unordered_map<sstring, sstring>;
 
-// Only the user-defined attributes for now: unlike the GCS object resource,
-// which carries the name, size, generation and modification time alongside
-// them, S3 reports those through get_object_stats(), which leaves this with a
-// single member.
+// The user-defined attributes plus the entity tag: unlike the GCS object
+// resource, which carries the name, size, generation and modification time
+// alongside them, S3 reports those through get_object_stats().
 struct object_info {
     object_metadata metadata;
+    // The object's ETag exactly as S3 reports it, i.e. wrapped in double quotes
+    // (RFC 9110 entity-tag). Treat it as an opaque change detector: whether it
+    // is the MD5 of the content depends on how the object was uploaded and
+    // encrypted -- it is not an MD5 for multipart uploads, nor for objects
+    // encrypted with SSE-KMS or SSE-C -- so it must not be used for data
+    // integrity verification.
+    sstring etag;
 };
 static constexpr range full_range{0};
 
@@ -275,6 +281,12 @@ public:
     future<temporary_buffer<char>> get_object_contiguous(sstring object_name, range download_range = s3::full_range, seastar::abort_source* = nullptr);
     future<> put_object(sstring object_name, temporary_buffer<char> buf, object_metadata = {}, seastar::abort_source* = nullptr);
     future<> put_object(sstring object_name, ::memory_data_sink_buffers bufs, object_metadata = {}, seastar::abort_source* = nullptr);
+    // Same as put_object() above, but resolves with the entity tag the server reported for
+    // the object the request created, exactly as it sent it (i.e. in double quotes), so that
+    // an upload sink can report the tag of the object it produced without a follow-up HEAD.
+    // Resolves with an empty string if the server created the object but reported no tag.
+    future<sstring> put_object_and_get_etag(sstring object_name, temporary_buffer<char> buf, object_metadata = {}, seastar::abort_source* = nullptr);
+    future<sstring> put_object_and_get_etag(sstring object_name, ::memory_data_sink_buffers bufs, object_metadata = {}, seastar::abort_source* = nullptr);
     future<> copy_object(sstring source_object, sstring target_object, object_metadata = {}, std::optional<size_t> part_size = {}, std::optional<tag> tag = {}, seastar::abort_source* = nullptr);
     future<> delete_object(sstring object_name, seastar::abort_source* = nullptr);
     future<> create_bucket(sstring bucket_name, seastar::abort_source* = nullptr);
@@ -283,7 +295,22 @@ public:
 
     file make_readable_file(sstring object_name, seastar::abort_source* = nullptr);
     data_sink make_upload_sink(sstring object_name, object_metadata = {}, seastar::abort_source* = nullptr);
+    // Same as make_upload_sink() above, but also returns a future resolving into the entity
+    // tag of the object the sink produced, exactly as S3 reports it (i.e. in double quotes).
+    // It resolves when the first flush() of the sink does, and fails with the same exception
+    // if that flush() fails; if the sink is closed or destroyed without ever being flushed,
+    // it fails with broken_promise. Either way it is resolved by the time the sink is closed,
+    // so awaiting it never outlives the sink. It is the tag of the very object the sink
+    // wrote, which a HEAD issued after the upload would not be - somebody may overwrite the
+    // key in between. It is empty if the server created the object but reported no tag the
+    // sink could make sense of, so the caller is expected to check for that. The caller has
+    // to consume the future even if the upload fails, or seastar reports it as an ignored
+    // exceptional future.
+    std::pair<data_sink, future<sstring>> make_upload_sink_and_get_etag(sstring object_name, object_metadata = {}, seastar::abort_source* = nullptr);
     data_sink make_upload_jumbo_sink(sstring object_name, object_metadata = {}, std::optional<unsigned> max_parts_per_piece = {}, seastar::abort_source* = nullptr);
+    // Same etag contract as make_upload_sink_and_get_etag() above.
+    std::pair<data_sink, future<sstring>> make_upload_jumbo_sink_and_get_etag(sstring object_name, object_metadata = {}, std::optional<unsigned> max_parts_per_piece = {},
+                                                                              seastar::abort_source* = nullptr);
     data_source make_download_source(sstring object_name, range download_range = s3::full_range, seastar::abort_source* = nullptr);
     data_source make_chunked_download_source(sstring object_name, range range = s3::full_range, seastar::abort_source* = nullptr);
     /// upload a file with specified path to s3
