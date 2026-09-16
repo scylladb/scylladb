@@ -1877,6 +1877,12 @@ database::query(schema_ptr query_schema, const query::read_command& cmd, query::
 
     if (cmd.query_uuid && !cmd.is_first_page) {
         querier_opt = _querier_cache.lookup_data_querier(cmd.query_uuid, *query_schema, ranges.front(), cmd.slice, semaphore, trace_state, timeout);
+        if (querier_opt && querier_opt->truncate_epoch() != cf.truncate_epoch()) {
+            // Saved before a tablet of this table was truncated locally: its reader
+            // still sees the dropped data. Start over from the paging state instead.
+            co_await querier_opt->close();
+            querier_opt.reset();
+        }
     }
 
     auto read_func = [&, this] (reader_permit permit) {
@@ -1941,6 +1947,10 @@ database::query_mutations(schema_ptr query_schema, const query::read_command& cm
 
     if (cmd.query_uuid && !cmd.is_first_page) {
         querier_opt = _querier_cache.lookup_mutation_querier(cmd.query_uuid, *query_schema, range, cmd.slice, semaphore, trace_state, timeout);
+        if (querier_opt && querier_opt->truncate_epoch() != cf.truncate_epoch()) {
+            co_await querier_opt->close();
+            querier_opt.reset();
+        }
     }
 
     auto read_func = [&] (reader_permit permit) {

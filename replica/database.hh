@@ -543,6 +543,10 @@ private:
     // TODO: find a better name for this semaphore.
     seastar::named_semaphore _sstable_set_mutation_sem = {1, named_semaphore_exception_factory{"sstable set mutation"}};
     mutable row_cache _cache; // Cache covers only sstables.
+    // Bumped by a local tablet truncate once its memtables are retired. Stamped on every
+    // querier at creation; a saved querier with an older epoch reads sources the truncate
+    // dropped, so database::query() closes it instead of serving the next page from it.
+    uint64_t _truncate_epoch = 0;
     sstables::sstable_generation_generator _sstable_generation_generator;
 
     db::replay_position _highest_rp;
@@ -1078,6 +1082,7 @@ public:
     future<const_mutation_partition_ptr> find_partition(schema_ptr, reader_permit permit, const dht::decorated_key& key) const;
     future<const_row_ptr> find_row(schema_ptr, reader_permit permit, const dht::decorated_key& partition_key, clustering_key clustering_key) const;
     shard_id shard_for_reads(dht::token t) const;
+    uint64_t truncate_epoch() const noexcept { return _truncate_epoch; }
     dht::shard_replica_set shard_for_writes(dht::token t) const;
     // Applies given mutation to this column family
     // The mutation is always upgraded to current schema.
