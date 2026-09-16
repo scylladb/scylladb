@@ -3180,12 +3180,14 @@ future<> storage_service::abort_topology_request(utils::UUID request_id) {
 }
 
 future<> storage_service::wait_for_topology_not_busy() {
-    auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
-    while (_topology_state_machine._topology.is_busy()) {
-        release_guard(std::move(guard));
-        co_await _topology_state_machine.event.when();
-        guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
-    }
+    // Must be called on shard 0: _group0 and the topology state machine only live there.
+    SCYLLA_ASSERT(this_shard_id() == 0);
+    // Barrier once for freshness, then wait on the locally applied state, like the fallback in
+    // await_topology_quiesced(). Re-reading through a group0 guard on every wakeup would instead
+    // advance past the idle moment, which lasts only milliseconds while the coordinator retries a
+    // failed rebuild. Only the barrier is bounded; the wait for idleness itself is not.
+    co_await _group0->group0_server_with_timeouts().read_barrier(&_group0_as, raft_timeout{});
+    co_await _topology_state_machine.await_not_busy();
 }
 
 future<> storage_service::alter_table_with_tablet_hints(table_id tid,
