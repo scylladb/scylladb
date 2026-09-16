@@ -120,6 +120,29 @@ future<> raft_groups_storage::erase_persisted_state(cql3::query_processor& qp, r
     rgslog.info("erase_persisted_state: erased the persisted raft state of group {} on shard {}", gid, shard);
 }
 
+future<truncate_record> raft_groups_storage::load_truncate_record(cql3::query_processor& qp, raft::group_id gid, shard_id shard) {
+    static const auto load_cql = format("SELECT truncated_at, last_truncate_request_id FROM system.{} WHERE shard = ? AND group_id = ? LIMIT 1",
+        db::system_keyspace::RAFT_GROUPS);
+    ::shared_ptr<cql3::untyped_result_set> rs = co_await qp.execute_internal(load_cql, {int16_t(shard), gid.id}, cql3::query_processor::cache_internal::yes);
+    truncate_record record;
+    if (rs->empty()) {
+        co_return record;
+    }
+    const auto& static_row = rs->one();
+    record.truncated_at = static_row.get_or<int64_t>("truncated_at", record.truncated_at);
+    record.last_truncate_request_id = static_row.get_or<utils::UUID>("last_truncate_request_id", record.last_truncate_request_id);
+    co_return record;
+}
+
+future<> raft_groups_storage::store_truncate_record(cql3::query_processor& qp, raft::group_id gid, shard_id shard, const truncate_record& record) {
+    static const auto store_cql = format("INSERT INTO system.{} (shard, group_id, truncated_at, last_truncate_request_id) VALUES (?, ?, ?, ?)",
+        db::system_keyspace::RAFT_GROUPS);
+    return qp.execute_internal(
+        store_cql,
+        {int16_t(shard), gid.id, int64_t(record.truncated_at), record.last_truncate_request_id},
+        cql3::query_processor::cache_internal::yes).discard_result();
+}
+
 future<raft::log_entries> raft_groups_storage::load_log() {
     return make_ready_future<raft::log_entries>(_raft_commitlog.load_log());
 }

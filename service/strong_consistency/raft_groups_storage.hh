@@ -8,6 +8,8 @@
 #pragma once
 
 #include "raft/raft.hh"
+#include "mutation/timestamp.hh"
+#include "utils/UUID.hh"
 
 #include <optional>
 #include <vector>
@@ -31,6 +33,18 @@ class modification_statement;
 } // namespace cql3
 
 namespace service::strong_consistency {
+
+// The last truncate a group's state machine applied, as recorded in system.raft_groups.
+// A default-constructed record means the group has never been truncated.
+struct truncate_record {
+    // The write timestamp the leader assigned to the truncate. Every write ordered after the
+    // truncate in the group's log is stamped above it.
+    api::timestamp_type truncated_at = api::min_timestamp;
+    // The id of the topology request which issued the truncate, null if none did. A retried
+    // request can put a second truncate entry in the log; the id lets the state machine apply
+    // it as a no-op.
+    utils::UUID last_truncate_request_id;
+};
 
 // Raft persistence for strongly consistent tablet groups.
 //
@@ -102,6 +116,11 @@ public:
     // re-apply already applied entries on restart. Only writes if the new
     // index is higher than the existing one (safe to call on repeated replays).
     static future<> store_snapshot_index(cql3::query_processor& qp, raft::group_id gid, shard_id shard, const raft::snapshot_descriptor& snap);
+    // The last truncate applied by the group `gid` hosted on `shard`, a default record if none.
+    // Static like load_commit_idx(), so that the commitlog replay can read it without a
+    // raft_groups_storage instance.
+    static future<truncate_record> load_truncate_record(cql3::query_processor& qp, raft::group_id gid, shard_id shard);
+    static future<> store_truncate_record(cql3::query_processor& qp, raft::group_id gid, shard_id shard, const truncate_record& record);
 
     std::vector<index_and_replay_position> acquire_replay_position_handles_for(const raft::log_entry_ptr_list& entries);
 
