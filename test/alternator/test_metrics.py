@@ -338,6 +338,27 @@ def test_batch_get_item_count(test_table_s, metrics):
         test_table_s.meta.client.batch_get_item(RequestItems = {
             test_table_s.name: {'Keys': [{'p': random_string()}, {'p': random_string()}], 'ConsistentRead': True}})
 
+# Regression test for #31259. BatchGetItem groups reads by partition internally,
+# but item-count metrics should count the requested keys.
+def test_batch_get_item_metrics_count_requested_keys(test_table_ss, metrics):
+    p = random_string()
+    keys = [{'p': p, 'c': c} for c in ('a', 'b', 'c')]
+    global_histogram = [
+        [0, {'op': 'BatchGetItem', 'le': '2.000000'}],
+        [1, {'op': 'BatchGetItem', 'le': '3.000000'}],
+    ]
+    table_histogram = [
+        [0, {'op': 'BatchGetItem', 'le': '2.000000', 'cf': test_table_ss.name}],
+        [1, {'op': 'BatchGetItem', 'le': '3.000000', 'cf': test_table_ss.name}],
+    ]
+    with check_increases_operation(metrics, ['BatchGetItem'], metric_name='scylla_alternator_batch_item_count', expected_value=3), \
+            check_table_increases_operation(metrics, ['BatchGetItem'], test_table_ss.name,
+                    metric_name='scylla_alternator_table_batch_item_count', expected_value=3), \
+            check_increases_metric_exact(metrics, 'scylla_alternator_batch_item_count_histogram_bucket', global_histogram), \
+            check_increases_metric_exact(metrics, 'scylla_alternator_table_batch_item_count_histogram_bucket', table_histogram):
+        test_table_ss.meta.client.batch_get_item(RequestItems={
+            test_table_ss.name: {'Keys': keys, 'ConsistentRead': True}})
+
 KB = 1024
 def test_rcu(test_table_s, metrics):
     with check_increases_metric_exact(metrics, 'scylla_alternator_rcu_total', [[2, None]]):
