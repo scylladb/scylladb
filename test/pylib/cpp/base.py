@@ -9,6 +9,8 @@ from __future__ import annotations
 import os
 import pathlib
 import shlex
+import signal
+import struct
 import subprocess
 from abc import ABC, abstractmethod
 from functools import cache, cached_property
@@ -19,7 +21,8 @@ import pytest
 from _pytest._code.code import ReprFileLocation
 
 from scripts import coverage as coverage_script
-from test import DEBUG_MODES, TEST_DIR, TOP_SRC_DIR, asan_options, path_to, ubsan_options
+from test import BUILD_DIR, DEBUG_MODES, TEST_DIR, TOP_SRC_DIR, asan_options, path_to, ubsan_options, \
+    use_traditional_build
 from test.pylib.coverage_utils import coverage_dir
 from test.pylib.runner import BUILD_MODE, CPP_TEST_LOG, CPP_TEST_LOG_KEPT, RUN_ID, TEST_SUITE
 from test.pylib.scylla_server import merge_cmdline_options
@@ -82,6 +85,21 @@ class CppFile(pytest.File, ABC):
     def exe_path(self) -> pathlib.Path:
         return self.build_basedir / self.test_name
 
+    @cached_property
+    def debug_exe_path(self) -> pathlib.Path:
+        """The executable to run under gdb: the unstripped re-link of exe_path, if there is one.
+
+        The configure.py build strips the test binaries and emits an unstripped
+        variant of each under a `_g` suffix, which --build links when --gdb is
+        given.  The cmake build has no such target and has to be configured
+        with debug info instead, so there this is just exe_path.
+        """
+
+        unstripped = self.exe_path.with_name(f"{self.exe_path.name}_g")
+        if self.config.getoption("--build") and unstripped.is_file():
+            return unstripped
+        return self.exe_path
+
     @property
     def exe_names(self) -> list[str]:
         """Names of the executables which can run this test file, most specific first.
@@ -113,12 +131,18 @@ class CppFile(pytest.File, ABC):
         # from build_basedir, the directory exe_path looks the executable up
         # in, so that what is built is what the test will run.
         target = os.path.relpath(self.build_basedir / exe_name, ninja_cwd())
+        targets = (target,)
+        if self.config.getoption("--gdb") and use_traditional_build():
+            # The test cases are listed by running the executable itself, so
+            # the stripped one is needed too, even though gdb gets the
+            # unstripped re-link.  See debug_exe_path.
+            targets += (f"{target}_g",)
 
         # Collection is captured, so the build would run with its output
         # swallowed until the whole session ends without suspending it.
         capture_manager = self.config.pluginmanager.getplugin("capturemanager")
         with capture_manager.global_and_fixture_disabled():
-            build_ninja_target(target)
+            build_ninja_targets(targets)
 
     @abstractmethod
     def list_test_cases(self) -> list[str]:
@@ -209,6 +233,9 @@ class CppTestCase(pytest.Item):
         )
 
     def run_exe(self, test_args: list[str], output_file: pathlib.Path) -> subprocess.Popen[str]:
+        if self.config.getoption("--gdb"):
+            return self.run_exe_under_gdb(test_args=test_args, output_file=output_file)
+
         args = [str(self.parent.exe_path), *test_args, *self.test_custom_args]
         timeout = TIMEOUT_DEBUG if self.parent.build_mode in DEBUG_MODES else TIMEOUT
         env = {**os.environ, **self.parent.test_env}
@@ -234,6 +261,46 @@ class CppTestCase(pytest.Item):
                 raise
         return p
 
+    def run_exe_under_gdb(self, test_args: list[str], output_file: pathlib.Path) -> subprocess.Popen[str]:
+        """Run the test executable under gdb, on the terminal pytest was started from.
+
+        The test's output goes to the terminal, interleaved with the debugging
+        session, so the log file is left empty -- it only exists to keep the
+        callers which read it working.  There is no timeout either: sitting at
+        a prompt for an arbitrarily long time is the entire point.
+        """
+
+        exe_path = self.parent.debug_exe_path
+        require_debug_info(exe_path=exe_path, build_mode=self.parent.build_mode)
+
+        output_file.write_bytes(b"")
+        args = ["gdb", "--args", str(exe_path), *test_args, *self.test_custom_args]
+        env = {**os.environ, **self.parent.test_env}
+        # Suspending the capture restores stdout and stderr, but not stdin:
+        # pytest keeps that pointed at /dev/null, so that a test reading it
+        # fails instead of hanging.  gdb would read that as an immediate EOF
+        # and quit before the user gets to type anything, so hand it the
+        # terminal explicitly.
+        try:
+            terminal = open("/dev/tty", mode="rb")
+        except OSError as e:
+            pytest.fail(f"--gdb needs a terminal to run the debugging session on: {e}", pytrace=False)
+
+        capture_manager = self.config.pluginmanager.getplugin("capturemanager")
+        with terminal, capture_manager.global_and_fixture_disabled():
+            print(f"Running under gdb: {subprocess.list2cmdline(args)}", flush=True)
+            # ^C at the gdb prompt is for gdb, but the signal goes to the
+            # whole foreground process group, this process included, which
+            # would tear the session down mid-debugging.  gdb interrupts a
+            # running inferior itself, having handed it the terminal.
+            interrupt_handler = signal.signal(signal.SIGINT, signal.SIG_IGN)
+            try:
+                p = subprocess.Popen(args=args, stdin=terminal, close_fds=True, cwd=TOP_SRC_DIR, env=env, text=True)
+                p.communicate()
+            finally:
+                signal.signal(signal.SIGINT, interrupt_handler)
+        return p
+
     def runtest(self) -> None:
         failures, output = self.parent.run_test_case(test_case=self)
 
@@ -250,8 +317,17 @@ class CppTestCase(pytest.Item):
         keep_log = bool(failures) or self.config.getoption("--save-log-on-success")
         if not keep_log:
             output.unlink(missing_ok=True)
-        self.user_properties.append((CPP_TEST_LOG, str(output)))
-        self.user_properties.append((CPP_TEST_LOG_KEPT, keep_log))
+        if not self.config.getoption("--gdb"):
+            # Under gdb the output went to the terminal, so there is no log to
+            # point at.
+            self.user_properties.append((CPP_TEST_LOG, str(output)))
+            self.user_properties.append((CPP_TEST_LOG_KEPT, keep_log))
+
+        if self.config.getoption("--gdb"):
+            # The exit status is gdb's, not the test's: quitting a session
+            # leaves it 0 however the test was doing, so there is no verdict
+            # to report.
+            pytest.skip("ran under gdb, which reports no test result")
 
         if failures:
             raise CppTestFailureList(failures)
@@ -319,15 +395,101 @@ class CppFailureRepr:
 
 
 @cache
-def build_ninja_target(target: str) -> None:
-    """Build a ninja target, at most once per session.
+def build_ninja_targets(targets: tuple[str, ...]) -> None:
+    """Build ninja targets, at most once per session.
 
     Several test files can share an executable (all of the combined tests do),
     and a test file is collected once per build mode and per --repeat, so
-    without the cache the same target would be built over and over again.
+    without the cache the same targets would be built over and over again.
     """
 
-    ninja_build(target)
+    ninja_build(*targets)
+
+
+def elf_section_names(path: pathlib.Path) -> list[str]:
+    """Names of the sections of an ELF64 file, or nothing if it isn't one."""
+
+    with path.open(mode="rb") as f:
+        header = f.read(64)
+        if len(header) < 64 or header[:4] != b"\x7fELF" or header[4] != 2:  # 2: ELFCLASS64
+            return []
+        endianness = "<" if header[5] == 1 else ">"
+        section_headers_offset, = struct.unpack_from(f"{endianness}Q", header, 0x28)
+        header_size, header_count, names_index = struct.unpack_from(f"{endianness}3H", header, 0x3a)
+        if not section_headers_offset or not header_count:
+            return []
+
+        f.seek(section_headers_offset)
+        section_headers = f.read(header_size * header_count)
+        # The section holding the section names is a section itself.  In a
+        # section header sh_offset is at 0x18 and sh_size at 0x20.
+        names_offset, names_size = struct.unpack_from(f"{endianness}2Q", section_headers, names_index * header_size + 0x18)
+        f.seek(names_offset)
+        names = f.read(names_size)
+
+    section_names = []
+    for index in range(header_count):
+        name_offset, = struct.unpack_from(f"{endianness}I", section_headers, index * header_size)
+        section_names.append(names[name_offset:names.index(b"\0", name_offset)].decode(encoding="ascii", errors="replace"))
+    return section_names
+
+
+def require_debug_info(exe_path: pathlib.Path, build_mode: str) -> None:
+    """Refuse to debug a test executable which carries no debug info.
+
+    There is nothing worth opening gdb for then: no source lines and no
+    variables, and for a stripped binary not even symbol names.  Say what to
+    build instead.
+    """
+
+    if not exe_path.is_file():
+        return
+    section_names = elf_section_names(exe_path)
+    if not section_names:
+        # Not an ELF we can read; leave the judgement to gdb.
+        return
+    if any(name.startswith(".debug_") or name == ".gnu_debuglink" for name in section_names):
+        return
+
+    if ".symtab" in section_names:
+        # The symbol table survived, so nothing was stripped: the objects
+        # themselves carry no DWARF, having been compiled without -g.  Both
+        # build systems do that for the dev mode -- can_have_debug_info in
+        # configure.py, no WITH_DEBUG_INFO in cmake/mode.Dev.cmake -- and no
+        # re-link can make up for it.
+        pytest.fail(
+            f"{exe_path} has symbols, but no debug info: the {build_mode} objects were compiled"
+            " without -g, so gdb would have no source lines or variables.\n"
+            f"The {build_mode} mode is built without debug info, so debug in a mode which has it,"
+            " e.g. --mode=debug or --mode=release.  A cmake build can also be configured with"
+            " -DScylla_WITH_DEBUG_INFO=ON, which gives every mode debug info.",
+            pytrace=False,
+        )
+
+    target = os.path.relpath(exe_path, ninja_cwd())
+    if use_traditional_build():
+        if target.endswith("_g"):
+            # _g is the unstripped re-link itself, so there is no _g of it.
+            how_to_fix = (
+                f"Re-configure and build the {build_mode} tests with debug info:\n"
+                f"    ./configure.py --tests-debuginfo 1 && ninja {target}"
+            )
+        else:
+            how_to_fix = (
+                f"Pass --build, which links the unstripped variant of the executable ({target}_g) and"
+                " debugs that, or build it yourself:\n"
+                f"    ninja {target}_g\n"
+                f"Alternatively, re-configure and build the {build_mode} tests with debug info:\n"
+                f"    ./configure.py --tests-debuginfo 1 && ninja {target}"
+            )
+    else:
+        how_to_fix = (
+            f"Re-configure and build the {build_mode} tests with debug info:\n"
+            f"    cmake -DScylla_WITH_DEBUG_INFO=ON {BUILD_DIR} && ninja -C {BUILD_DIR} {target}"
+        )
+
+    pytest.fail(f"{exe_path} was stripped, so gdb would have no symbols or source lines.\n{how_to_fix}",
+                pytrace=False)
 
 
 def get_lines_from_end(file_path: pathlib.Path, lines_count: int = 300) -> list[str]:
