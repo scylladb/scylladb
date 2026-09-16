@@ -19,6 +19,7 @@
 #include "idl/raft_storage.dist.impl.hh"
 
 #include "cql3/query_processor.hh"
+#include "replica/database.hh"
 
 #include <seastar/core/coroutine.hh>
 
@@ -118,6 +119,33 @@ future<> raft_groups_storage::erase_persisted_state(cql3::query_processor& qp, r
     co_await qp.execute_internal(delete_snapshot_config_cql, {int16_t(shard), gid.id}, cql3::query_processor::cache_internal::yes);
 
     rgslog.info("erase_persisted_state: erased the persisted raft state of group {} on shard {}", gid, shard);
+}
+
+future<truncate_record> raft_groups_storage::load_truncate_record(cql3::query_processor& qp, raft::group_id gid, shard_id shard) {
+    static const auto load_cql = format("SELECT truncated_at, last_truncate_request_id, truncate_index FROM system.{} WHERE shard = ? AND group_id = ? LIMIT 1",
+        db::system_keyspace::RAFT_GROUPS);
+    ::shared_ptr<cql3::untyped_result_set> rs = co_await qp.execute_internal(load_cql, {int16_t(shard), gid.id}, cql3::query_processor::cache_internal::yes);
+    truncate_record record;
+    if (rs->empty()) {
+        co_return record;
+    }
+    const auto& static_row = rs->one();
+    record.truncated_at = static_row.get_or<int64_t>("truncated_at", record.truncated_at);
+    record.last_truncate_request_id = static_row.get_or<utils::UUID>("last_truncate_request_id", record.last_truncate_request_id);
+    record.truncate_index = raft::index_t(static_row.get_or<int64_t>("truncate_index", record.truncate_index.value()));
+    co_return record;
+}
+
+future<> raft_groups_storage::store_truncate_record(replica::database& db, raft::group_id gid, shard_id shard,
+        const truncate_record& record, db::rp_handle handle) {
+    auto& cf = db.find_column_family(db::system_keyspace::raft_groups()->id());
+    auto s = cf.schema();
+    mutation m(s, partition_key::from_exploded(*s, {short_type->decompose(int16_t(shard)), uuid_type->decompose(gid.id)}));
+    const auto ts = api::new_timestamp();
+    m.set_static_cell("truncated_at", data_value(int64_t(record.truncated_at)), ts);
+    m.set_static_cell("last_truncate_request_id", data_value(record.last_truncate_request_id), ts);
+    m.set_static_cell("truncate_index", data_value(int64_t(record.truncate_index.value())), ts);
+    co_await db.apply_in_memory(m, cf, std::move(handle), db::no_timeout);
 }
 
 future<raft::log_entries> raft_groups_storage::load_log() {
