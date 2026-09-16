@@ -926,6 +926,52 @@ const tablet_transition_info* tablet_map::get_tablet_transition_info(tablet_id i
     return &i->second;
 }
 
+const tablet_replica_set& tablet_map::get_replicas_for_reading(tablet_id tablet) const {
+    auto* info = get_tablet_transition_info(tablet);
+    if (!info) {
+        return get_tablet_info(tablet).replicas;
+    }
+    switch (info->reads) {
+        case read_replica_set_selector::previous:
+            return get_tablet_info(tablet).replicas;
+        case read_replica_set_selector::next:
+            return info->next;
+    }
+    on_internal_error(tablet_logger, format("Invalid read replica selector: {}", static_cast<int>(info->reads)));
+}
+
+const tablet_replica_set& tablet_map::get_replicas_for_writing(tablet_id tablet) const {
+    auto* info = get_tablet_transition_info(tablet);
+    if (!info) {
+        return get_tablet_info(tablet).replicas;
+    }
+    switch (info->writes) {
+        case write_replica_set_selector::previous:
+            [[fallthrough]];
+        case write_replica_set_selector::both:
+            return get_tablet_info(tablet).replicas;
+        case write_replica_set_selector::next:
+            return info->next;
+    }
+    on_internal_error(tablet_logger, format("Invalid write replica selector: {}", static_cast<int>(info->writes)));
+}
+
+const tablet_replica* tablet_map::get_pending_replica(tablet_id tablet) const {
+    auto* info = get_tablet_transition_info(tablet);
+    if (!info || info->transition == tablet_transition_kind::intranode_migration) {
+        return nullptr;
+    }
+    switch (info->writes) {
+        case write_replica_set_selector::previous:
+            return nullptr;
+        case write_replica_set_selector::both:
+            return info->pending_replica ? &*info->pending_replica : nullptr;
+        case write_replica_set_selector::next:
+            return nullptr;
+    }
+    on_internal_error(tablet_logger, format("Invalid write replica selector: {}", static_cast<int>(info->writes)));
+}
+
 const tablet_raft_info& tablet_map::get_tablet_raft_info(tablet_id id) const {
     check_tablet_id(id);
     if (_raft_info.empty()) {
@@ -1513,22 +1559,7 @@ private:
     const tablet_replica_set& get_replicas_for_write(dht::token search_token) const {
         auto&& tablets = get_tablet_map();
         auto tablet = tablets.get_tablet_id(search_token);
-        auto* info = tablets.get_tablet_transition_info(tablet);
-        auto&& replicas = std::invoke([&] () -> const tablet_replica_set& {
-            if (!info) {
-                return tablets.get_tablet_info(tablet).replicas;
-            }
-            switch (info->writes) {
-                case write_replica_set_selector::previous:
-                    [[fallthrough]];
-                case write_replica_set_selector::both:
-                    return tablets.get_tablet_info(tablet).replicas;
-                case write_replica_set_selector::next: {
-                    return info->next;
-                }
-            }
-            on_internal_error(tablet_logger, format("Invalid write replica selector: {}", static_cast<int>(info->writes)));
-        });
+        auto&& replicas = tablets.get_replicas_for_writing(tablet);
         tablet_logger.trace("get_replicas_for_write({}): table={}, tablet={}, replicas={}", search_token, _table, tablet, replicas);
         return replicas;
     }
@@ -1536,44 +1567,18 @@ private:
     host_id_vector_topology_change get_pending_helper(const token& search_token) const {
         auto&& tablets = get_tablet_map();
         auto tablet = tablets.get_tablet_id(search_token);
-        auto&& info = tablets.get_tablet_transition_info(tablet);
-        if (!info || info->transition == tablet_transition_kind::intranode_migration) {
+        const auto* replica = tablets.get_pending_replica(tablet);
+        if (!replica) {
             return {};
         }
-        switch (info->writes) {
-            case write_replica_set_selector::previous:
-                return {};
-            case write_replica_set_selector::both: {
-                if (!info->pending_replica) {
-                    return {};
-                }
-                tablet_logger.trace("get_pending_endpoints({}): table={}, tablet={}, replica={}",
-                                    search_token, _table, tablet, *info->pending_replica);
-                return {info->pending_replica->host};
-            }
-            case write_replica_set_selector::next:
-                return {};
-        }
-        on_internal_error(tablet_logger, format("Invalid write replica selector: {}", static_cast<int>(info->writes)));
+        tablet_logger.trace("get_pending_endpoints({}): table={}, tablet={}, replica={}", search_token, _table, tablet, *replica);
+        return {replica->host};
     }
 
     host_id_vector_replica_set get_for_reading_helper(const token& search_token) const {
         auto&& tablets = get_tablet_map();
         auto tablet = tablets.get_tablet_id(search_token);
-        auto&& info = tablets.get_tablet_transition_info(tablet);
-        auto&& replicas = std::invoke([&] () -> const tablet_replica_set& {
-            if (!info) {
-                return tablets.get_tablet_info(tablet).replicas;
-            }
-            switch (info->reads) {
-                case read_replica_set_selector::previous:
-                    return tablets.get_tablet_info(tablet).replicas;
-                case read_replica_set_selector::next: {
-                    return info->next;
-                }
-            }
-            on_internal_error(tablet_logger, format("Invalid read replica selector: {}", static_cast<int>(info->reads)));
-        });
+        auto&& replicas = tablets.get_replicas_for_reading(tablet);
         tablet_logger.trace("get_endpoints_for_reading({}): table={}, tablet={}, replicas={}", search_token, _table, tablet, replicas);
         return to_host_set(replicas);
     }
@@ -1622,6 +1627,29 @@ public:
 
     virtual host_id_vector_replica_set get_replicas_for_reading(const token& search_token, bool is_vnode = false) const override {
         return get_for_reading_helper(search_token);
+    }
+
+    // The replication factor is calculated on the fly from the current read replica
+    // set of the token's tablet rather than taken from the schema, because during
+    // migrations caused by a replication factor change the schema and the per-tablet
+    // replica sets may temporarily disagree.
+    virtual size_t get_replication_factor(token search_token) const override {
+        auto&& tablets = get_tablet_map();
+        auto tablet = tablets.get_tablet_id(search_token);
+        auto rf = tablets.get_replicas_for_reading(tablet).size();
+        tablet_logger.trace("get_replication_factor({}): table={}, tablet={}, rf={}", search_token, _table, tablet, rf);
+        return rf;
+    }
+
+    virtual size_t get_replication_factor(token search_token, const sstring& datacenter) const override {
+        auto&& tablets = get_tablet_map();
+        auto tablet = tablets.get_tablet_id(search_token);
+        const auto& topo = get_topology();
+        size_t rf = std::ranges::count_if(tablets.get_replicas_for_reading(tablet), [&] (const tablet_replica& r) {
+            return topo.get_datacenter(r.host) == datacenter;
+        });
+        tablet_logger.trace("get_replication_factor({}, {}): table={}, tablet={}, rf={}", search_token, datacenter, _table, tablet, rf);
+        return rf;
     }
 
     std::optional<tablet_routing_info> check_locality(const token& search_token, unsigned original_shard) const override {
