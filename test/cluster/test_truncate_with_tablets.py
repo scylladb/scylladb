@@ -185,12 +185,17 @@ async def test_truncate_while_node_restart(manager: ScyllaClusterManager, featur
                                 query_template="SELECT COUNT(*) FROM {ks}.{table}", ks=ks, table='test', keys=keys, partition_key='pk') == 0
 
 
+@pytest.mark.parametrize("feature_config", feature_configs(FeatureConfigurations.EVENTUAL_CONSISTENCY,
+                                                           FeatureConfigurations.STRONG_CONSISTENCY))
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_truncate_with_coordinator_crash(manager: ScyllaClusterManager, storage_config: FeatureConfig):
+async def test_truncate_with_coordinator_crash(manager: ScyllaClusterManager, feature_config: FeatureConfig,
+                                               storage_config: FeatureConfig):
 
     logger.info('Bootstrapping cluster')
     cfg = { 'tablets_mode_for_new_keyspaces': 'enabled' }
-    cfg = storage_config.get_cluster_cfg(cfg)
+    cfg = storage_config.get_cluster_cfg(feature_config.get_cluster_cfg(cfg))
+    keyspace_opts = storage_config.get_keyspace_opts(feature_config.get_keyspace_opts(
+        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}"))
 
     servers = []
     servers.append(await manager.server_add(config=cfg))
@@ -200,10 +205,8 @@ async def test_truncate_with_coordinator_crash(manager: ScyllaClusterManager, st
     hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
 
     # Create a keyspace with tablets and initial_tablets == 2, then insert data
-    keyspace_opts = storage_config.get_keyspace_opts(
-        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}")
     async with new_test_keyspace(manager, keyspace_opts) as ks:
-        await cql.run_async(f'CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);')
+        await cql.run_async(feature_config.get_table_opts(f'CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);'))
 
         keys = range(1024)
         await asyncio.gather(*[cql.run_async(f'INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});') for k in keys])
@@ -229,8 +232,8 @@ async def test_truncate_with_coordinator_crash(manager: ScyllaClusterManager, st
         await trunc_future
 
         # Check if we have any data
-        row = await cql.run_async(SimpleStatement(f'SELECT COUNT(*) FROM {ks}.test', consistency_level=ConsistencyLevel.ALL))
-        assert row[0].count == 0
+        assert await count_rows(cql, feature_config,
+                                query_template="SELECT COUNT(*) FROM {ks}.{table}", ks=ks, table='test', keys=keys, partition_key='pk') == 0
 
 
 @pytest.mark.parametrize("feature_config", feature_configs(FeatureConfigurations.EVENTUAL_CONSISTENCY,
