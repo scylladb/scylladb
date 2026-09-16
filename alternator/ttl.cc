@@ -67,6 +67,7 @@ future<executor::request_return_type> executor::update_time_to_live(client_state
     }
 
     schema_ptr schema = get_table(_proxy, request);
+    get_stats_from_schema(_proxy, *schema)->api_operations.update_time_to_live++;
 
     maybe_audit(audit_info, audit::statement_category::DDL,
                 schema->ks_name(), schema->cf_name(), "UpdateTimeToLive", request);
