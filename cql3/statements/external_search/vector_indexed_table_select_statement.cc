@@ -8,7 +8,7 @@
 
 #include "cql3/statements/external_search/vector_indexed_table_select_statement.hh"
 #include "cql3/statements/external_search/external_function.hh"
-#include "cql3/statements/external_search/external_score_provider.hh"
+#include "cql3/statements/external_search/external_search_provider.hh"
 
 #include "cql3/expr/evaluate.hh"
 #include "cql3/expr/expr-utils.hh"
@@ -122,29 +122,38 @@ void prepare_ann_selectors(std::vector<selection::prepared_selector>& prepared_s
         std::optional<ann_ordering_info>& ordering_info, expr::temporary_allocator& temporaries_allocator,
         data_dictionary::database db, const schema_ptr& schema, prepare_context& ctx) {
     for (auto& ps : prepared_selectors) {
+        const auto written = ps.expr;
         ps.expr = expr::search_and_replace(ps.expr, [&] (const expr::expression& candidate) -> std::optional<expr::expression> {
             const auto* fc = expr::as_if<expr::function_call>(&candidate);
-            if (!fc || !expr::is_native_function_call(*fc, functions::ANN_FUNCTION_NAME)) {
+            if (!fc) {
+                return std::nullopt;
+            }
+            // Both 'ANN(column, query_vector)' and the legacy 'column ANN OF query_vector' parse
+            // into an ann() call.
+            const auto* fun = functions::as_external_search_function(*fc);
+            if (!fun || fun->family() != functions::search_family::ann) {
                 return std::nullopt;
             }
 
+            const auto function_name = fun->display_name();
             if (!ordering_info) {
-                throw exceptions::invalid_request_exception(
-                        "ANN() is not supported in the SELECT clause without a matching ANN ordering");
+                throw exceptions::invalid_request_exception(seastar::format(
+                        "{}() is not supported in the SELECT clause without a matching ANN ordering", function_name));
             }
 
             const auto& [ordering_column, ordering_vector] = ordering_info->prepared_ann_ordering;
 
-            auto [col, sel_vector] = external_search::extract_call_arguments(*fc, "ANN");
+            auto [col, sel_vector] = external_search::extract_call_arguments(*fc, function_name);
             if (col != ordering_column) {
-                throw exceptions::invalid_request_exception("ANN() in SELECT must reference the same column as the ANN ordering");
+                throw exceptions::invalid_request_exception(
+                        seastar::format("{}() in SELECT must reference the same column as the ANN ordering", function_name));
             }
 
             const auto vectors_equal = external_search::unevaluated_equality(sel_vector, ordering_vector);
             if (vectors_equal != external_search::equality::always) {
                 if (vectors_equal == external_search::equality::never) {
                     throw exceptions::invalid_request_exception(
-                            "ANN() in SELECT must use the same query vector as the ANN ordering");
+                            seastar::format("{}() in SELECT must use the same query vector as the ANN ordering", function_name));
                 }
                 // Lifted out of the selector tree, so nothing else registers a bind marker in this vector.
                 expr::fill_prepare_context(sel_vector, ctx);
@@ -153,28 +162,23 @@ void prepare_ann_selectors(std::vector<selection::prepared_selector>& prepared_s
             }
 
             if (ordering_info->is_rescoring_enabled) {
-                // Name the selector by what the user wrote - ps.expr, untouched so far - or an
-                // unaliased ANN() would come back named similarity_cosine(...).
-                if (!ps.alias) {
-                    ps.alias = ::make_shared<column_identifier>(fmt::format("{:result_set_metadata}", ps.expr), true);
+                if (fun->value() != functions::search_value::score) {
+                    // A rescoring index reorders the rows by the recomputed similarity, so the
+                    // Vector Store's rank no longer applies, and the rank in the new order is not
+                    // known until all rows are scored, which happens after the selectors. ANN() is
+                    // rejected too, since its tuple contains the rank.
+                    throw exceptions::invalid_request_exception(seastar::format(
+                            "{}() is not supported with a rescoring vector index: the rank is not available after rescoring",
+                            function_name));
                 }
 
                 // Every occurrence computes the similarity again, the hidden ordering selector included.
                 return make_similarity_expression(ordering_info->index, std::make_pair(col, std::move(sel_vector)), db, schema);
             }
 
-            // Every ANN() reports the same score, so one slot serves them all, and a temporary
-            // formats as the call it replaced, so the name needs nothing done to it here.
-            if (!ordering_info->temporary_index) {
-                ordering_info->temporary_index = temporaries_allocator.allocate();
-            }
-
-            return expr::expression(expr::temporary{
-                    .index = *ordering_info->temporary_index,
-                    .type = float_type,
-                    .replaced_expr = candidate,
-            });
+            return external_search::replace_search_call(fun->value(), candidate, ordering_info->temporaries, temporaries_allocator);
         });
+        external_search::name_selector_as_written(ps, written);
     }
 }
 
@@ -201,13 +205,15 @@ select_statement::ordering_comparator_type rescored_similarity_ordering(
         ordering_comparator_type ordering_comparator, std::optional<expr::expression> limit,
         std::optional<expr::expression> per_partition_limit, cql_stats& stats, ann_ordering_info ordering_info, std::unique_ptr<attributes> attrs) {
 
-    // Threshold filtering - WHERE ANN(column, query_vector) > score - is not implemented yet,
-    // so the ann() restrictions claimed for this query have nothing to interpret them.
+    // Filtering by similarity - WHERE ANN(column, query_vector) > score - is not implemented yet.
+    // The message names no function: the user's ANN() arrives here as ANN_SCORE() (see
+    // prepare_external_search_relation_lhs()).
     if (!restrictions->get_scoring_function_restrictions().empty()) {
-        throw exceptions::invalid_request_exception("ANN() is not supported in the WHERE clause");
+        throw exceptions::invalid_request_exception("Filtering by ANN similarity in the WHERE clause is not supported");
     }
 
-    if (ordering_info.temporary_index) {
+    // The score and the rank are matched to a row by primary key.
+    if (ordering_info.temporaries.any()) {
         external_search::fetch_primary_key_columns(*selection, *schema);
     }
 
@@ -281,10 +287,16 @@ future<shared_ptr<cql_transport::messages::result_message>> vector_indexed_table
         pkeys->erase(pkeys->begin() + limit, pkeys->end());
     }
 
-    auto provider = _ann_ordering_info.temporary_index
-                            ? std::make_unique<external_score_provider>(pkeys.value(), *_ann_ordering_info.temporary_index, *_schema)
-                            : nullptr;
-    co_return co_await query_base_table(qp, state, options, pkeys.value(), timeout, std::move(provider));
+    auto table_results = co_await query_base_table(qp, state, options, timeout, pkeys.value());
+
+    auto provider = std::optional<external_search::external_search_provider>{};
+    if (table_results && _ann_ordering_info.temporaries.any()) {
+        const auto& read = table_results.value();
+        auto rows = external_search::join_table_results(*read.rows, read.command->slice, *_schema, *_selection, &pkeys.value());
+        external_search::drop_unscored_rows(rows, pkeys.value());
+        provider.emplace(external_search::search_values_of(_ann_ordering_info.temporaries, rows, pkeys.value()), rows);
+    }
+    co_return co_await emit_result_set(std::move(table_results), options, provider ? &*provider : nullptr);
 }
 
 } // namespace statements

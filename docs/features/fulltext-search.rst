@@ -87,15 +87,34 @@ In the ``WHERE`` clause, ``>`` is the only supported operator and the right-hand
 side must be the literal ``0``. Operators such as ``>=``, ``=``, ``<``, ``<=``,
 and ``!=`` are rejected, as is any non-zero threshold.
 
-``BM25()`` may also be selected, to return the relevance score of each row::
+``WHERE BM25(v, 'search term') > 0`` compares the **score**, and is the same as
+``WHERE BM25_SCORE(v, 'search term') > 0``. ``BM25_RANK()`` cannot be used in the ``WHERE`` clause:
+a threshold on a rank would be a ``LIMIT``, not a filter.
 
-    SELECT id, BM25(v, 'search term') AS score FROM ks.t
+``BM25()`` may also be selected. It returns a ``tuple<float, int>``: the **score** the index gave
+the row, and the row's **rank**, its position in the index's result counted from 1::
+
+    SELECT id, BM25(v, 'search term') AS score_and_rank FROM ks.t
         WHERE BM25(v, 'search term') > 0
         ORDER BY BM25(v, 'search term')
         LIMIT 10;
 
-It is the score the rows are ranked by, so it needs the two clauses above and has to reference the
-same column and the same search term they do.
+``BM25_SCORE()`` and ``BM25_RANK()`` return the two values on their own, which is usually what a
+query wants::
+
+    SELECT id, BM25_SCORE(v, 'search term') AS score, BM25_RANK(v, 'search term') AS rank
+        FROM ks.t
+        WHERE BM25(v, 'search term') > 0
+        ORDER BY BM25(v, 'search term')
+        LIMIT 10;
+
+All three describe the search the rows are ranked by, so each needs the two clauses above and has
+to reference the same column and the same search term they do. A query using several of them still
+makes a single request.
+
+The rank is the position in the index's result, not in the result set. If the index returns a row
+that is no longer in the base table, that row's rank is missing from the result and the ranks after
+it are not renumbered.
 
 Filtering support
 ~~~~~~~~~~~~~~~~~

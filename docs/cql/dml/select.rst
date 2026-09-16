@@ -402,15 +402,27 @@ in this case ``[0.1, 0.2, 0.3, 0.4]``. Written with the function form, it is::
     SELECT image_id FROM ImageEmbeddings
       ORDER BY ANN(embedding, [0.1, 0.2, 0.3, 0.4]) LIMIT 5;
 
-``ANN()`` may also be used as a selector, to return the similarity score of each row::
+``ANN()`` may also be used as a selector. It returns a ``tuple<float, int>``: the **similarity** the
+index gave the row, and the row's **rank**, its position in the index's result counted from 1::
 
-    SELECT image_id, ANN(embedding, [0.1, 0.2, 0.3, 0.4]) AS similarity
+    SELECT image_id, ANN(embedding, [0.1, 0.2, 0.3, 0.4]) AS score_and_rank
       FROM ImageEmbeddings
       ORDER BY ANN(embedding, [0.1, 0.2, 0.3, 0.4]) LIMIT 5;
 
-It is the score the rows are ranked by, so it is only accepted in a query that already orders by
-an ANN clause, and every occurrence must name the same column and the same query vector as that
-clause.
+``ANN_SCORE()`` and ``ANN_RANK()`` return the two values on their own::
+
+    SELECT image_id, ANN_SCORE(embedding, [0.1, 0.2, 0.3, 0.4]) AS similarity
+      FROM ImageEmbeddings
+      ORDER BY ANN(embedding, [0.1, 0.2, 0.3, 0.4]) LIMIT 5;
+
+All three describe the search the rows are ranked by, so each is only accepted in a query that
+already orders by an ANN clause, and every occurrence must name the same column and the same query
+vector as that clause. A query using several of them still makes a single request.
+
+An index configured for :ref:`rescoring <create-vector-index-statement>` recomputes the similarity
+on the coordinator and reorders the rows by it, so the rank the Vector Store gave them no longer
+applies. ``ANN_RANK()`` and ``ANN()`` are rejected in the ``SELECT`` clause of such a query;
+``ANN_SCORE()`` and the ``ORDER BY`` itself work as usual.
 
 To score rows against a vector other than the one being searched for, use the
 :ref:`similarity functions <vector-similarity-functions>` directly.
@@ -499,16 +511,21 @@ Use bind markers for the query term::
         ORDER BY BM25(body, ?)
         LIMIT 10;
 
-Return the relevance score of each row::
+Return the score and the rank of each row::
 
-    SELECT title, BM25(body, 'distributed database') AS relevance FROM articles
+    SELECT title, BM25(body, 'distributed database') AS score_and_rank FROM articles
         WHERE BM25(body, 'distributed database') > 0
         ORDER BY BM25(body, 'distributed database')
         LIMIT 10;
 
-It is the score the rows are ranked by, so it is only accepted in a query that already has the
-required ``WHERE`` and ``ORDER BY`` clauses, and every occurrence must reference the same column
-and the same search term.
+``BM25()`` returns a ``tuple<float, int>``: the **score** the index gave the row, and the row's
+**rank**, its position in the index's result counted from 1. ``BM25_SCORE()`` and ``BM25_RANK()``
+return the two values on their own.
+
+All three describe the search the rows are ranked by, so each is only accepted in a query that
+already has the required ``WHERE`` and ``ORDER BY`` clauses, and every occurrence must reference the
+same column and the same search term. ``WHERE BM25(...) > 0`` compares the score, and is the same
+as ``WHERE BM25_SCORE(...) > 0``. ``BM25_RANK()`` cannot be used in the ``WHERE`` clause.
 
 The ``BM25()`` operator is not a reserved word. If a user-defined function named
 ``bm25`` exists in a keyspace, unqualified ``BM25()`` becomes ambiguous; qualify
