@@ -9,6 +9,7 @@
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/shard_id.hh>
 #include <seastar/core/on_internal_error.hh>
+#include <seastar/util/variant_utils.hh>
 #include "state_machine.hh"
 #include "db/schema_tables.hh"
 #include "mutation/frozen_mutation.hh"
@@ -71,18 +72,30 @@ public:
                 }
                 co_await _mm.get_group0_barrier().trigger(false, &_as);
             });
-            // Apply mutations sequentially to preserve linearizability.
+            // Apply the commands sequentially to preserve linearizability.
             // E.g., for writes A-B-C-D, a reader must observe
             // them in that order and never see A-C or A-D skipping intermediate values.
             for (size_t i = 0; i < command.size(); ++i) {
                 throwing_assert(replay_positions[i].index == command[i]->idx);
                 auto cmd = detail::deserialize_raft_command(command[i]);
-                auto& mut = std::get<write_mutation>(cmd.change).mutation;
-                auto schema = co_await schemas.resolve_and_upgrade(mut);
-                // Concurrent apply_in_memory() calls can complete out of order under memory pressure
-                // (suspended at run_when_memory_available()), making mutations visible out of Raft log order.
-                // Therefore we must await each apply_in_memory() sequentially to preserve Raft log order.
-                co_await _db.apply_in_memory(mut, std::move(schema), std::move(replay_positions[i].replay_position_handle), db::no_timeout, db::noop_large_data_guardrail::instance());
+                co_await std::visit(make_visitor(
+                [&] (write_mutation& write) -> future<> {
+                    auto schema = co_await schemas.resolve_and_upgrade(write.mutation);
+                    // Concurrent apply_in_memory() calls can complete out of order under memory pressure
+                    // (suspended at run_when_memory_available()), making mutations visible out of Raft log order.
+                    // Therefore we must await each apply_in_memory() sequentially to preserve Raft log order.
+                    co_await _db.apply_in_memory(write.mutation, std::move(schema), std::move(replay_positions[i].replay_position_handle), db::no_timeout, db::noop_large_data_guardrail::instance());
+                },
+                [&] (const truncate_command& tc) -> future<> {
+                    // TODO: handle commitlog reply position
+                    // We can release the handler once we persistently stored
+                    // the new truncate record in `system.raft_groups`table.
+                    // Requires scylladb/scylladb#30394 to get in.
+                    auto record = co_await raft_groups_storage::load_truncate_record(
+                            _sys_ks.query_processor(), _group_id, this_shard_id());
+                    co_await apply_truncate_command(_db, _sys_ks.query_processor(), _tablet, _group_id, tc, record);
+                }
+                ), cmd.change);
             }
         } catch (replica::no_such_column_family&) {
             // If the table doesn't exist, it means it was already dropped.
@@ -242,6 +255,21 @@ std::unique_ptr<raft_state_machine> make_state_machine(locator::global_tablet_id
     raft_groups_storage& persistence)
 {
     return std::make_unique<state_machine>(tablet, gid, db, mm, sys_ks, persistence);
+}
+
+future<> apply_truncate_command(replica::database& db, cql3::query_processor& qp,
+        locator::global_tablet_id tablet, raft::group_id gid,
+        const truncate_command& tc, truncate_record& record) {
+    if (record.last_truncate_request_id == tc.request_id) {
+        logger.debug("group {}: truncate of tablet {} by request {} was already applied, skipping",
+                gid, tablet, tc.request_id);
+        co_return;
+    }
+    logger.info("group {}: truncating tablet {} at {} by request {}",
+            gid, tablet, tc.truncated_at, tc.request_id);
+    co_await db.find_column_family(tablet.table).truncate_tablet_locally(db, tablet.tablet);
+    record = truncate_record{.truncated_at = tc.truncated_at, .last_truncate_request_id = tc.request_id};
+    co_await raft_groups_storage::store_truncate_record(qp, gid, this_shard_id(), record);
 }
 
 namespace detail {
