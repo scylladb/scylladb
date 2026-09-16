@@ -3791,11 +3791,6 @@ def test_searchvectors_projectionexpression_vs_projectiontype(dynamodb, needs_ve
 # reconstructs it from the 32-bit float version and returns that - not the
 # original high-precision vector.
 # This test proves this surprising (and undocumented) behavior.
-# This test currently fails on Alternator, because the vector store can't
-# currently the vector attribute - not even the 32-bit version of it - so
-# Alternator restores to fetching it from the base table, which unexpectedly
-# yields the original, high-precision vector, not the 32-bit truncated one.
-@pytest.mark.xfail(reason="Vector attribute is currently forces base read (fast_path=false)")
 def test_searchvectors_projected_vector_reduced_precision(dynamodb, needs_vector_store):
     with new_test_table(dynamodb,
             KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
@@ -3806,6 +3801,52 @@ def test_searchvectors_projected_vector_reduced_precision(dynamodb, needs_vector
                 'Dimensions': 3,
                 'DistanceFunction': 'COSINE',
                 'Projection': {'ProjectionType': 'KEYS_ONLY'},
+            }]) as table:
+        wait_for_vector_index_active(table, 'vind')
+        client = table.meta.client
+        p = random_string()
+        # A value with many more significant digits than a 32-bit float can
+        # hold.
+        v = [Decimal("1"), Decimal("3.1415926535897932384626433832795028841"), Decimal("3")]
+        table.put_item(Item={'p': p, 'v': v})
+        # Verify that the high-precision decimal was really stored with full
+        # precision in the base table (not truncated to float32)
+        result = table.get_item(Key={'p': p})
+        assert result['Item']['v'] == v
+        # Wait until the item is indexed, and ask ProjectionExpression to
+        # return the vector. We'll then see it's a reconstructed, truncated,
+        # version of v, not identical to the original v.
+        result = wait_for_search_vectors(client,
+            condition=lambda result: result.get('SearchResults'),
+            message='Timed out waiting for item to appear',
+            TableName=table.name, IndexName='vind', SearchVector=[1, 0, 0], TopK=1,
+            ProjectionExpression='p, v')
+        got_v = result['SearchResults'][0]['Item']['v']
+        # Check that got_v is *not* identical to v, but they are identical
+        # when truncated to float32 precision.
+        assert got_v != v
+        assert to_float32(got_v) == to_float32(v)
+
+# Same as test_searchvectors_projected_vector_reduced_precision but for the
+# ProjectionType=ALL case. In this case, all attributes of the item are
+# projected into the index, so in theory the full-precision vector could be
+# available there as well. But in practice, as we show in the test
+# test_vectorindexes_projection_skips_vector_attribute, DynamoDB doesn't
+# actually project the full-precision vector attribute even if we explicitly
+# ask to project it (ProjectionType=INCLUDE) and here we see the same also
+# when ProjectionType=ALL is used. Retrieving the vector from the index still
+# gives a truncated version.
+@pytest.mark.xfail(reason="ProjectType=ALL currently uses base-table reads vector attribute read with full precision")
+def test_searchvectors_projected_all_vector_reduced_precision(dynamodb, needs_vector_store):
+    with new_test_table(dynamodb,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}],
+            VectorIndexes=[{
+                'IndexName': 'vind',
+                'VectorAttribute': {'AttributeName': 'v'},
+                'Dimensions': 3,
+                'DistanceFunction': 'COSINE',
+                'Projection': {'ProjectionType': 'ALL'},
             }]) as table:
         wait_for_vector_index_active(table, 'vind')
         client = table.meta.client
@@ -6156,11 +6197,6 @@ def test_describetable_vectorindexes_projectiontype_include_keyattribute(dynamod
 # from search results unless a ProjectionExpression asks for it explicitly,
 # and even then it comes back reconstructed from the index's 32-bit floats,
 # not from a projected copy of the item's original value.
-# Like test_searchvectors_projected_vector_reduced_precision, this test fails
-# on Alternator on its last check: the vector attribute forces a base-table
-# read, which returns the item's original high-precision vector instead of the
-# 32-bit truncated one that DynamoDB returns.
-@pytest.mark.xfail(reason="Vector attribute is currently read with full precision, from base-table read")
 def test_vectorindexes_projection_skips_vector_attribute(dynamodb, needs_vector_store):
     with new_test_table(dynamodb,
             KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],

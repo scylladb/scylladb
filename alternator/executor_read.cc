@@ -1957,6 +1957,30 @@ future<executor::request_return_type> executor::query(client_state& client_state
     });
 }
 
+// Decode the indexed vector, which the vector store returns - when ann()'s
+// return_columns asks for it - as a JSON array of numbers reconstructed from
+// the index, i.e. the 32-bit floats the index holds rather than the possibly
+// higher-precision numbers which were written. We return it as a list ("L")
+// of numbers ("N"), as DynamoDB does, even if the item's attribute was
+// written as the ScyllaDB-only FLOAT32VECTOR type.
+static rjson::value decode_vector_column_value(const std::string& attr_name, const rjson::value& raw) {
+    if (!raw.IsArray()) {
+        throw api_error::internal(format("Vector store returned a non-array value for vector column '{}'", attr_name));
+    }
+    rjson::value list = rjson::empty_array();
+    for (const rjson::value& element : raw.GetArray()) {
+        if (!element.IsNumber()) {
+            throw api_error::internal(format("Vector store returned a non-numeric element for vector column '{}'", attr_name));
+        }
+        rjson::value number = rjson::empty_object();
+        rjson::add_with_string_name(number, "N", rjson::from_string(fmt::format("{}", element.GetFloat())));
+        rjson::push_back(list, std::move(number));
+    }
+    rjson::value wrapped = rjson::empty_object();
+    rjson::add_with_string_name(wrapped, "L", std::move(list));
+    return wrapped;
+}
+
 // Decode a single "fc" (filtering column) column's value, as returned in
 // vector_search::primary_key::column_values (see ann()'s return_columns),
 // into Alternator's typed JSON attribute-value representation ({"S": ...},
@@ -2317,13 +2341,8 @@ future<executor::request_return_type> executor::search_vectors(client_state& cli
     //    BaseRead=false, disobeying the BaseRead=false flag. Unfortunately
     //    we have no choice - the only other option would be to not allow
     //    BaseRead=false at all when ProjectionType=ALL.
-    // 3. Similarly, the vector store currently cannot retrieve the indexed
-    //    vector. If this vector is explicitly requested by
-    //    ProjectionExpression, we cannot use the fast path and emulate this
-    //    request inefficiently with the slow path.
 
-    bool fast_path = !base_read && !projection_type_all &&
-        !attrs_to_get_opt->contains(vector_attribute_name);
+    bool fast_path = !base_read && !projection_type_all;
 
     // vs_return_columns: the list of SearchSchema and Projection attributes
     // to ask the vector store to return alongside the primary keys - i.e.
@@ -2361,13 +2380,23 @@ future<executor::request_return_type> executor::search_vectors(client_state& cli
         }
         if (projection) {
             for (const std::string& attr : *projection) {
-                if (std::ranges::contains(vs_return_columns, attr)) {
+                if (std::ranges::contains(vs_return_columns, attr) ||
+                        attr == vector_attribute_name) {
                     continue;
                 }
                 if (!is_base_key(attr)) {
                     vs_return_columns.push_back(attr);
                 }
             }
+        }
+        // If this request explicitly asked for the indexed vector, ask the
+        // vector store to return it too - it reconstructs it from the index,
+        // so unlike the attributes above we ask for it only when wanted. Only
+        // an explicit ProjectionExpression counts: like DynamoDB, the default
+        // response does not include the vector attribute even when the
+        // index's Projection happens to list it.
+        if (has_explicit_attrs && attrs_to_get_opt->contains(vector_attribute_name)) {
+            vs_return_columns.push_back(vector_attribute_name);
         }
     }
 
@@ -2465,7 +2494,10 @@ future<executor::request_return_type> executor::search_vectors(client_state& cli
             for (const std::string& attr : vs_return_columns) {
                 auto it = pkey.column_values.find(attr);
                 if (it != pkey.column_values.end()) {
-                    rjson::add_with_string_name(item, attr, decode_fc_column_value(attr, it->second, ss_info));
+                    rjson::add_with_string_name(item, attr,
+                            attr == vector_attribute_name
+                                ? decode_vector_column_value(attr, it->second)
+                                : decode_fc_column_value(attr, it->second, ss_info));
                 }
             }
             if (flt && !flt.check(item)) {
