@@ -401,6 +401,12 @@ enum class tablet_transition_kind {
 
 tablet_transition_kind choose_rebuild_transition_kind(const gms::feature_service& features);
 
+// True if a transition in this stage can still be rolled back, so cancelling it is safe -
+// see the switch for the exact set. Up to and including the streaming stage writes still go to
+// the leaving replica, so the roll-back loses nothing. The stages which follow have to roll
+// forward, and the repair and restore stages are not cancellable at all.
+bool can_cancel_tablet_transition(tablet_transition_stage);
+
 sstring tablet_transition_stage_to_string(tablet_transition_stage);
 tablet_transition_stage tablet_transition_stage_from_string(const sstring&);
 sstring tablet_transition_kind_to_string(tablet_transition_kind);
@@ -421,6 +427,10 @@ struct tablet_transition_info {
     std::optional<tablet_replica> pending_replica; // Optimization (next - tablet_info::replicas)
     service::session_id session_id;
     sstring snapshot_name;
+    // Set when the transition was cancelled, e.g. because it was holding up a topology
+    // request. The coordinator rolls it back in the stages which support that, and ignores
+    // it in the ones which don't.
+    bool cancelled = false;
     write_replica_set_selector writes;
     read_replica_set_selector reads;
 
@@ -429,7 +439,8 @@ struct tablet_transition_info {
                            tablet_replica_set next,
                            std::optional<tablet_replica> pending_replica,
                            service::session_id session_id = {},
-                           sstring snapshot_name = {});
+                           sstring snapshot_name = {},
+                           bool cancelled = false);
 
     bool operator==(const tablet_transition_info&) const = default;
 };
