@@ -1350,6 +1350,8 @@ public:
     // Use in case this instance and p share the same schema.
     // Same guarantees and constraints as for other variants of apply().
     void apply(const schema& s, mutation_partition&& p, mutation_application_stats& app_stats);
+    // Like the const& overload above, but avoids cloning p: p is moved-from and upgraded in place if schemas differ.
+    void apply(const schema& this_schema, mutation_partition&& p, const schema& p_schema, mutation_application_stats& app_stats);
 
     // Applies p to this instance.
     //
@@ -1384,6 +1386,11 @@ public:
     // Strong exception guarantees.
     void upgrade(const schema& old_schema, const schema& new_schema);
 private:
+    // Common tail of the apply() overloads: applies p (already governed by this_schema) via
+    // apply_monotonically(is_preemptible::no), discarding the (irrelevant in that mode) apply_resume.
+    void finish_apply(const schema& this_schema, mutation_partition&& p, mutation_application_stats& app_stats);
+    // Upgrades p to this_schema if p_schema differs, then finish_apply()'s it.
+    void do_apply(const schema& this_schema, mutation_partition&& p, const schema& p_schema, mutation_application_stats& app_stats);
     void insert_row(const schema& s, const clustering_key& key, deletable_row&& row);
     void insert_row(const schema& s, const clustering_key& key, const deletable_row& row);
 
