@@ -29,7 +29,7 @@ from cassandra.pool import Host # type: ignore # pylint: disable=no-name-in-modu
 from cassandra.query import Statement # type: ignore # pylint: disable=no-name-in-module
 from cassandra import DriverException, ConsistencyLevel  # type: ignore # pylint: disable=no-name-in-module
 
-from test import BUILD_DIR, TOP_SRC_DIR, MODES_TIMEOUT_FACTOR
+from test import BUILD_DIR, TOP_SRC_DIR, MODES_TIMEOUT_FACTOR, use_traditional_build
 from test.pylib.internal_types import ServerInfo
 
 logger = logging.getLogger(__name__)
@@ -368,14 +368,15 @@ async def wait_all(coros: list[Coroutine], timeout: int|None = None):
     return result
 
 
+def ninja_args() -> list[str]:
+    return [] if use_traditional_build() else ["-C", str(BUILD_DIR)]
+
+
 def ninja(target: str) -> str:
     """Build specified target using ninja."""
 
     return subprocess.Popen(
-        # cmake places build.ninja in build/, traditional is in ./.
-        # We choose to test for traditional, not cmake, because IDEs may
-        # invoke cmake to learn the configuration and generate false positives
-        args=["ninja", *(["-C", str(BUILD_DIR)] if not TOP_SRC_DIR.joinpath("build.ninja").exists() else []), target],
+        args=["ninja", *ninja_args(), target],
         stdout=subprocess.PIPE,
         cwd=TOP_SRC_DIR,
     ).communicate()[0].decode()
