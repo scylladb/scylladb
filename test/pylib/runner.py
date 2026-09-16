@@ -46,7 +46,8 @@ from test.pylib.s3_server_mock import MockS3Server
 from test.pylib.scylla_cluster import ScyllaCluster
 from test.pylib.scylla_server import merge_cmdline_options
 from test.pylib.skip_reason_plugin import skip_marker
-from test.pylib.util import get_modes_to_run, scale_timeout_by_mode, get_xdist_worker_id, LogPrefixAdapter
+from test.pylib.util import NO_BUILD_CONFIGURED, build_is_configured, get_modes_to_run, scale_timeout_by_mode, \
+    get_xdist_worker_id, LogPrefixAdapter
 from test.pylib.version_fetch_utils import fetch_and_install_scylla_version
 
 if TYPE_CHECKING:
@@ -122,6 +123,9 @@ def pytest_addoption(parser: pytest.Parser) -> None:
                      help="Controls number of compaction groups to be used by Scylla tests. Value of 3 implies 8 groups.")
     parser.addoption('--repeat', action="store", default=1, type=int,
                      help="number of times to repeat test execution")
+
+    parser.addoption('--build', action='store_true', default=False,
+                     help="Build the executables of the selected C++ tests before running them.")
 
     parser.addoption('--exe-path', default=False,
                      dest="exe_path", action="store",
@@ -609,7 +613,12 @@ def pytest_configure(config: pytest.Config) -> None:
     if config.getoption("--exe-path"):
         if config.getoption("--mode"):
             raise RuntimeError("Can't use --mode with --exe-path or --exe-url.")
+        if config.getoption("--build"):
+            raise pytest.UsageError("Can't use --build with --exe-path or --exe-url: there is no build to run.")
         config.option.modes = ["custom_exe"]
+
+    if config.getoption("--build") and not build_is_configured():
+        raise pytest.UsageError(NO_BUILD_CONFIGURED)
 
     os.environ["TOPOLOGY_RANDOM_FAILURES_TEST_SHUFFLE_SEED"] = os.environ.get("TOPOLOGY_RANDOM_FAILURES_TEST_SHUFFLE_SEED", str(random.randint(0, sys.maxsize)))
     config.build_modes = get_modes_to_run(config)
