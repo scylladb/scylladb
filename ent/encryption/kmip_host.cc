@@ -34,6 +34,7 @@
 #include "encryption.hh"
 #include "encryption_exceptions.hh"
 #include "symmetric_key.hh"
+#include "key_cache.hh"
 #include "utils/hash.hh"
 #include "utils/loading_cache.hh"
 #include "utils/UUID.hh"
@@ -233,14 +234,8 @@ private:
     encryption_context& _ctxt;
     sstring _name;
     host_options _options;
-    utils::loading_cache<kmip_key_info, key_and_id_type, 2,
-                    utils::loading_cache_reload_enabled::yes,
-                    utils::simple_entry_size<key_and_id_type>,
-                    kmip_key_info_hash> _attr_cache;
-
-    utils::loading_cache<id_type, ::shared_ptr<symmetric_key>, 2,
-                    utils::loading_cache_reload_enabled::yes,
-                    utils::simple_entry_size<::shared_ptr<symmetric_key>>> _id_cache;
+    attr_cache<kmip_key_info, key_and_id_type, kmip_key_info_hash> _attr_cache;
+    id_cache<id_type, ::shared_ptr<symmetric_key>> _id_cache;
 
     using connections = std::deque<con_ptr>;
     using host_to_connections = std::unordered_map<sstring, connections>;

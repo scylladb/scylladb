@@ -49,7 +49,11 @@ void db::extensions::add_commitlog_file_extension(sstring n, commitlog_file_exte
 }
 
 void db::extensions::add_extension_to_schema(schema_ptr s, const sstring& name, shared_ptr<schema_extension> ext) {
-    const_cast<schema *>(s.get())->extensions()[name] = std::move(ext);
+    if (ext) {
+        const_cast<schema *>(s.get())->extensions()[name] = std::move(ext);
+    } else {
+        const_cast<schema *>(s.get())->extensions().erase(name);
+    }
 }
 
 void db::extensions::add_extension_internal_keyspace(std::string ks) {

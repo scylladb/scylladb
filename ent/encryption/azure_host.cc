@@ -26,6 +26,7 @@
 #include "azure_host.hh"
 #include "encryption.hh"
 #include "encryption_exceptions.hh"
+#include "key_cache.hh"
 
 using namespace std::chrono_literals;
 
@@ -82,6 +83,7 @@ public:
 
     impl(encryption_context*, const std::string& name, const host_options& options);
     future<> init();
+    future<> stop();
     const host_options& options() const;
     future<key_and_id_type> get_or_create_key(const key_info&, const option_override* = nullptr);
     future<key_ptr> get_key_by_id(const id_type&, const key_info&);
@@ -120,17 +122,8 @@ private:
 
     friend struct fmt::formatter<id_cache_key>;
 
-    template<typename Key, typename Value, typename Hash>
-    using cache_type = utils::loading_cache<
-        Key,
-        Value,
-        2,
-        utils::loading_cache_reload_enabled::yes,
-        utils::simple_entry_size<Value>,
-        Hash
-    >;
-    cache_type<attr_cache_key, key_and_id_type, attr_cache_key_hash> _attr_cache;
-    cache_type<id_cache_key, bytes, id_cache_key_hash> _id_cache;
+    attr_cache<attr_cache_key, key_and_id_type, attr_cache_key_hash> _attr_cache;
+    id_cache<id_cache_key, bytes, id_cache_key_hash> _id_cache;
 
     static constexpr char AKV_HOST_TEMPLATE[] = "{}.vault.azure.net";
     static constexpr char AKV_PATH_TEMPLATE[] = "/keys/{}/{}/{}?api-version=7.4";
@@ -219,6 +212,11 @@ future<> azure_host::impl::init() {
         }
         _initialized = true;
     });
+}
+
+future<> azure_host::impl::stop() {
+    co_await _attr_cache.stop();
+    co_await _id_cache.stop();
 }
 
 const azure_host::host_options& azure_host::impl::options() const {
@@ -454,6 +452,15 @@ future<azure_host::key_and_id_type> azure_host::impl::create_key(const attr_cach
     bytes id(sid.begin(), sid.end());
 
     azlog.trace("[{}] Created key id {}", _log_prefix, sid);
+
+    id_cache_key key2 {
+        .id = id,
+    };
+    co_await _id_cache.insert(key2, [&](const id_cache_key& kin) -> future<bytes>{
+        assert(kin.id == key2.id);
+        co_return key->key();
+    });
+
     co_return key_and_id_type{ key, id };
 }
 
@@ -542,6 +549,10 @@ azure_host::~azure_host() = default;
 
 future<> azure_host::init() {
     return _impl->init();
+}
+
+future<> azure_host::stop() {
+    return _impl->stop();
 }
 
 const azure_host::host_options& azure_host::options() const {
