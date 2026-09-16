@@ -452,9 +452,8 @@ struct record_sizes {
     size_t frame_size{};  // the record frame: the frame header, the record header and the value
     size_t padding{};     // what aligning the next frame after this one costs
 
-    // What the value spends on neither the mapping nor the partition: the table id, the schema
-    // version, the copy of the partition key that the record header already carries, and the
-    // framing of all of them.
+    // What the value spends on neither the mapping nor the partition: the version of the schema
+    // the record was written under.
     size_t value_rest() const noexcept { return value_size - mapping - partition; }
 };
 
@@ -488,7 +487,7 @@ void print_record_size_report(const std::vector<size_t>& key_sizes, const std::v
             "key", "cols", "value", "payload",
             "header", "value", "frame", "pad",
             "overhead", "ratio",
-            "mapping", "partition", "ids+key");
+            "mapping", "partition", "version");
     for (auto columns : column_counts) {
         auto s = make_kv_schema(static_cast<unsigned>(columns));
         for (auto value_size : value_sizes) {

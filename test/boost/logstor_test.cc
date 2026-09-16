@@ -23,6 +23,7 @@
 #include <seastar/util/memory-data-source.hh>
 #include <seastar/util/defer.hh>
 
+#include "mutation/canonical_mutation.hh"
 #include "replica/logstor/index.hh"
 #include "replica/logstor/logstor.hh"
 #include "replica/logstor/ondisk.hh"
@@ -604,6 +605,112 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_write_buffer_record_and_header_serializati
     BOOST_REQUIRE_EQUAL(sh.table, schema->id());
     BOOST_REQUIRE_EQUAL(sh.first_token, expected.header.key.token());
     BOOST_REQUIRE_EQUAL(sh.last_token, expected.header.key.token());
+}
+
+namespace {
+
+schema_ptr make_multi_column_schema() {
+    return schema_builder(1, "ks", "cf_multi")
+            .with_column("pk", utf8_type, column_kind::partition_key)
+            .with_column("v", utf8_type)
+            .with_column("w", int32_type)
+            .with_column("x", bytes_type)
+            .build();
+}
+
+// A partition with a live cell, an expiring cell and a dead cell, and a row marker.
+mutation make_multi_column_mutation(schema_ptr schema, sstring pk, api::timestamp_type ts) {
+    auto key = partition_key::from_single_value(*schema, serialized(pk));
+    mutation m(schema, dht::decorate_key(*schema, key));
+    auto& row = m.partition().clustered_row(*schema, clustering_key::make_empty());
+    row.apply(row_marker(ts));
+    const auto& v_def = *schema->get_column_definition("v");
+    const auto& w_def = *schema->get_column_definition("w");
+    const auto& x_def = *schema->get_column_definition("x");
+    row.cells().apply(v_def, atomic_cell::make_live(*v_def.type, ts, serialized(sstring("value"))));
+    row.cells().apply(w_def, atomic_cell::make_live(*w_def.type, ts, serialized(int32_t(42)),
+            gc_clock::now() + std::chrono::hours(1), std::chrono::hours(1)));
+    row.cells().apply(x_def, atomic_cell::make_dead(ts, gc_clock::now()));
+    return m;
+}
+
+record_header make_header(const mutation& m, api::timestamp_type ts) {
+    return record_header{
+        .key = m.decorated_key(),
+        .timestamp = ts,
+        .table = m.schema()->id(),
+    };
+}
+
+} // anonymous namespace
+
+// Checks that a record value decodes back to the partition it was encoded from, and that it is
+// smaller than the canonical_mutation it is stripped from.
+SEASTAR_THREAD_TEST_CASE(test_logstor_record_value_round_trip) {
+    auto schema = make_multi_column_schema();
+    const auto ts = api::timestamp_type(11);
+
+    auto m = make_multi_column_mutation(schema, "pk0", ts);
+    auto value = encode_record_value(m);
+    assert_that(decode_record_value(value, schema, make_header(m, ts))).is_equal_to(m);
+    BOOST_REQUIRE_LT(value.size(), canonical_mutation(m).representation().size());
+
+    // The value starts with the schema version, most significant half first. That is what a
+    // read under the same schema compares against, and a decoder that got the halves in the
+    // wrong order would still decode correctly, only through the converting path.
+    auto in = ser::as_input_stream(value.representation());
+    BOOST_REQUIRE_EQUAL(ser::serializer<int64_t>::read(in), schema->version().uuid().get_most_significant_bits());
+    BOOST_REQUIRE_EQUAL(ser::serializer<int64_t>::read(in), schema->version().uuid().get_least_significant_bits());
+
+    // A partition tombstone alone, with no row.
+    mutation deleted(schema, m.decorated_key());
+    deleted.partition().apply(tombstone(ts, gc_clock::now()));
+    auto deleted_value = encode_record_value(deleted);
+    assert_that(decode_record_value(deleted_value, schema, make_header(deleted, ts))).is_equal_to(deleted);
+}
+
+// Checks that a record written under one schema version reads under another the way a
+// canonical_mutation does: a column the record has and the schema does not is dropped, a column
+// the schema has and the record does not is absent.
+SEASTAR_THREAD_TEST_CASE(test_logstor_record_value_decodes_under_another_schema_version) {
+    auto schema = make_multi_column_schema();
+    const auto ts = api::timestamp_type(21);
+
+    auto m = make_multi_column_mutation(schema, "pk0", ts);
+    auto value = encode_record_value(m);
+    auto header = make_header(m, ts);
+    auto oracle = canonical_mutation(m);
+
+    auto with_added = schema_builder(schema).with_column("y", long_type).build();
+    BOOST_REQUIRE(with_added->version() != schema->version());
+    assert_that(decode_record_value(value, with_added, header)).is_equal_to(oracle.to_mutation(with_added));
+    assert_that(decode_record_value(value, with_added, header)).is_equal_to(m);
+
+    auto with_dropped = schema_builder(schema).without_column("w", ts + 1).build();
+    BOOST_REQUIRE(with_dropped->version() != schema->version());
+    auto decoded = decode_record_value(value, with_dropped, header);
+    assert_that(decoded).is_equal_to(oracle.to_mutation(with_dropped));
+    // Of the three cells written, the one of the dropped column is gone.
+    const auto& cells = decoded.partition().clustered_row(*with_dropped, clustering_key::make_empty()).cells();
+    BOOST_REQUIRE(cells.find_cell(with_dropped->get_column_definition("v")->id) != nullptr);
+    BOOST_REQUIRE(cells.find_cell(with_dropped->get_column_definition("x")->id) != nullptr);
+    BOOST_REQUIRE_EQUAL(cells.size(), 2u);
+}
+
+// Checks that a value is not decoded with the schema of another table: the table id comes from the
+// header, and the check that used to be inside the canonical_mutation has to hold there.
+SEASTAR_THREAD_TEST_CASE(test_logstor_record_value_rejects_the_schema_of_another_table) {
+    auto schema = make_multi_column_schema();
+    auto other = make_kv_schema();
+    const auto ts = api::timestamp_type(31);
+
+    auto m = make_multi_column_mutation(schema, "pk0", ts);
+    auto value = encode_record_value(m);
+    auto header = make_header(m, ts);
+
+    BOOST_REQUIRE(other->id() != schema->id());
+    BOOST_REQUIRE_THROW(decode_record_value(value, other, header), std::runtime_error);
+    assert_that(decode_record_value(value, schema, header)).is_equal_to(m);
 }
 
 // Checks that a raw write buffer can hold and seal a record whose serialized size is exactly max_record_size().
