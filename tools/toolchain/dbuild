@@ -208,6 +208,22 @@ volume_path = "$HOME/.local/share/containers/storage/libpod"
 # but we need to use port forwarded networking for our mocks etc.
 netns = "pasta"
 
+# The nested engine cannot label its own storage: doing so fails with
+#   lsetxattr(label=system_u:object_r:container_file_t:s0:c562,c1009)
+#       /run/containers/storage/overlay-containers/<id>/userdata/...:
+#       operation not supported
+# which leaves the files podman generates and mounts into a container --
+# /etc/resolv.conf among them -- labeled so that the container cannot read
+# them.  An image which reads one of those while starting up then fails to
+# launch, as the buildpack launcher of docker.io/adobe/s3mock does:
+#   open /etc/resolv.conf: permission denied
+#   ERROR: failed to launch: exec.d: failed to execute exec.d file at path
+#       '/layers/bellsoft_buildpacks_liberica/helper/exec.d/debug-9'
+# Since the labeling cannot work here, turn it off rather than have it
+# half-applied.  This file is only mounted into the dbuild container, so
+# the host's engine, and with it CI, keeps labeling its containers.
+label = false
+
 EOF
 
 storage_conf="$(mktemp)"
