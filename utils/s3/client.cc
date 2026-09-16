@@ -1563,9 +1563,12 @@ class client::chunked_download_source final : public seastar::data_source_impl {
     future<> _filling_fiber = make_ready_future<>();
 
     future<> make_filling_fiber() {
-        seastar::http::no_retry_strategy no_retry;
         s3l.trace("Fiber starts cycle for object '{}'", _object_name);
         auto units = try_get_units(_client->_buffered_dl_sem, 1);
+        // Consecutive requests that failed retryably, returned by one that completes.
+        // Kept here because the strategy is per-request and cannot carry a budget
+        // across them.
+        unsigned retries = 0;
         while (!_is_finished) {
             try {
                 if (!_is_finished && _buffers_size >= _max_buffers_size * _buffers_low_watermark) {
@@ -1623,6 +1626,7 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                 } else {
                     s3l.trace("Fiber for object '{}' will make HTTP request within range {}", _object_name, current_range);
                 }
+                aws::chunked_download_pacing_strategy pacer(retries, *_client->_request_limiter);
                 co_await _client->make_request(
                     std::move(req),
                     [this, &units, discover_size, pf_length = discover_size ? 0 : current_range.length()](
@@ -1683,7 +1687,7 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                         }
                         co_await in.close();
                     },
-                    no_retry,
+                    pacer,
                     [](std::exception_ptr ex) { std::rethrow_exception(std::move(ex)); },
                     {},
                     _as);
@@ -1696,7 +1700,17 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                     _get_cv.broken(ex);
                     co_return;
                 }
+                // Leaving through _get_cv.broken() rather than through the loop
+                // condition: a fiber that just stops parks its reader in _get_cv.wait()
+                // with nothing left to signal it.
+                if (++retries > aws::default_aws_retry_strategy::default_max_retries) {
+                    s3l.warn("Fiber for object '{}' failed {} requests in a row, last error: {}. Exiting", _object_name, retries, ex);
+                    _get_cv.broken(ex);
+                    co_return;
+                }
+                continue;
             }
+            retries = 0;
         }
         s3l.trace("Fiber for object '{}' completed", _object_name);
     }
