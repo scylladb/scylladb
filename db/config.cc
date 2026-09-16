@@ -1661,6 +1661,14 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "If enabled, Alternator compares the existing item with the new one during "
         "data-modifying operations to determine which event type should be emitted. "
         "This penalty is incurred only for tables with Alternator Streams enabled.")
+    , alternator_vector_search_extra_operators(this, "alternator_vector_search_extra_operators", liveness::LiveUpdate, value_status::Used, false,
+        "Allow comparison, range and set-membership operators (<, <=, >, >=, IN, BETWEEN) "
+        "in SearchVectors' SearchConditionExpression, on the vector index's INLINE_FILTER "
+        "attributes. DynamoDB currently supports only the equality operator (=) there, and "
+        "documents the others as \"not yet available\", so this option is disabled by default: "
+        "enabling it makes Alternator accept requests which DynamoDB would reject. The "
+        "SearchSchema's HASH attribute remains equality-only regardless of this option, "
+        "because it partitions the vector index.")
     , alternator_timeout_in_ms(this, "alternator_timeout_in_ms", liveness::LiveUpdate, value_status::Used, 10000,
         "The server-side timeout for completing Alternator API requests.")
     , alternator_ttl_period_in_seconds(this, "alternator_ttl_period_in_seconds", value_status::Used,
