@@ -126,6 +126,10 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 
     parser.addoption('--build', action='store_true', default=False,
                      help="Build the executables of the selected C++ tests before running them.")
+    parser.addoption('--gdb', action='store_true', default=False,
+                     help="Run the C++ test case under gdb.  Requires that exactly one test case is selected"
+                          " -- note that a test case is collected once per build mode, so --mode is usually"
+                          " needed as well.")
 
     parser.addoption('--exe-path', default=False,
                      dest="exe_path", action="store",
@@ -410,6 +414,27 @@ async def scylla_cluster(request: pytest.FixtureRequest,
         yield cluster
 
 
+def pytest_collection_finish(session: pytest.Session) -> None:
+    """Check that --gdb ended up with the one test case it can debug.
+
+    Here rather than in pytest_collection_modifyitems, where the items are
+    not final yet: -k and -m deselect from that same hook, and the plugin
+    which implements them has no tryfirst, so it may well run after this one.
+    """
+
+    config = session.config
+    if not config.getoption("--gdb"):
+        return
+    if len(session.items) != 1:
+        raise pytest.UsageError(
+            f"--gdb needs exactly one test case to be selected, but {len(session.items)} were."
+            "  Select a single one with `path/to/test.cc::case_name`, and keep in mind that every test"
+            f" case is collected once per build mode, so --mode is needed too (configured: {' '.join(config.build_modes)})."
+        )
+    if session.items[0].get_closest_marker("cpp") is None:
+        raise pytest.UsageError(f"--gdb only works for C++ tests, but {session.items[0].nodeid} is not one.")
+
+
 def pytest_collection_modifyitems(items: list[pytest.Item], config: pytest.Config) -> None:
     run_ids = defaultdict(lambda: count(start=int(config.getoption("--run_id") or 1)))
     for item in items:
@@ -567,6 +592,7 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
         session.exitstatus = EXIT_MAXFAIL_REACHED
 
 
+@pytest.hookimpl(tryfirst=True)
 def pytest_configure(config: pytest.Config) -> None:
     global _pytest_config
     _pytest_config = config
@@ -613,12 +639,31 @@ def pytest_configure(config: pytest.Config) -> None:
     if config.getoption("--exe-path"):
         if config.getoption("--mode"):
             raise RuntimeError("Can't use --mode with --exe-path or --exe-url.")
-        if config.getoption("--build"):
-            raise pytest.UsageError("Can't use --build with --exe-path or --exe-url: there is no build to run.")
+        for build_option in ("--build", "--gdb"):
+            if config.getoption(build_option):
+                raise pytest.UsageError(
+                    f"Can't use {build_option} with --exe-path or --exe-url: there is no build to run,"
+                    " and the C++ tests can't be looked up in the custom_exe mode those select.",
+                )
         config.option.modes = ["custom_exe"]
 
     if config.getoption("--build") and not build_is_configured():
         raise pytest.UsageError(NO_BUILD_CONFIGURED)
+
+    if config.getoption("--gdb"):
+        if shutil.which("gdb") is None:
+            raise pytest.UsageError("--gdb was requested, but gdb is not installed.")
+        if config.getoption("numprocesses", None):
+            raise pytest.UsageError("Can't use --gdb with xdist: a worker process has no terminal to debug on.")
+        if config.getoption("--repeat") != 1:
+            raise pytest.UsageError("Can't use --gdb with --repeat: only a single test case can be debugged.")
+        # pytest-timeout would pull the rug from under a debugging session,
+        # which is expected to sit at a prompt for as long as it takes.  It
+        # copies both options into its own state in its pytest_configure,
+        # hence the tryfirst above.
+        for timeout_option in ("timeout", "session_timeout"):
+            if hasattr(config.option, timeout_option):
+                setattr(config.option, timeout_option, 0)
 
     os.environ["TOPOLOGY_RANDOM_FAILURES_TEST_SHUFFLE_SEED"] = os.environ.get("TOPOLOGY_RANDOM_FAILURES_TEST_SHUFFLE_SEED", str(random.randint(0, sys.maxsize)))
     config.build_modes = get_modes_to_run(config)

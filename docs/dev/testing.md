@@ -231,8 +231,40 @@ If a test fails, its log can be found in
 When a single test case is run, the path of its log is printed at the end of
 the run. The log of a test which passed is deleted, unless
 `--save-log-on-success` (`-s` for `test.py`) is passed.
-By default, all unit tests are built stripped. To build non-stripped tests,
-`./configure` with `--tests-debuginfo list-of-tests`.
+
+A single test case can be run under gdb with `--gdb`:
+
+    $ ./tools/toolchain/dbuild -i -- pytest test/boost/aggregate_fcts_test.cc::test_aggregate_avg --mode=dev --gdb
+
+Note the `-i`: `dbuild` gives the container a terminal, but it does not pass
+input on to it unless asked to, and gdb sits at a prompt nothing can be typed
+into otherwise. It has to come before the `--` which ends dbuild's own flags.
+
+Since the debugging session takes over the terminal, exactly one test case
+has to be selected -- keep in mind that a test case is collected once per
+build mode, so `--mode` is needed as well -- and the tests cannot be run in
+parallel, which rules out `test.py`. The test case is reported as skipped
+afterwards: what the session exits with is gdb's verdict, not the test's.
+
+Note that the `dev` mode is compiled without debug info in both build systems,
+so a test can only be usefully debugged in another mode, `debug` and `release`
+among them:
+
+    $ ./tools/toolchain/dbuild -i -- pytest test/boost/aggregate_fcts_test.cc::test_aggregate_avg --mode=debug --build --gdb
+
+The other half of the problem is that the tests are linked stripped by
+default, their debug info being huge and there being hundreds of them. The
+configure.py build emits an unstripped re-link of every test binary under a
+`_g` suffix, which `--build` builds when `--gdb` is given, so the command
+above needs nothing else. `--gdb` debugs the `_g` variant whenever it is
+present, so it can equally well be linked by hand beforehand:
+
+    $ ./tools/toolchain/dbuild ninja build/debug/test/boost/aggregate_fcts_test_g
+
+The cmake build has no `_g` target, so there the tests have to be linked
+unstripped to begin with, by configuring with `-DScylla_WITH_DEBUG_INFO=ON`.
+The configure.py build can do the same with `--tests-debuginfo 1`.
+
 `test.py` adds some command line arguments to unit tests.
 
 ## Python tests
