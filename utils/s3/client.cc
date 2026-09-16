@@ -693,6 +693,7 @@ future<object_info> client::get_object_info(sstring object_name, seastar::abort_
                 info.metadata.emplace(std::move(key), value);
             }
         }
+        info.etag = rep.get_header("ETag");
         return make_ready_future<>();
     }, as);
     co_return info;
@@ -850,6 +851,10 @@ future<temporary_buffer<char>> client::get_object_contiguous(sstring object_name
 }
 
 future<> client::put_object(sstring object_name, temporary_buffer<char> buf, object_metadata metadata, seastar::abort_source* as) {
+    return put_object_and_get_etag(std::move(object_name), std::move(buf), std::move(metadata), as).discard_result();
+}
+
+future<sstring> client::put_object_and_get_etag(sstring object_name, temporary_buffer<char> buf, object_metadata metadata, seastar::abort_source* as) {
     s3l.trace("PUT {}", object_name);
     auto req = http::request::make("PUT", _host, object_name);
     add_object_metadata_headers(req, metadata);
@@ -868,13 +873,20 @@ future<> client::put_object(sstring object_name, temporary_buffer<char> buf, obj
             co_await coroutine::return_exception_ptr(std::move(ex));
         }
     });
-    co_await make_request(std::move(req), [len] (group_client& gc, const auto& rep, auto&& in) {
+    sstring etag;
+    co_await make_request(std::move(req), [len, &etag] (group_client& gc, const auto& rep, auto&& in) {
         gc.write_bytes += len;
+        etag = rep.get_header("ETag");
         return ignore_reply(rep, std::move(in));
     }, http::reply::status_type::ok, as);
+    co_return etag;
 }
 
 future<> client::put_object(sstring object_name, ::memory_data_sink_buffers bufs, object_metadata metadata, seastar::abort_source* as) {
+    return put_object_and_get_etag(std::move(object_name), std::move(bufs), std::move(metadata), as).discard_result();
+}
+
+future<sstring> client::put_object_and_get_etag(sstring object_name, ::memory_data_sink_buffers bufs, object_metadata metadata, seastar::abort_source* as) {
     s3l.trace("PUT {} (buffers)", object_name);
     auto req = http::request::make("PUT", _host, object_name);
     add_object_metadata_headers(req, metadata);
@@ -895,10 +907,13 @@ future<> client::put_object(sstring object_name, ::memory_data_sink_buffers bufs
             co_await coroutine::return_exception_ptr(std::move(ex));
         }
     });
-    co_await make_request(std::move(req), [len] (group_client& gc, const auto& rep, auto&& in) {
+    sstring etag;
+    co_await make_request(std::move(req), [len, &etag] (group_client& gc, const auto& rep, auto&& in) {
         gc.write_bytes += len;
+        etag = rep.get_header("ETag");
         return ignore_reply(rep, std::move(in));
     }, http::reply::status_type::ok, as);
+    co_return etag;
 }
 
 future<> client::delete_object(sstring object_name, seastar::abort_source* as) {
@@ -973,6 +988,14 @@ static const rapidxml::xml_node<>* get_node_safe(const rapidxml::xml_node<>* nod
     return child;
 }
 
+// The entity tag of the part the UploadPartCopy request produced, taken from the
+// CopyPartResult response. Note it parses the body in place, like the parser below.
+// Returns "" if the body isn't well-formed XML, and throws if it is XML but not a
+// CopyPartResult carrying an ETag - a missing node means the part copy didn't happen.
+// Neither outcome fails the upload here: both callers merely log it in their
+// handle_exception(), leave the part's tag empty and let finalize_upload() fail the
+// upload on it later. That is unlike parse_multipart_upload_etag() below, which never
+// reports a missing tag as a failure, because its upload has already completed.
 sstring parse_multipart_copy_upload_etag(sstring& body) {
     auto doc = std::make_unique<rapidxml::xml_document<>>();
     try {
@@ -985,6 +1008,32 @@ sstring parse_multipart_copy_upload_etag(sstring& body) {
     }
     auto root_node = get_node_safe(doc.get(), "CopyPartResult", "CopyPartResult");
     auto etag_node = get_node_safe(root_node, "ETag", "CopyPartResult");
+    return etag_node->value();
+}
+
+// The entity tag S3 assigned to the object the multipart upload produced, taken from the
+// CompleteMultipartUpload response. Note it parses the body in place, like the parsers above.
+// The upload is already complete when this is called, so a response that doesn't carry the
+// tag must not fail it - the caller is supposed to check the etag to be empty and handle
+// the missing tag the way it prefers.
+static sstring parse_multipart_upload_etag(sstring& body) {
+    auto doc = std::make_unique<rapidxml::xml_document<>>();
+    try {
+        doc->parse<0>(body.data());
+    } catch (const rapidxml::parse_error& e) {
+        s3l.warn("cannot parse complete multipart upload response: {}", e.what());
+        // The caller is supposed to check the etag to be empty
+        // and handle the missing tag the way it prefers
+        return "";
+    }
+    // A missing node means S3 didn't report the tag of the object it had just completed,
+    // which doesn't fail the upload, unlike in parse_multipart_copy_upload_etag() above
+    auto root_node = doc->first_node("CompleteMultipartUploadResult");
+    auto etag_node = root_node ? root_node->first_node("ETag") : nullptr;
+    if (!etag_node) {
+        s3l.warn("'{}' node is missing in CompleteMultipartUploadResult response", root_node ? "ETag" : "CompleteMultipartUploadResult");
+        return "";
+    }
     return etag_node->value();
 }
 
@@ -1003,6 +1052,13 @@ protected:
     // output_stream::close() flushes a second time, so upload_started() alone
     // cannot tell "nothing was ever written" from "already uploaded".
     bool _object_produced = false;
+    // Where to store the entity tag of the object produced, if the caller asked for
+    // one. The value stored is the ETag that S3 returned in the reply to the request
+    // that created the object (the PUT, or the CompleteMultipartUpload), rather than
+    // one read back later with a HEAD on _object_name, so it always describes the
+    // object this sink wrote even if someone overwrites that object afterwards.
+    // Unset for uploads nobody asked the tag of, including the jumbo sink's own pieces.
+    lw_shared_ptr<sstring> _etag;
 
     future<> start_upload();
     future<> finalize_upload();
@@ -1020,16 +1076,22 @@ protected:
     future<> put_empty_object() {
         s3l.trace("PUT empty object {}", _object_name);
         _object_produced = true;
-        return _client->put_object(_object_name, temporary_buffer<char>(), _metadata);
+        return _client->put_object_and_get_etag(_object_name, temporary_buffer<char>(), _metadata).then([etag = _etag] (sstring tag) {
+            if (etag) {
+                *etag = std::move(tag);
+            }
+        });
     }
 
-    multipart_upload(shared_ptr<client> cln, sstring object_name, object_metadata metadata, std::optional<tag> tag, seastar::abort_source* as)
+    multipart_upload(shared_ptr<client> cln, sstring object_name, object_metadata metadata, std::optional<tag> tag, seastar::abort_source* as,
+                     lw_shared_ptr<sstring> etag = {})
         : _client(std::move(cln))
         , _object_name(std::move(object_name))
         , _bg_flushes("s3::client::multipart_upload::bg_flushes")
         , _tag(std::move(tag))
         , _metadata(std::move(metadata))
         , _as(as)
+        , _etag(std::move(etag))
     {
     }
 
@@ -1144,8 +1206,9 @@ future<> client::copy_object(sstring source_object, sstring target_object, objec
 
 class client::upload_sink_base : public multipart_upload, public data_sink_impl {
 public:
-    upload_sink_base(shared_ptr<client> cln, sstring object_name, object_metadata metadata, std::optional<tag> tag, seastar::abort_source* as)
-        : multipart_upload(std::move(cln), std::move(object_name), std::move(metadata), std::move(tag), as)
+    upload_sink_base(shared_ptr<client> cln, sstring object_name, object_metadata metadata, std::optional<tag> tag, seastar::abort_source* as,
+                     lw_shared_ptr<sstring> etag = {})
+        : multipart_upload(std::move(cln), std::move(object_name), std::move(metadata), std::move(tag), as, std::move(etag))
     {
     }
 
@@ -1332,10 +1395,17 @@ future<> client::multipart_upload::finalize_upload() {
     });
     // If this request fails, finalize_upload() throws, the upload should then
     // be aborted in .close() method
-    co_await _client->make_request(std::move(req), [](const http::reply& rep, input_stream<char>&& in) -> future<> {
+    co_await _client->make_request(std::move(req), [this](const http::reply& rep, input_stream<char>&& in) -> future<> {
         auto payload = std::move(in);
         auto status_class = http::reply::classify_status(rep._status);
-        std::optional<aws::aws_error> possible_error = aws::aws_error::parse(co_await util::read_entire_stream_contiguous(payload));
+        auto body = co_await util::read_entire_stream_contiguous(payload);
+        // Both aws_error::parse() and parse_multipart_upload_etag() run rapidxml on the
+        // buffer in place, which terminates names and values with NULs and leaves it
+        // unparseable for the next reader. The error check cannot be the second one,
+        // because S3 reports CompleteMultipartUpload failures with a 200 status and an
+        // Error body, so the etag gets a copy of the body - and only when it is wanted.
+        sstring etag_body = _etag ? body : sstring();
+        std::optional<aws::aws_error> possible_error = aws::aws_error::parse(std::move(body));
         if (possible_error) {
             co_await coroutine::return_exception(aws::aws_exception(std::move(possible_error.value())));
         }
@@ -1347,8 +1417,12 @@ future<> client::multipart_upload::finalize_upload() {
         if (rep._status != http::reply::status_type::ok) {
             co_await coroutine::return_exception(httpd::unexpected_status_error(rep._status));
         }
-        // If we reach this point it means the request succeeded. However, the body payload was already consumed, so no response handler was invoked. At
-        // this point it is ok since we are not interested in parsing this particular response
+        // The request succeeded, so the response carries the entity tag of the object
+        // just completed. It is the only place it can be taken from without racing with
+        // whoever overwrites the key next, so parse it out for the callers that want it.
+        if (_etag) {
+            *_etag = parse_multipart_upload_etag(etag_body);
+        }
     }, http::reply::status_type::ok);
     _upload_id = ""; // now upload_started() returns false
 }
@@ -1379,8 +1453,9 @@ class client::upload_sink final : public client::upload_sink_base {
     }
 
 public:
-    upload_sink(shared_ptr<client> cln, sstring object_name, object_metadata metadata = {}, std::optional<tag> tag = {}, seastar::abort_source* as = nullptr)
-        : upload_sink_base(std::move(cln), std::move(object_name), std::move(metadata), std::move(tag), as)
+    upload_sink(shared_ptr<client> cln, sstring object_name, object_metadata metadata = {}, std::optional<tag> tag = {}, seastar::abort_source* as = nullptr,
+                lw_shared_ptr<sstring> etag = {})
+        : upload_sink_base(std::move(cln), std::move(object_name), std::move(metadata), std::move(tag), as, std::move(etag))
     {}
 
     // True while nothing has been written into the sink, so it has no object to
@@ -1402,7 +1477,11 @@ public:
             if (!upload_started()) {
                 s3l.trace("Sink fallback to plain PUT for {}", _object_name);
                 _object_produced = true;
-                co_return co_await _client->put_object(_object_name, std::move(_bufs), std::move(_metadata));
+                auto tag = co_await _client->put_object_and_get_etag(_object_name, std::move(_bufs), std::move(_metadata));
+                if (_etag) {
+                    *_etag = std::move(tag);
+                }
+                co_return;
             }
 
             if (_bufs.size() != 0) {
@@ -1489,8 +1568,9 @@ class client::upload_jumbo_sink final : public upload_sink_base {
     }
 
 public:
-    upload_jumbo_sink(shared_ptr<client> cln, sstring object_name, object_metadata metadata, std::optional<unsigned> max_parts_per_piece, seastar::abort_source* as)
-        : upload_sink_base(std::move(cln), std::move(object_name), std::move(metadata), std::nullopt, as)
+    upload_jumbo_sink(shared_ptr<client> cln, sstring object_name, object_metadata metadata, std::optional<unsigned> max_parts_per_piece, seastar::abort_source* as,
+                      lw_shared_ptr<sstring> etag)
+        : upload_sink_base(std::move(cln), std::move(object_name), std::move(metadata), std::nullopt, as, std::move(etag))
         , _maximum_parts_in_piece(max_parts_per_piece.value_or(maximum_parts_in_piece))
         , _current(std::make_unique<upload_sink>(_client, format("{}_{}", _object_name, parts_count()), object_metadata{}, piece_tag))
     {}
@@ -1537,12 +1617,13 @@ public:
     }
 };
 
-data_sink client::make_upload_sink(sstring object_name, object_metadata metadata, seastar::abort_source* as) {
-    return data_sink(std::make_unique<upload_sink>(shared_from_this(), std::move(object_name), std::move(metadata), std::nullopt, as));
+data_sink client::make_upload_sink(sstring object_name, object_metadata metadata, seastar::abort_source* as, lw_shared_ptr<sstring> etag) {
+    return data_sink(std::make_unique<upload_sink>(shared_from_this(), std::move(object_name), std::move(metadata), std::nullopt, as, std::move(etag)));
 }
 
-data_sink client::make_upload_jumbo_sink(sstring object_name, object_metadata metadata, std::optional<unsigned> max_parts_per_piece, seastar::abort_source* as) {
-    return data_sink(std::make_unique<upload_jumbo_sink>(shared_from_this(), std::move(object_name), std::move(metadata), max_parts_per_piece, as));
+data_sink client::make_upload_jumbo_sink(sstring object_name, object_metadata metadata, std::optional<unsigned> max_parts_per_piece, seastar::abort_source* as,
+                                         lw_shared_ptr<sstring> etag) {
+    return data_sink(std::make_unique<upload_jumbo_sink>(shared_from_this(), std::move(object_name), std::move(metadata), max_parts_per_piece, as, std::move(etag)));
 }
 
 class client::chunked_download_source final : public seastar::data_source_impl {

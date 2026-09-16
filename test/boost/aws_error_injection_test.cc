@@ -123,7 +123,11 @@ void do_test_client_multipart_upload(failure_policy policy, bool is_jumbo = fals
     auto close_client = deferred_close(*cln);
 
     testlog.info("Upload object");
-    auto out = output_stream<char>(is_jumbo ? cln->make_upload_jumbo_sink(name, s3::object_metadata{}, 3) : cln->make_upload_sink(name));
+    // Not empty, so that a failed flush overwriting it with "" shows.
+    const sstring unset = "unset";
+    auto etag = make_lw_shared<sstring>(unset);
+    auto out = output_stream<char>(is_jumbo ? cln->make_upload_jumbo_sink(name, s3::object_metadata{}, 3, nullptr, etag)
+                                            : cln->make_upload_sink(name, s3::object_metadata{}, nullptr, etag));
     auto close_stream = deferred_close(out);
 
     static constexpr unsigned chunk_size = 1000;
@@ -133,7 +137,16 @@ void do_test_client_multipart_upload(failure_policy policy, bool is_jumbo = fals
     }
 
     testlog.info("Flush multipart upload");
-    out.flush().get();
+    // The callers decide whether the flush must fail; the etag has to agree either way.
+    try {
+        out.flush().get();
+    } catch (...) {
+        // A failed flush leaves the etag alone.
+        BOOST_REQUIRE_EQUAL(*etag, unset);
+        throw;
+    }
+    // A successful one stores the tag of the completed upload.
+    BOOST_REQUIRE(!etag->empty() && *etag != unset);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_multipart_upload_sink_success) {
