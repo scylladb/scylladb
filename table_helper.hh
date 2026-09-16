@@ -10,6 +10,7 @@
 #pragma once
 
 #include "cql3/statements/prepared_statement.hh"
+#include "schema/schema_fwd.hh"
 #include "service/query_state.hh"
 
 namespace service {
@@ -127,6 +128,11 @@ public:
             return std::chrono::system_clock::time_point(nanoseconds((++last_event_nanos) * 100));
         }
     }
+
+    // The input may contain multiple semicolon-separated statements, of which the
+    // first must be the CREATE TABLE one and the rest are ignored, so a schema
+    // produced by describe with internals is accepted as is.
+    static schema_ptr parse_new_cf_statement(cql3::query_processor& qp, const sstring& create_cql);
 };
 
 struct bad_column_family : public std::exception {
