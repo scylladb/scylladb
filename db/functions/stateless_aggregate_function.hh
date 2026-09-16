@@ -17,7 +17,7 @@ struct stateless_aggregate_function final {
     data_type result_type;
     std::vector<data_type> argument_types;
 
-    bytes_opt initial_state;
+    managed_bytes_opt initial_state;
 
     // aggregates another input
     // signature: (state_type, argument_types...) -> state_type

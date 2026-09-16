@@ -43,7 +43,7 @@ public:
 
     virtual bool requires_thread() const override;
 
-    virtual bytes_opt execute(std::span<const bytes_opt> parameters) override {
+    virtual managed_bytes_opt execute(std::span<const managed_bytes_opt> parameters) override {
         bytes_ostream encoded_row;
         encoded_row.write("{", 1);
         for (size_t i = 0; i < _selector_names.size(); ++i) {
@@ -60,11 +60,13 @@ public:
                 encoded_row.write("\\\"", 2);
             }
             encoded_row.write("\": ", 3);
-            sstring row_sstring = to_json_string(*_selector_types[i], parameters[i]);
+            sstring row_sstring = parameters[i]
+                    ? to_json_string(*_selector_types[i], managed_bytes_view(*parameters[i]))
+                    : "null";
             encoded_row.write(row_sstring.c_str(), row_sstring.size());
         }
         encoded_row.write("}", 1);
-        return bytes(encoded_row.linearize());
+        return std::move(encoded_row).to_managed_bytes();
     }
 
     virtual const function_name& name() const override {

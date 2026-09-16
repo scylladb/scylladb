@@ -31,7 +31,7 @@ public:
         : native_scalar_function(name, float_type, arg_types) {
     }
 
-    virtual bytes_opt execute(std::span<const bytes_opt> parameters) override;
+    virtual managed_bytes_opt execute(std::span<const managed_bytes_opt> parameters) override;
 };
 
 namespace detail {

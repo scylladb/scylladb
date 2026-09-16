@@ -1898,13 +1898,13 @@ static cql3::raw_value do_evaluate(const function_call& fun_call, const evaluati
         throw std::runtime_error("Only scalar functions can be evaluated using evaluate()");
     }
 
-    std::vector<bytes_opt> arguments;
+    std::vector<managed_bytes_opt> arguments;
     arguments.reserve(fun_call.args.size());
 
     for (const expression& arg : fun_call.args) {
         cql3::raw_value arg_val = evaluate(arg, inputs);
 
-        arguments.emplace_back(to_bytes_opt(std::move(arg_val)));
+        arguments.emplace_back(std::move(arg_val).to_managed_bytes_opt());
     }
 
     bool has_cache_id = fun_call.lwt_cache_id.get() != nullptr && fun_call.lwt_cache_id->has_value();
@@ -1916,10 +1916,10 @@ static cql3::raw_value do_evaluate(const function_call& fun_call, const evaluati
         }
     }
 
-    bytes_opt result = scalar_fun->execute(arguments);
+    managed_bytes_opt result = scalar_fun->execute(arguments);
 
     if (has_cache_id) {
-        inputs.options->cache_pk_function_call(**fun_call.lwt_cache_id, result);
+        inputs.options->cache_pk_function_call(**fun_call.lwt_cache_id, to_bytes_opt(result));
     }
 
     if (!result.has_value()) {
@@ -1927,10 +1927,10 @@ static cql3::raw_value do_evaluate(const function_call& fun_call, const evaluati
     }
 
     try {
-        scalar_fun->return_type()->validate(*result);
+        scalar_fun->return_type()->validate(managed_bytes_view(*result));
     } catch (marshal_exception&) {
         throw runtime_exception(fmt::format("Return of function {} ({}) is not a valid value for its declared return type {}",
-                                       *scalar_fun, to_hex(result),
+                                       *scalar_fun, to_hex(to_bytes_opt(result)),
                                        scalar_fun->return_type()->as_cql3_type()
                                        ));
     }
@@ -2339,13 +2339,13 @@ convert_map_back_to_listlike(expression e) {
             return "NONE";
         }
 
-        virtual bytes_opt execute(std::span<const bytes_opt> parameters) override {
+        virtual managed_bytes_opt execute(std::span<const managed_bytes_opt> parameters) override {
             auto& p = parameters[0];
             if (!p) {
                 return std::nullopt;
             }
-            auto v = _map_type->deserialize_value(*p);
-            return _listlike_type->serialize_map(*_map_type, v);
+            auto v = _map_type->deserialize_value(managed_bytes_view(*p));
+            return managed_bytes(_listlike_type->serialize_map(*_map_type, v));
         }
     };
 

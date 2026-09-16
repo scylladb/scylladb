@@ -48,9 +48,13 @@ public:
     virtual bool is_pure() const override {
         return Pure;
     }
-    virtual bytes_opt execute(std::span<const bytes_opt> parameters) override {
+    virtual managed_bytes_opt execute(std::span<const managed_bytes_opt> parameters) override {
         try {
-            return _func(parameters);
+            if constexpr (std::invocable<Func, std::span<const managed_bytes_opt>>) {
+                return _func(parameters);
+            } else {
+                return to_managed_bytes_opt(_func(linearize_parameters(parameters)));
+            }
         } catch(exceptions::cassandra_exception&) {
             // If the function's code took the time to produce an official
             // cassandra_exception, pass it through. Otherwise, below we will

@@ -59,7 +59,7 @@ public:
     virtual bool is_native() const override;
     virtual bool is_aggregate() const override;
     virtual bool requires_thread() const override;
-    virtual bytes_opt execute(std::span<const bytes_opt> parameters) override;
+    virtual managed_bytes_opt execute(std::span<const managed_bytes_opt> parameters) override;
 
     description describe(with_create_statement) const;
 };

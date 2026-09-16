@@ -36,7 +36,8 @@ bool user_function::is_aggregate() const { return false; }
 
 bool user_function::requires_thread() const { return true; }
 
-bytes_opt user_function::execute(std::span<const bytes_opt> parameters) {
+managed_bytes_opt user_function::execute(std::span<const managed_bytes_opt> fragmented_parameters) {
+    auto parameters = linearize_parameters(fragmented_parameters);
     const auto& types = arg_types();
     if (parameters.size() != types.size()) {
         throw std::logic_error("Wrong number of parameters");
@@ -50,7 +51,7 @@ bytes_opt user_function::execute(std::span<const bytes_opt> parameters) {
             return std::nullopt;
         }
     }
-    return seastar::visit(_ctx,
+    return to_managed_bytes_opt(seastar::visit(_ctx,
         [&] (lua_context& ctx) -> bytes_opt {
             std::vector<data_value> values;
             values.reserve(parameters.size());
@@ -67,7 +68,7 @@ bytes_opt user_function::execute(std::span<const bytes_opt> parameters) {
             } catch (const wasm::exception& e) {
                 throw exceptions::invalid_request_exception(format("UDF error: {}", e.what()));
             }
-        });
+        }));
 }
 
 description user_function::describe(with_create_statement with_stmt) const {

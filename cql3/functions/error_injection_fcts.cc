@@ -40,8 +40,8 @@ public:
         return Pure;
     }
 
-    bytes_opt execute(std::span<const bytes_opt> parameters) override {
-        return _func(parameters);
+    managed_bytes_opt execute(std::span<const managed_bytes_opt> parameters) override {
+        return to_managed_bytes_opt(_func(linearize_parameters(parameters)));
     }
 };
 

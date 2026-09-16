@@ -17,6 +17,7 @@ namespace cql3 {
 namespace functions {
 
 using scalar_function = db::functions::scalar_function;
+using db::functions::linearize_parameters;
 
 }
 }
