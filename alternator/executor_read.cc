@@ -1566,7 +1566,8 @@ static rjson::value value_to_prefilter_json(const rjson::value& value, const std
 // triggers a ValidationException.
 static void primitive_condition_to_prefilter(
         const parsed::primitive_condition& cond,
-        const std::unordered_map<std::string, std::string>& attribute_types,
+        const search_schema_info& ss_info,
+        bool extra_operators,
         rjson::value& restrictions_arr)
 {
     using ctype = parsed::primitive_condition::type;
@@ -1580,8 +1581,8 @@ static void primitive_condition_to_prefilter(
             throw api_error::validation(
                 "SearchConditionExpression does not support nested attribute paths");
         }
-        auto it = attribute_types.find(path.root());
-        if (it == attribute_types.end()) {
+        auto it = ss_info.attribute_types.find(path.root());
+        if (it == ss_info.attribute_types.end()) {
             throw api_error::validation(format(
                 "SearchConditionExpression references attribute '{}' which is not declared in the "
                 "vector index's SearchSchema; only SearchSchema attributes can "
@@ -1606,30 +1607,123 @@ static void primitive_condition_to_prefilter(
     // The DynamoDB Vector Search API only allows the "=" comparator in
     // SearchConditionExpression - unlike KeyConditionExpression/
     // FilterExpression, it has no support for <, <=, >, >=, IN or BETWEEN,
-    // even though the vector store could technically evaluate some of these
-    // for INLINE_FILTER attributes.
-    if (cond._op != ctype::EQ) {
+    // even though the vector store can evaluate them. DynamoDB's own
+    // documentation says these are "not yet available", so the
+    // alternator_vector_search_extra_operators configuration option enables
+    // them for users who want them before DynamoDB catches up.
+    if (!extra_operators && cond._op != ctype::EQ) {
         throw api_error::validation(
             "SearchConditionExpression only supports the \"=\" comparator");
     }
-    // Binary comparison: one operand is a column path, the other a constant.
-    throwing_assert(cond._values.size() == 2);
-    bool col_left = cond._values[0].is_path();
-    bool col_right = cond._values[1].is_path();
-    if ((!col_left && !col_right) || (col_left && col_right)) {
-        throw api_error::validation(
-            "SearchConditionExpression comparison must compare an attribute to a constant");
-    }
-    const parsed::value& col_v   = col_left ? cond._values[0] : cond._values[1];
-    const parsed::value& const_v = col_left ? cond._values[1] : cond._values[0];
-    auto [col_name, expected_type] = require_search_schema_col(col_v);
+    // Even with that option enabled, the extra operators are allowed only on
+    // INLINE_FILTER attributes: the SearchSchema's HASH attribute partitions
+    // the vector index, so - like a query's partition key - it can only be
+    // matched for equality.
+    auto check_op_allowed_on = [&] (const std::string& col_name) {
+        if (cond._op != ctype::EQ && ss_info.hash_attribute && *ss_info.hash_attribute == col_name) {
+            throw api_error::validation(format(
+                "SearchConditionExpression only supports the \"=\" comparator for '{}', "
+                "the SearchSchema HASH attribute", col_name));
+        }
+    };
 
-    auto rhs_json = value_to_prefilter_json(require_resolved_val(const_v), col_name, expected_type);
-    auto restriction = rjson::empty_object();
-    rjson::add(restriction, "type", rjson::from_string("=="));
-    rjson::add(restriction, "lhs", rjson::from_string(col_name));
-    rjson::add(restriction, "rhs", std::move(rhs_json));
-    rjson::push_back(restrictions_arr, std::move(restriction));
+    if (cond._op == ctype::EQ || cond._op == ctype::LT || cond._op == ctype::LE ||
+            cond._op == ctype::GT || cond._op == ctype::GE) {
+        // Binary comparison: one operand is a column path, the other a constant.
+        throwing_assert(cond._values.size() == 2);
+        bool col_left = cond._values[0].is_path();
+        bool col_right = cond._values[1].is_path();
+        if ((!col_left && !col_right) || (col_left && col_right)) {
+            throw api_error::validation(
+                "SearchConditionExpression comparison must compare an attribute to a constant");
+        }
+        const parsed::value& col_v   = col_left ? cond._values[0] : cond._values[1];
+        const parsed::value& const_v = col_left ? cond._values[1] : cond._values[0];
+        auto [col_name, expected_type] = require_search_schema_col(col_v);
+        check_op_allowed_on(col_name);
+
+        // The vector store only supports comparisons of the form
+        // "col OP const" where the column name is on the left, so we need to
+        // rewrite "const < col" to "col > const", flipping the comparison
+        // direction.
+        const char* op_str;
+        if (col_left) {
+            switch (cond._op) {
+            case ctype::EQ: op_str = "=="; break;
+            case ctype::LT: op_str = "<";  break;
+            case ctype::LE: op_str = "<="; break;
+            case ctype::GT: op_str = ">";  break;
+            case ctype::GE: op_str = ">="; break;
+            // The outer "if" guarantees cond._op is one of EQ/LT/LE/GT/GE;
+            // the default cases below are unreachable by construction.
+            default: on_internal_error(elogger, "can't happen");
+            }
+        } else {
+            switch (cond._op) {
+            case ctype::EQ: op_str = "=="; break;
+            case ctype::LT: op_str = ">";  break; // const < col -> col > const
+            case ctype::LE: op_str = ">="; break; // const <= col -> col >= const
+            case ctype::GT: op_str = "<";  break; // const > col -> col < const
+            case ctype::GE: op_str = "<="; break; // const >= col -> col <= const
+            default: on_internal_error(elogger, "can't happen");
+            }
+        }
+        auto rhs_json = value_to_prefilter_json(require_resolved_val(const_v), col_name, expected_type);
+        auto restriction = rjson::empty_object();
+        rjson::add(restriction, "type", rjson::from_string(op_str));
+        rjson::add(restriction, "lhs", rjson::from_string(col_name));
+        rjson::add(restriction, "rhs", std::move(rhs_json));
+        rjson::push_back(restrictions_arr, std::move(restriction));
+
+    } else if (cond._op == ctype::IN) {
+        // IN operator: first value is the column, the remaining are constants.
+        if (cond._values.empty() || !cond._values[0].is_path()) {
+            throw api_error::validation(
+                "SearchConditionExpression IN must have an attribute name as its first operand");
+        }
+        auto [col_name, expected_type] = require_search_schema_col(cond._values[0]);
+        check_op_allowed_on(col_name);
+        auto rhs_arr = rjson::empty_array();
+        for (size_t i = 1; i < cond._values.size(); ++i) {
+            rjson::push_back(rhs_arr, value_to_prefilter_json(
+                    require_resolved_val(cond._values[i]), col_name, expected_type));
+        }
+        auto restriction = rjson::empty_object();
+        rjson::add(restriction, "type", rjson::from_string("IN"));
+        rjson::add(restriction, "lhs", rjson::from_string(col_name));
+        rjson::add(restriction, "rhs", std::move(rhs_arr));
+        rjson::push_back(restrictions_arr, std::move(restriction));
+
+    } else if (cond._op == ctype::BETWEEN) {
+        // a BETWEEN b AND c is expanded to two restrictions: a >= b AND a <= c.
+        if (cond._values.size() != 3 || !cond._values[0].is_path() ||
+                !cond._values[1].is_constant() || !cond._values[2].is_constant()) {
+            throw api_error::validation(
+                "SearchConditionExpression BETWEEN must have an attribute and two constant bounds");
+        }
+        auto [col_name, expected_type] = require_search_schema_col(cond._values[0]);
+        check_op_allowed_on(col_name);
+        auto lower_json = value_to_prefilter_json(require_resolved_val(cond._values[1]), col_name, expected_type);
+        auto upper_json = value_to_prefilter_json(require_resolved_val(cond._values[2]), col_name, expected_type);
+        auto col_json = rjson::from_string(col_name);
+
+        auto restr_ge = rjson::empty_object();
+        rjson::add(restr_ge, "type", rjson::from_string(">="));
+        rjson::add(restr_ge, "lhs", rjson::copy(col_json));
+        rjson::add(restr_ge, "rhs", std::move(lower_json));
+        rjson::push_back(restrictions_arr, std::move(restr_ge));
+
+        auto restr_le = rjson::empty_object();
+        rjson::add(restr_le, "type", rjson::from_string("<="));
+        rjson::add(restr_le, "lhs", std::move(col_json));
+        rjson::add(restr_le, "rhs", std::move(upper_json));
+        rjson::push_back(restrictions_arr, std::move(restr_le));
+
+    } else {
+        throw api_error::validation(
+            "SearchConditionExpression uses an unsupported operator; supported "
+            "operators are =, <, <=, >, >=, IN, BETWEEN");
+    }
 }
 
 // Parses a SearchConditionExpression from a vector search request and builds
@@ -1642,6 +1736,7 @@ static rjson::value parse_vector_search_prefilter(
         parsed::expression_cache& parsed_expr_cache,
         const rjson::value& request,
         const search_schema_info& ss_info,
+        bool extra_operators,
         std::unordered_set<std::string>& used_attribute_names,
         std::unordered_set<std::string>& used_attribute_values)
 {
@@ -1676,7 +1771,7 @@ static rjson::value parse_vector_search_prefilter(
 
     auto restrictions_arr = rjson::empty_array();
     for (const parsed::primitive_condition* cond : conditions) {
-        primitive_condition_to_prefilter(*cond, ss_info.attribute_types, restrictions_arr);
+        primitive_condition_to_prefilter(*cond, ss_info, extra_operators, restrictions_arr);
     }
 
     if (restrictions_arr.Empty()) {
@@ -2003,6 +2098,7 @@ future<executor::request_return_type> executor::search_vectors(client_state& cli
     // SearchSchema are allowed.
     rjson::value pre_filter = parse_vector_search_prefilter(
             *_parsed_expression_cache, request, ss_info,
+            _proxy.data_dictionary().get_config().alternator_vector_search_extra_operators(),
             used_attribute_names, used_attribute_values);
     const rjson::value* expression_attribute_names = rjson::find(request, "ExpressionAttributeNames");
     verify_all_are_used(expression_attribute_names, used_attribute_names, "ExpressionAttributeNames", "SearchVectors");
