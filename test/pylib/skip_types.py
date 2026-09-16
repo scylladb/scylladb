@@ -31,6 +31,10 @@ import pytest
 from test.pylib.skip_reason_plugin import skip
 
 
+# The fixture whose parametrization skip_storage selects on. Kept in one place:
+# it is the one name pylib borrows from a suite's conftest.
+STORAGE_FIXTURE = "storage"
+
 _GITHUB_ISSUE_LINK_RE = re.compile(r"^https://github\.com/[^/\s]+/[^/\s]+/issues/\d+/?$")
 _JIRA_LINK_RE = re.compile(r"^https://scylladb\.atlassian\.net/browse/[A-Z][A-Z0-9]+-\d+$")
 
@@ -46,6 +50,7 @@ def _is_valid_skip_bug_link(link: str) -> bool:
 class SkipType(StrEnum):
     SKIP_BUG = "bug"
     SKIP_ENV = "env"
+    SKIP_STORAGE = "storage"
 
     @staticmethod
     def _validate_skip_bug_args(link: str, reason: str, context: str) -> str:
@@ -76,6 +81,28 @@ class SkipType(StrEnum):
         if set(mark.kwargs) != {"link", "reason"}:
             raise pytest.UsageError(f"{context}: requires both 'link' and 'reason' keyword arguments (got {sorted(mark.kwargs)}).")
         return SkipType._validate_skip_bug_args(mark.kwargs["link"], mark.kwargs["reason"], context)
+
+    @staticmethod
+    def get_reason_skip_storage(mark, context):
+        """Strict skip_storage: storage flavors positional, reason required."""
+        if not mark.args:
+            raise pytest.UsageError(f"{context}: takes the storage flavors positionally, "
+                                    "e.g. skip_storage('s3', 'gs', reason=...).")
+        reason = mark.kwargs.get("reason", "").strip()
+        if set(mark.kwargs) != {"reason"} or not reason:
+            raise pytest.UsageError(f"{context}: requires a 'reason' keyword argument and no others "
+                                    f"(got {sorted(mark.kwargs)}).")
+        return reason
+
+    @staticmethod
+    def applies_skip_storage(mark, item) -> bool:
+        """Cover only the parametrizations whose storage flavor the marker names.
+
+        The local flavor parametrizes STORAGE_FIXTURE with None, which never
+        matches a named flavor, so it keeps running.
+        """
+        callspec = getattr(item, "callspec", None)
+        return callspec is not None and callspec.params.get(STORAGE_FIXTURE) in mark.args
 
     @property
     def marker_name(self) -> str:
