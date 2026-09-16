@@ -3050,11 +3050,43 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
     }
 
     using get_table_ids_func = std::function<std::unordered_set<table_id>(const db::system_keyspace::topology_requests_entry&)>;
-    using send_rpc_func = std::function<future<>(locator::host_id, const service::frozen_topology_guard&)>;
     using desc_func = std::function<std::string()>;
+    // Sends the operation to the replicas of `tables`. Gets the guard of the topology session
+    // the operation runs under, and the id of the topology request, with which the operation
+    // can identify itself to the replicas.
+    using send_all_func = std::function<future<>(const std::unordered_set<table_id>& tables, const service::frozen_topology_guard&, utils::UUID request_id)>;
     using before_finalize_func = std::function<future<>()>;
 
-    future<> handle_topology_ordered_op(group0_guard guard, get_table_ids_func get_table_ids, send_rpc_func send_rpc, desc_func desc, std::string_view what, before_finalize_func bf = {}) {
+    // Sends `send` to every host holding a replica of a tablet of `tables`, in parallel, once it
+    // has checked that all of them are alive. Nodes excluded from tablet operations are left out.
+    future<> send_to_tablet_replica_hosts(const std::unordered_set<table_id>& tables, desc_func desc, std::function<future<>(locator::host_id)> send) {
+        // Collect the IDs of the hosts with replicas, but ignore excluded nodes
+        std::unordered_set<locator::host_id> replica_hosts;
+        for (auto table_id : tables) {
+            const locator::tablet_map& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(table_id);
+            co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& tinfo) {
+                for (const locator::tablet_replica& replica: tinfo.replicas) {
+                    if (!_topo_sm._topology.excluded_tablet_nodes.contains(raft::server_id(replica.host.uuid()))) {
+                        replica_hosts.insert(replica.host);
+                    }
+                }
+                return make_ready_future<>();
+            });
+        }
+
+        // Check if all the nodes with replicas are alive
+        for (const locator::host_id& replica_host: replica_hosts) {
+            if (!_gossiper.is_alive(replica_host)) {
+                throw std::runtime_error(::format("Cannot perform {} because host {} is down", desc(), replica_host));
+            }
+        }
+
+        co_await coroutine::parallel_for_each(replica_hosts, [&] (const locator::host_id& host_id) -> future<> {
+            co_await send(host_id);
+        });
+    }
+
+    future<> handle_topology_ordered_op(group0_guard guard, get_table_ids_func get_table_ids, send_all_func send_all, desc_func desc, std::string_view what, before_finalize_func bf = {}) {
         // Execute a barrier to make sure the nodes we are performing truncate on see the session
         // and are able to create a topology_guard using the frozen_guard we are sending over RPC
         // TODO: Exclude nodes which don't contain replicas of the table we are truncating
@@ -3077,31 +3109,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 error = e.what();
             }
             if (!tables.empty()) {
-                // Collect the IDs of the hosts with replicas, but ignore excluded nodes
-                std::unordered_set<locator::host_id> replica_hosts;
-                for (auto table_id : tables) {
-                    const locator::tablet_map& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(table_id);
-                    co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& tinfo) {
-                        for (const locator::tablet_replica& replica: tinfo.replicas) {
-                            if (!_topo_sm._topology.excluded_tablet_nodes.contains(raft::server_id(replica.host.uuid()))) {
-                                replica_hosts.insert(replica.host);
-                            }
-                        }
-                        return make_ready_future<>();
-                    });
-                }
-
                 // Release the guard to avoid blocking group0 for long periods of time while invoking RPCs
                 release_guard(std::move(guard));
 
                 co_await utils::get_local_injector().inject(fmt::format("{}_table_wait", what), utils::wait_for_message(std::chrono::minutes(2)));
-
-                // Check if all the nodes with replicas are alive
-                for (const locator::host_id& replica_host: replica_hosts) {
-                    if (!_gossiper.is_alive(replica_host)) {
-                        throw std::runtime_error(::format("Cannot perform {} because host {} is down", desc(), replica_host));
-                    }
-                }
 
                 // The guard was released above, so we may have been deposed since. Don't
                 // touch the replicas if this operation is no longer the current one.
@@ -3110,11 +3121,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     throw term_changed_error{};
                 }
 
-                // Send the RPC to all replicas
+                // Send the operation to the replicas
                 const service::frozen_topology_guard frozen_guard { session };
-                co_await coroutine::parallel_for_each(replica_hosts, [&] (const locator::host_id& host_id) -> future<> {
-                    co_await send_rpc(host_id, frozen_guard);
-                });
+                co_await send_all(tables, frozen_guard, global_request_id);
             }
 
             // Clear the session and save the error message
@@ -3181,6 +3190,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
 
     future<> handle_truncate_table(group0_guard guard) {
         std::string ks_name, cf_name;
+        auto desc = [&] {
+            return fmt::format("TRUNCATE on table {}.{}", ks_name, cf_name);
+        };
 
         co_await handle_topology_ordered_op(std::move(guard)
             , [&](const db::system_keyspace::topology_requests_entry& topology_requests_entry) {
@@ -3197,12 +3209,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 }
                 throw std::invalid_argument(fmt::format("Cannot TRUNCATE table with UUID {} because it does not exist.", id));
             }
-            , [&](locator::host_id host_id, const service::frozen_topology_guard& frozen_guard) {
-                return ser::storage_proxy_rpc_verbs::send_truncate_with_tablets(&_messaging, host_id, ks_name, cf_name, frozen_guard);
+            , [&](const std::unordered_set<table_id>& tables, const service::frozen_topology_guard& frozen_guard, utils::UUID) {
+                return send_to_tablet_replica_hosts(tables, desc, [&] (locator::host_id host_id) {
+                    return ser::storage_proxy_rpc_verbs::send_truncate_with_tablets(&_messaging, host_id, ks_name, cf_name, frozen_guard);
+                });
             }
-            , [&] { 
-                return fmt::format("TRUNCATE on table {}.{}", ks_name, cf_name);
-            }
+            , desc
             , "truncate"
         );
     }
@@ -3214,6 +3226,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         bool skip_flush;
         gc_clock::time_point t;
         std::optional<gc_clock::time_point> expiry;
+        auto desc = [&] {
+            return fmt::format("SNAPSHOT on tables {}", ids);
+        };
 
         co_await handle_topology_ordered_op(std::move(guard)
             , [&](const db::system_keyspace::topology_requests_entry& topology_requests_entry) {
@@ -3234,12 +3249,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 rtlogger.info("Performing SNAPSHOT TABLES for {}", ids);
                 return *topology_requests_entry.snapshot_table_ids;
             }
-            , [&](locator::host_id host_id, const service::frozen_topology_guard& frozen_guard) {
-                return ser::storage_proxy_rpc_verbs::send_snapshot_with_tablets(&_messaging, host_id, ids, tag, t, skip_flush, expiry, frozen_guard);
+            , [&](const std::unordered_set<table_id>& tables, const service::frozen_topology_guard& frozen_guard, utils::UUID) {
+                return send_to_tablet_replica_hosts(tables, desc, [&] (locator::host_id host_id) {
+                    return ser::storage_proxy_rpc_verbs::send_snapshot_with_tablets(&_messaging, host_id, ids, tag, t, skip_flush, expiry, frozen_guard);
+                });
             }
-            , [&] { 
-                return fmt::format("SNAPSHOT on tables {}", ids);
-            }
+            , desc
             , "snapshot"
             , [&]() -> future<> {
                 db::snapshot_table_helper sth(_sys_ks.query_processor());
