@@ -10,6 +10,8 @@ import asyncio
 import logging
 import functools
 import operator
+import os
+import struct
 import time
 import re
 from contextlib import asynccontextmanager, contextmanager, suppress
@@ -771,3 +773,62 @@ def get_replica_count(rf: ReplicationOption) -> int:
         get_replica_count(["2"]) == 2
     """
     return len(rf) if type(rf) is list else int(rf)
+
+
+def get_commitlog_segment_id(path: str) -> int:
+    """
+    The id of a commitlog segment, taken from its name: <prefix>-<version>-<id>.log.
+    """
+    return int(os.path.basename(path).removesuffix(".log").split("-")[-1])
+
+
+def get_commitlog_segment_alignment(path: str) -> int:
+    """
+    The sector size of a commitlog segment, read from its header.
+    """
+    segment_header_size = 24
+    segment_magic = b"SCLC"
+
+    with open(path, "rb") as f:
+        header = f.read(segment_header_size)
+
+    assert len(header) == segment_header_size, f"{path} is too short to hold a segment header"
+    magic, _version, _segment_id, alignment, _checksum = struct.unpack(">IIQII", header)
+    assert magic.to_bytes(4, "big") == segment_magic, f"{path} is not a commitlog segment"
+    return alignment
+
+
+def commitlog_sector_has_data(file, sector: int, alignment: int) -> bool:
+    """
+    Whether a sector of an open segment holds anything the reader would look at.
+    """
+    file.seek(sector * alignment)
+    return any(file.read(alignment))
+
+
+def corrupt_commitlog_segment(path: str, sector: int = 1) -> None:
+    """
+    Damage a commitlog segment so that commitlog reports the corruption
+    once it reaches `sector`. It's done via flipping the CRC at the end
+    of the given sector.
+
+    Sector 0 holds the segment header and the first entries. Tests that need
+    the reader to hand out some entries before it fails should leave it alone.
+
+    Inspired by corrupt_segment() from test/boost/commitlog_test.cc.
+    """
+    alignment = get_commitlog_segment_alignment(path)
+    crc_size = 4
+    # The last crc_size bytes of a sector is its CRC.
+    crc_offset = (sector + 1) * alignment - crc_size
+
+    with open(path, "r+b") as f:
+        if not commitlog_sector_has_data(f, sector, alignment):
+            # Technically, flipping the bits in such a segment could work
+            # in some cases, but it's not reliable. Reject it.
+            pytest.fail(f"Sector {sector} of {path} holds no data")
+        f.seek(crc_offset)
+        stored = f.read(crc_size)
+        assert len(stored) == crc_size, f"{path} is shorter than sector {sector}"
+        f.seek(crc_offset)
+        f.write(bytes(b ^ 0xff for b in stored))
