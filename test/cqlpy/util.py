@@ -16,6 +16,7 @@ import collections
 import ssl
 from contextlib import contextmanager
 
+from cassandra import InvalidRequest
 from cassandra.auth import PlainTextAuthProvider
 from cassandra.cluster import Cluster, ConsistencyLevel, ExecutionProfile, EXEC_PROFILE_DEFAULT
 from cassandra.policies import RoundRobinPolicy
@@ -91,7 +92,7 @@ def keyspace_has_tablets(cql, keyspace):
 
     try:
         res = list(cql.execute(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name='{keyspace}'"))
-    except:
+    except InvalidRequest:
         # Antique versions of Scylla are is_scylla() but did not have
         # the scylla_keyspaces table. They didn't have tablets either, so
         # we should just return False.
