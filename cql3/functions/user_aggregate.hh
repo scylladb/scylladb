@@ -18,7 +18,7 @@ namespace functions {
 
 class user_aggregate : public db::functions::aggregate_function {
 public:
-    user_aggregate(function_name fname, bytes_opt initcond, ::shared_ptr<scalar_function> sfunc, ::shared_ptr<scalar_function> reducefunc, ::shared_ptr<scalar_function> finalfunc);
+    user_aggregate(function_name fname, managed_bytes_opt initcond, ::shared_ptr<scalar_function> sfunc, ::shared_ptr<scalar_function> reducefunc, ::shared_ptr<scalar_function> finalfunc);
     bool has_finalfunc() const;
 
     description describe(with_create_statement) const;
@@ -32,7 +32,7 @@ public:
     seastar::shared_ptr<scalar_function> finalfunc() const {
         return _agg.state_to_result_function;
     }
-    const bytes_opt& initcond() const {
+    const managed_bytes_opt& initcond() const {
         return _agg.initial_state;
     }
 };

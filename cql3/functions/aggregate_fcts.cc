@@ -55,8 +55,8 @@ public:
             , _func(std::move(func)) {
     }
 
-    virtual bytes_opt execute(std::span<const bytes_opt> parameters) override {
-        return _func(parameters);
+    virtual managed_bytes_opt execute(std::span<const managed_bytes_opt> parameters) override {
+        return to_managed_bytes_opt(_func(linearize_parameters(parameters)));
     }
 
     virtual const function_name& name() const override {
@@ -178,7 +178,7 @@ make_sum_function() {
             .state_type = data_type_for<accumulator_for<Type>>(),
             .result_type = data_type_for<Type>(),
             .argument_types = {data_type_for<Type>()},
-            .initial_state = data_type_for<accumulator_for<Type>>()->decompose(Acc(0)),
+            .initial_state = managed_bytes(data_type_for<accumulator_for<Type>>()->decompose(Acc(0))),
             .aggregation_function = make_internal_scalar_function("sum_step", return_accumulator_on_null, [] (Acc acc, Type addend) -> Acc { return acc + addend; }),
             .state_to_result_function = make_internal_scalar_function("sum_finalizer", return_any_nonnull, [] (Acc acc) -> Type { return narrow<Type>(acc); }),
             .state_reduction_function = make_internal_scalar_function("sum_reducer", return_any_nonnull, [] (Acc a1, Acc a2) -> Acc { return a1 + a2; }),
@@ -213,7 +213,7 @@ make_avg_function() {
             .state_type = accumulator_tuple_type,
             .result_type = data_type_for<Type>(),
             .argument_types = {data_type_for<Type>()},
-            .initial_state = make_tuple_value(accumulator_tuple_type, std::vector({data_value(sum_type(0)), data_value(int64_t(0))})).serialize(),
+            .initial_state = to_managed_bytes_opt(make_tuple_value(accumulator_tuple_type, std::vector({data_value(sum_type(0)), data_value(int64_t(0))})).serialize()),
             .aggregation_function = ::make_shared<internal_scalar_function>(
                     "avg_step",
                     accumulator_tuple_type,
@@ -309,7 +309,7 @@ aggregate_fcts::make_count_function(data_type input_type) {
             .state_type = long_type,
             .result_type = long_type,
             .argument_types = {input_type},
-            .initial_state = data_value(int64_t(0)).serialize(),
+            .initial_state = to_managed_bytes_opt(data_value(int64_t(0)).serialize()),
             .aggregation_function = ::make_shared<internal_scalar_function>(
                     "count_step",
                     long_type,
@@ -342,7 +342,7 @@ static data_type uda_return_type(const ::shared_ptr<scalar_function>& ffunc, con
     return ffunc ? ffunc->return_type() : sfunc->return_type();
 }
 
-user_aggregate::user_aggregate(function_name fname, bytes_opt initcond, ::shared_ptr<scalar_function> sfunc, ::shared_ptr<scalar_function> reducefunc, ::shared_ptr<scalar_function> finalfunc)
+user_aggregate::user_aggregate(function_name fname, managed_bytes_opt initcond, ::shared_ptr<scalar_function> sfunc, ::shared_ptr<scalar_function> reducefunc, ::shared_ptr<scalar_function> finalfunc)
         : aggregate_function(db::functions::stateless_aggregate_function{
                 .name = fname,
                 .state_type = sfunc->return_type(),
@@ -387,7 +387,7 @@ description user_aggregate::describe(with_create_statement with_stmt) const {
             os << "\n" << "FINALFUNC " << cql3::util::maybe_quote(_agg.state_to_result_function->name().name);
         }
         if (_agg.initial_state) {
-            os << "\n" << "INITCOND " << _agg.aggregation_function->return_type()->deserialize(bytes_view(*_agg.initial_state)).to_parsable_string();
+            os << "\n" << "INITCOND " << _agg.aggregation_function->return_type()->deserialize(managed_bytes_view(*_agg.initial_state)).to_parsable_string();
         }
         os << ";";
 
@@ -411,7 +411,7 @@ aggregate_fcts::make_count_rows_function() {
             .state_type = long_type,
             .result_type = long_type,
             .argument_types = {},
-            .initial_state = data_value(int64_t(0)).serialize(),
+            .initial_state = to_managed_bytes_opt(data_value(int64_t(0)).serialize()),
             .aggregation_function = make_internal_scalar_function("count_step", return_any_nonnull, [] (int64_t accumulator) {
                 return accumulator + 1;
             }),

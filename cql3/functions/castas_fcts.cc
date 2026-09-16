@@ -35,17 +35,17 @@ public:
     virtual void print(std::ostream& os) const override {
         os << "cast(" << _arg_types[0]->name() << " as " << _return_type->name() << ")";
     }
-    virtual bytes_opt execute(std::span<const bytes_opt> parameters) override {
+    virtual managed_bytes_opt execute(std::span<const managed_bytes_opt> parameters) override {
         auto from_type = arg_types()[0];
         auto to_type = return_type();
 
         auto&& val = parameters[0];
         if (!val) {
-            return val;
+            return std::nullopt;
         }
-        auto val_from = from_type->deserialize(*val);
+        auto val_from = from_type->deserialize(managed_bytes_view(*val));
         auto val_to = _func(val_from);
-        return to_type->decompose(val_to);
+        return managed_bytes(to_type->decompose(val_to));
     }
 };
 

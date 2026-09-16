@@ -161,12 +161,14 @@ std::vector<data_type> retrieve_vector_arg_types(const function_name& name, cons
     return {type, type};
 }
 
-bytes_opt vector_similarity_fct::execute(std::span<const bytes_opt> parameters) {
-    if (std::any_of(parameters.begin(), parameters.end(), [](const auto& param) {
+managed_bytes_opt vector_similarity_fct::execute(std::span<const managed_bytes_opt> fragmented_parameters) {
+    if (std::any_of(fragmented_parameters.begin(), fragmented_parameters.end(), [](const auto& param) {
             return !param;
         })) {
         return std::nullopt;
     }
+
+    auto parameters = linearize_parameters(fragmented_parameters);
 
     // Extract dimension from the vector type
     const auto& type = static_cast<const vector_type_impl&>(*arg_types()[0]);
@@ -177,7 +179,7 @@ bytes_opt vector_similarity_fct::execute(std::span<const bytes_opt> parameters) 
     std::vector<float> v2 = detail::extract_float_vector(parameters[1], dimension);
 
     float result = SIMILARITY_FUNCTIONS.at(_name)(v1, v2);
-    return float_type->decompose(result);
+    return managed_bytes(float_type->decompose(result));
 }
 
 } // namespace functions

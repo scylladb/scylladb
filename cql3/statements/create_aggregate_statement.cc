@@ -65,14 +65,14 @@ seastar::future<shared_ptr<db::functions::function>> create_aggregate_statement:
         }
     }
 
-    bytes_opt initcond = std::nullopt;
+    managed_bytes_opt initcond = std::nullopt;
     if (_ival) {
         auto dummy_ident = ::make_shared<column_identifier>("", true);
         auto column_spec = make_lw_shared<column_specification>("", "", dummy_ident, state_type);
         auto initcond_expr = prepare_expression(_ival.value(), db, _name.keyspace, nullptr, {column_spec});
         expr::verify_no_aggregate_functions(initcond_expr, "INITCOND clause");
         auto initcond_term = expr::evaluate(initcond_expr, query_options::DEFAULT);
-        initcond = std::move(initcond_term).to_bytes_opt();
+        initcond = std::move(initcond_term).to_managed_bytes_opt();
     }
 
     co_return ::make_shared<functions::user_aggregate>(_name, initcond, std::move(state_func), std::move(reduce_func), std::move(final_func));
