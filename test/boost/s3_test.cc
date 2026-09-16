@@ -37,6 +37,7 @@
 #include "utils/s3/noop_throttling_controller.hh"
 #include "utils/s3/utils/manip_s3.hh"
 #include "utils/exceptions.hh"
+#include "utils/hashers.hh"
 #include "utils/s3/credentials_providers/aws_credentials_provider_chain.hh"
 #include "utils/s3/credentials_providers/instance_profile_credentials_provider.hh"
 #include "utils/s3/credentials_providers/sts_assume_role_credentials_provider.hh"
@@ -245,6 +246,27 @@ SEASTAR_THREAD_TEST_CASE(test_client_put_get_object_s3) {
 
 SEASTAR_THREAD_TEST_CASE(test_client_put_get_object_proxy) {
     client_put_get_object(make_proxy_client);
+}
+
+void client_get_object_info_etag(const client_maker_function& client_maker) {
+    s3_test_fixture guard(client_maker);
+    auto cln = guard.client();
+    const auto name = guard.object_path("testetagobject");
+
+    static constexpr auto content = "1234567890"sv;
+    testlog.info("Put object {}\n", name);
+    cln->put_object(name, temporary_buffer<char>(content.data(), content.size())).get();
+
+    testlog.info("Get object info\n");
+    s3::object_info info = cln->get_object_info(name).get();
+    // The ETag of an object uploaded in a single PUT is the hex-encoded MD5 of
+    // its content, and the header carries it as a quoted entity-tag. Both the
+    // quotes and the value have to survive the trip through get_object_info().
+    BOOST_REQUIRE_EQUAL(info.etag, format("\"{}\"", to_hex(md5_hasher::calculate(content))));
+}
+
+SEASTAR_THREAD_TEST_CASE(test_client_get_object_info_etag) {
+    client_get_object_info_etag(make_s3_client);
 }
 
 void do_test_client_multipart_upload(const client_maker_function& client_maker, bool with_copy_upload) {
