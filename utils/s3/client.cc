@@ -692,6 +692,7 @@ future<object_info> client::get_object_info(sstring object_name, seastar::abort_
                 info.metadata.emplace(std::move(key), value);
             }
         }
+        info.etag = rep.get_header("ETag");
         return make_ready_future<>();
     }, as);
     co_return info;
