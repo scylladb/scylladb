@@ -19,7 +19,7 @@ namespace functions {
 
 namespace detail {
 
-std::vector<float> extract_float_vector(const bytes_opt& param, vector_dimension_t dimension) {
+std::vector<float> extract_float_vector(const managed_bytes_opt& param, vector_dimension_t dimension) {
     if (!param) {
         throw exceptions::invalid_request_exception("Cannot extract float vector from null parameter");
     }
@@ -31,13 +31,17 @@ std::vector<float> extract_float_vector(const bytes_opt& param, vector_dimension
                        expected_size, dimension, param->size()));
     }
 
-    std::vector<float> result(dimension);
-    const char* p = reinterpret_cast<const char*>(param->data());
-    for (size_t i = 0; i < dimension; ++i) {
-        result[i] = std::bit_cast<float>(consume_be<uint32_t>(p));
-    }
-
-    return result;
+    // managed_bytes only fragments past preferred_max_contiguous_allocation(),
+    // so a vector of embeddings is a single fragment in practice and this does
+    // not copy.
+    return with_linearized(managed_bytes_view(*param), [dimension] (bytes_view linear_param) {
+        std::vector<float> result(dimension);
+        const char* p = reinterpret_cast<const char*>(linear_param.data());
+        for (size_t i = 0; i < dimension; ++i) {
+            result[i] = std::bit_cast<float>(consume_be<uint32_t>(p));
+        }
+        return result;
+    });
 }
 
 } // namespace detail
@@ -161,14 +165,12 @@ std::vector<data_type> retrieve_vector_arg_types(const function_name& name, cons
     return {type, type};
 }
 
-managed_bytes_opt vector_similarity_fct::execute(std::span<const managed_bytes_opt> fragmented_parameters) {
-    if (std::any_of(fragmented_parameters.begin(), fragmented_parameters.end(), [](const auto& param) {
+managed_bytes_opt vector_similarity_fct::execute(std::span<const managed_bytes_opt> parameters) {
+    if (std::any_of(parameters.begin(), parameters.end(), [](const auto& param) {
             return !param;
         })) {
         return std::nullopt;
     }
-
-    auto parameters = linearize_parameters(fragmented_parameters);
 
     // Extract dimension from the vector type
     const auto& type = static_cast<const vector_type_impl&>(*arg_types()[0]);
