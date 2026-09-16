@@ -239,7 +239,7 @@ static raft::log_entry_ptr make_mutation_entry(const schema_ptr& s, raft::term_t
     m.set_clustered_cell(ck, to_bytes("v"), data_value(v), ts);
     m.partition().clustered_row(*s, ck).apply(row_marker(ts));
     raft::command cmd;
-    ser::serialize(cmd, service::strong_consistency::raft_command{.mutation = freeze(m)});
+    ser::serialize(cmd, service::strong_consistency::raft_command{.change = service::strong_consistency::write_mutation{.mutation = freeze(m)}});
     return make_lw_shared<raft::log_entry>(
             raft::log_entry{.term = term, .idx = idx, .data = std::move(cmd)});
 }

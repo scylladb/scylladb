@@ -82,7 +82,8 @@ public:
             // E.g., for writes A-B-C-D, a reader must observe
             // them in that order and never see A-C or A-D skipping intermediate values.
             for (size_t i = 0; i < command.size(); ++i) {
-                auto mut = detail::deserialize_to_frozen_mutation(command[i]);
+                auto cmd = detail::deserialize_raft_command(command[i]);
+                auto& mut = std::get<write_mutation>(cmd.change).mutation;
                 auto schema = co_await schemas.resolve_and_upgrade(mut);
                 // Taken after the schema resolution, which may yield on the
                 // group0 barrier.
@@ -265,11 +266,10 @@ std::unique_ptr<raft_state_machine> make_state_machine(locator::global_tablet_id
 
 namespace detail {
 
-frozen_mutation deserialize_to_frozen_mutation(const raft::log_entry_ptr& entry) {
+raft_command deserialize_raft_command(const raft::log_entry_ptr& entry) {
     const auto& cmd = std::get<raft::command>(entry->data);
     auto is = ser::as_input_stream(cmd);
-    auto command = ser::deserialize(is, std::type_identity<raft_command>());
-    return std::move(command.mutation);
+    return ser::deserialize(is, std::type_identity<raft_command>());
 }
 
 } // namespace detail
