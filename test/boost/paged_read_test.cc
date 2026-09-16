@@ -726,6 +726,22 @@ SEASTAR_THREAD_TEST_CASE(test_witnesses_of_per_partition_limit) {
     });
 }
 
+// Without native_reverse_queries, a replica converts a reversed read from the
+// legacy format with partition_slice_builder, which must keep the
+// per-partition limit. Otherwise the replica returns both rows of partition 1.
+SEASTAR_THREAD_TEST_CASE(test_legacy_reversed_read_keeps_per_partition_limit) {
+    with_harness([] (harness& hs) {
+        run_and_check(hs, read_case{
+            on_replicas({
+                regular_cell_write{1, 5, regular_column::v2, 9, 17},
+                regular_cell_write{1, 3, regular_column::v2, 9, 13},
+            }, 0b1),
+            select_query{.partitions = std::vector<int32_t>{1}, .reversed = true, .per_partition_limit = 1},
+            read_options{.replica_count = 1, .page_size = 5, .native_reverse_queries = false, .read_frontiers = false, .schedule_seed = 695175667},
+        });
+    });
+}
+
 namespace {
 
 // 1 to 4 replicas, of which all but one may be extra replicas.
