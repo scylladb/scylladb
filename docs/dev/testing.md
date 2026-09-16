@@ -213,6 +213,16 @@ Tests from boost suite are divided into test-cases. These are top-level
 functions wrapped by `BOOST_AUTO_TEST_CASE`, `SEASTAR_TEST_CASE` or alike.
 Boost tests support `path/to/file_name.cc::casename` selection described above.
 
+Unit tests are run by the executable they are built into, which has to be
+built beforehand. `--build` builds it as part of the run, so that a change
+can be tested with a single command:
+
+    $ ./tools/toolchain/dbuild pytest test/boost/aggregate_fcts_test.cc --mode=dev --build
+
+Note that tests which have no executable of their own are built into
+`test/boost/combined_tests`, so `--build` can build a lot more than the test
+selected.
+
 ### Debugging unit tests
 
 If a test fails, its log can be found in
