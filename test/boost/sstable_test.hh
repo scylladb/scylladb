@@ -54,6 +54,10 @@ public:
     static const std::unique_ptr<replica::storage_group_manager>& get_storage_group_manager(replica::column_family& cf) {
         return cf._sg_manager;
     }
+
+    static bool has_reads_parked_for_tablet_truncate(replica::column_family& cf) {
+        return cf._tablet_truncate_done.has_waiters();
+    }
 };
 
 namespace sstables {
