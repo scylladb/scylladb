@@ -218,6 +218,9 @@ Boost tests support `path/to/file_name.cc::casename` selection described above.
 If a test fails, its log can be found in
 `testlog/{mode}/{suitename}.{testname}.{casename}_stdout.{run_id}.log`
 (e.g. `testlog/dev/boost.aggregate_fcts_test.test_aggregate_avg_stdout.1.log`).
+When a single test case is run, the path of its log is printed at the end of
+the run. The log of a test which passed is deleted, unless
+`--save-log-on-success` (`-s` for `test.py`) is passed.
 By default, all unit tests are built stripped. To build non-stripped tests,
 `./configure` with `--tests-debuginfo list-of-tests`.
 `test.py` adds some command line arguments to unit tests.

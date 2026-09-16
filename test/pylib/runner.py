@@ -54,6 +54,7 @@ if TYPE_CHECKING:
 
     import _pytest.nodes
     import _pytest.scope
+    from _pytest.terminal import TerminalReporter
 
     from test.pylib.scylla_cluster import ClusterFactory
 
@@ -61,6 +62,12 @@ if TYPE_CHECKING:
 TEST_CONFIG_FILENAME = "test_config.yaml"
 PYTEST_LOG_FOLDER = "pytest_log"
 PYTEST_TESTS_LOGS_FOLDER = "pytest_tests_logs"
+
+# Names of the user properties a C++ test case records for the log it wrote.
+# User properties travel with the report, so they reach the terminal summary
+# even when the test ran in an xdist worker.
+CPP_TEST_LOG = "cpp_test_log"
+CPP_TEST_LOG_KEPT = "cpp_test_log_kept"
 
 REPEATING_FILES = pytest.StashKey[set[pathlib.Path]]()
 BUILD_MODE = pytest.StashKey[str]()
@@ -486,6 +493,35 @@ def pytest_runtest_logreport(report):
 
         node_reporter.to_xml = custom_to_xml
         node_reporter.__reporter_modified = True
+
+
+def pytest_terminal_summary(terminalreporter: TerminalReporter) -> None:
+    """Point at the log of a C++ test case when it was the only one that ran.
+
+    The log holds the full output of the test executable, of which the report
+    only shows the tail, so it is worth pointing at whenever the user is
+    looking at a single test -- which is also the only time they can tell
+    which test the path belongs to without reading it.
+    """
+
+    reports = [
+        report
+        for reports in terminalreporter.stats.values() for report in reports
+        if isinstance(report, pytest.TestReport) and report.when == "call"
+    ]
+    if len(reports) != 1:
+        return
+    properties = dict(reports[0].user_properties)
+    if (log_path := properties.get(CPP_TEST_LOG)) is None:
+        return
+
+    terminalreporter.write_sep("-", "C++ test log")
+    terminalreporter.write_line(log_path)
+    if not properties.get(CPP_TEST_LOG_KEPT):
+        terminalreporter.write_line(
+            "The log was removed because the test passed."
+            "  Pass --save-log-on-success (-s with test.py) to keep the logs of passing tests.",
+        )
 
 
 @pytest.hookimpl(trylast=True)
