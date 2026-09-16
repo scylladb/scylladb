@@ -19,7 +19,8 @@ namespace replica::logstor {
 //
 // The value holds the partition of the mutation and nothing the record_header already
 // carries, which is why decoding takes the header: the key and the table of the record come
-// from it.
+// from it. The layout of the value is described in replica/logstor/record_value.cc, next to
+// the encoder.
 
 // Encodes the partition of m as the value of a record whose header is built from m.
 record_value encode_record_value(const mutation& m);

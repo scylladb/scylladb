@@ -35,7 +35,9 @@ static constexpr uint32_t buffer_header_magic = 0x4c475342;
 //
 // The record header is the exception: it carries the partition key, so its size varies per
 // record. Its encoding is the pair of write_record_header()/read_record_header() at the
-// bottom of this file, and record_frame_header carries the key size that the reader needs.
+// bottom of this file, and record_frame_header carries the key size that the reader needs. The
+// record value that follows the header is variable too, and record_frame_header carries its
+// size; its encoding lives in replica/logstor/record_value.cc.
 //
 // serialized_size must stay in sync with write()/read()/skip(): it is what sizes the substreams in
 // write_buffer and the reads in segment_io, so a mismatch silently truncates or pads records on disk
