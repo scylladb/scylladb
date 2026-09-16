@@ -22,7 +22,6 @@ class function_name;
 
 class function {
 public:
-    using opt_bytes = std::optional<bytes>;
     virtual ~function() {}
     virtual const function_name& name() const = 0;
     virtual const std::vector<data_type>& arg_types() const = 0;
