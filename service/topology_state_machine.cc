@@ -276,6 +276,9 @@ validate_removing_node(replica::database& db, locator::host_id host_id) {
 }
 
 future<sstring> topology_state_machine::wait_for_request_completion(db::system_keyspace& sys_ks, utils::UUID id, bool require_entry) {
+    if (this_shard_id() != 0) {
+        on_internal_error(tsmlogger, "wait_for_request_completion() must run on shard 0");
+    }
     tsmlogger.debug("Start waiting for topology request completion (request id {})", id);
     while (true) {
         auto c = reload_count;
