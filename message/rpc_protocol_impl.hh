@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <seastar/core/shared_future.hh>
 #include <seastar/rpc/rpc.hh>
 #include "messaging_service.hh"
 #include "serializer.hh"
@@ -79,6 +80,21 @@ public:
 class messaging_service::rpc_protocol_client_wrapper {
     std::unique_ptr<rpc_protocol::client> _p;
     ::shared_ptr<seastar::tls::server_credentials> _credentials;
+    // The future of the one-shot CLIENT_ID handshake send. The CLIENT_ID
+    // handler on the peer attaches the sender identity (host_id etc.) that
+    // handlers of subsequent verbs rely on, so no verb may reach the peer on
+    // a connection whose CLIENT_ID it did not see first. Once CLIENT_ID is
+    // enqueued, the connection's ordered pipeline guarantees that: any verb
+    // sent later is behind it, and a failure to write it out kills the whole
+    // connection, taking the later verbs with it. The only dangerous failure
+    // is a synchronous one (e.g. bad_alloc while marshalling), which leaves
+    // the connection alive but unidentified - it makes this future available
+    // and failed before the connection is ever handed out to senders, and
+    // senders must check for that (and must not wait otherwise: a send may
+    // not outlive its verb's timeout just because the handshake is stuck
+    // together with the rest of a slow connection).
+    // Starts ready and is set right after the connection is created.
+    shared_future<> _client_id_sent = shared_future<>(make_ready_future<>());
 public:
     rpc_protocol_client_wrapper(rpc_protocol &proto, rpc::client_options opts, socket_address addr,
                                 socket_address local = {})
@@ -99,6 +115,10 @@ public:
         return _p->error();
     }
 
+    const shared_future<>& client_id_sent() const { return _client_id_sent; }
+
+    void set_client_id_sent(shared_future<> f) { _client_id_sent = std::move(f); }
+
     operator rpc_protocol::client &() { return *_p; }
 
     /**
@@ -108,6 +128,11 @@ public:
      */
     template<typename Serializer, typename... Out>
     future<rpc::sink<Out...>> make_stream_sink() {
+        // Refuse to use a connection whose CLIENT_ID handshake failed
+        // synchronously (see client_id_sent()).
+        if (_client_id_sent.available() && _client_id_sent.failed()) {
+            return make_exception_future<rpc::sink<Out...>>(_client_id_sent.get_future().get_exception());
+        }
         if (_credentials) {
             return _p->make_stream_sink<Serializer, Out...>(seastar::tls::socket(_credentials));
         }
@@ -130,6 +155,13 @@ auto send_message(messaging_service* ms, messaging_verb verb, std::optional<loca
         return futurator::make_exception_future(rpc::closed_error("local node is shutting down"));
     }
     auto rpc_client_ptr = ms->get_rpc_client(verb, id, host_id);
+    const auto& client_id_sent = rpc_client_ptr->client_id_sent();
+    if (client_id_sent.available() && client_id_sent.failed()) {
+        // The CLIENT_ID handshake failed synchronously, leaving the connection
+        // alive but unidentified and hence unusable (see client_id_sent()).
+        ms->increment_dropped_messages(verb);
+        return futurator::make_exception_future(client_id_sent.get_future().get_exception());
+    }
     auto& rpc_client = *rpc_client_ptr;
     return rpc_handler(rpc_client, std::forward<MsgOut>(msg)...).handle_exception([ms = ms->shared_from_this(), id, host_id, verb, rpc_client_ptr = std::move(rpc_client_ptr)] (std::exception_ptr&& eptr) {
         ms->increment_dropped_messages(verb);
@@ -169,6 +201,13 @@ auto send_message_timeout(messaging_service* ms, messaging_verb verb, std::optio
         return futurator::make_exception_future(rpc::closed_error("local node is shutting down"));
     }
     auto rpc_client_ptr = ms->get_rpc_client(verb, id, host_id);
+    const auto& client_id_sent = rpc_client_ptr->client_id_sent();
+    if (client_id_sent.available() && client_id_sent.failed()) {
+        // The CLIENT_ID handshake failed synchronously, leaving the connection
+        // alive but unidentified and hence unusable (see client_id_sent()).
+        ms->increment_dropped_messages(verb);
+        return futurator::make_exception_future(client_id_sent.get_future().get_exception());
+    }
     auto& rpc_client = *rpc_client_ptr;
     return rpc_handler(rpc_client, timeout, std::forward<MsgOut>(msg)...).handle_exception([ms = ms->shared_from_this(), id, host_id, verb, rpc_client_ptr = std::move(rpc_client_ptr)] (std::exception_ptr&& eptr) {
         ms->increment_dropped_messages(verb);
@@ -211,6 +250,13 @@ auto send_message_cancellable(messaging_service* ms, messaging_verb verb, std::o
         return futurator::make_exception_future(rpc::closed_error("local node is shutting down"));
     }
     auto rpc_client_ptr = ms->get_rpc_client(verb, id, host_id);
+    const auto& client_id_sent = rpc_client_ptr->client_id_sent();
+    if (client_id_sent.available() && client_id_sent.failed()) {
+        // The CLIENT_ID handshake failed synchronously, leaving the connection
+        // alive but unidentified and hence unusable (see client_id_sent()).
+        ms->increment_dropped_messages(verb);
+        return futurator::make_exception_future(client_id_sent.get_future().get_exception());
+    }
     auto& rpc_client = *rpc_client_ptr;
 
     auto c = std::make_unique<seastar::rpc::cancellable>();
@@ -262,6 +308,13 @@ auto send_message_timeout_cancellable(messaging_service* ms, messaging_verb verb
     }
     auto address = ms->addr_for_host_id(host_id);
     auto rpc_client_ptr = ms->get_rpc_client(verb, address, host_id);
+    const auto& client_id_sent = rpc_client_ptr->client_id_sent();
+    if (client_id_sent.available() && client_id_sent.failed()) {
+        // The CLIENT_ID handshake failed synchronously, leaving the connection
+        // alive but unidentified and hence unusable (see client_id_sent()).
+        ms->increment_dropped_messages(verb);
+        return futurator::make_exception_future(client_id_sent.get_future().get_exception());
+    }
     auto& rpc_client = *rpc_client_ptr;
 
     auto c = std::make_unique<seastar::rpc::cancellable>();
