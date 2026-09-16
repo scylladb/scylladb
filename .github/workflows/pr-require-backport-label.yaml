@@ -54,8 +54,7 @@ jobs:
             const escaped = repo.replace('/', '\\/');
             // Deliberately the exact pattern from backport-pr-fixes-validation.yaml,
             // which runs on the generated backport PR and is the strictest check in
-            // the chain (auto-backport.py is more lenient, so it is not the binding
-            // constraint). Anything looser here would let a PR pass, get backported,
+            // the chain. Anything looser here would let a PR pass, get backported,
             // and only then fail - which is what this check exists to prevent. Keep
             // the two patterns identical.
             const pattern = `Fixes:? ((?:#|${escaped}#|https://github\\.com/${escaped}/issues/)(\\d+)|(?:https://scylladb\\.atlassian\\.net/browse/)?([A-Z]+-\\d+))`;
