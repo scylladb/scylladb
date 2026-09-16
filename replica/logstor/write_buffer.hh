@@ -54,9 +54,6 @@ class log_record_writer {
     using ostream = seastar::simple_memory_output_stream;
 
     log_record _record;
-    mutable std::optional<size_t> _data_size;
-
-    void compute_sizes() const;
 
 public:
     explicit log_record_writer(log_record record)
@@ -67,12 +64,8 @@ public:
         return ondisk::log_record_header_size(_record.header);
     }
 
-    // The data size is computed lazily, as it requires measuring the serialized mutation.
     size_t data_size() const {
-        if (!_data_size) {
-            compute_sizes();
-        }
-        return *_data_size;
+        return _record.value.size();
     }
 
     // Total serialized content size (header + data)
@@ -151,7 +144,7 @@ struct buffered_write_result {
 // layout is:
 //   buffer_header
 //   (segment_header)?                 // for segment_kind::full only
-//   record_header + log_record_header (fixed fields + partition key) + canonical_mutation
+//   record_header + log_record_header (fixed fields + partition key) + record value
 //   ...
 //   zero padding to the requested final alignment
 //

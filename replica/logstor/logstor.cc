@@ -15,6 +15,7 @@
 #include "readers/forwardable.hh"
 #include "keys/keys.hh"
 #include "replica/logstor/key_utils.hh"
+#include "replica/logstor/record_value.hh"
 #include "replica/logstor/segment_manager.hh"
 #include "replica/logstor/types.hh"
 #include <seastar/core/when_all.hh>
@@ -167,7 +168,7 @@ future<> logstor::write(const mutation& m, write_target target, db::timeout_cloc
             .timestamp = ts,
             .table = table,
         },
-        .mut = canonical_mutation(m)
+        .value = encode_record_value(m),
     };
 
     auto writer = log_record_writer(std::move(record));
@@ -220,7 +221,7 @@ future<std::optional<mutation>> logstor::read(schema_ptr s, const primary_index&
         co_await coroutine::return_exception(key_mismatch_error(dk.key(), record.header.key.key(), lookup->entry.location));
     }
 
-    mutation m = record.mut.to_mutation(s);
+    mutation m = decode_record_value(record.value, s, record.header);
 
     if (!bypass_cache) {
         index.populate_cache(pk, lookup->entry.location, m);
@@ -467,7 +468,7 @@ mutation_reader logstor::make_reader(schema_ptr schema, const primary_index& ind
                     continue;
                 }
                 reads.push_back(_logstor->_segment_manager.read(slot.location).then([this, &slot] (log_record record) {
-                    auto mut = record.mut.to_mutation(_schema);
+                    auto mut = decode_record_value(record.value, _schema, record.header);
                     auto memory = _permit.consume_memory(mut.memory_usage(*_schema));
                     slot.mut = pending_mutation{std::move(mut), std::move(memory)};
                 }));

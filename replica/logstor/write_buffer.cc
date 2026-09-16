@@ -17,23 +17,17 @@
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/coroutine/as_future.hh>
 #include "serializer_impl.hh"
-#include "idl/frozen_schema.dist.hh"
-#include "idl/frozen_schema.dist.impl.hh"
 #include <seastar/core/align.hh>
 #include <seastar/core/aligned_buffer.hh>
 #include "utils/crc.hh"
 
 namespace replica::logstor {
 
-void log_record_writer::compute_sizes() const {
-    seastar::measuring_output_stream ms_data;
-    ser::serialize(ms_data, _record.mut);
-    _data_size = ms_data.size();
-}
-
 void log_record_writer::write(ostream& out) const {
     ondisk::write_log_record_header(out, _record.header);
-    ser::serialize(out, _record.mut);
+    for (bytes_view frag : _record.value.representation().fragments()) {
+        out.write(reinterpret_cast<const char*>(frag.data()), frag.size());
+    }
 }
 
 void log_record_bytes_writer::write(ostream& out) const {
@@ -316,8 +310,8 @@ bool ondisk::validate_header(const ondisk::buffer_header& bh) {
 }
 
 bool ondisk::validate_record_header(const ondisk::record_header& rh) {
-    // A record always carries a serialized canonical_mutation, so a zero data_size cannot come
-    // from a record this code wrote. It is what a scan sees in the zero-filled tail of a torn
+    // A record always carries an encoded value, so a zero data_size cannot come from a record
+    // this code wrote. It is what a scan sees in the zero-filled tail of a torn
     // buffer, and rejecting it stops the scan there instead of walking the tail as a run of
     // zero-length records. The key bound rejects a corrupt header before its key_size is
     // trusted to size a read or an allocation.

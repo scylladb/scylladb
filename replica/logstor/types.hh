@@ -11,7 +11,7 @@
 #include <fmt/format.h>
 #include "dht/decorated_key.hh"
 #include "replica/logstor/key_utils.hh"
-#include "mutation/canonical_mutation.hh"
+#include "bytes_ostream.hh"
 #include "mutation/timestamp.hh"
 
 namespace replica::logstor {
@@ -81,9 +81,30 @@ struct log_record_header {
     }
 };
 
+// The value of a record: the partition it holds, encoded. The bytes are opaque everywhere but in
+// replica/logstor/record_value.hh, where the two functions that encode and decode them live.
+class record_value {
+    bytes_ostream _data;
+
+public:
+    record_value() = default;
+    explicit record_value(bytes_ostream data) noexcept
+        : _data(std::move(data))
+    { }
+    // A copy of the value's bytes, as read from a record on disk.
+    explicit record_value(bytes_view data) {
+        _data.write(data);
+    }
+
+    size_t size() const noexcept { return _data.size(); }
+    const bytes_ostream& representation() const noexcept { return _data; }
+
+    bool operator==(const record_value& other) const noexcept { return _data == other._data; }
+};
+
 struct log_record {
     log_record_header header;
-    canonical_mutation mut;
+    record_value value;
 };
 
 struct log_record_bytes_view {

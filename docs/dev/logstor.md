@@ -29,7 +29,7 @@ The `segment_manager` handles the allocation and management of fixed-size segmen
 - **Recovery**: Scans segments on startup to rebuild the index
 - **Separator**: Writes to all _compaction groups_ (tablets and even tables) go to a single active segment. The separator splits these mixed segments, which have records from different compaction groups, into segments that each has a single compaction group. This separation is useful when migrating tablets.
 
-The data in the segments consists of records of type `log_record`. Each record contains the value for some key as a `canonical_mutation` and additional metadata.
+The data in the segments consists of records of type `log_record`. Each record contains the value for some key as an encoded partition (`record_value`) and additional metadata.
 
 The `segment_manager` receives new writes via a `write_buffer` and writes them sequentially to the active segment with 4k-block alignment.
 
@@ -231,7 +231,7 @@ Each record within the buffer is structured as:
 ```
 record_header        (8 bytes)
 log_record_header    (32 + key_size bytes)
-canonical_mutation   (data_size bytes)
+record_value         (data_size bytes)
 zero_padding         -- to align to record_alignment (8 bytes)
 ```
 
@@ -240,7 +240,7 @@ zero_padding         -- to align to record_alignment (8 bytes)
 | Offset | Size | Field       | Description |
 |--------|------|-------------|-------------|
 | 0      | 4    | `key_size`  | Size in bytes of the partition key at the end of the `log_record_header` that follows. |
-| 4      | 4    | `data_size` | Size in bytes of the serialized `canonical_mutation` that follows the `log_record_header`. |
+| 4      | 4    | `data_size` | Size in bytes of the `record_value` that follows the `log_record_header`. |
 
 **Log Record Header** (`log_record_header`):
 
@@ -253,12 +253,12 @@ Written by `ondisk::write_log_record_header()`. The fixed fields come first, at 
 | 16     | 16         | `table`     | `table_id` (UUID) — the table this record belongs to, written as its most significant and then its least significant 64-bit half. |
 | 32     | `key_size` | `key`       | The partition key in its internal representation (`partition_key::representation()`). |
 
-**Mutation Data**:
+**Record Value** (`record_value`):
 
-The `data_size` bytes immediately following the log record header are the IDL-serialized `canonical_mutation`, which holds the full partition value.
+The `data_size` bytes immediately following the log record header are the encoded partition. They are opaque to everything but `encode_record_value()` and `decode_record_value()` in `replica/logstor/record_value.hh`: compaction, the separator and segment streaming copy a value as it is. The encoding is the IDL-serialized `canonical_mutation` of the partition, written without the length prefix the IDL puts around it, since `data_size` already gives the size.
 
 **Record Location** (`log_location`):
 
 The `log_location` stored in the index for each record points to the start of the `record_header`:
 - `offset`: byte offset from the start of the segment to the `record_header`.
-- `size`: total size including `record_header` + `log_record_header` + `canonical_mutation`
+- `size`: total size including `record_header` + `log_record_header` + `record_value`
