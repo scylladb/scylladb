@@ -196,43 +196,152 @@ async def wait_for_pow2_convergence(manager: ScyllaClusterManager, server: Serve
 
 async def verify_migration_status(manager: ScyllaClusterManager, server: ServerInfo,
                                   ks: str, expected_status: str,
-                                  expected_node_statuses: dict[str, tuple[str, str]],
-                                  retries: int = 0, retry_interval: float = 0):
-    async def _check():
-        # Verify migration status via the migration status API
+                                  expected_node_statuses: dict[str, tuple[str, str]]):
+    # The status API takes a group0 read barrier, so a single check is enough:
+    # anything a node published before it finished starting up is already visible.
+    status = await manager.api.get_vnode_tablet_migration_status(server.ip_addr, ks)
+    actual_node_statuses = {n['host_id']: (n['current_mode'], n['intended_mode']) for n in status['nodes']}
+    assert status['status'] == expected_status, f"Expected migration status '{expected_status}', got '{status['status']}'"
+    assert actual_node_statuses == expected_node_statuses, f"Expected node statuses {expected_node_statuses}, got {actual_node_statuses}"
+
+    # Verify migration status via the tasks API
+    tm = TaskManagerClient(manager.api)
+    tasks = await tm.list_tasks(server.ip_addr, "vnodes_to_tablets_migration")
+    ks_tasks = [t for t in tasks if t.keyspace == ks and t.type == "vnodes_to_tablets_migration"]
+
+    if expected_status == "migrating_to_tablets":
+        assert len(ks_tasks) == 1, f"Expected 1 virtual task for keyspace '{ks}', got {len(ks_tasks)}"
+        task = ks_tasks[0]
+        assert task.state == "running", f"Expected task state 'running', got '{task.state}'"
+        assert task.type == "vnodes_to_tablets_migration", f"Expected task type 'vnodes_to_tablets_migration', got '{task.type}'"
+
+        task_status = await tm.get_task_status(server.ip_addr, task.task_id)
+        expected_total = len(expected_node_statuses)
+        expected_completed = sum(1 for cm, _ in expected_node_statuses.values() if cm == 'tablets')
+        assert task_status.progress_total == expected_total, f"Expected progress_total {expected_total}, got {task_status.progress_total}"
+        assert task_status.progress_completed == expected_completed, f"Expected progress_completed {expected_completed}, got {task_status.progress_completed}"
+    else:
+        assert len(ks_tasks) == 0, f"Expected no virtual tasks for keyspace '{ks}' when status is '{expected_status}', got {len(ks_tasks)}"
+
+
+async def wait_for_node_storage_modes(manager: ScyllaClusterManager, server: ServerInfo,
+                                      ks: str, expected: tuple[str, str], timeout: float = 60):
+    """Wait until the status API reports `expected` (current, intended) for `server`.
+
+    Polls, unlike verify_migration_status(): a mode published by the feature listener
+    lands in a background fiber that startup does not wait for.
+    """
+    host_id = await manager.get_host_id(server.server_id)
+    deadline = time.time() + timeout
+    last = None
+    while time.time() < deadline:
         status = await manager.api.get_vnode_tablet_migration_status(server.ip_addr, ks)
-        actual_node_statuses = {n['host_id']: (n['current_mode'], n['intended_mode']) for n in status['nodes']}
-        assert status['status'] == expected_status, f"Expected migration status '{expected_status}', got '{status['status']}'"
-        assert actual_node_statuses == expected_node_statuses, f"Expected node statuses {expected_node_statuses}, got {actual_node_statuses}"
-
-        # Verify migration status via the tasks API
-        tm = TaskManagerClient(manager.api)
-        tasks = await tm.list_tasks(server.ip_addr, "vnodes_to_tablets_migration")
-        ks_tasks = [t for t in tasks if t.keyspace == ks and t.type == "vnodes_to_tablets_migration"]
-
-        if expected_status == "migrating_to_tablets":
-            assert len(ks_tasks) == 1, f"Expected 1 virtual task for keyspace '{ks}', got {len(ks_tasks)}"
-            task = ks_tasks[0]
-            assert task.state == "running", f"Expected task state 'running', got '{task.state}'"
-            assert task.type == "vnodes_to_tablets_migration", f"Expected task type 'vnodes_to_tablets_migration', got '{task.type}'"
-
-            task_status = await tm.get_task_status(server.ip_addr, task.task_id)
-            expected_total = len(expected_node_statuses)
-            expected_completed = sum(1 for cm, _ in expected_node_statuses.values() if cm == 'tablets')
-            assert task_status.progress_total == expected_total, f"Expected progress_total {expected_total}, got {task_status.progress_total}"
-            assert task_status.progress_completed == expected_completed, f"Expected progress_completed {expected_completed}, got {task_status.progress_completed}"
-        else:
-            assert len(ks_tasks) == 0, f"Expected no virtual tasks for keyspace '{ks}' when status is '{expected_status}', got {len(ks_tasks)}"
-
-    for attempt in range(retries + 1):
-        try:
-            await _check()
+        modes = {n['host_id']: (n['current_mode'], n['intended_mode']) for n in status['nodes']}
+        last = modes.get(host_id)
+        if last == expected:
             return
-        except AssertionError:
-            if attempt < retries and retry_interval > 0:
-                await asyncio.sleep(retry_interval)
-            else:
-                raise
+        await asyncio.sleep(0.5)
+    assert False, f"Node {host_id} reported {last}, expected {expected} within {timeout}s"
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_storage_mode_published_after_feature_enabled(manager: ScyllaClusterManager):
+    """Verify a node publishes its storage mode when TOPOLOGY_CURRENT_STORAGE_MODE is
+    enabled after it booted, without waiting for another restart.
+
+    The skip_current_storage_mode_publish one-shot injection stands in for the upgrade
+    that introduces the feature, where no node can see it enabled on that boot: it
+    suppresses the publish on the boot pass, leaving the listener to reconcile.
+    """
+    cfg = {'tablet_load_stats_refresh_interval_in_seconds': 1, 'num_tokens': 16}
+    servers = await manager.servers_add(1, cmdline=['--smp', '2'], config=cfg)
+    server = servers[0]
+    host_id = await manager.get_host_id(server.server_id)
+    cql, _ = await manager.get_ready_cql(servers)
+
+    ks_opts = "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}"
+    async with new_test_keyspace(manager, ks_opts) as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+        stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, c) VALUES (?, ?)")
+        await asyncio.gather(*(cql.run_async(stmt, [k, k]) for k in range(100)))
+
+        logger.info(f"Migrating {ks} and marking the node")
+        await manager.api.create_vnode_tablet_migration(server.ip_addr, ks)
+        await manager.api.upgrade_node_to_tablets(server.ip_addr)
+
+        await verify_migration_status(manager, server, ks,
+            expected_status='migrating_to_tablets',
+            expected_node_statuses={host_id: ('vnodes', 'tablets')})
+
+        logger.info("Restarting the node with the boot-time publish suppressed")
+        await manager.server_stop_gracefully(server.server_id)
+        await manager.server_update_config(server.server_id, 'error_injections_at_startup',
+            [{'name': 'skip_current_storage_mode_publish', 'one_shot': True}])
+        await manager.server_start(server.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        # The boot pass skipped the column, so this only passes because the feature
+        # listener reconciled it afterwards.
+        logger.info("Verifying the listener published the mode the boot pass skipped")
+        await wait_for_node_storage_modes(manager, server, ks, ('tablets', 'tablets'))
+
+        logger.info(f"Finalizing the migration of {ks}")
+        await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks)
+        await read_barrier(manager.api, server.ip_addr)
+
+        await verify_migration_status(manager, server, ks,
+            expected_status='tablets', expected_node_statuses={})
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_migration_refused_before_feature_enabled(manager: ScyllaClusterManager):
+    """Verify a migration cannot start until TOPOLOGY_CURRENT_STORAGE_MODE is enabled.
+
+    suppress_features stands in for a node that still runs older code.
+    """
+    cfg = {
+        'tablet_load_stats_refresh_interval_in_seconds': 1,
+        'num_tokens': 16,
+        'error_injections_at_startup': [
+            {'name': 'suppress_features', 'value': 'TOPOLOGY_CURRENT_STORAGE_MODE'}],
+    }
+    servers = await manager.servers_add(1, cmdline=['--smp', '2'], config=cfg)
+    server = servers[0]
+    cql, _ = await manager.get_ready_cql(servers)
+
+    ks_opts = "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}"
+    async with new_test_keyspace(manager, ks_opts) as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+
+        with pytest.raises(HTTPError, match="TOPOLOGY_CURRENT_STORAGE_MODE cluster feature is not enabled"):
+            await manager.api.create_vnode_tablet_migration(server.ip_addr, ks)
+
+        logger.info("Restarting the node without the suppression so the feature is enabled")
+        await manager.server_stop_gracefully(server.server_id)
+        await manager.server_remove_config_option(server.server_id, 'error_injections_at_startup')
+        await manager.server_start(server.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        # The coordinator enables the feature once every node supports it. Retry only
+        # that refusal; anything else is a real error and must not be swallowed.
+        not_enabled = "TOPOLOGY_CURRENT_STORAGE_MODE cluster feature is not enabled"
+        deadline = time.time() + 60
+        while True:
+            try:
+                await manager.api.create_vnode_tablet_migration(server.ip_addr, ks)
+                break
+            except HTTPError as e:
+                if not_enabled not in e.message:
+                    raise
+                assert time.time() < deadline, f"Migration still refused after the feature should be enabled: {e}"
+                await asyncio.sleep(0.5)
+
+        host_id = await manager.get_host_id(server.server_id)
+        await verify_migration_status(manager, server, ks,
+            expected_status='migrating_to_tablets',
+            expected_node_statuses={host_id: ('vnodes', 'vnodes')})
 
 
 async def test_migration(manager: ScyllaClusterManager):
@@ -603,8 +712,7 @@ async def test_migration_multinode(manager: ScyllaClusterManager):
         logger.info("Verifying migration status after rolling restarts")
         await verify_migration_status(manager, servers[0], ks,
             expected_status='migrating_to_tablets',
-            expected_node_statuses={host_id: ('tablets', 'tablets') for host_id in host_ids},
-            retries=1, retry_interval=1) # the status is derived from the topology coordinator's load stats which are refreshed every second; give it one retry after 1 second
+            expected_node_statuses={host_id: ('tablets', 'tablets') for host_id in host_ids})
 
         logger.info("Finalizing tablets migration")
         await manager.api.finalize_vnode_tablet_migration(servers[0].ip_addr, ks)
@@ -760,8 +868,7 @@ async def test_migration_multidc(manager: ScyllaClusterManager):
         logger.info("Verifying migration status after rolling restarts")
         await verify_migration_status(manager, servers[0], ks,
             expected_status='migrating_to_tablets',
-            expected_node_statuses={host_id: ('tablets', 'tablets') for host_id in host_ids},
-            retries=1, retry_interval=1)
+            expected_node_statuses={host_id: ('tablets', 'tablets') for host_id in host_ids})
 
         logger.info("Finalizing tablets migration")
         await manager.api.finalize_vnode_tablet_migration(servers[0].ip_addr, ks)
@@ -1016,12 +1123,10 @@ async def test_migration_multiple_keyspaces(manager: ScyllaClusterManager):
             logger.info("Verifying both keyspaces show as migrating")
             await verify_migration_status(manager, server, ks1,
                 expected_status='migrating_to_tablets',
-                expected_node_statuses={host_id: ('tablets', 'tablets')},
-                retries=1, retry_interval=1)
+                expected_node_statuses={host_id: ('tablets', 'tablets')})
             await verify_migration_status(manager, server, ks2,
                 expected_status='migrating_to_tablets',
-                expected_node_statuses={host_id: ('tablets', 'tablets')},
-                retries=1, retry_interval=1)
+                expected_node_statuses={host_id: ('tablets', 'tablets')})
 
             logger.info("Finalizing migration for ks1")
             await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks1)
@@ -1369,19 +1474,20 @@ async def test_migration_with_zero_token_node(manager: ScyllaClusterManager):
     zero-token nodes because collect_tablet_load_stats only queried token-owning nodes, but
     the finalization check iterated all normal nodes.
 
-    The migration status API is deliberately not used to check progress here. It derives
-    current_mode from system.tablet_sizes, which is keyed by tablet replica, so a zero-token
-    node never appears in it and is always reported as using vnodes no matter what it has
-    actually done. That is a separate bug with a separate fix, so this test only checks that
-    finalization itself no longer fails.
+    Also reproduces SCYLLADB-3849 for the zero-token node: the status API used to derive
+    current_mode from system.tablet_sizes, which is keyed by tablet replica, so a node
+    holding no replicas of the keyspace was reported as using vnodes however far it had
+    actually got. Each node now records the mode it runs in, so the status is checked at
+    every step of the migration here, one node at a time.
 
     Steps:
     1. Start a 2-node cluster: one token-owning node in dc1 and one zero-token node in dc2 (arbiter DC).
     2. Create a vnode keyspace with RF={'dc1': 1, 'dc2': 0}.
-    3. Start the migration.
-    4. Mark both nodes for upgrade and restart them.
-    5. Finalize the migration — this should succeed (previously it would fail).
-    6. Verify the keyspace now uses tablets and the data is intact.
+    3. Start the migration — both nodes report vnodes.
+    4. Mark both nodes for upgrade — both still report vnodes, having not restarted yet.
+    5. Restart the nodes one at a time, verifying that only the restarted one reports tablets.
+    6. Finalize the migration — this should succeed (previously it would fail).
+    7. Verify the keyspace now uses tablets and the data is intact.
     """
     num_keys = 100
     tokens_per_node = 16
@@ -1401,6 +1507,9 @@ async def test_migration_with_zero_token_node(manager: ScyllaClusterManager):
     token_owning_servers = [server_dc1]
     cql, _ = await manager.get_ready_cql(token_owning_servers)
 
+    host_id_dc1 = await manager.get_host_id(server_dc1.server_id)
+    host_id_dc2 = await manager.get_host_id(server_dc2.server_id)
+
     logger.info("Creating keyspace with RF={'dc1': 1, 'dc2': 0}")
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': 1, 'dc2': 0} AND tablets = {'enabled': false}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
@@ -1412,19 +1521,47 @@ async def test_migration_with_zero_token_node(manager: ScyllaClusterManager):
         logger.info("Starting vnodes-to-tablets migration")
         await manager.api.create_vnode_tablet_migration(server_dc1.ip_addr, ks)
 
+        logger.info("Verifying migration status after creating tablet map")
+        await verify_migration_status(manager, server_dc1, ks,
+            expected_status='migrating_to_tablets',
+            expected_node_statuses={host_id_dc1: ('vnodes', 'vnodes'),
+                                    host_id_dc2: ('vnodes', 'vnodes')})
+
         logger.info("Marking both nodes for tablets migration")
         await manager.api.upgrade_node_to_tablets(server_dc1.ip_addr)
         await manager.api.upgrade_node_to_tablets(server_dc2.ip_addr)
+
+        # Marking a node only states an intent. Neither node has restarted, so neither
+        # switched its storage mode - the zero-token node included.
+        logger.info("Verifying that marking the nodes did not change the mode they run in")
+        await verify_migration_status(manager, server_dc1, ks,
+            expected_status='migrating_to_tablets',
+            expected_node_statuses={host_id_dc1: ('vnodes', 'tablets'),
+                                    host_id_dc2: ('vnodes', 'tablets')})
 
         logger.info("Restarting token-owning node to trigger resharding")
         await manager.server_restart(server_dc1.server_id)
         await reconnect_driver(manager)
         cql, _ = await manager.get_ready_cql(token_owning_servers)
 
+        # No retries: a node publishes its mode before it finishes starting up, and the
+        # status API takes a read barrier, so the switch is visible right away.
+        logger.info("Verifying that only the restarted node reports tablets")
+        await verify_migration_status(manager, server_dc1, ks,
+            expected_status='migrating_to_tablets',
+            expected_node_statuses={host_id_dc1: ('tablets', 'tablets'),
+                                    host_id_dc2: ('vnodes', 'tablets')})
+
         logger.info("Restarting zero-token node to trigger its migration")
         await manager.server_restart(server_dc2.server_id)
         await reconnect_driver(manager)
         cql, _ = await manager.get_ready_cql(token_owning_servers)
+
+        logger.info("Verifying that the zero-token node reports tablets after its restart")
+        await verify_migration_status(manager, server_dc1, ks,
+            expected_status='migrating_to_tablets',
+            expected_node_statuses={host_id_dc1: ('tablets', 'tablets'),
+                                    host_id_dc2: ('tablets', 'tablets')})
 
         logger.info("Finalizing tablets migration (should succeed with zero-token node present)")
         await manager.api.finalize_vnode_tablet_migration(server_dc1.ip_addr, ks)
@@ -1440,5 +1577,227 @@ async def test_migration_with_zero_token_node(manager: ScyllaClusterManager):
         assert len(res) == 1 and res[0].initial_tablets is not None, \
             "Keyspace is still using vnodes after migration finalization"
 
+        logger.info("Verifying both storage mode columns are cleared after finalization")
+        rows = await cql.run_async("SELECT host_id, intended_storage_mode, current_storage_mode FROM system.topology WHERE key = 'topology'", host=host_dc1)
+        assert len(rows) == 2, f"Expected 2 rows, got {len(rows)}"
+        for row in rows:
+            assert row.intended_storage_mode is None and row.current_storage_mode is None, \
+                f"Expected both storage modes cleared for node {row.host_id}, got " \
+                f"intended='{row.intended_storage_mode}' current='{row.current_storage_mode}'"
+
         logger.info("Verifying data integrity after finalization")
         await verify_data_integrity(cql, ks, "test", num_keys)
+
+
+async def test_migration_status_api_with_rf_zero_dc(manager: ScyllaClusterManager):
+    """Verify the migration status API for a token-owning node in a DC where the keyspace has RF=0.
+
+    Reproduces SCYLLADB-3849: the API used to derive current_mode from
+    system.tablet_sizes, whose replicas map is built from each tablet's replica set.
+    A node that holds no replica of the migrating keyspace could never appear there,
+    so it was reported as using vnodes for the whole migration. Unlike a zero-token
+    node, the node here owns tokens - it just replicates nothing for this keyspace,
+    because the keyspace gives its DC RF=0.
+
+    Such a node still has to be upgraded: its tables have nothing to reshard, but
+    their storage_group_manager and sstable_set are flavor-dependent and built once
+    at startup, so they would stay vnode-flavored if the user later raised the RF.
+
+    The RF=0 node is restarted first, so that the run fails at the first status check
+    after that restart if the mode is derived from tablet replicas again.
+
+    Steps:
+    1. Start two token-owning nodes, one in dc1 and one in dc2.
+    2. Create a vnode keyspace with RF={'dc1': 1, 'dc2': 0}, so the dc2 node has no replicas.
+    3. Start the migration and mark both nodes — both still report vnodes.
+    4. Restart the dc2 node — only it reports tablets.
+    5. Restart the dc1 node — both report tablets.
+    6. Finalize and verify the keyspace uses tablets and the data is intact.
+    """
+    num_keys = 100
+    tokens_per_node = 16
+
+    logger.info("Starting one token-owning node in each of dc1 and dc2")
+    cfg = {'tablet_load_stats_refresh_interval_in_seconds': 1, 'num_tokens': tokens_per_node}
+    server_dc1 = await manager.server_add(cmdline=['--smp', '2'], config=cfg, property_file={"dc": "dc1", "rack": "rack1"})
+    server_dc2 = await manager.server_add(cmdline=['--smp', '2'], config=cfg, property_file={"dc": "dc2", "rack": "rack1"})
+    servers = [server_dc1, server_dc2]
+
+    cql, _ = await manager.get_ready_cql(servers)
+
+    host_id_dc1 = await manager.get_host_id(server_dc1.server_id)
+    host_id_dc2 = await manager.get_host_id(server_dc2.server_id)
+
+    logger.info("Creating keyspace with RF={'dc1': 1, 'dc2': 0}")
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': 1, 'dc2': 0} AND tablets = {'enabled': false}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+
+        logger.info(f"Populating table with {num_keys} rows")
+        # CL=ONE rather than the driver's default: the round-robin policy may pick the
+        # dc2 node as coordinator, and a LOCAL_* level cannot be met in a DC with RF=0.
+        stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, c) VALUES (?, ?)")
+        stmt.consistency_level = ConsistencyLevel.ONE
+        await asyncio.gather(*(cql.run_async(stmt, [k, k]) for k in range(num_keys)))
+
+        logger.info("Starting vnodes-to-tablets migration")
+        await manager.api.create_vnode_tablet_migration(server_dc1.ip_addr, ks)
+
+        logger.info("Verifying that the tablet map has no replicas in dc2")
+        tablet_replicas = await get_all_tablet_replicas(manager, server_dc1, ks, 'test')
+        replica_hosts = {r[0] for tr in tablet_replicas for r in tr.replicas}
+        assert replica_hosts == {host_id_dc1}, \
+            f"Expected all tablet replicas on the dc1 node, got {replica_hosts}"
+
+        logger.info("Verifying migration status after creating tablet map")
+        await verify_migration_status(manager, server_dc1, ks,
+            expected_status='migrating_to_tablets',
+            expected_node_statuses={host_id_dc1: ('vnodes', 'vnodes'),
+                                    host_id_dc2: ('vnodes', 'vnodes')})
+
+        logger.info("Marking both nodes for tablets migration")
+        await manager.api.upgrade_node_to_tablets(server_dc1.ip_addr)
+        await manager.api.upgrade_node_to_tablets(server_dc2.ip_addr)
+
+        logger.info("Verifying that marking the nodes did not change the mode they run in")
+        await verify_migration_status(manager, server_dc1, ks,
+            expected_status='migrating_to_tablets',
+            expected_node_statuses={host_id_dc1: ('vnodes', 'tablets'),
+                                    host_id_dc2: ('vnodes', 'tablets')})
+
+        logger.info("Restarting the dc2 node, which holds no replicas of the keyspace")
+        await manager.server_restart(server_dc2.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        logger.info("Verifying that the node with no replicas reports tablets after its restart")
+        await verify_migration_status(manager, server_dc1, ks,
+            expected_status='migrating_to_tablets',
+            expected_node_statuses={host_id_dc1: ('vnodes', 'tablets'),
+                                    host_id_dc2: ('tablets', 'tablets')})
+
+        logger.info("Restarting the dc1 node to trigger resharding")
+        await manager.server_restart(server_dc1.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        logger.info("Verifying that both nodes report tablets")
+        await verify_migration_status(manager, server_dc1, ks,
+            expected_status='migrating_to_tablets',
+            expected_node_statuses={host_id_dc1: ('tablets', 'tablets'),
+                                    host_id_dc2: ('tablets', 'tablets')})
+
+        logger.info("Finalizing tablets migration")
+        await manager.api.finalize_vnode_tablet_migration(server_dc1.ip_addr, ks)
+
+        await read_barrier(manager.api, server_dc2.ip_addr)
+        host_dc2 = cql.cluster.metadata.get_host(server_dc2.ip_addr)
+
+        logger.info("Verifying that the keyspace schema has tablets enabled")
+        res = await cql.run_async(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{ks}'", host=host_dc2)
+        assert len(res) == 1 and res[0].initial_tablets is not None, \
+            "Keyspace is still using vnodes after migration finalization"
+
+        logger.info("Verifying data integrity after finalization")
+        await verify_data_integrity(cql, ks, "test", num_keys, cl=ConsistencyLevel.ONE)
+
+
+async def test_migration_status_reset_between_migrations(manager: ScyllaClusterManager):
+    """Verify that a node's recorded storage mode does not leak into the next migration.
+
+    The mode a node runs in is recorded per node, not per keyspace, and it is cleared
+    when a migration is finalized. Without that clearing, a node that migrated one
+    keyspace would look as if it had already switched for the next keyspace as well -
+    before it restarted, and therefore before its tables for that keyspace got their
+    tablet flavor.
+
+    Steps:
+    1. Start a single node and create two vnode keyspaces.
+    2. Migrate and finalize the first keyspace, so the node ends up running in tablets mode.
+    3. Start a migration for the second keyspace and verify the node reports vnodes.
+    4. Mark and restart it, verify it reports tablets, then finalize.
+    """
+    num_keys = 100
+
+    logger.info("Starting a single node")
+    cfg = {'tablet_load_stats_refresh_interval_in_seconds': 1, 'num_tokens': 16}
+    servers = await manager.servers_add(1, cmdline=['--smp', '2'], config=cfg)
+    server = servers[0]
+    host_id = await manager.get_host_id(server.server_id)
+
+    cql, _ = await manager.get_ready_cql(servers)
+
+    ks_opts = "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}"
+    async with new_test_keyspace(manager, ks_opts) as ks1:
+        async with new_test_keyspace(manager, ks_opts) as ks2:
+            for ks in (ks1, ks2):
+                await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+                stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, c) VALUES (?, ?)")
+                await asyncio.gather(*(cql.run_async(stmt, [k, k]) for k in range(num_keys)))
+
+            logger.info(f"Migrating {ks1}")
+            await manager.api.create_vnode_tablet_migration(server.ip_addr, ks1)
+            await manager.api.upgrade_node_to_tablets(server.ip_addr)
+            await manager.server_restart(server.server_id)
+            await reconnect_driver(manager)
+            cql, _ = await manager.get_ready_cql(servers)
+
+            await verify_migration_status(manager, server, ks1,
+                expected_status='migrating_to_tablets',
+                expected_node_statuses={host_id: ('tablets', 'tablets')})
+
+            logger.info(f"Finalizing the migration of {ks1}")
+            await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks1)
+            await read_barrier(manager.api, server.ip_addr)
+
+            # Let the post-finalization tablet merge settle, so the restarts below do
+            # not land mid-merge.
+            logger.info(f"Waiting for pow2 convergence of {ks1}")
+            await wait_for_pow2_convergence(manager, server, ks1, 'test')
+
+            logger.info("Verifying both storage mode columns are cleared after finalization")
+            rows = await cql.run_async("SELECT intended_storage_mode, current_storage_mode FROM system.topology WHERE key = 'topology'")
+            assert len(rows) == 1, f"Expected 1 row, got {len(rows)}"
+            assert rows[0].intended_storage_mode is None and rows[0].current_storage_mode is None, \
+                f"Expected both storage modes cleared, got intended='{rows[0].intended_storage_mode}' " \
+                f"current='{rows[0].current_storage_mode}'"
+
+            # A node only publishes the mode while an intent is recorded for it, so a
+            # restart outside a migration must not put the column back.
+            logger.info("Restarting the node outside a migration and rechecking the columns")
+            await manager.server_restart(server.server_id)
+            await reconnect_driver(manager)
+            cql, _ = await manager.get_ready_cql(servers)
+            await read_barrier(manager.api, server.ip_addr)
+            rows = await cql.run_async("SELECT intended_storage_mode, current_storage_mode FROM system.topology WHERE key = 'topology'")
+            assert rows[0].intended_storage_mode is None and rows[0].current_storage_mode is None, \
+                f"Restart outside a migration resurrected a storage mode: intended='{rows[0].intended_storage_mode}' " \
+                f"current='{rows[0].current_storage_mode}'"
+
+            # The node runs tablet-flavored tables for ks1 now, but its tables for ks2 were
+            # built before ks2 had a tablet map, so it has to restart again. The status must
+            # say so instead of reporting the mode left over from the previous migration.
+            logger.info(f"Starting a migration for {ks2} and verifying the node reports vnodes")
+            await manager.api.create_vnode_tablet_migration(server.ip_addr, ks2)
+            await verify_migration_status(manager, server, ks2,
+                expected_status='migrating_to_tablets',
+                expected_node_statuses={host_id: ('vnodes', 'vnodes')})
+
+            logger.info(f"Marking and restarting the node for {ks2}")
+            await manager.api.upgrade_node_to_tablets(server.ip_addr)
+            await manager.server_restart(server.server_id)
+            await reconnect_driver(manager)
+            cql, _ = await manager.get_ready_cql(servers)
+
+            await verify_migration_status(manager, server, ks2,
+                expected_status='migrating_to_tablets',
+                expected_node_statuses={host_id: ('tablets', 'tablets')})
+
+            logger.info(f"Finalizing the migration of {ks2}")
+            await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks2)
+            await read_barrier(manager.api, server.ip_addr)
+
+            logger.info("Verifying both keyspaces use tablets")
+            for ks in (ks1, ks2):
+                res = await cql.run_async(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{ks}'")
+                assert len(res) == 1 and res[0].initial_tablets is not None, \
+                    f"Keyspace {ks} is still using vnodes after migration finalization"
