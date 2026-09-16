@@ -138,6 +138,9 @@ static std::optional<attrs_to_get> calculate_attrs_to_get(const rjson::value& re
         const rjson::value& attributes_to_get = req["AttributesToGet"];
         attrs_to_get ret;
         for (auto it = attributes_to_get.Begin(); it != attributes_to_get.End(); ++it) {
+            if (!it->IsString()) {
+                throw api_error::validation("AttributesToGet entries must be strings");
+            }
             attribute_path_map_add("AttributesToGet", ret, rjson::to_string(*it));
             validate_attr_name_length("AttributesToGet", it->GetStringLength(), false);
         }
@@ -189,7 +192,7 @@ get_table_or_view(service::storage_proxy& proxy, const rjson::value& request) {
             type = table_or_view_type::gsi;
         } else {
             throw api_error::validation(
-                    fmt::format("Non-string IndexName '{}'", rjson::to_string_view(*index_name)));
+                    fmt::format("Non-string IndexName '{}'", *index_name));
         }
         // If no tables for global indexes were found, the index may be local
         if (!proxy.data_dictionary().has_schema(keyspace_name, table_name)) {
@@ -787,8 +790,17 @@ future<executor::request_return_type> executor::scan(client_state& client_state,
         return make_ready_future<request_return_type>(api_error::validation(
                 "Consistent reads are not allowed on global indexes (GSI)"));
     }
+    // Unlike Query, real DynamoDB's Scan doesn't seem to actually enforce
+    // Limit's documented type (Integer) or range - despite both operations
+    // documenting Limit identically, an oversized Limit that Query rejects
+    // is silently accepted by Scan. We match this by treating a Limit that
+    // doesn't fit in 32 bits the same as an absent one (unbounded), instead
+    // of rejecting it like get_uint64_attribute() would.
     rjson::value* limit_json = rjson::find(request, "Limit");
-    uint32_t limit = limit_json ? limit_json->GetUint64() : std::numeric_limits<uint32_t>::max();
+    uint32_t limit = std::numeric_limits<uint32_t>::max();
+    if (limit_json && limit_json->IsUint64() && limit_json->GetUint64() <= std::numeric_limits<uint32_t>::max()) {
+        limit = limit_json->GetUint64();
+    }
     if (limit <= 0) {
         return make_ready_future<request_return_type>(api_error::validation("Limit must be greater than 0"));
     }
@@ -2153,8 +2165,7 @@ future<executor::request_return_type> executor::query(client_state& client_state
         return make_ready_future<request_return_type>(api_error::validation(
                 "Consistent reads are not allowed on global indexes (GSI)"));
     }
-    rjson::value* limit_json = rjson::find(request, "Limit");
-    uint32_t limit = limit_json ? limit_json->GetUint64() : std::numeric_limits<uint32_t>::max();
+    uint32_t limit = get_uint64_attribute(request, "Limit").value_or(std::numeric_limits<uint32_t>::max());
     if (limit <= 0) {
         return make_ready_future<request_return_type>(api_error::validation("Limit must be greater than 0"));
     }

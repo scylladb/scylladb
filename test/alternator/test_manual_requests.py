@@ -698,3 +698,119 @@ def test_request_limit_exceeded_connection_reuse(dynamodb, cql):
         assert 'ResourceNotFoundException' in body, body
     finally:
         conn.close()
+
+# validate_value() checks the shape of every value type it recognizes - S
+# and B must be strings, N a numeric string, sets non-empty arrays, and so
+# on - but it used to accept "BOOL" unconditionally, without checking that
+# its value is really a JSON boolean. A value like {"BOOL": "dog"} passed
+# validation and only failed later, when serialization assumed it was a
+# bool: an InternalServerError instead of a clean ValidationException.
+# Needs a manual request: boto3 rejects a non-bool BOOL value client-side.
+@pytest.mark.parametrize("op", ['PutItem', 'UpdateItem', 'BatchWriteItem'])
+def test_write_malformed_bool_value(dynamodb, test_table_s, op):
+    p = random_string()
+    payloads = {
+        'PutItem': '''{
+            "TableName": "''' + test_table_s.name + '''",
+            "Item": {"p": {"S": "''' + p + '''"}, "x": {"BOOL": "dog"}}}''',
+        'UpdateItem': '''{
+            "TableName": "''' + test_table_s.name + '''",
+            "Key": {"p": {"S": "''' + p + '''"}},
+            "UpdateExpression": "SET x = :x",
+            "ExpressionAttributeValues": {":x": {"BOOL": "dog"} }}''',
+        'BatchWriteItem': '''{
+            "RequestItems": {
+            "''' + test_table_s.name + '''": [
+                {"PutRequest":
+                    {"Item": {"p": {"S": "''' + p + '''"}, "x": {"BOOL": "dog"}}}}
+            ]}}'''
+    }
+    with pytest.raises(ManualRequestError) as err:
+        manual_request(dynamodb, op, payloads[op])
+    assert err.value.type in ('ValidationException', 'SerializationException'), \
+        f'Unexpected error type {err.value.type} for {op} with malformed {{"BOOL": "dog"}}'
+
+# The legacy Expected/ComparisonOperator checks (check_comparable_type() in
+# conditions.cc) only checked an AttributeValueList entry's type tag ("S",
+# "N" or "B"), not that its value actually has that JSON type. A malformed
+# entry like {"S": 123} passed that check and reached code that assumes a
+# string: an InternalServerError instead of a clean ValidationException.
+# Affects every comparator that reads such a value (LT, LE, GT, GE, BETWEEN,
+# BEGINS_WITH, CONTAINS); we only test LT here. Needs a manual request:
+# boto3 rejects a non-string "S" value client-side.
+def test_expected_comparison_operator_type_mismatch(dynamodb, test_table_s):
+    p = random_string()
+    # Seed the item with a normal, validly-typed string attribute "x", so
+    # the *existing* value also passes check_comparable_type() - an Expected
+    # check against a *missing* attribute short-circuits before ever
+    # reaching the buggy code.
+    manual_request(dynamodb, 'PutItem', '''{
+        "TableName": "''' + test_table_s.name + '''",
+        "Item": {"p": {"S": "''' + p + '''"}, "x": {"S": "hello"}}}''')
+    body = '''{
+        "TableName": "''' + test_table_s.name + '''",
+        "Key": {"p": {"S": "''' + p + '''"}},
+        "Expected": {"x": {"ComparisonOperator": "LT", "AttributeValueList": [{"S": 123}]}}}'''
+    with pytest.raises(ManualRequestError) as err:
+        manual_request(dynamodb, 'DeleteItem', body)
+    assert err.value.type in ('ValidationException', 'SerializationException'), \
+        f'Unexpected error type {err.value.type} (message: {err.value.message})'
+
+# GetItem's legacy "AttributesToGet" entries weren't checked to be strings
+# before use - same class of bug as above. A non-string entry like 123 got
+# an InternalServerError instead of a ValidationException. Needs a manual
+# request: boto3 rejects non-string entries client-side.
+def test_get_item_attributes_to_get_non_string(dynamodb, test_table_s):
+    p = random_string()
+    body = '''{
+        "TableName": "''' + test_table_s.name + '''",
+        "Key": {"p": {"S": "''' + p + '''"}},
+        "AttributesToGet": [123]}'''
+    with pytest.raises(ManualRequestError) as err:
+        manual_request(dynamodb, 'GetItem', body)
+    assert err.value.type in ('ValidationException', 'SerializationException'), \
+        f'Unexpected error type {err.value.type} (message: {err.value.message})'
+
+# AttributeUpdates's legacy "Action" field wasn't checked to be a string -
+# same class of bug as above, in two places: once while deciding whether the
+# update needs a read-before-write, and again while actually applying it.
+# A non-string Action like 123 got an InternalServerError instead of a
+# ValidationException. Needs a manual request: boto3 rejects a non-string
+# Action client-side.
+def test_update_item_attribute_updates_non_string_action(dynamodb, test_table_s):
+    p = random_string()
+    body = '''{
+        "TableName": "''' + test_table_s.name + '''",
+        "Key": {"p": {"S": "''' + p + '''"}},
+        "AttributeUpdates": {"y": {"Action": 123, "Value": {"S": "z"}}}}'''
+    with pytest.raises(ManualRequestError) as err:
+        manual_request(dynamodb, 'UpdateItem', body)
+    assert err.value.type in ('ValidationException', 'SerializationException'), \
+        f'Unexpected error type {err.value.type} (message: {err.value.message})'
+
+# UntagResource's "TagKeys" entries weren't checked to be strings - same
+# class of bug as above. A non-string entry like 123 got an
+# InternalServerError instead of a ValidationException. Needs a manual
+# request: boto3 rejects non-string entries client-side.
+def test_untag_resource_non_string_tag_key(dynamodb, test_table):
+    arn = test_table.meta.client.describe_table(TableName=test_table.name)['Table']['TableArn']
+    body = '{"ResourceArn": "' + arn + '", "TagKeys": [123]}'
+    with pytest.raises(ManualRequestError) as err:
+        manual_request(dynamodb, 'UntagResource', body)
+    assert err.value.type in ('ValidationException', 'SerializationException'), \
+        f'Unexpected error type {err.value.type} (message: {err.value.message})'
+
+# Query already rejects a non-string IndexName, but the error message it
+# built for that case read the value as a string too - so reporting the
+# error hit the same class of bug as above, giving an InternalServerError
+# instead of the intended ValidationException. Needs a manual request:
+# boto3 rejects a non-string IndexName client-side.
+def test_query_non_string_index_name(dynamodb, test_table):
+    body = '''{
+        "TableName": "''' + test_table.name + '''",
+        "IndexName": 123,
+        "KeyConditions": {"p": {"AttributeValueList": [{"S": "x"}], "ComparisonOperator": "EQ"}}}'''
+    with pytest.raises(ManualRequestError) as err:
+        manual_request(dynamodb, 'Query', body)
+    assert err.value.type in ('ValidationException', 'SerializationException'), \
+        f'Unexpected error type {err.value.type} (message: {err.value.message})'

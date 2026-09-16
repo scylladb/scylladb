@@ -364,8 +364,14 @@ static bool check_comparable_type(const rjson::value& v) {
     if (!v.IsObject() || v.MemberCount() != 1) {
         return false;
     }
-    const rjson::value& type = v.MemberBegin()->name;
-    return type == "S" || type == "N" || type == "B";
+    const auto& kv = *v.MemberBegin();
+    if (kv.name != "S" && kv.name != "N" && kv.name != "B") {
+        return false;
+    }
+    // S, N and B are all encoded as a JSON string (S and B directly, N as a
+    // string holding a decimal number) - see validate_value(). A type tag
+    // whose value isn't really a string (e.g. {"S": 123}) isn't comparable.
+    return kv.value.IsString();
 }
 
 // Check if two JSON-encoded values match with cmp.
