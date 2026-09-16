@@ -13,6 +13,8 @@
 #include <memory>
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/loop.hh>
+#include <seastar/core/sleep.hh>
 #include <seastar/coroutine/as_future.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
@@ -3188,6 +3190,74 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         }
     }
 
+    // Commits a truncate_command in the raft group of each tablet of `table`. A tablet's replicas
+    // are asked in turn, the hinted leader first, until the leader commits the entry. Only a raft
+    // quorum per tablet is needed, so dead and excluded replicas are skipped. A retried request
+    // may add a second entry to a group; the state machine deduplicates it by request id.
+    future<> truncate_strongly_consistent_table(table_id table, locator::token_metadata_ptr tm,
+            const service::frozen_topology_guard& frozen_guard, utils::UUID request_id) {
+        const locator::tablet_map& tmap = tm->tablets().get_tablet_map(table);
+        auto tablet_ids = tmap.tablet_ids();
+        co_await max_concurrent_for_each(tablet_ids, 64, [&] (locator::tablet_id tid) -> future<> {
+            const auto gid = tmap.get_tablet_raft_info(tid).group_id;
+            const locator::global_tablet_id tablet{table, tid};
+            const auto& replicas = tmap.get_tablet_info(tid).replicas;
+            auto is_replica = [&] (locator::host_id host) {
+                return std::ranges::any_of(replicas, [&] (const locator::tablet_replica& r) { return r.host == host; });
+            };
+            std::optional<locator::host_id> leader;
+            while (true) {
+                // The hinted leader first, then the other replicas in tablet map order.
+                std::vector<locator::host_id> hosts;
+                if (leader) {
+                    hosts.push_back(*leader);
+                }
+                for (const locator::tablet_replica& replica : replicas) {
+                    if (!leader || replica.host != *leader) {
+                        hosts.push_back(replica.host);
+                    }
+                }
+                for (auto it = hosts.begin(); it != hosts.end(); ++it) {
+                    const locator::host_id host = *it;
+                    if (_topo_sm._topology.excluded_tablet_nodes.contains(raft::server_id(host.uuid()))
+                            || !_gossiper.is_alive(host)) {
+                        continue;
+                    }
+                    service::strong_consistency::truncate_tablet_result res;
+                    try {
+                        res = co_await ser::groups_manager_rpc_verbs::send_truncate_tablet(&_messaging, host,
+                                netw::messaging_service::clock_type::now() + std::chrono::seconds(10),
+                                raft::server_id(host.uuid()), tablet, gid, request_id, frozen_guard);
+                    } catch (...) {
+                        rtlogger.warn("truncate_tablet of {} (group {}) failed on {}: {}",
+                                tablet, gid, host, std::current_exception());
+                    }
+                    if (res.committed) {
+                        utils::get_local_injector().inject("truncate_sc_crash_after_tablet_commit", [] {
+                            rtlogger.info("truncate_sc_crash_after_tablet_commit hit, killing the node");
+                            _exit(1);
+                        });
+                        rtlogger.debug("truncate of {} (group {}) committed", tablet, gid);
+                        co_return;
+                    }
+                    if (res.leader && is_replica(locator::host_id(res.leader->uuid()))) {
+                        leader = locator::host_id(res.leader->uuid());
+                        // Ask the hinted leader next if it is still ahead in this round.
+                        if (auto next = std::find(std::next(it), hosts.end(), *leader); next != hosts.end()) {
+                            std::iter_swap(std::next(it), next);
+                        }
+                    }
+                }
+                // Nobody committed: the leader is unknown or changing, or the group has no quorum.
+                co_await sleep_abortable(std::chrono::milliseconds(200), _as);
+                if (_term != _raft.get_current_term() || _topo_sm._topology.session != frozen_guard) {
+                    rtlogger.info("truncate of {} is no longer the current operation, giving up", tablet);
+                    throw term_changed_error{};
+                }
+            }
+        });
+    }
+
     future<> handle_truncate_table(group0_guard guard) {
         std::string ks_name, cf_name;
         auto desc = [&] {
@@ -3209,8 +3279,16 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 }
                 throw std::invalid_argument(fmt::format("Cannot TRUNCATE table with UUID {} because it does not exist.", id));
             }
-            , [&](const std::unordered_set<table_id>& tables, const service::frozen_topology_guard& frozen_guard, utils::UUID) {
-                return send_to_tablet_replica_hosts(tables, desc, [&] (locator::host_id host_id) {
+            , [&](const std::unordered_set<table_id>& tables, const service::frozen_topology_guard& frozen_guard, utils::UUID request_id) -> future<> {
+                auto tm = get_token_metadata_ptr();
+                const table_id id = *tables.begin();
+                if (tm->tablets().get_tablet_map(id).has_raft_info()) {
+                    // A strongly consistent table: the truncate is an entry in the raft log of each
+                    // tablet, where its position decides which writes survive it.
+                    co_await truncate_strongly_consistent_table(id, std::move(tm), frozen_guard, request_id);
+                    co_return;
+                }
+                co_await send_to_tablet_replica_hosts(tables, desc, [&] (locator::host_id host_id) {
                     return ser::storage_proxy_rpc_verbs::send_truncate_with_tablets(&_messaging, host_id, ks_name, cf_name, frozen_guard);
                 });
             }
