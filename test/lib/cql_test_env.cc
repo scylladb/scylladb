@@ -234,7 +234,10 @@ private:
     }
 
     auto make_query_state() {
-        if (_db.local().has_keyspace(ks_name)) {
+        // Only fall back to the default keyspace if the client state doesn't
+        // have one yet, otherwise a keyspace selected with USE would be reset
+        // before each statement.
+        if (_core_local.local().client_state.get_raw_keyspace().empty() && _db.local().has_keyspace(ks_name)) {
             _core_local.local().client_state.set_keyspace(_db.local(), ks_name);
         }
         return ::make_shared<service::query_state>(_core_local.local().client_state, empty_service_permit());
@@ -267,11 +270,19 @@ public:
     }
 
     virtual future<cql3::prepared_cache_key_type> prepare(sstring query) override {
-        return qp().invoke_on_all([query, this] (auto& local_qp) {
+        // The client state is per shard and USE only changes the one on the
+        // shard it ran on, so prepare with the keyspace of the local shard on
+        // every shard, and compute the returned id with it too, that is what
+        // execute_prepared() will look it up with.
+        sstring ks = make_query_state()->get_client_state().get_raw_keyspace();
+        return qp().invoke_on_all([query, ks, this] (auto& local_qp) {
             auto qs = this->make_query_state();
+            if (!ks.empty()) {
+                qs->get_client_state().set_keyspace(_db.local(), ks);
+            }
             return local_qp.prepare(query, *qs, test_dialect()).finally([qs] {}).discard_result();
-        }).then([query, this] {
-            return local_qp().compute_id(query, ks_name, test_dialect());
+        }).then([query, ks, this] {
+            return local_qp().compute_id(query, ks, test_dialect());
         });
     }
 

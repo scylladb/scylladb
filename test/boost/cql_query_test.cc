@@ -1316,4 +1316,23 @@ SEASTAR_TEST_CASE(test_a_parsed_statement_gets_only_the_markers_of_its_text) {
     });
 }
 
+// The test environment computes the id of a prepared statement itself, and
+// it has to use the same keyspace the query processor keyed the cache with,
+// which is the one selected with USE, not the default one.
+SEASTAR_TEST_CASE(test_prepared_statement_after_use) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE KEYSPACE other_ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}").get();
+        e.execute_cql("CREATE TABLE other_ks.tbl (pk int PRIMARY KEY, v int)").get();
+        e.execute_cql("USE other_ks").get();
+
+        auto id = e.prepare("INSERT INTO tbl (pk, v) VALUES (?, ?)").get();
+        e.execute_prepared(id, {
+                cql3::raw_value::make_value(int32_type->decompose(1)),
+                cql3::raw_value::make_value(int32_type->decompose(2))}).get();
+
+        assert_that(e.execute_cql("SELECT v FROM other_ks.tbl WHERE pk = 1").get())
+            .is_rows().with_rows({{int32_type->decompose(2)}});
+    });
+}
+
 BOOST_AUTO_TEST_SUITE_END()
