@@ -30,6 +30,7 @@ jobs:
           echo "JOB_NAME=${FOLDER_NAME}/job/next" >> $GITHUB_ENV
 
       - name: Trigger Jenkins Job
+        id: trigger-jenkins
         env:
           JENKINS_USER: ${{ secrets.JENKINS_USERNAME }}
           JENKINS_API_TOKEN: ${{ secrets.JENKINS_TOKEN }}
@@ -40,10 +41,16 @@ jobs:
         run: |
           echo "Checking Existence of Jenkins Job: $JOB_NAME"
           JOB_URL="$JENKINS_URL/job/$JOB_NAME/api/json"
-          if ! curl --silent --fail --user "$JENKINS_USER:$JENKINS_API_TOKEN" "$JOB_URL" > /dev/null; then
+          JOB_HTTP_CODE=$(curl --silent --output /dev/null --write-out '%{http_code}' --user "$JENKINS_USER:$JENKINS_API_TOKEN" "$JOB_URL")
+          if [[ "$JOB_HTTP_CODE" == "404" ]]; then
             echo "Jenkins job $JOB_NAME does not exist yet. Skipping trigger."
+            echo "job_exists=false" >> "$GITHUB_OUTPUT"
             exit 0
+          elif [[ "$JOB_HTTP_CODE" != "200" ]]; then
+            echo "ERROR: unexpected HTTP $JOB_HTTP_CODE checking existence of Jenkins job $JOB_NAME" >&2
+            exit 1
           fi
+          echo "job_exists=true" >> "$GITHUB_OUTPUT"
 
           echo "Triggering Jenkins Job: $JOB_NAME"
           if ! curl -X POST "$JENKINS_URL/job/$JOB_NAME/buildWithParameters" --fail --user "$JENKINS_USER:$JENKINS_API_TOKEN" -i -v; then
@@ -59,5 +66,94 @@ jobs:
                 '{channel: $channel, text: $text, icon_emoji: $icon}')" \
               https://slack.com/api/chat.postMessage
 
+            exit 1
+          fi
+
+      - name: Comment "Queued" on the originating PR(s)
+        if: steps.trigger-jenkins.outputs.job_exists == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.AUTO_BACKPORT_TOKEN }}
+          REPO: ${{ github.repository }}
+          REF_NAME: ${{ github.ref_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          TRAILER_JQ='split("\n") as $lines
+            | ($lines | to_entries | map(select(.value | test("^Closes "; "i")))) as $matches
+            | if ($matches | length) == 0 then empty
+              else
+                ($matches | last.key) as $start
+                | reduce range($start; -1; -1) as $i
+                    ({stop:false, acc:[]};
+                      if .stop then .
+                      elif ($lines[$i] | test("^Closes "; "i")) then .acc += [$lines[$i]]
+                      elif ($lines[$i] | test("^[[:space:]]*$")) then .
+                      else .stop = true
+                      end)
+                | .acc | reverse | .[]
+              end'
+
+          if [[ "$BEFORE_SHA" =~ ^0+$ ]]; then
+            CLOSES_LINES=$(gh api "repos/$REPO/commits/$AFTER_SHA" --jq ".commit.message | $TRAILER_JQ")
+          else
+            CLOSES_LINES=$(gh api --paginate "repos/$REPO/compare/$BEFORE_SHA...$AFTER_SHA?per_page=100" --jq ".commits[].commit.message | $TRAILER_JQ")
+          fi
+
+          if [[ -z "$CLOSES_LINES" ]]; then
+            echo "No Closes trailers found, nothing to comment on"
+            exit 0
+          fi
+
+          MARKER="Queued to \`$REF_NAME\` (${AFTER_SHA:0:8})"
+          BOT_LOGIN=$(gh api user --jq '.login')
+          HAD_FAILURE=0
+
+          while IFS= read -r LINE; do
+            [[ -z "$LINE" ]] && continue
+
+            if [[ ! "$LINE" =~ ^Closes[[:space:]]+([^[:space:]#]+)#([0-9]+)[[:space:]]*$ ]]; then
+              echo "Skipping unrecognized Closes line: $LINE"
+              continue
+            fi
+            LINE_REPO="${BASH_REMATCH[1]}"
+            PR_NUMBER="${BASH_REMATCH[2]}"
+
+            if [[ "$LINE_REPO" != "$REPO" ]]; then
+              echo "Skipping cross-repo reference $LINE_REPO#$PR_NUMBER (this push is for $REPO)"
+              continue
+            fi
+
+            PR_ERR_FILE=$(mktemp)
+            if ! PR_JSON=$(gh api "repos/$REPO/pulls/$PR_NUMBER" 2>"$PR_ERR_FILE"); then
+              PR_ERR=$(cat "$PR_ERR_FILE")
+              rm -f "$PR_ERR_FILE"
+              if [[ "$PR_ERR" == *"HTTP 404"* ]]; then
+                echo "PR #$PR_NUMBER not found (probably an issue, not a PR), skipping"
+                continue
+              fi
+              echo "ERROR: failed to look up PR #$PR_NUMBER: $PR_ERR" >&2
+              exit 1
+            fi
+            rm -f "$PR_ERR_FILE"
+            STATE=$(jq -r '.state' <<< "$PR_JSON")
+            [[ "$STATE" == "open" ]] || continue
+
+            COMMENTS=$(gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments" --jq ".[] | select(.user.login == \"$BOT_LOGIN\") | .body")
+
+            if grep -qF "$MARKER" <<< "$COMMENTS"; then
+              echo "PR #$PR_NUMBER already has a queued comment, skipping"
+              continue
+            fi
+
+            if ! gh pr comment "$PR_NUMBER" --repo "$REPO" \
+              --body "$MARKER. This PR will be closed once promoted to the stable branch."; then
+              echo "ERROR: failed to comment on PR #$PR_NUMBER" >&2
+              HAD_FAILURE=1
+            fi
+          done <<< "$(sort -u <<< "$CLOSES_LINES")"
+
+          if [[ "$HAD_FAILURE" -eq 1 ]]; then
             exit 1
           fi
