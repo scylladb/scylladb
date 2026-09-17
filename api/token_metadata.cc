@@ -35,7 +35,7 @@ void set_token_metadata(http_context& ctx, routes& r, sharded<locator::shared_to
     });
 
     ss::get_node_tokens.set(r, [&tm, &g] (std::unique_ptr<http::request> req) {
-        gms::inet_address addr(req->get_path_param("endpoint"));
+        auto addr = require_path_param<gms::inet_address>(*req, "endpoint");
         auto& local_tm = *tm.local().get();
         std::optional<locator::host_id> host_id;
         try {
@@ -99,8 +99,7 @@ void set_token_metadata(http_context& ctx, routes& r, sharded<locator::shared_to
     });
 
     static auto host_or_broadcast = [&tm](const_req req) {
-        auto host = req.get_query_param("host");
-        return host.empty() ? tm.local().get()->get_topology().my_address() : gms::inet_address(host);
+        return get_query_param<gms::inet_address>(req, "host", tm.local().get()->get_topology().my_address());
     };
 
     httpd::endpoint_snitch_info_json::get_datacenter.set(r, [&tm, &g](const_req req) {
