@@ -64,6 +64,8 @@ BOOST_AUTO_TEST_CASE(from_string_bad) {
       "3fw2_0tj4_46w3k2cpidnirvjy7kkkk"s,
       "3fw2_0tj4"s,
       "3fw2_0tj4_46w3k2cpidnirvjy7k_and_more"s,
+      // the 13-character part overflows uint64_t
+      "3fw2_0tj4_46w3kzzzzzzzzzzzzz"s,
       "bonjour"s,
       "0x42"s,
       ""s,
