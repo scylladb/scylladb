@@ -1345,6 +1345,10 @@ void sstable::rewrite_statistics() {
     sstlog.debug("Rewriting statistics component of sstable {}", get_filename());
 
     auto lock = get_units(_mutate_sem, 1).get();
+    if (_unlinked) {
+        sstlog.debug("Skipping statistics rewrite of unlinked sstable {}", get_filename());
+        return;
+    }
     file_output_stream_options options;
     options.buffer_size = sstable_buffer_size;
     auto w = make_component_file_writer(component_type::TemporaryStatistics, std::move(options),
