@@ -80,7 +80,7 @@ mutation lookup(primary_index& index, replica::logstor::cache_tracker& tracker, 
     auto it = index.find(dk);
     BOOST_REQUIRE(it != index.end());
 
-    auto result = tracker.lookup(*it, std::move(schema));
+    auto result = tracker.lookup(*it, *schema);
     BOOST_REQUIRE(result);
     return std::move(*result);
 }
@@ -89,7 +89,7 @@ bool lookup_exists(primary_index& index, replica::logstor::cache_tracker& tracke
     auto it = index.find(dk);
     BOOST_REQUIRE(it != index.end());
 
-    return bool(tracker.lookup(*it, std::move(schema)));
+    return bool(tracker.lookup(*it, *schema));
 }
 
 bool evict_one(replica::logstor::cache_tracker& tracker) {
