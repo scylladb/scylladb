@@ -197,8 +197,7 @@ void set_storage_proxy(http_context& ctx, routes& r, sharded<service::storage_pr
     });
 
     sp::set_hinted_handoff_enabled.set(r, [&proxy](std::unique_ptr<http::request> req)  {
-        auto enable = req->get_query_param("enable");
-        auto filter = (enable == "true" || enable == "1")
+        auto filter = get_query_param<bool>(*req, "enable")
                 ? db::hints::host_filter(db::hints::host_filter::enabled_for_all_tag {})
                 : db::hints::host_filter(db::hints::host_filter::disabled_for_all_tag {});
         return proxy.invoke_on_all([filter = std::move(filter)] (service::storage_proxy& sp) {
