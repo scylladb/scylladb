@@ -1011,6 +1011,9 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Trigger automatic logstor compaction when the number of available segments drops below this fraction of the total number of logstor segments. A value of 0 disables the trigger threshold.")
     , logstor_compaction_max_shares(this, "logstor_compaction_max_shares", liveness::LiveUpdate, value_status::Used, 2000,
         "Maximum CPU shares the logstor compaction controller gives the logstor compaction scheduling group, reached at full space pressure. ")
+    , logstor_separator_shares(this, "logstor_separator_shares", liveness::LiveUpdate, value_status::Used, 1000,
+        "CPU shares of the logstor separator scheduling group. Unlike compaction, the separator is not discretionary - it is the second half of a write that was already accepted - so its shares are a fixed number rather than a controller output. "
+        "The default gives it the same weight as the group that writes the record the first time, which is right as long as the two cost about the same per record.")
     , file_cache_size_in_mb(this, "file_cache_size_in_mb", value_status::Unused, 512,
         "Total memory to use for SSTable-reading buffers.")
     , memtable_flush_queue_size(this, "memtable_flush_queue_size", value_status::Unused, 4,

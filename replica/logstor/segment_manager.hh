@@ -56,6 +56,7 @@ struct segment_manager_config {
     utils::updateable_value<float> compaction_static_shares;
     utils::updateable_value<float> compaction_max_shares;
     seastar::scheduling_group separator_sg;
+    utils::updateable_value<float> separator_shares;
     seastar::scheduling_group split_compaction_sg;
 };
 
