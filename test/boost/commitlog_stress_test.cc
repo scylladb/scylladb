@@ -20,7 +20,8 @@
  * This file fills those gaps:
  *
  *  - many concurrent writers, several tables, heavy-tailed random entry
- *    sizes from 1 byte to 10 MB (plus exact boundary sizes) in the same
+ *    sizes from 1 byte up to the configured max cell size (10 MB by default,
+ *    see max_cell_mb(); plus exact boundary sizes) in the same
  *    log, in PERIODIC and BATCH mode, with and without O_DSYNC.
  *    Contents are verified byte for byte both live and after a simulated
  *    crash + restart, using a shared replay_state exactly as the real
@@ -44,6 +45,7 @@
 
 #include <boost/test/unit_test.hpp>
 
+#include <cstdlib>
 #include <deque>
 #include <random>
 #include <ranges>
@@ -92,6 +94,38 @@ namespace {
 
 constexpr size_t MB = 1024 * 1024;
 constexpr size_t KB = 1024;
+
+// Largest oversized cell/entry these tests generate, in MB.
+//
+// Defaults to 10 MB, which keeps the suite's runtime and tmpfs footprint
+// reasonable for CI. Set SCYLLA_CL_STRESS_MAX_CELL_MB to a bigger value (e.g.
+// 50) for a longer soak: with 1 MB segments a 50 MB entry becomes ~100
+// fragments spread over ~50 segments, which is where the oversized/fragmented
+// write and replay paths are under the most pressure.
+size_t max_cell_mb() {
+    static const size_t value = [] {
+        if (const auto* s = std::getenv("SCYLLA_CL_STRESS_MAX_CELL_MB")) {
+            auto n = std::strtoul(s, nullptr, 10);
+            if (n >= 1 && n <= 1024) {
+                return size_t(n);
+            }
+        }
+        return size_t(10);
+    }();
+    return value;
+}
+
+size_t max_cell_size() {
+    return max_cell_mb() * MB;
+}
+
+// Per-shard commitlog space for a test that keeps `n_big` entries of
+// max_cell_size() alive at once (these tests hold their rp_handles, so nothing
+// is ever released and the footprint is the whole working set). Generous
+// headroom, floored at `floor_mb` so small-cell runs behave exactly as before.
+size_t space_for(size_t n_big, size_t floor_mb) {
+    return std::max(floor_mb, max_cell_mb() * n_big * 3);
+}
 
 table_id make_table_id() {
     return table_id(utils::UUID_gen::get_time_UUID());
@@ -270,7 +304,7 @@ future<> simulate_crash(commitlog& log, std::vector<rp_handle>& handles) {
 static future<> do_test_mixed_size_concurrent_writers(commitlog::sync_mode mode, bool o_dsync, size_t n_fibers, size_t per_fiber) {
     tmpdir tmp;
     // 4 MB segments -> max_record ~2 MB, so a 10 MB entry fragments over 3+ segments.
-    auto cfg = make_stress_config(tmp, 4, 2048);
+    auto cfg = make_stress_config(tmp, 4, space_for(24, 2048));
     cfg.mode = mode;
     cfg.use_o_dsync = o_dsync;
 
@@ -285,7 +319,7 @@ static future<> do_test_mixed_size_concurrent_writers(commitlog::sync_mode mode,
 
     entry_map expected;
     std::vector<rp_handle> handles;
-    constexpr size_t max_oversized = 10 * MB + 4096;
+    const size_t max_oversized = max_cell_size() + 4096;
 
     {
         auto log = co_await commitlog::create_commitlog(cfg);
@@ -441,7 +475,7 @@ mutation make_test_mutation(schema_ptr s, int variant, size_t cell_size, std::mt
 SEASTAR_TEST_CASE(test_add_entries_batch_mixing_tiny_and_huge_mutations_across_schemas) {
     tmpdir tmp;
     // 8 MB segments -> 4 MB max entry. Two 10 MB cells force fragmentation.
-    auto cfg = make_stress_config(tmp, 8, 1024);
+    auto cfg = make_stress_config(tmp, 8, space_for(8, 1024));
 
     auto seed = tests::random::get_int<uint64_t>();
     testlog.info("seed={}", seed);
@@ -452,7 +486,7 @@ SEASTAR_TEST_CASE(test_add_entries_batch_mixing_tiny_and_huge_mutations_across_s
     std::vector<schema_ptr> schemas = { make_test_schema("t_ck_blob", 0), make_test_schema("t_text_static", 1), make_test_schema("t_pk_only", 2) };
 
     // Cell sizes: two 10 MB, three ~700 KB, the rest tiny. Shuffle them.
-    std::vector<size_t> cell_sizes = { 10 * MB, 10 * MB, 700 * KB, 700 * KB, 700 * KB };
+    std::vector<size_t> cell_sizes = { max_cell_size(), max_cell_size(), 700 * KB, 700 * KB, 700 * KB };
     while (cell_sizes.size() < 40) {
         cell_sizes.push_back(1 + rng() % 64);
     }
@@ -530,12 +564,12 @@ SEASTAR_TEST_CASE(test_add_entries_batch_mixing_tiny_and_huge_mutations_across_s
  */
 static future<> do_test_fragmented_entry_with_damaged_middle_segment(bool truncate) {
     tmpdir tmp;
-    auto cfg = make_stress_config(tmp, 1, 128);
+    auto cfg = make_stress_config(tmp, 1, space_for(2, 128));
 
     auto uuid = make_table_id();
     entry_map smalls;
     replay_position big_rp;
-    constexpr size_t big_size = 10 * MB;
+    const size_t big_size = max_cell_size();
     constexpr uint64_t big_seed = 0xb16;
     sstring victim;
 
@@ -623,13 +657,13 @@ SEASTAR_TEST_CASE(test_fragmented_entry_with_truncated_middle_segment) {
  */
 SEASTAR_TEST_CASE(test_interleaved_small_and_fragmented_entries_replay) {
     tmpdir tmp;
-    auto cfg = make_stress_config(tmp, 1, 256); // 1 MB segments -> ~0.5 MB max record
+    auto cfg = make_stress_config(tmp, 1, space_for(6, 256)); // 1 MB segments -> ~0.5 MB max record
     auto uuid = make_table_id();
 
     entry_map expected;
     std::vector<rp_handle> handles;
     constexpr int n_big = 6;
-    const size_t big_size = 4 * MB + 12345; // spans ~9 segments, fragmented
+    const size_t big_size = max_cell_size() + 12345; // spans many segments, fragmented
 
     {
         auto log = co_await commitlog::create_commitlog(cfg);
@@ -1045,7 +1079,11 @@ SEASTAR_TEST_CASE(test_replayer_restores_mixed_size_mutations_across_tables) {
         testlog.info("seed={} max_record={}", seed, max_record);
         std::mt19937_64 rng(seed);
 
-        const size_t sizes[] = { 8, 4 * KB, 300 * KB, max_record + 1, 10 * MB };
+        // This one goes through a real cql_test_env, so the cell also has to
+        // survive the memtable and the large-data guardrails. Cap it at 16 MB
+        // so a soak run with a huge SCYLLA_CL_STRESS_MAX_CELL_MB keeps testing
+        // the replayer rather than unrelated large-cell machinery.
+        const size_t sizes[] = { 8, 4 * KB, 300 * KB, max_record + 1, std::min<size_t>(max_cell_size(), 16 * MB) };
         constexpr int n = 25;
         for (int i = 0; i < n; ++i) {
             auto& tb = tables[i % tables.size()];
