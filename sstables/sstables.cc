@@ -337,6 +337,9 @@ future<> parse(const schema&, sstable_version_types, random_access_reader& in, d
 
 template <typename T>
 future<> parse(const schema&, sstable_version_types, random_access_reader& in, T& len, bytes& s) {
+    if (len > in.size()) {
+        throw_malformed_sstable_exception(format("String length {} exceeds component size {}", len, in.size()));
+    }
     return in.read_exactly(len).then([&s, len] (auto buf) {
         check_buf_size(buf, len);
         // Likely a different type of char. Most bufs are unsigned, whereas the bytes type is signed.
@@ -467,7 +470,19 @@ template <typename Size, typename Members>
 future<> parse(const schema& s, sstable_version_types v, random_access_reader& in, disk_array<Size, Members>& arr) {
     Size len;
     co_await parse(s, v, in, len);
-    arr.elements.reserve(len);
+    // Every element takes at least one byte on disk; integral ones take
+    // exactly sizeof(Members). Only integral arrays are reserved up front,
+    // the in-memory size of other elements is unrelated to their on-disk size.
+    if constexpr (std::integral<Members>) {
+        if (len > in.size() / sizeof(Members)) {
+            throw_malformed_sstable_exception(format("Array length {} exceeds component size {}", len, in.size()));
+        }
+        arr.elements.reserve(len);
+    } else {
+        if (len > in.size()) {
+            throw_malformed_sstable_exception(format("Array length {} exceeds component size {}", len, in.size()));
+        }
+    }
     co_await parse(s, v, in, len, arr.elements);
 }
 
@@ -590,6 +605,10 @@ future<> parse(const schema& schema, sstable_version_types v, random_access_read
                      s.header.memory_size,
                      s.header.sampling_level,
                      s.header.size_at_full_sampling);
+    if (s.header.size >= in.size() / sizeof(pos_type) || s.header.memory_size > in.size()) {
+        throw_malformed_sstable_exception(format("Summary header is inconsistent with component size {}: size={}, memory_size={}",
+                in.size(), s.header.size, s.header.memory_size));
+    }
     // Positions are encoded in little-endian.
     s.positions.reserve(s.header.size + 1);
     while (s.positions.size() != s.header.size) {
@@ -750,14 +769,17 @@ future<> parse(const schema& s, sstable_version_types v, random_access_reader& i
         co_await coroutine::return_exception(malformed_sstable_exception("Estimated histogram with zero size found. Can't continue!"));
     }
 
+    auto type_size = sizeof(uint64_t) * 2;
+    if (length > in.size() / type_size) {
+        throw_malformed_sstable_exception(format("Estimated histogram length {} exceeds component size {}", length, in.size()));
+    }
+
     // Arrays are potentially pre-initialized by the estimated_histogram constructor.
     eh.bucket_offsets.clear();
     eh.buckets.clear();
 
     eh.bucket_offsets.reserve(length - 1);
     eh.buckets.reserve(length);
-
-    auto type_size = sizeof(uint64_t) * 2;
     auto buf = co_await in.read_exactly(length * type_size);
     check_buf_size(buf, length * type_size);
 
