@@ -7,6 +7,7 @@
  */
 
 
+#include <algorithm>
 #include <unordered_set>
 #include <regex>
 #include <boost/test/unit_test.hpp>
@@ -46,25 +47,71 @@
 using namespace std::string_view_literals;
 using namespace std::chrono_literals;
 
-// Retry strategy for tests: same retryability logic as the default AWS
-// strategy but with a fixed 1ms delay between retries instead of
-// exponential backoff, to keep tests fast.
+// Retry strategy for tests: same retryability logic as the default AWS strategy,
+// but with a delay schedule tuned for a local mock server rather than a remote
+// AWS endpoint.
+//
+// Two very different things make a request fail here. The common one is the s3
+// proxy (test/pylib/s3_proxy.py) injecting a retryable error into a request the
+// server would have served immediately; retrying that after a millisecond keeps
+// the tests fast, and the proxy gives up injecting after at most
+// `--max-retries` errors on the same path. The uncommon one is the mock server
+// itself going unresponsive for tens of seconds under the load of the whole
+// test suite running against it concurrently (SCYLLADB-4576), which no number
+// of millisecond retries can ride out.
+//
+// So the retry budget is expressed as wall-clock time rather than as a retry
+// count: the first `fast_retry_count` retries happen a millisecond apart, to
+// deal with the injected errors at no cost, and after that the delay grows
+// exponentially up to `maximum_retry_delay` until `total_retry_budget` of
+// delays has been spent. Only a failing request ever waits, so the schedule
+// costs a passing test nothing.
 class test_retry_strategy : public seastar::http::retry_strategy {
-    unsigned _max_retries;
+    static constexpr unsigned fast_retry_count = 10;
+    static constexpr std::chrono::milliseconds fast_retry_delay = 1ms;
+    static constexpr std::chrono::milliseconds maximum_retry_delay = 1s;
+
+    std::chrono::milliseconds _total_retry_budget;
+
+    // The delay to wait before the retry that follows `attempted_retries`
+    // already attempted ones.
+    static std::chrono::milliseconds delay_before_retry(unsigned attempted_retries) {
+        if (attempted_retries < fast_retry_count) {
+            return fast_retry_delay;
+        }
+        // Cap the shift well below the width of the representation, so that the
+        // clamp below, and not overflow, is what bounds the result.
+        auto doublings = std::min(attempted_retries - fast_retry_count + 1, 20u);
+        return std::min(fast_retry_delay * (1u << doublings), maximum_retry_delay);
+    }
+
+    // How much of the budget the delays before the retries attempted so far
+    // have consumed. The schedule depends on nothing but the retry count, so
+    // this can be summed up rather than measured, which keeps the strategy
+    // stateless and therefore shareable between the concurrent requests of one
+    // client.
+    static std::chrono::milliseconds delay_spent_so_far(unsigned attempted_retries) {
+        auto spent = 0ms;
+        for (unsigned retry = 0; retry < attempted_retries; ++retry) {
+            spent += delay_before_retry(retry);
+        }
+        return spent;
+    }
 
 public:
-    test_retry_strategy(unsigned max_retries = 10) : _max_retries(max_retries) {}
+    explicit test_retry_strategy(std::chrono::milliseconds total_retry_budget = 60s)
+        : _total_retry_budget(total_retry_budget) {}
 
     future<bool> should_retry(std::exception_ptr error, unsigned attempted_retries) const override {
-        if (attempted_retries >= _max_retries) {
-            co_return false;
-        }
         auto err = aws::aws_error::from_exception_ptr(error);
         if (err.is_retryable() != utils::http::retryable::yes) {
             co_return false;
         }
+        if (delay_spent_so_far(attempted_retries) >= _total_retry_budget) {
+            co_return false;
+        }
         if (attempted_retries > 0) {
-            co_await seastar::sleep(1ms);
+            co_await seastar::sleep(delay_before_retry(attempted_retries));
         }
         co_return true;
     }
@@ -72,6 +119,14 @@ public:
 
 static std::unique_ptr<seastar::http::retry_strategy> make_test_retry_strategy() {
     return std::make_unique<test_retry_strategy>();
+}
+
+// For the tests that deliberately point a client at an address nothing listens
+// on and want the failure handed back to them. A refused connection is
+// retryable, so with the budget above such a test would spend all of it waiting
+// for a server that does not exist.
+static std::unique_ptr<seastar::http::retry_strategy> make_unretrying_test_retry_strategy() {
+    return std::make_unique<test_retry_strategy>(0ms);
 }
 
 // The test can be run on real AWS-S3 bucket. For that, create a bucket with
@@ -926,7 +981,7 @@ SEASTAR_THREAD_TEST_CASE(test_creds) {
     BOOST_REQUIRE(creds1.expires_at - creds.expires_at >= 1s);
 
     provider_chain = {};
-    provider_chain.add_credentials_provider(std::make_unique<aws::sts_assume_role_credentials_provider>("0.0.0.0", 0, false, [] { return std::make_unique<test_retry_strategy>(1); }))
+    provider_chain.add_credentials_provider(std::make_unique<aws::sts_assume_role_credentials_provider>("0.0.0.0", 0, false, make_unretrying_test_retry_strategy))
         .add_credentials_provider(std::make_unique<aws::instance_profile_credentials_provider>(host, port, make_test_retry_strategy));
     creds = provider_chain.get_aws_credentials().get();
     BOOST_REQUIRE_EQUAL(creds.access_key_id, "INSTANCE_FROFILE_EXAMPLE_ACCESS_KEY_ID");
@@ -937,8 +992,8 @@ SEASTAR_THREAD_TEST_CASE(test_creds) {
     BOOST_REQUIRE(creds1.expires_at - creds.expires_at >= 1s);
 
     provider_chain = {};
-    provider_chain.add_credentials_provider(std::make_unique<aws::sts_assume_role_credentials_provider>("0.0.0.0", 0, false, [] { return std::make_unique<test_retry_strategy>(1); }))
-        .add_credentials_provider(std::make_unique<aws::instance_profile_credentials_provider>("0.0.0.0", 0, [] { return std::make_unique<test_retry_strategy>(1); }));
+    provider_chain.add_credentials_provider(std::make_unique<aws::sts_assume_role_credentials_provider>("0.0.0.0", 0, false, make_unretrying_test_retry_strategy))
+        .add_credentials_provider(std::make_unique<aws::instance_profile_credentials_provider>("0.0.0.0", 0, make_unretrying_test_retry_strategy));
     creds = provider_chain.get_aws_credentials().get();
     BOOST_REQUIRE_EQUAL(creds.access_key_id, "");
     BOOST_REQUIRE_EQUAL(creds.secret_access_key, "");
