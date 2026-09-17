@@ -419,6 +419,7 @@ public:
                 _bucket, seastar::http::internal::url_encode(_object_name), _generation);
         auto range = fmt::format("bytes={}-{}", pos, pos + to_read - 1);
         size_t result = 0;
+        bool whole_object = false;
         co_await _impl->send_with_retry(path, GCP_OBJECT_SCOPE_READ_ONLY, ""s, ""s,
                 [&](const seastar::http::reply& rep, seastar::input_stream<char>& in) -> future<> {
                     if (rep._status != seastar::http::reply::status_type::ok
@@ -429,8 +430,13 @@ public:
                     // send_with_retry() re-runs this handler on every attempt, so the
                     // count has to start over. Carrying it across would place the
                     // retried range at dst + result, i.e. the right bytes at the
-                    // wrong offset.
+                    // wrong offset. Assigning whole_object rather than or-ing it
+                    // resets it the same way.
                     result = 0;
+                    whole_object = rep._status == seastar::http::reply::status_type::ok;
+                    utils::get_local_injector().inject("gcp_client_whole_object_reply", [&whole_object] {
+                        whole_object = true;
+                    });
                     auto bufs = co_await util::read_entire_stream(in);
                     auto dst = reinterpret_cast<char*>(buffer);
                     for (auto& buf : bufs) {
@@ -456,8 +462,19 @@ public:
                 httpclient::method_type::GET,
                 rest::key_values({{ RANGE, range }}),
                 _as);
-        // A truncated body was already retried in the handler, so anything short
-        // here is a reply that described a different range than the one asked for.
+        // 200 means the reply carried the whole object rather than the range, so
+        // the copy above took its first to_read bytes - the right count from the
+        // wrong offset, which the length check below cannot see. GCS documents
+        // that it ignores Range in some circumstances. A request that already
+        // covers the whole object is answered this way legitimately, and gets the
+        // same bytes either way.
+        if (whole_object && (pos != 0 || to_read != _size)) {
+            throw storage_io_error(EIO, fmt::format("Read of {}:{} answered the whole object for the {} bytes asked for at offset {}"
+                , _bucket, _object_name, to_read, pos
+            ));
+        }
+        // A truncated body was already retried in the handler, so a short answer
+        // here is a reply that described a shorter range than the one asked for.
         if (result != to_read) {
             throw storage_io_error(EIO, fmt::format("Short read of object {}:{}: asked for {} bytes at offset {}, got {}"
                 , _bucket, _object_name, to_read, pos, result
