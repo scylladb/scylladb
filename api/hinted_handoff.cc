@@ -30,12 +30,11 @@ void set_hinted_handoff(http_context& ctx, routes& r, sharded<service::storage_p
             hosts.reserve(hosts_str.size());
 
             for (const auto& host_str : hosts_str) {
+                auto host = parse_inet_address_param("target_hosts", host_str);
                 try {
-                    gms::inet_address host;
-                    host = gms::inet_address(host_str);
                     hosts.push_back(g.local().get_host_id(host));
                 } catch (std::exception& e) {
-                    throw httpd::bad_param_exception(format("Failed to parse host address {}: {}", host_str, e.what()));
+                    throw httpd::bad_param_exception(format("Unknown host address {}: {}", host_str, e.what()));
                 }
             }
 
@@ -57,27 +56,19 @@ void set_hinted_handoff(http_context& ctx, routes& r, sharded<service::storage_p
             throw httpd::bad_param_exception(format("Failed to parse the sync point description {}: {}", encoded, e.what()));
         }
 
-        lowres_clock::time_point deadline;
-        const sstring timeout_str = req->get_query_param("timeout");
-        try {
-            deadline = [&] {
-                if (timeout_str.empty()) {
-                    // Empty string - don't wait at all, just check the status
-                    return lowres_clock::time_point::min();
-                } else {
-                    const auto timeout = std::stoll(timeout_str);
-                    if (timeout >= 0) {
-                        // Wait until the point is reached, or until `timeout` seconds elapse
-                        return lowres_clock::now() + std::chrono::seconds(timeout);
-                    } else {
-                        // Negative value indicates infinite timeout
-                        return lowres_clock::time_point::max();
-                    }
-                }
-            } ();
-        } catch (std::exception& e) {
-            throw httpd::bad_param_exception(format("Failed to parse the timeout parameter {}: {}", timeout_str, e.what()));
-        }
+        const auto timeout = try_get_query_param<std::chrono::seconds>(*req, "timeout");
+        const auto deadline = [&] {
+            if (!timeout) {
+                // No timeout - don't wait at all, just check the status
+                return lowres_clock::time_point::min();
+            } else if (*timeout >= std::chrono::seconds::zero()) {
+                // Wait until the point is reached, or until `timeout` elapses
+                return lowres_clock::now() + *timeout;
+            } else {
+                // Negative value indicates infinite timeout
+                return lowres_clock::time_point::max();
+            }
+        } ();
 
         using return_type = hh::ns_get_hints_sync_point::get_hints_sync_point_return_type;
         using return_type_wrapper = hh::ns_get_hints_sync_point::return_type_wrapper;

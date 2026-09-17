@@ -28,16 +28,14 @@ using namespace json;
 namespace {
 
 ::service::raft_timeout get_request_timeout(const http::request& req) {
-    return std::invoke([timeout_str = req.get_query_param("timeout")] {
-        if (timeout_str.empty()) {
-            return ::service::raft_timeout{};
-        }
-        auto dur = std::stoll(timeout_str);
-        if (dur <= 0) {
-            throw bad_param_exception{"Timeout must be a positive number."};
-        }
-        return ::service::raft_timeout{.value = lowres_clock::now() + std::chrono::seconds{dur}};
-    });
+    const auto timeout = try_get_query_param<std::chrono::seconds>(req, "timeout");
+    if (!timeout) {
+        return ::service::raft_timeout{};
+    }
+    if (*timeout <= std::chrono::seconds::zero()) {
+        throw bad_param_exception{"Timeout must be a positive number."};
+    }
+    return ::service::raft_timeout{.value = lowres_clock::now() + *timeout};
 }
 
 }  // namespace
@@ -45,7 +43,7 @@ namespace {
 
 void set_raft(http_context&, httpd::routes& r, sharded<service::raft_group_registry>& raft_gr) {
     r::trigger_snapshot.set(r, [&raft_gr] (std::unique_ptr<http::request> req) -> future<json_return_type> {
-        raft::group_id gid{utils::UUID{req->get_path_param("group_id")}};
+        const auto gid = require_path_param<raft::group_id>(*req, "group_id");
         auto timeout = get_request_timeout(*req);
 
         std::atomic<bool> found_srv{false};
@@ -72,7 +70,8 @@ void set_raft(http_context&, httpd::routes& r, sharded<service::raft_group_regis
         co_return json_void{};
     });
     r::get_leader_host.set(r, [&raft_gr] (std::unique_ptr<http::request> req) -> future<json_return_type> {
-        if (req->get_query_param("group_id").empty()) {
+        const auto gid_param = try_get_query_param<raft::group_id>(*req, "group_id");
+        if (!gid_param) {
             const auto leader_id = co_await raft_gr.invoke_on(0, [] (service::raft_group_registry& raft_gr) {
                 auto& srv = raft_gr.group0();
                 return srv.current_leader();
@@ -80,7 +79,7 @@ void set_raft(http_context&, httpd::routes& r, sharded<service::raft_group_regis
             co_return json_return_type{leader_id.to_sstring()};
         }
 
-        const raft::group_id gid{utils::UUID{req->get_query_param("group_id")}};
+        const raft::group_id gid = *gid_param;
 
         std::atomic<bool> found_srv{false};
         std::atomic<raft::server_id> leader_id = raft::server_id::create_null_id();
@@ -101,7 +100,8 @@ void set_raft(http_context&, httpd::routes& r, sharded<service::raft_group_regis
     r::read_barrier.set(r, [&raft_gr] (std::unique_ptr<http::request> req) -> future<json_return_type> {
         auto timeout = get_request_timeout(*req);
 
-        if (req->get_query_param("group_id").empty()) {
+        const auto gid_param = try_get_query_param<raft::group_id>(*req, "group_id");
+        if (!gid_param) {
             // Read barrier on group 0 by default
             co_await raft_gr.invoke_on(0, [timeout] (service::raft_group_registry& raft_gr) -> future<> {
                 co_await raft_gr.group0_with_timeouts().read_barrier(nullptr, timeout);
@@ -109,7 +109,7 @@ void set_raft(http_context&, httpd::routes& r, sharded<service::raft_group_regis
             co_return json_void{};
         }
 
-        raft::group_id gid{utils::UUID{req->get_query_param("group_id")}};
+        const raft::group_id gid = *gid_param;
 
         std::atomic<bool> found_srv{false};
         co_await raft_gr.invoke_on_all([gid, timeout, &found_srv] (service::raft_group_registry& raft_gr) -> future<> {
@@ -135,7 +135,8 @@ void set_raft(http_context&, httpd::routes& r, sharded<service::raft_group_regis
         // A null id lets the leader pick any up-to-date voter as its successor.
         const auto target = get_query_param<raft::server_id>(*req, "target_host_id");
 
-        if (req->get_query_param("group_id").empty()) {
+        const auto gid_param = try_get_query_param<raft::group_id>(*req, "group_id");
+        if (!gid_param) {
             // Stepdown on group 0 by default
             co_await raft_gr.invoke_on(0, [timeout_dur, target] (service::raft_group_registry& raft_gr) {
                 apilog.info("Triggering stepdown for group0, target {}", target);
@@ -143,7 +144,7 @@ void set_raft(http_context&, httpd::routes& r, sharded<service::raft_group_regis
             });
             co_return json_void{};
         }
-        raft::group_id gid{utils::UUID{req->get_query_param("group_id")}};
+        const raft::group_id gid = *gid_param;
 
         std::atomic<bool> found_srv{false};
         co_await raft_gr.invoke_on_all([gid, timeout_dur, target, &found_srv] (service::raft_group_registry& raft_gr) -> future<> {

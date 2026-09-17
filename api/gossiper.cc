@@ -31,21 +31,21 @@ void set_gossiper(http_context& ctx, routes& r, gms::gossiper& g) {
     });
 
     httpd::gossiper_json::get_endpoint_downtime.set(r, [&g] (std::unique_ptr<request> req) -> future<json::json_return_type> {
-        gms::inet_address ep(req->get_path_param("addr"));
+        auto ep = require_path_param<gms::inet_address>(*req, "addr");
         // synchronize unreachable_members on all shards
         co_await g.get_unreachable_members_synchronized();
         co_return g.get_endpoint_downtime(g.get_host_id(ep));
     });
 
     httpd::gossiper_json::get_current_generation_number.set(r, [&g] (std::unique_ptr<http::request> req) {
-        gms::inet_address ep(req->get_path_param("addr"));
+        auto ep = require_path_param<gms::inet_address>(*req, "addr");
         return g.get_current_generation_number(g.get_host_id(ep)).then([] (gms::generation_type res) {
             return make_ready_future<json::json_return_type>(res.value());
         });
     });
 
     httpd::gossiper_json::get_current_heart_beat_version.set(r, [&g] (std::unique_ptr<http::request> req) {
-        gms::inet_address ep(req->get_path_param("addr"));
+        auto ep = require_path_param<gms::inet_address>(*req, "addr");
         return g.get_current_heart_beat_version(g.get_host_id(ep)).then([] (gms::version_type res) {
             return make_ready_future<json::json_return_type>(res.value());
         });
@@ -58,7 +58,7 @@ void set_gossiper(http_context& ctx, routes& r, gms::gossiper& g) {
     });
 
     httpd::gossiper_json::force_remove_endpoint.set(r, [&g](std::unique_ptr<http::request> req) {
-        gms::inet_address ep(req->get_path_param("addr"));
+        auto ep = require_path_param<gms::inet_address>(*req, "addr");
         return g.force_remove_endpoint(g.get_host_id(ep), gms::null_permit_id).then([] () {
             return make_ready_future<json::json_return_type>(json_void());
         });
