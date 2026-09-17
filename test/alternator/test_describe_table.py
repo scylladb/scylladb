@@ -177,6 +177,21 @@ def test_describe_table_provisioned_throughput(test_table):
     assert got['ProvisionedThroughput']['WriteCapacityUnits'] == 0
     assert got['ProvisionedThroughput']['ReadCapacityUnits'] == 0
 
+# Test the WarmThroughput attribute returned by DescribeTable. Alternator has
+# no throughput caps and does not implement pre-warming (issue #21853), but
+# DynamoDB returns this structure even for a table created without configuring
+# it, and clients rely on it being there: the Terraform AWS Provider polls it
+# after CreateTable and reads its absence as the table not existing, which
+# broke every "terraform apply" against Alternator (CUSTOMER-705). The numbers
+# differ - DynamoDB reports a 12000/4000 baseline, Alternator zeros - so only
+# the structure is checked here.
+def test_describe_table_warm_throughput(test_table):
+    got = test_table.meta.client.describe_table(TableName=test_table.name)['Table']
+    assert 'WarmThroughput' in got
+    assert isinstance(got['WarmThroughput']['ReadUnitsPerSecond'], int)
+    assert isinstance(got['WarmThroughput']['WriteUnitsPerSecond'], int)
+    assert got['WarmThroughput']['Status'] == 'ACTIVE'
+
 # This is a silly test for the RestoreSummary attribute in DescribeTable -
 # it should not exist in a table not created by a restore. When testing
 # the backup/restore feature, we will have more meaningful tests for the
