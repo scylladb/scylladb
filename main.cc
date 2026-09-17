@@ -2198,6 +2198,22 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 group0_service.setup_group0_if_exist(sys_ks.local(), ss.local(), qp.local(), mm.local()).get();
             }
 
+            // init_non_system_keyspaces() below reads system.sstables, and the
+            // commitlog carrying its updates is only replayed further down, so
+            // it has to be replayed here first.  Restricted to that table: the
+            // others have not been loaded yet.  The full replay still covers
+            // these segments, and mutations are idempotent.
+            if (auto* cl = db.local().commitlog(); cl != nullptr) {
+                auto paths = cl->get_segments_to_replay().get();
+                if (!paths.empty()) {
+                    checkpoint(stop_signal, "replaying commit log for the sstables registry");
+                    const auto registry_id = db::system_keyspace::sstables_registry()->id();
+                    auto rp = db::commitlog_replayer::create_replayer(db, sys_ks, nullptr,
+                            [registry_id] (table_id id) { return id == registry_id; }).get();
+                    rp.recover(paths, db::commitlog::descriptor::FILENAME_PREFIX).get();
+                }
+            }
+
             checkpoint(stop_signal, "loading non-system sstables");
             replica::distributed_loader::init_non_system_keyspaces(db, proxy, sys_ks).get();
 
