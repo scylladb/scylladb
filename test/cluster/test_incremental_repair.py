@@ -1371,3 +1371,97 @@ async def test_full_incremental_repair_with_repaired_view_compaction_leaves_no_t
 
     if not deleted_while_held:
         pytest.skip("repaired-view compaction deleted none of the captured sstables; race not exercised")
+
+
+async def prepare_cluster_with_unrepaired_sstables(manager, nr_keys=1000, tablets=4):
+    """Three nodes with several unrepaired sstables per tablet, including data missing on one."""
+    # Hinted handoff off, so writes done while a node is down stay missing on it.
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(
+            manager, nr_keys=nr_keys, tablets=tablets,
+            cmdline=['--hinted-handoff-enabled', 'false', '--logger-log-level', 'compaction=debug'])
+    await flush_all(manager, servers, ks)
+
+    await manager.server_stop_gracefully(servers[2].server_id)
+    await insert_keys(cql, ks, nr_keys, 2 * nr_keys)
+    await manager.server_start(servers[2].server_id)
+    await flush_all(manager, servers, ks)
+
+    for i in range(2, 5):
+        await insert_keys(cql, ks, i * nr_keys, (i + 1) * nr_keys)
+        await flush_all(manager, servers, ks)
+
+    logs = [await manager.server_open_log(s.server_id) for s in servers]
+    return servers, cql, ks, logs
+
+
+# The same orphaned Statistics.db as the previous test, reached by releasing the protection
+# instead of never covering it. The coordinator reaches end_repair while the repair master is
+# still running; if the drain RPC to the master also fails, it proceeds anyway and sends
+# repair_update_compaction_ctrl, which clears being_repaired and releases the repair lock, so
+# compaction deletes the captured sstables before the master marks them. Orphans land on the
+# repair master only, since the followers' repair_metas are already gone.
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_incremental_repair_mark_after_end_repair_leaves_no_toc_less_sstables(manager: ManagerClient):
+    servers, cql, ks, logs = await prepare_cluster_with_unrepaired_sstables(manager, tablets=1)
+
+    coordinator = await find_server_by_host_id(manager, servers, await get_topology_coordinator(manager))
+    coord_log = await manager.server_open_log(coordinator.server_id)
+    coord_mark = await coord_log.mark()
+    marks = [await log.mark() for log in logs]
+
+    # Only the repair master reaches this point, after deciding mark_as_repaired=true.
+    await asyncio.gather(*[manager.api.enable_injection(s.ip_addr, "repair_finish_wait", one_shot=True) for s in servers])
+    res = await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", 'all', incremental_mode='incremental',
+                                          await_completion=False)
+    task_id = res['tablet_task_id']
+
+    _, matches = await coord_log.wait_for(r"Initiating tablet repair host=(\S+) tablet=", from_mark=coord_mark, timeout=120)
+    master = await find_server_by_host_id(manager, servers, matches[0][1].group(1))
+    master_idx = servers.index(master)
+    master_log, master_mark = logs[master_idx], marks[master_idx]
+    # The injection calls on_internal_error() after 5 minutes: release it well before that.
+    await master_log.wait_for("repair_finish_wait: waiting for message", from_mark=master_mark, timeout=120)
+    captured_on_master = await captured_sstables([master_log], [master_mark])
+    logger.info(f"master server {master.server_id} paused before marking {len(captured_on_master)} sstables: {captured_on_master}")
+
+    # Lose the drain RPC to the master, and the coordinator's in-flight repair RPC.
+    await manager.api.enable_injection(master.ip_addr, "raft_topology_barrier_and_drain_fail_before", one_shot=False)
+    await manager.api.enable_injection(coordinator.ip_addr, "handle_tablet_migration_repair_fail", one_shot=False)
+    try:
+        # Creating a tablet table goes through topology_transition(), which wakes up the coordinator.
+        for i in range(10):
+            await cql.run_async(f"CREATE TABLE {ks}.wake_{i} (pk int PRIMARY KEY)")
+            try:
+                await master_log.wait_for("Got repair_update_compaction_ctrl gid=", from_mark=master_mark, timeout=10)
+                break
+            except TimeoutError:
+                logger.info("repair_update_compaction_ctrl not received by the master yet, waking the coordinator again")
+        else:
+            assert False, "the coordinator never sent repair_update_compaction_ctrl to the master"
+    finally:
+        await manager.api.disable_injection(coordinator.ip_addr, "handle_tablet_migration_repair_fail")
+        await manager.api.disable_injection(master.ip_addr, "raft_topology_barrier_and_drain_fail_before")
+    assert await coord_log.grep("drain rpc failed, proceed to fence old writes", from_mark=coord_mark)
+
+    # being_repaired cleared and the lock released: compaction may now pick captured sstables.
+    await manager.api.keyspace_compaction(master.ip_addr, ks, 'test')
+    deleted_while_paused = await wait_for_deleted(captured_on_master, timeout=30)
+    logger.info(f"{len(deleted_while_paused)} of {len(captured_on_master)} captured sstables deleted on the master "
+                f"before it marked them: {deleted_while_paused}")
+
+    mark_before_release = await master_log.mark()
+    await manager.api.message_injection(master.ip_addr, "repair_finish_wait")
+    await master_log.wait_for("Marking filename=.* for incremental repair", from_mark=mark_before_release, timeout=60)
+    await asyncio.gather(*[manager.api.disable_injection(s.ip_addr, "repair_finish_wait") for s in servers])
+
+    # The failed repair keeps its repair_task_info, so the scheduler retries it; let that finish.
+    try:
+        await asyncio.wait_for(manager.api.wait_task(servers[0].ip_addr, task_id), timeout=300)
+    except Exception as e:
+        logger.warning(f"repair task did not finish cleanly (tolerated, still checking disk): {e}")
+
+    await check_no_toc_less_sstables(manager, servers, ks)
+
+    if not deleted_while_paused:
+        pytest.skip("compaction deleted none of the sstables captured on the master; race not exercised")
