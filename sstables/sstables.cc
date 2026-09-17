@@ -747,6 +747,16 @@ future<> parse(const schema& schema, sstable_version_types v, random_access_read
                 throw_malformed_sstable_exception(fmt::format("Invalid metadata type at Statistics file: {} ", int(type)));
             }
         }
+        // Every writer we read from (Cassandra 2.x/3.x, Scylla) emits all of
+        // these; the accessors assume their presence.
+        for (auto type : {metadata_type::Validation, metadata_type::Compaction, metadata_type::Stats}) {
+            if (!s.contents.contains(type)) {
+                throw_malformed_sstable_exception(fmt::format("Statistics is malformed: missing metadata type {}", int(type)));
+            }
+        }
+        if (v >= sstable_version_types::mc && !s.contents.contains(metadata_type::Serialization)) {
+            throw_malformed_sstable_exception("Statistics is malformed: missing Serialization header");
+        }
     } catch (const malformed_sstable_exception&) {
         throw;
     } catch (...) {
@@ -1321,11 +1331,11 @@ void sstable::write_compression() {
 void sstable::validate_partitioner() {
     auto entry = _components->statistics.contents.find(metadata_type::Validation);
     if (entry == _components->statistics.contents.end()) {
-        throw std::runtime_error("Validation metadata not available");
+        throw_malformed_sstable_exception("Validation metadata not available", get_filename(component_type::Statistics));
     }
     auto& p = entry->second;
     if (!p) {
-        throw std::runtime_error("Validation is malformed");
+        throw_malformed_sstable_exception("Validation is malformed", get_filename(component_type::Statistics));
     }
 
     validation_metadata& v = *static_cast<validation_metadata *>(p.get());
@@ -1448,11 +1458,11 @@ future<> sstable::validate_digests(sstable::skip_data_digest skip_data) {
 void sstable::validate_min_max_metadata() {
     auto entry = _components->statistics.contents.find(metadata_type::Stats);
     if (entry == _components->statistics.contents.end()) {
-        throw std::runtime_error(fmt::format("Stats metadata not available for SSTable {}", get_filename()));
+        throw_malformed_sstable_exception("Stats metadata not available", get_filename(component_type::Statistics));
     }
     auto& p = entry->second;
     if (!p) {
-        throw std::runtime_error(fmt::format("Statistics is malformed for SSTable {}", get_filename()));
+        throw_malformed_sstable_exception("Statistics is malformed", get_filename(component_type::Statistics));
     }
 
     stats_metadata& s = *static_cast<stats_metadata *>(p.get());
@@ -3755,7 +3765,7 @@ void sstable::set_sstable_level(uint32_t new_level) {
     }
     auto& p = entry->second;
     if (!p) {
-        throw std::runtime_error("Statistics is malformed");
+        throw_malformed_sstable_exception("Statistics is malformed", get_filename(component_type::Statistics));
     }
     stats_metadata& s = *static_cast<stats_metadata *>(p.get());
     sstlog.debug("set level of {} with generation {} from {} to {}", get_filename(), _generation, s.sstable_level, new_level);
@@ -3774,7 +3784,7 @@ void sstable::mutate_sstable_level(uint32_t new_level) {
 
     auto& p = entry->second;
     if (!p) {
-        throw std::runtime_error("Statistics is malformed");
+        throw_malformed_sstable_exception("Statistics is malformed", get_filename(component_type::Statistics));
     }
     stats_metadata& s = *static_cast<stats_metadata *>(p.get());
     if (s.sstable_level == new_level) {
