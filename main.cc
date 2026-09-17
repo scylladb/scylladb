@@ -2198,6 +2198,28 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 group0_service.setup_group0_if_exist(sys_ks.local(), ss.local(), qp.local(), mm.local()).get();
             }
 
+            // init_non_system_keyspaces() below reads system.sstables, and
+            // the commitlog carrying its updates is only replayed further down,
+            // so it has to be replayed here first.  The system keyspaces are
+            // the ones init_system_keyspace() has already loaded, which is what
+            // makes them the set a pass this early can apply.  The full replay
+            // still covers these segments, and mutations are idempotent.
+            if (auto* cl = db.local().commitlog(); cl != nullptr) {
+                auto paths = cl->get_segments_to_replay().get();
+                if (!paths.empty()) {
+                    checkpoint(stop_signal, "replaying commit log for the system tables");
+                    std::unordered_set<table_id> system_tables;
+                    db.local().get_tables_metadata().for_each_table([&] (table_id id, lw_shared_ptr<replica::table> t) {
+                        if (is_system_keyspace(t->schema()->ks_name())) {
+                            system_tables.insert(id);
+                        }
+                    });
+                    auto rp = db::commitlog_replayer::create_replayer(db, sys_ks, nullptr,
+                            [tables = std::move(system_tables)] (table_id id) { return tables.contains(id); }).get();
+                    rp.recover(paths, db::commitlog::descriptor::FILENAME_PREFIX).get();
+                }
+            }
+
             checkpoint(stop_signal, "loading non-system sstables");
             replica::distributed_loader::init_non_system_keyspaces(db, proxy, sys_ks).get();
 
