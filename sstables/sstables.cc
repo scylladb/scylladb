@@ -627,6 +627,17 @@ future<> parse(const schema& schema, sstable_version_types v, random_access_read
     // query the position of the "next" index.
     s.positions.push_back(s.header.memory_size);
 
+    // Each entry is a key followed by a 64-bit position, and entries are laid
+    // out back to back, so positions must be strictly increasing with at least
+    // the position field between them. Validate before computing entry sizes
+    // from their differences.
+    for (size_t i = 0; i + 1 < s.positions.size(); ++i) {
+        if (s.positions[i] >= s.positions[i + 1] || s.positions[i + 1] - s.positions[i] < sizeof(uint64_t)) {
+            throw_malformed_sstable_exception(format("Summary entry {} has invalid position range [{}, {})",
+                    i, s.positions[i], s.positions[i + 1]));
+        }
+    }
+
     co_await in.seek(sizeof(summary::header) + s.header.memory_size);
     co_await parse(schema, v, in, s.first_key, s.last_key);
     co_await in.seek(s.positions[0] + sizeof(summary::header));
