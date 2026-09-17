@@ -10,6 +10,7 @@
 #include <boost/test/unit_test.hpp>
 
 #include <stdlib.h>
+#include <cstring>
 #include <sstream>
 #include <regex>
 #include <iostream>
@@ -3557,6 +3558,155 @@ SEASTAR_TEST_CASE(test_commitlog_add_entries_retain_schemas) {
         BOOST_REQUIRE(found);
 
     });
+}
+
+// Fill and free blocks of the pre-write buffer's size and alignment, which follow
+// buf_size and align in segment_manager::allocate_segment_ex(), so that the
+// pre-write of the next new segment in dir very likely reuses one of them.
+static future<> dirty_prewrite_buffer_size_class(const std::filesystem::path& dir, unsigned char marker) {
+    const auto probe = (dir / "alignment-probe").string();
+    auto f = co_await open_file_dma(probe, open_flags::rw | open_flags::create);
+    const size_t align = f.disk_write_dma_alignment();
+    co_await f.close();
+    co_await remove_file(probe);
+
+    const size_t buf_size = align_up<size_t>(16 * 1024, align);
+    std::vector<temporary_buffer<char>> junk;
+    junk.reserve(512);
+    for (int i = 0; i < 512; ++i) {
+        auto b = temporary_buffer<char>::aligned(align, buf_size);
+        std::memset(b.get_write(), marker, buf_size);
+        junk.emplace_back(std::move(b));
+    }
+}
+
+// Test that the pre-written tail of a new O_DSYNC segment is zero-filled.
+//
+// segment_manager::allocate_segment_ex() pre-writes the tail of a new segment
+// from an allocate_single_buffer() buffer, which is uninitialized. Stale heap
+// bytes written there leak process memory into the file, and replay takes a
+// non-zero tail sector for data, so a healthy segment reads as corrupt:
+//
+//   Segment data corruption: checksums do not match: <stale bytes> vs. <crc> ...
+//
+// Fresh pages are usually zero, which hides the bug. Dirtying the allocator with
+// a marker pattern in the pre-write buffer's size class makes the pre-write very
+// likely to reuse a marked block.
+SEASTAR_TEST_CASE(test_odsync_preallocated_tail_is_zeroed) {
+    constexpr size_t segment_size = 1024 * 1024;
+    constexpr unsigned char marker = 0xAB;
+    commitlog::config cfg;
+    tmpdir tmp;
+    co_await dirty_prewrite_buffer_size_class(tmp.path(), marker);
+    cfg.commit_log_location = tmp.path().string();
+    cfg.commitlog_segment_size_in_mb = 1;
+    cfg.commitlog_total_space_in_mb = 64 * this_smp_shard_count();
+    cfg.allow_going_over_size_limit = false;
+    cfg.use_o_dsync = true; // forces the pre-write path
+
+    auto log = co_await commitlog::create_commitlog(cfg);
+    auto uuid = make_table_id();
+
+    // A single tiny entry, so only the very start of the segment holds real data
+    // and the rest of the file is preallocated tail.
+    sstring tmp_data = "hej bubba cow";
+    auto h = co_await log.add_mutation(uuid, tmp_data.size(), db::commitlog::force_sync::yes, [&](db::commitlog::output& dst) {
+        dst.write(tmp_data.data(), tmp_data.size());
+    });
+    auto rp = h.release();
+    co_await log.sync_all_segments();
+
+    sstring victim;
+    for (auto& name : log.get_active_segment_names()) {
+        if (commitlog::descriptor(name).id == rp.id) {
+            victim = name;
+            break;
+        }
+    }
+    BOOST_REQUIRE(!victim.empty());
+
+    auto f = co_await open_file_dma(victim, open_flags::ro);
+    auto file_size = co_await f.size();
+    BOOST_REQUIRE_EQUAL(file_size, segment_size);
+    auto raw = co_await f.dma_read_exactly<char>(0, segment_size);
+    co_await f.close();
+
+    // Everything past the first 64k is preallocated tail - the entry is a handful
+    // of bytes, so nothing legitimate is written there.
+    constexpr size_t skip = 64 * 1024;
+    size_t nonzero = 0, markers = 0, first_bad = 0;
+    for (size_t i = skip; i < raw.size(); ++i) {
+        if (raw[i] != 0) {
+            if (!nonzero) {
+                first_bad = i;
+            }
+            ++nonzero;
+            if (static_cast<unsigned char>(raw[i]) == marker) {
+                ++markers;
+            }
+        }
+    }
+
+    BOOST_CHECK_MESSAGE(nonzero == 0,
+            format("preallocated tail of {} holds {} non-zero bytes ({} equal to the 0x{:02x} heap marker), first at offset {}: "
+                   "uninitialized memory is being written into the segment file",
+                   victim, nonzero, markers, marker, first_bad));
+
+    co_await log.shutdown();
+    co_await log.clear();
+}
+
+// Read back a newly created O_DSYNC segment as replay would after a crash. Past the
+// write frontier the file holds what the pre-write put there, and there is no
+// terminating zero sector. Replay must see the end of the written data, not
+// corruption. A recycled file is covered by test_commitlog_read_back_recycled_segment_odsync.
+SEASTAR_TEST_CASE(test_commitlog_read_back_new_odsync_segment) {
+    commitlog::config cfg;
+    tmpdir tmp;
+    co_await dirty_prewrite_buffer_size_class(tmp.path(), 0xAB);
+    cfg.commit_log_location = tmp.path().string();
+    cfg.commitlog_segment_size_in_mb = 1;
+    cfg.commitlog_total_space_in_mb = 64 * this_smp_shard_count();
+    cfg.use_o_dsync = true;
+
+    auto log = co_await commitlog::create_commitlog(cfg);
+    const auto uuid = make_table_id();
+
+    // The directory starts empty, so the first segment is a new file.
+    constexpr size_t entries_written = 3;
+    std::optional<segment_id_type> id;
+    rp_set handles;
+    for (size_t i = 0; i < entries_written; ++i) {
+        rp_handle h = co_await log.add_mutation(uuid, 1000, db::commitlog::force_sync::yes, [] (db::commitlog::output& dst) {
+            dst.fill('1', 1000);
+        });
+        BOOST_REQUIRE_EQUAL(h.rp().id, id.value_or(h.rp().id));
+        id = h.rp().id;
+        handles.put(std::move(h));
+    }
+
+    // The segment is still open, so it has no terminating zero sector, as after a crash.
+    // A zero pre-write ends the read at the first zero chunk header. Nothing in a new,
+    // fully pre-written file can raise segment_truncation, so any segment_error is a failure.
+    const auto path = (tmp.path() / commitlog::descriptor(*id, commitlog::descriptor::FILENAME_PREFIX).filename()).string();
+    size_t read_entries = 0;
+    std::optional<sstring> error;
+    try {
+        co_await db::commitlog::read_log_file(path, db::commitlog::descriptor::FILENAME_PREFIX,
+                [&] (db::commitlog::buffer_and_replay_position) -> future<> {
+            ++read_entries;
+            co_return;
+        });
+    } catch (commitlog::segment_error& e) {
+        error = e.what();
+    }
+
+    handles = rp_set{};
+    co_await log.shutdown();
+    co_await log.clear();
+
+    BOOST_REQUIRE_MESSAGE(!error, fmt::format("the pre-written tail of a new segment does not read as the end of data: {}", error.value_or("")));
+    BOOST_REQUIRE_EQUAL(read_entries, entries_written);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -7,6 +7,7 @@
  * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.1 and Apache-2.0)
  */
 
+#include <cstring>
 #include <stdexcept>
 #include <string>
 #include <sys/stat.h>
@@ -2444,6 +2445,10 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
                 auto rem = zerofill_size;
 
                 auto buf = allocate_single_buffer(buf_size, align);
+                // allocate_single_buffer() memory is uninitialized. Stale heap bytes would leak
+                // process memory into the file, and after a crash replay would fail the checksum
+                // of a stale tail sector and report a healthy segment as corrupt.
+                std::memset(buf.get_write(), 0, buf_size);
                 while (rem != 0) {
                     static constexpr size_t max_write = 128 * 1024;
                     auto n = std::min(max_write / buf_size, 1 + rem / buf_size);
