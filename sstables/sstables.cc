@@ -3547,6 +3547,11 @@ future<lw_shared_ptr<checksum>> sstable::read_checksum_from_file(file f) {
         auto buf = co_await crc_stream.read_exactly(size);
         check_buf_size(buf, size);
         checksum->chunk_size = net::ntoh(read_unaligned<uint32_t>(buf.get()));
+        // The checksummed readers index chunks with shifts and masks derived
+        // from the chunk size, so it must be a non-zero power of two.
+        if (!std::has_single_bit(checksum->chunk_size)) {
+            throw_malformed_sstable_exception(format("CRC chunk size {} is not a power of two", checksum->chunk_size));
+        }
 
         buf = co_await crc_stream.read_exactly(size);
         while (!buf.empty()) {
@@ -3566,7 +3571,12 @@ future<lw_shared_ptr<checksum>> sstable::read_checksum_from_file(file f) {
 
 
 future<lw_shared_ptr<checksum>> sstable::read_checksum(file f) {
-    auto checksum = co_await read_checksum_from_file(std::move(f));
+    lw_shared_ptr<sstables::checksum> checksum;
+    try {
+        checksum = co_await read_checksum_from_file(std::move(f));
+    } catch (const malformed_sstable_exception& e) {
+        throw malformed_sstable_exception(e.what(), filename(component_type::CRC));
+    }
 
     if (!_components->checksum) {
         _components->checksum = checksum->weak_from_this();
