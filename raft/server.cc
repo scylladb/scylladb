@@ -703,27 +703,27 @@ future<entry_id> server_impl::add_entry_on_leader(command cmd, seastar::abort_so
 
     // Wait for sufficient memory to become available
     fsm::memory_permit memory_permit;
-        try {
-            memory_permit = co_await _fsm->wait_for_memory_permit(as, log::memory_usage_of(cmd, _config.max_command_size));
-        } catch (semaphore_aborted&) {
-            throw request_aborted(
-                format("Semaphore aborted while waiting for memory availability for adding entry on leader in term: {}, on server: {}, current term: {}",
-                       append_in_term,
-                       _id,
-                       _fsm->get_current_term()));
-        }
-        if (append_in_term != _fsm->get_current_term()) [[unlikely]] {
-            // Throw an exception and refuse to append if the term has changed
-            // since the beginning of the server::add_entry call, in order to
-            // uphold the guarantee in the add_entry contract. This can happen
-            // due to a different node becoming a leader, but also may happen
-            // due to circumstances where leadership ultimately stays on the
-            // same node, e.g. if a different node becomes a leader for a while
-            // or after a network partition. This may lead to a slightly confusing
-            // error message, but it beats adding a new error variant for this
-            // case only.
-            co_await coroutine::return_exception(raft::not_a_leader(_fsm->current_leader()));
-        }
+    try {
+        memory_permit = co_await _fsm->wait_for_memory_permit(as, log::memory_usage_of(cmd, _config.max_command_size));
+    } catch (semaphore_aborted&) {
+        throw request_aborted(
+            format("Semaphore aborted while waiting for memory availability for adding entry on leader in term: {}, on server: {}, current term: {}",
+                    append_in_term,
+                    _id,
+                    _fsm->get_current_term()));
+    }
+    if (append_in_term != _fsm->get_current_term()) [[unlikely]] {
+        // Throw an exception and refuse to append if the term has changed
+        // since the beginning of the server::add_entry call, in order to
+        // uphold the guarantee in the add_entry contract. This can happen
+        // due to a different node becoming a leader, but also may happen
+        // due to circumstances where leadership ultimately stays on the
+        // same node, e.g. if a different node becomes a leader for a while
+        // or after a network partition. This may lead to a slightly confusing
+        // error message, but it beats adding a new error variant for this
+        // case only.
+        co_await coroutine::return_exception(raft::not_a_leader(_fsm->current_leader()));
+    }
     logger.trace("[{}] adding entry after waiting for memory permit", _tag);
 
     const log_entry& e = _fsm->add_entry(std::move(cmd));
