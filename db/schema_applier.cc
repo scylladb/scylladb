@@ -1124,15 +1124,14 @@ future<> schema_applier::finalize_tables_and_views() {
         const auto& tables = diff.tables_and_views.local().tables;
         const auto& cdc = diff.tables_and_views.local().cdc;
         const auto& views = diff.tables_and_views.local().views;
-        for (auto& created_cdc : cdc.created) {
-            co_await db.make_column_family_directory(created_cdc);
-        }
-        for (auto& created_table : tables.created) {
-            co_await db.make_column_family_directory(created_table);
-        }
-        for (auto& created_view : views.created) {
-            co_await db.make_column_family_directory(created_view);
-        }
+        auto make_directories = [&db] (const auto& created) {
+            return max_concurrent_for_each(created, max_concurrent, [&db] (const schema_ptr& s) {
+                return db.make_column_family_directory(s);
+            });
+        };
+        co_await make_directories(cdc.created);
+        co_await make_directories(tables.created);
+        co_await make_directories(views.created);
     });
 
     // Insert column_mapping into history table for altered and created tables.
