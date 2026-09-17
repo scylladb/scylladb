@@ -1741,16 +1741,20 @@ future<> system_keyspace::drop_truncation_rp_records() {
 
         if (segment_id != 0) {
             any = true;
-            sstring req = format("UPDATE system.{} SET segment_id = 0, position = 0 WHERE table_uuid = {} AND shard = {}", TRUNCATED, table_uuid, shard);
-            co_await execute_cql(req);
+            static const sstring req = format("UPDATE system.{} SET segment_id = 0, position = 0 WHERE table_uuid = ? AND shard = ?", TRUNCATED);
+            co_await execute_cql(req, table_uuid.uuid(), shard);
         }
     });
     if (!to_delete.empty()) {
+        static const sstring req = format("DELETE FROM system.{} WHERE table_uuid IN ?", TRUNCATED);
+        const auto uuid_list_type = list_type_impl::get_instance(uuid_type, false);
         // IN has a limit to how many values we can put into it.
-        for (auto&& chunk : to_delete | std::views::transform(&table_id::to_sstring) | std::views::chunk(100)) {
-            auto str = std::ranges::to<std::string>(chunk | std::views::join_with(','));
-            auto req = fmt::format("DELETE FROM system.{} WHERE table_uuid IN ({})", TRUNCATED, str);
-            co_await execute_cql(req);
+        constexpr size_t max_in_values = 100;
+        for (auto&& chunk : to_delete | std::views::chunk(max_in_values)) {
+            auto uuids = chunk
+                    | std::views::transform([] (table_id id) { return data_value(id.uuid()); })
+                    | std::ranges::to<std::vector<data_value>>();
+            co_await execute_cql(req, make_list_value(uuid_list_type, std::move(uuids)));
         }
         any = true;
     }
@@ -1760,8 +1764,8 @@ future<> system_keyspace::drop_truncation_rp_records() {
 }
 
 future<> system_keyspace::remove_truncation_records(table_id id) {
-    auto req = format("DELETE FROM system.{} WHERE table_uuid = {}", TRUNCATED, id);
-    co_await execute_cql(req);
+    static const sstring req = format("DELETE FROM system.{} WHERE table_uuid = ?", TRUNCATED);
+    co_await execute_cql(req, id.uuid());
     co_await force_blocking_flush(TRUNCATED);
 }
 
@@ -1804,7 +1808,8 @@ future<> system_keyspace::drop_all_commitlog_cleanup_records() {
 
     co_await coroutine::parallel_for_each(*rs, [&] (const cql3::untyped_result_set_row& row) -> future<> {
         auto shard = row.get_as<int32_t>("shard");
-        co_await execute_cql(format("DELETE FROM system.{} WHERE shard = {}", COMMITLOG_CLEANUPS, shard));
+        static const sstring delete_req = format("DELETE FROM system.{} WHERE shard = ?", COMMITLOG_CLEANUPS);
+        co_await execute_cql(delete_req, shard);
     });
 }
 
@@ -2567,8 +2572,10 @@ future<> system_keyspace::update_repair_history(repair_history_entry entry) {
 }
 
 future<> system_keyspace::get_repair_history(::table_id table_id, repair_history_consumer f) {
-    sstring req = format("SELECT * from system.{} WHERE table_uuid = {}", REPAIR_HISTORY, table_id);
-    co_await _qp.query_internal(req, [&f] (const cql3::untyped_result_set::row& row) mutable -> future<stop_iteration> {
+    static const sstring req = format("SELECT * from system.{} WHERE table_uuid = ?", REPAIR_HISTORY);
+    co_await _qp.query_internal(req, db::consistency_level::ONE, {table_id.uuid()},
+            cql3::query_processor::default_internal_page_size,
+            [&f] (const cql3::untyped_result_set::row& row) mutable -> future<stop_iteration> {
         repair_history_entry ent;
         ent.id = tasks::task_id(row.get_as<utils::UUID>("repair_uuid"));
         ent.table_uuid = ::table_id(row.get_as<utils::UUID>("table_uuid"));
@@ -3478,8 +3485,8 @@ future<> system_keyspace::sstables_registry_list(table_id owner, sstable_registr
 }
 
 future<service::topology_request_state> system_keyspace::get_topology_request_state(utils::UUID id, bool require_entry) {
-    auto rs = co_await execute_cql(
-        format("SELECT done, error FROM system.{} WHERE id = {}", TOPOLOGY_REQUESTS, id));
+    static const sstring req = format("SELECT done, error FROM system.{} WHERE id = ?", TOPOLOGY_REQUESTS);
+    auto rs = co_await execute_cql(req, id);
     if (!rs || rs->empty()) {
         if (require_entry) {
             on_internal_error(slogger, format("no entry for request id {}", id));
@@ -3526,8 +3533,8 @@ system_keyspace::topology_requests_entry system_keyspace::topology_request_row_t
 }
 
 future<system_keyspace::topology_requests_entry> system_keyspace::get_topology_request_entry(utils::UUID id, bool require_entry) {
-    auto rs = co_await execute_cql(
-        format("SELECT * FROM system.{} WHERE id = {}", TOPOLOGY_REQUESTS, id));
+    static const sstring req = format("SELECT * FROM system.{} WHERE id = ?", TOPOLOGY_REQUESTS);
+    auto rs = co_await execute_cql(req, id);
 
     if (!rs || rs->empty()) {
         if (require_entry) {
@@ -3551,9 +3558,9 @@ future<system_keyspace::topology_requests_entries> system_keyspace::get_node_ops
 
 
     // Requests which finished after end_time_limit.
-    auto rs_done = co_await execute_cql(
-        format("SELECT * FROM system.{} WHERE end_time > {} AND request_type IN ('{}', '{}', '{}', '{}', '{}') ALLOW FILTERING", TOPOLOGY_REQUESTS, end_time_limit.time_since_epoch().count(),
-            service::topology_request::join, service::topology_request::replace, service::topology_request::rebuild, service::topology_request::leave, service::topology_request::remove));
+    static const sstring done_req = format("SELECT * FROM system.{} WHERE end_time > ? AND request_type IN ('{}', '{}', '{}', '{}', '{}') ALLOW FILTERING", TOPOLOGY_REQUESTS,
+            service::topology_request::join, service::topology_request::replace, service::topology_request::rebuild, service::topology_request::leave, service::topology_request::remove);
+    auto rs_done = co_await execute_cql(done_req, end_time_limit);
 
     topology_requests_entries m;
     for (const auto& row: *rs_done) {

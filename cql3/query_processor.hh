@@ -320,10 +320,15 @@ public:
             int32_t page_size,
             noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)> f);
 
+    // The page size used by the convenience overload of query_internal below.
+    // Callers which need to pass values have to use the overload above, and
+    // should use this unless they have a reason to page differently.
+    static constexpr int32_t default_internal_page_size = 1000;
+
     /*
      * \brief iterate over all cql results using paging
      * An overload of query_internal without query parameters
-     * using CL = ONE, no timeout, and page size = 1000.
+     * using CL = ONE, no timeout, and page size = default_internal_page_size.
      *
      * query_string - the cql string, can contain placeholders
      * f - a function to be run on each row of the query result,
