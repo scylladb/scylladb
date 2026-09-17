@@ -24,6 +24,7 @@
 #include "sstables/sstables.hh"
 #include "partition_range_compat.hh"
 #include "utils/assert.hh"
+#include "utils/chain_abort_source.hh"
 #include "utils/error_injection.hh"
 #include "utils/from_chars_exactly.hh"
 
@@ -455,13 +456,14 @@ static future<std::list<locator::host_id>> get_hosts_participating_in_repair(
 }
 
 
-future<gc_clock::time_point> flush_hints_batchlog_on_node(netw::messaging_service& ms, locator::host_id node, const repair_flush_hints_batchlog_request& req) {
+future<gc_clock::time_point> flush_hints_batchlog_on_node(netw::messaging_service& ms, locator::host_id node, const repair_flush_hints_batchlog_request& req, abort_source& as) {
     auto start_time = gc_clock::now();
     std::chrono::milliseconds margin = std::chrono::seconds(30);
     if (auto injected = utils::get_local_injector().inject_parameter<uint32_t>("repair_flush_hints_batchlog_rpc_margin_in_ms")) {
         margin = std::chrono::milliseconds(*injected);
     }
     abort_on_expiry expiry(lowres_clock::now() + std::max(req.hints_timeout, req.batchlog_timeout) + margin);
+    auto sub = utils::chain_abort_source(expiry.abort_source(), as);
     repair_flush_hints_batchlog_response resp;
     try {
         resp = co_await ser::repair_rpc_verbs::send_repair_flush_hints_batchlog(&ms, node, expiry.abort_source(), req);
@@ -480,7 +482,7 @@ future<gc_clock::time_point> flush_hints_batchlog_on_node(netw::messaging_servic
 
 future<std::tuple<bool, bool, gc_clock::time_point>> repair_service::flush_hints(repair_uniq_id id,
         sstring keyspace, std::vector<sstring> cfs,
-        std::unordered_set<locator::host_id> ignore_nodes) {
+        std::unordered_set<locator::host_id> ignore_nodes, abort_source& as) {
     auto& db = get_db().local();
     auto uuid = id.uuid();
     bool needs_flush_before_repair = false;
@@ -520,12 +522,12 @@ future<std::tuple<bool, bool, gc_clock::time_point>> repair_service::flush_hints
                         uuid, nodes_down);
                 co_return std::make_tuple(needs_flush_before_repair, hints_batchlog_flushed, flush_time);
             }
-            co_await parallel_for_each(waiting_nodes, [this, uuid, &times, &req] (locator::host_id node) -> future<> {
+            co_await parallel_for_each(waiting_nodes, [this, uuid, &times, &req, &as] (locator::host_id node) -> future<> {
                 rlogger.debug("repair[{}]: Sending repair_flush_hints_batchlog to node={}, started",
                         uuid, node);
                 try {
                     auto& ms = get_messaging();
-                    times.push_back(co_await flush_hints_batchlog_on_node(ms, node, req));
+                    times.push_back(co_await flush_hints_batchlog_on_node(ms, node, req, as));
                 } catch (...) {
                     rlogger.warn("repair[{}]: Sending repair_flush_hints_batchlog to node={}, failed: {}",
                             uuid, node, std::current_exception());
@@ -540,6 +542,7 @@ future<std::tuple<bool, bool, gc_clock::time_point>> repair_service::flush_hints
             auto duration = std::chrono::duration<float>(gc_clock::now() - start_time);
             rlogger.debug("repair[{}]: Finished repair_flush_hints_batchlog flush_times={} flush_time={} flush_duration={}", uuid, times, flush_time, duration);
         } catch (...) {
+            as.check();
             rlogger.warn("repair[{}]: Sending repair_flush_hints_batchlog failed, continue to run repair", uuid);
         }
     } else {
@@ -1587,7 +1590,7 @@ future<> repair_service::run_user_requested_repair(
         } else {
             participants = get_hosts_participating_in_repair(_gossiper.local(), germs->get(), keyspace, ranges, data_centers, hosts, ignore_nodes).get();
         }
-        auto [_, hints_batchlog_flushed, flush_time] = flush_hints(id, keyspace, cfs, ignore_nodes).get();
+        auto [_, hints_batchlog_flushed, flush_time] = flush_hints(id, keyspace, cfs, ignore_nodes, task_as).get();
 
         std::vector<future<>> repair_results;
         repair_results.reserve(this_smp_shard_count());
@@ -2766,7 +2769,7 @@ future<repair_service::tablet_repair_result> repair_service::run_tablet_repair(
                 }
                 switch (flush.mode) {
                 case service::tablet_repair_flush_mode::flush:
-                    std::tie(needs_flush_before_repair, hints_batchlog_flushed, flush_time) = co_await rs.flush_hints(id, m.keyspace_name, tables, ignore_nodes);
+                    std::tie(needs_flush_before_repair, hints_batchlog_flushed, flush_time) = co_await rs.flush_hints(id, m.keyspace_name, tables, ignore_nodes, rs.get_repair_module().abort_source());
                     break;
                 case service::tablet_repair_flush_mode::skip:
                     break;

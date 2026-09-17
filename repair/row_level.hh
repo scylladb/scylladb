@@ -174,7 +174,7 @@ private:
     gc_clock::time_point _flush_hints_batchlog_time;
     future<std::tuple<bool, bool, gc_clock::time_point>> flush_hints(repair_uniq_id id,
             sstring keyspace, std::vector<sstring> cfs,
-            std::unordered_set<locator::host_id> ignore_nodes);
+            std::unordered_set<locator::host_id> ignore_nodes, abort_source& as);
 
     config _config;
     static config default_config() { return {}; }

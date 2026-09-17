@@ -15,6 +15,7 @@
 
 #include <seastar/core/sstring.hh>
 #include <seastar/core/sharded.hh>
+#include <seastar/core/abort_source.hh>
 #include <seastar/core/future.hh>
 
 #include "gms/inet_address.hh"
@@ -285,8 +286,9 @@ struct repair_flush_hints_batchlog_response {
 // fails with timed_out_error. The replica bounds itself by the timeouts in
 // the request and logs its failure, so with the margin that failure wins
 // over the caller's, and the caller times out only on a replica that is
-// stuck or unreachable.
-future<gc_clock::time_point> flush_hints_batchlog_on_node(netw::messaging_service& ms, locator::host_id node, const repair_flush_hints_batchlog_request& req);
+// stuck or unreachable. Aborting as stops the wait early with the exception
+// as carries.
+future<gc_clock::time_point> flush_hints_batchlog_on_node(netw::messaging_service& ms, locator::host_id node, const repair_flush_hints_batchlog_request& req, abort_source& as);
 
 struct tablet_repair_task_meta {
     sstring keyspace_name;
