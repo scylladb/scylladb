@@ -2037,6 +2037,32 @@ static rjson::value decode_fc_column_value(const std::string& attr_name, const r
     return wrapped;
 }
 
+// Convert a failure of an ann() call to the vector store into the api_error
+// to return to the client. Most of these failures - the vector store being
+// unreachable, its address not resolving, the request timing out, or the
+// reply being unparsable - are considered temporary failures, so we return
+// api_error::internal (InternalServerError) to indicate a temporary failure
+// and suggest to the client that they can retry the request.
+// We return a permanent failure (ValidationException) only if the vector
+// store is disabled in the configuration, or the vector store itself reported
+// an error with a 4xx status code.
+static api_error api_error_from_vector_store_error(const vector_search::vector_store_client::ann_error& error) {
+    const sstring msg = std::visit(vector_search::error_visitor{}, error);
+    return std::visit(overloaded_functor{
+        [&msg] (const vector_search::disabled_error&) {
+            return api_error::validation(msg);
+        },
+        [&msg] (const vector_search::service_error& e) {
+            return e.status >= seastar::http::reply::status_type::internal_server_error
+                    ? api_error::internal(msg)
+                    : api_error::validation(msg);
+        },
+        [&msg] (const auto&) {
+            return api_error::internal(msg);
+        },
+    }, error);
+}
+
 // The SearchVectors operation. This is a new API introduced by DynamoDB for
 // doing vector search, and is separate request from the classic Query
 // operation.
@@ -2428,8 +2454,7 @@ future<executor::request_return_type> executor::search_vectors(client_state& cli
             base_schema->ks_name(), std::string(index_name), base_schema,
             std::move(search_vec), topk, pre_filter, aoe.abort_source(), /*routing=*/false, vs_return_columns);
     if (!pkeys_result.has_value()) {
-        const sstring error_msg = std::visit(vector_search::error_visitor{}, pkeys_result.error());
-        co_return api_error::validation(error_msg);
+        co_return api_error_from_vector_store_error(pkeys_result.error());
     }
     const std::vector<vector_search::primary_key>& pkeys = pkeys_result.value();
     _stats.vector_search.items_from_vs += pkeys.size();
