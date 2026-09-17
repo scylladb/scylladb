@@ -592,8 +592,6 @@ future<> server_impl::wait_for_entry(entry_id eid, wait_type type, seastar::abor
 
             auto term = _fsm->log_term_for(eid.idx);
 
-            _stats.waiters_awoken++;
-
             if (!term) {
                 // The entry at index `eid.idx` got truncated away.
                 // Still, if the last snapshot's term is the same as `eid.term`, we can deduce
@@ -613,12 +611,19 @@ future<> server_impl::wait_for_entry(entry_id eid, wait_type type, seastar::abor
                 if (snap_term == eid.term) {
                     logger.trace("[{}] wait_for_entry {}.{}: entry got truncated away, but has the snapshot's term"
                                  " (snapshot index: {})", _tag, eid.term, eid.idx, snap_idx);
+                    _stats.waiters_awoken++;
                     co_return;
                 }
 
                 logger.trace("[{}] wait_for_entry {}.{}: entry got truncated away", _tag, eid.term, eid.idx);
+                // No result to give: the entry is gone and the snapshot that
+                // replaced it cannot say whether it was this entry that
+                // committed at its index.
+                _stats.waiters_dropped++;
                 throw commit_status_unknown();
             }
+
+            _stats.waiters_awoken++;
 
             if (*term != eid.term) {
                 throw dropped_entry();
