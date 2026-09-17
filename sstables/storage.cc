@@ -33,6 +33,7 @@
 #include "sstables/integrity_checked_file_impl.hh"
 #include "sstables/writer.hh"
 #include "utils/assert.hh"
+#include "utils/error_injection.hh"
 #include "utils/lister.hh"
 #include "utils/overloaded_functor.hh"
 #include "utils/memory_data_sink.hh"
@@ -1002,6 +1003,10 @@ future<data_sink> object_storage_base::make_component_sink(sstable& sst, compone
 }
 
 future<> object_storage_base::seal(const sstable& sst) {
+    // Lets a test hold an sstable that is complete in the bucket while its
+    // registry entry still says creating.
+    co_await utils::get_local_injector().inject("object_storage_seal_before_sealed_status",
+            utils::wait_for_message(std::chrono::minutes{5}));
     co_await sst.manager().sstables_registry().update_entry_status(owner(), sst.manager().get_local_host_id(), sst.generation(), status_sealed);
 }
 
