@@ -81,3 +81,6 @@
 "service/qos/service_level_controller.cc":
   groups:
     "134": "service_level"
+"ent/encryption/key_cache.cc":
+  params:
+    '"encryption_key_"s + n': ["encryption_key_id_cache", "encryption_key_attr_cache"]
