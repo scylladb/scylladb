@@ -3853,6 +3853,37 @@ db::commitlog::read_log_file(const replay_state& state, sstring filename, sstrin
 
                 auto& frag_states = state.fragment_state[id];
 
+                // Fragment ids are a per-shard counter (segment_manager::_frag_id_counter)
+                // that restarts from 1 in every process and is written raw into each
+                // fragment. Segments from two generations can coexist on disk (e.g. a
+                // crash leaves an oversized entry with its tail unwritten, then another
+                // boot writes a new oversized entry before the old segments are removed),
+                // and both entries can then carry the same fragment id, colliding in this
+                // bucket. Without disambiguation the stale, never-completed fragments
+                // prevent the intact entry from being reassembled and it is silently
+                // dropped on replay.
+                //
+                // All fragments of one entry satisfy offset + size + rem == total (a
+                // constant) and never overlap, so a fragment whose total differs from, or
+                // whose offset range overlaps, what is already buffered under this id must
+                // belong to a different entry. Distinct entries never interleave in replay
+                // order and a completed entry is delivered and erased immediately, so a
+                // non-empty bucket at this point can only hold an earlier entry that never
+                // completed. Discard those stale fragments before adding this one. (Note:
+                // the offset-0 fragment is not necessarily read first - e.g. an entry that
+                // wraps a segment boundary - so we must key off the invariant, not order.)
+                if (!frag_states.empty()) {
+                    auto incoming_total = uint64_t(frag.end) + frag.rem;
+                    auto existing_total = uint64_t(frag_states.front().end) + frag_states.front().rem;
+                    bool overlaps = std::ranges::any_of(frag_states, [&](const entry_fragment& f) {
+                        return frag.offset < f.end && f.offset < frag.end;
+                    });
+                    if (incoming_total != existing_total || overlaps) {
+                        clogger.debug("Discarding {} stale fragment(s) for reused fragment id {} at {}", frag_states.size(), id, rp);
+                        frag_states.clear();
+                    }
+                }
+
                 auto join = [](entry_fragment& f1, entry_fragment& f2) {
                     auto size1 = f1.rpbuf.buffer.size_bytes();
                     auto size2 = f2.rpbuf.buffer.size_bytes();
