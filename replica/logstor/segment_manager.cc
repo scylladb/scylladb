@@ -69,8 +69,6 @@ public:
 
     virtual ~segment() = default;
 
-    future<log_record> read(log_location);
-
     log_segment_id id() const noexcept { return _id; }
     seastar::file& get_file() noexcept { return _file; }
 
@@ -146,17 +144,6 @@ segment::segment(log_segment_id id, seastar::file file, uint64_t file_offset, ui
     , _file(std::move(file))
     , _file_offset(file_offset)
     , _max_size(max_size) {
-}
-
-future<log_record> segment::read(log_location loc) {
-    if (loc.offset + loc.size > _max_size) [[unlikely]] {
-        throw std::runtime_error(fmt::format("Read beyond end of segment {}: offset {} + size {} > max_size {}",
-                                             _id, loc.offset, loc.size, _max_size));
-    }
-
-    return _file.dma_read_exactly<char>(absolute_offset(loc.offset), loc.size).then([] (temporary_buffer<char> buf) {
-        return deserialize_log_record(simple_memory_input_stream(buf.begin(), buf.size()));
-    });
 }
 
 void writeable_segment::start(segment_ref seg_ref, segment_sequence seq_num) {
@@ -1606,12 +1593,24 @@ void segment_manager_impl::on_free_record(log_location location) noexcept {
 
 future<log_record> segment_manager_impl::read(log_location location) {
     auto holder = _async_gate.hold();
+
+    if (location.offset + location.size > _cfg.segment_size) [[unlikely]] {
+        co_return coroutine::exception(std::make_exception_ptr(std::runtime_error(fmt::format(
+            "Read beyond end of segment {}: offset {} + size {} > segment size {}",
+            location.segment, location.offset, location.size, _cfg.segment_size))));
+    }
+
     auto [file_id, file_offset] = segment_id_to_file_location(location.segment);
-    auto file = co_await _file_mgr.get_file(file_id);
-    segment seg(location.segment, file, file_offset, _cfg.segment_size);
-    auto record = co_await seg.read(location);
+    // The file it reads from outlives the read: it is held here, on the frame of this coroutine,
+    // because the read is issued on it and seastar keeps reading from it after the first suspension.
+    auto file = _file_mgr.opened_file(file_id);
+    if (!file) [[unlikely]] {
+        file = co_await _file_mgr.get_file(file_id);
+    }
+
+    auto buf = co_await file.dma_read_exactly<char>(file_offset + location.offset, location.size);
     _stats.bytes_read += location.size;
-    co_return std::move(record);
+    co_return deserialize_log_record(simple_memory_input_stream(buf.begin(), buf.size()));
 }
 
 future<> segment_manager_impl::request_segment_switch() {
