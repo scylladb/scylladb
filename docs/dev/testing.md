@@ -267,6 +267,13 @@ Tests run in parallel via `pytest-xdist` workers (`gw0`, `gw1`, ...).
 Each worker writes its log to `testlog/pytest_log/pytest_gw{N}_{HOST_ID}.log`.
 This log contains cluster lifecycle messages and test pass/fail status.
 
+If a worker dies unexpectedly (no traceback, no core), the controller logs a
+dmesg tail and cgroup `memory.events` dump to its own
+`testlog/pytest_log/pytest_main_{HOST_ID}.log`, next to the "worker crashed"
+failure. An `oom_kill` counter there, or a kernel "Killed process" line in the
+dmesg tail, confirms the worker was killed externally (OOM-killer or a
+cgroup memory limit) rather than crashing on its own.
+
 For example, imagine `cqlpy/test_null.py` fails. The relevant lines
 in the worker log will be:
 
