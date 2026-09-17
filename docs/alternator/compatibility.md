@@ -19,7 +19,8 @@ Moreover, DynamoDB's per-table provisioning (`BillingMode=PROVISIONED`) is
 not yet supported by Scylla. The BillingMode and ProvisionedThroughput options
 on a table need to be valid but are ignored, and ScyllaDB behaves like DynamoDB's
 `BillingMode=PAY_PER_REQUEST`: All requests are accepted without a per-table
-throughput cap.
+throughput cap. The values provisioned for a table and for each of its GSIs
+are remembered and returned by `DescribeTable`, but are not enforced.
 
 ## Load balancing
 
