@@ -726,7 +726,16 @@ future<> buffered_writer::flush() {
     });
 }
 
-future<buffered_write_result> buffered_writer::write_to_buffer(log_record_writer writer, db::timeout_clock::time_point timeout, write_target target) {
+// A record that goes straight into the head buffer waits for nothing - it is accepted by returning,
+// and only its place in a segment is still to come - so this is not a coroutine: one that suspends
+// nowhere would allocate a frame per write to do nothing with it. A record that has to be queued
+// waits in queue_write(), which is where the frame belongs.
+//
+// Not being a coroutine, it has to report a failure as a failed future itself, which is what the
+// noexcept says: the caller counts a failed write off the future it gets back, and a throw out of
+// here would go past that accounting. The try costs nothing on the path that does not throw.
+future<buffered_write_result> buffered_writer::write_to_buffer(log_record_writer writer, db::timeout_clock::time_point timeout, write_target target) noexcept {
+  try {
     auto holder = _async_gate.hold();
 
     // The record has to fit the mixed buffer it goes into here and the full segment the separator
@@ -734,34 +743,45 @@ future<buffered_write_result> buffered_writer::write_to_buffer(log_record_writer
     // fits the buffer it is written to first would be accepted here and then never fit anywhere the
     // separator could put it.
     const size_t max_size = raw_write_buffer::max_record_size_any_kind(head_buf().get_buffer_size());
-    if (writer.size() > max_size) {
-        co_await coroutine::return_exception(std::runtime_error(fmt::format("Write size {} exceeds the maximum record size {}", writer.size(), max_size)));
+    if (writer.size() > max_size) [[unlikely]] {
+        return make_exception_future<buffered_write_result>(std::runtime_error(
+                fmt::format("Write size {} exceeds the maximum record size {}", writer.size(), max_size)));
     }
 
     // fast path - if there are no queued writes and there is space in the current head buffer or the next, advance the
     // head buffer if needed and write to it.
     if (_queued_writes.empty()) {
         if (auto persisted = append_to_head_buffer(writer, target)) {
-            co_return buffered_write_result{std::move(*persisted)};
+            return make_ready_future<buffered_write_result>(buffered_write_result{std::move(*persisted)});
         }
     }
 
     // either there are queued writes or there is no space in the head buffer and ring is full - queue the write.
+    return queue_write(std::move(writer), timeout, std::move(target), std::move(holder));
+  } catch (...) {
+    return current_exception_as_future<buffered_write_result>();
+  }
+}
 
+// The future of the request is what this returns, so there is nothing to wait for here either: the
+// consumer resolves it when it makes room for the record. The request carries the gate holder of the
+// write, which is what has to outlive the wait.
+future<buffered_write_result> buffered_writer::queue_write(log_record_writer writer, db::timeout_clock::time_point timeout,
+        write_target target, seastar::gate::holder holder) {
     if (_max_queued_write_bytes != 0 && _queued_write_bytes + writer.size() > _max_queued_write_bytes) {
-        co_await coroutine::return_exception(replica::rate_limit_exception());
+        return make_exception_future<buffered_write_result>(replica::rate_limit_exception());
     }
 
     const bool queue_was_empty = _queued_writes.empty();
     const auto write_size = writer.size();
-    queued_write request(std::move(writer), std::move(target), timeout, _next_queued_write_id++, write_size);
+    queued_write request(std::move(writer), std::move(target), std::move(holder), timeout, _next_queued_write_id++, write_size);
     auto accepted = request.accepted_pr.get_future();
     _queued_write_bytes += write_size;
     _queued_writes.push_back(std::move(request), timeout);
     if (queue_was_empty) {
         _consumer_progress_cv.signal();
     }
-    co_return co_await std::move(accepted);
+    return accepted;
 }
 
 future<> buffered_writer::consumer_loop() {

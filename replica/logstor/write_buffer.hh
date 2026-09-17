@@ -561,13 +561,19 @@ class buffered_writer {
         seastar::promise<log_location_with_holder> persisted_pr; // written to a segment
         log_record_writer writer;
         write_target target;
+        // Keeps the writer from finishing its stop() while the record is on the queue. It is held
+        // by the request rather than by whoever waits for it, so that queueing a write needs no
+        // coroutine of its own.
+        seastar::gate::holder async_gate_holder;
         db::timeout_clock::time_point timeout;
         uint64_t id;
         size_t write_size;
 
-        queued_write(log_record_writer writer, write_target target, db::timeout_clock::time_point timeout, uint64_t id, size_t write_size)
+        queued_write(log_record_writer writer, write_target target, seastar::gate::holder async_gate_holder,
+                db::timeout_clock::time_point timeout, uint64_t id, size_t write_size)
             : writer(std::move(writer))
             , target(std::move(target))
+            , async_gate_holder(std::move(async_gate_holder))
             , timeout(timeout)
             , id(id)
             , write_size(write_size) {
@@ -634,6 +640,11 @@ class buffered_writer {
 
     std::optional<future<log_location_with_holder>> append_to_head_buffer(log_record_writer&, write_target&);
 
+    // Puts a record that found no room in the ring on the queue of writes waiting for some, and
+    // waits there for it to be taken into a buffer.
+    future<buffered_write_result> queue_write(log_record_writer, db::timeout_clock::time_point timeout, write_target,
+            seastar::gate::holder);
+
     bool try_dispatch_next_buffer();
     future<> run_dispatched_write(size_t idx);
     future<bool> reclaim_completed_tails();
@@ -664,7 +675,7 @@ public:
     // Takes a record. The future it returns resolves once the record is in a buffer, and carries a
     // second future that resolves once that buffer is in a segment, which is where the record's
     // location comes from.
-    future<buffered_write_result> write_to_buffer(log_record_writer, db::timeout_clock::time_point timeout, write_target target = {});
+    future<buffered_write_result> write_to_buffer(log_record_writer, db::timeout_clock::time_point timeout, write_target target = {}) noexcept;
 
     size_t queued_write_count() const noexcept { return _queued_writes.size(); }
 
