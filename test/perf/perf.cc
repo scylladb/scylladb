@@ -16,6 +16,7 @@
 #include "release.hh"
 #include <boost/algorithm/string.hpp>
 #include <fstream>
+#include <stdexcept>
 
 
 uint64_t perf_mallocs() {
@@ -64,6 +65,11 @@ auto fmt::formatter<perf_result>::format(const perf_result& result, fmt::format_
 }
 
 aggregated_perf_results::aggregated_perf_results(std::vector<perf_result>& results) {
+    // Every statistic below indexes the results, so a run that measured nothing - a duration of
+    // zero iterations - would read past the end of an empty vector rather than say so.
+    if (results.empty()) {
+        throw std::invalid_argument("no measurement iterations to aggregate");
+    }
     stats["throughput"] = calculate_stats(results, std::mem_fn(&perf_result::throughput));
     median_by_throughput = results[results.size() / 2];
     stats["instructions_per_op"] = calculate_stats(results, std::mem_fn(&perf_result::instructions_per_op));
