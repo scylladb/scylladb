@@ -312,6 +312,69 @@ SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_download_source_truncated_body, local
 #endif
 }
 
+// A read that fails partway has to leave the source where it was. Before
+// SCYLLADB-4293 the state was discarded on the way out, so the retry started the
+// object again from zero while every layer above kept counting from where it had
+// reached - genuine bytes at the wrong offset, which nothing downstream can see.
+SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_download_source_resumes_after_failure, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
+    auto& c = client();
+    auto name = make_name();
+    std::vector<temporary_buffer<char>> written;
+    // Several ranges, so the injected failure lands mid-object. On the first
+    // range a rewind and a resume are the same thing.
+    constexpr size_t object_size = 24*1024*1024 + 4096;
+
+    objects_to_delete.emplace_back(name);
+    co_await create_object_of_size(c, bucket, name, object_size, &written);
+
+#ifdef SCYLLA_ENABLE_ERROR_INJECTION
+    auto [expected, total] = stream_from_buffers(std::move(written));
+    auto is = seastar::input_stream<char>(c.create_download_source(bucket, name));
+
+    // Drain the whole first range before injecting. The source fetches
+    // default_gcp_storage_chunk_size at a time and serves later reads out of that
+    // buffer without going near the network, so a failure injected before it is
+    // exhausted never fires. The constant is file-static in object_storage.cc, so
+    // this 8 MiB is coupled to it by hand: if it changes, change this too, or the
+    // injection is served from a still-full buffer and BOOST_REQUIRE(threw) fails.
+    size_t read = 0;
+    while (read < 8*1024*1024) {
+        auto buf = co_await is.read();
+        BOOST_REQUIRE(!buf.empty());
+        BOOST_REQUIRE_EQUAL(buf, co_await expected.read_exactly(buf.size()));
+        read += buf.size();
+    }
+
+    // Fail the next range until the retries run out, so the error reaches us,
+    // then carry on reading the same source.
+    utils::get_local_injector().enable("gcp_source_truncated_body");
+    bool threw = false;
+    try {
+        co_await is.read();
+    } catch (const storage_io_error&) {
+        threw = true;
+    }
+    utils::get_local_injector().disable("gcp_source_truncated_body");
+    BOOST_REQUIRE(threw);
+
+    // What comes next must be what comes next, not the object over again.
+    while (read < total) {
+        auto buf = co_await is.read();
+        if (buf.empty()) {
+            break;
+        }
+        BOOST_REQUIRE_EQUAL(buf, co_await expected.read_exactly(buf.size()));
+        read += buf.size();
+    }
+    BOOST_REQUIRE_EQUAL(read, total);
+
+    co_await is.close();
+    co_await expected.close();
+#else
+    testlog.info("Skipping the resume-after-failure case, it needs SCYLLA_ENABLE_ERROR_INJECTION");
+#endif
+}
+
 // make_readable_file() is how the sstable layer opens every component it does
 // not stream -- TOC, Statistics, Summary, Filter, Scylla metadata -- and had no
 // coverage at all.
