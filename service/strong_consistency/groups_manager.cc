@@ -201,7 +201,7 @@ groups_manager::groups_manager(netw::messaging_service& ms,
     init_messaging_service();
 }
 
-future<> groups_manager::start_raft_group(global_tablet_id tablet,
+future<tablet_state_machine*> groups_manager::start_raft_group(global_tablet_id tablet,
         raft::group_id group_id,
         token_metadata_ptr tm)
 {
@@ -313,6 +313,7 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
         .persistence = persistence_ref,
         .state_machine = state_machine_ref
     }, get_tick_interval());
+    co_return &state_machine_ref;
 }
 
 void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_state& state) {
@@ -359,6 +360,12 @@ void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_
         // the mapping if it is a child. Unlike the erase from _raft_groups below, we need no check
         // for a start which superseded the deletion - a group deleted while a resize is recorded
         // is deleted by an ending it does not come back from.
+        // A child is registered with its parent for as long as the parent's state has no
+        // end_resize, and its mapping to the parent outlives that, so the mapping is how we find
+        // the registration to drop.
+        if (const auto parent_gid = _resize_tracker.get_parent_group(id)) {
+            _resize_tracker.unregister_child(*parent_gid, *state.state_machine);
+        }
         _resize_tracker.erase_group(id);
 
         _raft_gr.destroy_server(id);
@@ -1239,9 +1246,16 @@ void groups_manager::update(token_metadata_ptr new_tm) {
             if (!state.is_linked()) {
                 _starting_groups.push_back(state);
             }
-            chain_control_op(state, id, [&state, this, tablet, id, new_tm, g = state.gate] () mutable -> future<> {
-                co_await start_raft_group(tablet, id, std::move(new_tm));
+            chain_control_op(state, id, [&state, this, tablet, id, new_tm, parent_id, g = state.gate] () mutable -> future<> {
+                state.state_machine = co_await start_raft_group(tablet, id, std::move(new_tm));
                 state.server = &_raft_gr.get_server(id);
+                // A group created by a resize applies nothing until the group it replaces applied
+                // end_resize here, which the tracker tells it; every other group applies right away.
+                if (parent_id) {
+                    _resize_tracker.register_child(*parent_id, *state.state_machine);
+                } else {
+                    state.state_machine->enable();
+                }
                 state.leader_info_updater = leader_info_updater(state, tablet, id);
 
                 // We want to make sure the server is ready to serve requests before
@@ -1251,6 +1265,14 @@ void groups_manager::update(token_metadata_ptr new_tm) {
                 // after this operation. Probing `g`, the gate of this
                 // incarnation, just stops the wait once a deletion is queued;
                 // state.gate may already be a later incarnation's open gate.
+                //
+                // For a group replacing one whose resize is still under way, ready means led: its
+                // leader's clock is seeded by a read barrier which a parked applier holds until
+                // the parent is sealed, and the sealing is what wait_for_groups_to_start() gates
+                // on the node driving it. Waiting for the clock here would wait for the sealing
+                // this very wait prevents. Waiting for a leader still covers what matters for a
+                // fresh group: the fast-bootstrap election, which the barrier after this start
+                // otherwise races.
                 abort_on_expiry aoe(lowres_clock::now() + std::chrono::seconds(60));
                 while (true) {
                     auto holder = g->try_hold();
@@ -1258,15 +1280,25 @@ void groups_manager::update(token_metadata_ptr new_tm) {
                         break;
                     }
                     auto srv = raft_server(state, std::move(*holder));
-                    auto res = srv.begin_mutate(aoe.abort_source());
-                    if (auto w = get_if<raft_server::need_wait_for_leader>(&res)) {
-                        auto f = co_await coroutine::as_future(std::move(w->future));
-                        if (f.failed()) {
-                            logger.warn("update(): waiting for leader timed out for tablet {}, "
-                                "group id {}: {}", tablet, id, f.get_exception());
-                            break;
+                    std::optional<future<>> wait;
+                    if (parent_id) {
+                        auto res = srv.begin_read(aoe.abort_source());
+                        if (auto w = get_if<raft_server::need_wait_for_leader>(&res)) {
+                            wait = std::move(w->future);
                         }
                     } else {
+                        auto res = srv.begin_mutate(aoe.abort_source());
+                        if (auto w = get_if<raft_server::need_wait_for_leader>(&res)) {
+                            wait = std::move(w->future);
+                        }
+                    }
+                    if (!wait) {
+                        break;
+                    }
+                    auto f = co_await coroutine::as_future(std::move(*wait));
+                    if (f.failed()) {
+                        logger.warn("update(): waiting for leader timed out for tablet {}, "
+                            "group id {}: {}", tablet, id, f.get_exception());
                         break;
                     }
                 }

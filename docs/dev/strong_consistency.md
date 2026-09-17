@@ -296,5 +296,29 @@ this replica has observed goes through: the resize is only ever ended by the tab
 replaced, and that takes the parent's tablet away. Nothing else takes it away in the meantime -
 the resize can no longer be revoked, and the tablet is not migrated while its replacement ids are
 recorded. The state goes with the teardown whatever phase the resize reached - a node shutting
-down or a table being dropped ends one early. Each child's mapping is dropped by the child's own
-teardown, or by `update()` when it observes that the group now serves a tablet of its own.
+down or a table being dropped ends one early, and the teardown may then find a child's applier
+still parked; the children it still holds are enabled so that their fibers can exit, which is
+harmless: nothing reads them meanwhile, and a handed-off write sorts above every write of the
+parent whatever order the two are applied in.
+Each child's mapping is dropped by the child's own teardown, or by `update()` when it observes
+that the group now serves a tablet of its own.
+
+The parking itself belongs to the state machine: every `apply()` first waits until the state
+machine is enabled (`tablet_state_machine::enable()`). `groups_manager` enables a group which
+replaces nothing as soon as its server is up, and registers a child with its parent's state in
+the tracker instead (`raft_resize_tracker::register_child()`); the parent's `end_resize` enables
+every child registered with it, and the parent's teardown enables the rest. That the parent is
+what releases a parked applier is also why the wait needs no abort source of its own, which
+matters because it could not have one that works: `raft::server::abort()` joins the applier fiber *before* it aborts
+the state machine, the RPC and the persistence, so none of those aborts can reach a fiber which is
+already inside `apply()`. A child is never torn down while its parent survives - both hold their
+tablets only while the resize is in the tablet metadata, and the write which clears it takes the
+parent's tablet away in the same breath - so a child being torn down always has its wait ended by
+its parent's teardown, either just before or just after its own. Every other suspension in
+`apply()` completes on its own.
+
+## Reads on a child before the parent is done
+
+A child group must not apply anything until the parent has applied everything it committed;
+otherwise a read served by the child could observe a state older than a write already
+committed in the parent. The child's applier therefore blocks on `end_resize`.

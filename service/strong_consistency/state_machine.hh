@@ -74,7 +74,28 @@ struct raft_command {
 // inert, since group ids are never reused and only groups the tablet map names are looked up.
 mutation make_resize_marker_mutation(raft::group_id gid, shard_id shard, const resize_marker& marker);
 
-std::unique_ptr<raft_state_machine> make_state_machine(locator::global_tablet_id tablet,
+// The state machine of a strongly consistent tablet's Raft group, as far as groups_manager sees
+// it beyond what raft does.
+class tablet_state_machine : public raft_state_machine {
+public:
+    // Lets apply() run; until then every apply() waits. A group which replaces nothing is enabled
+    // right after it is created. A group created by a resize must not apply anything before the
+    // group it replaces has applied everything it committed, so it is enabled by the resize
+    // tracker once that group applied end_resize on this replica
+    // (raft_resize_tracker::register_child()), or when that resize ends here without it - a
+    // shutdown or a table drop - so that its applier fiber can exit.
+    //
+    // The enabling has to come from outside because nothing of the group's own can provide it:
+    // raft::server::abort() joins the applier fiber before it aborts the state machine, so an
+    // abort source of the state machine's would be requested only after the parked apply()
+    // returned. A child is never torn down while its parent's state survives - both hold their
+    // tablets only while the resize is in the tablet metadata, and the write which clears it takes
+    // the parent's tablet away in the same breath - so the parent's teardown always ends the wait
+    // of a child being torn down, just before or just after the child's own.
+    virtual void enable() noexcept = 0;
+};
+
+std::unique_ptr<tablet_state_machine> make_state_machine(locator::global_tablet_id tablet,
     raft::group_id gid,
     replica::database& db,
     service::migration_manager& mm,

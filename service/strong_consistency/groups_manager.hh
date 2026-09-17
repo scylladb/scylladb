@@ -37,6 +37,7 @@ namespace service::strong_consistency {
 
 class raft_server;
 class raft_resize_tracker;
+class tablet_state_machine;
 
 // What separates a raft group's live configuration from the one its tablet's current
 // migration stage implies. Defined in groups_manager.cc.
@@ -139,6 +140,8 @@ class groups_manager : public peering_sharded_service<groups_manager> {
         bool has_tablet = false;
         lw_shared_ptr<gate> gate = nullptr;
         raft::server* server = nullptr;
+        // Owned by `server`, valid for as long as it is.
+        tablet_state_machine* state_machine = nullptr;
         shared_future<> server_control_op = make_ready_future<>();
 
         // Populated only when this node thinks it's a tablet raft group leader.
@@ -184,8 +187,9 @@ class groups_manager : public peering_sharded_service<groups_manager> {
 
     tablet_group_leader_cache _leader_cache;
 
-    // Should be called on the shard that hosts the Raft group
-    future<> start_raft_group(locator::global_tablet_id tablet,
+    // Should be called on the shard that hosts the Raft group. Returns the group's state machine,
+    // owned by the raft server it started.
+    future<tablet_state_machine*> start_raft_group(locator::global_tablet_id tablet,
         raft::group_id group_id,
         locator::token_metadata_ptr tm);
 

@@ -45,6 +45,11 @@ struct raft_resize_state {
     // resize_marker::timestamp), so it is above every write in the parent's log. Set with
     // end_resize.
     api::timestamp_type end_resize_timestamp = api::min_timestamp;
+
+    // The state machines of the children parked on this parent, enabled by end_resize or when
+    // the state goes. Empty once end_resize is set. Each pointer is owned by the child's raft
+    // server; groups_manager registers it for the time the server exists.
+    std::vector<tablet_state_machine*> children;
 };
 
 // Owns the state of every tablet resize the groups hosted on this shard take part in (see
@@ -103,6 +108,16 @@ public:
 
     // Returns the parent of `child_gid`, or nullopt if it is not a child of a resize.
     std::optional<raft::group_id> get_parent_group(raft::group_id child_gid) const;
+
+    // Parks `child` on `parent_gid`: it is enabled (tablet_state_machine::enable()) once the
+    // parent applies end_resize here. If there is nothing to wait for - the parent has applied
+    // end_resize already, or its state is gone because the resize is over on this replica - it is
+    // enabled before this returns and nothing is parked. The child must be unregistered before
+    // its raft server is destroyed.
+    // FIXME: a tablet merge gives a child several parents, each of which will have to enable it
+    // before it may apply.
+    void register_child(raft::group_id parent_gid, tablet_state_machine& child);
+    void unregister_child(raft::group_id parent_gid, tablet_state_machine& child);
 };
 
 } // namespace service::strong_consistency
