@@ -307,6 +307,25 @@ SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_readable_file_truncated_body, local_g
         // is unchanged by this becoming retryable.
     }
     utils::get_local_injector().disable("gcp_client_truncated_body");
+
+    // A reply that carried the whole object instead of the range delivers the
+    // right number of bytes from offset zero, so the length check cannot see it.
+    testlog.info("A whole-object reply to a strict sub-range must fail");
+    utils::get_local_injector().enable("gcp_client_whole_object_reply");
+    auto disable_whole = seastar::defer([] () noexcept {
+        utils::get_local_injector().disable("gcp_client_whole_object_reply");
+    });
+    try {
+        co_await f.dma_read(0, buf.get_write(), buf.size());
+        BOOST_ERROR("a whole-object reply to a sub-range should not have produced a successful read");
+    } catch (const storage_io_error&) {
+    }
+
+    // The same reply to a request that already covers the whole object carries
+    // exactly the bytes that were asked for, so it has to keep working.
+    testlog.info("A whole-object reply to a whole-object request must succeed");
+    auto whole = temporary_buffer<char>::aligned(f.memory_dma_alignment(), object_size);
+    BOOST_REQUIRE_EQUAL(co_await f.dma_read(0, whole.get_write(), whole.size()), object_size);
 #else
     testlog.info("Skipping the truncated-body cases, they need SCYLLA_ENABLE_ERROR_INJECTION");
 #endif
