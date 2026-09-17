@@ -2542,7 +2542,7 @@ future<> segment_manager_impl::do_recovery(replica::database& db) {
     // Populate the index from all segments. Keep the latest record for each key.
     // For equal records, keep the one from the segment with the highest sequence number.
     auto cmp_with_seq = [&segment_seqs] (const index_entry& old_entry, const index_entry& candidate) -> std::strong_ordering {
-        if (auto c = primary_index::default_entry_cmp(old_entry, candidate); c != 0) {
+        if (auto c = primary_index::default_entry_cmp{}(old_entry, candidate); c != 0) {
             return c;
         }
         const auto old_seq = segment_seqs[old_entry.location.segment.value];
@@ -2897,7 +2897,7 @@ public:
 
 future<> segment_manager_impl::load_segment(replica::database& db, log_segment_id seg_id) {
     // read the segment and populate the index
-    co_await recover_segment(db, seg_id, primary_index::default_entry_cmp, [] (const segment_header&) {});
+    co_await recover_segment(db, seg_id, primary_index::default_entry_cmp{}, [] (const segment_header&) {});
 
     auto& desc = get_segment_descriptor(seg_id);
     co_await add_segment_to_compaction_group(db, desc);

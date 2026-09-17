@@ -247,13 +247,20 @@ public:
         return false;
     }
 
+    // Which of two entries of the same key is the newer one. Every write of an existing key asks
+    // this, so the default is a stateless functor and the comparator a template parameter: the
+    // compare is then inlined, rather than a std::function built per insert to call it through.
+    // Only recovery has a comparator of its own, and it captures state, which entry_cmp_fn is for.
+    struct default_entry_cmp {
+        std::strong_ordering operator()(const index_entry& a, const index_entry& b) const noexcept {
+            return a.timestamp <=> b.timestamp;
+        }
+    };
+
     using entry_cmp_fn = std::function<std::strong_ordering(const index_entry&, const index_entry&)>;
 
-    static std::strong_ordering default_entry_cmp(const index_entry& a, const index_entry& b) noexcept {
-        return a.timestamp <=> b.timestamp;
-    }
-
-    std::pair<bool, std::optional<index_entry>> insert(const primary_index_key& key, index_entry new_entry, entry_cmp_fn cmp = default_entry_cmp) {
+    template <typename EntryCmp = default_entry_cmp>
+    std::pair<bool, std::optional<index_entry>> insert(const primary_index_key& key, index_entry new_entry, const EntryCmp& cmp = {}) {
         partitions_type::bound_hint hint;
         auto i = _partitions.lower_bound(key.dk, dht::ring_position_comparator(*_schema), hint);
         if (hint.match) {
