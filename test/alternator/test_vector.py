@@ -7316,6 +7316,42 @@ def test_query_vector_store_disabled(dynamodb, table_vs, scylla_only):
             table_vs.meta.client.search_vectors(
                 TableName=table_vs.name, IndexName='vind', SearchVector=[0, 0, 0], TopK=1)
 
+# The context manager unreachable_vector_store() temporarily points the
+# vector_store_primary_uri configuration option at an address where nothing is
+# listening. Unlike unconfigured_vector_store() above, this URI *is* valid, so
+# the vector store counts as configured and Alternator will really try - and
+# fail - to reach it.
+# This requires the vector store to have been configured in the first place:
+# we need a real URI to restore at the end, and because of issue #28225 an
+# empty configuration cannot be restored. Tests using this must therefore
+# also use the needs_vector_store fixture.
+@contextmanager
+def unreachable_vector_store(dynamodb):
+    original_value = scylla_config_read(dynamodb, 'vector_store_primary_uri')
+    assert original_value.startswith('"') and original_value.endswith('"')
+    original_value = original_value[1:-1]
+    assert original_value != ''
+    # Port 1 on localhost - a valid URI, but nothing is listening there.
+    scylla_config_write(dynamodb, 'vector_store_primary_uri', 'http://127.0.0.1:1')
+    try:
+        yield
+    finally:
+        scylla_config_write(dynamodb, 'vector_store_primary_uri', original_value)
+
+# A vector store which is configured but cannot be reached is a temporary
+# failure so should report InternalServerError, suggesting to clients that
+# they can retry the request - not a ValidationException, which means the
+# query is incorrect and must not be retried.
+# This test configures the vector store to point to an unreachable URI, which
+# is one kind of such temporary failure.
+# This is a scylla_only test because it reconfigures ScyllaDB's vector store,
+# an action which has no parallel in DynamoDB.
+def test_search_vectors_vector_store_unreachable(dynamodb, table_vs, needs_vector_store, scylla_only):
+    with unreachable_vector_store(dynamodb):
+        with pytest.raises(ClientError, match='InternalServerError'):
+            table_vs.meta.client.search_vectors(
+                TableName=table_vs.name, IndexName='vind', SearchVector=[0, 0, 0], TopK=1)
+
 # Test that in Alternator, even if the vector store is not configured, it is
 # possible to create a vector index on the table - but DescribeTable will
 # always show that it is CREATING, not ACTIVE.
