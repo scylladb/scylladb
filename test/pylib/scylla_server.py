@@ -312,7 +312,9 @@ def stop_event(func):
 # up to ~64 attempts to give up, i.e. hours, to notice a control connection is unreachable.
 # Any Cluster created by this module must bound both individual connection attempts and
 # the overall retry budget.
-_DRIVER_RECONNECTION_POLICY = ExponentialReconnectionPolicy(base_delay=1.0, max_delay=10.0, max_attempts=10)
+# The base delay decides how quickly a node that comes back is noticed; max_attempts
+# keeps the overall budget at ~78s.
+_DRIVER_RECONNECTION_POLICY = ExponentialReconnectionPolicy(base_delay=0.1, max_delay=1.0, max_attempts=80)
 
 
 class ScyllaServer:
