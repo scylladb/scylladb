@@ -93,6 +93,7 @@ target_sources(api
     task_manager.cc
     task_manager_test.cc
     token_metadata.cc
+    utils.cc
     ${swagger_gen_files})
 target_include_directories(api
   PUBLIC

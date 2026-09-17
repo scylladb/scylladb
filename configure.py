@@ -1475,6 +1475,7 @@ api = ['api/api.cc',
        'api/cql_server_test.cc',
        'api/service_levels.cc',
        Json2Code('api/api-doc/service_levels.json'),
+       'api/utils.cc',
        ]
 
 alternator = [
