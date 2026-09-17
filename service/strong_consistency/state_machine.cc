@@ -42,7 +42,7 @@ mutation make_resize_marker_mutation(raft::group_id gid, shard_id shard, const r
     return m;
 }
 
-class state_machine : public raft_state_machine {
+class state_machine : public tablet_state_machine {
     locator::global_tablet_id _tablet;
     raft::group_id _group_id;
     replica::database& _db;
@@ -52,6 +52,10 @@ class state_machine : public raft_state_machine {
     raft_resize_tracker& _resize_tracker;
 
     abort_source _as;
+
+    // Engaged until enable() is called; apply() waits on it while it is. A plain promise is
+    // enough because there is a single applier fiber, so at most one wait is ever outstanding.
+    std::optional<promise<>> _enable;
 
 public:
     state_machine(locator::global_tablet_id tablet,
@@ -68,6 +72,7 @@ public:
         , _sys_ks(sys_ks)
         , _persistence(persistence)
         , _resize_tracker(resize_tracker)
+        , _enable(std::in_place)
     {
     }
 
@@ -82,9 +87,22 @@ public:
         }
     }
 
+    void enable() noexcept override {
+        if (auto p = std::exchange(_enable, std::nullopt)) {
+            p->set_value();
+        }
+    }
+
     future<> apply(raft::log_entry_ptr_list command) override {
         static thread_local logging::logger::rate_limit rate_limit(std::chrono::seconds(10));
+        // A rate limit of its own, so that other messages of this function cannot suppress it.
+        static thread_local logging::logger::rate_limit parked_rate_limit(std::chrono::seconds(10));
         try {
+            if (_enable) {
+                logger.log(log_level::trace, parked_rate_limit, "apply(): waiting for parent group to finish resizing before applying mutations for group {}", _group_id);
+                co_await _enable->get_future();
+            }
+
             co_await utils::get_local_injector().inject("strong_consistency_state_machine_wait_before_apply", utils::wait_for_message(20min));
             logger.trace("Tablet {}, raft group {}, applies {} entries, indexes {} to {}.",
                 _tablet, _group_id, command.size(), command.front()->idx, command.back()->idx);
@@ -302,7 +320,7 @@ future<schema_ptr> schema_store::resolve_and_upgrade(frozen_mutation& m) {
     co_return schema;
 }
 
-std::unique_ptr<raft_state_machine> make_state_machine(locator::global_tablet_id tablet,
+std::unique_ptr<tablet_state_machine> make_state_machine(locator::global_tablet_id tablet,
     raft::group_id gid,
     replica::database& db,
     service::migration_manager& mm,

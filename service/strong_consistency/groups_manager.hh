@@ -41,6 +41,7 @@ class raft_groups_storage;
 
 class raft_server;
 class raft_resize_tracker;
+class tablet_state_machine;
 
 /// A cache of leader locations for raft groups where this node is not a replica.
 /// Populated by the CQL transport layer after a redirect reveals the actual leader.
@@ -188,6 +189,8 @@ class groups_manager : public peering_sharded_service<groups_manager> {
         // Owned by the raft::server. Cleared before that server is destroyed,
         // so the commitlog's flush handler never sees a dangling pointer.
         raft_groups_storage* storage = nullptr;
+        // Owned by `server`, valid for as long as it is.
+        tablet_state_machine* state_machine = nullptr;
 
         shared_future<> server_control_op = make_ready_future<>();
 
@@ -240,10 +243,11 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     // outlives the manager.
     future<> _draining_colocators = make_ready_future<>();
 
-    // Should be called on the shard that hosts the Raft group
+    // Should be called on the shard that hosts the Raft group. Returns the group's state machine,
+    // owned by the raft server it started.
     // If the group is created as a result of a resize, the parent id is the group_id
     // of the original tablet.
-    future<> start_raft_group(locator::global_tablet_id tablet,
+    future<tablet_state_machine*> start_raft_group(locator::global_tablet_id tablet,
         raft::group_id group_id,
         locator::token_metadata_ptr tm,
         lw_shared_ptr<raft::server_stats> server_stats,
@@ -263,9 +267,10 @@ class groups_manager : public peering_sharded_service<groups_manager> {
         std::optional<raft::group_id> parent_gid);
 
     // Waits until a just started server knows a leader, so that it is ready to serve
-    // requests once wait_for_groups_to_start() reports it.
+    // requests once wait_for_groups_to_start() reports it. `parent_gid` is the group's
+    // parent if the group was created by a resize.
     future<> wait_for_first_leader(locator::global_tablet_id tablet, raft::group_id group_id,
-        raft_group_state& state, gate& g);
+        raft_group_state& state, gate& g, std::optional<raft::group_id> parent_gid);
 
     // What becomes of a group's commitlog segment references when its server goes
     // away: keep at shutdown so replay can recover the log, release for a group

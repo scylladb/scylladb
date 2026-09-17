@@ -206,7 +206,7 @@ groups_manager::groups_manager(netw::messaging_service& ms,
     init_messaging_service();
 }
 
-future<> groups_manager::start_raft_group(global_tablet_id tablet,
+future<tablet_state_machine*> groups_manager::start_raft_group(global_tablet_id tablet,
         raft::group_id group_id,
         token_metadata_ptr tm,
         lw_shared_ptr<raft::server_stats> server_stats,
@@ -383,6 +383,7 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
                     group_id, std::current_exception());
         }
     }
+    co_return &state_machine_ref;
 }
 
 void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_state& state,
@@ -439,8 +440,16 @@ void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_
             state.metrics->remove_server(*state.server);
             state.metrics = nullptr;
         }
+
+        // The state machine is destroyed with the server, so we unregister it first, even if a
+        // start superseded this deletion. The child's mapping to its parent outlives the
+        // registration.
+        if (const auto parent_gid = _resize_tracker.get_parent_group(id)) {
+            _resize_tracker.unregister_child(*parent_gid, *state.state_machine);
+        }
         _raft_gr.destroy_server(id);
         state.server = nullptr;
+        state.state_machine = nullptr;
         logger.info("schedule_raft_group_deletion(): raft server for group id {} is destroyed", id);
 
         // We need to erase the raft group state only if we are still the last operation on it.
@@ -1060,15 +1069,22 @@ void groups_manager::schedule_raft_group_start(global_tablet_id tablet, raft::gr
     chain_control_op(state, id, [this, &state, tablet, id, tm = std::move(tm), parent_gid, range, g = state.gate,
             m = metrics.weak_from_this(), server_stats = metrics.server_stats(),
             rpc_stats = metrics.rpc_stats()] () mutable -> future<> {
-        co_await start_raft_group(tablet, id, std::move(tm), std::move(server_stats), std::move(rpc_stats),
-            parent_gid);
+        state.state_machine = co_await start_raft_group(tablet, id, std::move(tm), std::move(server_stats),
+            std::move(rpc_stats), parent_gid);
         state.server = &_raft_gr.get_server(id);
         state.metrics = std::move(m);
         if (state.metrics) {
             state.metrics->add_server(*state.server);
         }
+        // A group created by a resize applies nothing until the group it replaces applied
+        // end_resize here, which the tracker tells it; every other group applies right away.
+        if (parent_gid) {
+            _resize_tracker.register_child(*parent_gid, *state.state_machine);
+        } else {
+            state.state_machine->enable();
+        }
         state.leader_info_updater = leader_info_updater(state, tablet.table, id, range);
-        co_await wait_for_first_leader(tablet, id, state, *g);
+        co_await wait_for_first_leader(tablet, id, state, *g, parent_gid);
 
         // If a restart is already queued behind us, the group isn't started yet; that
         // start will unlink the state.
@@ -1080,21 +1096,35 @@ void groups_manager::schedule_raft_group_start(global_tablet_id tablet, raft::gr
 }
 
 future<> groups_manager::wait_for_first_leader(global_tablet_id tablet, raft::group_id id, raft_group_state& state,
-        gate& g) {
+        gate& g, std::optional<raft::group_id> parent_gid) {
     // Up to a minute, and not beyond a deletion queued for this incarnation: `g` is its
     // gate, while state.gate may already be a later incarnation's open gate. The server
     // can't be destroyed meanwhile: a deletion runs only after the start that calls this.
+    //
+    // A child waits only for a leader: seeding its leader's clock runs a read barrier,
+    // which the parked applier holds until the parent applies end_resize, and on the node
+    // which drives the split that would block wait_for_groups_to_start().
     abort_on_expiry aoe(lowres_clock::now() + std::chrono::seconds(60));
     while (auto holder = g.try_hold()) {
         auto srv = raft_server(state, std::move(*holder));
-        auto res = srv.begin_mutate(aoe.abort_source());
-        auto* w = get_if<raft_server::need_wait_for_leader>(&res);
-        if (!w) {
+        std::optional<future<>> wait;
+        if (parent_gid) {
+            auto res = srv.begin_read(aoe.abort_source());
+            if (auto* w = get_if<raft_server::need_wait_for_leader>(&res)) {
+                wait = std::move(w->future);
+            }
+        } else {
+            auto res = srv.begin_mutate(aoe.abort_source());
+            if (auto* w = get_if<raft_server::need_wait_for_leader>(&res)) {
+                wait = std::move(w->future);
+            }
+        }
+        if (!wait) {
             co_return;
         }
         logger.debug("The raft group of tablet {}, group id {}, waits for its first leader: {}.", tablet, id,
                 srv.server().current_leader() ? "its leader state isn't ready yet" : "no leader is known");
-        auto f = co_await coroutine::as_future(std::move(w->future));
+        auto f = co_await coroutine::as_future(std::move(*wait));
         if (f.failed()) {
             const auto conf = srv.server().get_configuration();
             logger.warn("update(): waiting for leader timed out for tablet {}, group id {}: {}, this replica is {} of "
