@@ -189,14 +189,9 @@ future<> write_buffer::abort_writes(std::exception_ptr ex) {
         _written.set_exception(std::move(ex));
     }
 
-    // Mixed buffers keep per-record futures for separator rewriting. When the
-    // flush fails there is no separator pass to consume them, so drain them here
-    // before reset() clears the vector and would otherwise abandon failed futures.
-    auto records = std::exchange(_records_copy, {});
-    for (auto& record : records) {
-        auto f = co_await coroutine::as_future(std::move(record.loc));
-        f.ignore_ready_future();
-    }
+    // Mixed buffers keep copies of their records for separator rewriting. A failed flush has no
+    // separator pass to consume them, and they were never written anywhere, so drop them.
+    _records_copy.clear();
 
     co_await close();
 }
@@ -232,19 +227,12 @@ template <log_record_writer_concept Writer>
 future<log_location_with_holder> write_buffer::write(Writer writer, write_target target) {
     auto append_result = _raw.append(writer);
 
-    auto record_location = [record_header_offset = append_result.record_header_offset, total_size = append_result.total_size] (log_location base_location) {
-        return log_location {
-            .segment = base_location.segment,
-            .offset = static_cast<uint32_t>(base_location.offset + record_header_offset),
-            .size = static_cast<uint32_t>(total_size)
-        };
-    };
-
     if (with_record_copy()) {
         if constexpr (std::same_as<Writer, log_record_writer>) {
             _records_copy.push_back(record_in_buffer {
                 .writer = std::move(writer),
-                .loc = _written.get_shared_future().then(record_location),
+                .offset_in_buffer = append_result.record_header_offset,
+                .size = append_result.total_size,
                 .target = std::move(target)
             });
         } else {
@@ -257,8 +245,10 @@ future<log_location_with_holder> write_buffer::write(Writer writer, write_target
     // as index updates.
     auto op = _write_gate.hold();
 
-    return _written.get_shared_future().then([record_location, op = std::move(op)] (log_location base_location) mutable {
-        return std::make_tuple(record_location(base_location), std::move(op));
+    return _written.get_shared_future().then(
+            [offset_in_buffer = append_result.record_header_offset, size = append_result.total_size, op = std::move(op)]
+            (log_location buffer_location) mutable {
+        return std::make_tuple(record_location(buffer_location, offset_in_buffer, size), std::move(op));
     });
 }
 
@@ -772,11 +762,6 @@ future<buffered_write_result> buffered_writer::write_to_buffer(log_record_writer
         _consumer_progress_cv.signal();
     }
     co_return co_await std::move(accepted);
-}
-
-future<log_location_with_holder> buffered_writer::write(log_record_writer writer, db::timeout_clock::time_point timeout, write_target target) {
-    auto result = co_await write_to_buffer(std::move(writer), timeout, std::move(target));
-    co_return co_await std::move(result.persisted);
 }
 
 future<> buffered_writer::consumer_loop() {

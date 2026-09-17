@@ -141,12 +141,20 @@ future<> logstor::write(const mutation& m, write_target target, db::timeout_cloc
 
     auto writer = log_record_writer(std::move(record));
 
-    auto result_f = co_await coroutine::as_future(_write_buffer.write(std::move(writer), timeout, std::move(target)));
-    if (result_f.failed()){
+    // Two waits, not one: first for the record to be taken into a buffer, then for that buffer to
+    // reach a segment. They are awaited here rather than behind a call of their own, which would
+    // cost a coroutine frame per write to do nothing else.
+    auto accepted_f = co_await coroutine::as_future(_write_buffer.write_to_buffer(std::move(writer), timeout, std::move(target)));
+    if (accepted_f.failed()) {
         _stats.write_failures++;
-        co_await coroutine::return_exception_ptr(result_f.get_exception());
+        co_await coroutine::return_exception_ptr(accepted_f.get_exception());
     }
-    auto [location, op] = result_f.get();
+    auto persisted_f = co_await coroutine::as_future(std::move(accepted_f.get().persisted));
+    if (persisted_f.failed()) {
+        _stats.write_failures++;
+        co_await coroutine::return_exception_ptr(persisted_f.get_exception());
+    }
+    auto [location, op] = persisted_f.get();
     index_entry new_entry {
         .location = location,
         .timestamp = ts,
