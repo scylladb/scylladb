@@ -54,8 +54,31 @@ class S3MockServer:
     # S3Mock is a Spring Boot application packaged with a buildpack whose memory
     # calculator derives the heap size from the container's memory limit, which on
     # an unconstrained test machine yields an absurd -Xmx. Objects live on disk, so
-    # cap the heap at something a test service has no business exceeding.
-    JAVA_TOOL_OPTIONS = '-Xmx512m'
+    # cap the heap rather than let it derive one. How tight that cap can be is
+    # decided by the collector, and the buildpack forces -XX:+UseSerialGC, which
+    # stops the application for the whole of every collection and collects more
+    # often the closer the heap runs to full. At 512m the heap ran full under the
+    # load of the whole test suite and the server went on accepting connections
+    # while serving nothing for tens of seconds (SCYLLADB-4576), so give it room
+    # the suite cannot fill.
+    #
+    # Naming a concurrent collector instead is not an option: the buildpack appends
+    # its own -XX:+UseSerialGC after whatever JAVA_TOOL_OPTIONS carries, and a JVM
+    # told to use two collectors refuses to start at all.
+    #
+    # -Xlog:gc goes to stdout, which DockerizedServer captures into the archived
+    # container log, so that a future stall can be told apart from a collection
+    # pause without having to reproduce it.
+    JAVA_TOOL_OPTIONS = '-Xmx2g -Xlog:gc'
+
+    # Spring Boot properties, in the relaxed-binding form Spring reads out of the
+    # environment. A few dozen tests run against this one server at once and each
+    # of them keeps its connections alive, so the defaults - 200 worker threads and
+    # an accept queue of 100 - leave connections waiting for a worker or dropped by
+    # the queue, which a client sees as a connection reset. See SCYLLADB-4576.
+    SPRING_PROPERTIES = {'SERVER_TOMCAT_THREADS_MAX': '400',
+                         'SERVER_TOMCAT_ACCEPT_COUNT': '1000',
+                         'SERVER_TOMCAT_MAX_CONNECTIONS': '20000'}
     STARTED_MESSAGE = 'Started S3MockApplication'
 
     def __init__(self, log_dir, logger):
@@ -85,7 +108,10 @@ class S3MockServer:
 
     def _docker_args(self, host, port):
         # pylint: disable=unused-argument
-        return ['-e', f'JAVA_TOOL_OPTIONS={self.JAVA_TOOL_OPTIONS}']
+        args = ['-e', f'JAVA_TOOL_OPTIONS={self.JAVA_TOOL_OPTIONS}']
+        for name, value in self.SPRING_PROPERTIES.items():
+            args += ['-e', f'{name}={value}']
+        return args
 
     def _create_bucket(self):
         resource = boto3.resource('s3',
