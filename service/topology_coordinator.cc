@@ -2754,6 +2754,15 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                             if (is_excluded(dst)) {
                                 co_return;
                             }
+                            // Only a tablet's own replicas can download its sstables, so a replica
+                            // which is down leaves nobody to do it. Don't send it the RPC: the verb
+                            // has no timeout, and a node which no longer serves requests but still
+                            // accepts connections is never going to answer it.
+                            if (!_gossiper.is_alive(r.host)) {
+                                fail(std::make_exception_ptr(std::runtime_error(
+                                        fmt::format("Cannot restore tablet {} because host {} is down", gid, r.host))));
+                                co_return;
+                            }
                             auto f = co_await coroutine::as_future(
                                     ser::sstables_loader_rpc_verbs::send_restore_tablet(&_messaging, r.host, as, dst, gid));
                             if (f.failed()) {
