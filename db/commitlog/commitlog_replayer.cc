@@ -48,7 +48,8 @@ class db::commitlog_replayer::impl {
 
     friend class db::commitlog_replayer;
 public:
-    impl(seastar::sharded<replica::database>& db, seastar::sharded<db::system_keyspace>& sys_ks, seastar::sharded<raft_commitlog_replay_buffer>* raft_buffer);
+    impl(seastar::sharded<replica::database>& db, seastar::sharded<db::system_keyspace>& sys_ks, seastar::sharded<raft_commitlog_replay_buffer>* raft_buffer,
+            commitlog_replayer::table_filter filter);
 
     future<> init();
 
@@ -117,16 +118,19 @@ public:
     seastar::sharded<replica::database>& _db;
     seastar::sharded<db::system_keyspace>& _sys_ks;
     seastar::sharded<raft_commitlog_replay_buffer>* _raft_buffer;
+    commitlog_replayer::table_filter _table_filter;
     shard_rpm_map _rpm;
     db::system_keyspace::commitlog_cleanup_map _cleanup_map;
     shard_rp_map _min_pos;
 };
 
 db::commitlog_replayer::impl::impl(
-        seastar::sharded<replica::database>& db, seastar::sharded<db::system_keyspace>& sys_ks, seastar::sharded<raft_commitlog_replay_buffer>* raft_buffer)
+        seastar::sharded<replica::database>& db, seastar::sharded<db::system_keyspace>& sys_ks, seastar::sharded<raft_commitlog_replay_buffer>* raft_buffer,
+        commitlog_replayer::table_filter filter)
     : _db(db)
     , _sys_ks(sys_ks)
     , _raft_buffer(raft_buffer)
+    , _table_filter(std::move(filter))
 {}
 
 future<> db::commitlog_replayer::impl::init() {
@@ -230,6 +234,11 @@ future<> db::commitlog_replayer::impl::process(
         const auto& read_entry = cer.entry().item;
 
         if (std::holds_alternative<raft_commitlog_entry>(read_entry)) {
+            if (_table_filter) {
+                // A filtered replay does not own the raft replay buffer; the
+                // unfiltered one that follows it processes these entries.
+                co_return;
+            }
             const auto& raft_entry = std::get<raft_commitlog_entry>(read_entry);
             SCYLLA_ASSERT(_raft_buffer);
             rlogger.debug("Adding raft log entry for group {} at {} to replay buffer", raft_entry.group_id, rp);
@@ -239,6 +248,14 @@ future<> db::commitlog_replayer::impl::process(
             const auto& mut_entry = std::get<mutation_entry>(read_entry);
 
             auto& fm = mut_entry.mutation();
+
+            // Filter before the schema version is resolved below: a table that
+            // is out of scope may also have a schema version this pass does not
+            // know yet, which that lookup reports as an error.
+            if (_table_filter && !_table_filter(fm.column_family_id())) {
+                s->skipped_mutations++;
+                co_return;
+            }
 
             auto& local_cm = _column_mappings.local().map;
             auto cm_it = local_cm.find(fm.schema_version());
@@ -343,8 +360,9 @@ future<> db::commitlog_replayer::impl::process(
 }
 
 db::commitlog_replayer::commitlog_replayer(
-        seastar::sharded<replica::database>& db, seastar::sharded<db::system_keyspace>& sys_ks, seastar::sharded<raft_commitlog_replay_buffer>* raft_buffer)
-    : _impl(std::make_unique<impl>(db, sys_ks, raft_buffer))
+        seastar::sharded<replica::database>& db, seastar::sharded<db::system_keyspace>& sys_ks, seastar::sharded<raft_commitlog_replay_buffer>* raft_buffer,
+        table_filter filter)
+    : _impl(std::make_unique<impl>(db, sys_ks, raft_buffer, std::move(filter)))
 {}
 
 db::commitlog_replayer::commitlog_replayer(commitlog_replayer&& r) noexcept
@@ -355,8 +373,9 @@ db::commitlog_replayer::~commitlog_replayer()
 {}
 
 future<db::commitlog_replayer> db::commitlog_replayer::create_replayer(
-        seastar::sharded<replica::database>& db, seastar::sharded<db::system_keyspace>& sys_ks, seastar::sharded<raft_commitlog_replay_buffer>* raft_buffer) {
-    return do_with(commitlog_replayer(db, sys_ks, raft_buffer), [](auto&& rp) {
+        seastar::sharded<replica::database>& db, seastar::sharded<db::system_keyspace>& sys_ks, seastar::sharded<raft_commitlog_replay_buffer>* raft_buffer,
+        table_filter filter) {
+    return do_with(commitlog_replayer(db, sys_ks, raft_buffer, std::move(filter)), [](auto&& rp) {
         auto f = rp._impl->init();
         return f.then([rp = std::move(rp)]() mutable {
             return make_ready_future<commitlog_replayer>(std::move(rp));
