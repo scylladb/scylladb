@@ -358,6 +358,34 @@ void executor::supplement_table_info(rjson::value& descr, const schema& schema, 
     rjson::add(descr, "TableStatus", "ACTIVE");
     rjson::add(descr, "TableId", rjson::from_string(schema.id().to_sstring()));
 
+    // A WarmThroughput appears in this response only when the request
+    // configured one, which echoing the request back already achieves - but the
+    // request carries only the units, and DynamoDB reports a Status with them.
+    // Alternator's CreateTable is synchronous and this response already says
+    // TableStatus ACTIVE, so the warm throughput is active with it.
+    rjson::value* warm = rjson::find(descr, "WarmThroughput");
+    if (warm && warm->IsObject() && !rjson::find(*warm, "Status")) {
+        rjson::add(*warm, "Status", "ACTIVE");
+    }
+
+    // DynamoDB reports every GSI's ProvisionedThroughput here - zeros in
+    // PAY_PER_REQUEST mode - so fill in what the request left out.
+    rjson::value* gsis = rjson::find(descr, "GlobalSecondaryIndexes");
+    if (gsis && gsis->IsArray()) {
+        for (rjson::value& g : gsis->GetArray()) {
+            rjson::value* throughput = rjson::find(g, "ProvisionedThroughput");
+            if (!throughput) {
+                rjson::value t = rjson::empty_object();
+                rjson::add(t, "ReadCapacityUnits", 0);
+                rjson::add(t, "WriteCapacityUnits", 0);
+                rjson::add(t, "NumberOfDecreasesToday", 0);
+                rjson::add(g, "ProvisionedThroughput", std::move(t));
+            } else if (!rjson::find(*throughput, "NumberOfDecreasesToday")) {
+                rjson::add(*throughput, "NumberOfDecreasesToday", 0);
+            }
+        }
+    }
+
     executor::supplement_table_stream_info(descr, schema, sp);
 }
 
