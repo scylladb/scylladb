@@ -505,6 +505,25 @@ future<> executor::fill_table_size(rjson::value &table_description, schema_ptr s
     rjson::add(table_description, "TableSizeBytes", total_size);
 }
 
+// Read the provisioned RCU and WCU stored in a table's or a view's tags.
+// Returns nullopt when nothing is stored - the table is in PAY_PER_REQUEST
+// mode, or it predates Alternator storing these tags.
+static std::optional<std::pair<int, int>> get_provisioned_throughput(const std::map<sstring, sstring>* tags_ptr) {
+    if (!tags_ptr) {
+        return std::nullopt;
+    }
+    auto rcu_tag = tags_ptr->find(RCU_TAG_KEY);
+    auto wcu_tag = tags_ptr->find(WCU_TAG_KEY);
+    if (rcu_tag == tags_ptr->end() || wcu_tag == tags_ptr->end()) {
+        return std::nullopt;
+    }
+    try {
+        return std::make_pair(std::stoi(rcu_tag->second), std::stoi(wcu_tag->second));
+    } catch (...) {
+        return std::nullopt;
+    }
+}
+
 // Read the WarmThroughput units stored in a table's tags, or nullopt when the
 // table never had any configured.
 static std::optional<std::pair<int, int>> get_warm_throughput(const std::map<sstring, sstring>* tags_ptr) {
@@ -563,24 +582,9 @@ future<std::variant<rjson::value, api_error>> executor::fill_table_description(s
     rjson::add(table_description, "BillingModeSummary", rjson::empty_object());
     rjson::add(table_description["BillingModeSummary"], "LastUpdateToPayPerRequestDateTime", rjson::value(creation_timestamp));
     // In PAY_PER_REQUEST billing mode, provisioned capacity should return 0
-    int rcu = 0;
-    int wcu = 0;
-    bool is_pay_per_request = true;
-
-    if (tags_ptr) {
-        auto rcu_tag = tags_ptr->find(RCU_TAG_KEY);
-        auto wcu_tag = tags_ptr->find(WCU_TAG_KEY);
-        if (rcu_tag != tags_ptr->end() && wcu_tag != tags_ptr->end()) {
-            try {
-                rcu = std::stoi(rcu_tag->second);
-                wcu = std::stoi(wcu_tag->second);
-                is_pay_per_request = false;
-            } catch (...) {
-                rcu = 0;
-                wcu = 0;
-            }
-        }
-    }
+    const auto throughput = get_provisioned_throughput(tags_ptr);
+    const auto [rcu, wcu] = throughput.value_or(std::make_pair(0, 0));
+    const bool is_pay_per_request = !throughput.has_value();
     if (is_pay_per_request) {
         rjson::add(table_description["BillingModeSummary"], "BillingMode", "PAY_PER_REQUEST");
     } else {
@@ -620,8 +624,9 @@ future<std::variant<rjson::value, api_error>> executor::fill_table_description(s
                 sstring index_name = cf_name.substr(delim_it + 1);
                 rjson::add(view_entry, "IndexName", rjson::from_string(index_name));
                 rjson::add(view_entry, "IndexArn", generate_arn_for_index(*schema, index_name));
+                const std::map<sstring, sstring>* view_tags_ptr = db::get_tags_of_table(vptr);
                 // Add index's KeySchema and collect types for AttributeDefinitions:
-                describe_key_schema(view_entry, *vptr, &key_attribute_types, db::get_tags_of_table(vptr));
+                describe_key_schema(view_entry, *vptr, &key_attribute_types, view_tags_ptr);
                 // Add projection type
                 rjson::value projection = rjson::empty_object();
                 rjson::add(projection, "ProjectionType", "ALL");
@@ -629,17 +634,28 @@ future<std::variant<rjson::value, api_error>> executor::fill_table_description(s
                 rjson::add(view_entry, "Projection", std::move(projection));
                 // Local secondary indexes are marked by an extra '!' sign occurring before the ':' delimiter
                 bool is_lsi = (delim_it > 1 && cf_name[delim_it-1] == '!');
-                // IndexStatus, Backfilling and WarmThroughput are reported only
-                // for GSIs - an LSI has no status of its own, and DynamoDB reports
-                // no WarmThroughput for it. Alternator schema operations are
-                // synchronous so only two combinations of the status flags are
-                // possible: ACTIVE (for a built view) or CREATING+Backfilling (if
-                // view building is in progress).
+                // IndexStatus, Backfilling, ProvisionedThroughput and
+                // WarmThroughput are reported only for GSIs - an LSI has no
+                // status of its own, and DynamoDB reports neither throughput
+                // structure for it. Alternator schema operations are synchronous
+                // so only two combinations of the status flags are possible:
+                // ACTIVE (for a built view) or CREATING+Backfilling (if view
+                // building is in progress).
                 if (!is_lsi) {
                     auto is_view_build_result = co_await is_view_built(vptr, _proxy, client_state, trace_state, permit);
                     if (auto error = std::get_if<api_error>(&is_view_build_result)) {
                         co_return std::move(*error);
                     }
+                    // Each GSI has its own ProvisionedThroughput, which DynamoDB
+                    // reports (as zeros in PAY_PER_REQUEST mode) separately from
+                    // the base table's. LSIs have no such field - they share the
+                    // base table's provisioning.
+                    auto [index_rcu, index_wcu] = get_provisioned_throughput(view_tags_ptr).value_or(std::make_pair(0, 0));
+                    rjson::value index_throughput = rjson::empty_object();
+                    rjson::add(index_throughput, "ReadCapacityUnits", index_rcu);
+                    rjson::add(index_throughput, "WriteCapacityUnits", index_wcu);
+                    rjson::add(index_throughput, "NumberOfDecreasesToday", 0);
+                    rjson::add(view_entry, "ProvisionedThroughput", std::move(index_throughput));
                     const bool is_built = std::get<bool>(is_view_build_result);
                     rjson::add(view_entry, "IndexStatus", rjson::from_string(is_built ? "ACTIVE" : "CREATING"));
                     if (!is_built) {
@@ -1595,6 +1611,22 @@ static std::map<sstring, sstring> make_gsi_tags(
     return tags;
 }
 
+// A GSI carries its own ProvisionedThroughput, separate from the base table's.
+// Store it in the view's tags the same way the base table's is stored, so that
+// DescribeTable can report it back. Like the base table's, it is not enforced.
+static void add_gsi_provisioned_throughput_tags(std::map<sstring, sstring>& tags, const rjson::value& index) {
+    const rjson::value* throughput = rjson::find(index, "ProvisionedThroughput");
+    if (!throughput) {
+        return;
+    }
+    auto rcu = get_int_attribute(*throughput, "ReadCapacityUnits");
+    auto wcu = get_int_attribute(*throughput, "WriteCapacityUnits");
+    if (rcu && wcu) {
+        tags[RCU_TAG_KEY] = std::to_string(*rcu);
+        tags[WCU_TAG_KEY] = std::to_string(*wcu);
+    }
+}
+
 future<executor::request_return_type> executor::create_table_on_shard0(service::client_state&& client_state, tracing::trace_state_ptr trace_state, rjson::value request, bool enforce_authorization, bool warn_authorization,
             const db::tablets_mode_t::mode tablets_mode, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
     throwing_assert(this_shard_id() == 0);
@@ -1756,7 +1788,21 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
                 spurious_base_key_added_as_range_key = true;
             }
 
+            // DynamoDB requires each GSI to carry its own ProvisionedThroughput
+            // when the table is PROVISIONED, and to omit it when the table is
+            // PAY_PER_REQUEST. Rejecting both mismatches here is what lets the
+            // store below be unconditional.
+            const bool index_has_throughput = rjson::find(g, "ProvisionedThroughput");
+            if (bm.provisioned && !index_has_throughput) {
+                co_return api_error::validation(fmt::format(
+                    "One or more parameter values were invalid: ProvisionedThroughput is not specified for index: {}", index_name));
+            }
+            if (!bm.provisioned && index_has_throughput) {
+                co_return api_error::validation(fmt::format(
+                    "One or more parameter values were invalid: ProvisionedThroughput should not be specified for index: {} when BillingMode is PAY_PER_REQUEST", index_name));
+            }
             auto tags = make_gsi_tags(composite_gsi_keys_supported, spurious_base_key_added_as_range_key, view_hash_keys, view_range_keys);
+            add_gsi_provisioned_throughput_tags(tags, g);
             view_builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(std::move(tags)));
             view_builders.emplace_back(std::move(view_builder));
         }
@@ -2419,7 +2465,16 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                                 spurious_base_key_added_as_range_key = true;
                             }
                         }
+                        // As in CreateTable, but the table's billing mode can
+                        // only be read back from its stored throughput - a table
+                        // with none is PAY_PER_REQUEST, which is also what
+                        // DescribeTable reports for it.
+                        if (!get_provisioned_throughput(db::get_tags_of_table(schema)) && rjson::find(it->value, "ProvisionedThroughput")) {
+                            co_return api_error::validation(fmt::format(
+                                "One or more parameter values were invalid: Neither ReadCapacityUnits nor WriteCapacityUnits can be specified for index: {} when BillingMode is PAY_PER_REQUEST", index_name));
+                        }
                         auto tags = make_gsi_tags(composite_gsi_keys_supported, spurious_base_key_added_as_range_key, view_hash_keys, view_range_keys);
+                        add_gsi_provisioned_throughput_tags(tags, it->value);
                         view_builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(std::move(tags)));
                         // Note below we don't need to add virtual columns, as all
                         // base columns were copied to view. TODO: reconsider the need
