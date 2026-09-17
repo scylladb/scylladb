@@ -7,9 +7,12 @@
 
 # S3 proxy server to inject retryable errors for fuzzy testing.
 
+import http.cookiejar as cookiejar
 import logging
 import os
 import random
+import socket
+import struct
 import sys
 import asyncio
 
@@ -66,6 +69,48 @@ class LRUCache:
 # Simple proxy between s3 client and the S3 server to randomly inject errors and simulate cases when the request succeeds but the wire got "broken"
 def true_or_false():
     return random.choice([True, False])
+
+
+# The session the handler threads forward over. A plain requests.request() opens
+# a fresh connection to the S3 server for every request it forwards and closes it
+# again afterwards; at the thousand-odd requests a second the whole test suite
+# puts through this proxy that is a thousand connections a second left in
+# TIME_WAIT, and an accept queue the server cannot drain, which a client sees as
+# a connection reset (SCYLLADB-4576). A session keeps the connections to the
+# server alive in a pool and hands them back out instead.
+#
+# One session shared by every thread rather than one per thread, because
+# ThreadingHTTPServer gives each client connection a thread of its own and a
+# per-thread pool would be thrown away with it. What the threads share is the
+# urllib3 pool underneath, which is built to be used from several of them at
+# once; the parts of a requests.Session that are not are its cookie jar, which
+# the policy below stops anything from ever being put into, and its configuration,
+# which nothing here touches after this function has returned.
+_forwarding_session = None
+_forwarding_session_lock = threading.Lock()
+
+
+class _block_all_cookies(cookiejar.DefaultCookiePolicy):
+    def set_ok(self, cookie, request):
+        return False
+
+
+def forwarding_session():
+    global _forwarding_session
+    with _forwarding_session_lock:
+        if _forwarding_session is None:
+            session = requests.Session()
+            session.cookies.set_policy(_block_all_cookies())
+            # Enough connections for every test the suite runs against the server
+            # at once, and no capping of the pool: a discarded connection here is
+            # exactly the connection churn this pool exists to avoid.
+            adapter = requests.adapters.HTTPAdapter(pool_connections=32,
+                                                    pool_maxsize=512,
+                                                    pool_block=False)
+            session.mount('http://', adapter)
+            session.mount('https://', adapter)
+            _forwarding_session = session
+        return _forwarding_session
 
 
 class InjectingHandler(BaseHTTPRequestHandler):
@@ -159,13 +204,28 @@ class InjectingHandler(BaseHTTPRequestHandler):
     def get_retryable_http_codes(self):
         return random.choice(self.retryable_codes), random.choice(self.error_names)
 
+    def abort_connection(self):
+        """Drop the connection so that the client sees a connection reset.
+
+        Letting the connection close on its own would send a FIN, an orderly
+        shutdown, which is not what this is meant to simulate. SO_LINGER with a
+        zero timeout makes the close send an RST instead. Closing here does not
+        close the socket yet - rfile and wfile still hold it open - but it marks
+        it closed, so that the real close happens when the handler closes those,
+        which is before socketserver gets to shut the socket down for writing and
+        send the very FIN we are trying to avoid. That shutdown then fails on a
+        closed socket, which socketserver expects and ignores.
+        """
+        try:
+            self.request.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('ii', 1, 0))
+            self.request.close()
+        except OSError:
+            pass
+        self.close_connection = True
+
     def respond_with_error(self, reset_connection: bool):
         if reset_connection:
-            try:
-                # Forcefully close the connection to simulate a connection reset
-                self.request.shutdown_request()
-            except OSError:
-                pass
+            self.abort_connection()
             return
         code, error_name = self.get_retryable_http_codes()
         self.send_response(code)
@@ -204,8 +264,8 @@ class InjectingHandler(BaseHTTPRequestHandler):
                 target_url = self.s3_uri + self.path
                 headers = {key: value for key, value in self.headers.items()}
                 try:
-                    response = requests.request(self.command, target_url, headers=headers, data=body,
-                                                timeout=self.forward_timeout)
+                    response = forwarding_session().request(self.command, target_url, headers=headers, data=body,
+                                                            timeout=self.forward_timeout)
                 except requests.exceptions.RequestException as e:
                     # Forwarding to the S3 server failed (e.g. connection reset while it is
                     # under load from concurrent requests). Nothing has been written to the client
