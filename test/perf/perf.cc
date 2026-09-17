@@ -88,9 +88,11 @@ aggregated_perf_results::stats_t aggregated_perf_results::calculate_stats(std::v
     std::vector<double> abs_deviations;
     abs_deviations.reserve(results.size());
     for (const auto& pr : results) {
-        auto dev = get_stat(pr) - ret.mean;
-        abs_deviations.emplace_back(std::abs(dev));
-        var += dev * dev;
+        auto stat = get_stat(pr);
+        auto deviation_from_mean = stat - ret.mean;
+        var += deviation_from_mean * deviation_from_mean;
+        auto deviation_from_median = stat - ret.median;
+        abs_deviations.emplace_back(std::abs(deviation_from_median));
     }
     // Since the results are samples of the total population
     // devide the sum of squared deviations by (n - 1) rather than by n
