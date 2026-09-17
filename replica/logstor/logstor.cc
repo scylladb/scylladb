@@ -177,7 +177,7 @@ future<std::optional<mutation>> logstor::read(const schema& s, const primary_ind
 
     // lookup in cache
     if (cache) {
-        auto cached_mut = cache->lookup(*it, s.shared_from_this());
+        auto cached_mut = cache->lookup(*it, s);
         if (cached_mut) {
             co_return std::move(*cached_mut);
         }
