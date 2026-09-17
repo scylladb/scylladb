@@ -271,10 +271,11 @@ class utils::gcp::storage::client::object_data_source : public seekable_data_sou
             }
         }
         ~hold_state() {
+            // Given back on the exception path too: the commit is all-or-nothing, so
+            // the state always describes exactly what the call did, and the caller
+            // resumes from there. Dropping it rewound the source to position zero.
             _state->adjust_lease();
-            if (!std::uncaught_exceptions()) {
-                _src._state = std::move(_state);
-            }
+            _src._state = std::move(_state);
         }
         operator state&() const {
             return *_state;
@@ -1150,11 +1151,30 @@ future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::
                         utils::http::throw_body_ended_early(fmt::format("Body of {}:{} ended early: got {} of the {} bytes it declared at offset {}",
                                 _bucket, _object_name, got, rep.content_length, s.position));
                     }
+                    // Counted here, between the two checks. The attempt above is
+                    // retried, so counting it would bill the same logical range twice;
+                    // the one below is not, and those bytes did arrive over the wire on
+                    // a response the server completed.
+                    _impl->count_read_bytes(got);
+                    // to_read never runs past the end of the object, so a satisfiable
+                    // range that came back whole came back complete. Anything else is a
+                    // reply describing a different range than the one asked for. Raise it
+                    // before committing anything: storage_io_error is not a system_error,
+                    // so the strategy classifies it as non-retryable and stops at once,
+                    // and a commit first would leave the caller a resumable state holding
+                    // bytes from an offset it never asked for.
+                    if (got != to_read) {
+                        throw storage_io_error(EIO, fmt::format("Read of {}:{} answered {} bytes for the {} bytes asked for at offset {} of {}",
+                                _bucket, _object_name, got, to_read, s.position, _size));
+                    }
                     auto old = s.position;
                     for (auto&& buf : bufs) {
-                        s.position += buf.size();
-                        _impl->count_read_bytes(buf.size());
+                        // deque's push is strongly exception safe, so either the
+                        // state takes the bytes and the position moves, or neither
+                        // happens.
+                        auto n = buf.size();
                         s.buffers.emplace_back(std::move(buf));
+                        s.position += n;
                     }
                     gcp_storage.debug("Read object {}:{} ({}-{}/{})", _bucket, _object_name, old, s.position, _size);
                 }
@@ -1162,16 +1182,6 @@ future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::
                 , rest::key_values({ { RANGE, range } })
                 , _as
             );
-
-            // to_read never runs past the end of the object, so a satisfiable range
-            // that came back whole came back complete. Anything else means the reply
-            // described a different range than the one asked for, which is not
-            // something a retry can fix, and handing the short data back would
-            // surface two calls later as an end of stream that is not one.
-            if (got != to_read) {
-                throw storage_io_error(EIO, fmt::format("Read of {}:{} answered {} bytes for the {} bytes asked for at offset {} of {}",
-                        _bucket, _object_name, got, to_read, s.position - got, _size));
-            }
         }
     }
 
