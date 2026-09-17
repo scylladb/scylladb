@@ -9,6 +9,7 @@
 #include <seastar/core/coroutine.hh>
 
 #include "api/api-doc/raft.json.hh"
+#include "api/utils.hh"
 
 #include "service/raft/raft_group_registry.hh"
 #include "utils/log.hh"
@@ -131,26 +132,29 @@ void set_raft(http_context&, httpd::routes& r, sharded<service::raft_group_regis
         const auto stepdown_timeout_ticks = dur / service::raft_tick_interval;
         auto timeout_dur = raft::logical_clock::duration(stepdown_timeout_ticks);
 
+        // A null id lets the leader pick any up-to-date voter as its successor.
+        const auto target = get_query_param<raft::server_id>(*req, "target_host_id");
+
         if (req->get_query_param("group_id").empty()) {
             // Stepdown on group 0 by default
-            co_await raft_gr.invoke_on(0, [timeout_dur] (service::raft_group_registry& raft_gr) {
-                apilog.info("Triggering stepdown for group0");
-                return raft_gr.group0().stepdown(timeout_dur);
+            co_await raft_gr.invoke_on(0, [timeout_dur, target] (service::raft_group_registry& raft_gr) {
+                apilog.info("Triggering stepdown for group0, target {}", target);
+                return raft_gr.group0().stepdown(timeout_dur, target);
             });
             co_return json_void{};
         }
         raft::group_id gid{utils::UUID{req->get_query_param("group_id")}};
 
         std::atomic<bool> found_srv{false};
-        co_await raft_gr.invoke_on_all([gid, timeout_dur, &found_srv] (service::raft_group_registry& raft_gr) -> future<> {
+        co_await raft_gr.invoke_on_all([gid, timeout_dur, target, &found_srv] (service::raft_group_registry& raft_gr) -> future<> {
             auto* srv = raft_gr.find_server(gid);
             if (!srv) {
                 co_return;
             }
 
             found_srv = true;
-            apilog.info("Triggering stepdown for group {}", gid);
-            co_await srv->stepdown(timeout_dur);
+            apilog.info("Triggering stepdown for group {}, target {}", gid, target);
+            co_await srv->stepdown(timeout_dur, target);
         });
 
         if (!found_srv) {
