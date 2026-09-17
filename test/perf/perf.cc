@@ -88,9 +88,13 @@ aggregated_perf_results::stats_t aggregated_perf_results::calculate_stats(std::v
     std::vector<double> abs_deviations;
     abs_deviations.reserve(results.size());
     for (const auto& pr : results) {
-        auto dev = get_stat(pr) - ret.mean;
-        abs_deviations.emplace_back(std::abs(dev));
+        auto stat = get_stat(pr);
+        auto dev = stat - ret.mean;
         var += dev * dev;
+        // The standard deviation is a spread around the mean, the median absolute deviation one
+        // around the median. Taking the latter around the mean is what lets a single outlying
+        // iteration move it, which is the opposite of what it is quoted for.
+        abs_deviations.emplace_back(std::abs(stat - ret.median));
     }
     // Since the results are samples of the total population
     // devide the sum of squared deviations by (n - 1) rather than by n
