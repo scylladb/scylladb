@@ -1612,7 +1612,16 @@ future<log_record> segment_manager_impl::read(log_location location) {
         file = co_await _file_mgr.get_file(file_id);
     }
 
-    auto buf = co_await file.dma_read_exactly<char>(file_offset + location.offset, location.size);
+    // The bulk read is what dma_read_exactly() does underneath, over two coroutine frames of its
+    // own: one to trim the buffer the disk gave back to the size that was asked for, and one to
+    // reject a short read. This coroutine is already here to do both.
+    auto buf = co_await file.dma_read_bulk<char>(file_offset + location.offset, location.size);
+    if (buf.size() < location.size) [[unlikely]] {
+        co_return coroutine::exception(std::make_exception_ptr(std::runtime_error(fmt::format(
+            "Short read of segment {}: got {} bytes of the {} asked for at offset {}",
+            location.segment, buf.size(), location.size, location.offset))));
+    }
+    buf.trim(location.size);
     _stats.bytes_read += location.size;
     co_return deserialize_log_record(simple_memory_input_stream(buf.begin(), buf.size()));
 }
