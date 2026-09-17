@@ -1389,6 +1389,49 @@ def test_reads_before_write_and_write_using_lwt_metrics(dynamodb, test_table_s, 
             with check_increases_metric_exact(metrics, table_lwt, [[1, lwt_cf]]):
                 lwt_table.put_item(Item={'p': p})
 
+# Regression test for #31262: PutItem, UpdateItem and DeleteItem must count an
+# LWT shard bounce in both the global and the per-table metric.
+def test_write_item_table_shard_bounce_for_lwt(dynamodb, metrics):
+    # A shard bounce can only happen when Scylla runs on more than one shard,
+    # so on a single-shard Scylla this test has nothing to check.
+    shards = {int(shard) for shard in re.findall(r'(?:\{|,)shard="(\d+)"', get_metrics(metrics))}
+    if len(shards) < 2:
+        skip_env('requires at least two shards')
+
+    global_metric = 'scylla_alternator_shard_bounce_for_lwt'
+    table_metric = 'scylla_alternator_table_shard_bounce_for_lwt'
+    with new_test_table(dynamodb,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}],
+            # This tag is essential: without it these writes would not use LWT
+            # at all, and would never bounce between shards.
+            Tags=[{'Key': 'system:write_isolation', 'Value': 'always_use_lwt'}]) as lwt_table:
+        cf = {'cf': lwt_table.name}
+
+        def check_table_bounce(operation_name, operation):
+            before_global = get_metric(metrics, global_metric)
+            before_table = get_metric(metrics, table_metric, cf)
+            # Each operation uses a different partition key, so it lands on a
+            # random shard. With at least two shards, the chance that none of
+            # 200 different keys needs a bounce is infinitesimal.
+            for i in range(200):
+                operation(i)
+                if get_metric(metrics, table_metric, cf) > before_table:
+                    break
+            assert get_metric(metrics, global_metric) > before_global, (
+                f'{operation_name} did not exercise an LWT shard bounce')
+            assert get_metric(metrics, table_metric, cf) > before_table, (
+                f'{table_metric} did not increase for {operation_name}')
+
+        check_table_bounce('PutItem',
+            lambda i: lwt_table.put_item(Item={'p': f'put-{i}'}))
+        check_table_bounce('UpdateItem',
+            lambda i: lwt_table.update_item(Key={'p': f'update-{i}'},
+                UpdateExpression='SET a = :a',
+                ExpressionAttributeValues={':a': i}))
+        check_table_bounce('DeleteItem',
+            lambda i: lwt_table.delete_item(Key={'p': f'delete-{i}'}))
+
 # Test that scylla_alternator_conditional_check_failed  is incremented when a
 # conditional write (PutItem, UpdateItem, DeleteItem) fails due to an
 # unsatisfied ConditionExpression. Both the global metric and the per-table
@@ -1624,4 +1667,4 @@ def test_metric_reads_before_write(dynamodb, metrics, write_isolation):
 
 # TODO: there are additional metrics which we don't yet test here. At the
 # time of this writing they are:
-# shard_bounce_for_lwt, requests_blocked_memory, requests_shed
+# requests_blocked_memory, requests_shed
