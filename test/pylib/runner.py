@@ -38,7 +38,7 @@ from test.pylib.coverage_utils import coverage_dir
 from test.pylib.ldap_server import start_ldap
 from test.pylib.s3mock_server import S3MockServer
 from test.pylib.resource_gather import setup_cgroup, setup_worker_cgroup, get_resource_gather, SystemResourceMonitor, \
-    SCYLLA_TEST_CGROUP_BASE_ENV, gather_host_info
+    SCYLLA_TEST_CGROUP_BASE_ENV, gather_host_info, gather_oom_kill_evidence
 from test.pylib.db.writer import SQLiteWriter, DEFAULT_DB_NAME, HOST_INFO_TABLE
 from test.pylib.host_registry import HostRegistry
 from test.pylib.s3_proxy import S3ProxyServer
@@ -443,6 +443,33 @@ def pytest_sessionstart(session: pytest.Session) -> None:
             async def stop_resource_monitor() -> None:
                 system_resource_monitor.stop()
             artifacts.add_exit_artifact(stop_resource_monitor)
+
+
+@pytest.hookimpl(optionalhook=True)
+def pytest_testnodedown(node, error) -> None:
+    """Log dmesg + cgroup memory.events when an xdist worker dies unexpectedly.
+
+    optionalhook=True: this module is also loaded as a plugin in sessions
+    run with -p no:xdist, where the xdist hookspec that owns this hook isn't
+    registered at all.
+
+    A dead worker leaves no traceback and no core when it was killed by the
+    OOM-killer or a cgroup memory limit rather than crashing on its own; this
+    dump lets a future recurrence confirm or refute that hypothesis from the
+    controller's log, next to the "worker crashed" failure it already reports.
+    """
+    if error is None:
+        return
+    try:
+        worker_id = node.gateway.id
+        worker_pid = (getattr(node, "workerinfo", None) or {}).get("pid")
+        evidence = gather_oom_kill_evidence(worker_id)
+        logger.warning(
+            "xdist worker %s (pid %s) died unexpectedly: %s\n%s",
+            worker_id, worker_pid, error, evidence,
+        )
+    except Exception:
+        logger.warning("Failed to gather diagnostics for a dead xdist worker", exc_info=True)
 
 
 @pytest.hookimpl(tryfirst=True)

@@ -243,6 +243,63 @@ class ResourceGatherOn(ResourceGatherRecord):
         return result
 
 
+DMESG_TAIL_LINES = 200
+
+
+def _read_file_or_reason(path: Path) -> str:
+    """Read *path* as text, or describe why it could not be read."""
+    try:
+        return path.read_text().strip()
+    except OSError as exc:
+        return f"<unavailable: {exc}>"
+
+
+def _dmesg_tail(lines: int = DMESG_TAIL_LINES) -> str:
+    """Return the last *lines* lines of the kernel ring buffer, or why they're unavailable."""
+    try:
+        result = subprocess.run(
+            ["dmesg", "--ctime"], capture_output=True, text=True, timeout=60, check=False)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return f"<unavailable: {exc}>"
+    if result.returncode != 0:
+        return f"<unavailable: dmesg exited with {result.returncode}: {result.stderr.strip()}>"
+    return "\n".join(result.stdout.splitlines()[-lines:])
+
+
+def gather_oom_kill_evidence(worker_id: str | None) -> str:
+    """Collect circumstantial evidence for whether a dead xdist worker was killed externally.
+
+    Combines the dmesg tail, the dead worker's own cgroup memory.events (only
+    present when the harness was run with --gather-metrics — see
+    setup_worker_cgroup()), the controller's own cgroup memory.events, and
+    /proc/meminfo into one human-readable string suitable for logging.
+
+    Without --gather-metrics, or on cgroup v1 (no memory.events file), only the
+    machine-wide dmesg tail and the controller's own cgroup numbers remain:
+    that is circumstantial, not conclusive, evidence of an external OOM or
+    cgroup kill — it does not by itself prove the dead worker was the target.
+    """
+    sections = [
+        "--- dmesg tail ---",
+        _dmesg_tail(),
+    ]
+
+    if worker_id is not None:
+        sections += [
+            f"--- {worker_id} cgroup memory.events ---",
+            _read_file_or_reason(CGROUP_TESTS / worker_id / "memory.events"),
+        ]
+
+    sections += [
+        "--- controller cgroup memory.events ---",
+        _read_file_or_reason(get_current_cgroup() / "memory.events"),
+        "--- /proc/meminfo ---",
+        _read_file_or_reason(Path("/proc/meminfo")),
+    ]
+
+    return "\n".join(sections)
+
+
 def gather_host_info() -> HostInfo:
     """Collect static hardware information about the current host."""
     try:
