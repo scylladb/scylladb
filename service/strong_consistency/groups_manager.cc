@@ -122,9 +122,11 @@ public:
     }
 };
 
-raft_server::raft_server(groups_manager::raft_group_state& state, gate::holder holder)
+raft_server::raft_server(raft::group_id gid, groups_manager::raft_group_state& state, gate::holder holder, raft_resize_tracker& resize_tracker)
     : _state(state)
     , _holder(std::move(holder))
+    , _gid(gid)
+    , _resize_tracker(resize_tracker)
 {
 }
 
@@ -183,7 +185,8 @@ auto raft_server::begin_mutate(abort_source& as) -> begin_mutate_result {
         // so callers wait on leader_info_cond until their own deadline fires.
         return need_wait_for_leader{wait_with_abort_source(_state.leader_info_cond, as)};
     }
-    const auto new_ts = std::max(api::new_timestamp(), _state.leader_info->last_timestamp + 1);
+    const auto new_ts = std::max({api::new_timestamp(), _state.leader_info->last_timestamp + 1,
+            groups_manager::leader_timestamp_floor(_gid, _state, _resize_tracker) + 1});
     _state.leader_info->last_timestamp = new_ts;
     return timestamp_with_term{new_ts, term};
 }
@@ -200,6 +203,23 @@ auto raft_server::begin_read(abort_source& as) -> begin_read_result {
         return raft::not_a_leader{leader};
     }
     return ok{};
+}
+
+void raft_server::advance_leader_timestamp(api::timestamp_type ts) {
+    _state.min_leader_timestamp = std::max(_state.min_leader_timestamp, ts);
+    if (_state.leader_info) {
+        _state.leader_info->last_timestamp = std::max(_state.leader_info->last_timestamp, ts);
+    }
+}
+
+api::timestamp_type groups_manager::leader_timestamp_floor(raft::group_id gid, const raft_group_state& state, const raft_resize_tracker& resize_tracker) {
+    // The end_resize timestamp of the group this one replaces, if it is known here yet, is above
+    // every write in that group's log, and every write of this group has to sort after those. It
+    // is consulted on every write rather than pushed into leader_info when end_resize is applied,
+    // so that a leader whose clock was seeded before that - the stored data it seeded from lacks
+    // whatever the parent had not applied here yet - is covered without anyone having to find it.
+    return std::max(state.min_leader_timestamp,
+            resize_tracker.parent_end_resize_timestamp(gid).value_or(api::min_timestamp));
 }
 
 groups_manager::groups_manager(netw::messaging_service& ms, 
@@ -412,14 +432,14 @@ void groups_manager::chain_control_op(raft_group_state& state, raft::group_id id
     });
 }
 
-std::optional<raft_server> groups_manager::try_acquire_server(raft_group_state& state) {
+std::optional<raft_server> groups_manager::try_acquire_server(raft::group_id gid, raft_group_state& state) {
     // No preemption between the checks, see raft_group_state.
     auto h = state.gate->try_hold();
     if (!h || !state.server_control_op.available()) {
         return std::nullopt;
     }
     SCYLLA_ASSERT(state.server);
-    return raft_server(state, std::move(*h));
+    return raft_server(gid, state, std::move(*h), _resize_tracker);
 }
 
 void groups_manager::schedule_raft_groups_deletion(bool all) {
@@ -613,9 +633,13 @@ future<> groups_manager::leader_info_updater(raft_group_state& state, global_tab
                 // There's no reason to abort this operation in any other case.
                 co_await state.server->read_barrier(nullptr);
 
+                // The floor covers what the stored data cannot: for a group created by a resize,
+                // writes of the group it replaces which are not applied here yet, whose
+                // timestamps every write of this group has to exceed (see leader_timestamp_floor()).
                 state.leader_info = leader_info {
                     .term = current_term,
-                    .last_timestamp = schema->table().get_max_timestamp_for_tablet(tablet.tablet)
+                    .last_timestamp = std::max(schema->table().get_max_timestamp_for_tablet(tablet.tablet),
+                                               leader_timestamp_floor(gid, state, _resize_tracker))
                 };
                 logger.debug("leader_info_updater({}-{}): read_barrier() completed, "
                     "new leader term {}, last_timestamp {}",
@@ -1235,6 +1259,20 @@ void groups_manager::update(token_metadata_ptr new_tm) {
             // another in which this group is the parent.
             if (_resize_tracker.get_parent_group(id)) {
                 logger.debug("update(): group {} is no longer a child, dropping its mapping", id);
+                // The floor the parent's end_resize put under this group's clock goes with the
+                // mapping (see leader_timestamp_floor()), so we keep it in the group's own state.
+                // The parent has applied end_resize on every replica the finalization waited for
+                // before it replaced the map, and its state is still here, since its teardown is
+                // only scheduled below. A replica the finalization did not wait for - one being
+                // excluded from the cluster - may not have applied it; it is on its way out and
+                // leads nothing for long, so we only note it.
+                if (const auto floor = _resize_tracker.parent_end_resize_timestamp(id)) {
+                    auto& child_state = _raft_groups[id];
+                    child_state.min_leader_timestamp = std::max(child_state.min_leader_timestamp, *floor);
+                } else {
+                    logger.warn("update(): group {} stops being a child of a resize whose end_resize "
+                            "this replica has not applied", id);
+                }
                 _resize_tracker.erase_group(id);
             }
 
@@ -1274,10 +1312,6 @@ void groups_manager::update(token_metadata_ptr new_tm) {
             chain_control_op(state, id, [&state, this, tablet, id, new_tm, parent_id, g = state.gate] () mutable -> future<> {
                 state.state_machine = co_await start_raft_group(tablet, id, std::move(new_tm));
                 state.server = &_raft_gr.get_server(id);
-                // The update() which started this group could not do it - the server did not exist
-                // yet. A stale limit is corrected by the next update(), which finalizing or rolling
-                // back the resize triggers.
-                apply_applier_queue_max_size(state.server, parent_id.has_value());
                 // A group created by a resize applies nothing until the group it replaces applied
                 // end_resize here, which the tracker tells it; every other group applies right away.
                 if (parent_id) {
@@ -1285,6 +1319,10 @@ void groups_manager::update(token_metadata_ptr new_tm) {
                 } else {
                     state.state_machine->enable();
                 }
+                // The update() which started this group could not do it - the server did not exist
+                // yet. A stale limit is corrected by the next update(), which finalizing or rolling
+                // back the resize triggers.
+                apply_applier_queue_max_size(state.server, parent_id.has_value());
                 state.leader_info_updater = leader_info_updater(state, tablet, id);
 
                 // We want to make sure the server is ready to serve requests before
@@ -1308,7 +1346,7 @@ void groups_manager::update(token_metadata_ptr new_tm) {
                     if (!holder) {
                         break;
                     }
-                    auto srv = raft_server(state, std::move(*holder));
+                    auto srv = raft_server(id, state, std::move(*holder), _resize_tracker);
                     std::optional<future<>> wait;
                     if (parent_id) {
                         auto res = srv.begin_read(aoe.abort_source());
@@ -1345,6 +1383,14 @@ void groups_manager::update(token_metadata_ptr new_tm) {
 
     schedule_raft_groups_deletion(false);
     _leader_cache.end_sweep();
+}
+
+std::optional<raft_server> groups_manager::try_acquire_server(raft::group_id group_id) {
+    const auto it = _raft_groups.find(group_id);
+    if (it == _raft_groups.end()) {
+        return std::nullopt;
+    }
+    return try_acquire_server(group_id, it->second);
 }
 
 future<raft_server> groups_manager::acquire_server(table_id table_id, raft::group_id group_id, abort_source& as) {
@@ -1386,9 +1432,37 @@ future<raft_server> groups_manager::acquire_server(table_id table_id, raft::grou
     }
     // Holder and future are taken atomically, so the future completes with the
     // start that created this gate, whose server the holder protects.
-    return state.server_control_op.get_future(as).then([&state, h = std::move(*h)] mutable {
-        return raft_server(state, std::move(h));
+    return state.server_control_op.get_future(as).then([this, group_id, &state, h = std::move(*h)] mutable {
+        return raft_server(group_id, state, std::move(h), _resize_tracker);
     });
+}
+
+bool groups_manager::should_handoff_writes(raft::group_id group_id) const {
+    return _resize_tracker.should_handoff_writes(group_id);
+}
+
+std::optional<raft::group_id> groups_manager::group_for_handoff(schema_ptr s, const dht::token& token) const {
+    const auto& tablet_map = s->table().get_effective_replication_map()->get_token_metadata().tablets().get_tablet_map(s->id());
+    if (!tablet_map.has_raft_info()) {
+        on_internal_error(logger, format("group_for_handoff: table {} does not have raft info", s->id()));
+    }
+    const auto tablet_id = tablet_map.get_tablet_id(token);
+    if (!tablet_map.is_resizing(tablet_id)) {
+        logger.debug("group_for_handoff: tablet {} of table {} is not resizing any more", tablet_id, s->id());
+        return std::nullopt;
+    }
+    // The kind of the resize in progress is the kind of the resize decision, and
+    // get_split_child_gids() only answers for a split. A merge never gets here: no merge decision
+    // is emitted for a strongly consistent table, see tablet_allocator_impl's process_table().
+    const auto& decision = tablet_map.resize_decision();
+    if (!decision.is_split()) {
+        on_internal_error(logger, format("group_for_handoff: tablet {} is not being split, its "
+                "resize decision is {}", tablet_id, decision.type_name()));
+    }
+    // The left child owns the tokens up to and including the split token, the right one the
+    // rest, as in stable_token_of_group().
+    const auto [left, right] = tablet_map.get_split_child_gids(tablet_id);
+    return token <= tablet_map.get_split_token(tablet_id) ? left : right;
 }
 
 void groups_manager::start() {
@@ -1422,7 +1496,7 @@ future<> groups_manager::stepdown_leaders() {
         auto& [gid, state] = entry;
 
         // The handle also pins the entry: its erase waits for the gate.
-        const auto srv = try_acquire_server(state);
+        const auto srv = try_acquire_server(gid, state);
         if (!srv || !srv->server().is_leader()) {
             co_return;
         }
@@ -1475,7 +1549,7 @@ std::optional<locator::tablet_routing_info_v2> groups_manager::check_tablet_vers
         return std::nullopt;
     }
 
-    const auto srv = try_acquire_server(group_it->second);
+    const auto srv = try_acquire_server(group_id, group_it->second);
     if (!srv) [[unlikely]] {
         // Being deleted or (re)started: no server to ask for the leader.
         return std::nullopt;
