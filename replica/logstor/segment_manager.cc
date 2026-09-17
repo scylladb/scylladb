@@ -1226,8 +1226,21 @@ future<owned_write_buffer> compaction_manager_impl::allocate_separator_buffer() 
     return _sm.allocate_separator_buffer();
 }
 
+// The geometry is divided by while the members are being initialized - here and in file_manager -
+// so a zero size has to be rejected before that rather than by the checks in the body below, which
+// only ever see the quotients.
+static const segment_manager_config& validated_geometry(const segment_manager_config& config) {
+    if (config.segment_size == 0) {
+        throw exceptions::configuration_exception("Segment size must not be zero");
+    }
+    if (config.file_size == 0) {
+        throw exceptions::configuration_exception("File size must not be zero");
+    }
+    return config;
+}
+
 segment_manager_impl::segment_manager_impl(segment_manager_config config)
-    : _file_mgr(config)
+    : _file_mgr(validated_geometry(config))
     , _compaction_mgr(*this, compaction_manager_impl::compaction_config{
             .compaction_enabled = config.compaction_enabled,
             .max_segments_per_compaction = config.max_segments_per_compaction,
