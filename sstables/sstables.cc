@@ -337,6 +337,9 @@ future<> parse(const schema&, sstable_version_types, random_access_reader& in, d
 
 template <typename T>
 future<> parse(const schema&, sstable_version_types, random_access_reader& in, T& len, bytes& s) {
+    if (len > in.size()) {
+        throw_malformed_sstable_exception(format("String length {} exceeds component size {}", len, in.size()));
+    }
     return in.read_exactly(len).then([&s, len] (auto buf) {
         check_buf_size(buf, len);
         // Likely a different type of char. Most bufs are unsigned, whereas the bytes type is signed.
@@ -467,6 +470,9 @@ template <typename Size, typename Members>
 future<> parse(const schema& s, sstable_version_types v, random_access_reader& in, disk_array<Size, Members>& arr) {
     Size len;
     co_await parse(s, v, in, len);
+    if (len > in.size()) {
+        throw_malformed_sstable_exception(format("Array length {} exceeds component size {}", len, in.size()));
+    }
     arr.elements.reserve(len);
     co_await parse(s, v, in, len, arr.elements);
 }
@@ -590,6 +596,10 @@ future<> parse(const schema& schema, sstable_version_types v, random_access_read
                      s.header.memory_size,
                      s.header.sampling_level,
                      s.header.size_at_full_sampling);
+    if (s.header.size >= in.size() / sizeof(pos_type) || s.header.memory_size > in.size()) {
+        throw_malformed_sstable_exception(format("Summary header is inconsistent with component size {}: size={}, memory_size={}",
+                in.size(), s.header.size, s.header.memory_size));
+    }
     // Positions are encoded in little-endian.
     s.positions.reserve(s.header.size + 1);
     while (s.positions.size() != s.header.size) {
@@ -758,6 +768,9 @@ future<> parse(const schema& s, sstable_version_types v, random_access_reader& i
     eh.buckets.reserve(length);
 
     auto type_size = sizeof(uint64_t) * 2;
+    if (length > in.size() / type_size) {
+        throw_malformed_sstable_exception(format("Estimated histogram length {} exceeds component size {}", length, in.size()));
+    }
     auto buf = co_await in.read_exactly(length * type_size);
     check_buf_size(buf, length * type_size);
 
