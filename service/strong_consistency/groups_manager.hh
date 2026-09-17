@@ -12,6 +12,7 @@
 #include "locator/tablets.hh"
 #include "locator/tablet_metadata_guard.hh"
 #include "service/strong_consistency/raft_resize_tracker.hh"
+#include "service/topology_guard.hh"
 #include "message/messaging_service.hh"
 #include "service/raft/raft_group_registry.hh"
 #include "cql3/query_processor.hh"
@@ -213,6 +214,10 @@ class groups_manager : public peering_sharded_service<groups_manager> {
         // back later.
         lw_shared_ptr<abort_source> config_sync_as;
 
+        // Set on a parent once its data has been flushed for the seal, so that the rounds of
+        // process_raft_resize which follow do not flush again. See handle_process_raft_resize().
+        bool seal_flushed = false;
+
         // Set on a parent for as long as it is being resized on this replica.
         std::unique_ptr<resize_colocation_state> resize_colocation;
     };
@@ -369,6 +374,16 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     future<> drain_group_deletion(locator::global_tablet_id tablet, raft::group_id group_id,
         lowres_clock::time_point deadline);
 
+    // Enters the topology session the finalization resizing `parent_gid` runs under, or returns nullopt if this
+    // shard does not have it: the token metadata change which opens it has not been applied here
+    // yet, or the one which closes it has. Either way the caller cannot act on the resize here.
+    std::optional<service::topology_guard> try_enter_resize_session(service::session_id session, raft::group_id parent_gid) const;
+
+    // Returns the shard hosting the raft server of the given tablet. Nullopt if the table is gone.
+    // The caller must hold the resize session of the tablet map it took `tablet` and
+    // `expected_gid` from; a map here which disagrees with them is then an internal error.
+    std::optional<shard_id> find_shard_for_tablet(locator::global_tablet_id tablet, raft::group_id expected_gid) const;
+
     // try_acquire_server() for a group named by id: nullopt also if the group is not hosted here.
     std::optional<raft_server> try_acquire_server(raft::group_id group_id);
 
@@ -398,6 +413,17 @@ public:
     // caller must then retry against the current map rather than hand the request anywhere.
     bool should_handoff_writes(raft::group_id group_id) const;
     std::optional<raft::group_id> group_for_handoff(schema_ptr schema, const dht::token& token) const;
+
+    // Seals the raft group `parent_gid` of `tablet`, which is being replaced by the groups
+    // `new_gids`.
+    // Returns true once start_resize and end_resize have been committed in the parent group. With
+    // wait_only, returns true once end_resize has been applied on this replica and the tablet's
+    // data has been flushed.
+    // Returns false if the call has to be retried, which covers every case where this replica
+    // cannot make progress yet. It has not observed the resize (so does not have `session`), does
+    // not host the groups involved, does not lead the parent, or the leaders are not co-located.
+    future<bool> handle_process_raft_resize(locator::global_tablet_id tablet, raft::group_id parent_gid,
+        const std::vector<raft::group_id>& new_gids, bool wait_only, service::session_id session, abort_source& as);
 
     // Called during node boot. Starts all raft::server instances corresponding
     // to the latest group0 state in the background.
@@ -530,6 +556,7 @@ public:
     using begin_read_result = std::variant<ok, raft::not_a_leader, need_wait_for_leader>;
     begin_read_result begin_read(abort_source&);
     void advance_leader_timestamp(api::timestamp_type ts);
+
 };
 
 } // namespace service::strong_consistency
