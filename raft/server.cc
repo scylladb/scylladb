@@ -27,6 +27,7 @@
 #include <seastar/core/gate.hh>
 
 #include "fsm.hh"
+#include "metrics_options.hh"
 #include "log_indexed_container.hh"
 #include "log.hh"
 #include "raft.hh"
@@ -57,6 +58,7 @@ struct awaited_conf_change {
 static const seastar::metrics::label server_id_label("id");
 static const seastar::metrics::label log_entry_type("log_entry_type");
 static const seastar::metrics::label message_type("message_type");
+static const seastar::metrics::label blocked_reason_label("reason");
 
 // Result types for do_on_leader_with_retries action lambda.
 // retry_with_leader: retry on the specified leader. If the leader is the
@@ -123,6 +125,8 @@ public:
     future<> modify_config(std::vector<config_member> add, std::vector<server_id> del, seastar::abort_source* as) override;
     future<entry_id> add_entry_on_leader(command command, seastar::abort_source* as);
     void register_metrics() override;
+    log_state get_log_state() const override;
+    blocked_followers get_blocked_followers() const override;
     size_t max_command_size() const override;
 private:
     seastar::condition_variable _events;
@@ -174,38 +178,9 @@ private:
         trigger_snapshot_msg>;
     queue<applier_fiber_message> _apply_entries = queue<applier_fiber_message>(10);
 
-    struct stats {
-        uint64_t add_command = 0;
-        uint64_t add_dummy = 0;
-        uint64_t add_config = 0;
-        uint64_t append_entries_received = 0;
-        uint64_t append_entries_reply_received = 0;
-        uint64_t request_vote_received = 0;
-        uint64_t request_vote_reply_received = 0;
-        uint64_t waiters_awoken = 0;
-        uint64_t waiters_dropped = 0;
-        uint64_t append_entries_reply_sent = 0;
-        uint64_t append_entries_sent = 0;
-        uint64_t vote_request_sent = 0;
-        uint64_t vote_request_reply_sent = 0;
-        uint64_t install_snapshot_sent = 0;
-        uint64_t snapshot_reply_sent = 0;
-        uint64_t polls = 0;
-        uint64_t store_term_and_vote = 0;
-        uint64_t store_snapshot = 0;
-        uint64_t sm_load_snapshot = 0;
-        uint64_t truncate_persisted_log = 0;
-        uint64_t persisted_log_entries = 0;
-        uint64_t queue_entries_for_apply = 0;
-        uint64_t applied_entries = 0;
-        uint64_t snapshots_taken = 0;
-        uint64_t timeout_now_sent = 0;
-        uint64_t timeout_now_received = 0;
-        uint64_t read_quorum_sent = 0;
-        uint64_t read_quorum_received = 0;
-        uint64_t read_quorum_reply_sent = 0;
-        uint64_t read_quorum_reply_received = 0;
-    } _stats;
+    // Counters, either private or shared through configuration::shared_stats.
+    stats _own_stats;
+    stats& _stats;
 
     struct op_status {
         term_t term; // term the entry was added with
@@ -379,7 +354,8 @@ server_impl::server_impl(server_id uuid, std::unique_ptr<rpc> rpc,
                     _rpc(std::move(rpc)), _state_machine(std::move(state_machine)),
                     _persistence(std::move(persistence)), _failure_detector(failure_detector),
                     _id(uuid), _tag(config.tag.empty() ? format("{}", uuid) : std::move(config.tag)),
-                    _config(config), _do_on_leader_gate("raft::server_impl::do_on_leader_gate")
+                    _config(config), _stats(_config.shared_stats ? *_config.shared_stats : _own_stats),
+                    _do_on_leader_gate("raft::server_impl::do_on_leader_gate")
 {
     set_rpc_server(_rpc.get());
     if (_config.snapshot_threshold_log_size > _config.max_log_size) {
@@ -699,18 +675,28 @@ future<> server_impl::wait_for_entry(entry_id eid, wait_type type, seastar::abor
 
 future<entry_id> server_impl::add_entry_on_leader(command cmd, seastar::abort_source* as) {
     // Wait for sufficient memory to become available
+    const size_t size = log::memory_usage_of(cmd, _config.max_command_size);
     semaphore_units<> memory_permit;
     while (true) {
         term_t t = _fsm->get_current_term();
-        try {
-            memory_permit = co_await _fsm->wait_for_memory_permit(as, log::memory_usage_of(cmd, _config.max_command_size));
-        } catch (semaphore_aborted&) {
-            throw request_aborted(
-                format("Semaphore aborted while waiting for memory availability for adding entry on leader in term: {}, on server: {}, current term: {}",
-                       t,
-                       _id,
-                       _fsm->get_current_term()));
+        auto permit = _fsm->try_get_memory_permit(size);
+        if (!permit) {
+            // A leadership transfer takes all the log memory to stop admitting
+            // entries, so waiting through one is not a shortage of log memory.
+            if (!_fsm->is_stepping_down()) {
+                _stats.log_limiter_waits++;
+            }
+            try {
+                permit = co_await _fsm->wait_for_memory_permit(as, size);
+            } catch (semaphore_aborted&) {
+                throw request_aborted(
+                    format("Semaphore aborted while waiting for memory availability for adding entry on leader in term: {}, on server: {}, current term: {}",
+                           t,
+                           _id,
+                           _fsm->get_current_term()));
+            }
         }
+        memory_permit = std::move(*permit);
         if (t == _fsm->get_current_term()) {
             break;
         }
@@ -1869,73 +1855,104 @@ server_impl::get_configuration() const {
     return _fsm->get_configuration();
 }
 
+server::log_state server_impl::get_log_state() const {
+    return log_state{
+        .in_memory_log_size = _fsm->in_memory_log_size(),
+        .log_memory_usage = _fsm->log_memory_usage(),
+        .last_idx = _fsm->log_last_idx(),
+        .commit_idx = _fsm->commit_idx(),
+        .applied_idx = _applied_idx,
+        .log_limiter_waiters = _fsm->count_memory_permit_waiters(),
+    };
+}
+
+blocked_followers server_impl::get_blocked_followers() const {
+    return _fsm->count_blocked_followers();
+}
+
+void server::register_stats_metrics(seastar::metrics::metric_groups& metrics, const stats& s, const metrics_options& options) {
+    namespace sm = seastar::metrics;
+    const auto& aggregate = options.aggregate_labels;
+    const bool skip = options.skip_when_empty;
+    auto labels = [&options] (std::initializer_list<sm::label_instance> extra = {}) {
+        auto result = options.labels;
+        result.insert(result.end(), extra.begin(), extra.end());
+        return result;
+    };
+    metrics.add_group(options.group_name, {
+        sm::make_total_operations("add_entries", s.add_command,
+             sm::description("Number of entries added on this node, the log_entry_type label can be command, dummy or config"), labels({log_entry_type("command")})).aggregate(aggregate).set_skip_when_empty(skip),
+        sm::make_total_operations("add_entries", s.add_dummy,
+             sm::description("Number of entries added on this node, the log_entry_type label can be command, dummy or config"), labels({log_entry_type("dummy")})).aggregate(aggregate).set_skip_when_empty(skip),
+        sm::make_total_operations("add_entries", s.add_config,
+             sm::description("Number of entries added on this node, the log_entry_type label can be command, dummy or config"), labels({log_entry_type("config")})).aggregate(aggregate).set_skip_when_empty(skip),
+
+        sm::make_total_operations("messages_received", s.append_entries_received,
+             sm::description("Number of messages received, the message_type determines the type of message"), labels({message_type("append_entries")})).aggregate(aggregate).set_skip_when_empty(skip),
+        sm::make_total_operations("messages_received", s.append_entries_reply_received,
+             sm::description("Number of messages received, the message_type determines the type of message"), labels({message_type("append_entries_reply")})).aggregate(aggregate).set_skip_when_empty(skip),
+        sm::make_total_operations("messages_received", s.request_vote_received,
+             sm::description("Number of messages received, the message_type determines the type of message"), labels({message_type("request_vote")})).aggregate(aggregate).set_skip_when_empty(skip),
+        sm::make_total_operations("messages_received", s.request_vote_reply_received,
+             sm::description("Number of messages received, the message_type determines the type of message"), labels({message_type("request_vote_reply")})).aggregate(aggregate).set_skip_when_empty(skip),
+        sm::make_total_operations("messages_received", s.timeout_now_received,
+             sm::description("Number of messages received, the message_type determines the type of message"), labels({message_type("timeout_now")})).aggregate(aggregate).set_skip_when_empty(skip),
+        sm::make_total_operations("messages_received", s.read_quorum_received,
+             sm::description("Number of messages received, the message_type determines the type of message"), labels({message_type("read_quorum")})).aggregate(aggregate).set_skip_when_empty(skip),
+        sm::make_total_operations("messages_received", s.read_quorum_reply_received,
+             sm::description("Number of messages received, the message_type determines the type of message"), labels({message_type("read_quorum_reply")})).aggregate(aggregate).set_skip_when_empty(skip),
+
+        sm::make_total_operations("messages_sent", s.append_entries_sent,
+             sm::description("Number of messages sent, the message_type determines the type of message"), labels({message_type("append_entries")})).aggregate(aggregate).set_skip_when_empty(skip),
+        sm::make_total_operations("messages_sent", s.append_entries_reply_sent,
+             sm::description("Number of messages sent, the message_type determines the type of message"), labels({message_type("append_entries_reply")})).aggregate(aggregate).set_skip_when_empty(skip),
+        sm::make_total_operations("messages_sent", s.vote_request_sent,
+             sm::description("Number of messages sent, the message_type determines the type of message"), labels({message_type("request_vote")})).aggregate(aggregate).set_skip_when_empty(skip),
+        sm::make_total_operations("messages_sent", s.vote_request_reply_sent,
+             sm::description("Number of messages sent, the message_type determines the type of message"), labels({message_type("request_vote_reply")})).aggregate(aggregate).set_skip_when_empty(skip),
+        sm::make_total_operations("messages_sent", s.install_snapshot_sent,
+             sm::description("Number of messages sent, the message_type determines the type of message"), labels({message_type("install_snapshot")})).aggregate(aggregate).set_skip_when_empty(skip),
+        sm::make_total_operations("messages_sent", s.snapshot_reply_sent,
+             sm::description("Number of messages sent, the message_type determines the type of message"), labels({message_type("snapshot_reply")})).aggregate(aggregate).set_skip_when_empty(skip),
+        sm::make_total_operations("messages_sent", s.timeout_now_sent,
+             sm::description("Number of messages sent, the message_type determines the type of message"), labels({message_type("timeout_now")})).aggregate(aggregate).set_skip_when_empty(skip),
+        sm::make_total_operations("messages_sent", s.read_quorum_sent,
+             sm::description("Number of messages sent, the message_type determines the type of message"), labels({message_type("read_quorum")})).aggregate(aggregate).set_skip_when_empty(skip),
+        sm::make_total_operations("messages_sent", s.read_quorum_reply_sent,
+             sm::description("Number of messages sent, the message_type determines the type of message"), labels({message_type("read_quorum_reply")})).aggregate(aggregate).set_skip_when_empty(skip),
+
+        sm::make_total_operations("waiter_awoken", s.waiters_awoken,
+             sm::description("Number of waiters that got result back"), labels()).aggregate(aggregate).set_skip_when_empty(skip),
+        sm::make_total_operations("waiter_dropped", s.waiters_dropped,
+             sm::description("Number of waiters that did not get result back"), labels()).aggregate(aggregate).set_skip_when_empty(skip),
+        sm::make_total_operations("polls", s.polls,
+             sm::description("Number of times raft state machine polled"), labels()).aggregate(aggregate).set_skip_when_empty(skip),
+        sm::make_total_operations("store_term_and_vote", s.store_term_and_vote,
+             sm::description("Number of times term and vote persisted"), labels()).aggregate(aggregate).set_skip_when_empty(skip),
+        sm::make_total_operations("store_snapshot", s.store_snapshot,
+             sm::description("Number of snapshots persisted"), labels()).aggregate(aggregate).set_skip_when_empty(skip),
+        sm::make_total_operations("sm_load_snapshot", s.sm_load_snapshot,
+             sm::description("Number of times user state machine reloaded with a snapshot"), labels()).aggregate(aggregate).set_skip_when_empty(skip),
+        sm::make_total_operations("truncate_persisted_log", s.truncate_persisted_log,
+             sm::description("Number of times log truncated on storage"), labels()).aggregate(aggregate).set_skip_when_empty(skip),
+        sm::make_total_operations("persisted_log_entries", s.persisted_log_entries,
+             sm::description("Number of log entries persisted"), labels()).aggregate(aggregate).set_skip_when_empty(skip),
+        sm::make_total_operations("queue_entries_for_apply", s.queue_entries_for_apply,
+             sm::description("Number of log entries queued to be applied"), labels()).aggregate(aggregate).set_skip_when_empty(skip),
+        sm::make_total_operations("applied_entries", s.applied_entries,
+             sm::description("Number of log entries applied"), labels()).aggregate(aggregate).set_skip_when_empty(skip),
+        sm::make_total_operations("snapshots_taken", s.snapshots_taken,
+             sm::description("Number of times user's state machine snapshotted"), labels()).aggregate(aggregate).set_skip_when_empty(skip),
+
+        sm::make_total_operations("log_limiter_waits", s.log_limiter_waits,
+             sm::description("Number of times adding an entry had to wait for the in-memory log to shrink below max_log_size"), labels()).aggregate(aggregate).set_skip_when_empty(skip),
+    });
+}
+
 void server_impl::register_metrics() {
     namespace sm = seastar::metrics;
+    register_stats_metrics(_metrics, _stats, metrics_options{.group_name = "raft", .labels = {server_id_label(_id)}});
     _metrics.add_group("raft", {
-        sm::make_total_operations("add_entries", _stats.add_command,
-             sm::description("Number of entries added on this node, the log_entry_type label can be command, dummy or config"), {server_id_label(_id), log_entry_type("command")}),
-        sm::make_total_operations("add_entries", _stats.add_dummy,
-             sm::description("Number of entries added on this node, the log_entry_type label can be command, dummy or config"), {server_id_label(_id), log_entry_type("dummy")}),
-        sm::make_total_operations("add_entries", _stats.add_config,
-             sm::description("Number of entries added on this node, the log_entry_type label can be command, dummy or config"), {server_id_label(_id), log_entry_type("config")}),
-
-        sm::make_total_operations("messages_received", _stats.append_entries_received,
-             sm::description("Number of messages received, the message_type determines the type of message"), {server_id_label(_id), message_type("append_entries")}),
-        sm::make_total_operations("messages_received", _stats.append_entries_reply_received,
-             sm::description("Number of messages received, the message_type determines the type of message"), {server_id_label(_id), message_type("append_entries_reply")}),
-        sm::make_total_operations("messages_received", _stats.request_vote_received,
-             sm::description("Number of messages received, the message_type determines the type of message"), {server_id_label(_id), message_type("request_vote")}),
-        sm::make_total_operations("messages_received", _stats.request_vote_reply_received,
-             sm::description("Number of messages received, the message_type determines the type of message"), {server_id_label(_id), message_type("request_vote_reply")}),
-        sm::make_total_operations("messages_received", _stats.timeout_now_received,
-             sm::description("Number of messages received, the message_type determines the type of message"), {server_id_label(_id), message_type("timeout_now")}),
-        sm::make_total_operations("messages_received", _stats.read_quorum_received,
-             sm::description("Number of messages received, the message_type determines the type of message"), {server_id_label(_id), message_type("read_quorum")}),
-        sm::make_total_operations("messages_received", _stats.read_quorum_reply_received,
-             sm::description("Number of messages received, the message_type determines the type of message"), {server_id_label(_id), message_type("read_quorum_reply")}),
-
-        sm::make_total_operations("messages_sent", _stats.append_entries_sent,
-             sm::description("Number of messages sent, the message_type determines the type of message"), {server_id_label(_id), message_type("append_entries")}),
-        sm::make_total_operations("messages_sent", _stats.append_entries_reply_sent,
-             sm::description("Number of messages sent, the message_type determines the type of message"), {server_id_label(_id), message_type("append_entries_reply")}),
-        sm::make_total_operations("messages_sent", _stats.vote_request_sent,
-             sm::description("Number of messages sent, the message_type determines the type of message"), {server_id_label(_id), message_type("request_vote")}),
-        sm::make_total_operations("messages_sent", _stats.vote_request_reply_sent,
-             sm::description("Number of messages sent, the message_type determines the type of message"), {server_id_label(_id), message_type("request_vote_reply")}),
-        sm::make_total_operations("messages_sent", _stats.install_snapshot_sent,
-             sm::description("Number of messages sent, the message_type determines the type of message"), {server_id_label(_id), message_type("install_snapshot")}),
-        sm::make_total_operations("messages_sent", _stats.snapshot_reply_sent,
-             sm::description("Number of messages sent, the message_type determines the type of message"), {server_id_label(_id), message_type("snapshot_reply")}),
-        sm::make_total_operations("messages_sent", _stats.timeout_now_sent,
-             sm::description("Number of messages sent, the message_type determines the type of message"), {server_id_label(_id), message_type("timeout_now")}),
-        sm::make_total_operations("messages_sent", _stats.read_quorum_sent,
-             sm::description("Number of messages sent, the message_type determines the type of message"), {server_id_label(_id), message_type("read_quorum")}),
-        sm::make_total_operations("messages_sent", _stats.read_quorum_reply_sent,
-             sm::description("Number of messages sent, the message_type determines the type of message"), {server_id_label(_id), message_type("read_quorum_reply")}),
-
-        sm::make_total_operations("waiter_awoken", _stats.waiters_awoken,
-             sm::description("Number of waiters that got result back"), {server_id_label(_id)}),
-        sm::make_total_operations("waiter_dropped", _stats.waiters_dropped,
-             sm::description("Number of waiters that did not get result back"), {server_id_label(_id)}),
-        sm::make_total_operations("polls", _stats.polls,
-             sm::description("Number of times raft state machine polled"), {server_id_label(_id)}),
-        sm::make_total_operations("store_term_and_vote", _stats.store_term_and_vote,
-             sm::description("Number of times term and vote persisted"), {server_id_label(_id)}),
-        sm::make_total_operations("store_snapshot", _stats.store_snapshot,
-             sm::description("Number of snapshots persisted"), {server_id_label(_id)}),
-        sm::make_total_operations("sm_load_snapshot", _stats.sm_load_snapshot,
-             sm::description("Number of times user state machine reloaded with a snapshot"), {server_id_label(_id)}),
-        sm::make_total_operations("truncate_persisted_log", _stats.truncate_persisted_log,
-             sm::description("Number of times log truncated on storage"), {server_id_label(_id)}),
-        sm::make_total_operations("persisted_log_entries", _stats.persisted_log_entries,
-             sm::description("Number of log entries persisted"), {server_id_label(_id)}),
-        sm::make_total_operations("queue_entries_for_apply", _stats.queue_entries_for_apply,
-             sm::description("Number of log entries queued to be applied"), {server_id_label(_id)}),
-        sm::make_total_operations("applied_entries", _stats.applied_entries,
-             sm::description("Number of log entries applied"), {server_id_label(_id)}),
-        sm::make_total_operations("snapshots_taken", _stats.snapshots_taken,
-             sm::description("Number of times user's state machine snapshotted"), {server_id_label(_id)}),
-
         sm::make_gauge("in_memory_log_size", [this] { return _fsm->in_memory_log_size(); },
                        sm::description("size of in-memory part of the log"), {server_id_label(_id)}),
         sm::make_gauge("log_memory_usage", [this] { return _fsm->log_memory_usage(); },
@@ -1954,6 +1971,14 @@ void server_impl::register_metrics() {
                        sm::description("commit index"), {server_id_label(_id)}),
         sm::make_gauge("apply_index", [this] { return _applied_idx.value(); },
                        sm::description("applied index"), {server_id_label(_id)}),
+        sm::make_gauge("log_limiter_waiters", [this] { return _fsm->count_memory_permit_waiters(); },
+                       sm::description("Number of entries currently waiting for the in-memory log to shrink below max_log_size"), {server_id_label(_id)}),
+        sm::make_gauge("blocked_followers", [this] { return _fsm->count_blocked_followers().probe; },
+                       sm::description("Number of followers the leader cannot send entries to, the reason label can be probe (waiting for the reply to a probe of the follower's log), pipeline_full (the maximal number of append requests is in flight) or snapshot (waiting for a snapshot transfer); followers the failure detector reports down are not counted"), {server_id_label(_id), blocked_reason_label("probe")}),
+        sm::make_gauge("blocked_followers", [this] { return _fsm->count_blocked_followers().pipeline_full; },
+                       sm::description("Number of followers the leader cannot send entries to, the reason label can be probe (waiting for the reply to a probe of the follower's log), pipeline_full (the maximal number of append requests is in flight) or snapshot (waiting for a snapshot transfer); followers the failure detector reports down are not counted"), {server_id_label(_id), blocked_reason_label("pipeline_full")}),
+        sm::make_gauge("blocked_followers", [this] { return _fsm->count_blocked_followers().snapshot; },
+                       sm::description("Number of followers the leader cannot send entries to, the reason label can be probe (waiting for the reply to a probe of the follower's log), pipeline_full (the maximal number of append requests is in flight) or snapshot (waiting for a snapshot transfer); followers the failure detector reports down are not counted"), {server_id_label(_id), blocked_reason_label("snapshot")}),
     });
 }
 

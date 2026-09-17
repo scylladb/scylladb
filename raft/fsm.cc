@@ -91,6 +91,44 @@ future<semaphore_units<>> fsm::wait_for_memory_permit(seastar::abort_source* as,
     return as ? get_units(sm, size, *as) : get_units(sm, size);
 }
 
+std::optional<semaphore_units<>> fsm::try_get_memory_permit(size_t size) {
+    check_is_leader();
+    return try_get_units(*leader_state().log_limiter_semaphore, size);
+}
+
+size_t fsm::count_memory_permit_waiters() const {
+    // A leadership transfer takes all the log memory to stop admitting
+    // entries, so waiting through one is not a shortage of log memory.
+    if (!is_leader() || is_stepping_down()) {
+        return 0;
+    }
+    return leader_state().log_limiter_semaphore->waiters();
+}
+
+blocked_followers fsm::count_blocked_followers() const {
+    blocked_followers result;
+    if (!is_leader()) {
+        return result;
+    }
+    for (const auto& [id, progress] : leader_state().tracker) {
+        if (id == _my_id || progress.can_send_to() || !_failure_detector.is_alive(id)) {
+            continue;
+        }
+        switch (progress.state) {
+        case follower_progress::state::PROBE:
+            result.probe++;
+            break;
+        case follower_progress::state::PIPELINE:
+            result.pipeline_full++;
+            break;
+        case follower_progress::state::SNAPSHOT:
+            result.snapshot++;
+            break;
+        }
+    }
+    return result;
+}
+
 const configuration& fsm::get_configuration() const {
     return _log.get_configuration();
 }

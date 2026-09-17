@@ -105,6 +105,138 @@ SEASTAR_THREAD_TEST_CASE(test_release_memory_if_add_entry_throws) {
 #endif
 }
 
+// Servers sharing a stats object accumulate their counters into it, so a
+// whole set of servers can be exported as one metric series.
+SEASTAR_THREAD_TEST_CASE(test_shared_stats) {
+    auto shared = make_lw_shared<raft::server::stats>();
+    const size_t node_count = 3;
+    test_case test_config {
+        .nodes = node_count,
+        .config = std::vector<raft::server::configuration>(node_count,
+            raft::server::configuration{.shared_stats = shared})
+    };
+    // apply_entries must exceed the entries added below, or the state
+    // machine's done promise fires prematurely.
+    auto cluster = raft_cluster<std::chrono::steady_clock>{
+        std::move(test_config),
+        ::apply_changes,
+        100,  // apply_entries
+        0,
+        0, false, tick_delay, rpc_config{}
+    };
+    cluster.start_all().get();
+    auto stop = defer([&cluster] noexcept { cluster.stop_all().get(); });
+
+    const size_t entries = 10;
+    cluster.add_entries(entries, 0).get();
+    cluster.read(read_value{0, entries}).get();
+
+    BOOST_CHECK_EQUAL(shared->add_command, entries);
+    BOOST_CHECK_GE(shared->applied_entries, entries);
+    // Every node persists what the leader adds, so all of them count here.
+    BOOST_CHECK_GE(shared->persisted_log_entries, node_count * entries);
+}
+
+// An entry waiting for log memory is accounted in the log limiter
+// counters, and the number of waiters drops back to zero once it gets in.
+SEASTAR_THREAD_TEST_CASE(test_log_limiter_stats) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    std::cerr << "Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n";
+#else
+    auto shared = make_lw_shared<raft::server::stats>();
+    // The log holds exactly one command, so a second one has to wait until
+    // the first is applied and snapshotted.
+    const size_t command_size = sizeof(size_t);
+    test_case test_config {
+        .nodes = 1,
+        .config = std::vector<raft::server::configuration>({
+            raft::server::configuration {
+                .snapshot_threshold_log_size = 0,
+                .snapshot_trailing_size = 0,
+                .max_log_size = command_size,
+                .max_command_size = command_size,
+                .shared_stats = shared
+            }
+        })
+    };
+    // apply_entries must exceed the entries added below, or the state
+    // machine's done promise fires prematurely.
+    auto cluster = raft_cluster<std::chrono::steady_clock>{
+        std::move(test_config),
+        ::apply_changes,
+        100,  // apply_entries
+        0,
+        0, false, tick_delay, rpc_config{}
+    };
+    cluster.start_all().get();
+    auto stop = defer([&cluster] noexcept { cluster.stop_all().get(); });
+
+    // Keep the first entry uncommitted, so its memory is still in use.
+    utils::get_local_injector().enable("poll_fsm_output/pause");
+    // abort() cannot interrupt the pause loop in the io fiber, so a check
+    // below throwing would leave stop_all() waiting for it forever.
+    auto resume = defer([] noexcept { utils::get_local_injector().disable("poll_fsm_output/pause"); });
+    auto entries = cluster.add_entries_concurrent(2, 0);
+    auto& leader = cluster.get_server(0);
+    const auto deadline = std::chrono::steady_clock::now() + 10s;
+    while (leader.get_log_state().log_limiter_waiters == 0) {
+        BOOST_REQUIRE(std::chrono::steady_clock::now() < deadline);
+        seastar::sleep(10ms).get();
+    }
+    BOOST_CHECK_EQUAL(shared->log_limiter_waits, 1u);
+    BOOST_CHECK_EQUAL(leader.get_log_state().log_limiter_waiters, 1u);
+
+    utils::get_local_injector().disable("poll_fsm_output/pause");
+    entries.get();
+    cluster.read(read_value{0, 2}).get();
+    BOOST_CHECK_EQUAL(shared->log_limiter_waits, 1u);
+    BOOST_CHECK_EQUAL(leader.get_log_state().log_limiter_waiters, 0u);
+#endif
+}
+
+// A leader transferring its leadership away takes all the log memory, so an
+// entry added meanwhile waits for the transfer rather than for the log to
+// shrink. Such a wait is not counted.
+SEASTAR_THREAD_TEST_CASE(test_log_limiter_stats_during_stepdown) {
+    auto shared = make_lw_shared<raft::server::stats>();
+    const size_t node_count = 3;
+    test_case test_config {
+        .nodes = node_count,
+        .config = std::vector<raft::server::configuration>(node_count,
+            raft::server::configuration{.shared_stats = shared})
+    };
+    // apply_entries must exceed the entries added below, or the state
+    // machine's done promise fires prematurely.
+    auto cluster = raft_cluster<std::chrono::steady_clock>{
+        std::move(test_config),
+        ::apply_changes,
+        100,  // apply_entries
+        0,
+        0, false, tick_delay, rpc_config{}
+    };
+    cluster.start_all().get();
+    auto stop = defer([&cluster] noexcept { cluster.stop_all().get(); });
+
+    // The target of the transfer cannot answer it, so the transfer stays in
+    // progress and the entry added below keeps waiting for the memory it took.
+    cluster.disconnect(1);
+    auto transfer = cluster.get_server(0).stepdown(raft::logical_clock::duration(1000), to_raft_id(1));
+    auto entry = cluster.add_entries_concurrent(1, 0);
+    seastar::sleep(3 * tick_delay).get();
+
+    BOOST_CHECK(!entry.available());
+    BOOST_CHECK_EQUAL(shared->log_limiter_waits, 0u);
+    BOOST_CHECK_EQUAL(cluster.get_server(0).get_log_state().log_limiter_waiters, 0u);
+
+    // Letting the transfer complete releases the entry, which the new leader
+    // admits without waiting.
+    cluster.connect_all();
+    transfer.get();
+    entry.get();
+    BOOST_CHECK_EQUAL(shared->log_limiter_waits, 0u);
+    BOOST_CHECK_EQUAL(cluster.get_server(0).get_log_state().log_limiter_waiters, 0u);
+}
+
 // A simple test verifying the most basic properties of `wait_for_state_change`:
 // * Triggering the passed abort_source will abort the operation.
 //   The future will be resolved.

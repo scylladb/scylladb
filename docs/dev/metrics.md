@@ -90,18 +90,33 @@ database.
 On a deployment with a large number of tables, this can result in a very
 large number of metrics at each time, and overwhelm Scylla's HTTP
 server and/or the Prometheus server collecting these metrics. For this
-reason, the per-table metrics are currently **disabled** by default:
-The per-table metrics are defined in the `table::set_metrics()` function,
-and only added when the `enable_keyspace_column_family_metrics` flag is
-enabled (and it is disabled by default).
+reason, the full set of per-table metrics is currently **disabled** by
+default: it is defined in the `table::set_metrics()` function, and only
+added when the `enable_keyspace_column_family_metrics` flag is enabled
+(and it is disabled by default). Most of this set is reported separately
+by each shard; only its histograms are summed over the shards of the
+node.
 
 To enable this flag and the per-table metrics, you can pass the parameters
 `--enable-keyspace-column-family-metrics 1` in the Scylla command line, or
 set this parameter in Scylla's configuration file. 
 
+What Scylla exports by default instead is a reduced set of the per-table
+metrics, summed over all the shards of the node, so that each table adds
+one copy of every metric rather than one per shard, without a `shard`
+label. (The cache hit rate is a node-wide value already, and is reported
+once, from shard 0, with an empty `shard` label.) Most of these series
+also carry a `__per_table="node"` label; seastar leaves labels whose
+names start with two underscores out of the Prometheus text it exports,
+but the metrics relabel rules (see `relabel_config_file`) can match them
+to single these series out. The tables of internal keyspaces are left
+out. This set is controlled by the `enable_node_aggregated_table_metrics`
+flag, which only applies while `enable_keyspace_column_family_metrics`
+is off.
+
 We are planning to rethink this approach in the future. In particular,
-it's not great that we currently need to restart Scylla to make these
-metrics available. Scylla already maintains these per-table metrics in
+it's not great that we currently need to restart Scylla to make the full
+set available. Scylla already maintains these per-table metrics in
 per-table memory variables, and we just need a way to optionally expose
 them through the HTTP request.
 
@@ -116,6 +131,15 @@ scylla_column_family_pending_compaction{cf="IndexInfo",ks="system",shard="0",typ
 Here we can see the "scylla_column_family_pending_compactions" metric
 measured in shard 0 of this node, for the table "IndexInfo" in keyspace
 "system".
+
+The raft groups behind strongly consistent tablets export their metrics per
+table as well, under the `scylla_strong_consistency_raft_` prefix with the
+same "ks" and "cf" labels, and they follow the flags of the other per-table
+metrics: they are reported per shard with
+`enable_keyspace_column_family_metrics`, otherwise summed over the shards of
+the node as long as `enable_node_aggregated_table_metrics` is on (the
+default), and not at all when both flags are off. See
+[strong_consistency.md](strong_consistency.md).
 
 ## Types of metrics
 Scylla metrics fall under three types: "counter", "gauge" and "histogram".

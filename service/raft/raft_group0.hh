@@ -9,6 +9,7 @@
 
 #include "service/raft/join_node.hh"
 #include "service/raft/raft_group_registry.hh"
+#include "service/raft/raft_rpc.hh"
 #include "service/raft/discovery.hh"
 #include "service/raft/group0_fwd.hh"
 #include "gms/feature.hh"
@@ -117,6 +118,9 @@ class raft_group0 {
 
     gms::feature::listener_registration _raft_support_listener;
 
+    // Read by the metric group below, which is registered before the group 0
+    // server creates its RPC instance and outlives it.
+    lw_shared_ptr<raft_rpc::stats> _rpc_stats = make_lw_shared<raft_rpc::stats>();
     seastar::metrics::metric_groups _metrics;
     void register_metrics();
 
