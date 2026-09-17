@@ -115,7 +115,7 @@ struct leader {
     // Used to access new leader to set semaphore exception
     const raft::fsm& fsm;
     // Used to limit log size
-    std::unique_ptr<seastar::semaphore> log_limiter_semaphore;
+    lw_shared_ptr<seastar::semaphore> log_limiter_semaphore;
     // If the leader is in the process of transferring the leadership
     // contains a time point in the future the transfer will be aborted at
     // unless completes successfully till then.
@@ -185,7 +185,7 @@ struct leader {
     // again in reverse when the clock recovers. Drawn once per leadership term.
     mono_clock::duration clock_stepdown_jitter{0};
 
-    leader(size_t max_log_size, const class fsm& fsm_) : fsm(fsm_), log_limiter_semaphore(std::make_unique<seastar::semaphore>(max_log_size)) {}
+    leader(size_t max_log_size, const class fsm& fsm_) : fsm(fsm_), log_limiter_semaphore(make_lw_shared<seastar::semaphore>(max_log_size)) {}
     leader(leader&&) = default;
     ~leader();
 };
@@ -469,6 +469,24 @@ protected: // For testing
     }
 
 public:
+    class memory_permit {
+    private:
+        lw_shared_ptr<seastar::semaphore> _semaphore;
+        seastar::semaphore_units<> _units;
+
+        memory_permit(lw_shared_ptr<seastar::semaphore> semaphore, seastar::semaphore_units<> units)
+                : _semaphore(std::move(semaphore)), _units(std::move(units))
+        {}
+
+    public:
+        size_t release() {
+            return _units.release();
+        }
+
+        memory_permit() = default;
+        friend class fsm;
+    };
+
     explicit fsm(server_id id, sstring tag, term_t current_term, server_id voted_for, log log,
             index_t commit_idx, failure_detector& failure_detector, fsm_config conf,
             seastar::condition_variable& sm_events);
@@ -545,7 +563,7 @@ public:
     // go below max_log_size.
     // Can only be called on a leader.
     // On abort throws `semaphore_aborted`.
-    future<semaphore_units<>> wait_for_memory_permit(seastar::abort_source* as, size_t size);
+    future<memory_permit> wait_for_memory_permit(seastar::abort_source* as, size_t size);
 
     // Return current configuration.
     const configuration& get_configuration() const;
