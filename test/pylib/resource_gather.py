@@ -245,6 +245,13 @@ class ResourceGatherOn(ResourceGatherRecord):
 
 DMESG_TAIL_LINES = 200
 
+# dmesg reads the in-kernel ring buffer directly and should return almost
+# instantly; this is just a safety net against an unexpected stall, kept
+# short since this call happens synchronously in the controller process
+# (once per dead worker) and this whole diagnostic exists specifically to
+# run under memory-pressure conditions where a subprocess could hang.
+_DMESG_TIMEOUT_SECONDS = 10
+
 
 def _read_file_or_reason(path: Path) -> str:
     """Read *path* as text, or describe why it could not be read."""
@@ -258,7 +265,7 @@ def _dmesg_tail(lines: int = DMESG_TAIL_LINES) -> str:
     """Return the last *lines* lines of the kernel ring buffer, or why they're unavailable."""
     try:
         result = subprocess.run(
-            ["dmesg", "--ctime"], capture_output=True, text=True, timeout=60, check=False)
+            ["dmesg", "--ctime"], capture_output=True, text=True, timeout=_DMESG_TIMEOUT_SECONDS, check=False)
     except (OSError, subprocess.SubprocessError) as exc:
         return f"<unavailable: {exc}>"
     if result.returncode != 0:
@@ -290,9 +297,14 @@ def gather_oom_kill_evidence(worker_id: str | None) -> str:
             _read_file_or_reason(CGROUP_TESTS / worker_id / "memory.events"),
         ]
 
+    try:
+        controller_memory_events = _read_file_or_reason(get_current_cgroup() / "memory.events")
+    except (OSError, IndexError) as exc:
+        controller_memory_events = f"<unavailable: {exc}>"
+
     sections += [
         "--- controller cgroup memory.events ---",
-        _read_file_or_reason(get_current_cgroup() / "memory.events"),
+        controller_memory_events,
         "--- /proc/meminfo ---",
         _read_file_or_reason(Path("/proc/meminfo")),
     ]
