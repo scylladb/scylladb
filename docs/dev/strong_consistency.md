@@ -472,7 +472,15 @@ before the parent's Raft server is created: after a restart the parent's committ
 applied by commitlog replay rather than by `state_machine::apply()`, so nothing else would record
 the markers. The state is created when the replica learns of the resize, from the tablet
 metadata or from the markers after a restart, and dropped by the teardown of the parent's Raft
-server.
+server. A node shutting
+down or a table being dropped ends a resize early; the teardown then enables the children still
+parked, so that their appliers can exit.
+
+Every `apply()` first waits until the state machine is enabled
+(`tablet_state_machine::enable()`). `groups_manager` enables a group which replaces nothing as
+soon as its server is up, and registers a child with its parent's state in the tracker instead
+(`raft_resize_tracker::register_child()`); the parent's `end_resize` enables every child
+registered with it, and the parent's teardown enables the rest.
 
 ## Co-locating the leaders of the children
 
