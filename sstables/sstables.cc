@@ -41,6 +41,7 @@
 
 #include "utils/error_injection.hh"
 #include "utils/to_string.hh"
+#include "exceptions/exceptions.hh"
 #include "data_dictionary/storage_options.hh"
 #include "dht/sharder.hh"
 #include "writer.hh"
@@ -892,7 +893,7 @@ void write(sstable_version_types v, file_writer& out, const commitlog_interval& 
     write(v, out, ci.end);
 }
 
-future<> parse(const schema& s, sstable_version_types v, random_access_reader& in, compression& c) {
+static future<> do_parse_compression(const schema& s, sstable_version_types v, random_access_reader& in, compression& c) {
     uint64_t data_len = 0;
     uint32_t chunk_len = 0;
 
@@ -906,15 +907,33 @@ future<> parse(const schema& s, sstable_version_types v, random_access_reader& i
     uint32_t len = 0;
     compression::segmented_offsets::writer offsets = c.offsets.get_writer();
     co_await parse(s, v, in, len);
+    // One offset per chunk of uncompressed data. Some older writers also
+    // appended one trailing offset past the last chunk, tolerate it.
+    const uint64_t expected_chunks = data_len / chunk_len + (data_len % chunk_len != 0);
+    if (len < expected_chunks || len - expected_chunks > 1) {
+        throw_malformed_sstable_exception(format("CompressionInfo is malformed: {} chunk offsets, expected {} for data_len={} chunk_len={}",
+                len, expected_chunks, data_len, chunk_len));
+    }
     auto eoarr = [&c, &len] { return c.offsets.size() == len; };
 
     while (!eoarr()) {
         auto now = std::min(len - c.offsets.size(), 100000 / sizeof(uint64_t));
         auto buf = co_await in.read_exactly(now * sizeof(uint64_t));
+        check_buf_size(buf, now * sizeof(uint64_t));
         for (size_t i = 0; i < now; ++i) {
             uint64_t value = read_unaligned<uint64_t>(buf.get() + i * sizeof(uint64_t));
+            // Throws std::invalid_argument on offsets that go backwards or
+            // jump further than the encoding allows. Converted below.
             offsets.push_back(net::ntoh(value));
         }
+    }
+}
+
+future<> parse(const schema& s, sstable_version_types v, random_access_reader& in, compression& c) {
+    try {
+        co_await do_parse_compression(s, v, in, c);
+    } catch (const std::invalid_argument& e) {
+        throw_malformed_sstable_exception(fmt::format("CompressionInfo is malformed: {}", e.what()));
     }
 }
 
@@ -1284,7 +1303,22 @@ future<> sstable::read_compression() {
     }
 
     co_await read_simple_and_verify_digest<component_type::CompressionInfo>(_components->compression);
-    auto compressor = co_await manager().get_compressor_factory().make_compressor_for_reading(_components->compression);
+    compressor_ptr compressor;
+    try {
+        // Interprets the algorithm name and options read from the component.
+        // An unknown algorithm is reported as std::runtime_error, an invalid
+        // option as request_validation_exception: both are problems with the
+        // component. Everything else (I/O, allocation, ...) keeps its type.
+        compressor = co_await manager().get_compressor_factory().make_compressor_for_reading(_components->compression);
+    } catch (const std::system_error&) {
+        throw;
+    } catch (const std::runtime_error& e) {
+        throw_malformed_sstable_exception(fmt::format("Failed to create decompressor from CompressionInfo: {}", e.what()),
+                filename(component_type::CompressionInfo));
+    } catch (const exceptions::request_validation_exception& e) {
+        throw_malformed_sstable_exception(fmt::format("Failed to create decompressor from CompressionInfo: {}", e.what()),
+                filename(component_type::CompressionInfo));
+    }
     _components->compression.set_compressor(std::move(compressor));
     _components->compression.discard_hidden_options();
 }
