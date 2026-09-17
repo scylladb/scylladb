@@ -356,6 +356,27 @@ void executor::supplement_table_info(rjson::value& descr, const schema& schema, 
     rjson::add(descr, "TableStatus", "ACTIVE");
     rjson::add(descr, "TableId", rjson::from_string(schema.id().to_sstring()));
 
+    // Unlike DescribeTable, this description is the request echoed back, so a
+    // GSI carries only what the request happened to specify. DynamoDB reports
+    // every GSI's ProvisionedThroughput here - zeros in PAY_PER_REQUEST mode -
+    // so fill in what the request left out. DynamoDB reports no WarmThroughput
+    // in this response at all, so neither do we.
+    rjson::value* gsis = rjson::find(descr, "GlobalSecondaryIndexes");
+    if (gsis && gsis->IsArray()) {
+        for (rjson::value& g : gsis->GetArray()) {
+            rjson::value* throughput = rjson::find(g, "ProvisionedThroughput");
+            if (!throughput) {
+                rjson::value t = rjson::empty_object();
+                rjson::add(t, "ReadCapacityUnits", 0);
+                rjson::add(t, "WriteCapacityUnits", 0);
+                rjson::add(t, "NumberOfDecreasesToday", 0);
+                rjson::add(g, "ProvisionedThroughput", std::move(t));
+            } else if (!rjson::find(*throughput, "NumberOfDecreasesToday")) {
+                rjson::add(*throughput, "NumberOfDecreasesToday", 0);
+            }
+        }
+    }
+
     executor::supplement_table_stream_info(descr, schema, sp);
 }
 
