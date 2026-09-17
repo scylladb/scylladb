@@ -826,11 +826,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
         auto&& opts = app.configuration();
 
-        namespace sm = seastar::metrics;
-        app_metrics.add_group("scylladb", {
-            sm::make_gauge("current_version", sm::description("Current ScyllaDB version."), { sm::label_instance("version", scylla_version()), sm::shard_label(""), basic_level}, [] { return 0; })
-        });
-
         for (auto& opt: deprecated_options.options()) {
             if (opts.contains(opt->long_name())) {
                 startlog.warn("{} option ignored (deprecated)", opt->long_name());
@@ -1601,6 +1596,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             const auto listen_address = utils::resolve(cfg->listen_address, family).get();
             const auto host_id = initialize_local_info_thread(sys_ks, snitch, listen_address, *cfg, broadcast_addr, broadcast_rpc_addr);
+
+            namespace sm = seastar::metrics;
+            app_metrics.add_group("scylladb", {
+                sm::make_gauge("current_version", sm::description("Current ScyllaDB version."), { sm::label_instance("version", scylla_version()), sm::label_instance("host_id", host_id), sm::shard_label(""), basic_level}, [] { return 0; })
+            });
 
           shared_token_metadata::mutate_on_all_shards(token_metadata, [host_id] (locator::token_metadata& tm) {
               // Makes local host id available in topology cfg as soon as possible.
