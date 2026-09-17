@@ -93,7 +93,7 @@
 #include "utils/labels.hh"
 #include "utils/io-wrappers.hh"
 
-#include <boost/lexical_cast.hpp>
+#include <charconv>
 
 thread_local disk_error_signal_type sstable_read_error;
 thread_local disk_error_signal_type sstable_write_error;
@@ -3428,6 +3428,26 @@ static future<bool> do_validate_uncompressed(input_stream<char>& stream, size_t 
     co_return true;
 }
 
+// Digest.crc32 holds the full CRC32 of the Data file as an unsigned decimal
+// number in ASCII, and nothing else: no sign, no whitespace, no line
+// terminator. Anything else is a malformed sstable. The raw content is not
+// included in the message; the file itself is available for inspection.
+static uint32_t parse_digest(std::string_view digest_str) {
+    uint32_t digest = 0;
+    const char* const first = digest_str.data();
+    const char* const last = first + digest_str.size();
+    const auto [ptr, ec] = std::from_chars(first, last, digest, 10);
+    if (ec != std::errc{}) {
+        throw_malformed_sstable_exception(format("Failed to parse Digest ({} bytes): {}",
+                digest_str.size(), std::make_error_code(ec).message()));
+    }
+    if (ptr != last) {
+        throw_malformed_sstable_exception(format("Failed to parse Digest ({} bytes): {} trailing byte(s) after the number",
+                digest_str.size(), last - ptr));
+    }
+    return digest;
+}
+
 future<uint32_t> sstable::read_digest_from_file(file f) {
     sstring digest_str;
     file_input_stream_options options;
@@ -3445,7 +3465,7 @@ future<uint32_t> sstable::read_digest_from_file(file f) {
     co_await digest_stream.close();
     maybe_rethrow_exception(std::move(ex));
 
-    co_return boost::lexical_cast<uint32_t>(digest_str);
+    co_return parse_digest(digest_str);
 }
 
 
@@ -3474,7 +3494,11 @@ future<std::optional<uint32_t>> sstable::read_digest(file f) {
         co_return std::nullopt;
     }
 
-    _components->digest = co_await read_digest_from_file(std::move(f));
+    try {
+        _components->digest = co_await read_digest_from_file(std::move(f));
+    } catch (const malformed_sstable_exception& e) {
+        throw malformed_sstable_exception(e.what(), filename(component_type::Digest));
+    }
     co_return _components->digest;
 }
 

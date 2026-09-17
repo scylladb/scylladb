@@ -23,6 +23,7 @@
 #include "sstables/open_info.hh"
 #include "sstables/version.hh"
 #include "test/lib/exception_utils.hh"
+#include "test/lib/log.hh"
 #include "test/lib/random_schema.hh"
 #include "test/lib/sstable_utils.hh"
 #include "test/lib/random_utils.hh"
@@ -1033,6 +1034,72 @@ static future<> test_component_digest_persistence(component_type component, ssta
         auto scylla_data = util::read_entire_stream_contiguous(stream2).get();
         auto calc_scylla_digest = crc32_utils::checksum(scylla_data.begin(), scylla_data.size() - sizeof(uint32_t));
         BOOST_REQUIRE_EQUAL(calc_scylla_digest, sst_reopened->get_component_digest(sstables::component_type::Scylla).value());
+    });
+}
+
+// Digest.crc32 must hold exactly one unsigned decimal number. Anything else
+// must surface as a malformed_sstable_exception naming the component file,
+// instead of an opaque parse error.
+SEASTAR_TEST_CASE(test_read_malformed_digest) {
+    return test_env::do_with_async([] (test_env& env) {
+        sstables::scoped_no_abort_on_malformed_sstable_error no_abort;
+
+        auto random_spec = tests::make_random_schema_specification(
+            "ks",
+            std::uniform_int_distribution<size_t>(1, 2),
+            std::uniform_int_distribution<size_t>(1, 2),
+            std::uniform_int_distribution<size_t>(1, 2),
+            std::uniform_int_distribution<size_t>(1, 2));
+        auto random_schema = tests::random_schema{tests::random::get_int<uint32_t>(), *random_spec};
+        const auto muts = tests::generate_random_mutations(random_schema, 1).get();
+        // Skip validation so nothing reads (and caches) the digest before the test does.
+        auto sst = make_sstable_containing(env.make_sstable(random_schema.schema(), sstable::version_types::me), muts, validate::no).get();
+
+        auto& storage = sstables::test(sst).get_storage();
+        auto write_digest = [&] (std::string_view content) {
+            auto os = output_stream<char>(storage.make_component_sink(*sst, component_type::Digest, open_flags::wo | open_flags::truncate, {}).get());
+            auto close_os = deferred_close(os);
+            os.write(content.data(), content.size()).get();
+            os.flush().get();
+        };
+        const auto digest_filename = sst->get_filename(component_type::Digest).format();
+
+        auto require_malformed = [&] (std::string_view content, std::vector<std::string_view> expected_fragments) {
+            write_digest(content);
+            expected_fragments.push_back(digest_filename);
+            BOOST_REQUIRE_EXCEPTION(sst->read_digest().get(), malformed_sstable_exception, [&] (const malformed_sstable_exception& e) {
+                const std::string_view what = e.what();
+                for (auto fragment : expected_fragments) {
+                    if (what.find(fragment) == std::string_view::npos) {
+                        testlog.error("expected fragment \"{}\" missing from exception message: {}", fragment, what);
+                        return false;
+                    }
+                }
+                return true;
+            });
+        };
+
+        require_malformed("", {"Failed to parse Digest (0 bytes)"});
+        require_malformed("abc", {"Failed to parse Digest (3 bytes)"});
+        require_malformed("-1", {"Failed to parse Digest (2 bytes)"});
+        require_malformed("+1", {"Failed to parse Digest (2 bytes)"});
+        require_malformed(" 1", {"Failed to parse Digest (2 bytes)"});
+        require_malformed("12\n", {"Failed to parse Digest (3 bytes)", "1 trailing byte(s) after the number"});
+        require_malformed("12 34", {"Failed to parse Digest (5 bytes)", "3 trailing byte(s) after the number"});
+        require_malformed("4294967296", {"Failed to parse Digest (10 bytes)"});
+        require_malformed("99999999999999999999", {"Failed to parse Digest (20 bytes)"});
+        // A digit string padded with zero bytes, as left behind by a lost truncate.
+        require_malformed(std::string_view("12\0\0\0", 5), {"Failed to parse Digest (5 bytes)", "3 trailing byte(s) after the number"});
+
+        // Valid content, boundary values. read_digest() caches on success, so
+        // drop the cached value before reading the second one. Don't reload the
+        // sstable for this: loading populates the cache from the Data digest
+        // stored in Scylla.db, bypassing the Digest file entirely.
+        write_digest("0");
+        BOOST_REQUIRE_EQUAL(sst->read_digest().get().value(), 0u);
+        write_digest("4294967295");
+        sstables::test(sst).set_digest(std::nullopt);
+        BOOST_REQUIRE_EQUAL(sst->read_digest().get().value(), std::numeric_limits<uint32_t>::max());
     });
 }
 
