@@ -2391,6 +2391,13 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
                 auto rem = zerofill_size;
 
                 auto buf = allocate_single_buffer(buf_size, align);
+                // allocate_single_buffer() hands back uninitialized memory
+                // (posix_memalign). Without zeroing it we would "pre-write" stale
+                // heap contents into the segment file instead of zeros. That both
+                // persists arbitrary process memory to disk and defeats the
+                // all-zero sector check the replayer uses to find the end of a
+                // segment, making a healthy segment be reported as corrupt.
+                std::memset(buf.get_write(), 0, buf_size);
                 while (rem != 0) {
                     static constexpr size_t max_write = 128 * 1024;
                     auto n = std::min(max_write / buf_size, 1 + rem / buf_size);

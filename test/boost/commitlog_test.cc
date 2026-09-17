@@ -10,6 +10,7 @@
 #include <boost/test/unit_test.hpp>
 
 #include <stdlib.h>
+#include <cstring>
 #include <sstream>
 #include <regex>
 #include <iostream>
@@ -2902,6 +2903,99 @@ SEASTAR_TEST_CASE(test_descriptor_roundtrip) {
     }
 
     return make_ready_future<>();
+}
+
+// Test that the preallocated ("pre-written") tail of a segment is zero-filled.
+//
+// With use_o_dsync, segment_manager::allocate_segment_ex() pre-writes the tail of
+// a new segment so the file is fully allocated on disk. The buffer it writes comes
+// from allocate_single_buffer(), i.e. temporary_buffer<char>::aligned(), which is
+// posix_memalign'd and therefore *uninitialized*. Without zeroing it, whatever
+// stale heap bytes it holds are written verbatim into the segment file.
+//
+// That has two effects. Arbitrary process memory is persisted into the commitlog
+// file, and - because the replayer uses an all-zero sector as the marker for the
+// end of a segment - a perfectly healthy segment gets reported as corrupt:
+//
+//   Segment data corruption: checksums do not match: 0 vs. <crc> ...
+//
+// It normally hides because freshly mapped pages happen to be zero. This test
+// makes it deterministic by dirtying the allocator with a marker pattern in the
+// pre-write buffer's size class first.
+SEASTAR_TEST_CASE(test_odsync_preallocated_tail_is_zeroed) {
+    constexpr size_t segment_size = 1024 * 1024;
+    constexpr size_t junk_buf_size = 16 * 1024; // the pre-write buffer's size class
+    constexpr unsigned char marker = 0xAB;
+
+    // Dirty the heap, then free it immediately before creating the commitlog so
+    // the pre-write allocation is very likely to reuse one of these blocks.
+    {
+        std::vector<temporary_buffer<char>> junk;
+        junk.reserve(512);
+        for (int i = 0; i < 512; ++i) {
+            auto b = temporary_buffer<char>::aligned(4096, junk_buf_size);
+            std::memset(b.get_write(), marker, junk_buf_size);
+            junk.emplace_back(std::move(b));
+        }
+    }
+
+    commitlog::config cfg;
+    tmpdir tmp;
+    cfg.commit_log_location = tmp.path().string();
+    cfg.commitlog_segment_size_in_mb = 1;
+    cfg.commitlog_total_space_in_mb = 64 * this_smp_shard_count();
+    cfg.allow_going_over_size_limit = false;
+    cfg.use_o_dsync = true; // forces the pre-write path
+
+    auto log = co_await commitlog::create_commitlog(cfg);
+    auto uuid = make_table_id();
+
+    // A single tiny entry, so only the very start of the segment holds real data
+    // and the rest of the file is preallocated tail.
+    sstring tmp_data = "hej bubba cow";
+    auto h = co_await log.add_mutation(uuid, tmp_data.size(), db::commitlog::force_sync::yes, [&](db::commitlog::output& dst) {
+        dst.write(tmp_data.data(), tmp_data.size());
+    });
+    auto rp = h.release();
+    co_await log.sync_all_segments();
+
+    sstring victim;
+    for (auto& name : log.get_active_segment_names()) {
+        if (commitlog::descriptor(name).id == rp.id) {
+            victim = name;
+        }
+    }
+    BOOST_REQUIRE(!victim.empty());
+
+    auto f = co_await open_file_dma(victim, open_flags::ro);
+    auto file_size = co_await f.size();
+    BOOST_REQUIRE_EQUAL(file_size, segment_size);
+    auto raw = co_await f.dma_read_exactly<char>(0, segment_size);
+    co_await f.close();
+
+    // Everything past the first 64k is preallocated tail - the entry is a handful
+    // of bytes, so nothing legitimate is written there.
+    constexpr size_t skip = 64 * 1024;
+    size_t nonzero = 0, markers = 0, first_bad = 0;
+    for (size_t i = skip; i < raw.size(); ++i) {
+        if (raw[i] != 0) {
+            if (!nonzero) {
+                first_bad = i;
+            }
+            ++nonzero;
+            if (static_cast<unsigned char>(raw[i]) == marker) {
+                ++markers;
+            }
+        }
+    }
+
+    BOOST_CHECK_MESSAGE(nonzero == 0,
+            format("preallocated tail of {} holds {} non-zero bytes ({} equal to the 0x{:02x} heap marker), first at offset {}: "
+                   "uninitialized memory is being written into the segment file",
+                   victim, nonzero, markers, marker, first_bad));
+
+    co_await log.shutdown();
+    co_await log.clear();
 }
 
 BOOST_AUTO_TEST_SUITE_END()
