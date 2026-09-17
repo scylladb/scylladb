@@ -4802,9 +4802,9 @@ generation_type::from_string(const std::string& s) {
         }
         utils::UUID_gen::decimicroseconds timestamp = {};
         auto decode_base36 = [](const std::string& s) {
-            std::size_t pos{};
-            auto n = std::stoull(s, &pos, 36);
-            if (pos != s.size()) {
+            uint64_t n = 0;
+            auto [ptr, ec] = std::from_chars(s.data(), s.data() + s.size(), n, 36);
+            if (ec != std::errc{} || ptr != s.data() + s.size()) {
                 throw std::invalid_argument(fmt::format("invalid part in UUID: {}", s));
             }
             return n;
