@@ -114,6 +114,12 @@ logging::logger elogger("alternator-executor");
 // configured for a table with BillingMode=PROVISIONED.
 const sstring RCU_TAG_KEY("system:provisioned_rcu");
 const sstring WCU_TAG_KEY("system:provisioned_wcu");
+// Tags storing the "ReadUnitsPerSecond" and "WriteUnitsPerSecond" of a table's
+// WarmThroughput. Alternator has nothing to pre-warm, so these are remembered
+// and reported back but never enforced - the Terraform AWS Provider needs
+// DescribeTable to return the warm throughput a table was configured with.
+const sstring WARM_READ_TAG_KEY("system:warm_read_units");
+const sstring WARM_WRITE_TAG_KEY("system:warm_write_units");
 // Tag storing the table's original creation time, in milliseconds since the
 // Unix epoch. All tables get this tag when they are created, but it may be
 // missing in old tables created before this tag was introduced.
@@ -501,6 +507,49 @@ future<> executor::fill_table_size(rjson::value &table_description, schema_ptr s
     rjson::add(table_description, "TableSizeBytes", total_size);
 }
 
+// Read the WarmThroughput units stored in a table's tags, or nullopt when the
+// table never had any configured. Both units are optional in a request, and a
+// request configuring just one of them is remembered - DynamoDB fills the other
+// with the baseline every table has, Alternator has none and leaves it zero.
+static std::optional<std::pair<int, int>> get_warm_throughput(const std::map<sstring, sstring>* tags_ptr) {
+    if (!tags_ptr) {
+        return std::nullopt;
+    }
+    auto units = [tags_ptr] (const sstring& key) -> std::optional<int> {
+        auto tag = tags_ptr->find(key);
+        if (tag == tags_ptr->end()) {
+            return std::nullopt;
+        }
+        try {
+            return std::stoi(tag->second);
+        } catch (...) {
+            return std::nullopt;
+        }
+    };
+    auto read_units = units(WARM_READ_TAG_KEY);
+    auto write_units = units(WARM_WRITE_TAG_KEY);
+    if (!read_units && !write_units) {
+        return std::nullopt;
+    }
+    return std::make_pair(read_units.value_or(0), write_units.value_or(0));
+}
+
+// Remember a WarmThroughput given in a CreateTable or UpdateTable request.
+// Returns whether the request carried one at all.
+static bool add_warm_throughput_tags(std::map<sstring, sstring>& tags, const rjson::value& request) {
+    const rjson::value* warm = rjson::find(request, "WarmThroughput");
+    if (!warm) {
+        return false;
+    }
+    if (auto read_units = get_int_attribute(*warm, "ReadUnitsPerSecond")) {
+        tags[WARM_READ_TAG_KEY] = std::to_string(*read_units);
+    }
+    if (auto write_units = get_int_attribute(*warm, "WriteUnitsPerSecond")) {
+        tags[WARM_WRITE_TAG_KEY] = std::to_string(*write_units);
+    }
+    return true;
+}
+
 future<std::variant<rjson::value, api_error>> executor::fill_table_description(schema_ptr schema, table_status tbl_status, service::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit)
 {
     rjson::value table_description = rjson::empty_object();
@@ -550,6 +599,14 @@ future<std::variant<rjson::value, api_error>> executor::fill_table_description(s
     rjson::add(table_description["ProvisionedThroughput"], "ReadCapacityUnits", rcu);
     rjson::add(table_description["ProvisionedThroughput"], "WriteCapacityUnits", wcu);
     rjson::add(table_description["ProvisionedThroughput"], "NumberOfDecreasesToday", 0);
+    // Alternator has no throughput caps so these numbers are meaningless, but
+    // the structure must be present: clients such as the Terraform AWS Provider
+    // read a missing WarmThroughput as a missing table. Real support is #21853.
+    const auto [warm_read, warm_write] = get_warm_throughput(tags_ptr).value_or(std::make_pair(0, 0));
+    rjson::add(table_description, "WarmThroughput", rjson::empty_object());
+    rjson::add(table_description["WarmThroughput"], "ReadUnitsPerSecond", warm_read);
+    rjson::add(table_description["WarmThroughput"], "WriteUnitsPerSecond", warm_write);
+    rjson::add(table_description["WarmThroughput"], "Status", rjson::from_string(table_status_to_sstring(tbl_status)));
 
     data_dictionary::table t = _proxy.data_dictionary().find_column_family(schema);
 
@@ -581,12 +638,12 @@ future<std::variant<rjson::value, api_error>> executor::fill_table_description(s
                 rjson::add(view_entry, "Projection", std::move(projection));
                 // Local secondary indexes are marked by an extra '!' sign occurring before the ':' delimiter
                 bool is_lsi = (delim_it > 1 && cf_name[delim_it-1] == '!');
-                // Add IndexStatus and Backfilling flags, but only for GSIs -
-                // LSIs can only be created with the table itself and do not
-                // have a status. Alternator schema operations are synchronous
-                // so only two combinations of these flags are possible: ACTIVE
-                // (for a built view) or CREATING+Backfilling (if view building
-                // is in progress).
+                // IndexStatus, Backfilling and WarmThroughput are reported only
+                // for GSIs - an LSI has no status of its own, and DynamoDB reports
+                // no WarmThroughput for it. Alternator schema operations are
+                // synchronous so only two combinations of the status flags are
+                // possible: ACTIVE (for a built view) or CREATING+Backfilling (if
+                // view building is in progress).
                 if (!is_lsi) {
                     auto is_view_build_result = co_await is_view_built(vptr, _proxy, client_state, trace_state, permit);
                     if (auto error = std::get_if<api_error>(&is_view_build_result)) {
@@ -594,6 +651,15 @@ future<std::variant<rjson::value, api_error>> executor::fill_table_description(s
                     }
                     if (std::get<bool>(is_view_build_result)) {
                         rjson::add(view_entry, "IndexStatus", "ACTIVE");
+                        // DynamoDB reports a GSI's WarmThroughput only once the
+                        // index is ACTIVE - while it is still being built the
+                        // structure is absent. See the base table's
+                        // WarmThroughput above for why the values are zeros.
+                        rjson::value warm_throughput = rjson::empty_object();
+                        rjson::add(warm_throughput, "ReadUnitsPerSecond", 0);
+                        rjson::add(warm_throughput, "WriteUnitsPerSecond", 0);
+                        rjson::add(warm_throughput, "Status", "ACTIVE");
+                        rjson::add(view_entry, "WarmThroughput", std::move(warm_throughput));
                     } else {
                         rjson::add(view_entry, "IndexStatus", "CREATING");
                         rjson::add(view_entry, "Backfilling", rjson::value(true));
@@ -2276,6 +2342,7 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
         tags_map[RCU_TAG_KEY] = std::to_string(bm.rcu);
         tags_map[WCU_TAG_KEY] = std::to_string(bm.wcu);
     }
+    add_warm_throughput_tags(tags_map, request);
     set_table_creation_time(tags_map, db_clock::now());
     builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(tags_map));
 
@@ -2573,6 +2640,18 @@ future<executor::request_return_type> executor::update_table(client_state& clien
             }
 
             schema_builder builder(tab);
+
+            // DynamoDB accepts an UpdateTable carrying only WarmThroughput.
+            // Alternator has no throughput caps and nothing to pre-warm, so it
+            // just remembers the request for DescribeTable to report back.
+            std::map<sstring, sstring> warm_tags;
+            if (const auto* tags_ptr = db::get_tags_of_table(tab)) {
+                warm_tags = *tags_ptr;
+            }
+            if (add_warm_throughput_tags(warm_tags, request)) {
+                empty_request = false;
+                builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(std::move(warm_tags)));
+            }
 
             rjson::value* stream_specification = rjson::find(request, "StreamSpecification");
             rjson::value* gsi_updates = rjson::find(request, "GlobalSecondaryIndexUpdates");
