@@ -24,6 +24,29 @@ namespace cql3::statements {
 
 namespace {
 
+secondary_index::index resolve_index(functions::search_family family, data_dictionary::database db, const schema_ptr& schema,
+        const column_definition& column) {
+    auto cf = db.find_column_family(schema);
+    auto indexes = cf.get_index_manager().list_indexes();
+
+    if (family == functions::search_family::ann) {
+        auto it = std::ranges::find_if(indexes, [&column] (const auto& index) {
+            return secondary_index::vector_index::is_vector_index_on_column(index.metadata(), column.name_as_text());
+        });
+        if (it == indexes.end()) {
+            throw exceptions::invalid_request_exception("ANN ordering by vector requires the column to be indexed using 'vector_index'");
+        }
+        return *it;
+    }
+
+    for (const auto& idx : indexes) {
+        if (idx.supports_bm25_expression(column)) {
+            return idx;
+        }
+    }
+    throw exceptions::invalid_request_exception("No fulltext index found for full-text search query");
+}
+
 /// Orders by a score column of the result row, descending, rows without a usable score last.
 select_statement::ordering_comparator_type descending_score_comparator(size_t score_column_index) {
     return [score_column_index, type = float_type] (const raw::select_statement::result_row_type& r1, const raw::select_statement::result_row_type& r2) {
@@ -50,16 +73,7 @@ std::optional<bm25_ordering_info> get_bm25_ordering_info(
     }
     auto [column, search_term] = external_search::extract_call_arguments(fc, "BM25");
 
-    auto cf = db.find_column_family(schema);
-    auto& sim = cf.get_index_manager();
-
-    for (const auto& idx : sim.list_indexes()) {
-        if (idx.supports_bm25_expression(*column)) {
-            return bm25_ordering_info{idx, std::move(search_term)};
-        }
-    }
-
-    throw exceptions::invalid_request_exception("No fulltext index found for full-text search query");
+    return bm25_ordering_info{resolve_index(functions::search_family::bm25, db, schema, *column), std::move(search_term)};
 }
 
 void prepare_bm25_selectors(std::vector<selection::prepared_selector>& prepared_selectors, std::optional<bm25_ordering_info>& ordering_info,
@@ -126,22 +140,12 @@ std::optional<ann_ordering_info> get_ann_ordering_info(
 
     raw::select_statement::prepared_ann_ordering_type prepared_ann_ordering = std::make_pair(def, std::move(query_vector));
 
-    auto cf = db.find_column_family(schema);
-    auto& sim = cf.get_index_manager();
-
-    auto indexes = sim.list_indexes();
-    auto it = std::ranges::find_if(indexes, [def] (const auto& ind) {
-        return secondary_index::vector_index::is_vector_index_on_column(ind.metadata(), def->name_as_text());
-    });
-
-    if (it == indexes.end()) {
-        throw exceptions::invalid_request_exception("ANN ordering by vector requires the column to be indexed using 'vector_index'");
-    }
+    auto index = resolve_index(functions::search_family::ann, db, schema, *def);
 
     return ann_ordering_info{
-        *it,
+        index,
         std::move(prepared_ann_ordering),
-        secondary_index::vector_index::is_rescoring_enabled(it->metadata().options())
+        secondary_index::vector_index::is_rescoring_enabled(index.metadata().options())
     };
 }
 
