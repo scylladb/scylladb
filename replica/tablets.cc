@@ -12,6 +12,7 @@
 #include "types/types.hh"
 #include "types/tuple.hh"
 #include "types/list.hh"
+#include "data_dictionary/keyspace_metadata.hh"
 #include "db/system_keyspace.hh"
 #include "schema/schema_builder.hh"
 #include "cql3/query_processor.hh"
@@ -542,6 +543,12 @@ tablet_mutation_builder&
 tablet_mutation_builder::set_base_table(table_id base_table) {
     _m.set_static_cell("base_table", data_value(base_table.uuid()), _ts);
     return *this;
+}
+
+bool has_any_tablet_map(const locator::tablet_metadata& tm, const data_dictionary::keyspace_metadata& ksm) {
+    return std::ranges::any_of(ksm.cf_meta_data(), [&tm] (const auto& e) {
+        return tm.has_tablet_map(e.second->id());
+    });
 }
 
 mutation make_drop_tablet_map_mutation(table_id id, api::timestamp_type ts) {
