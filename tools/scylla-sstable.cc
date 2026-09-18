@@ -20,6 +20,8 @@
 #include "compaction/compaction.hh"
 #include "compaction/compaction_strategy.hh"
 #include "compaction/compaction_strategy_state.hh"
+#include "compaction/time_window_compaction_strategy.hh"
+#include "tombstone_gc.hh"
 #include "cql3/statements/raw/parsed_statement.hh"
 #include "cql3/cql_config.hh"
 #include "cql3/statements/modification_statement.hh"
@@ -41,6 +43,7 @@
 #include "schema/compression_initializer.hh"
 #include "schema/speculative_retry_initializer.hh"
 #include "sstables/index_reader.hh"
+#include "sstables/sstable_version.hh"
 #include "sstables/sstables_manager.hh"
 #include "sstables/sstable_directory.hh"
 #include "sstables/open_info.hh"
@@ -51,14 +54,18 @@
 #include "test/lib/cql_test_env.hh"
 #include "tools/json_writer.hh"
 #include "tools/json_mutation_stream_parser.hh"
-#include "tools/load_system_tablets.hh"
+#include "tools/load_system_tables.hh"
 #include "tools/lua_sstable_consumer.hh"
+#include "tools/read_mutation.hh"
 #include "tools/schema_loader.hh"
 #include "tools/sstable_consumer.hh"
 #include "tools/utils.hh"
 #include "types/json_utils.hh"
 #include "locator/host_id.hh"
 #include "mutation_writer/token_group_based_splitting_writer.hh"
+#include "dht/token-sharding.hh"
+#include "utils/overloaded_functor.hh"
+#include "utils/pretty_printers.hh"
 
 using namespace seastar;
 using namespace sstables;
@@ -153,6 +160,32 @@ struct sstable_path_info {
     table_id id;
 };
 
+// The table a directory holds the sstables of, deduced from its path:
+// <data dir>/<keyspace>/<table>-<id>, with the sstables of a state like upload
+// or staging one level below that.
+sstable_path_info extract_from_table_directory(std::filesystem::path directory) {
+    directory = directory.lexically_normal();
+    // a trailing separator leaves an empty filename behind
+    if (directory.filename().empty()) {
+        directory = directory.parent_path();
+    }
+    // a table directory is named "<table>-<id>", the id being 32 hex characters
+    auto is_table_directory = [] (const std::filesystem::path& path) {
+        constexpr size_t id_size = 32;
+        const auto name = path.filename().native();
+        return name.size() > id_size + 1 && name[name.size() - id_size - 1] == '-';
+    };
+    const auto table_directory = is_table_directory(directory) ? directory : directory.parent_path();
+    if (!is_table_directory(table_directory)) {
+        throw std::invalid_argument(fmt::format("cannot extract information from the path of {}: it is neither the"
+                " directory of a table nor one of its sub-directories", directory));
+    }
+    auto [table, id] = replica::parse_table_directory_name(table_directory.filename().native());
+    return sstable_path_info{
+            directory, table_directory.parent_path().parent_path(),
+            table_directory.parent_path().filename().native(), std::move(table), id};
+}
+
 sstable_path_info extract_from_sstable_path(const bpo::variables_map& app_config) {
     if (!app_config.count("sstables")) {
         throw std::invalid_argument("cannot extract information from sstable path, no sstable arguments");
@@ -162,7 +195,9 @@ sstable_path_info extract_from_sstable_path(const bpo::variables_map& app_config
     sstring keyspace, table;
     auto result = sstables::parse_path(sst_path);
     if (!result) {
-        throw std::invalid_argument(fmt::format("cannot extract information from sstable path, sstable has invalid path: {}", sst_path));
+        // the argument can be the directory holding the sstables instead of one
+        // of them, and a directory names its table just as well
+        return extract_from_table_directory(std::move(sst_path));
     }
     auto [_, ks, tbl] = std::move(*result);
     keyspace = std::move(ks);
@@ -205,19 +240,38 @@ struct path_with_source {
     sstring source;
 };
 
-path_with_source obtain_data_dir(const bpo::variables_map& app_config, db::config& cfg) {
+path_with_source obtain_data_dir(const bpo::variables_map& app_config, const db::config& cfg) {
     if (app_config.contains("scylla-data-dir")) {
         return {.path = fs::path(app_config["scylla-data-dir"].as<sstring>()), .source = "--scylla-data-dir parameter"};
     } else if (app_config.contains("scylla-yaml-file")) {
-        return {.path = fs::path(cfg.data_file_directories()[0]), .source = "--scylla-yaml-file parameter"};
+        // at(), not [], as the configuration may not name a data dir at all
+        return {.path = fs::path(cfg.data_file_directories().at(0)), .source = "--scylla-yaml-file parameter"};
     } else if (std::getenv("SCYLLA_CONF")) {
-        return {.path = fs::path(cfg.data_file_directories()[0]), .source = "SCYLLA_CONF environment variable"};
+        return {.path = fs::path(cfg.data_file_directories().at(0)), .source = "SCYLLA_CONF environment variable"};
     } else if (std::getenv("SCYLLA_HOME")) {
-        return {.path = fs::path(cfg.data_file_directories()[0]), .source = "SCYLLA_HOME environment variable"};
+        return {.path = fs::path(cfg.data_file_directories().at(0)), .source = "SCYLLA_HOME environment variable"};
     } else {
         const auto info = extract_from_sstable_path(app_config);
         return {.path = info.data_dir_path, .source = seastar::format("autodetected from sstable path ({})", info.sstable_path.native())};
     }
+}
+
+// The data dir the sstables being examined live in. Unlike obtain_data_dir(),
+// which answers where this node keeps its data, the sstable path wins here: it
+// is the data dir the user pointed the tool at, which is not necessarily the
+// one the configuration names.
+std::filesystem::path find_data_dir(const bpo::variables_map& app_config, const db::config& dbcfg) {
+    try {
+        return extract_from_sstable_path(app_config).data_dir_path;
+    } catch (...) {
+        sst_log.debug("failed to extract the data dir from the sstable path: {:t}", std::current_exception());
+    }
+    try {
+        return obtain_data_dir(app_config, dbcfg).path;
+    } catch (...) {
+        sst_log.debug("failed to obtain the data dir: {:t}", std::current_exception());
+    }
+    return {};
 }
 
 struct schema_with_source {
@@ -297,11 +351,11 @@ std::optional<schema_with_source> try_load_schema_autodetect(const bpo::variable
 
     try {
         const auto [keyspace_name, table_name] = get_keyspace_and_table_options(app_config);
-        const auto data_dir_path = std::filesystem::path(cfg.data_file_directories().at(0));
-        return schema_with_source{.schema = tools::load_schema_from_schema_tables(cfg, data_dir_path, keyspace_name, table_name).get(),
+        const auto path_with_source = obtain_data_dir(app_config, cfg);
+        return schema_with_source{.schema = tools::load_schema_from_schema_tables(cfg, path_with_source.path, keyspace_name, table_name).get(),
             .source = "schema-tables",
-            .path = data_dir_path,
-            .obtained_from = "data dir"};
+            .path = path_with_source.path,
+            .obtained_from = format("data dir (obtained via {})", path_with_source.source)};
     } catch (...) {
         sst_log.debug("Trying to locate data dir failed: {:t}", std::current_exception());
     }
@@ -326,8 +380,149 @@ std::optional<schema_with_source> try_load_schema_autodetect(const bpo::variable
         sst_log.debug("Trying to load schema from the sstable itself failed: {:t}", std::current_exception());
     }
 
-    fmt::print(std::cerr, "Failed to autodetect and load schema, try again with --logger-log-level scylla-sstable=debug to learn more or provide the schema source manually\n");
+    fmt::print(std::cerr, "Failed to autodetect and load schema, try again with --logger-log-level scylla-sstable=debug to learn more or provide the schema source manually.\n"
+            "If the schema is expected to come from the schema tables of a running node, they have to be on disk: nodetool flush system_schema\n");
     return {};
+}
+
+// An object storage path is not a local file, it cannot be a directory and it
+// does not name a keyspace.
+bool is_object_storage_path(const std::filesystem::path& path) {
+    using osp = db::object_storage_endpoint_param;
+    static const auto types = { osp::s3_type, osp::gs_type };
+    return std::ranges::any_of(types, std::bind_front(&data_dictionary::is_object_storage_fqn, path));
+}
+
+// Two arguments which name no path at all are a keyspace and a table, whose
+// sstables are then resolved through the storage options of the keyspace
+// instead of being read off the command line.
+//
+// What makes an argument a path is that it has a directory in it, rather than
+// that it happens to exist: whether "layout my_keyspace my_table" describes a
+// table must not depend on what the directory the tool was started in holds. A
+// bare name which is meant as a path can always be written as "./my_table".
+std::optional<std::pair<sstring, sstring>> get_keyspace_and_table_arguments(const bpo::variables_map& app_config) {
+    if (!app_config.count("sstables")) {
+        return std::nullopt;
+    }
+    const auto arguments = app_config["sstables"].as<std::vector<sstring>>();
+    if (arguments.size() != 2) {
+        return std::nullopt;
+    }
+    for (const auto& argument : arguments) {
+        const auto path = std::filesystem::path(argument);
+        if (is_object_storage_path(path) || path.has_parent_path()) {
+            return std::nullopt;
+        }
+    }
+    return std::pair(arguments[0], arguments[1]);
+}
+
+// The arguments which name a directory of sstables -- typically a table
+// directory -- rather than an sstable. All the arguments have to be of the same
+// kind: the sstables of a directory are enumerated as scylla enumerates them,
+// which is not something to mix with sstables named one by one.
+std::vector<sstring> get_sstable_directory_arguments(const bpo::variables_map& app_config) {
+    if (!app_config.count("sstables")) {
+        return {};
+    }
+    std::vector<sstring> directories;
+    size_t files = 0;
+    for (const auto& argument : app_config["sstables"].as<std::vector<sstring>>()) {
+        if (is_object_storage_path(std::filesystem::path(argument))) {
+            ++files;
+            continue;
+        }
+        const auto ftype = file_type(argument, follow_symlink::yes).get();
+        if (!ftype) {
+            // say so here: further down the line the path is only reported as a
+            // schema which could not be autodetected, or as an sstable whose
+            // components are missing
+            throw std::invalid_argument(fmt::format("no such file or directory: {}", argument));
+        }
+        if (*ftype == directory_entry_type::directory) {
+            directories.push_back(argument);
+        } else {
+            ++files;
+        }
+    }
+    if (!directories.empty() && files) {
+        throw std::invalid_argument("cannot mix directories with the sstables to work on");
+    }
+    return directories;
+}
+
+// The sstables the given storage options hold, enumerated the way scylla
+// enumerates them: a directory listing for local storage, the sstables registry
+// of the node for a table living in object storage.
+//
+// Only sealed sstables are picked up, and an sstable the node deletes while the
+// scan is running is left out, as the data dir of a running node is a moving
+// target.
+std::vector<sstables::shared_sstable> load_sstables_of_storage(schema_ptr schema, sstables::sstables_manager& sst_man,
+        lw_shared_ptr<const data_dictionary::storage_options> storage_options) {
+    sstables::sstable_directory sst_dir(sst_man, schema, &schema->get_sharder(), std::move(storage_options),
+            sstables::sstable_state::normal, default_io_error_handler_gen());
+    auto flags = sstables::sstable_directory::process_flags::read_only();
+    flags.skip_vanished_sstables = true;
+    sst_dir.scan_sstable_dir().get();
+    sst_dir.process_sstable_dir(flags).get();
+    return std::move(sst_dir.get_unsorted_sstables());
+}
+
+// The sstables of a directory -- typically the table directory of a node.
+std::vector<sstables::shared_sstable> load_sstables_of_directory(schema_ptr schema, sstables::sstables_manager& sst_man,
+        const std::filesystem::path& directory) {
+    return load_sstables_of_storage(schema, sst_man, make_lw_shared<const data_dictionary::storage_options>(
+            data_dictionary::make_local_options(directory)));
+}
+
+// The sstables of a table, wherever the storage options of its keyspace put
+// them: a directory of the data dir, or a bucket of an object store.
+std::vector<sstables::shared_sstable> load_sstables_of_table(schema_ptr schema, sstables::sstables_manager& sst_man,
+        const db::config& dbcfg, const bpo::variables_map& app_config, reader_permit permit,
+        std::string_view keyspace, std::string_view table) {
+    const auto data_dir_path = find_data_dir(app_config, dbcfg);
+    if (data_dir_path.empty()) {
+        throw std::invalid_argument(fmt::format("cannot resolve the sstables of {}.{}: the scylla data dir is not"
+                " known, provide it with --scylla-data-dir or --scylla-yaml-file", keyspace, table));
+    }
+    auto storage_options = tools::load_keyspace_storage_options(dbcfg, data_dir_path, keyspace, permit).get();
+    if (!storage_options) {
+        // a keyspace with no row in system_schema.scylla_keyspaces keeps its
+        // sstables in the data dir
+        storage_options = data_dictionary::make_local_options(
+                get_table_directory(data_dir_path, keyspace, table).get());
+    }
+    sst_log.debug("resolving the sstables of {}.{} through its {} storage", keyspace, table,
+            storage_options->type_string());
+
+    // the sstables of a table on object storage are enumerated from the
+    // registry of the node, which is down, so serve it from its data dir
+    sst_man.plug_sstables_registry(tools::make_offline_sstables_registry(dbcfg, data_dir_path, permit));
+    auto unplug_registry = defer([&sst_man] noexcept { sst_man.unplug_sstables_registry(); });
+
+    return load_sstables_of_storage(schema, sst_man,
+            make_lw_shared<const data_dictionary::storage_options>(std::move(*storage_options)));
+}
+
+// The identity of the node whose data directory is being examined. A data dir
+// which doesn't identify its node falls back to a made up identity, as every
+// operation did before.
+locator::host_id resolve_local_host_id(const bpo::variables_map& app_config, const db::config& dbcfg,
+        reader_permit permit) {
+    if (const auto data_dir_path = find_data_dir(app_config, dbcfg); !data_dir_path.empty()) {
+        try {
+            if (auto local_node = tools::load_local_node_info(dbcfg, data_dir_path, permit).get()) {
+                sst_log.debug("the data dir {} belongs to node {}", data_dir_path, local_node->host_id);
+                return local_node->host_id;
+            }
+        } catch (...) {
+            sst_log.debug("failed to read the identity of the node owning {}: {:t}",
+                    data_dir_path, std::current_exception());
+        }
+    }
+    return locator::host_id::create_random_id();
 }
 
 const std::vector<sstables::shared_sstable> load_sstables(schema_ptr schema, sstables::sstables_manager& sst_man, sstables::storage_manager& sstm,
@@ -444,15 +639,23 @@ const std::vector<sstables::shared_sstable> load_sstables(schema_ptr schema, sst
             };
             co_await sst->load(schema->get_sharder(), open_cfg);
         } catch (...) {
+            auto ex = std::current_exception();
+            if (components_are_missing(ex)) {
+                sst_log.warn("Skipping SSTable {}, it was deleted while being loaded: {:t}", sst->get_filename(), ex);
+                co_return;
+            }
             // Print each individual error here since parallel_for_each
             // will propagate only one of them up the stack.
             auto msg = fmt::format("Could not load SSTable: {}", sst->get_filename());
-            fmt::print(std::cerr, "{}: {:t}\n", msg, std::current_exception());
+            fmt::print(std::cerr, "{}: {:t}\n", msg, ex);
             throw_with_nested(std::runtime_error(msg));
         }
 
         sstables[i] = std::move(sst);
     }).get();
+
+    // the sstables which were deleted while being loaded left a hole behind
+    std::erase(sstables, nullptr);
 
     return sstables;
 }
@@ -2210,8 +2413,8 @@ void shard_of_with_tablets(const std::vector<sstables::shared_sstable>& sstables
             fmt::print(std::cerr, "unable to find replica set for sstable: {}\n", sst->get_filename());
             continue;
         }
-        auto& [token, replica_set] = *tablet;
-        for (auto& replica : replica_set) {
+        auto& [token, tablet_row] = *tablet;
+        for (auto& replica : tablet_row.replicas) {
             writer.StartObject();
             writer.Key("host");
             writer.String(fmt::to_string(replica.host));
@@ -2554,6 +2757,784 @@ void split_operation(schema_ptr schema, reader_permit permit, const std::vector<
             fmt::print(std::cout, "    {}\n", file);
         }
     }
+}
+
+// The layout operation describes how the sstables of a table are organized by
+// its compaction strategy: incremental and size-tiered compaction organize them
+// into runs, leveled compaction into levels and time-window compaction into
+// time windows. Sstables are grouped by the compaction group owning them -- a
+// tablet, or a shard for vnode-based tables -- and, within it, by the above.
+
+enum class layout_grouping { run, level, window };
+
+layout_grouping grouping_of(compaction::compaction_strategy_type type) {
+    switch (type) {
+    case compaction::compaction_strategy_type::leveled:
+        return layout_grouping::level;
+    case compaction::compaction_strategy_type::time_window:
+        return layout_grouping::window;
+    default:
+        return layout_grouping::run;
+    }
+}
+
+std::string_view describe(layout_grouping grouping) {
+    switch (grouping) {
+    case layout_grouping::run:
+        return "runs";
+    case layout_grouping::level:
+        return "levels";
+    case layout_grouping::window:
+        return "time windows";
+    }
+    std::abort();
+}
+
+// The short names --strategy accepts, in addition to the compaction strategy
+// class names recognized by compaction_strategy::type().
+const std::unordered_map<std::string_view, compaction::compaction_strategy_type> strategy_short_names{
+    {"ics", compaction::compaction_strategy_type::incremental},
+    {"stcs", compaction::compaction_strategy_type::size_tiered},
+    {"lcs", compaction::compaction_strategy_type::leveled},
+    {"twcs", compaction::compaction_strategy_type::time_window},
+};
+
+compaction::compaction_strategy_type parse_strategy(const sstring& name) {
+    // the short names are recognized regardless of case, e.g. both lcs and LCS
+    auto short_name = name;
+    std::transform(short_name.begin(), short_name.end(), short_name.begin(), ::tolower);
+    if (auto it = strategy_short_names.find(std::string_view(short_name)); it != strategy_short_names.end()) {
+        return it->second;
+    }
+    try {
+        return compaction::compaction_strategy::type(name);
+    } catch (...) {
+        throw std::invalid_argument(fmt::format("invalid value for option strategy: {}, expected one of ({}), or a compaction strategy class name",
+                    name, fmt::join(strategy_short_names | std::views::keys, ", ")));
+    }
+}
+
+// Everything the layout can report about a single sstable.
+struct layout_sstable {
+    sstring name;
+    sstring generation;
+    sstring version;
+    sstring origin;
+    sstring run;
+    uint64_t size = 0;
+    uint64_t total_size = 0;
+    uint64_t filter_size = 0;
+    uint32_t level = 0;
+    int64_t window = 0;
+    bool spans_windows = false;
+    uint64_t partitions = 0;
+    int64_t rows = 0;
+    uint64_t tombstones = 0;
+    std::optional<uint64_t> expired_tombstones;
+    int64_t min_timestamp = 0;
+    int64_t max_timestamp = 0;
+    int64_t max_local_deletion_time = 0;
+    int64_t first_token = 0;
+    int64_t last_token = 0;
+    int64_t mtime = 0;
+    double compression_ratio = 0.0;
+    std::optional<uint64_t> tablet;
+    std::optional<unsigned> shard;
+};
+
+// A cell of the layout table. The monostate stands for an unknown value, e.g.
+// the tablet of an sstable of a vnode-based table.
+using layout_cell = std::variant<std::monostate, int64_t, double, sstring>;
+
+enum class cell_format {
+    plain,
+    boolean,
+    bytes,       // human-readable data size
+    percentage,
+    epoch_us,    // api::timestamp_type, microseconds since the epoch
+    epoch_s,     // gc_clock/db_clock time point, seconds since the epoch
+};
+
+struct layout_column {
+    const char* name;
+    cell_format format;
+    layout_cell (*get)(const layout_sstable&);
+    const char* description;
+};
+
+int64_t percentage_of(uint64_t part, uint64_t whole) {
+    return whole ? int64_t(double(part) / double(whole) * 100.0) : 0;
+}
+
+const std::vector<layout_column> layout_columns{
+    {"name", cell_format::plain, [] (const layout_sstable& s) -> layout_cell { return s.name; },
+        "name of the data component"},
+    {"generation", cell_format::plain, [] (const layout_sstable& s) -> layout_cell { return s.generation; },
+        "generation of the sstable"},
+    {"version", cell_format::plain, [] (const layout_sstable& s) -> layout_cell { return s.version; },
+        "sstable format version"},
+    {"origin", cell_format::plain, [] (const layout_sstable& s) -> layout_cell { return s.origin; },
+        "what produced the sstable (memtable, compaction, repair, ...)"},
+    {"run", cell_format::plain, [] (const layout_sstable& s) -> layout_cell { return s.run; },
+        "identifier of the run the sstable belongs to"},
+    {"level", cell_format::plain, [] (const layout_sstable& s) -> layout_cell { return int64_t(s.level); },
+        "level of the sstable"},
+    {"window", cell_format::epoch_us, [] (const layout_sstable& s) -> layout_cell { return s.window; },
+        "start of the time window the sstable belongs to"},
+    {"spans-windows", cell_format::boolean, [] (const layout_sstable& s) -> layout_cell { return int64_t(s.spans_windows); },
+        "whether the data of the sstable spans more than one time window"},
+    {"tablet", cell_format::plain, [] (const layout_sstable& s) -> layout_cell {
+            return s.tablet ? layout_cell(int64_t(*s.tablet)) : layout_cell(); },
+        "index of the tablet owning the sstable"},
+    {"shard", cell_format::plain, [] (const layout_sstable& s) -> layout_cell {
+            return s.shard ? layout_cell(int64_t(*s.shard)) : layout_cell(); },
+        "shard owning the sstable on this node"},
+    {"size", cell_format::bytes, [] (const layout_sstable& s) -> layout_cell { return int64_t(s.size); },
+        "on-disk size of the data component"},
+    {"total-size", cell_format::bytes, [] (const layout_sstable& s) -> layout_cell { return int64_t(s.total_size); },
+        "on-disk size of all the components"},
+    {"filter-size", cell_format::bytes, [] (const layout_sstable& s) -> layout_cell { return int64_t(s.filter_size); },
+        "on-disk size of the bloom filter component"},
+    {"partitions", cell_format::plain, [] (const layout_sstable& s) -> layout_cell { return int64_t(s.partitions); },
+        "estimated number of partitions"},
+    {"rows", cell_format::plain, [] (const layout_sstable& s) -> layout_cell { return s.rows; },
+        "number of rows"},
+    {"tombstones", cell_format::plain, [] (const layout_sstable& s) -> layout_cell { return int64_t(s.tombstones); },
+        "estimated number of tombstones"},
+    {"expired", cell_format::plain, [] (const layout_sstable& s) -> layout_cell {
+            return s.expired_tombstones ? layout_cell(int64_t(*s.expired_tombstones)) : layout_cell(); },
+        "estimated number of tombstones which can already be purged"},
+    {"expired-pctg", cell_format::percentage, [] (const layout_sstable& s) -> layout_cell {
+            return s.expired_tombstones ? layout_cell(percentage_of(*s.expired_tombstones, s.tombstones)) : layout_cell(); },
+        "share of the tombstones which can already be purged"},
+    {"min-timestamp", cell_format::epoch_us, [] (const layout_sstable& s) -> layout_cell { return s.min_timestamp; },
+        "smallest write timestamp in the sstable"},
+    {"max-timestamp", cell_format::epoch_us, [] (const layout_sstable& s) -> layout_cell { return s.max_timestamp; },
+        "largest write timestamp in the sstable"},
+    {"max-deletion-time", cell_format::epoch_s, [] (const layout_sstable& s) -> layout_cell { return s.max_local_deletion_time; },
+        "largest local deletion time in the sstable, \"none\" if some of its data never expires"},
+    {"first-token", cell_format::plain, [] (const layout_sstable& s) -> layout_cell { return s.first_token; },
+        "token of the first partition"},
+    {"last-token", cell_format::plain, [] (const layout_sstable& s) -> layout_cell { return s.last_token; },
+        "token of the last partition"},
+    {"mtime", cell_format::epoch_s, [] (const layout_sstable& s) -> layout_cell { return s.mtime; },
+        "time the data component was last written to"},
+    {"compression-ratio", cell_format::plain, [] (const layout_sstable& s) -> layout_cell {
+            // uncompressed sstables have no compression ratio recorded
+            return s.compression_ratio < 0.0 ? layout_cell() : layout_cell(s.compression_ratio); },
+        "size of the compressed data component, relative to the uncompressed one"},
+};
+
+const std::vector<std::string_view> default_layout_columns{
+    "name", "size", "origin", "partitions", "rows", "tombstones", "expired", "min-timestamp", "max-timestamp", "mtime",
+};
+
+const layout_column& find_layout_column(std::string_view name) {
+    auto it = std::ranges::find_if(layout_columns, [name] (const layout_column& column) { return name == column.name; });
+    if (it == layout_columns.end()) {
+        throw std::invalid_argument(fmt::format("unknown column: {}, expected one of ({})", name,
+                fmt::join(layout_columns | std::views::transform([] (const layout_column& c) { return c.name; }), ", ")));
+    }
+    return *it;
+}
+
+// Splits a comma-separated option value, e.g. --columns name,size,rows
+std::vector<sstring> split_option_list(const sstring& value) {
+    auto items = std::views::split(std::string_view(value), std::string_view(","))
+            | std::ranges::to<std::vector<sstring>>();
+    std::erase(items, sstring());
+    return items;
+}
+
+std::vector<const layout_column*> get_layout_columns(const bpo::variables_map& vm) {
+    const auto value = vm["columns"].as<sstring>();
+    if (value == "all") {
+        return layout_columns | std::views::transform([] (const layout_column& c) { return &c; })
+                | std::ranges::to<std::vector<const layout_column*>>();
+    }
+    auto columns = split_option_list(value)
+            | std::views::transform([] (const sstring& name) { return &find_layout_column(name); })
+            | std::ranges::to<std::vector<const layout_column*>>();
+    if (columns.empty()) {
+        throw std::invalid_argument("no columns selected, --columns expects at least one column name");
+    }
+    return columns;
+}
+
+// A column to order the sstables by. The keys are applied in the order they
+// were provided, that is in decreasing order of relevance.
+struct layout_sort_key {
+    const layout_column* column;
+    bool descending;
+};
+
+std::vector<layout_sort_key> get_layout_sort_keys(const bpo::variables_map& vm) {
+    std::vector<layout_sort_key> keys;
+    for (const auto& spec : split_option_list(vm["sort"].as<sstring>())) {
+        const auto separator = spec.find(':');
+        bool descending = false;
+        if (separator != sstring::npos) {
+            const auto direction = spec.substr(separator + 1);
+            if (direction == "desc") {
+                descending = true;
+            } else if (direction != "asc") {
+                throw std::invalid_argument(fmt::format("invalid sort direction: {}, expected one of (asc, desc)", direction));
+            }
+        }
+        keys.push_back({&find_layout_column(spec.substr(0, separator)), descending});
+    }
+    return keys;
+}
+
+std::strong_ordering compare_cells(const layout_cell& a, const layout_cell& b) {
+    if (a.index() != b.index()) {
+        return a.index() <=> b.index();
+    }
+    return std::visit([&b] (const auto& lhs) -> std::strong_ordering {
+        using cell_type = std::decay_t<decltype(lhs)>;
+        if constexpr (std::is_same_v<cell_type, std::monostate>) {
+            return std::strong_ordering::equal;
+        } else if constexpr (std::is_same_v<cell_type, double>) {
+            return std::strong_order(lhs, std::get<double>(b));
+        } else if constexpr (std::is_same_v<cell_type, sstring>) {
+            return std::string_view(lhs) <=> std::string_view(std::get<sstring>(b));
+        } else {
+            return lhs <=> std::get<cell_type>(b);
+        }
+    }, a);
+}
+
+void sort_sstables(std::vector<layout_sstable>& sstables, const std::vector<layout_sort_key>& keys) {
+    std::ranges::stable_sort(sstables, [&keys] (const layout_sstable& a, const layout_sstable& b) {
+        for (const auto& key : keys) {
+            const auto order = compare_cells(key.column->get(a), key.column->get(b));
+            if (order != std::strong_ordering::equal) {
+                return key.descending ? order > 0 : order < 0;
+            }
+        }
+        return false;
+    });
+}
+
+sstring format_epoch_seconds(int64_t seconds) {
+    // sstables which have data that never expires have their max local deletion
+    // time set to the largest representable one
+    if (seconds <= 0 || seconds >= std::numeric_limits<int32_t>::max()) {
+        return "none";
+    }
+    return fmt::format("{:%FT%TZ}", fmt::gmtime(std::time_t(seconds)));
+}
+
+sstring format_cell(const layout_cell& cell, cell_format format) {
+    return std::visit([format] (const auto& value) -> sstring {
+        using cell_type = std::decay_t<decltype(value)>;
+        if constexpr (std::is_same_v<cell_type, std::monostate>) {
+            return "-";
+        } else if constexpr (std::is_same_v<cell_type, sstring>) {
+            return value.empty() ? sstring("-") : value;
+        } else if constexpr (std::is_same_v<cell_type, double>) {
+            return fmt::format("{:.3f}", value);
+        } else {
+            switch (format) {
+            case cell_format::boolean:
+                return value ? "yes" : "no";
+            case cell_format::bytes:
+                return fmt::format("{:i}", utils::pretty_printed_data_size(value));
+            case cell_format::percentage:
+                return fmt::format("{}%", value);
+            case cell_format::epoch_us:
+                return format_epoch_seconds(value / 1000000);
+            case cell_format::epoch_s:
+                return format_epoch_seconds(value);
+            case cell_format::plain:
+                return fmt::to_string(value);
+            }
+            std::abort();
+        }
+    }, cell);
+}
+
+// The aggregate of a set of sstables, printed for each group and each bucket.
+struct layout_summary {
+    uint64_t sstables = 0;
+    uint64_t size = 0;
+    uint64_t partitions = 0;
+    int64_t rows = 0;
+    uint64_t tombstones = 0;
+    std::optional<uint64_t> expired_tombstones;
+    int64_t min_timestamp = std::numeric_limits<int64_t>::max();
+    int64_t max_timestamp = std::numeric_limits<int64_t>::min();
+    int64_t first_token = std::numeric_limits<int64_t>::max();
+    int64_t last_token = std::numeric_limits<int64_t>::min();
+
+    void add(const layout_sstable& sst) {
+        ++sstables;
+        size += sst.size;
+        partitions += sst.partitions;
+        rows += sst.rows;
+        tombstones += sst.tombstones;
+        if (sst.expired_tombstones) {
+            expired_tombstones = expired_tombstones.value_or(0) + *sst.expired_tombstones;
+        }
+        min_timestamp = std::min(min_timestamp, sst.min_timestamp);
+        max_timestamp = std::max(max_timestamp, sst.max_timestamp);
+        first_token = std::min(first_token, sst.first_token);
+        last_token = std::max(last_token, sst.last_token);
+    }
+};
+
+sstring describe(const layout_summary& summary) {
+    const auto expired = summary.expired_tombstones
+            ? sstring(fmt::format("{}, {}%", *summary.expired_tombstones, percentage_of(*summary.expired_tombstones, summary.tombstones)))
+            : sstring("unknown");
+    return fmt::format("sstables: {}, size: {:i}, partitions: {}, rows: {}, tombstones: {} (expired: {}), timestamp: [{}, {}], token: [{}, {}]",
+            summary.sstables, utils::pretty_printed_data_size(summary.size), summary.partitions, summary.rows,
+            summary.tombstones, expired,
+            format_epoch_seconds(summary.min_timestamp / 1000000), format_epoch_seconds(summary.max_timestamp / 1000000),
+            summary.first_token, summary.last_token);
+}
+
+// gc grace seconds only says when tombstones expire in the timeout mode
+sstring describe(const tombstone_gc_options& options, std::chrono::seconds gc_grace_seconds,
+        std::optional<size_t> repaired_ranges) {
+    switch (options.mode()) {
+    case tombstone_gc_mode::timeout:
+        return fmt::format("gc grace seconds: {}, tombstones dropped more than that ago are counted as expired",
+                gc_grace_seconds.count());
+    case tombstone_gc_mode::immediate:
+        return "every tombstone which was dropped is counted as expired";
+    case tombstone_gc_mode::disabled:
+        return "no tombstone can be purged";
+    case tombstone_gc_mode::repair:
+        if (!repaired_ranges) {
+            return "expired tombstones are not reported: the repair history of the table could not be read";
+        }
+        return fmt::format("repaired ranges: {}, propagation delay: {}s, tombstones dropped before a range was"
+                " repaired, less the propagation delay, are counted as expired in it",
+                *repaired_ranges, options.propagation_delay_in_seconds().count());
+    }
+    std::abort();
+}
+
+// The sstables of a single run, level or time window.
+struct layout_bucket {
+    sstring label;
+    int64_t key = 0;
+    std::vector<layout_sstable> sstables;
+
+    layout_summary summary() const {
+        layout_summary summary;
+        for (const auto& sst : sstables) {
+            summary.add(sst);
+        }
+        return summary;
+    }
+};
+
+// The sstables of a single compaction group: a tablet, or a shard for
+// vnode-based tables.
+struct layout_compaction_group {
+    sstring label;
+    std::vector<layout_bucket> buckets;
+
+    layout_summary summary() const {
+        layout_summary summary;
+        for (const auto& bucket : buckets) {
+            for (const auto& sst : bucket.sstables) {
+                summary.add(sst);
+            }
+        }
+        return summary;
+    }
+};
+
+void print_layout_text(const std::vector<layout_compaction_group>& groups, const std::vector<const layout_column*>& columns) {
+    // pre-render the cells, so that the columns are aligned across all the
+    // groups and buckets
+    auto widths = columns | std::views::transform([] (const layout_column* c) { return std::strlen(c->name); })
+            | std::ranges::to<std::vector<size_t>>();
+    std::unordered_map<const layout_sstable*, std::vector<sstring>> cells;
+    layout_summary total;
+    std::map<unsigned, layout_summary> per_shard;
+    for (const auto& group : groups) {
+        for (const auto& bucket : group.buckets) {
+            for (const auto& sst : bucket.sstables) {
+                total.add(sst);
+                if (sst.shard) {
+                    per_shard[*sst.shard].add(sst);
+                }
+                auto& row = cells[&sst];
+                for (size_t i = 0; i < columns.size(); ++i) {
+                    row.push_back(format_cell(columns[i]->get(sst), columns[i]->format));
+                    widths[i] = std::max(widths[i], row.back().size());
+                }
+            }
+        }
+    }
+
+    auto print_row = [&] (const std::vector<sstring>& row) {
+        for (size_t i = 0; i < row.size(); ++i) {
+            // the last column is not padded, to avoid trailing whitespace
+            fmt::print(std::cout, "    {:<{}}", row[i], i + 1 == row.size() ? 0 : widths[i]);
+        }
+        fmt::print(std::cout, "\n");
+    };
+    const auto header = columns | std::views::transform([] (const layout_column* c) { return sstring(c->name); })
+            | std::ranges::to<std::vector<sstring>>();
+
+    for (const auto& group : groups) {
+        fmt::print(std::cout, "\n=== {} ===\n{}\n", group.label, describe(group.summary()));
+        for (const auto& bucket : group.buckets) {
+            fmt::print(std::cout, "\n--- {}: {}\n", bucket.label, describe(bucket.summary()));
+            print_row(header);
+            for (const auto& sst : bucket.sstables) {
+                print_row(cells.at(&sst));
+            }
+        }
+    }
+    // compaction is per compaction group, but the shard is what the groups
+    // compete for, so summarize what each one holds as well
+    for (const auto& [shard, summary] : per_shard) {
+        fmt::print(std::cout, "\n=== SHARD #{} SUMMARY ===\n{}\n", shard, describe(summary));
+    }
+    fmt::print(std::cout, "\n=== TOTAL ===\n{}\n", describe(total));
+}
+
+void print_layout_json(const std::vector<layout_compaction_group>& groups, const std::vector<const layout_column*>& columns) {
+    json_writer writer;
+    writer.StartObject();
+    writer.Key("compaction_groups");
+    writer.StartArray();
+    for (const auto& group : groups) {
+        writer.StartObject();
+        writer.Key("name");
+        writer.String(group.label);
+        writer.Key("buckets");
+        writer.StartArray();
+        for (const auto& bucket : group.buckets) {
+            writer.StartObject();
+            writer.Key("name");
+            writer.String(bucket.label);
+            writer.Key("sstables");
+            writer.StartArray();
+            for (const auto& sst : bucket.sstables) {
+                writer.StartObject();
+                for (const auto* column : columns) {
+                    writer.Key(column->name);
+                    std::visit(overloaded_functor{
+                        [&] (const std::monostate&) { writer.Null(); },
+                        [&] (int64_t value) { writer.Int64(value); },
+                        [&] (double value) { writer.Double(value); },
+                        [&] (const sstring& value) { writer.String(value); },
+                    }, column->get(sst));
+                }
+                writer.EndObject();
+            }
+            writer.EndArray();
+            writer.EndObject();
+        }
+        writer.EndArray();
+        writer.EndObject();
+    }
+    writer.EndArray();
+    writer.EndObject();
+}
+
+// Maps the sstables of a tablet-based table onto the tablet owning them.
+class tablet_owner {
+    tools::tablets_t _tablets;
+    std::optional<locator::host_id> _host_id;
+public:
+    tablet_owner(tools::tablets_t tablets, std::optional<locator::host_id> host_id)
+        : _tablets(std::move(tablets)), _host_id(host_id) {
+    }
+
+    size_t size() const { return _tablets.size(); }
+
+    // Each tablet owns the (last_token(i-1), last_token(i)] token range, and
+    // remembers when it was last repaired.
+    tools::repaired_ranges_t repaired_ranges() const {
+        tools::repaired_ranges_t repaired_ranges;
+        auto start = dht::minimum_token();
+        for (const auto& [last_token, tablet] : _tablets) {
+            if (tablet.repair_time) {
+                repaired_ranges.emplace_back(
+                        dht::token_range(dht::token_range::bound(start, false), dht::token_range::bound(last_token, true)),
+                        to_gc_clock(*tablet.repair_time));
+            }
+            start = last_token;
+        }
+        return repaired_ranges;
+    }
+
+    // Each tablet owns the (last_token(i-1), last_token(i)] token range, so the
+    // tablet owning an sstable is the first one whose range contains the
+    // sstable's first token. The shard the sstable resides on is the shard this
+    // node represents that tablet on.
+    void assign(layout_sstable& sst) const {
+        auto tablet = _tablets.upper_bound(dht::token::from_int64(sst.first_token));
+        if (tablet == _tablets.end()) {
+            sst_log.warn("{} is not owned by any tablet of the table", sst.name);
+            return;
+        }
+        if (auto last_tablet = _tablets.lower_bound(dht::token::from_int64(sst.last_token)); tablet != last_tablet) {
+            sst_log.warn("{} spans across multiple tablets, assigning it to the one owning its first token", sst.name);
+        }
+        sst.tablet = std::distance(_tablets.begin(), tablet);
+        if (!_host_id) {
+            return;
+        }
+        for (const auto& replica : tablet->second.replicas) {
+            if (replica.host == *_host_id) {
+                sst.shard = replica.shard;
+            }
+        }
+    }
+};
+
+void layout_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
+        sstables::sstables_manager&, const db::config& dbcfg, const bpo::variables_map& vm) {
+    if (sstables.empty()) {
+        throw std::invalid_argument("no sstables specified on the command line");
+    }
+
+    const auto strategy = vm.count("strategy")
+            ? parse_strategy(vm["strategy"].as<sstring>())
+            : schema->configured_compaction_strategy();
+    const auto grouping = grouping_of(strategy);
+    const auto columns = get_layout_columns(vm);
+    const auto sort_keys = get_layout_sort_keys(vm);
+    const auto format = get_output_format_from_options(vm, output_format::text);
+
+    auto strategy_options = schema->compaction_strategy_options();
+    for (const auto& [key, value] : vm["strategy-option"].as<program_options::string_map>()) {
+        strategy_options[key] = value;
+    }
+    const auto twcs_options = compaction::time_window_compaction_strategy_options(strategy_options);
+    auto window_of = [&twcs_options] (api::timestamp_type timestamp) -> int64_t {
+        if (timestamp == api::missing_timestamp) {
+            return 0;
+        }
+        return compaction::time_window_compaction_strategy::get_window_for(twcs_options, timestamp);
+    };
+
+    const auto gc_grace_seconds = std::chrono::duration_cast<std::chrono::seconds>(schema->gc_grace_seconds());
+    const auto& gc_options = schema->tombstone_gc_options();
+
+    // The layout of a tablet-based table is described per tablet, that of a
+    // vnode-based one per shard, as those are the compaction groups its sstables
+    // are organized in.
+    auto table = schema->id();
+    try {
+        // the id the table directory is named after is the authoritative one,
+        // a schema which didn't come from the schema tables carries a made up id
+        table = extract_from_sstable_path(vm).id;
+    } catch (...) {
+        sst_log.debug("failed to extract the table id from the sstable path: {:t}", std::current_exception());
+    }
+    const auto data_dir_path = find_data_dir(vm, dbcfg);
+    std::optional<tools::local_node_info> local_node;
+    if (!data_dir_path.empty()) {
+        try {
+            local_node = tools::load_local_node_info(dbcfg, data_dir_path, permit).get();
+        } catch (...) {
+            sst_log.debug("failed to read the identity of the node from {}: {:t}", data_dir_path, std::current_exception());
+        }
+    }
+    std::optional<std::filesystem::path> system_tablets_dir;
+    if (vm.count("system-tablets-dir")) {
+        system_tablets_dir = std::filesystem::path(vm["system-tablets-dir"].as<sstring>());
+    }
+    std::optional<tablet_owner> tablets;
+    if (!data_dir_path.empty() || system_tablets_dir) {
+        try {
+            tablets.emplace(tools::load_system_tablets(dbcfg, data_dir_path, table, permit, system_tablets_dir).get(),
+                    local_node ? std::optional(local_node->host_id) : std::nullopt);
+        } catch (...) {
+            sst_log.info("{}.{} has no tablets in system.tablets, describing it as a vnode-based table ({:t})."
+                    " If it is expected to be tablet-based, system.tablets has to be on disk: nodetool flush system tablets",
+                    schema->ks_name(), schema->cf_name(), std::current_exception());
+        }
+        if (tablets && !local_node) {
+            // the shard a tablet is on is the shard this node represents it on,
+            // so without knowing which host this is, there is no shard to report
+            sst_log.warn("the identity of the node owning {} is unknown, the sstables of {}.{} are not attributed to shards",
+                    data_dir_path, schema->ks_name(), schema->cf_name());
+        }
+    }
+    // Which tombstones are expired is left to the tombstone_gc_state a node
+    // uses, so that every mode is interpreted exactly as it interprets them.
+    // Under the repair mode it answers out of the repair history, which lives in
+    // system.tablets for a tablet-based table and in system.repair_history for a
+    // vnode-based one -- a node merges both into this same state.
+    shared_tombstone_gc_state shared_gc_state;
+    std::optional<size_t> repaired_ranges;
+    if (gc_options.mode() == tombstone_gc_mode::repair) {
+        std::optional<tools::repaired_ranges_t> ranges;
+        if (tablets) {
+            ranges = tablets->repaired_ranges();
+        } else if (!data_dir_path.empty()) {
+            try {
+                ranges = tools::load_system_repair_history(dbcfg, data_dir_path, table, permit).get();
+            } catch (...) {
+                sst_log.warn("failed to read the repair history of {}.{} from {}, its expired tombstones are not"
+                        " reported: {:t}", schema->ks_name(), schema->cf_name(), data_dir_path, std::current_exception());
+            }
+        }
+        if (ranges) {
+            for (const auto& [range, repair_time] : *ranges) {
+                // the gc state is asked about the schema, so the history has to
+                // be registered under its id, which is the id of the table only
+                // when the schema came from the schema tables
+                shared_gc_state.update_repair_time(schema->id(), range, repair_time);
+            }
+            repaired_ranges = ranges->size();
+        }
+    }
+    // the commitlog check needs a running node, it has no bearing on an estimate
+    const auto gc_state = tombstone_gc_state(shared_gc_state).with_commitlog_check_disabled();
+    // nothing can be said about the expired tombstones of a table whose repair
+    // history is what decides them, when that history could not be read
+    const auto expiry_is_known = gc_options.mode() != tombstone_gc_mode::repair || repaired_ranges.has_value();
+
+    // For a vnode-based table the shard owning an sstable is derived from the
+    // sharding parameters of the node, which have to be provided if they
+    // couldn't be read from system.topology.
+    std::optional<dht::static_sharder> sharder;
+    if (tablets) {
+        // the compaction groups of a tablet-based table are its tablets, the
+        // sharding parameters of the node have no say in them
+        if (vm.count("shards") || vm.count("ignore-msb-bits")) {
+            throw std::invalid_argument(fmt::format("{}.{} is a tablet-based table: --shards and --ignore-msb-bits"
+                    " describe the sharding of a vnode-based one", schema->ks_name(), schema->cf_name()));
+        }
+    } else {
+        const auto shards = vm.count("shards")
+                ? std::optional(vm["shards"].as<unsigned>())
+                : (local_node ? local_node->shard_count : std::nullopt);
+        const auto ignore_msb_bits = vm.count("ignore-msb-bits")
+                ? std::optional(vm["ignore-msb-bits"].as<unsigned>())
+                : (local_node ? local_node->ignore_msb_bits : std::nullopt);
+        if (shards && ignore_msb_bits) {
+            sharder.emplace(*shards, *ignore_msb_bits);
+        } else {
+            sst_log.info("unknown sharding parameters of {}.{}, describing all its sstables as a single compaction group,"
+                    " provide --shards and --ignore-msb-bits to have them described per shard",
+                    schema->ks_name(), schema->cf_name());
+        }
+    }
+
+    // Collect the sstables into their compaction group and, within it, into
+    // their run, level or time window.
+    std::map<std::pair<int64_t, int64_t>, std::map<sstring, layout_bucket>> layout;
+    for (const auto& sst : sstables) {
+        const auto& stats = sst->get_stats_metadata();
+        layout_sstable desc{
+            .name = sst->component_basename(component_type::Data),
+            .generation = fmt::to_string(sst->generation()),
+            .version = fmt::to_string(sst->get_version()),
+            .origin = sst->get_origin(),
+            .run = fmt::to_string(sst->run_identifier()),
+            .size = sst->ondisk_data_size(),
+            .total_size = sst->bytes_on_disk(),
+            .filter_size = sst->filter_size(),
+            .level = sst->get_sstable_level(),
+            .window = window_of(stats.max_timestamp),
+            .spans_windows = window_of(stats.min_timestamp) != window_of(stats.max_timestamp),
+            .partitions = sst->get_estimated_key_count(),
+            .rows = stats.rows_count,
+            .min_timestamp = stats.min_timestamp,
+            .max_timestamp = stats.max_timestamp,
+            .max_local_deletion_time = stats.max_local_deletion_time,
+            .first_token = dht::token::to_int64(sst->get_first_decorated_key().token()),
+            .last_token = dht::token::to_int64(sst->get_last_decorated_key().token()),
+            .mtime = std::chrono::duration_cast<std::chrono::seconds>(sst->data_file_write_time().time_since_epoch()).count(),
+            .compression_ratio = sst->get_compression_ratio(),
+        };
+        // A tombstone is expired if it was dropped before the point in time
+        // before which the data of this sstable can be purged, which the sstable
+        // itself works out of the gc state, exactly as compaction does.
+        const auto gc_before = sst->get_gc_before_for_drop_estimation(gc_clock::now(), gc_state, schema);
+        uint64_t expired_tombstones = 0;
+        for (const auto& [deletion_time, count] : stats.estimated_tombstone_drop_time.bin) {
+            desc.tombstones += count;
+            if (deletion_time < gc_before.time_since_epoch().count()) {
+                expired_tombstones += count;
+            }
+        }
+        if (expiry_is_known) {
+            desc.expired_tombstones = expired_tombstones;
+        }
+        if (tablets) {
+            tablets->assign(desc);
+        } else if (sharder) {
+            desc.shard = sharder->shard_for_reads(sst->get_first_decorated_key().token());
+        }
+
+        sstring label;
+        int64_t key = 0;
+        switch (grouping) {
+        case layout_grouping::run:
+            label = fmt::format("RUN {}", desc.run);
+            break;
+        case layout_grouping::level:
+            label = fmt::format("LEVEL {}", desc.level);
+            key = desc.level;
+            break;
+        case layout_grouping::window:
+            label = fmt::format("WINDOW {}", format_epoch_seconds(desc.window / 1000000));
+            key = desc.window;
+            break;
+        }
+        const auto group_key = std::pair(desc.shard ? int64_t(*desc.shard) : -1, desc.tablet ? int64_t(*desc.tablet) : -1);
+        auto& bucket = layout[group_key][label];
+        bucket.label = std::move(label);
+        bucket.key = key;
+        bucket.sstables.push_back(std::move(desc));
+    }
+
+    std::vector<layout_compaction_group> groups;
+    for (auto& [group_key, buckets] : layout) {
+        const auto [shard, tablet] = group_key;
+        sstring label = "ALL SSTABLES";
+        if (tablet >= 0 && shard >= 0) {
+            label = fmt::format("TABLET #{}, SHARD #{}", tablet, shard);
+        } else if (tablet >= 0) {
+            label = fmt::format("TABLET #{}", tablet);
+        } else if (shard >= 0) {
+            label = fmt::format("SHARD #{}", shard);
+        } else if (tablets) {
+            label = "SSTABLES OWNED BY NO TABLET";
+        }
+        auto& group = groups.emplace_back(layout_compaction_group{.label = std::move(label)});
+        for (auto& [_, bucket] : buckets) {
+            sort_sstables(bucket.sstables, sort_keys);
+            group.buckets.push_back(std::move(bucket));
+        }
+        // levels and time windows have a natural order, runs are ordered by
+        // size, with the largest -- most expensive to compact -- one first
+        if (grouping == layout_grouping::run) {
+            std::ranges::sort(group.buckets, std::ranges::greater(), [] (const layout_bucket& b) { return b.summary().size; });
+        } else {
+            std::ranges::sort(group.buckets, std::ranges::less(), [] (const layout_bucket& b) { return b.key; });
+        }
+    }
+
+    if (format == output_format::json) {
+        print_layout_json(groups, columns);
+        return;
+    }
+    fmt::print(std::cout, "table: {}.{}\ncompaction strategy: {} ({}), describing its {}\n",
+            schema->ks_name(), schema->cf_name(), compaction::compaction_strategy::name(strategy),
+            vm.count("strategy") ? "provided with --strategy" : "obtained from the schema", describe(grouping));
+    fmt::print(std::cout, "tombstone_gc: {}, {}\n", gc_options.mode(), describe(gc_options, gc_grace_seconds, repaired_ranges));
+    if (tablets) {
+        fmt::print(std::cout, "tablets: {}, this node: {}\n", tablets->size(),
+                local_node ? fmt::to_string(local_node->host_id) : "unknown, sstables are not attributed to shards");
+    }
+    print_layout_text(groups, columns);
+    fmt::print(std::cout, "\nNOTE: the number of partitions, tombstones and expired tombstones are estimates,"
+            " read from the metadata of the sstables.\n");
 }
 
 const std::vector<operation_option> global_options {
@@ -2980,6 +3961,66 @@ For more information, see: {}
                 typed_option<>("merge", "combine all input sstable(s) into a single stream before splitting"),
             }},
             split_operation},
+/* layout */
+    {{"layout",
+            "Describe the layout of the sstables of a table",
+fmt::format(R"(
+Describe how the sstables of a table are organized by its compaction strategy.
+Incremental and size-tiered compaction organize sstables into runs, leveled
+compaction into levels and time-window compaction into time windows. The
+sstables are grouped accordingly, and each group is annotated with the aggregate
+of the sstables in it.
+
+The compaction strategy, its options and the tombstone_gc mode are the ones of
+the schema. --strategy and --strategy-option are shortcuts for describing the
+layout in the terms of another strategy, useful when the schema is not available
+-- in which case the schema loader falls back to the default, incremental
+compaction. Everything else the description depends on is a property of the
+schema too, so overriding the schema itself, with --schema-file, customizes all
+of it.
+
+Sstables belonging to different compaction groups are described separately, as
+compaction only ever considers sstables of the same compaction group. For a
+tablet-based table the compaction group is the tablet, which is looked up in
+system.tablets, located in the data dir. If system.tablets lives elsewhere, its
+directory can be provided with --system-tablets-dir. For a vnode-based table the
+compaction group is the shard, which is derived from the sharding parameters of
+the node, read from system.topology; --shards and --ignore-msb-bits provide them
+when it cannot be read, and are rejected for a tablet-based table, whose
+sharding is its tablet map.
+
+The table directory, or the keyspace and the table names, can be passed instead
+of the individual sstables, in which case all the sstables of the table are
+described.
+
+Chose the columns to include with --columns and the order of the sstables within
+each group with --sort. The supported columns are:
+{}
+
+For more information, see: {}
+)",
+        fmt::join(layout_columns | std::views::transform([] (const layout_column& c) {
+            return fmt::format("* {}: {}", c.name, c.description); }), "\n"),
+        doc_link("operating-scylla/admin-tools/scylla-sstable#layout")),
+            {
+                typed_option<sstring>("strategy", "the compaction strategy to describe the layout in the terms of, one of"
+                        " (ics, stcs, lcs, twcs), defaults to the compaction strategy of the schema"),
+                typed_option<program_options::string_map>("strategy-option", {}, "compaction strategy option(s) overriding"
+                        " those of the schema, e.g. --strategy-option compaction_window_unit=HOURS"),
+                typed_option<sstring>("columns", fmt::format("{}", fmt::join(default_layout_columns, ",")),
+                        "the columns to include, a comma-separated list of column names, or \"all\" for all of them"),
+                typed_option<sstring>("sort", "size:desc", "the columns to order the sstables of each group by, a"
+                        " comma-separated list of column[:asc|desc], in decreasing order of relevance"),
+                typed_option<sstring>("system-tablets-dir", "tablet-based tables only: path to the directory containing"
+                        " the sstables of system.tablets, when it cannot be located in the data dir"),
+                typed_option<unsigned>("shards", "vnode-based tables only: the number of shards the source scylla"
+                        " instance has, defaults to the one recorded in system.topology"),
+                typed_option<unsigned>("ignore-msb-bits", "vnode-based tables only:"
+                        " 'murmur3_partitioner_ignore_msb_bits' set by scylla.yaml, defaults to the one recorded in"
+                        " system.topology"),
+                typed_option<std::string>("output-format", "text", "the output-format, one of (text, json)"),
+            }},
+            layout_operation},
 };
 
 } // anonymous namespace
@@ -3110,7 +4151,30 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
     };
     tool_app_template app(std::move(app_cfg));
 
-    return app.run_async(argc, argv, [&app] (const operation& operation, const bpo::variables_map& app_config) {
+    return app.run_async(argc, argv, [&app] (const operation& operation, const bpo::variables_map& raw_app_config) {
+        // The sstables to work on can be named one by one, or by the directory
+        // holding them, or by the table they belong to. Tell which it is before
+        // anything looks at the arguments.
+        bpo::variables_map app_config;
+        std::optional<std::pair<sstring, sstring>> keyspace_and_table;
+        std::vector<sstring> sstable_directories;
+        try {
+            keyspace_and_table = get_keyspace_and_table_arguments(raw_app_config);
+            app_config = raw_app_config;
+            if (keyspace_and_table) {
+                // the schema comes from the named table, and its sstables are
+                // resolved once the sstables manager is up
+                app_config.erase("sstables");
+                app_config.insert_or_assign("keyspace", bpo::variable_value(boost::any(keyspace_and_table->first), false));
+                app_config.insert_or_assign("table", bpo::variable_value(boost::any(keyspace_and_table->second), false));
+            } else {
+                sstable_directories = get_sstable_directory_arguments(app_config);
+            }
+        } catch (std::invalid_argument& e) {
+            fmt::print(std::cerr, "error processing arguments: {}\n", e.what());
+            return 1;
+        }
+
         schema_ptr schema;
         std::optional<schema_with_source> schema_with_source;
 
@@ -3230,6 +4294,16 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
         db::nop_large_data_handler large_data_handler;
         db::nop_corrupt_data_handler corrupt_data_handler(db::corrupt_data_handler::register_metrics::no);
 
+        reader_concurrency_semaphore rcs_sem(reader_concurrency_semaphore::no_limits{}, app_name, reader_concurrency_semaphore::register_metrics::no);
+        auto stop_semaphore = deferred_stop(rcs_sem);
+
+        const auto permit = rcs_sem.make_tracking_only_permit(schema, app_name, db::no_timeout, {});
+
+        // Whoever asks the manager for the local host id -- the compaction
+        // setup and the sstable writer do, from a coroutine -- cannot wait for
+        // it, so resolve it here, while still in a seastar thread.
+        const auto local_host_id = resolve_local_host_id(app_config, dbcfg, permit);
+
         feature_service.ms_sstable.enable();
         feature_service.mt_sstable.enable();
         sstables::sstables_manager sst_man(
@@ -3240,7 +4314,7 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
             feature_service,
             tracker,
             dir_sem,
-            [host_id = locator::host_id::create_random_id()] { return host_id; },
+            [local_host_id] { return local_host_id; },
             *scf,
             abort,
             dbcfg.extensions().sstable_file_io_extensions(),
@@ -3249,7 +4323,26 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
         auto close_sst_man = deferred_close(sst_man);
 
         std::vector<sstables::shared_sstable> sstables;
-        if (app_config.count("sstables")) {
+        if (keyspace_and_table) {
+            const auto& [keyspace, table] = *keyspace_and_table;
+            try {
+                sstables = load_sstables_of_table(schema, sst_man, dbcfg, app_config, permit, keyspace, table);
+            } catch (...) {
+                fmt::print(std::cerr, "error resolving the sstables of {}.{}: {:t}\n",
+                        keyspace, table, std::current_exception());
+                return 1;
+            }
+        } else if (!sstable_directories.empty()) {
+            try {
+                for (const auto& directory : sstable_directories) {
+                    auto of_directory = load_sstables_of_directory(schema, sst_man, std::filesystem::path(directory));
+                    std::ranges::move(of_directory, std::back_inserter(sstables));
+                }
+            } catch (...) {
+                fmt::print(std::cerr, "error loading the sstables of the directory: {:t}\n", std::current_exception());
+                return 1;
+            }
+        } else if (app_config.count("sstables")) {
             const auto sstable_names = app_config["sstables"].as<std::vector<sstring>>();
             if (std::set(sstable_names.begin(), sstable_names.end()).size() != sstable_names.size()) {
                 fmt::print(std::cerr, "error processing arguments: duplicate sstable arguments found\n");
@@ -3262,11 +4355,6 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
                 return 1;
             }
         }
-
-        reader_concurrency_semaphore rcs_sem(reader_concurrency_semaphore::no_limits{}, app_name, reader_concurrency_semaphore::register_metrics::no);
-        auto stop_semaphore = deferred_stop(rcs_sem);
-
-        const auto permit = rcs_sem.make_tracking_only_permit(schema, app_name, db::no_timeout, {});
 
         try {
             operations_with_func.at(operation)(schema, permit, sstables, sst_man, dbcfg, app_config);
