@@ -627,8 +627,8 @@ def test_bm25_on_clustering_key_with_fulltext_index(cql, test_keyspace):
 
 
 def test_non_scoring_function_in_order_by_rejected(cql, fulltext_table):
-    """A non-scoring function call in ORDER BY clause must be rejected."""
-    with pytest.raises(InvalidRequest, match="supported as scoring functions in ORDER BY"):
+    """A function call in ORDER BY that names no search must be rejected."""
+    with pytest.raises(InvalidRequest, match="must name at least one search"):
         cql.execute(f"SELECT * FROM {fulltext_table} ORDER BY now() LIMIT 1")
 
 
@@ -733,3 +733,15 @@ def test_bm25_rejected_in_non_select_statements(cql, fulltext_table):
         cql.execute(f"UPDATE {fulltext_table} SET content = 'x' WHERE p = 1 AND BM25(content, 'hello') > 0")
     with pytest.raises(InvalidRequest, match="only supported in SELECT statements"):
         cql.execute(f"DELETE FROM {fulltext_table} WHERE p = 1 AND BM25(content, 'hello') > 0")
+
+
+def test_aggregate_in_order_by_rejected(cql, fulltext_table):
+    """An aggregate collapses the rows it is computed over, so it cannot order them.
+
+    Without an explicit rejection the score selector added for the ordering would turn the whole
+    statement into an aggregation, and the query would silently return a single row.
+    """
+    for aggregate in ["SUM", "MIN", "MAX", "AVG", "COUNT"]:
+        with pytest.raises(InvalidRequest, match="Aggregation functions are not supported in the ORDER BY clause"):
+            cql.prepare(f"SELECT * FROM {fulltext_table} WHERE BM25(content, 'hello') > 0 "
+                        f"ORDER BY {aggregate}(BM25_SCORE(content, 'hello')) LIMIT 10")

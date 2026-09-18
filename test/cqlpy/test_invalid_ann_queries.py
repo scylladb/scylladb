@@ -14,7 +14,7 @@ from .util import new_test_table, new_function, is_scylla
 from cassandra.protocol import InvalidRequest, SyntaxException
 
 ANN_REQUIRES_INDEX_MESSAGE = "ANN ordering by vector requires the column to be indexed"
-UNKNOWN_SCORING_FUNCTION_MESSAGE = "Only ANN() and BM25() are supported as scoring functions in ORDER BY"
+UNKNOWN_SCORING_FUNCTION_MESSAGE = "An ORDER BY expression must name at least one search, through ANN() or BM25()"
 # ANN()'s arguments are checked by ordinary function resolution, which runs before the vector
 # search claims the ORDER BY clause, so argument-count and argument-type diagnostics come from
 # the function layer and name the resolved function.

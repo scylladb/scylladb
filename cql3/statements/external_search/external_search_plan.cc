@@ -89,10 +89,6 @@ const search_source* external_search_plan::find(functions::search_family family)
     return it == _sources.end() ? nullptr : &*it;
 }
 
-search_source* external_search_plan::find(functions::search_family family) {
-    return const_cast<search_source*>(std::as_const(*this).find(family));
-}
-
 search_source& external_search_plan::search_of(const expr::function_call& fc, const functions::external_search_function& fun,
         search_clause clause) {
     auto [column, query_value] = external_search::extract_call_arguments(fc, fun.display_name());
@@ -124,8 +120,6 @@ search_source& external_search_plan::search_of(const expr::function_call& fc, co
         return *source;
     }
 
-    // Every call describes the one search of its family the rows are ranked by, so it has to use
-    // the query value the ORDER BY clause does.
     const auto values_equal = external_search::unevaluated_equality(query_value, source->query_value);
     if (values_equal != external_search::equality::always) {
         if (values_equal == external_search::equality::never) {
@@ -169,19 +163,41 @@ expr::expression external_search_plan::replace_search_calls(const expr::expressi
     });
 }
 
-void external_search_plan::resolve_ordering(const expr::function_call& fc) {
-    const auto* fun = functions::as_external_search_function(fc);
-    // Only ANN() and BM25() rank rows, and both return the (score, rank) pair. A call naming one
-    // value of a search does not rank by it; select_statement rejects such an ORDER BY.
-    if (!fun || fun->value() != functions::search_value::score_and_rank) {
-        return;
+void external_search_plan::resolve_ordering(const expr::expression& prepared_ordering) {
+    throwing_assert(_sources.empty());
+
+    // Rejected here, or the hidden selector holding the score would make the whole statement an
+    // aggregation and silently return one row.
+    expr::verify_no_aggregate_functions(prepared_ordering, "ORDER BY clause");
+
+    // A bare call means the index's own ranking: nothing is computed or sorted here, so the call
+    // is left as it is. Replacing BM25() would give the (score, rank) pair, which is not a score to
+    // sort by. Both 'ORDER BY ANN(column, query_vector)' and the legacy 'ORDER BY column ANN OF
+    // query_vector' parse into an ann() call.
+    if (const auto* fc = expr::as_if<expr::function_call>(&prepared_ordering)) {
+        if (const auto* fun = functions::as_external_search_function(*fc)) {
+            auto& source = search_of(*fc, *fun, search_clause::ordering);
+            if (source.rescores()) {
+                _ordering_expr = ann_search::similarity_expression(source.index, source.column, source.query_value, _db, _schema);
+            }
+            return;
+        }
     }
-    auto& source = search_of(fc, *fun, search_clause::ordering);
-    if (source.rescores()) {
-        // A rescoring index ordered the rows by the score it reported for a quantized vector, which
-        // is not the requested order: the coordinator recomputes the similarity and sorts by it.
-        _ordering_expr = ann_search::similarity_expression(source.index, source.column, source.query_value, _db, _schema);
+
+    // Any other call becomes the score the rows are sorted by, the searches being whatever its
+    // arguments name. Preparation can also have folded the call to a constant, which names none.
+    auto ordering = replace_search_calls(prepared_ordering, search_clause::ordering);
+    if (_sources.empty()) {
+        // The regular-ordering path skips a scoring ordering, so it would otherwise be silently ignored.
+        throw exceptions::invalid_request_exception(
+                "An ORDER BY expression must name at least one search, through ANN() or BM25()");
     }
+    if (expr::type_of(ordering) != float_type) {
+        throw exceptions::invalid_request_exception(seastar::format(
+                "An ORDER BY expression over searches must be a score, but {} is {}",
+                prepared_ordering, expr::type_of(ordering)->as_cql3_type()));
+    }
+    _ordering_expr = std::move(ordering);
 }
 
 void external_search_plan::check_restrictions(const restrictions::select_restrictions& restrictions) {

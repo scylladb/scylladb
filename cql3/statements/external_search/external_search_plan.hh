@@ -94,8 +94,9 @@ public:
         , _temporaries_allocator(temporaries_allocator) {
     }
 
-    /// Resolves the search the ORDER BY call names, if it names one.
-    void resolve_ordering(const expr::function_call& fc);
+    /// Adds the searches the ORDER BY call names. A bare ANN() or BM25() keeps the index's order;
+    /// any other call is replaced like a selector and becomes the score the rows are sorted by.
+    void resolve_ordering(const expr::expression& prepared_ordering);
 
     /// The score the rows are sorted by, when it is not the index's own order. select_statement::prepare()
     /// adds it as a hidden trailing selector for the comparator to read.
@@ -116,14 +117,6 @@ public:
         return _sources.empty();
     }
 
-    bool has_ann() const {
-        return find(functions::search_family::ann) != nullptr;
-    }
-
-    bool has_bm25() const {
-        return find(functions::search_family::bm25) != nullptr;
-    }
-
     const std::vector<search_source>& sources() const {
         return _sources;
     }
@@ -141,7 +134,6 @@ private:
     expr::expression replace_search_calls(const expr::expression& e, search_clause clause);
 
     const search_source* find(functions::search_family family) const;
-    search_source* find(functions::search_family family);
 };
 
 /// Orders by a score column of the result row, descending, rows without a usable score last.

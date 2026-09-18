@@ -116,6 +116,9 @@ uint64_t candidates_wanted(const search_source& source, uint64_t limit) {
 ::shared_ptr<select_statement> external_index_select_statement::prepare(
         std::vector<search_source> sources, external_statement_args args) {
     throwing_assert(!sources.empty());
+    if (sources.size() > 1) {
+        throw exceptions::invalid_request_exception("Combining several searches in one query is not supported yet");
+    }
 
     if (!args.limit.has_value()) {
         throw exceptions::invalid_request_exception(

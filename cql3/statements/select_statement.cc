@@ -2128,35 +2128,19 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
 
     prepared_selectors = maybe_jsonize_select_clause(std::move(prepared_selectors), db, schema);
 
-    // A scoring ORDER BY is prepared here, once, and its resolved call is then offered to the
-    // resolvers. Preparing it in a resolver instead would mean preparing it once per resolver, and
-    // so registering its bind markers more than once.
-    std::optional<expr::expression> prepared_scoring_ordering;
-    if (!_parameters->orderings().empty()) {
-        if (const auto* scoring_ord = std::get_if<raw::select_statement::scoring_function_ordering>(&_parameters->orderings().front().second)) {
-            prepared_scoring_ordering = expr::prepare_expression(scoring_ord->func_expr, db, schema->ks_name(), schema.get(), nullptr);
-            expr::fill_prepare_context(*prepared_scoring_ordering, ctx);
-        }
-    }
-    const expr::function_call* scoring_call = prepared_scoring_ordering
-            ? expr::as_if<expr::function_call>(&*prepared_scoring_ordering)
-            : nullptr;
-
     expr::temporary_allocator temporaries_allocator;
     auto plan = external_search_plan(db, schema, ctx, temporaries_allocator);
-    if (scoring_call) {
-        plan.resolve_ordering(*scoring_call);
-    }
-    const bool is_ann_query = plan.has_ann();
-    const bool has_bm25_ordering = plan.has_bm25();
-    const bool is_external_search = !plan.empty();
 
-    if (prepared_scoring_ordering && !is_ann_query && !has_bm25_ordering) {
-        // A function call in ORDER BY that no scoring-function resolver claimed. The
-        // regular-ordering path below skips scoring orderings, so reject it explicitly
-        // instead of silently ignoring the ORDER BY clause.
-        throw exceptions::invalid_request_exception("Only ANN() and BM25() are supported as scoring functions in ORDER BY");
+    // A scoring ORDER BY is prepared once, here; preparing it inside the plan per clause would
+    // register its bind markers more than once.
+    if (!_parameters->orderings().empty()) {
+        if (const auto* scoring_ord = std::get_if<raw::select_statement::scoring_function_ordering>(&_parameters->orderings().front().second)) {
+            auto prepared_ordering = expr::prepare_expression(scoring_ord->func_expr, db, schema->ks_name(), schema.get(), nullptr);
+            expr::fill_prepare_context(prepared_ordering, ctx);
+            plan.resolve_ordering(prepared_ordering);
+        }
     }
+    const bool is_external_search = !plan.empty();
 
     if (prepared_selectors.empty() && (!_group_by_columns.empty() || plan.ordering_expr())) {
         // We have a "SELECT * GROUP BY", or a "SELECT *" whose rows have to be ranked by a score
