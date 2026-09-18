@@ -22,7 +22,9 @@ from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.util import gather_safely, wait_for
 
 from test.pylib import nodetool
-from test.cluster.util import get_topology_coordinator, keyspace_has_tablets, new_test_keyspace, new_test_table
+from test.cluster.util import (get_commitlog_segment_id, corrupt_commitlog_segment,
+                               get_topology_coordinator, keyspace_has_tablets, new_test_keyspace,
+                               new_test_table)
 
 
 logger = logging.getLogger(__name__)
@@ -1565,3 +1567,131 @@ async def test_hint_retransmission_keeps_column_mappings(manager: ScyllaClusterM
     rows = await cql.run_async(SimpleStatement(f"SELECT pk, v FROM {table}",
                                                 consistency_level=ConsistencyLevel.ONE))
     assert sorted((row.pk, row.v) for row in rows) == [(i, i + 1) for i in range(row_count)]
+
+
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+async def test_corrupted_segment_is_removed(manager: ScyllaClusterManager):
+    """
+    Reproducer of SCYLLADB-4294.
+
+    The original problem stemmed from hint sending being an asynchronous operation
+    with relation to reading from the commitlog. If sending a hint failed *after*
+    hint_sender encountered corruption in the segment, it would override the flag
+    both failure scenarios relied on.
+
+    As a result, hint_sender didn't attempt removing the corrupted segment, treating
+    the whole operation as if it *only* failed to apply a hint. When it then entered
+    the function send_one_file() again, it would go through the same corrupted
+    commitlog, potentially running into the same issue.
+
+    This test follows exactly that scenario. More details can be found in Jira.
+    """
+    fail_hint_send_injection = "hinted_handoff_fail_hint_send"
+    # Use one shard so that all hints land in the same segment.
+    # The increased log level is needed for the test to be reliable.
+    cmdline = ["--smp=1", "--logger-log-level", "hints_manager=trace"]
+    # Allow sending one hint at a time. This simplifies the test.
+    config = {"max_hinted_handoff_concurrency": 1}
+
+    node1, node2 = await manager.servers_add(2, cmdline=cmdline, config=config, auto_rack_dc="dc1")
+
+    node2_host_id = await manager.get_host_id(node2.server_id)
+    hints_dir = await get_hints_dir(manager, node1)
+
+    cql = await manager.get_cql_exclusive(node1)
+    await cql.run_async("CREATE KEYSPACE ks WITH replication = "
+                        "{'class': 'NetworkTopologyStrategy', 'replication_factor': 2}")
+    await cql.run_async("CREATE TABLE ks.tbl (pk int PRIMARY KEY, v int)")
+
+    await manager.server_stop_gracefully(node2.server_id)
+    await manager.server_not_sees_other_server(node1.ip_addr, node2.ip_addr)
+
+    stmt = cql.prepare("INSERT INTO ks.tbl (pk, v) VALUES (?, ?)")
+    stmt.consistency_level = ConsistencyLevel.ONE
+
+    # This number of hints should always be enough to cover at least
+    # two commitlog sectors.
+    hint_count = 4000
+    batch_size = 1000
+    for i in range(hint_count // batch_size):
+        start = i * batch_size
+        await gather_safely(*[cql.run_async(stmt, (start + j, start + j)) for j in range(batch_size)])
+
+    await wait_until_hint_writing_settled(manager, [node1])
+    written = await get_hint_metrics(manager.metrics, node1.ip_addr, "written")
+    assert written == hint_count, f"Some hints failed to be written: {written} vs. {hint_count}"
+
+    await manager.server_stop_gracefully(node1.server_id)
+
+    segments = glob.glob(os.path.join(hints_dir, "*", str(node2_host_id), "HintsLog-*.log"))
+    assert segments, f"No hint segments for {node2_host_id} under {hints_dir}"
+    # The oldest segments are replayed first, so damage the one picked up first.
+    damaged_segment = min(segments, key=get_commitlog_segment_id)
+    logger.info(f"Corrupting hint segment {damaged_segment}")
+    corrupt_commitlog_segment(damaged_segment)
+
+    injections = [
+        {"name": fail_hint_send_injection, "one_shot": False},
+        # Speed up the test.
+        {"name": "decrease_hints_flush_period", "one_shot": False}
+    ]
+    await manager.server_update_config(node1.server_id, "error_injections_at_startup", injections)
+    await manager.server_start(node1.server_id)
+
+    log = await manager.server_open_log(node1.server_id)
+    mark = await log.mark()
+
+    await manager.server_start(node2.server_id)
+    await manager.server_sees_other_server(node1.ip_addr, node2.ip_addr)
+
+    segment_name = re.escape(os.path.basename(damaged_segment))
+
+    try:
+        # Wait for the first hint to get stuck at the error injection.
+        await log.wait_for(fail_hint_send_injection, from_mark=mark, timeout=120)
+
+        # In the meantime, the second hint should also be scheduled
+        # by hint_sender::send_one_file, but because of throttling
+        # allowing for one hint to be sent at a time, it'll be
+        # waiting and *not* hit the error injection yet.
+        async def wait_for_second_hint():
+            matches = await log.grep("Scheduling a hint to be sent", from_mark=mark)
+            return True if (len(matches) == 2) else None
+        await wait_for(wait_for_second_hint, deadline=time.time() + 120)
+
+        # Sanity check. Make sure the second hint didn't reach the error
+        # injection yet.
+        matches = await log.grep(fail_hint_send_injection, from_mark=mark)
+        assert len(matches) == 1, f"Expected just one hint being stuck, got: {len(matches)}"
+        mark = await log.mark()
+
+        # With this setup, make the first hint fail. This should trigger
+        # hint_sender::send_one_file to run into the corrupted sector
+        # in the segment.
+        # Note that the second hint will be attempted to be sent now,
+        # but because the injection is still active, it will hang at it.
+        # We can only unblock it *after* we observe the error message
+        # about the corrupted segment.
+        await manager.api.message_injection(node1.ip_addr, fail_hint_send_injection)
+        await log.wait_for(f"Segment error in .*{segment_name}", from_mark=mark, timeout=120)
+        mark = await log.mark()
+    finally:
+        # Don't prolong test teardown if anything inside the try clause fails.
+        await manager.api.disable_injection(node1.ip_addr, fail_hint_send_injection)
+        await manager.api.message_injection(node1.ip_addr, fail_hint_send_injection)
+
+    await log.wait_for(f"Corrupted segment .*{segment_name} has been deleted", from_mark=mark, timeout=120)
+
+    async def wait_for_damaged_segment_removed():
+        return True if (not os.path.exists(damaged_segment)) else None
+    await wait_for(wait_for_damaged_segment_removed, deadline=time.time() + 120)
+
+    # Make sure we *did* try to send something. That was a necessary part of the
+    # trigger of the original problem.
+    send_errors = await get_hint_metrics(manager.metrics, node1.ip_addr, "send_errors")
+    assert send_errors and send_errors >= 1, \
+        "No hint send failed, so the test did not exercise the race it is meant to cover"
+
+    corrupted_files = await get_hint_metrics(manager.metrics, node1.ip_addr, "corrupted_files")
+    assert corrupted_files == 1, \
+        f"The damaged segment was processed {corrupted_files} times, expected exactly once"
