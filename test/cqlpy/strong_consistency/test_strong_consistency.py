@@ -20,6 +20,7 @@ from cassandra.query import BatchStatement, BatchType, SimpleStatement
 
 from test.pylib.skip_types import skip_env
 
+from .. import nodetool
 from ..util import new_materialized_view, new_test_table, unique_name
 
 
@@ -435,29 +436,22 @@ def test_group_by_on_sc_table(cql, sc_keyspace):
             cql.execute(f"SELECT ck, count(v) FROM {table} WHERE pk = 1 GROUP BY pk, ck")
 
 
-def test_debug_selects_on_sc_table(cql, sc_keyspace, test_keyspace):
+def test_prune_materialized_view_on_sc_table(cql, sc_keyspace, test_keyspace):
     """
-    SELECT FROM MUTATION_FRAGMENTS() and PRUNE MATERIALIZED VIEW are
-    rejected on strongly consistent tables. Both would otherwise be
-    dispatched as plain strongly consistent reads: an internal server
-    error for MUTATION_FRAGMENTS(), a silent no-op for PRUNE
-    MATERIALIZED VIEW. The eventually consistent behavior of both
-    statements serves as contrast: MUTATION_FRAGMENTS() returns the
-    partition's fragments, and PRUNE is rejected on a plain table and
-    returns no rows from a view.
+    PRUNE MATERIALIZED VIEW is rejected on strongly consistent tables.
+    It would otherwise be dispatched as a plain strongly consistent
+    read, a silent no-op. The eventually consistent behavior serves as
+    contrast: PRUNE is rejected on a plain table and returns no rows
+    from a view.
     """
     with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, v int") as table:
         cql.execute(f"INSERT INTO {table} (pk, v) VALUES (1, 2)")
-
-        with pytest.raises(InvalidRequest, match="MUTATION_FRAGMENTS.. is not supported on strongly consistent tables"):
-            cql.execute(f"SELECT * FROM MUTATION_FRAGMENTS({table}) WHERE pk = 1")
 
         with pytest.raises(InvalidRequest, match="PRUNE MATERIALIZED VIEW is not supported on strongly consistent tables"):
             cql.execute(f"PRUNE MATERIALIZED VIEW {table} WHERE pk = 1")
 
     with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int") as ec_table:
         cql.execute(f"INSERT INTO {ec_table} (pk, v) VALUES (1, 2)")
-        assert len(list(cql.execute(f"SELECT * FROM MUTATION_FRAGMENTS({ec_table}) WHERE pk = 1"))) > 0
 
         with pytest.raises(InvalidRequest, match="Ghost rows can only be deleted from materialized views"):
             cql.execute(f"PRUNE MATERIALIZED VIEW {ec_table} WHERE pk = 1")
@@ -501,3 +495,79 @@ def test_oversized_write_on_sc_table(cql, sc_keyspace):
         m = re.search(r"write of (\d+) bytes exceeds the limit of (\d+) bytes", str(e.value))
         size, limit = int(m.group(1)), int(m.group(2))
         assert size >= 200 * 1024 > limit
+
+
+def test_mutation_fragments_on_sc_table(cql, sc_keyspace):
+    """
+    SELECT FROM MUTATION_FRAGMENTS() dumps a strongly consistent table
+    like any other table. Strongly consistent writes are applied into
+    the table's memtable, a flush moves them to an sstable, and a read
+    populates the row cache. The dump reads the local replica only, so
+    it is issued at ONE.
+    """
+    with new_test_table(cql, sc_keyspace, "pk int, ck int, v int, PRIMARY KEY (pk, ck)") as table:
+        for ck in range(3):
+            cql.execute(f"INSERT INTO {table} (pk, ck, v) VALUES (1, {ck}, {ck})")
+        # A write returns once committed. The linearizable read waits
+        # for it to be applied, which is what the dump reads.
+        assert len(list(cql.execute(f"SELECT * FROM {table} WHERE pk = 1"))) == 3
+
+        dump = SimpleStatement(f"SELECT mutation_source, mutation_fragment_kind, ck FROM MUTATION_FRAGMENTS({table}) WHERE pk = 1",
+                               consistency_level=ConsistencyLevel.ONE)
+
+        def fragments(source):
+            return [(r.mutation_fragment_kind, r.ck) for r in cql.execute(dump) if r.mutation_source.startswith(source)]
+
+        expected = [('partition start', None), ('clustering row', 0), ('clustering row', 1), ('clustering row', 2), ('partition end', None)]
+        assert fragments('memtable:') == expected
+        assert fragments('sstable:') == []
+
+        nodetool.flush(cql, table)
+        assert fragments('memtable:') == []
+        assert fragments('sstable:') == expected
+
+        assert len(list(cql.execute(f"SELECT * FROM {table} WHERE pk = 1"))) == 3
+        assert fragments('row-cache') == expected
+
+
+def test_mutation_fragments_paging_on_sc_table(cql, sc_keyspace):
+    """
+    A paged dump of a strongly consistent table returns the same
+    fragments as the unpaged one, whatever the page size.
+    """
+    with new_test_table(cql, sc_keyspace, "pk int, ck int, v int, PRIMARY KEY (pk, ck)") as table:
+        for ck in range(23):
+            cql.execute(f"INSERT INTO {table} (pk, ck, v) VALUES (1, {ck}, {ck})")
+        assert len(list(cql.execute(f"SELECT * FROM {table} WHERE pk = 1"))) == 23
+
+        query = f"SELECT * FROM MUTATION_FRAGMENTS({table}) WHERE pk = 1"
+        expected = list(cql.execute(SimpleStatement(query, consistency_level=ConsistencyLevel.ONE)))
+        # partition start, 23 rows, partition end
+        assert len(expected) == 25
+
+        for page_size in (1, 7, 10, 24, 25):
+            statement = SimpleStatement(query, fetch_size=page_size, consistency_level=ConsistencyLevel.ONE)
+            assert list(cql.execute(statement)) == expected, f"fetch_size={page_size}"
+
+
+def test_mutation_fragments_consistency_level_on_sc_table(cql, sc_keyspace):
+    """
+    A dump of a strongly consistent table is accepted only at ONE and
+    LOCAL_ONE. It reads the coordinator only, with no read barrier. A
+    regular read at ONE also reads one replica with no barrier, but is
+    redirected when the coordinator is not a replica. QUORUM and
+    LOCAL_QUORUM promise a linearizable read the dump cannot give.
+    """
+    with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, v int") as table:
+        cql.execute(f"INSERT INTO {table} (pk, v) VALUES (1, 2)")
+        assert len(list(cql.execute(f"SELECT * FROM {table} WHERE pk = 1"))) == 1
+
+        query = f"SELECT * FROM MUTATION_FRAGMENTS({table}) WHERE pk = 1"
+        for cl in (ConsistencyLevel.ONE, ConsistencyLevel.LOCAL_ONE):
+            # partition start, clustering row, partition end
+            assert len(list(cql.execute(SimpleStatement(query, consistency_level=cl)))) == 3
+
+        error_msg = "MUTATION_FRAGMENTS\\(\\) on strongly consistent tables must use ONE/LOCAL_ONE consistency level"
+        for cl in (ConsistencyLevel.QUORUM, ConsistencyLevel.LOCAL_QUORUM, ConsistencyLevel.ALL):
+            with pytest.raises(InvalidRequest, match=error_msg):
+                cql.execute(SimpleStatement(query, consistency_level=cl))
