@@ -16,6 +16,7 @@ from cassandra.cluster import ConsistencyLevel
 from cassandra.query import SimpleStatement
 
 from test.pylib.internal_types import ServerInfo
+from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import HTTPError
 from test.pylib.tablets import get_tablet_replica
@@ -347,7 +348,7 @@ async def test_small_table_optimization_repair(manager):
     assert len(rows) == 1
 
 
-@pytest.mark.parametrize("reason", ["rebuild", "bootstrap", "decommission"])
+@pytest.mark.parametrize("reason", ["rebuild", "bootstrap", "replace", "decommission"])
 async def test_small_table_optimization_for_rbno_auto_detect_by_size(manager, reason):
     """Verify that the small table optimization is automatically enabled for a
     user table during repair based node operations based on the table's on-disk
@@ -361,8 +362,8 @@ async def test_small_table_optimization_for_rbno_auto_detect_by_size(manager, re
     while the large one must fall back to the regular ranged repair. The decision
     is made by probing the table size on the replicas the operation syncs from,
     so it must hold for the join style operations where the data lives on the
-    peers (bootstrap, rebuild) as well as for decommission where the data is
-    local to the coordinating node.
+    peers (bootstrap, rebuild, replace) as well as for decommission where the
+    data is local to the coordinating node.
     """
     ks = "auto_opt_ks"
     small_tbl = "small_tbl"
@@ -402,6 +403,17 @@ async def test_small_table_optimization_for_rbno_auto_detect_by_size(manager, re
     if reason == "bootstrap":
         coordinator = await manager.server_add(config=config, cmdline=cmdline,
                                                property_file={"dc": "dc1", "rack": "rack99"})
+        log = await manager.server_open_log(coordinator.server_id)
+        mark = None
+    elif reason == "replace":
+        # Like bootstrap, the coordinator is the node that joins. It must be put
+        # in the dc and rack of the node it replaces.
+        replaced = servers[-1]
+        await manager.server_stop(replaced.server_id, convict=True)
+        coordinator = await manager.server_add(
+            ReplaceConfig(replaced_id=replaced.server_id, reuse_ip_addr=False, use_host_id=True),
+            config=config, cmdline=cmdline,
+            property_file={"dc": replaced.datacenter, "rack": replaced.rack})
         log = await manager.server_open_log(coordinator.server_id)
         mark = None
     else:

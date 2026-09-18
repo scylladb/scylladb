@@ -301,7 +301,9 @@ class DTestSetup:
             # where a node can be unavailable for an extended period of time,
             # this can cause the reconnection retry interval to get very large,
             # longer than a test timeout.
-            reconnection_policy=ExponentialReconnectionPolicy(1.0, 4.0),
+            # The base delay decides how long a reconnect is delayed after a node is
+            # already back up; max_attempts keeps the overall budget at ~251s.
+            reconnection_policy=ExponentialReconnectionPolicy(0.1, 1.0, 250),
         )
         try:
             session = cluster.connect(wait_for_all_pools=True)

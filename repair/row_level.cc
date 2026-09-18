@@ -1569,6 +1569,23 @@ public:
                 co_await tmptr->update_normal_tokens(bootstrap_tokens, myid);
                 rlogger.debug("small_table_optimization: Got bootstrap tokens={}", bootstrap_tokens);
             }
+        } else if (_reason == streaming::stream_reason::replace) {
+            auto myid = tm->get_my_id();
+            // The tokens of the node we replace become ours, but the token metadata
+            // only learns that once the replace finishes. Assume a single replace is
+            // in progress, so any node being replaced is the one we are replacing.
+            std::unordered_set<dht::token> replacing_tokens;
+            for (const auto& [token, host_id] : tm->get_token_to_endpoint()) {
+                if (tm->is_being_replaced(host_id)) {
+                    replacing_tokens.insert(token);
+                }
+                co_await coroutine::maybe_yield();
+            }
+            if (!replacing_tokens.empty()) {
+                tmptr = std::make_unique<locator::token_metadata>(co_await tm->clone_only_token_map());
+                co_await tmptr->update_normal_tokens(replacing_tokens, myid);
+                rlogger.debug("small_table_optimization: Got replacing tokens={}", replacing_tokens);
+            }
         } else if (_reason == streaming::stream_reason::decommission) {
             auto myid = tm->get_my_id();
             auto& leaving = tm->get_leaving_endpoints();
