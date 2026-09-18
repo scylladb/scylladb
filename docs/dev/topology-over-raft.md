@@ -188,11 +188,12 @@ are the currently supported global topology operations:
    coordinator, continues with the tables which have no map yet, and the request is
    completed together with the last of them. Every command is a regular guarded topology
    change, so all nodes see each part as soon as it commits. A keyspace with maps for only
-   some of its tables (after a failed request, for instance) cannot be finalized, and is
-   completed by preparing it again. The tablet count targets are computed once, by the node
-   which received the API call, and travel with the request, so that they don't depend on
-   which coordinator writes which table's map. Gated by the `PREPARE_MIGRATION_AS_TOPOLOGY_OPERATION` cluster
-   feature.
+   some of its tables (after a failed request, for instance) cannot be finalized forward; it
+   is completed by preparing it again, or taken back to vnodes by finalizing it while no node
+   is marked for upgrade, which drops the maps it does have. The tablet count targets are
+   computed once, by the node which received the API call, and travel with the request, so
+   that they don't depend on which coordinator writes which table's map. Gated by the
+   `PREPARE_MIGRATION_AS_TOPOLOGY_OPERATION` cluster feature.
 
 ## Tablet draining
 

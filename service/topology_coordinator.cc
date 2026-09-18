@@ -1370,14 +1370,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     const auto& tablet_metadata = tmptr->tablets();
                     auto tables = ks.metadata()->tables();
 
-                    // Verify all tables have tablet maps.
-                    for (const auto& schema : tables) {
-                        if (!tablet_metadata.has_tablet_map(schema->id())) {
-                            throw std::runtime_error(fmt::format(
-                                "Table {}.{} does not have a tablet map", ks_name, schema->cf_name()));
-                        }
-                    }
-
                     // Find the migration direction (tablets or rollback to vnodes).
                     // Nodes that haven't set their intended mode are treated as vnodes (the default).
                     std::optional<intended_storage_mode> global_intended_mode;
@@ -1399,6 +1391,18 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
 
                     rtlogger.info("Finalizing migration for keyspace '{}': direction={}",
                         ks_name, rollback ? "rollback to vnodes" : "forward to tablets");
+
+                    if (!rollback) {
+                        // Forward needs every table to have a tablet map. Rollback doesn't: it
+                        // drops whatever maps there are, which is also how a keyspace prepared
+                        // only in part is taken back to vnodes.
+                        for (const auto& schema : tables) {
+                            if (!tablet_metadata.has_tablet_map(schema->id())) {
+                                throw std::runtime_error(fmt::format(
+                                    "Table {}.{} does not have a tablet map", ks_name, schema->cf_name()));
+                            }
+                        }
+                    }
 
                     co_await _tablet_load_stats_refresh.trigger();
 
@@ -1490,10 +1494,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     if (other_ks.uses_tablets()) {
                         continue;
                     }
-                    bool other_ks_has_tablet_map = std::ranges::any_of(other_ks.metadata()->tables(), [&](const auto& s) {
-                        return tmd.has_tablet_map(s->id());
-                    });
-                    if (other_ks_has_tablet_map) {
+                    if (replica::has_any_tablet_map(tmd, *other_ks.metadata())) {
                         has_other_migrating_ks = true;
                         break;
                     }
