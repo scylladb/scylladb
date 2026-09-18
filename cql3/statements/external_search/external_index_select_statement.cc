@@ -86,40 +86,45 @@ lw_shared_ptr<query::read_command> external_index_select_statement::prepare_comm
             options.get_timestamp(state));
 }
 
-future<::shared_ptr<cql_transport::messages::result_message>> external_index_select_statement::query_base_table(query_processor& qp,
-        service::query_state& state, const query_options& options, const std::vector<vector_search::primary_key>& pkeys, lowres_clock::time_point timeout,
-        std::unique_ptr<cql3::selection::external_values_provider> provider) const {
-    auto command = prepare_command_for_base_query(qp, state, options, pkeys.size());
-
-    auto result = co_await query_base_table(qp, state, options, command, timeout, pkeys);
-
-    command->set_row_limit(get_limit(options, _limit));
-
-    co_return co_await wrap_result_to_error_message([this, command = std::move(command), &options, provider_ptr = provider.get()](auto query_result) {
-        return process_results(std::move(query_result), command, options, _query_start_time_point, provider_ptr);
-    })(std::move(result));
+future<::shared_ptr<cql_transport::messages::result_message>> external_index_select_statement::emit_result_set(
+        coordinator_result<base_table_read> table_results, const query_options& options,
+        const cql3::selection::external_values_provider* provider) const {
+    co_return co_await wrap_result_to_error_message([this, &options, provider](base_table_read read) {
+        // process_results() trims the result set to this limit once post-query ordering has sorted it.
+        read.command->set_row_limit(get_limit(options, _limit));
+        return process_results(std::move(read.rows), read.command, options, _query_start_time_point, provider);
+    })(std::move(table_results));
 }
 
-future<coordinator_result<foreign_ptr<lw_shared_ptr<query::result>>>> external_index_select_statement::query_base_table(query_processor& qp,
-        service::query_state& state, const query_options& options, lw_shared_ptr<query::read_command> command, lowres_clock::time_point timeout,
-        const std::vector<vector_search::primary_key>& pkeys) const {
+future<coordinator_result<external_index_select_statement::base_table_read>> external_index_select_statement::query_base_table(query_processor& qp,
+        service::query_state& state, const query_options& options, lowres_clock::time_point timeout,
+        std::span<const vector_search::hybrid_candidate> candidates) const {
+
+    // Read one row for every key the index returned. process_results() later applies the
+    // user's LIMIT, and the provider may drop some rows, so fewer rows than this may reach the
+    // client.
+    auto command = prepare_command_for_base_query(qp, state, options, candidates.size());
 
     // For tables without clustering columns, we can optimize by querying
     // partition ranges instead of individual primary keys, since the
     // partition key alone uniquely identifies each row.
     if (_schema->clustering_key_size() == 0) {
-        auto to_partition_ranges = [](const std::vector<vector_search::primary_key>& pkeys) -> std::vector<dht::partition_range> {
+        auto to_partition_ranges = [](std::span<const vector_search::hybrid_candidate> candidates) -> std::vector<dht::partition_range> {
             std::vector<dht::partition_range> partition_ranges;
-            std::ranges::transform(pkeys, std::back_inserter(partition_ranges), [](const auto& pkey) {
-                return dht::partition_range::make_singular(pkey.partition);
+            std::ranges::transform(candidates, std::back_inserter(partition_ranges), [](const auto& candidate) {
+                return dht::partition_range::make_singular(candidate.partition);
             });
 
             return partition_ranges;
         };
-        co_return co_await query_base_table(qp, state, options, std::move(command), timeout, to_partition_ranges(pkeys));
+        auto rows = co_await query_partition_ranges(qp, state, options, command, timeout, to_partition_ranges(candidates));
+        if (!rows) {
+            co_return std::move(rows).as_failure();
+        }
+        co_return base_table_read{std::move(rows).value(), std::move(command)};
     }
-    co_return co_await utils::result_map_reduce(
-            pkeys.begin(), pkeys.end(),
+    auto rows = co_await utils::result_map_reduce(
+            candidates.begin(), candidates.end(),
             [&](this auto, auto& key) -> future<coordinator_result<foreign_ptr<lw_shared_ptr<query::result>>>> {
                 auto cmd = ::make_lw_shared<query::read_command>(*command);
                 cmd->slice._row_ranges = query::clustering_row_ranges{query::clustering_range::make_singular(key.clustering)};
@@ -132,9 +137,13 @@ future<coordinator_result<foreign_ptr<lw_shared_ptr<query::result>>>> external_i
                 co_return std::move(rqr.value().query_result);
             },
             query::result_merger{command->get_row_limit(), query::max_partitions});
+    if (!rows) {
+        co_return std::move(rows).as_failure();
+    }
+    co_return base_table_read{std::move(rows).value(), std::move(command)};
 }
 
-future<coordinator_result<foreign_ptr<lw_shared_ptr<query::result>>>> external_index_select_statement::query_base_table(query_processor& qp,
+future<coordinator_result<foreign_ptr<lw_shared_ptr<query::result>>>> external_index_select_statement::query_partition_ranges(query_processor& qp,
         service::query_state& state, const query_options& options, lw_shared_ptr<query::read_command> command, lowres_clock::time_point timeout,
         std::vector<dht::partition_range> partition_ranges) const {
 

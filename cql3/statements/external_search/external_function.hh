@@ -9,7 +9,10 @@
 #pragma once
 
 #include "cql3/expr/expression.hh"
+#include "cql3/expr/temporary_allocator.hh"
+#include "cql3/selection/selector.hh"
 
+#include <optional>
 #include <string_view>
 
 class schema;
@@ -18,6 +21,12 @@ class column_definition;
 namespace cql3::selection {
 
 class selection;
+
+}
+
+namespace cql3::functions {
+
+enum class search_value;
 
 }
 
@@ -48,5 +57,36 @@ equality unevaluated_equality(const expr::expression& a, const expr::expression&
 /// Adds the primary-key columns to those fetched for every row, selected or not: a score arrives
 /// keyed by primary key, and that is how it is matched to its row.
 void fetch_primary_key_columns(selection::selection& selection, const schema& schema);
+
+/// The temporaries holding the score and the rank of one search. Each is allocated by the first
+/// SELECT call asking for that value and filled per row by external_search_provider from the
+/// index's response.
+struct search_temporaries {
+    std::optional<size_t> score;
+    std::optional<size_t> rank;
+    std::optional<size_t> fragment;
+
+    /// True when the query returns some value of the search.
+    bool any() const {
+        return score.has_value() || rank.has_value() || fragment.has_value();
+    }
+};
+
+/// The expression that replaces `call`, a call to a search function returning `value`: a read of
+/// the temporary holding that value, allocated if this is the first call asking for it, or for the
+/// (score, rank) pair a tuple of the two reads. Every call asking for one value reads the same
+/// temporary, so BM25() and BM25_SCORE() in one query share the score's. A temporary is typed by
+/// the function's declared return type, since that is what the selector reading it was typed by.
+///
+/// A temporary that replaces a whole call carries the call in replaced_expr, so an unaliased
+/// selector still formats as the call. The two temporaries inside the tuple carry no call; see
+/// name_selector_as_written().
+expr::expression replace_search_call(functions::search_value value, const expr::expression& call, search_temporaries& temporaries,
+        expr::temporary_allocator& allocator);
+
+/// Names an unaliased selector after `written`, the expression the user wrote, when what it was
+/// replaced with would not format as it. "SELECT BM25(c, t)" is replaced with a tuple of two
+/// temporaries, which would otherwise be named "(system.temporary(0), system.temporary(1))".
+void name_selector_as_written(selection::prepared_selector& selector, const expr::expression& written);
 
 } // namespace cql3::statements::external_search
