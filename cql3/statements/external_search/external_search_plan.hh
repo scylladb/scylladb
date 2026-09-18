@@ -54,4 +54,55 @@ select_statement::ordering_comparator_type rescored_similarity_ordering(
         data_dictionary::database db,
         schema_ptr schema);
 
+/// The external searches one statement runs, and the replacement of the calls that refer to them.
+///
+/// A call to a search function (ANN(), BM25(), ...) cannot be evaluated from its arguments: only
+/// the index can. Preparation finds every such call, decides which search it refers to, and replaces
+/// it with a read of the temporary that search's result is delivered in.
+///
+/// ORDER BY introduces the searches; a call in SELECT or WHERE must refer to one of them. The
+/// clauses are handled by separate methods because they become available at different points of
+/// select_statement::prepare(); resolve_ordering() comes first.
+class external_search_plan {
+    data_dictionary::database _db;
+    schema_ptr _schema;
+    prepare_context& _ctx;
+    expr::temporary_allocator& _temporaries_allocator;
+    // One per family for now; a query naming several searches needs a list instead.
+    std::optional<ann_ordering_info> _ann;
+    std::optional<bm25_ordering_info> _bm25;
+
+public:
+    external_search_plan(data_dictionary::database db, schema_ptr schema, prepare_context& ctx,
+            expr::temporary_allocator& temporaries_allocator)
+        : _db(db)
+        , _schema(std::move(schema))
+        , _ctx(ctx)
+        , _temporaries_allocator(temporaries_allocator) {
+    }
+
+    /// Resolves the search the ORDER BY call names, if it names one.
+    void resolve_ordering(const expr::function_call& fc);
+
+    /// Replaces every call in the SELECT clause that refers to a search bound above.
+    void replace_selectors(std::vector<selection::prepared_selector>& prepared_selectors);
+
+    bool has_ann() const {
+        return _ann.has_value();
+    }
+
+    bool has_bm25() const {
+        return _bm25.has_value();
+    }
+
+    std::optional<ann_ordering_info>& ann() {
+        return _ann;
+    }
+
+    std::optional<bm25_ordering_info>& bm25() {
+        return _bm25;
+    }
+};
+
+
 } // namespace cql3::statements
