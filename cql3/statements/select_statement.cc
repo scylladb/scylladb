@@ -2148,8 +2148,6 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     if (scoring_call) {
         plan.resolve_ordering(*scoring_call);
     }
-    auto& ann_ordering_info_opt = plan.ann();
-    auto& bm25_ordering_info_opt = plan.bm25();
     const bool is_ann_query = plan.has_ann();
     const bool has_bm25_ordering = plan.has_bm25();
 
@@ -2160,7 +2158,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
         throw exceptions::invalid_request_exception("Only ANN() and BM25() are supported as scoring functions in ORDER BY");
     }
 
-    if (prepared_selectors.empty() && (!_group_by_columns.empty() || (is_ann_query && ann_ordering_info_opt->is_rescoring_enabled))) {
+    if (prepared_selectors.empty() && (!_group_by_columns.empty() || plan.is_rescoring())) {
         // We have a "SELECT * GROUP BY" or "SELECT * ORDER BY ANN" with rescoring enabled. If we leave prepared_selectors
         // empty, below we choose selection::wildcard() for SELECT *, and either:
         //  - forget to do the "levellize" trick needed for the GROUP BY. See #16531.
@@ -2188,8 +2186,8 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
 
     select_statement::ordering_comparator_type ordering_comparator;
     bool hide_last_column = false;
-    if (is_ann_query && ann_ordering_info_opt->is_rescoring_enabled) {
-        ordering_comparator = rescored_similarity_ordering(prepared_selectors, *ann_ordering_info_opt, db, schema);
+    if (plan.is_rescoring()) {
+        ordering_comparator = rescored_similarity_ordering(prepared_selectors, *plan.ann_ordering(), db, schema);
         hide_last_column = true;
     }
 
@@ -2378,7 +2376,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     } else if (is_ann_query) {
         stmt = vector_indexed_table_select_statement::prepare(db, schema, ctx.bound_variables_size(), _parameters, std::move(selection), std::move(restrictions),
                 std::move(group_by_cell_indices), is_reversed_, std::move(ordering_comparator),
-                prepare_limit(db, ctx, _limit), prepare_limit(db, ctx, _per_partition_limit), stats, std::move(*ann_ordering_info_opt),
+                prepare_limit(db, ctx, _limit), prepare_limit(db, ctx, _per_partition_limit), stats, *plan.ann_ordering(),
                 std::move(prepared_attrs));
     } else if (is_fts_query) {
         stmt = fulltext_indexed_table_select_statement::prepare(
@@ -2394,7 +2392,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
             prepare_limit(db, ctx, _limit),
             prepare_limit(db, ctx, _per_partition_limit),
             stats,
-            std::move(bm25_ordering_info_opt),
+            plan.bm25_ordering(),
             std::move(prepared_attrs));
     } else if (restrictions->uses_secondary_indexing()) {
         stmt = view_indexed_table_select_statement::prepare(
