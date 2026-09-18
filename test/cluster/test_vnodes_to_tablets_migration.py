@@ -17,7 +17,7 @@ from test.pylib.tablets import get_tablet_count, get_all_tablet_replicas
 from test.pylib.rest_client import HTTPError, read_barrier
 from test.pylib.internal_types import ServerInfo
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
-from test.cluster.util import new_test_keyspace, reconnect_driver
+from test.cluster.util import new_test_keyspace, reconnect_driver, get_coordinator_host, wait_new_coordinator_elected
 from test.cluster.tasks.task_manager_client import TaskManagerClient
 
 logger = logging.getLogger(__name__)
@@ -1050,6 +1050,275 @@ async def test_migration_multiple_keyspaces(manager: ScyllaClusterManager):
             for row in rows:
                 assert row.intended_storage_mode is None, \
                     f"intended_storage_mode should be cleared for node {row.host_id} after all migrations are done, got '{row.intended_storage_mode}'"
+
+
+async def tables_with_tablet_map(manager: ScyllaClusterManager, server: ServerInfo, ks: str, tables: list[str]) -> list[str]:
+    """Return the tables among `tables` which have a tablet map, as seen by `server`."""
+    return [t for t in tables if await get_tablet_count(manager, server, ks, t) > 0]
+
+
+async def assert_all_tables_have_tablet_map(manager: ScyllaClusterManager, server: ServerInfo, ks: str, tables: list[str]):
+    mapped = await tables_with_tablet_map(manager, server, ks, tables)
+    missing = sorted(set(tables) - set(mapped))
+    assert not missing, f"tables of {ks} without a tablet map: {missing}"
+
+
+# Logged by the topology coordinator after it commits a command of a prepare_migration
+# request which leaves the request in the queue, i.e. after every command but the last.
+# The coordinator logs it once the command is applied, so a pass which loses its guard and
+# retries doesn't add to the count.
+PREPARE_PART_LOG = r"Committed a part of the vnodes-to-tablets migration preparation of keyspace"
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_migration_tablet_maps_split_across_commands(manager: ScyllaClusterManager):
+    """Verify that a keyspace whose tablet maps don't fit into one group0 command is prepared.
+
+    The tablet maps of a keyspace with many tables exceed the maximum group0 command size,
+    so the topology coordinator writes them with several commands, leaving the request in
+    the queue until the last one, and every table has to end up with a map.
+
+    The injection makes every table go out in its own command, so that a few tables are
+    enough to exercise the splitting.
+    """
+    num_tables = 5
+    server, cql = await setup_single_node(manager)
+
+    await manager.api.enable_injection(server.ip_addr, 'prepare_migration_one_table_per_command',
+                                       one_shot=False)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}") as ks:
+        tables = [f't{i}' for i in range(num_tables)]
+        for t in tables:
+            await cql.run_async(f"CREATE TABLE {ks}.{t} (pk int PRIMARY KEY, c int)")
+
+        logger.info(f"Preparing migration of {num_tables} tables, one command per table")
+        log = await manager.server_open_log(server.server_id)
+        mark = await log.mark()
+        await manager.api.create_vnode_tablet_migration(server.ip_addr, ks)
+
+        # Guard against the test passing without exercising the splitting at all, e.g.
+        # if the injection stopped taking effect. Every table but the last goes out in a
+        # command which leaves the request queued, logged as a "part" of it.
+        parts = await log.grep(PREPARE_PART_LOG, from_mark=mark)
+        assert len(parts) == num_tables - 1, \
+            f"expected {num_tables - 1} partial command(s), found {len(parts)}"
+
+        await assert_all_tables_have_tablet_map(manager, server, ks, tables)
+
+        status = await manager.api.get_vnode_tablet_migration_status(server.ip_addr, ks)
+        assert status['status'] == 'migrating_to_tablets', \
+            f"expected keyspace to be migrating_to_tablets, got '{status['status']}'"
+
+        logger.info("Completing the migration")
+        await manager.api.upgrade_node_to_tablets(server.ip_addr)
+        await manager.server_restart(server.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql([server])
+
+        await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks)
+
+        res = await cql.run_async(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{ks}'")
+        assert len(res) == 1 and res[0].initial_tablets is not None, \
+            "keyspace is still using vnodes after migration finalization"
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_migration_prepare_resumed_after_coordinator_change(manager: ScyllaClusterManager):
+    """Verify that preparing a migration survives losing the topology coordinator.
+
+    The tablet maps of a keyspace are written by several group0 commands, and the request
+    stays in the queue until the last one. If the coordinator dies in between, the next
+    coordinator has to pick the request up and write the maps which are still missing,
+    so that the keyspace doesn't end up with tablet maps for only some of its tables.
+    """
+    num_tables = 4
+
+    cfg = {'num_tokens': 16}
+    servers = await manager.servers_add(3, cmdline=['--smp', '2'], config=cfg)
+    cql, _ = await manager.get_ready_cql(servers)
+
+    coordinator = await get_coordinator_host(manager)
+    coordinator_host_id = await manager.get_host_id(coordinator.server_id)
+    other = [s for s in servers if s.server_id != coordinator.server_id]
+    logger.info(f"Topology coordinator is {coordinator.server_id}")
+
+    for s in servers:
+        await manager.api.enable_injection(s.ip_addr, 'prepare_migration_one_table_per_command',
+                                           one_shot=False)
+    # Only the current coordinator pauses; whoever takes over must run to completion.
+    await manager.api.enable_injection(coordinator.ip_addr, 'prepare_migration_after_part',
+                                       one_shot=True)
+    # The injection state comes back per shard, so the list is never empty by itself.
+    armed = await manager.api.get_injection(coordinator.ip_addr, 'prepare_migration_after_part')
+    assert any(shard['enabled'] for shard in armed), \
+        f"the pause injection is not armed on the coordinator: {armed}"
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'enabled': false}") as ks:
+        tables = [f't{i}' for i in range(num_tables)]
+        for t in tables:
+            await cql.run_async(f"CREATE TABLE {ks}.{t} (pk int PRIMARY KEY, c int)")
+
+        # Drive the request from a node which is not going away, so that the API call
+        # survives the coordinator being stopped.
+        logger.info("Starting prepare from a non-coordinator node")
+        prepare = asyncio.create_task(
+                manager.api.create_vnode_tablet_migration(other[0].ip_addr, ks))
+        try:
+            logger.info("Waiting for the coordinator to commit the first command")
+            await manager.api.wait_for_injection_enter(coordinator.ip_addr, 'prepare_migration_after_part')
+
+            # Kill it rather than shutting it down: a graceful stop waits for the topology
+            # coordinator fiber, which is parked in the injection, and this is meant to
+            # stand for a coordinator which dies in the middle of the request anyway.
+            logger.info(f"Killing the coordinator {coordinator.server_id}")
+            await manager.server_stop(coordinator.server_id, convict=True)
+            await wait_new_coordinator_elected(manager, coordinator_host_id, time.time() + 120)
+
+            logger.info("Waiting for the new coordinator to finish preparing")
+            await prepare
+        finally:
+            # Whatever failed above, don't leave the API call dangling, and surface its
+            # own error rather than a timeout waiting for something it never started.
+            if not prepare.done():
+                prepare.cancel()
+            await asyncio.gather(prepare, return_exceptions=True)
+
+        # Every table must have a map, including the ones the stopped coordinator wrote.
+        await assert_all_tables_have_tablet_map(manager, other[0], ks, tables)
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_migration_prepare_resumed_after_failure(manager: ScyllaClusterManager):
+    """Verify that a prepare which fails halfway is completed by preparing again.
+
+    The tablet maps are written by several group0 commands, each visible as soon as it
+    commits. If the request fails after some of them, the keyspace has maps for only some
+    of its tables: it must not report as migrating in that state, and preparing it again
+    has to write the maps which are still missing instead of starting over.
+    """
+    num_tables = 4
+    server, cql = await setup_single_node(manager)
+
+    await manager.api.enable_injection(server.ip_addr, 'prepare_migration_one_table_per_command',
+                                       one_shot=False)
+    # Fails the request on its second pass, i.e. once the first table's map is committed.
+    await manager.api.enable_injection(server.ip_addr, 'prepare_migration_fail_on_resume',
+                                       one_shot=True)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}") as ks:
+        tables = [f't{i}' for i in range(num_tables)]
+        for t in tables:
+            await cql.run_async(f"CREATE TABLE {ks}.{t} (pk int PRIMARY KEY, c int)")
+
+        logger.info("Preparing the migration, failing after the first command")
+        with pytest.raises(HTTPError, match="injected prepare_migration failure"):
+            await manager.api.create_vnode_tablet_migration(server.ip_addr, ks)
+
+        # The map written by the first command stays: it is what the next prepare builds
+        # on. The rest of the keyspace has none yet, and the keyspace is not migrating.
+        mapped = await tables_with_tablet_map(manager, server, ks, tables)
+        assert len(mapped) == 1, \
+            f"expected exactly one table with a tablet map after the failure, got {mapped}"
+        status = await manager.api.get_vnode_tablet_migration_status(server.ip_addr, ks)
+        assert status['status'] == 'vnodes', \
+            f"a partially prepared keyspace must not report as migrating, got '{status['status']}'"
+
+        logger.info("Preparing the migration again, this time without the failure")
+        await manager.api.create_vnode_tablet_migration(server.ip_addr, ks)
+
+        await assert_all_tables_have_tablet_map(manager, server, ks, tables)
+        status = await manager.api.get_vnode_tablet_migration_status(server.ip_addr, ks)
+        assert status['status'] == 'migrating_to_tablets', \
+            f"expected keyspace to be migrating_to_tablets, got '{status['status']}'"
+
+
+@pytest.mark.slow
+async def test_migration_tablet_maps_exceed_command_size(manager: ScyllaClusterManager):
+    """Verify a keyspace whose tablet maps really exceed what one group0 command carries.
+
+    Unlike test_migration_tablet_maps_split_across_commands, which shrinks the budget to
+    nothing with an error injection, this one builds a keyspace whose maps exceed the real
+    per-command budget (half of max_command_size, at most 4MiB), so that the size accounting
+    itself is exercised: with 256 tokens on each of 3 nodes a table has 769 tablets, and a
+    tablet row with 3 replicas takes a few hundred bytes, so a table is a couple of hundred
+    kilobytes and a few dozen of them pass the budget.
+
+    This is the shape of keyspace SCYLLADB-1149 is about; before the maps were written by
+    several commands, a keyspace like this could not be migrated at all.
+    """
+    # 30 tables land just over the budget and produce a single extra command, which is too
+    # close to the edge: a smaller tablet row would put the keyspace back under it and the
+    # test would stop covering the splitting. Twice that leaves room.
+    num_tables = 60
+
+    cfg = {'num_tokens': 256}
+    servers = await manager.servers_add(3, cmdline=['--smp', '2'], config=cfg)
+    cql, _ = await manager.get_ready_cql(servers)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'enabled': false}") as ks:
+        tables = [f't{i}' for i in range(num_tables)]
+        logger.info(f"Creating {num_tables} tables")
+        for t in tables:
+            await cql.run_async(f"CREATE TABLE {ks}.{t} (pk int PRIMARY KEY, c int)")
+
+        coordinator = await get_coordinator_host(manager)
+        log = await manager.server_open_log(coordinator.server_id)
+        mark = await log.mark()
+
+        logger.info("Preparing the migration")
+        await manager.api.create_vnode_tablet_migration(servers[0].ip_addr, ks)
+
+        # The maps have to have needed more than one command, otherwise the test isn't
+        # covering what it says it does.
+        parts = await log.grep(PREPARE_PART_LOG, from_mark=mark)
+        assert len(parts) > 0, \
+            f"the tablet maps fit into a single command ({len(parts)} partial command(s)),"\
+            " so the test no longer covers the splitting; raise num_tables"
+        logger.info(f"Tablet maps were written by {len(parts) + 1} commands")
+
+        await assert_all_tables_have_tablet_map(manager, servers[0], ks, tables)
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_migration_partially_prepared_keyspace_can_be_rolled_back(manager: ScyllaClusterManager):
+    """Verify that a keyspace prepared only in part can be rolled back.
+
+    A prepare which fails halfway leaves tablet maps for some tables of the keyspace.
+    Finalizing forward needs every table to have a map, so the way out of that state is
+    either preparing it again or rolling it back: finalizing with no node marked for
+    upgrade has to accept such a keyspace and drop the maps it does have, after which it
+    can be prepared again from scratch.
+    """
+    num_tables = 4
+    server, cql = await setup_single_node(manager)
+
+    await manager.api.enable_injection(server.ip_addr, 'prepare_migration_one_table_per_command',
+                                       one_shot=False)
+    await manager.api.enable_injection(server.ip_addr, 'prepare_migration_fail_on_resume',
+                                       one_shot=True)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}") as ks:
+        tables = [f't{i}' for i in range(num_tables)]
+        for t in tables:
+            await cql.run_async(f"CREATE TABLE {ks}.{t} (pk int PRIMARY KEY, c int)")
+
+        logger.info("Preparing the migration, failing after the first command")
+        with pytest.raises(HTTPError, match="injected prepare_migration failure"):
+            await manager.api.create_vnode_tablet_migration(server.ip_addr, ks)
+        mapped = await tables_with_tablet_map(manager, server, ks, tables)
+        assert len(mapped) == 1, f"expected exactly one table with a tablet map, got {mapped}"
+
+        logger.info("Rolling the migration back")
+        await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks)
+        mapped = await tables_with_tablet_map(manager, server, ks, tables)
+        assert not mapped, f"tables still with a tablet map after the rollback: {mapped}"
+        status = await manager.api.get_vnode_tablet_migration_status(server.ip_addr, ks)
+        assert status['status'] == 'vnodes', f"expected keyspace to be back to vnodes, got '{status['status']}'"
+
+        logger.info("Preparing the migration again from scratch")
+        await manager.api.create_vnode_tablet_migration(server.ip_addr, ks)
+        await assert_all_tables_have_tablet_map(manager, server, ks, tables)
 
 
 @pytest.mark.asyncio
