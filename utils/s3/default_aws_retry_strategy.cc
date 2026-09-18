@@ -26,10 +26,21 @@ using namespace seastar::http;
 
 namespace aws {
 
+// Report an aborted wait the way a pre-request abort_requested() check would, so
+// callers don't have to special-case a sleep_aborted from inside a retry.
+static seastar::future<> map_abort(seastar::future<> f, seastar::abort_source* as) {
+    if (!as) {
+        return f;
+    }
+    return f.handle_exception_type([as](const seastar::sleep_aborted&) {
+        return seastar::make_exception_future<>(as->abort_requested_exception_ptr());
+    });
+}
+
 // Delay before a retry, by error class: a dropped connection can be retried almost
 // immediately, while a 503 means the endpoint is over its limit already. A throttle
 // also waits before its first retry, which is where the larger base pays off.
-static seastar::future<> sleep_before_retry(size_t attempted_retries, bool is_throttling) {
+static seastar::future<> sleep_before_retry(size_t attempted_retries, bool is_throttling, seastar::abort_source* as) {
     // The transient base is what the client always used, so a dropped connection
     // still backs off exactly as before. Only the throttling class is reshaped.
     constexpr double transient_base_sec = 0.025;
@@ -50,7 +61,11 @@ static seastar::future<> sleep_before_retry(size_t attempted_retries, bool is_th
     const double base = is_throttling ? throttling_base_sec : transient_base_sec;
     const double exponential = base * static_cast<double>(1UL << std::min(attempted_retries, size_t{30}));
     const double delay_sec = std::min(exponential, cap_sec);
-    return seastar::sleep(std::chrono::milliseconds(static_cast<int64_t>(delay_sec * 1000.0)));
+    const auto delay = std::chrono::milliseconds(static_cast<int64_t>(delay_sec * 1000.0));
+    if (!as) {
+        return seastar::sleep(delay);
+    }
+    return map_abort(seastar::sleep_abortable(delay, *as), as);
 }
 
 s3::throttling_controller& default_aws_retry_strategy::no_throttling() {
@@ -58,8 +73,8 @@ s3::throttling_controller& default_aws_retry_strategy::no_throttling() {
     return instance;
 }
 
-default_aws_retry_strategy::default_aws_retry_strategy(unsigned max_retries, s3::throttling_controller& controller)
-    : _max_retries(max_retries), _controller(controller) {
+default_aws_retry_strategy::default_aws_retry_strategy(unsigned max_retries, s3::throttling_controller& controller, seastar::abort_source* as)
+    : _max_retries(max_retries), _controller(controller), _as(as) {
 }
 
 // Errors that indicate the S3 endpoint is throttling us (429/503-class).
@@ -99,10 +114,9 @@ seastar::future<bool> default_aws_retry_strategy::should_retry(std::exception_pt
 
     if (should_retry) {
         rs_logger.debug("AWS HTTP client request failed. Reason: {}. Retry# {}", err.get_error_message(), attempted_retries);
-        co_await sleep_before_retry(attempted_retries, is_throttling);
+        co_await sleep_before_retry(attempted_retries, is_throttling, _as);
         // After the backoff, so the brake is checked close to the re-dispatch.
-        // should_retry() has no abort_source, so this wait is not abortable.
-        co_await _controller.acquire(nullptr);
+        co_await map_abort(_controller.acquire(_as), _as);
     } else {
         rs_logger.warn("AWS HTTP client encountered non-retryable error. Reason: {}. Code: {}. Retry# {}",
                        err.get_error_message(),
