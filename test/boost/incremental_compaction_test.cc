@@ -7,6 +7,7 @@
 #include <boost/test/unit_test.hpp>
 #include <fmt/ranges.h>
 #include <boost/range/iterator_range_core.hpp>
+#include <filesystem>
 #include <memory>
 #include <utility>
 
@@ -37,7 +38,10 @@
 
 #include "test/lib/sstable_utils.hh"
 #include "test/lib/test_services.hh"
+#include "test/lib/eventually.hh"
 #include "test/lib/log.hh"
+
+namespace fs = std::filesystem;
 
 using namespace sstables;
 
@@ -882,5 +886,165 @@ SEASTAR_TEST_CASE(gc_sstables_are_announced_to_the_compacting_registration_test)
                 seastar::format("{} GC sstable(s) were attached to the sstable set without being announced to "
                         "the compacting registration, so a concurrent compaction could remove them: [{}]",
                         unannounced_gc_sstables.size(), fmt::join(unannounced_gc_sstables, ", ")));
+    });
+}
+
+// Reproducer for the garbage collected sstable that an incremental compaction
+// leaves behind on disk when its final replacement fails (SCYLLADB-4617).
+//
+// A garbage collected (GC) sstable can still be unused when the compaction
+// reaches end of stream: mutation_compactor seals the GC writer before the
+// regular one, so if the regular writer had already rotated shut -- which is
+// what happens when the tail of the merged stream is entirely purgeable -- its
+// consume_end_of_stream() is a no-op, and
+// maybe_replace_exhausted_sstables_by_sst(), the only caller of
+// consume_unused_garbage_collected_sstables(), never runs again.
+//
+// replace_remaining_exhausted_sstables() deletes such an sstable, but only
+// after it has handed the final replacement to the replacer.  If that
+// replacement throws, the deletion is skipped and nothing else picks the
+// sstable up:
+//
+//  - it was never handed to the replacer, so it is in no
+//    compaction_completion_desc and the caller cannot delete it on the
+//    compaction's behalf;
+//  - compaction::run() calls finish() outside the try/catch that invokes
+//    on_interrupt(), so delete_sstables_for_interrupted_compaction() -- the
+//    only other place that deletes _unused_garbage_collected_sstables -- never
+//    runs either;
+//  - it is sealed, so seal_sstable() already cleared
+//    mark_for_deletion::implicit and ~sstable() will not unlink it.
+//
+// Its files stay on disk, neither attached nor deleted, and invisible until the
+// next restart rescans the data directory.  Same shape as SCYLLADB-3531, but
+// for the GC-only container, which the fix for that one cannot reach.
+SEASTAR_TEST_CASE(unused_gc_sstable_is_deleted_when_final_replacement_fails_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto schema = schema_builder(this_smp_shard_count(), "ks", "gc_sstable_leak_test")
+                .with_column("pk", utf8_type, column_kind::partition_key)
+                .with_column("data", utf8_type)
+                .with_tombstone_gc_options(tombstone_gc_options{tombstone_gc_mode::immediate})
+                .build();
+
+        constexpr int num_sstables = 16;
+        constexpr int keys_per_sstable = 100;
+        constexpr api::timestamp_type ts = 100;
+        constexpr uint64_t max_sstable_size = 1024;
+
+        auto dks = tests::generate_partition_keys(num_sstables * keys_per_sstable, schema, local_shard_only::yes);
+
+        table_for_tests cf = env.make_table_for_tests(schema);
+        auto close_cf = deferred_stop(cf);
+
+        // Same shape as gc_sstable_incremental_release_test: 3/4 of the keys are
+        // expired tombstones, so the compaction produces GC sstables, and the
+        // inputs share a run identifier so that the incremental, and hence the
+        // garbage collecting, writer is enabled.
+        const auto run_id = sstables::run_id::create_random_id();
+        std::vector<shared_sstable> input_sstables;
+        for (int i = 0; i < num_sstables - 1; i++) {
+            input_sstables.push_back(add_input_sstable(env, cf, schema, dks, i * keys_per_sstable, keys_per_sstable,
+                    run_id, {.live_ts = ts, .tombstone_ts = ts}));
+        }
+
+        // The last input shapes the tail of the merged stream, which is what
+        // decides whether a GC sstable is left unused.  It holds one live
+        // partition far larger than the output sstable size, so that the regular
+        // writer rotates shut right after writing it, followed by nothing but
+        // expired tombstones, so that it is never reopened and its
+        // consume_end_of_stream() is a no-op.  The GC sstable covering that tail
+        // is then sealed at end of stream with nothing left to consume it.
+        {
+            auto& cdef = *schema->get_column_definition("data");
+            const int first_key = (num_sstables - 1) * keys_per_sstable;
+            utils::chunked_vector<mutation> mutations;
+
+            mutation big(schema, dks.at(first_key));
+            big.set_clustered_cell(clustering_key::make_empty(), cdef,
+                    atomic_cell::make_live(*cdef.type, ts, serialized(sstring(1u << 20, 'x'))));
+            mutations.push_back(std::move(big));
+
+            const auto expiration_time = (gc_clock::now() - 2s).time_since_epoch().count();
+            for (int j = 1; j < keys_per_sstable; j++) {
+                mutation mut(schema, dks.at(first_key + j));
+                mut.set_clustered_cell(clustering_key::make_empty(), cdef,
+                        atomic_cell::make_dead(ts, gc_clock::time_point(gc_clock::duration(expiration_time))));
+                mutations.push_back(std::move(mut));
+            }
+
+            auto sst = make_sstable_containing(env.make_sst_factory(schema), std::move(mutations)).get();
+            sstables::test(sst).set_run_identifier(run_id);
+            column_family_test(cf).add_sstable(sst).get();
+            input_sstables.push_back(std::move(sst));
+        }
+        // Covers the highest keys, so it is the last one to be exhausted, and
+        // only replace_remaining_exhausted_sstables() can be the one to do it.
+        const auto last_input = input_sstables.back();
+
+        // Every sstable the compaction creates, GC ones included: they all come
+        // from the same creator.
+        std::vector<shared_sstable> created;
+        auto sst_factory = env.make_sst_factory(schema);
+        auto creator = [&] {
+            auto sst = sst_factory();
+            created.push_back(sst);
+            return sst;
+        };
+
+        // Everything the replacer was told about, added or removed.
+        std::unordered_set<shared_sstable> handed_to_replacer;
+
+        auto replacer = [&] (compaction::compaction_completion_desc desc) {
+            auto new_sstables = desc.all_new_sstables();
+            handed_to_replacer.insert(new_sstables.begin(), new_sstables.end());
+            handed_to_replacer.insert(desc.old_sstables.begin(), desc.old_sstables.end());
+
+            const bool is_final = std::ranges::find(desc.old_sstables, last_input) != desc.old_sstables.end();
+
+            // Apply the replacement before failing it, so that the only thing
+            // left unaccounted for is the GC sstable that was never handed to us.
+            column_family_test(cf).rebuild_sstable_list(cf.as_compaction_group_view(), new_sstables, desc.old_sstables).get();
+            env.test_compaction_manager().propagate_replacement(cf.as_compaction_group_view(), desc.old_sstables, std::move(new_sstables));
+
+            if (is_final) {
+                // Stands in for the failures
+                // update_sstable_sets_on_compaction_completion() hits for real,
+                // e.g. the "Unable to remove input SSTable" guard tripped by a
+                // concurrent tablet split or migration.
+                throw std::runtime_error("injected final replacement failure");
+            }
+        };
+
+        auto desc = compaction::compaction_descriptor(input_sstables, 1, max_sstable_size);
+        BOOST_REQUIRE_THROW(compact_sstables(env, std::move(desc), cf, creator, replacer).get(), std::runtime_error);
+
+        // Snapshot the identities before dropping every reference the test holds:
+        // an sstable that was only marked for deletion is unlinked once the last
+        // reference to it goes away, so one that was handled correctly would
+        // still look leaked if the test kept a reference of its own.
+        std::vector<sstring> unaccounted;
+        for (const auto& sst : created) {
+            if (!handed_to_replacer.contains(sst)) {
+                unaccounted.push_back(sstring(fmt::to_string(sst->toc_filename())));
+            }
+        }
+        created.clear();
+        handed_to_replacer.clear();
+
+        // Guard against the test passing vacuously, i.e. because the compaction
+        // never left a GC sstable unused in the first place.
+        BOOST_REQUIRE(!unaccounted.empty());
+
+        auto leaked = [&] {
+            return std::ranges::to<std::vector<sstring>>(unaccounted
+                    | std::views::filter([] (const sstring& toc) {
+                return fs::exists(fs::path(std::string(toc)));
+            }));
+        };
+        (void) eventually_true([&] { return leaked().empty(); });
+
+        BOOST_REQUIRE_MESSAGE(leaked().empty(),
+                seastar::format("{} garbage collected sstable(s) left on disk after the final replacement failed: [{}]",
+                        leaked().size(), fmt::join(leaked(), ", ")));
     });
 }
