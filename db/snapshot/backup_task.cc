@@ -27,39 +27,25 @@ extern logging::logger snap_log;
 
 namespace db::snapshot {
 
-backup_task_impl::backup_task_impl(tasks::task_manager::module_ptr module,
-                                   snapshot_ctl& ctl,
-                                   sharded<sstables::storage_manager>& sstm,
-                                   sstring endpoint,
-                                   sstring bucket,
-                                   sstring prefix,
-                                   sstring ks,
-                                   std::filesystem::path snapshot_dir,
-                                   bool move_files) noexcept
-    : tasks::task_manager::task::impl(module, tasks::task_id::create_random_id(), 0, "node", ks, "", "", tasks::task_id::create_null_id())
-    , _snap_ctl(ctl)
+backup_state::backup_state(snapshot_ctl& ctl,
+                           sharded<sstables::storage_manager>& sstm,
+                           sstring endpoint,
+                           sstring bucket,
+                           sstring prefix,
+                           sstring ks,
+                           std::filesystem::path snapshot_dir,
+                           bool move_files)
+    : _snap_ctl(ctl)
     , _sstm(sstm)
     , _endpoint(std::move(endpoint))
     , _bucket(std::move(bucket))
     , _prefix(std::move(prefix))
+    , _keyspace(std::move(ks))
     , _snapshot_dir(std::move(snapshot_dir))
-    , _remove_on_uploaded(move_files) {
-    _status.progress_units = "bytes";
-}
+    , _remove_on_uploaded(move_files)
+{}
 
-std::string backup_task_impl::type() const {
-    return "backup";
-}
-
-tasks::is_internal backup_task_impl::is_internal() const noexcept {
-    return tasks::is_internal::no;
-}
-
-tasks::is_abortable backup_task_impl::is_abortable() const noexcept {
-    return tasks::is_abortable::yes;
-}
-
-future<tasks::task_manager::task::progress> backup_task_impl::get_progress() const {
+future<tasks::task_manager::task::progress> backup_state::get_progress() const {
     auto p = co_await _sstm.map_reduce0(
         [this](const auto&) {
             return _progress_per_shard[this_shard_id()];
@@ -70,13 +56,9 @@ future<tasks::task_manager::task::progress> backup_task_impl::get_progress() con
     };
 }
 
-tasks::is_user_task backup_task_impl::is_user_task() const noexcept {
-    return tasks::is_user_task::yes;
-}
-
-future<> backup_task_impl::worker::upload_component(sstring name) {
-    auto component_name = _task._snapshot_dir / name;
-    auto destination = sstables::object_name(_task._bucket, _task._prefix, name);
+future<> backup_state::worker::upload_component(sstring name) {
+    auto component_name = _state._snapshot_dir / name;
+    auto destination = sstables::object_name(_state._bucket, _state._prefix, name);
     snap_log.trace("Upload {} to {}", component_name.native(), destination);
 
     // Start uploading in the background. The caller waits for these fibers
@@ -85,7 +67,7 @@ future<> backup_task_impl::worker::upload_component(sstring name) {
     //  - s3::client::claim_memory semaphore
     //  - http::client::max_connections limitation
     try {
-        co_await _client->upload_file(component_name, std::move(destination), _task._progress_per_shard[this_shard_id()], &_as);
+        co_await _client->upload_file(component_name, std::move(destination), _state._progress_per_shard[this_shard_id()], &_as);
     } catch (const abort_requested_exception&) {
         snap_log.info("Upload aborted per requested: {}", component_name.native());
         throw;
@@ -94,7 +76,7 @@ future<> backup_task_impl::worker::upload_component(sstring name) {
         throw;
     }
 
-    if (!_task._remove_on_uploaded) {
+    if (!_state._remove_on_uploaded) {
         co_return;
     }
 
@@ -111,7 +93,7 @@ future<> backup_task_impl::worker::upload_component(sstring name) {
     }
 }
 
-future<> backup_task_impl::do_backup() {
+future<> backup_state::do_backup(abort_source& as) {
     if (!co_await file_exists(_snapshot_dir.native())) {
         throw std::invalid_argument(fmt::format("snapshot does not exist at {}", _snapshot_dir.native()));
     }
@@ -129,7 +111,7 @@ future<> backup_task_impl::do_backup() {
     co_await _sharded_worker.start(std::ref(_snap_ctl.db()), std::ref(*this));
 
     gate abort_gate;
-    auto abort_sub = _as.subscribe([&] () noexcept {
+    auto abort_sub = as.subscribe([&] () noexcept {
         if (auto gh = abort_gate.try_hold()) {
             std::ignore = _sharded_worker.invoke_on_all([] (worker& m) {
                 m.abort();
@@ -155,7 +137,7 @@ future<> backup_task_impl::do_backup() {
     }
 }
 
-future<> backup_task_impl::process_snapshot_dir() {
+future<> backup_state::process_snapshot_dir() {
     auto directory = co_await io_check(open_directory, _snapshot_dir.native());
     auto snapshot_dir_lister = directory_lister(directory, _snapshot_dir, lister::dir_entry_types::of<directory_entry_type::regular>());
     size_t num_sstable_comps = 0;
@@ -201,8 +183,8 @@ future<> backup_task_impl::process_snapshot_dir() {
     }
 }
 
-future<> backup_task_impl::worker::start_uploading() {
-    named_gate uploads(format("do_backup::uploads({})", _task._snapshot_dir));
+future<> backup_state::worker::start_uploading() {
+    named_gate uploads(format("do_backup::uploads({})", _state._snapshot_dir));
 
     try {
         while (!_ex) {
@@ -212,8 +194,8 @@ future<> backup_task_impl::worker::start_uploading() {
             // Pre-upload break point. For testing abort in actual s3 client usage.
             co_await utils::get_local_injector().inject("backup_task_pre_upload", utils::wait_for_message(std::chrono::minutes(2)));
 
-            auto name_opt = co_await smp::submit_to(_task._backup_shard, [this] () {
-                return _task.dequeue();
+            auto name_opt = co_await smp::submit_to(_state._backup_shard, [this] () {
+                return _state.dequeue();
             });
             if (!name_opt) {
                 break;
@@ -239,7 +221,7 @@ future<> backup_task_impl::worker::start_uploading() {
     }
 }
 
-future<> backup_task_impl::worker::backup_file(sstring name, upload_permit permit) {
+future<> backup_state::worker::backup_file(sstring name, upload_permit permit) {
     try {
         co_await upload_component(name);
     } catch (...) {
@@ -251,7 +233,7 @@ future<> backup_task_impl::worker::backup_file(sstring name, upload_permit permi
     }
 }
 
-std::optional<std::string> backup_task_impl::dequeue() {
+std::optional<std::string> backup_state::dequeue() {
     if (_files.empty()) {
         dequeue_sstable();
     }
@@ -263,7 +245,7 @@ std::optional<std::string> backup_task_impl::dequeue() {
     return ret;
 }
 
-void backup_task_impl::dequeue_sstable() {
+void backup_state::dequeue_sstable() {
     auto to_backup = _sstable_comps.begin();
     if (to_backup == _sstable_comps.end()) {
         return;
@@ -289,32 +271,32 @@ void backup_task_impl::dequeue_sstable() {
     }
 }
 
-void backup_task_impl::on_sstable_deletion(sstables::generation_type gen) {
+void backup_state::on_sstable_deletion(sstables::generation_type gen) {
     if (_sstable_comps.contains(gen)) {
         _deleted_sstables.push_back(gen);
     }
 }
 
-backup_task_impl::worker::worker(const replica::database& db, backup_task_impl& task)
+backup_state::worker::worker(const replica::database& db, backup_state& state)
     // Backup only reads snapshot files from disk and never touches the live
     // table, so it's not mandatory to resolve it (it may have been dropped after the
     // snapshot was taken). The sstables_manager is only used for its
     // dir_semaphore() and deletion notifications, and selecting between the
     // system and the user manager depends only on the keyspace name.
-    : _manager(db.get_sstables_manager(task._status.keyspace))
-    , _task(task)
-    , _client(task._sstm.local().get_endpoint_client(task._endpoint))
+    : _manager(db.get_sstables_manager(state._keyspace))
+    , _state(state)
+    , _client(state._sstm.local().get_endpoint_client(state._endpoint))
 {
     _manager.subscribe(*this);
 }
 
-backup_task_impl::worker::~worker() = default;
+backup_state::worker::~worker() = default;
 
-void backup_task_impl::worker::abort() {
+void backup_state::worker::abort() {
     _as.request_abort();
 }
 
-future<> backup_task_impl::worker::deleted_sstable(sstables::generation_type gen) const {
+future<> backup_state::worker::deleted_sstable(sstables::generation_type gen) const {
     // The notification is called for any sstable, so `gen` may belong
     // to another table, or to an sstable that was created after the snapshot
     // was taken.
@@ -323,21 +305,21 @@ future<> backup_task_impl::worker::deleted_sstable(sstables::generation_type gen
     //
     // Note: looking up gen in `_sstables_in_snapshot` is safe, although it was
     // created on `backup_shard`, since it is immutable after `process_snapshot_dir` is done.
-    if (_task._sstables_in_snapshot.contains(gen)) {
+    if (_state._sstables_in_snapshot.contains(gen)) {
         snap_log.debug("SSTable with generation {} was deleted from the table", gen);
         // Break point for testing that the worker outlives the notifications it started.
         co_await utils::get_local_injector().inject("backup_task_deleted_sstable", utils::wait_for_message(std::chrono::minutes(2)));
-        co_await smp::submit_to(_task._backup_shard, [this, gen] {
-            _task.on_sstable_deletion(gen);
+        co_await smp::submit_to(_state._backup_shard, [this, gen] {
+            _state.on_sstable_deletion(gen);
         });
     }
 }
 
-future<> backup_task_impl::run() {
+future<> backup_state::run(abort_source& as) {
     // do_backup() removes a file once it is fully uploaded, so we are actually
     // mutating snapshots.
-    co_await _snap_ctl.run_snapshot_modify_operation([this] {
-        return do_backup();
+    co_await _snap_ctl.run_snapshot_modify_operation([this, &as] {
+        return do_backup(as);
     });
     snap_log.info("Finished backup");
 }

@@ -42,12 +42,15 @@ class snapshot_ctl;
 
 namespace snapshot {
 
-class backup_task_impl : public tasks::task_manager::task::impl {
+inline constexpr auto backup_task_type = "backup";
+
+class backup_state {
     snapshot_ctl& _snap_ctl;
     sharded<sstables::storage_manager>& _sstm;
     sstring _endpoint;
     sstring _bucket;
     sstring _prefix;
+    sstring _keyspace;
     std::filesystem::path _snapshot_dir;
     bool _remove_on_uploaded;
     tasks::task_manager::task::progress _total_progress;
@@ -63,13 +66,13 @@ class backup_task_impl : public tasks::task_manager::task::impl {
 
     class worker : sstables::sstables_manager_event_handler {
         sstables::sstables_manager& _manager;
-        backup_task_impl& _task;
+        backup_state& _state;
         shared_ptr<sstables::object_storage_client> _client;
         abort_source _as;
         std::exception_ptr _ex;
 
     public:
-        worker(const replica::database& db, backup_task_impl& task);
+        worker(const replica::database& db, backup_state& state);
         ~worker();
 
         // Called by sharded<worker>::stop() before the worker is destroyed.
@@ -100,32 +103,26 @@ class backup_task_impl : public tasks::task_manager::task::impl {
     sharded<worker> _sharded_worker;
     std::vector<utils::upload_progress> _progress_per_shard{this_smp_shard_count()};
 
-    future<> do_backup();
+    future<> do_backup(abort_source& as);
     future<> process_snapshot_dir();
     // Returns a disengaged optional when done
     std::optional<std::string> dequeue();
     void dequeue_sstable();
     void on_sstable_deletion(sstables::generation_type gen);
 
-protected:
-    virtual future<> run() override;
-
 public:
-    backup_task_impl(tasks::task_manager::module_ptr module,
-                     snapshot_ctl& ctl,
-                     sharded<sstables::storage_manager>& sstm,
-                     sstring endpoint,
-                     sstring bucket,
-                     sstring prefix,
-                     sstring ks,
-                     std::filesystem::path snapshot_dir,
-                     bool move_files) noexcept;
+    backup_state(snapshot_ctl& ctl,
+                 sharded<sstables::storage_manager>& sstm,
+                 sstring endpoint,
+                 sstring bucket,
+                 sstring prefix,
+                 sstring ks,
+                 std::filesystem::path snapshot_dir,
+                 bool move_files);
 
-    virtual std::string type() const override;
-    virtual tasks::is_internal is_internal() const noexcept override;
-    virtual tasks::is_abortable is_abortable() const noexcept override;
-    virtual future<tasks::task_manager::task::progress> get_progress() const override;
-    virtual tasks::is_user_task is_user_task() const noexcept override;
+    // Must be called on the shard the state was created on.
+    future<> run(abort_source& as);
+    future<tasks::task_manager::task::progress> get_progress() const;
 };
 
 } // snapshot namespace
