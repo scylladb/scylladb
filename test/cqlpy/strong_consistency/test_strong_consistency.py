@@ -50,6 +50,41 @@ def test_reject_user_provided_timestamps(cql, sc_keyspace):
             cql.prepare(f"INSERT INTO {table} (pk, v) VALUES (?, ?) USING TIMESTAMP ?")
 
 
+def test_protocol_timestamp_ignored_on_sc_table(cql, sc_keyspace, test_keyspace):
+    """
+    The CQL USING TIMESTAMP clause is rejected on a strongly consistent table,
+    but the protocol level timestamp - which every driver with client side
+    timestamps on, python's among them, puts on every request - is silently
+    ignored instead: the raft leader assigns the timestamp and never looks at
+    what the client sent. Rejecting it would refuse every statement from such
+    a driver, so ignoring is the deliberate choice, and it means the same
+    client code orders writes differently on the two kinds of table.
+
+    The eventually consistent half is not decoration, it is the control: it is
+    what shows the client timestamp is still being sent at all. Were the driver
+    to stop consulting the generator, both writes would get ordinary timestamps
+    and that half would fail, instead of the strongly consistent half passing
+    for the wrong reason.
+    """
+    for keyspace, honours_client_timestamp in [(sc_keyspace, False), (test_keyspace, True)]:
+        kind = "eventually" if honours_client_timestamp else "strongly"
+        with new_test_table(cql, keyspace, "pk int PRIMARY KEY, v int") as table:
+            cql.execute(f"INSERT INTO {table} (pk, v) VALUES (1, 1)")
+            # The driver has no per-statement client timestamp, so the generator
+            # on the cluster is the only lever - and that cluster is shared with
+            # every other test in the run, hence the restore.
+            generator = cql.cluster.timestamp_generator
+            cql.cluster.timestamp_generator = lambda: 1000  # 1970, far below the row
+            try:
+                cql.execute(f"INSERT INTO {table} (pk, v) VALUES (1, 2)")
+            finally:
+                cql.cluster.timestamp_generator = generator
+            # Honoured, the write is shadowed by the older row; ignored, it wins.
+            expected = 1 if honours_client_timestamp else 2
+            assert cql.execute(f"SELECT v FROM {table} WHERE pk = 1").one().v == expected, \
+                f"{kind} consistent table: expected v={expected}"
+
+
 @pytest.mark.parametrize("batch_mode", ["text", "prepared"], ids=["text", "prepared"])
 def test_batch(cql, sc_keyspace, batch_mode):
     """
