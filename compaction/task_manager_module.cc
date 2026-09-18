@@ -806,9 +806,10 @@ future<tasks::task_manager::task_ptr> task_manager_module::start_upgrade_sstable
 static future<> run_shard_upgrade_sstables_compaction(task_manager_module& module, replica::database& db, std::string keyspace, lw_shared_ptr<std::vector<table_info>> tables, bool exclude_current_version, tasks::task_info task_info) {
     seastar::condition_variable cv;
     current_task_type current_task;
+    compaction_turn turn{cv, current_task};
     std::vector<table_tasks_info> table_tasks;
     for (auto& ti : *tables) {
-        table_tasks.emplace_back(co_await module.make_and_start_task<table_upgrade_sstables_compaction_task_impl>(task_info, keyspace, ti.name, task_info.get_id(), db, ti, cv, current_task, exclude_current_version), ti);
+        table_tasks.emplace_back(co_await module.start_table_upgrade_sstables_compaction(db, keyspace, ti, turn, exclude_current_version, task_info), ti);
     }
 
     co_await run_table_tasks(db, std::move(table_tasks), cv, current_task, false);
@@ -829,8 +830,8 @@ future<tasks::task_manager::task_ptr> task_manager_module::start_shard_upgrade_s
     });
 }
 
-static future<> run_table_upgrade_sstables_compaction(replica::database& db, std::string keyspace, const table_info& ti, seastar::condition_variable& cv, current_task_type& current_task, bool exclude_current_version, tasks::task_info task_info) {
-    co_await wait_for_your_turn(cv, current_task, task_info.get_id());
+static future<> run_table_upgrade_sstables_compaction(replica::database& db, std::string keyspace, lw_shared_ptr<table_info> ti, compaction_turn& turn, bool exclude_current_version, tasks::task_info task_info) {
+    co_await wait_for_your_turn(turn.cv, turn.current_task, task_info.get_id());
     auto get_owned_ranges = [&] (std::string_view keyspace_name) -> future<owned_ranges_ptr> {
         const auto& ks = db.find_keyspace(keyspace_name);
         if (ks.get_replication_strategy().is_per_table()) {
@@ -840,7 +841,7 @@ static future<> run_table_upgrade_sstables_compaction(replica::database& db, std
         co_return compaction::make_owned_ranges_ptr(co_await db.get_keyspace_local_ranges(erm));
     };
     auto owned_ranges_ptr = co_await get_owned_ranges(keyspace);
-    co_await run_on_table("upgrade_sstables", db, keyspace, ti, [&] (replica::table& t) -> future<> {
+    co_await run_on_table("upgrade_sstables", db, keyspace, *ti, [&] (replica::table& t) -> future<> {
         return t.parallel_foreach_compaction_group_view([&] (compaction::compaction_group_view& ts) -> future<> {
             auto lock_holder = co_await t.get_compaction_manager().get_incremental_repair_read_lock(ts, "upgrade_sstables_compaction");
             co_await t.get_compaction_manager().perform_sstable_upgrade(owned_ranges_ptr, ts, exclude_current_version, task_info);
@@ -848,12 +849,20 @@ static future<> run_table_upgrade_sstables_compaction(replica::database& db, std
     });
 }
 
-future<> table_upgrade_sstables_compaction_task_impl::run() {
-    return run_table_upgrade_sstables_compaction(_db, _status.keyspace, _ti, _cv, _current_task, _exclude_current_version, info());
-}
-
-future<std::optional<double>> table_upgrade_sstables_compaction_task_impl::expected_total_workload() const {
-    co_return _expected_workload = _expected_workload ? _expected_workload : co_await get_table_task_workload(_db, _status.keyspace, _ti);
+future<tasks::task_manager::task_ptr> task_manager_module::start_table_upgrade_sstables_compaction(replica::database& db, std::string keyspace, const table_info& info, compaction_turn& turn, bool exclude_current_version, tasks::task_info parent_info) {
+    auto ti = make_lw_shared<table_info>(info);
+    tasks::task_manager::task_builder task_builder{shared_from_this(), upgrade_sstables_compaction_task_type};
+    task_builder.set_scope("table")
+                .set_keyspace(keyspace)
+                .set_table(ti->name)
+                .set_progress_units("bytes")
+                .set_parent_info(parent_info)
+                .set_workload_fn([&db, keyspace, ti] () -> future<std::optional<double>> {
+                    co_return co_await get_table_task_workload(db, keyspace, *ti);
+                });
+    return std::move(task_builder).build([&db, keyspace = std::move(keyspace), ti, &turn, exclude_current_version] (tasks::task_manager::task::impl& self) {
+        return run_table_upgrade_sstables_compaction(db, keyspace, ti, turn, exclude_current_version, self.info());
+    });
 }
 
 tasks::is_user_task scrub_sstables_compaction_task_impl::is_user_task() const noexcept {
