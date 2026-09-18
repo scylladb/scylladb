@@ -34,6 +34,8 @@
 #include <seastar/http/request.hh>
 #include <seastar/http/exception.hh>
 #include "default_aws_retry_strategy.hh"
+#include "utils/s3/aws_throttling_controller.hh"
+#include "utils/s3/noop_throttling_controller.hh"
 #include "db/config.hh"
 #include "utils/assert.hh"
 #include "utils/s3/aws_error.hh"
@@ -82,7 +84,8 @@ future<> ignore_reply(const http::reply& rep, input_stream<char>&& in_) {
     co_await util::skip_entire_stream(in);
 }
 
-client::client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global_factory gf, private_tag, std::unique_ptr<http::experimental::retry_strategy> rs)
+client::client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global_factory gf, private_tag,
+               std::unique_ptr<http::experimental::retry_strategy> rs, std::unique_ptr<throttling_controller> tc)
         : _host(std::move(host))
         , _cfg(std::move(cfg))
         , _creds_sem(1)
@@ -105,6 +108,7 @@ client::client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global
                 }
             }();
         })
+        , _request_limiter(std::move(tc))
         , _gf(std::move(gf))
         , _memory(mem)
         , _retry_strategy(std::move(rs)) {
@@ -114,9 +118,7 @@ client::client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global
         .add_credentials_provider(std::make_unique<aws::sts_assume_role_credentials_provider>(_cfg->region, _cfg->role_arn));
 
     _creds_update_timer.arm(lowres_clock::now());
-    if (!_retry_strategy) {
-        _retry_strategy = std::make_unique<aws::default_aws_retry_strategy>();
-    }
+    register_client_metrics();
 }
 
 void client::update_config_sync(std::string region, std::string ira) {
@@ -148,8 +150,31 @@ void client::update_config_sync(std::string region, std::string ira) {
     });
 }
 
+static std::unique_ptr<throttling_controller> make_default_throttling_controller() {
+    return std::make_unique<aws_throttling_controller>();
+}
+
 shared_ptr<client> client::make(std::string endpoint, endpoint_config_ptr cfg, semaphore& mem, global_factory gf) {
-    return seastar::make_shared<client>(std::move(endpoint), std::move(cfg), mem, std::move(gf), private_tag{});
+    return make(std::move(endpoint), std::move(cfg), mem, nullptr, nullptr, std::move(gf));
+}
+
+shared_ptr<client> client::make(std::string endpoint, endpoint_config_ptr cfg, semaphore& mem,
+                                std::unique_ptr<http::experimental::retry_strategy> rs,
+                                std::unique_ptr<throttling_controller> tc, global_factory gf) {
+    if (!tc) {
+        tc = make_default_throttling_controller();
+    }
+    // After the controller, which the default strategy takes a reference to. The client
+    // owns both and destroys the strategy first, since _retry_strategy is declared after
+    // _request_limiter.
+    if (!rs) {
+        rs = std::make_unique<aws::default_aws_retry_strategy>(aws::default_aws_retry_strategy::default_max_retries, *tc);
+    }
+    return seastar::make_shared<client>(std::move(endpoint), std::move(cfg), mem, std::move(gf), private_tag{}, std::move(rs), std::move(tc));
+}
+
+shared_ptr<client> client::make(std::string endpoint, endpoint_config_ptr cfg, semaphore& mem, std::unique_ptr<http::experimental::retry_strategy> rs, global_factory gf) {
+    return make(std::move(endpoint), std::move(cfg), mem, std::move(rs), nullptr, std::move(gf));
 }
 
 shared_ptr<client> client::make(std::string ep, std::string region, std::string iam_role_arn, semaphore& memory, global_factory gf) {
@@ -262,6 +287,31 @@ void client::group_client::register_metrics(std::string class_name, std::string 
                           {ep_label, sg_label})
 
     });
+}
+
+// Per-client metrics, as opposed to the per-scheduling-group ones in
+// group_client::register_metrics. The send brake is shared by every scheduling
+// group on the shard, so registering its numbers per group would produce one
+// series per group all reporting the same thing.
+void client::register_client_metrics() {
+    namespace sm = seastar::metrics;
+    auto ep_label = sm::label("endpoint")(_host);
+    auto op_label = sm::label("operation");
+    auto request_op = op_label("request");
+
+    std::vector<sm::metric_definition> defs;
+    defs.emplace_back(sm::make_counter("throttles", [this] { return _request_limiter->throttles(); },
+            sm::description("Total number of throttling responses (503 SlowDown etc.) from S3"), {ep_label, request_op})
+            (sm::skip_when_empty::yes));
+    defs.emplace_back(sm::make_counter("send_freezes", [this] { return _request_limiter->freezes(); },
+            sm::description("Times sending was held back after a throttling response"), {ep_label, request_op})
+            (sm::skip_when_empty::yes));
+    // The input the brake decides on, so that the threshold it is compared against can
+    // be checked against a real workload.
+    defs.emplace_back(sm::make_gauge("refused_request_ratio", [this] { return _request_limiter->refused_ratio(); },
+            sm::description("Smoothed share of S3 requests the endpoint is refusing"), {ep_label, request_op}));
+
+    _client_metrics.add_group("s3", defs);
 }
 
 client::group_client& client::find_or_create_client() {
@@ -383,13 +433,18 @@ http::experimental::client::reply_handler client::wrap_handler(http::request& re
                 throw aws::aws_exception(
                     aws::aws_error{aws::aws_error_type::HTTP_UNAUTHORIZED, "EACCESS fault injected to simulate authorization failure", utils::http::retryable::no});
             }
-            co_return co_await handler(rep, std::move(_in));
+            co_await handler(rep, std::move(_in));
         } catch (...) {
             eptr = std::current_exception();
         }
         if (eptr) {
             co_await coroutine::return_exception_ptr(std::make_exception_ptr(aws::aws_exception(aws_error::from_exception_ptr(eptr))));
         }
+
+        // The only exit from this handler that is not an exception, so the only place a
+        // successful attempt can be reported. Every failure above leaves through the
+        // retry strategy, which reports it there instead.
+        _request_limiter->on_not_throttled();
     };
 }
 
@@ -411,8 +466,15 @@ future<> client::make_request(http::request req,
                               seastar::abort_source* as) {
     auto request = std::move(req);
     auto handler = wrap_handler(request, std::move(handle), expected);
-    co_await authorize(request);
     auto& gc = find_or_create_client();
+
+    co_await _request_limiter->acquire(as);
+
+    // Signed after the brake releases the request, not before it: a freeze holds the
+    // request for seconds, and the signature carries a timestamp. Retries re-send an
+    // already signed request from inside http::client, so this only keeps the first
+    // dispatch fresh; a stale one there is caught by the REQUEST_TIME_TOO_SKEWED path.
+    co_await authorize(request);
 
     co_await gc.http.make_request(request, handler, rs, std::nullopt, as).handle_exception([err_handler = std::move(err_handler)](auto ex) {
         err_handler(std::move(ex));
