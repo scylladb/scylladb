@@ -1786,6 +1786,8 @@ rest_get_vnode_tablet_migration(http_context& ctx, sharded<service::storage_serv
     ss::vnode_tablet_migration_status result;
     result.keyspace = status.keyspace;
     result.status = fmt::format("{}", status.status);
+    result.tables_with_tablet_map = status.tables_with_tablet_map;
+    result.tables_total = status.tables_total;
     result.nodes._set = true;
     for (const auto& node : status.nodes) {
         ss::vnode_tablet_migration_node_status n;
