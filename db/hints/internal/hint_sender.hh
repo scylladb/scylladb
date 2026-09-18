@@ -254,6 +254,10 @@ private:
     /// \return future that resolves when the mutation sending processing is complete.
     future<> send_one_mutation(frozen_mutation_and_schema m);
 
+    /// \brief Moves the sent replay position up to the bound the context has reached, if it is further, and
+    /// notifies the replay waiters.
+    void advance_sent_upper_bound(const send_one_file_ctx& ctx) noexcept;
+
     /// \brief Notifies replay waiters for which the target replay position was reached.
     void notify_replay_waiters() noexcept;
 

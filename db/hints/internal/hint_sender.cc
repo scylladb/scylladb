@@ -329,13 +329,7 @@ future<> hint_sender::send_one_hint(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fr
             // We just need to account in the ctx that sending of this hint has failed.
             if (!f.failed()) {
                 ctx_ptr->on_hint_send_success(rp);
-                auto new_bound = ctx_ptr->get_replayed_bound();
-                // Segments from other shards are replayed first and are considered to be "before" replay position 0.
-                // Update the sent upper bound only if it is a local segment.
-                if (new_bound.shard_id() == this_shard_id() && _sent_upper_bound_rp < new_bound) {
-                    _sent_upper_bound_rp = new_bound;
-                    notify_replay_waiters();
-                }
+                advance_sent_upper_bound(*ctx_ptr);
             } else {
                 ctx_ptr->on_hint_send_failure(rp);
             }
@@ -345,6 +339,16 @@ future<> hint_sender::send_one_hint(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fr
         manager_logger.trace("hint_sender[{}]:send_one_hint: Exception occurred: {}", _ep_key, eptr);
         ctx_ptr->on_hint_send_failure(rp);
     });
+}
+
+void hint_sender::advance_sent_upper_bound(const send_one_file_ctx& ctx) noexcept {
+    auto new_bound = ctx.get_replayed_bound();
+    // Segments from other shards are replayed first and are considered to be "before" replay position 0.
+    // Update the sent upper bound only if it is a local segment.
+    if (new_bound.shard_id() == this_shard_id() && _sent_upper_bound_rp < new_bound) {
+        _sent_upper_bound_rp = new_bound;
+        notify_replay_waiters();
+    }
 }
 
 void hint_sender::notify_replay_waiters() noexcept {
