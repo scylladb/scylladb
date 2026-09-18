@@ -404,6 +404,18 @@ bool fsm::has_output() const {
         || _output.state_changed;
 }
 
+committed_batch fsm::committed_entries(index_t first_idx, index_t last_idx) {
+    committed_batch batch;
+    for (auto idx = first_idx; idx <= last_idx; ++idx) {
+        const auto& entry = _log[idx.value()];
+        batch.ids.append(idx, entry->term);
+        if (const auto* cfg = std::get_if<configuration>(&entry->data); cfg && !cfg->is_joint()) {
+            batch.non_joint_conf_committed = true;
+        }
+    }
+    return batch;
+}
+
 fsm_output fsm::get_output() {
     auto diff = _log.last_idx() - _log.stable_idx();
 
@@ -437,23 +449,17 @@ fsm_output fsm::get_output() {
         output.term_and_vote = {_current_term, _voted_for};
     }
 
-    // Return committed entries.
+    // Report the entries that became committed: their ids only, the
+    // entries themselves stay in the log.
     // Observer commit index may be smaller than snapshot index
-    // in which case we should not attempt committing entries belonging
+    // in which case we should not report entries belonging
     // to a snapshot.
     auto observed_ci =  std::max(_observed._commit_idx, _log.get_snapshot().idx);
-    if (observed_ci < _commit_idx) {
-        output.committed.reserve((_commit_idx - observed_ci).value());
-
-        for (auto idx = observed_ci + index_t{1}; idx <= _commit_idx; ++idx) {
-            const auto& entry = _log[idx.value()];
-            output.committed.push_back(entry);
-        }
-    }
+    output.committed = committed_entries(observed_ci + index_t{1}, _commit_idx);
 
     // Get a snapshot of all unsent messages.
-    // Do it after populating log_entries and committed arrays
-    // to not lose messages in case arrays population throws
+    // Do it after populating the log_entries array
+    // to not lose messages in case the population throws
     std::swap(output.messages, _messages);
 
     // Get status of leadership transfer (if any)
@@ -1344,6 +1350,20 @@ bool fsm::apply_snapshot(snapshot_descriptor snp, size_t max_trailing_entries, s
 
     _output.snps_to_drop.push_back(current_snp.id);
 
+    // A snapshot from the leader replaces the committed entries above the
+    // previous snapshot in the log, which the applier fiber may not have
+    // applied yet: report them along with it, while their terms are at
+    // hand, after those of a received snapshot still pending in the
+    // output. A local snapshot never goes above the applied index.
+    utils::small_vector<subsumed_batch, 1> subsumed;
+    if (!local) {
+        if (_output.snp && !_output.snp->is_local) {
+            subsumed = std::move(_output.snp->subsumed);
+        }
+        subsumed.emplace_back(committed_entries(current_snp.idx + index_t{1}, _commit_idx),
+                entry_id{.term = snp.term, .idx = snp.idx});
+    }
+
     // If the snapshot is local, _commit_idx is larger than snp.idx.
     // Otherwise snp.idx becomes the new commit index.
     _commit_idx = std::max(_commit_idx, snp.idx);
@@ -1351,7 +1371,8 @@ bool fsm::apply_snapshot(snapshot_descriptor snp, size_t max_trailing_entries, s
     _output.snp.emplace(fsm_output::applied_snapshot{
         .snp = _log.get_snapshot(),
         .is_local = local,
-        .preserved_log_entries = _log.get_snapshot().idx.value() + 1 - new_first_index.value()});
+        .preserved_log_entries = _log.get_snapshot().idx.value() + 1 - new_first_index.value(),
+        .subsumed = std::move(subsumed)});
     if (is_leader()) {
         logger.trace("apply_snapshot[{}]: signal {} available units", _tag, units);
         leader_state().log_limiter_semaphore->signal(units);
