@@ -194,6 +194,11 @@ future<> raft_group0_client::add_entry(group0_command group0_cmd, group0_guard g
                 // Just fail the operation by propagating the error.
                 logger.error("add_entry: unexpected `not_a_leader` error: \"{}\". Please file an issue.", e);
                 throw;
+            } catch (const raft_operation_timeout_error& e) {
+                // A per-operation deadline expiry, not a hard raft error: fall through
+                // to the applied/GC-window classification below instead of propagating
+                // an opaque error the caller has no way to retry safely.
+                logger.warn("add_entry: {}", e);
             }
 
             // Thanks to the `prev_state_id` check in `group0_state_machine::apply`, the command is idempotent.
