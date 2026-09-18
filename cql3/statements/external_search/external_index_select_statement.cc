@@ -261,8 +261,7 @@ future<::shared_ptr<cql_transport::messages::result_message>> external_index_sel
         throw exceptions::invalid_request_exception("Full-text search queries support only one WHERE BM25() restriction");
     }
 
-    ordering_info->deferred_where_term = bm25_search::validate_restriction(
-            scoring_restrictions.front(), ordering_info->index, ordering_info->search_term);
+    ordering_info->deferred_where_term = bm25_search::validate_restriction(scoring_restrictions.front(), ordering_info->search_term);
 
     // Reject any WHERE restrictions beyond the single BM25 clause.
     // BM25 restrictions are excluded from `restrictions`.

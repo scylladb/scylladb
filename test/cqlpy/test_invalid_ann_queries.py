@@ -78,7 +78,7 @@ def test_quoted_ann_function_in_where_clause(cql, indexed_vector_table):
 def test_quoted_ann_function_in_where_clause_without_ordering(cql, indexed_vector_table):
     # Without an ORDER BY nothing claims the restriction. It must not be silently dropped:
     # scoring restrictions never reach the filtering machinery.
-    with pytest.raises(InvalidRequest, match="requires a matching ORDER BY clause"):
+    with pytest.raises(InvalidRequest, match="names a search that the ORDER BY clause does not run"):
         cql.execute(f'SELECT * FROM {indexed_vector_table} WHERE "ann"(v, [0.1, 0.2, 0.3]) > 0 LIMIT 5')
 
 # ANN() selected reports the score the rows are ranked by, so it needs an ANN ordering to agree

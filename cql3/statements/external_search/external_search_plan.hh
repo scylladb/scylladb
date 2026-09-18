@@ -11,13 +11,17 @@
 #include "cql3/functions/scoring_fcts.hh"
 #include "cql3/statements/external_search/external_index_select_statement.hh"
 
+namespace cql3::restrictions {
+class select_restrictions;
+}
+
 namespace cql3::statements {
 
-/// The clause a call was written in. Only ORDER BY introduces a search; a call in SELECT must refer
-/// to one the ORDER BY introduced, and each clause has its own error message when it does not.
+/// The clause a search call was written in. Only ORDER BY introduces a search.
 enum class search_clause {
     ordering,
     selectors,
+    restrictions,
 };
 
 /// A query value that prepare could not compare with the ORDER BY one because of a bind marker.
@@ -85,6 +89,10 @@ public:
     /// of its search's temporary.
     void replace_selectors(std::vector<selection::prepared_selector>& prepared_selectors);
 
+    /// Checks the WHERE clause against the searches: each relation on a search function must
+    /// name one of them.
+    void check_restrictions(const restrictions::select_restrictions& restrictions);
+
     /// True when the statement names no search, i.e. this is an ordinary query.
     bool empty() const {
         return _sources.empty();
@@ -106,7 +114,7 @@ public:
 
 private:
     /// The search the call `fc` refers to, by family and column. In ORDER BY a call with no
-    /// matching search adds one; in SELECT it is an error.
+    /// matching search adds one; elsewhere it is an error.
     search_source& search_of(const expr::function_call& fc, const functions::external_search_function& fun, search_clause clause);
 
     /// The expression that replaces `call_expr`: a read of the temporary the value is delivered in,
