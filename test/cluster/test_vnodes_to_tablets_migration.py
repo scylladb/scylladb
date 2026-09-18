@@ -28,7 +28,7 @@ from test.pylib.internal_types import ServerInfo
 from test.pylib.util import get_enabled_features, wait_for, wait_for_feature, wait_for_cql_and_get_hosts, wait_for_view
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
-from test.cluster.util import create_new_test_keyspace, new_test_keyspace, reconnect_driver, ensure_group0_leader_on, trigger_stepdown
+from test.cluster.util import create_new_test_keyspace, new_test_keyspace, reconnect_driver, ensure_group0_leader_on, trigger_stepdown, get_coordinator_host, wait_new_coordinator_elected
 from test.cluster.tasks.task_manager_client import TaskManagerClient
 
 logger = logging.getLogger(__name__)
@@ -1411,6 +1411,84 @@ async def test_migration_multiple_keyspaces(manager: ScyllaClusterManager):
             for row in rows:
                 assert row.intended_storage_mode is None, \
                     f"intended_storage_mode should be cleared for node {row.host_id} after all migrations are done, got '{row.intended_storage_mode}'"
+
+
+async def tables_with_tablet_map(manager: ScyllaClusterManager, server: ServerInfo, ks: str, tables: list[str]) -> list[str]:
+    """Return the tables among `tables` which have a tablet map, as seen by `server`."""
+    return [t for t in tables if await get_tablet_count(manager, server, ks, t) > 0]
+
+
+async def assert_all_tables_have_tablet_map(manager: ScyllaClusterManager, server: ServerInfo, ks: str, tables: list[str]):
+    mapped = await tables_with_tablet_map(manager, server, ks, tables)
+    missing = sorted(set(tables) - set(mapped))
+    assert not missing, f"tables of {ks} without a tablet map: {missing}"
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_migration_prepare_resumed_after_coordinator_change(manager: ScyllaClusterManager, scale_timeout):
+    """Verify that preparing a migration survives losing the topology coordinator.
+
+    The tablet maps of a keyspace are written by several group0 commands, and the request
+    stays in the queue until the last one. If the coordinator dies in between, the next
+    coordinator has to pick the request up and write the maps which are still missing,
+    so that the keyspace doesn't end up with tablet maps for only some of its tables.
+    """
+    num_tables = 4
+
+    cfg = {'num_tokens': 16}
+    property_file = [{"dc": "dc1", "rack": f"rack{i}"} for i in range(1, 4)]
+    servers = await manager.servers_add(3, cmdline=['--smp', '2'], config=cfg, property_file=property_file)
+    cql, _ = await manager.get_ready_cql(servers)
+
+    coordinator = await get_coordinator_host(manager)
+    coordinator_host_id = await manager.get_host_id(coordinator.server_id)
+    other = [s for s in servers if s.server_id != coordinator.server_id]
+    logger.info(f"Topology coordinator is {coordinator.server_id}")
+
+    for s in servers:
+        await manager.api.enable_injection(s.ip_addr, 'prepare_migration_one_table_per_command',
+                                           one_shot=False)
+    # Only the current coordinator pauses; whoever takes over must run to completion.
+    await manager.api.enable_injection(coordinator.ip_addr, 'prepare_migration_after_part',
+                                       one_shot=True)
+    # The injection state comes back per shard, so the list is never empty by itself.
+    armed = await manager.api.get_injection(coordinator.ip_addr, 'prepare_migration_after_part')
+    assert any(shard['enabled'] for shard in armed), \
+        f"the pause injection is not armed on the coordinator: {armed}"
+
+    async with new_migrating_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'enabled': false}") as ks:
+        tables = [f't{i}' for i in range(num_tables)]
+        for t in tables:
+            await cql.run_async(f"CREATE TABLE {ks}.{t} (pk int PRIMARY KEY, c int)")
+
+        # Drive the request from a node which is not going away, so that the API call
+        # survives the coordinator being stopped.
+        logger.info("Starting prepare from a non-coordinator node")
+        prepare = asyncio.create_task(
+                manager.api.create_vnode_tablet_migration(other[0].ip_addr, ks))
+        try:
+            logger.info("Waiting for the coordinator to commit the first command")
+            await manager.api.wait_for_injection_enter(coordinator.ip_addr, 'prepare_migration_after_part',
+                                                       deadline=time.time() + scale_timeout(60))
+
+            # Kill it rather than shutting it down: a graceful stop waits for the topology
+            # coordinator fiber, which is parked in the injection, and this is meant to
+            # stand for a coordinator which dies in the middle of the request anyway.
+            logger.info(f"Killing the coordinator {coordinator.server_id}")
+            await manager.server_stop(coordinator.server_id, convict=True)
+            await wait_new_coordinator_elected(manager, coordinator_host_id, time.time() + scale_timeout(120))
+
+            logger.info("Waiting for the new coordinator to finish preparing")
+            await prepare
+        finally:
+            # Whatever failed above, don't leave the API call dangling, and surface its
+            # own error rather than a timeout waiting for something it never started.
+            if not prepare.done():
+                prepare.cancel()
+            await asyncio.gather(prepare, return_exceptions=True)
+
+        # Every table must have a map, including the ones the stopped coordinator wrote.
+        await assert_all_tables_have_tablet_map(manager, other[0], ks, tables)
 
 
 async def test_migration_multiple_tables(manager: ScyllaClusterManager, scale_timeout):
