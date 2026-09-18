@@ -38,8 +38,7 @@ audit_tables        Comma-separated list of table names that should be audited, 
 
                     For Alternator tables use the ``alternator.<table_name>`` format (see :ref:`alternator-auditing`).
 ------------------  ------------------------------------------------------------------------------------------------------------------------
-audit_keyspaces     Comma-separated list of keyspaces that should be audited. You must specify at least one keyspace.
-                    If you leave this option empty, no keyspace will be audited.
+audit_keyspaces     Comma-separated list of keyspaces that should be audited. All tables in those keyspaces are audited.
 ==================  ========================================================================================================================
 
 The default value and liveness of each option are listed in
@@ -48,7 +47,16 @@ The default value and liveness of each option are listed in
 :ref:`audit_tables <confprop_audit_tables>` and
 :ref:`audit_keyspaces <confprop_audit_keyspaces>`.
 
-To audit all the tables in a keyspace, set the ``audit_keyspaces`` with the keyspace you want to audit and leave ``audit_tables`` empty.
+``audit_tables`` and ``audit_keyspaces`` are two independent, alternative ways to select what gets
+audited -- you don't need to fill in both. Pick whichever matches what you want to audit, or combine
+them:
+
+- **Audit specific tables** — set ``audit_tables`` to those tables and leave ``audit_keyspaces``
+  empty.
+- **Audit whole keyspaces** — set ``audit_keyspaces`` to those keyspaces and leave
+  ``audit_tables`` empty.
+
+You can also combine both: a table is then audited if it matches either setting.
 
 You can use DCL, AUTH, and ADMIN audit categories without including any keyspace or table.
 
