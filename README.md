@@ -63,6 +63,14 @@ For more run options, run:
 $ ./tools/toolchain/dbuild ./build/release/scylla --help
 ```
 
+## Self-Hosting Options
+
+### Elestio
+
+You can deploy Scylla on Elestio using one-click deployment.
+
+[![Deploy on Elestio](https://elest.io/images/logos/deploy-to-elestio-btn.png)](https://elest.io/open-source/scylladb)
+
 ## Testing
 
 [![Build with the latest Seastar](https://github.com/scylladb/scylladb/actions/workflows/seastar.yaml/badge.svg)](https://github.com/scylladb/scylladb/actions/workflows/seastar.yaml) [![Check Reproducible Build](https://github.com/scylladb/scylladb/actions/workflows/reproducible-build.yaml/badge.svg)](https://github.com/scylladb/scylladb/actions/workflows/reproducible-build.yaml) [![clang-nightly](https://github.com/scylladb/scylladb/actions/workflows/clang-nightly.yaml/badge.svg)](https://github.com/scylladb/scylladb/actions/workflows/clang-nightly.yaml)
