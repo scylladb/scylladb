@@ -8,6 +8,7 @@
 
 #include "utils/assert.hh"
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/as_future.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/try_future.hh>
 #include <seastar/util/closeable.hh>
@@ -778,18 +779,19 @@ public:
 
 future<> shard_reader::close() noexcept {
     if (_read_ahead) {
-        try {
-            co_await *std::exchange(_read_ahead, std::nullopt);
-        } catch (...) {
-            auto ex = std::current_exception();
+        // Use coroutine::as_future: a timed out read-ahead is an expected
+        // outcome here, not worth a real C++ throw/catch.
+        if (auto f = co_await coroutine::as_future(*std::exchange(_read_ahead, std::nullopt)); f.failed()) {
+            auto ex = f.get_exception();
             if (!is_timeout_exception(ex)) {
                 mrlog.warn("shard_reader::close(): read_ahead on shard {} failed: {}", _shard, ex);
             }
         }
     }
 
-    try {
-        co_await smp::submit_to(_shard, [this] {
+    // Use coroutine::as_future: closing a reader that timed out on the remote
+    // shard is an expected outcome, not worth a real C++ throw/catch.
+    auto f = co_await coroutine::as_future(smp::submit_to(_shard, [this] {
             if (!_reader) {
                 return make_ready_future<>();
             }
@@ -810,9 +812,12 @@ future<> shard_reader::close() noexcept {
             }).then([this, irh = std::move(irh)] (mutation_reader::tracked_buffer&& buf) mutable {
                 return _lifecycle_policy->destroy_reader({std::move(irh), std::move(buf)});
             });
-        });
-    } catch (...) {
-        mrlog.error("shard_reader::close(): failed to stop reader on shard {}: {:t}", _shard, std::current_exception());
+        }));
+    if (f.failed()) {
+        auto ex = f.get_exception();
+        if (!is_timeout_exception(ex)) {
+            mrlog.error("shard_reader::close(): failed to stop reader on shard {}: {:t}", _shard, ex);
+        }
     }
 }
 
