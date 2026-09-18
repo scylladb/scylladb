@@ -216,6 +216,7 @@ private:
     cache_tracker& _tracker;
     stats _stats{};
     schema_ptr _schema;
+    bool _single_row_partitions;
     partitions_type _partitions; // Cached partitions are complete.
 
     // The snapshots used by cache are versioned. The version number of a snapshot is
