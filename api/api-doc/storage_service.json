@@ -4097,6 +4097,14 @@
                "type":"string",
                "description":"The migration status: `vnodes` (not started), `migrating_to_tablets` (in progress), or `tablets` (complete)"
             },
+            "tables_with_tablet_map":{
+               "type":"long",
+               "description":"How many of the keyspace's tables have a tablet map. Preparation writes them over several group0 commands, so this reports its progress. Fewer than all of them once no preparation is running means one did not finish: the keyspace reports as `vnodes` and can be prepared again to complete it, or finalized to roll it back"
+            },
+            "tables_total":{
+               "type":"long",
+               "description":"How many tables the keyspace has"
+            },
             "nodes":{
                "type":"array",
                "items":{
