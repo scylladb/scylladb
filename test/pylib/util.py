@@ -13,12 +13,15 @@ import threading
 import time
 import asyncio
 import concurrent.futures
+import fcntl
 import logging
 import os
 import random
 import string
-from collections.abc import Awaitable, Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine, Iterator
+from contextlib import contextmanager
 from functools import cache, partial
+from pathlib import Path
 from typing import Optional, TypeVar, Any, cast
 
 import colorama
@@ -29,7 +32,7 @@ from cassandra.pool import Host # type: ignore # pylint: disable=no-name-in-modu
 from cassandra.query import Statement # type: ignore # pylint: disable=no-name-in-module
 from cassandra import DriverException, ConsistencyLevel  # type: ignore # pylint: disable=no-name-in-module
 
-from test import BUILD_DIR, TOP_SRC_DIR, MODES_TIMEOUT_FACTOR
+from test import BUILD_DIR, TOP_SRC_DIR, MODES_TIMEOUT_FACTOR, use_traditional_build
 from test.pylib.internal_types import ServerInfo
 
 logger = logging.getLogger(__name__)
@@ -368,17 +371,77 @@ async def wait_all(coros: list[Coroutine], timeout: int|None = None):
     return result
 
 
+def build_is_configured() -> bool:
+    """Is there a build ninja can be run in?
+
+    Neither build system has generated its build.ninja in a source tree which
+    was never configured, or whose build directory was wiped.
+    """
+
+    return use_traditional_build() or BUILD_DIR.joinpath("build.ninja").exists()
+
+
+NO_BUILD_CONFIGURED = (
+    f"There is no configured build: neither {TOP_SRC_DIR / 'build.ninja'} nor {BUILD_DIR / 'build.ninja'}"
+    " exists.  Please run ./configure.py (or cmake, for a cmake build) first."
+)
+
+
+def check_build_is_configured() -> None:
+    if not build_is_configured():
+        raise RuntimeError(NO_BUILD_CONFIGURED)
+
+
+def ninja_cwd() -> Path:
+    """The directory ninja is invoked from, which its targets are relative to."""
+
+    return TOP_SRC_DIR if use_traditional_build() else BUILD_DIR
+
+
+def ninja_args() -> list[str]:
+    return [] if use_traditional_build() else ["-C", str(BUILD_DIR)]
+
+
+@contextmanager
+def ninja_lock() -> Iterator[None]:
+    """Serialize ninja invocations.
+
+    xdist workers collect in parallel and would otherwise run several ninja
+    instances in the same build directory, which ninja does not guard against
+    itself.  Querying is serialized along with building, because a query on a
+    stale build.ninja regenerates it first.
+    """
+
+    lock_path = BUILD_DIR / ".pytest-ninja-lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open(mode="w", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file, fcntl.LOCK_EX)
+        yield
+
+
 def ninja(target: str) -> str:
     """Build specified target using ninja."""
 
-    return subprocess.Popen(
-        # cmake places build.ninja in build/, traditional is in ./.
-        # We choose to test for traditional, not cmake, because IDEs may
-        # invoke cmake to learn the configuration and generate false positives
-        args=["ninja", *(["-C", str(BUILD_DIR)] if not TOP_SRC_DIR.joinpath("build.ninja").exists() else []), target],
-        stdout=subprocess.PIPE,
-        cwd=TOP_SRC_DIR,
-    ).communicate()[0].decode()
+    check_build_is_configured()
+    with ninja_lock():
+        return subprocess.Popen(
+            args=["ninja", *ninja_args(), target],
+            stdout=subprocess.PIPE,
+            cwd=TOP_SRC_DIR,
+        ).communicate()[0].decode()
+
+
+def ninja_build(*targets: str) -> None:
+    """Build the given targets with ninja, with its output going to the terminal.
+
+    Raises RuntimeError if the build fails.
+    """
+
+    check_build_is_configured()
+    with ninja_lock():
+        process = subprocess.run(args=["ninja", *ninja_args(), *targets], cwd=TOP_SRC_DIR, check=False)
+    if process.returncode:
+        raise RuntimeError(f"Failed to build {' '.join(targets)}: ninja exited with {process.returncode}")
 
 
 @cache
@@ -388,6 +451,26 @@ def get_configured_modes() -> list[str]:
     # debug release dev
     return re.sub(r'.* List configured modes\n(.*)\n', r'\1',
                             out, count=1, flags=re.DOTALL).split('\n')[-1].split(' ')
+
+
+@cache
+def get_configured_tests() -> frozenset[str]:
+    """Names of the tests the build system is configured to build.
+
+    The names are of the `test/<suite>/<test name>` form, i.e. the source
+    directory of a test and the name of the executable it is built into --
+    which is not necessarily the name of the test: tests can be built into a
+    shared executable, like test/boost/combined_tests.
+    """
+
+    # [1/1] List configured unit tests
+    # test/boost/UUID_test
+    # ...
+    # The cmake build quotes the whole list, so strip the quotes as well.
+    return frozenset(
+        stripped for line in ninja("unit_test_list").splitlines()
+        if (stripped := line.strip().strip("'")).startswith("test/")
+    )
 
 
 def get_modes_to_run(config) -> list[str]:

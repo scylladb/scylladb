@@ -46,7 +46,8 @@ from test.pylib.s3_server_mock import MockS3Server
 from test.pylib.scylla_cluster import ScyllaCluster
 from test.pylib.scylla_server import merge_cmdline_options
 from test.pylib.skip_reason_plugin import skip_marker
-from test.pylib.util import get_modes_to_run, scale_timeout_by_mode, get_xdist_worker_id, LogPrefixAdapter
+from test.pylib.util import NO_BUILD_CONFIGURED, build_is_configured, get_modes_to_run, scale_timeout_by_mode, \
+    get_xdist_worker_id, LogPrefixAdapter
 from test.pylib.version_fetch_utils import fetch_and_install_scylla_version
 
 if TYPE_CHECKING:
@@ -54,6 +55,7 @@ if TYPE_CHECKING:
 
     import _pytest.nodes
     import _pytest.scope
+    from _pytest.terminal import TerminalReporter
 
     from test.pylib.scylla_cluster import ClusterFactory
 
@@ -61,6 +63,12 @@ if TYPE_CHECKING:
 TEST_CONFIG_FILENAME = "test_config.yaml"
 PYTEST_LOG_FOLDER = "pytest_log"
 PYTEST_TESTS_LOGS_FOLDER = "pytest_tests_logs"
+
+# Names of the user properties a C++ test case records for the log it wrote.
+# User properties travel with the report, so they reach the terminal summary
+# even when the test ran in an xdist worker.
+CPP_TEST_LOG = "cpp_test_log"
+CPP_TEST_LOG_KEPT = "cpp_test_log_kept"
 
 REPEATING_FILES = pytest.StashKey[set[pathlib.Path]]()
 BUILD_MODE = pytest.StashKey[str]()
@@ -115,6 +123,13 @@ def pytest_addoption(parser: pytest.Parser) -> None:
                      help="Controls number of compaction groups to be used by Scylla tests. Value of 3 implies 8 groups.")
     parser.addoption('--repeat', action="store", default=1, type=int,
                      help="number of times to repeat test execution")
+
+    parser.addoption('--build', action='store_true', default=False,
+                     help="Build the executables of the selected C++ tests before running them.")
+    parser.addoption('--gdb', action='store_true', default=False,
+                     help="Run the C++ test case under gdb.  Requires that exactly one test case is selected"
+                          " -- note that a test case is collected once per build mode, so --mode is usually"
+                          " needed as well.")
 
     parser.addoption('--exe-path', default=False,
                      dest="exe_path", action="store",
@@ -393,6 +408,27 @@ async def scylla_cluster(request: pytest.FixtureRequest,
         yield cluster
 
 
+def pytest_collection_finish(session: pytest.Session) -> None:
+    """Check that --gdb ended up with the one test case it can debug.
+
+    Here rather than in pytest_collection_modifyitems, where the items are
+    not final yet: -k and -m deselect from that same hook, and the plugin
+    which implements them has no tryfirst, so it may well run after this one.
+    """
+
+    config = session.config
+    if not config.getoption("--gdb"):
+        return
+    if len(session.items) != 1:
+        raise pytest.UsageError(
+            f"--gdb needs exactly one test case to be selected, but {len(session.items)} were."
+            "  Select a single one with `path/to/test.cc::case_name`, and keep in mind that every test"
+            f" case is collected once per build mode, so --mode is needed too (configured: {' '.join(config.build_modes)})."
+        )
+    if session.items[0].get_closest_marker("cpp") is None:
+        raise pytest.UsageError(f"--gdb only works for C++ tests, but {session.items[0].nodeid} is not one.")
+
+
 def pytest_collection_modifyitems(items: list[pytest.Item], config: pytest.Config) -> None:
     run_ids = defaultdict(lambda: count(start=int(config.getoption("--run_id") or 1)))
     for item in items:
@@ -488,6 +524,35 @@ def pytest_runtest_logreport(report):
         node_reporter.__reporter_modified = True
 
 
+def pytest_terminal_summary(terminalreporter: TerminalReporter) -> None:
+    """Point at the log of a C++ test case when it was the only one that ran.
+
+    The log holds the full output of the test executable, of which the report
+    only shows the tail, so it is worth pointing at whenever the user is
+    looking at a single test -- which is also the only time they can tell
+    which test the path belongs to without reading it.
+    """
+
+    reports = [
+        report
+        for reports in terminalreporter.stats.values() for report in reports
+        if isinstance(report, pytest.TestReport) and report.when == "call"
+    ]
+    if len(reports) != 1:
+        return
+    properties = dict(reports[0].user_properties)
+    if (log_path := properties.get(CPP_TEST_LOG)) is None:
+        return
+
+    terminalreporter.write_sep("-", "C++ test log")
+    terminalreporter.write_line(log_path)
+    if not properties.get(CPP_TEST_LOG_KEPT):
+        terminalreporter.write_line(
+            "The log was removed because the test passed."
+            "  Pass --save-log-on-success (-s with test.py) to keep the logs of passing tests.",
+        )
+
+
 @pytest.hookimpl(trylast=True)
 def pytest_sessionfinish(session: pytest.Session) -> None:
     # After pytest's own pytest_sessionfinish, which runs the fixture
@@ -521,6 +586,7 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
         session.exitstatus = EXIT_MAXFAIL_REACHED
 
 
+@pytest.hookimpl(tryfirst=True)
 def pytest_configure(config: pytest.Config) -> None:
     global _pytest_config
     _pytest_config = config
@@ -567,10 +633,35 @@ def pytest_configure(config: pytest.Config) -> None:
     if config.getoption("--exe-path"):
         if config.getoption("--mode"):
             raise RuntimeError("Can't use --mode with --exe-path or --exe-url.")
+        if config.getoption("--build"):
+            raise RuntimeError("Can't use --build with --exe-path or --exe-url: there is no build to run.")
         config.option.modes = ["custom_exe"]
 
+    if config.getoption("--build") and not build_is_configured():
+        raise pytest.UsageError(NO_BUILD_CONFIGURED)
+
+    if config.getoption("--gdb"):
+        if shutil.which("gdb") is None:
+            raise pytest.UsageError("--gdb was requested, but gdb is not installed.")
+        if config.getoption("numprocesses", None):
+            raise pytest.UsageError("Can't use --gdb with xdist: a worker process has no terminal to debug on.")
+        if config.getoption("--repeat") != 1:
+            raise pytest.UsageError("Can't use --gdb with --repeat: only a single test case can be debugged.")
+        # pytest-timeout would pull the rug from under a debugging session,
+        # which is expected to sit at a prompt for as long as it takes.  It
+        # copies both options into its own state in its pytest_configure,
+        # hence the tryfirst above.
+        for timeout_option in ("timeout", "session_timeout"):
+            if getattr(config.option, timeout_option, None):
+                setattr(config.option, timeout_option, 0)
+
     os.environ["TOPOLOGY_RANDOM_FAILURES_TEST_SHUFFLE_SEED"] = os.environ.get("TOPOLOGY_RANDOM_FAILURES_TEST_SHUFFLE_SEED", str(random.randint(0, sys.maxsize)))
-    config.build_modes = get_modes_to_run(config)
+    try:
+        config.build_modes = get_modes_to_run(config)
+    except RuntimeError as e:
+        # Typically an unconfigured build, which the user can act on: a
+        # traceback would only bury the message.
+        raise pytest.UsageError(str(e)) from e
 
     if testpy_run_id := config.getoption("--run_id"):
         if config.getoption("--repeat") != 1:

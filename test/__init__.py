@@ -11,7 +11,7 @@ import os
 from pathlib import Path
 
 __all__ = ["ALL_MODES", "BUILD_DIR", "DEBUG_MODES", "HOST_ID", "TEST_DIR", "TEST_RUNNER", "TOP_SRC_DIR",
-           "asan_options", "path_to", "ubsan_options"]
+           "asan_options", "path_to", "ubsan_options", "use_traditional_build"]
 
 
 TEST_RUNNER = os.environ.get("SCYLLA_TEST_RUNNER", "pytest")
@@ -77,13 +77,21 @@ def asan_options(inherit: bool = False) -> str:
     return ":".join(filter(None, opts))
 
 
+def use_traditional_build() -> bool:
+    """Is this a configure.py build tree, rather than a cmake one?
+
+    cmake places build.ninja in build/, traditional is in ./.  We choose to
+    test for traditional, not cmake, because IDEs may invoke cmake to learn
+    the configuration and generate false positives.
+    """
+
+    return TOP_SRC_DIR.joinpath("build.ninja").exists()
+
+
 def path_to(mode: str, *components: str) -> str:
     """Resolve path to built executable."""
 
-    # cmake places build.ninja in build/, traditional is in ./.
-    # We choose to test for traditional, not cmake, because IDEs may
-    # invoke cmake to learn the configuration and generate false positives
-    if not TOP_SRC_DIR.joinpath("build.ninja").exists():
+    if not use_traditional_build():
         *dir_components, basename = components
         return str(BUILD_DIR.joinpath(*dir_components, ALL_MODES[mode], basename))
     return str(BUILD_DIR.joinpath(mode, *components))
