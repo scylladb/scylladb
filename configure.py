@@ -741,6 +741,7 @@ vector_search_tests = set([
     'test/vector_search/load_balancer_test',
     'test/vector_search/client_test',
     'test/vector_search/filter_test',
+    'test/vector_search/hybrid_search_test',
 ])
 
 wasms = set([
@@ -1416,6 +1417,7 @@ scylla_core = (['message/messaging_service.cc',
                 'reader_concurrency_semaphore_group.cc',
                 'utils/disk_space_monitor.cc',
                 'vector_search/vector_store_client.cc',
+                'vector_search/hybrid_search.cc',
                 'vector_search/dns.cc',
                 'vector_search/client.cc',
                 'vector_search/clients.cc',
@@ -1871,6 +1873,7 @@ deps['test/vector_search/vector_store_client_test'] =  ['test/vector_search/vect
 deps['test/vector_search/load_balancer_test'] = ['test/vector_search/load_balancer_test.cc'] + scylla_tests_dependencies
 deps['test/vector_search/client_test'] = ['test/vector_search/client_test.cc'] + scylla_tests_dependencies
 deps['test/vector_search/filter_test'] = ['test/vector_search/filter_test.cc'] + scylla_tests_dependencies
+deps['test/vector_search/hybrid_search_test'] = ['test/vector_search/hybrid_search_test.cc'] + scylla_tests_dependencies
 
 boost_tests_prefixes = ["test/boost/", "test/vector_search/", "test/raft/", "test/manual/", "test/ldap/"]
 
