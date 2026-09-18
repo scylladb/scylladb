@@ -26,20 +26,29 @@ seastar::logger logstor_logger("logstor");
 static api::timestamp_type extract_logstor_record_timestamp(const mutation& m) {
     const auto& partition = m.partition();
 
+    api::timestamp_type ts = api::missing_timestamp;
+
     for (const auto& row_entry : partition.clustered_rows()) {
         if (row_entry.dummy()) {
             continue;
         }
         if (!row_entry.row().marker().is_missing()) {
-            return row_entry.row().marker().timestamp();
+            ts = std::max(ts, row_entry.row().marker().timestamp());
         }
     }
 
     if (const auto partition_tombstone = partition.partition_tombstone(); partition_tombstone) {
-        return partition_tombstone.timestamp;
+        ts = std::max(ts, partition_tombstone.timestamp);
     }
 
-    throw std::runtime_error("logstor mutation has no row marker or partition tombstone timestamp");
+    if (ts == api::missing_timestamp) {
+        throw std::runtime_error("logstor mutation has no row marker or partition tombstone timestamp");
+    }
+
+    // A converged partition produced by repair may carry both a live row marker
+    // and a newer partition tombstone. Use the maximum timestamp so the record
+    // wins against, and is not later resurrected by, the versions it supersedes.
+    return ts;
 }
 
 logstor::logstor(logstor_config config, ::cache_tracker& shared_cache_tracker)
