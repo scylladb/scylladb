@@ -11,6 +11,7 @@
 #include <vector>
 #include "gms/gossip_address_map.hh"
 #include "gms/inet_address.hh"
+#include "node_ops/node_ops_ctl.hh"
 #include "repair/repair.hh"
 #include "repair/task_manager_module.hh"
 #include "service/topology_guard.hh"
@@ -222,6 +223,14 @@ public:
     future<> cleanup_history(tasks::task_id repair_id);
     future<> load_history();
 
+    // Repair a single local range, multiple column families.
+    // Comparable to RepairSession in Origin
+    future<> repair_range(shard_repair_state& rstate, const dht::token_range& range, table_info table, gc_clock::time_point flush_time);
+
+    // Repair the given shard_repair_state's ranges for all its tables, in limited
+    // parallelism.
+    future<> do_repair_ranges(shard_repair_state& rstate, gc_clock::time_point flush_time);
+
     future<int> do_repair_start(gms::gossip_address_map& addr_map, sstring keyspace, std::unordered_map<sstring, sstring> options_map);
 
     // The tokens are the tokens assigned to the bootstrap node.
@@ -348,7 +357,7 @@ public:
     void on_cleanup_for_drop_table(const table_id& id);
 };
 
-class repair_info;
+class shard_repair_state;
 using repair_master = bool_class<class repair_master_tag>;
 class partition_key_and_mutation_fragments;
 using repair_rows_on_wire = std::list<partition_key_and_mutation_fragments>;
@@ -356,10 +365,9 @@ class repair_row;
 class repair_hasher;
 class repair_writer;
 
-future<> repair_cf_range_row_level(repair::shard_repair_task_impl& shard_task,
+future<> repair_cf_range_row_level(shard_repair_state& rstate,
         sstring cf_name, table_id table_id, dht::token_range range,
-        const std::vector<locator::host_id>& all_peer_nodes, bool small_table_optimization, gc_clock::time_point flush_time,
-        service::frozen_topology_guard topo_guard);
+        const std::vector<locator::host_id>& all_peer_nodes, gc_clock::time_point flush_time);
 future<std::list<repair_row>> to_repair_rows_list(repair_rows_on_wire rows,
         schema_ptr s, uint64_t seed, repair_master is_master,
         reader_permit permit, repair_hasher hasher);
