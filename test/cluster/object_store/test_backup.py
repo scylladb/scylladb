@@ -2139,13 +2139,11 @@ async def test_drop_table_during_backup(manager: ScyllaClusterManager, object_st
 
         # Pause the backup before the per-shard worker runs.
         await manager.api.enable_injection(server.ip_addr, "backup_task_before_worker", one_shot=True)
-        server_log = await manager.server_open_log(server.server_id)
-        log_mark = await server_log.mark()
 
         prefix = unique_name('backup_')
         tid = await manager.api.backup(server.ip_addr, ks, cf, snap_name, object_storage.address, object_storage.bucket_name, prefix)
 
-        await server_log.wait_for("backup_task_before_worker: waiting for message", from_mark=log_mark)
+        await manager.api.wait_for_injection_enter(server.ip_addr, "backup_task_before_worker")
 
         # Drop the table while the backup is parked. The snapshot files remain on
         # disk, so the backup should still be able to upload them.
