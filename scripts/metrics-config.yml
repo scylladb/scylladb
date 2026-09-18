@@ -84,3 +84,8 @@
 "ent/encryption/key_cache.cc":
   groups:
     "61": ["encryption_key_id_cache", "encryption_key_attr_cache"]
+"service/tablet_allocator.cc":
+  groups:
+    "52": "load_balancer"
+    "70": "load_balancer"
+    "79": "load_balancer"

@@ -163,8 +163,23 @@ def get_metrics_information(config_file):
     with open(config_file, 'r') as file:
         return yaml.safe_load(file)
 
-def get_metrics_from_file(file_name, prefix, metrics_information, verb=None, strict=True):
+def get_file_config(clean_name, metrics_information):
+    """Return (skip, params, groups) for a source file from the loaded config."""
+    entry = metrics_information[clean_name] if clean_name in metrics_information else None
+    if entry is not None:
+        if (isinstance(entry, str) and entry == "skip") or "skip" in entry:
+            return True, {}, {}
+    if not isinstance(entry, dict):
+        return False, {}, {}
+    return False, entry.get("params", {}), entry.get("groups", {})
+
+
+def get_metrics_from_file(file_name, prefix, metrics_information, verb=None, strict=True, unresolved_groups=None):
     current_group = ""
+    # False once a group name is taken verbatim from an expression the parser
+    # could not evaluate, which makes every name derived from it wrong.
+    current_group_resolved = True
+    current_group_line = 0
     # Normalize path for cross-platform compatibility
     # Convert absolute paths to relative and backslashes to forward slashes
     clean_name = file_name
@@ -183,12 +198,9 @@ def get_metrics_from_file(file_name, prefix, metrics_information, verb=None, str
     # Normalize backslashes to forward slashes for config file compatibility
     clean_name = clean_name.replace('\\', '/')
     param_mapping = {}
-    groups = {}
-    if clean_name in metrics_information:
-        if (isinstance(metrics_information[clean_name], str) and metrics_information[clean_name] == "skip") or "skip" in metrics_information[clean_name]:
-            return {}
-    param_mapping =  metrics_information[clean_name]["params"] if clean_name in metrics_information and "params" in metrics_information[clean_name] else {}
-    groups = metrics_information[clean_name]["groups"] if clean_name in metrics_information and "groups" in metrics_information[clean_name] else {}
+    skip, param_mapping, groups = get_file_config(clean_name, metrics_information)
+    if skip:
+        return {}
 
     metrics = {}
     names = undefined
@@ -201,6 +213,8 @@ def get_metrics_from_file(file_name, prefix, metrics_information, verb=None, str
         for line in file:
             if str(line_number) in groups:
                 current_group = groups[str(line_number)]
+                current_group_resolved = True
+                current_group_line = line_number
                 verbose(verb, "found group from config ", groups[str(line_number)])
             if serching_group:
                 m = string_content.match(line)
@@ -208,6 +222,8 @@ def get_metrics_from_file(file_name, prefix, metrics_information, verb=None, str
                     line_number += 1
                     continue
                 current_group = m.group(1)
+                current_group_resolved = True
+                current_group_line = line_number
                 serching_group = False
                 verbose(verb, "group found on new line", current_group)
             m = metric.match(line)
@@ -217,12 +233,15 @@ def get_metrics_from_file(file_name, prefix, metrics_information, verb=None, str
                 if gr_match:
                     # Extract group from add_group on the same line
                     current_group = gr_match.group(2)
+                    current_group_line = line_number
                     m_str = string_content.match(current_group)
                     if m_str:
                         current_group = m_str.group(1)
+                        current_group_resolved = True
                     else:
                         m_alt = alternative_name.match(current_group)
                         if m_alt:
+                            current_group_resolved = m_alt.group(1) in param_mapping
                             current_group = param_mapping[m_alt.group(1)] if m_alt.group(1) in param_mapping else m_alt.group(1)
                     verbose(verb, "group found on same line as metric", current_group)
                 else:
@@ -273,6 +292,10 @@ def get_metrics_from_file(file_name, prefix, metrics_information, verb=None, str
                         handle_error(f"no name list {current_metric}", strict)
                         continue
                     description_list = make_name_list(descrs, file_name+" "+str(line_number), param_mapping, verb, strict)
+                    if not current_group_resolved and unresolved_groups is not None:
+                        entry = (current_group_line, current_group)
+                        if entry not in unresolved_groups:
+                            unresolved_groups.append(entry)
                     current_groups = current_group if isinstance(current_group, list) else [current_group]
                     for cg in current_groups:
                         for idx, base_name in enumerate(name_list):
@@ -289,15 +312,18 @@ def get_metrics_from_file(file_name, prefix, metrics_information, verb=None, str
                 m = gr.match(line)
                 if m:
                     current_group = m.group(2)
+                    current_group_line = line_number
                     if not current_group:
                         verbose(verb, "empty group found")
                         serching_group = True
                     m = string_content.match(current_group)
                     if m:
                         current_group = m.group(1)
+                        current_group_resolved = True
                     else:
                         m = alternative_name.match(current_group)
                         if m:
+                            current_group_resolved = m.group(1) in param_mapping
                             current_group = param_mapping[m.group(1)] if m.group(1) in param_mapping else m.group(1)
                             verbose(verb, "Alternative group", file_name, line_number, current_group)
                 m = metrics_directive.match(line)
@@ -366,14 +392,24 @@ def validate_all_metrics(prefix, config_file, verbose=False, strict=True):
 
     for file_path in metric_files:
         try:
-            metrics = get_metrics_from_file(file_path, prefix, metrics_info, verbose, strict)
+            problems = []
+            unresolved_groups = []
+            metrics = get_metrics_from_file(file_path, prefix, metrics_info, verbose, strict, unresolved_groups)
             metrics_count = len(metrics)
             total_metrics += metrics_count
+            if unresolved_groups:
+                # The parser counts lines from zero, so report line + 1: that is both
+                # the line an editor shows and the key a 'groups' override needs.
+                problems.append("unresolved add_group() argument(s): " + ", ".join(
+                    f"{expression} (line {line + 1})" for line, expression in unresolved_groups))
             invalid_names = find_invalid_metric_names(metrics)
             if invalid_names:
-                reason = "unresolved metric name(s): " + ", ".join(invalid_names)
+                problems.append("unresolved metric name(s): " + ", ".join(invalid_names))
+            if problems:
+                reason = "; ".join(problems)
                 print(f"[ERROR] {file_path}")
-                print(f"   {reason}")
+                for problem in problems:
+                    print(f"   {problem}")
                 failed_files.append((file_path, reason))
             elif verbose:
                 print(f"[OK] {file_path} - {metrics_count} metrics")
