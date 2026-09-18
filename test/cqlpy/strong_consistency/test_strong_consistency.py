@@ -403,6 +403,16 @@ def test_mixed_keyspace_batch_on_sc_table(cql, sc_keyspace, test_keyspace):
                     APPLY BATCH
                 """)
 
+            # A mixed batch is classified in two independent places - here in
+            # batch_statement::prepare() for the textual form, and in
+            # transport/server.cc for the native protocol one - and has already
+            # been let through once, when the textual path asked only about the
+            # keyspace of the first statement. The eventually consistent half
+            # is the telling one: it is written through the ordinary path, so
+            # it would leak whatever the raft group did.
+            assert list(cql.execute(f"SELECT pk, v FROM {sc_table} WHERE pk = 1")) == []
+            assert list(cql.execute(f"SELECT pk, v FROM {ec_table} WHERE pk = 1")) == []
+
 
 def test_group_by_on_sc_table(cql, sc_keyspace):
     """
