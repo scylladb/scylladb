@@ -16,7 +16,7 @@
 import pytest
 import time
 from cassandra.protocol import InvalidRequest
-from .util import new_test_table, new_materialized_view, new_secondary_index, ScyllaMetrics
+from .util import new_test_table, new_test_keyspace, new_materialized_view, new_secondary_index, ScyllaMetrics
 
 # All tests in this file check the Scylla-only per-row TTL feature, so
 # let's mark them all scylla_only with an autouse fixture:
@@ -599,3 +599,30 @@ def test_row_ttl_metrics(cql, test_keyspace, ttl_period):
         # the exactly 2 items deleted (we assume that no other TTL activity
         # is running on the same Scylla instance in parallel...)
         assert end.get('scylla_expiration_items_deleted') == (start.get('scylla_expiration_items_deleted') or 0) + 2
+
+# Drives scan_table()'s real tablet path (SCYLLADB-3891) with many tablets,
+# unlike the default keyspace used above which has few or none.
+def test_row_ttl_expiration_many_tablets(cql, this_dc, ttl_period, skip_without_tablets):
+    typ = 'bigint'
+    nrows = 200
+    with new_test_keyspace(cql,
+            " WITH REPLICATION = {'class': 'NetworkTopologyStrategy', '" + this_dc + "': 1}"
+            " AND TABLETS = {'initial': 32}") as keyspace:
+        with new_test_table(cql, keyspace, f'p int primary key, e {typ} ttl, x int') as table:
+            start = ScyllaMetrics.query(cql)
+            e = to_ttl(typ, time.time()-60)
+            for p in range(nrows):
+                cql.execute(f'INSERT INTO {table} (p, e, x) values ({p}, {e}, {p})')
+            deadline = time.time() + 3*ttl_period + 3
+            while time.time() < deadline:
+                if len(list(cql.execute(f'SELECT p from {table}'))) == 0:
+                    break
+                time.sleep(0.1)
+            assert list(cql.execute(f'SELECT p from {table}')) == []
+            # The expiration must have probed and scanned tablets. Every
+            # scanned tablet is first probed, so probed >= scanned.
+            end = ScyllaMetrics.query(cql)
+            probed = (end.get('scylla_expiration_tablets_probed') or 0) - (start.get('scylla_expiration_tablets_probed') or 0)
+            scanned = (end.get('scylla_expiration_tablets_scanned') or 0) - (start.get('scylla_expiration_tablets_scanned') or 0)
+            assert scanned > 0
+            assert probed >= scanned
