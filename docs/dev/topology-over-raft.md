@@ -182,11 +182,17 @@ are the currently supported global topology operations:
    of a vnodes-to-tablets migration. It is executed by the topology coordinator rather than
    by the node which received the API call, for two reasons. The coordinator is a singleton,
    so two concurrent migrations of the same keyspace cannot interleave their writes. And the
-   request is stored in group0, so it survives coordinator failover and is resumed instead of
-   leaving the keyspace with tablet maps for only some of its tables. The latter matters
-   because the tablet maps of a large keyspace do not fit into a single group0 command and
-   have to be written by several of them. Gated by the
-   `PREPARE_MIGRATION_AS_TOPOLOGY_OPERATION` cluster feature.
+   request is stored in group0, so it survives coordinator failover. The tablet maps of a
+   large keyspace do not fit into a single group0 command, so the coordinator writes as many
+   as fit and leaves the request in the queue; the next pass, possibly on another
+   coordinator, continues with the tables which have no map yet, and the request is
+   completed together with the last of them. Every command is a regular guarded topology
+   change, so all nodes see each part as soon as it commits. A keyspace with maps for only
+   some of its tables (after a failed request, for instance) cannot be finalized, and is
+   completed by preparing it again. The tablet count targets are computed once, by the node
+   which received the API call, and travel with the request, so that they don't depend on
+   which coordinator writes which table's map. Gated by the `PREPARE_MIGRATION_AS_TOPOLOGY_OPERATION` cluster
+   feature.
 
 ## Tablet draining
 
