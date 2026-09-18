@@ -107,8 +107,27 @@ For example:
    ALTER MATERIALIZED VIEW ks.mv
      WITH COMPACTION = {'class': 'LeveledCompactionStrategy'} ;
 
+Consistency of View Updates
+---------------------------------------
+
+By default, updates to materialized views are applied **asynchronously**.
+A write to the base table is considered successful once the required
+consistency level is reached for the base table replicas, and does not wait
+for the corresponding updates to be applied to the view. As a result, reads
+from the view may temporarily return stale data, and only achieve eventual
+consistency.
+
+If stronger consistency is required, a materialized view can be created with
+``WITH synchronous_updates = true``. In this mode, writes succeed only after
+the required consistency level is reached for both the base table and
+the view, ensuring that new data is immediately visible in the view, at
+the cost of higher write latency and reduced availability.
+
+See :ref:`Synchronous materialized views <synchronous-materialized-views>` for
+more information.
+
 More information 
-................
+-------------------
 
 * :doc:`CQL Reference for Materialized Views </cql/mv>`
 * Learn more about Materialized Views with ScyllaDB University (Free, registration required)
