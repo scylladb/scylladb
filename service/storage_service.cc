@@ -4508,16 +4508,31 @@ future<> storage_service::finalize_tablets_migration(const sstring& ks_name) {
             throw std::runtime_error(fmt::format("Keyspace '{}' has no tables", ks_name));
         }
 
-        for (const auto& schema : tables) {
-            if (!tablet_metadata.has_tablet_map(schema->id())) {
-                throw std::runtime_error(fmt::format("Table {}.{} does not have a tablet map; "
-                    "all tables in keyspace '{}' must be prepared for migration before finalizing",
-                    ks_name, schema->cf_name(), ks_name));
+        // Finalizing forward needs every table to have a tablet map. Finalizing with no node
+        // marked for upgrade rolls the keyspace back to vnodes, and that takes back whatever
+        // maps there are, so that a keyspace prepared only in part can be returned to vnodes
+        // as well; a keyspace with no maps at all has nothing to finalize either way.
+        //
+        // The coordinator decides the direction by what all the normal nodes are marked as,
+        // with an unmarked node counting as vnodes, and refuses a cluster which doesn't
+        // agree with itself. Ask it the same way here, so that a disagreement is reported
+        // by the coordinator, which names the node, rather than as a missing tablet map.
+        const auto& normal_nodes = _topology_state_machine._topology.normal_nodes;
+        const bool forward = !normal_nodes.empty() && std::ranges::all_of(normal_nodes, [] (const auto& node) {
+            return node.second.storage_mode == intended_storage_mode::tablets;
+        });
+        const bool any_mapped = replica::has_any_tablet_map(tablet_metadata, *ks.metadata());
+        if (forward || !any_mapped) {
+            for (const auto& schema : tables) {
+                if (!tablet_metadata.has_tablet_map(schema->id())) {
+                    throw std::runtime_error(fmt::format("Table {}.{} does not have a tablet map; "
+                        "all tables in keyspace '{}' must be prepared for migration before finalizing",
+                        ks_name, schema->cf_name(), ks_name));
+                }
             }
         }
 
-        slogger.info("All {} table(s) in keyspace '{}' have tablet maps, submitting finalization request",
-                     tables.size(), ks_name);
+        slogger.info("Submitting finalization request for keyspace '{}' ({} table(s))", ks_name, tables.size());
 
         request_id = guard.new_group0_state_id();
 
