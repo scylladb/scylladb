@@ -11,6 +11,7 @@
 #include "cql3/functions/functions.hh"
 #include "db/config.hh"
 #include "exceptions/exceptions.hh"
+#include "index/secondary_index_manager.hh"
 #include "index/vector_index.hh"
 #include "schema/schema.hh"
 #include "types/types.hh"
@@ -19,9 +20,25 @@
 #include "cql3/expr/expr-utils.hh"
 #include "cql3/util.hh"
 
+#include <algorithm>
 #include <cmath>
 
 namespace cql3::statements::ann_search {
+
+secondary_index::index index_for(data_dictionary::database db, const schema_ptr& schema, const column_definition& column) {
+    auto cf = db.find_column_family(schema);
+    auto& sim = cf.get_index_manager();
+
+    auto indexes = sim.list_indexes();
+    auto it = std::ranges::find_if(indexes, [&column] (const auto& ind) {
+        return secondary_index::vector_index::is_vector_index_on_column(ind.metadata(), column.name_as_text());
+    });
+
+    if (it == indexes.end()) {
+        throw exceptions::invalid_request_exception("ANN ordering by vector requires the column to be indexed using 'vector_index'");
+    }
+    return *it;
+}
 
 std::vector<float> query_vector(const column_definition& column, const cql3::raw_value& value) {
     throwing_assert(!value.is_null());

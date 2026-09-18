@@ -15,10 +15,14 @@
 
 class column_definition;
 
-/// The parts of running a vector search that are specific to it: how the query value is read, how
-/// many candidates the index is asked for, and how a rescoring index's similarity is recomputed.
-/// The statement running the search decides when to ask and what to do with the rows.
+/// The parts of running a vector search that are specific to it: which index serves it, how the
+/// query value is read, how many candidates the index is asked for, and how a rescoring index's
+/// similarity is recomputed. The statement running the search decides when to ask and what to do
+/// with the rows.
 namespace cql3::statements::ann_search {
+
+/// The vector index that serves searches on `column`.
+secondary_index::index index_for(data_dictionary::database db, const schema_ptr& schema, const column_definition& column);
 
 /// The query vector an evaluated query value holds.
 std::vector<float> query_vector(const column_definition& column, const cql3::raw_value& value);

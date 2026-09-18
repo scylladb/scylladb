@@ -9,6 +9,7 @@
 #include "cql3/statements/external_search/external_search_plan.hh"
 
 #include "cql3/statements/external_search/ann_search.hh"
+#include "cql3/statements/external_search/bm25_search.hh"
 #include "index/vector_index.hh"
 
 #include "cql3/expr/expr-utils.hh"
@@ -50,16 +51,7 @@ std::optional<bm25_ordering_info> get_bm25_ordering_info(
     }
     auto [column, search_term] = external_search::extract_call_arguments(fc, "BM25");
 
-    auto cf = db.find_column_family(schema);
-    auto& sim = cf.get_index_manager();
-
-    for (const auto& idx : sim.list_indexes()) {
-        if (idx.supports_bm25_expression(*column)) {
-            return bm25_ordering_info{idx, std::move(search_term)};
-        }
-    }
-
-    throw exceptions::invalid_request_exception("No fulltext index found for full-text search query");
+    return bm25_ordering_info{bm25_search::index_for(db, schema, *column), std::move(search_term)};
 }
 
 void prepare_bm25_selectors(std::vector<selection::prepared_selector>& prepared_selectors, std::optional<bm25_ordering_info>& ordering_info,
@@ -126,22 +118,12 @@ std::optional<ann_ordering_info> get_ann_ordering_info(
 
     raw::select_statement::prepared_ann_ordering_type prepared_ann_ordering = std::make_pair(def, std::move(query_vector));
 
-    auto cf = db.find_column_family(schema);
-    auto& sim = cf.get_index_manager();
-
-    auto indexes = sim.list_indexes();
-    auto it = std::ranges::find_if(indexes, [def] (const auto& ind) {
-        return secondary_index::vector_index::is_vector_index_on_column(ind.metadata(), def->name_as_text());
-    });
-
-    if (it == indexes.end()) {
-        throw exceptions::invalid_request_exception("ANN ordering by vector requires the column to be indexed using 'vector_index'");
-    }
+    auto index = ann_search::index_for(db, schema, *def);
 
     return ann_ordering_info{
-        *it,
+        index,
         std::move(prepared_ann_ordering),
-        secondary_index::vector_index::is_rescoring_enabled(it->metadata().options())
+        secondary_index::vector_index::is_rescoring_enabled(index.metadata().options())
     };
 }
 

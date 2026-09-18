@@ -10,6 +10,7 @@
 
 #include "cql3/expr/expression.hh"
 #include "cql3/statements/external_search/values_provider.hh"
+#include "data_dictionary/data_dictionary.hh"
 #include "index/secondary_index.hh"
 #include "schema/schema.hh"
 #include "vector_search/vector_store_client.hh"
@@ -19,10 +20,13 @@
 #include <optional>
 #include <span>
 
-/// The parts of running a full-text search that are specific to it: how the query value is read,
-/// which relation on it is accepted, and how excerpts are fetched. The statement running the search
-/// decides when to ask and what to do with the rows.
+/// The parts of running a full-text search that are specific to it: which index serves it, how the
+/// query value is read, which relation on it is accepted, and how excerpts are fetched. The
+/// statement running the search decides when to ask and what to do with the rows.
 namespace cql3::statements::bm25_search {
+
+/// The full-text index that serves searches on `column`.
+secondary_index::index index_for(data_dictionary::database db, const schema_ptr& schema, const column_definition& column);
 
 /// The column the index is built on: the one the rows are ranked by and a fragment is generated from.
 const column_definition& indexed_column(const schema& schema, const secondary_index::index& index);

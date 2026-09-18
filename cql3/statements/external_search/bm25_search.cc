@@ -21,6 +21,19 @@
 
 namespace cql3::statements::bm25_search {
 
+secondary_index::index index_for(data_dictionary::database db, const schema_ptr& schema, const column_definition& column) {
+    auto cf = db.find_column_family(schema);
+    auto& sim = cf.get_index_manager();
+
+    for (const auto& idx : sim.list_indexes()) {
+        if (idx.supports_bm25_expression(column)) {
+            return idx;
+        }
+    }
+
+    throw exceptions::invalid_request_exception("No fulltext index found for full-text search query");
+}
+
 const column_definition& indexed_column(const schema& schema, const secondary_index::index& index) {
     const auto* cdef = schema.get_column_definition(to_bytes(index.target_column()));
     throwing_assert(cdef);
