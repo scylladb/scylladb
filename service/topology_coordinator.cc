@@ -1970,6 +1970,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             co_await _group0.client().add_entry(std::move(g0_cmd), std::move(guard), _as);
         }
         break;
+        case global_topology_request::prepare_migration:
+            co_await handle_prepare_migration(std::move(guard), req_id, req_entry);
+            break;
         case global_topology_request::restore_tablets: {
             rtlogger.info("restore_tablets requested");
 
@@ -3792,6 +3795,175 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             } catch (group0_concurrent_modification&) {
             }
         }
+    }
+
+    // Generates the tablet maps of the tables of the keyspace which don't have one yet
+    // and appends them to `updates`.
+    //
+    // Does no group0 or raft I/O of its own, so the only thing it throws is a reason for
+    // the request to fail.
+    future<> generate_prepare_migration_updates(
+            utils::chunked_vector<canonical_mutation>& updates, const group0_guard& guard,
+            const db::system_keyspace::topology_requests_entry& req) {
+        if (!req.prepare_migration_ks_name) {
+            throw std::runtime_error("prepare_migration request carries no keyspace name");
+        }
+        if (!req.prepare_migration_tables) {
+            throw std::runtime_error("prepare_migration request carries no tables");
+        }
+        const sstring& ks_name = *req.prepare_migration_ks_name;
+
+        const auto tmptr = get_token_metadata_ptr();
+
+        // The state may have changed since the API path asked the same questions. Whether
+        // the keyspace will be RF-rack-valid is the API path's to warn about.
+        const auto* nts = validate_keyspace_for_migration(_db, ks_name, _topo_sm._topology);
+        validate_rf_for_tablets_migration(_db, tmptr, *nts, ks_name);
+        co_await validate_keyspace_views_for_tablets_migration(_db, _sys_ks, _topo_sm._topology, ks_name);
+        auto& ks = _db.find_keyspace(ks_name);
+        const auto erm = ks.get_static_effective_replication_map();
+
+        // A tablet map, not table::uses_tablets(), says what is left to do: uses_tablets()
+        // reflects this node's effective replication map, fixed at startup, while the map is
+        // the cluster-wide state this request produces. It also makes the request idempotent.
+        size_t all_tables = 0;
+        // Tables which have no tablet map yet.
+        size_t remaining_tables = 0;
+        // Tables that get a tablet map of their own: base tables, and views
+        // that cannot be co-located with their base table.
+        std::vector<std::pair<table_id, sstring>> tables_to_build_maps;
+        // Tables that share the tablet map of another table, keyed by the
+        // table whose map they share. Currently, these are views co-located
+        // with their base table. Each only needs an entry saying so, written
+        // with the base table's map.
+        std::unordered_map<table_id, std::vector<std::pair<table_id, sstring>>> tables_to_colocate;
+        for (const auto& [name, schema] : ks.metadata()->cf_meta_data()) {
+            ++all_tables;
+            if (tmptr->tablets().has_tablet_map(schema->id())) {
+                continue;
+            }
+            ++remaining_tables;
+            if (auto base_id = schema->is_view() ? _db.get_base_table_for_tablet_colocation(*schema, {}) : std::nullopt) {
+                tables_to_colocate[*base_id].push_back({schema->id(), name});
+            } else {
+                tables_to_build_maps.push_back({schema->id(), name});
+            }
+        }
+
+        if (remaining_tables == 0) {
+            rtlogger.info("All tables of keyspace '{}' already have a tablet map", ks_name);
+            co_return;
+        }
+        if (remaining_tables < all_tables) {
+            rtlogger.info("Resuming the preparation of keyspace '{}': {} of {} table(s) already have a tablet map",
+                          ks_name, all_tables - remaining_tables, all_tables);
+        }
+
+        auto append_tablet_map_mutations = [&] (table_id tid, const sstring& cf_name, const locator::tablet_map& tmap, size_t target_pow2) -> future<> {
+            rtlogger.info("Built tablet map for table {}.{} with {} tablet(s) (target pow2={})",
+                          ks_name, cf_name, tmap.tablet_count(), target_pow2);
+
+            co_await replica::tablet_map_to_mutations(
+                tmap,
+                tid,
+                ks_name,
+                cf_name,
+                guard.write_timestamp(),
+                _feature_service,
+                [&] (mutation m) -> future<> {
+                    updates.emplace_back(co_await make_canonical_mutation_gently(m));
+                });
+        };
+
+        auto append_colocated_tablet_map_mutations = [&] (table_id base_id) -> future<> {
+            auto it = tables_to_colocate.find(base_id);
+            if (it == tables_to_colocate.end()) {
+                co_return;
+            }
+            for (const auto& [tid, cf_name] : it->second) {
+                rtlogger.info("Built co-located tablet map for {}.{} (shares the tablet map of {})",
+                              ks_name, cf_name, base_id);
+                auto m = replica::colocated_tablet_map_to_mutation(tid, ks_name, cf_name, base_id, guard.write_timestamp());
+                updates.emplace_back(co_await make_canonical_mutation_gently(std::move(m)));
+            }
+        };
+
+        const auto& targets = *req.prepare_migration_tables;
+        // Tables without a target all get the same plain vnode-derived map, built once.
+        std::optional<locator::tablet_map> plain_tmap;
+        for (const auto& [tid, cf_name] : tables_to_build_maps) {
+            size_t target_pow2 = 0;
+            // A table created after the request was made has no target and gets the
+            // plain vnode-derived layout, which the load balancer splits later.
+            if (auto it = targets.find(tid); it != targets.end()) {
+                target_pow2 = static_cast<size_t>(it->second);
+            }
+            if (target_pow2) {
+                auto tmap = co_await build_tablet_map_for_migration(erm, target_pow2);
+                co_await append_tablet_map_mutations(tid, cf_name, tmap, target_pow2);
+            } else {
+                if (!plain_tmap) {
+                    plain_tmap = co_await build_tablet_map_for_migration(erm, 0);
+                }
+                co_await append_tablet_map_mutations(tid, cf_name, *plain_tmap, 0);
+            }
+            co_await append_colocated_tablet_map_mutations(tid);
+        }
+    }
+
+    // Writes the tablet maps of the tables of a keyspace which don't have one yet, the
+    // first phase of a vnodes-to-tablets migration, and completes the request.
+    future<> handle_prepare_migration(group0_guard guard, utils::UUID req_id,
+                                      const db::system_keyspace::topology_requests_entry& req) {
+        const sstring ks_name = req.prepare_migration_ks_name.value_or("");
+        rtlogger.info("prepare_migration requested for keyspace '{}'", ks_name);
+
+        utils::chunked_vector<canonical_mutation> updates;
+        sstring error;
+
+        try {
+            co_await generate_prepare_migration_updates(updates, guard, req);
+        } catch (const std::exception& e) {
+            // The builder commits nothing of its own, so what it throws is a reason for the
+            // request to fail rather than for the coordinator to retry.
+            error = e.what();
+            rtlogger.error("Couldn't process global_topology_request::prepare_migration for keyspace '{}': {}",
+                           ks_name, std::current_exception());
+            updates.clear();
+        }
+
+        // Seed every node, so that an absent mode means one thing only: a migration started
+        // before the cluster knew the column, which is the single case the status API answers
+        // from tablet sizes. Each node overwrites its own cell with what it booted with as it
+        // restarts. Only once every node knows the column: a cell for a column an older node
+        // lacks would leave system.topology differing between them. Written with the maps
+        // rather than when the request is queued, since a finalization of another keyspace
+        // in between clears the column while no keyspace has a map, and not on failure,
+        // which leaves no map for a mode to describe.
+        if (error.empty() && _feature_service.topology_current_storage_mode) {
+            topology_mutation_builder builder(guard.write_timestamp());
+            bool seeded = false;
+            for (const auto& [node_id, rs] : _topo_sm._topology.normal_nodes) {
+                if (!rs.current_storage_mode) {
+                    builder.with_node(node_id).set("current_storage_mode", storage_mode::vnodes);
+                    seeded = true;
+                }
+            }
+            if (seeded) {
+                updates.emplace_back(builder.build());
+            }
+        }
+
+        updates.emplace_back(topology_request_tracking_mutation_builder(req_id)
+                                  .done(error)
+                                  .build());
+        updates.emplace_back(topology_mutation_builder(guard.write_timestamp())
+                                  .drop_first_global_topology_request_id(
+                                          _topo_sm._topology.global_requests_queue, req_id)
+                                  .build());
+
+        co_await update_topology_state(std::move(guard), std::move(updates),
+                fmt::format("prepare vnodes-to-tablets migration for keyspace '{}'", ks_name));
     }
 
     future<> handle_truncate_table(group0_guard guard) {

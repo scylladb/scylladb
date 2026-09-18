@@ -582,8 +582,36 @@ void create_vnode_keyspace_with_table(cql_test_env& e, const sstring& ks_name,
     e.execute_cql(fmt::format("CREATE TABLE {}.t (pk int PRIMARY KEY, v int)", ks_name)).get();
 }
 
+// Takes the topology out of the `lock` transition state topology_builder leaves it in.
+// A locked topology coordinator picks up no request, and the preparation is one.
+void unlock_topology(cql_test_env& e) {
+    abort_source as;
+    auto& client = e.get_raft_group0_client();
+    const auto& topo = e.get_topology_state_machine().local()._topology;
+    while (true) {
+        auto guard = client.start_operation(as).get();
+        if (topo.tstate != service::topology::transition_state::lock) {
+            return;
+        }
+        service::topology_change change({service::topology_mutation_builder(guard.write_timestamp())
+                                             .del_transition_state()
+                                             .build()});
+        auto g0_cmd = client.prepare_command(std::move(change), guard, "unlocking topology");
+        try {
+            client.add_entry(std::move(g0_cmd), std::move(guard), as).get();
+            return;
+        } catch (service::group0_concurrent_modification&) {
+            testlog.info("Concurrent modification detected while unlocking topology, retrying");
+        }
+    }
+}
+
 // Adds a new DC with the given number of nodes in each rack, and returns its name.
+// The nodes don't exist, but nothing the preparation does reaches them: they are only
+// replicas in the maps it writes. Tablet balancing is disabled, so that the coordinator,
+// once unlocked, doesn't plan any tablet work onto them either.
 sstring add_dc(cql_test_env& e, std::vector<size_t> nodes_per_rack) {
+    e.get_storage_service().local().set_tablet_balancing_enabled(false).get();
     topology_builder topo(e);
     for (size_t i = 0; i < nodes_per_rack.size(); ++i) {
         if (i > 0) {
@@ -593,6 +621,7 @@ sstring add_dc(cql_test_env& e, std::vector<size_t> nodes_per_rack) {
             topo.add_node();
         }
     }
+    unlock_topology(e);
     return topo.dc();
 }
 
