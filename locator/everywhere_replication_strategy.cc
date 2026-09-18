@@ -40,8 +40,8 @@ void everywhere_replication_strategy::validate_options(const gms::feature_servic
     }
 }
 
-sstring everywhere_replication_strategy::sanity_check_read_replicas(const effective_replication_map& erm, const host_id_vector_replica_set& read_replicas) const {
-    const auto replication_factor = erm.get_replication_factor();
+sstring everywhere_replication_strategy::sanity_check_read_replicas(const effective_replication_map& erm, const host_id_vector_replica_set& read_replicas, dht::token token) const {
+    const auto replication_factor = erm.get_schema_replication_factor();
     if (const auto& topo_info = erm.get_token_metadata().get_topology_change_info(); topo_info && topo_info->read_new) {
         if (read_replicas.size() > replication_factor + 1) {
             return seastar::format(
