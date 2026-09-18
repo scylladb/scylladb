@@ -12,6 +12,9 @@ add_scylla_test(alternator_export_test
 add_scylla_test(alternator_unit_test
   KIND SEASTAR
   LIBRARIES alternator)
+add_scylla_test(alternator_table_scan_test
+  KIND SEASTAR
+  LIBRARIES alternator)
 add_scylla_test(anchorless_list_test
   KIND BOOST)
 add_scylla_test(audit_rule_test
