@@ -780,7 +780,7 @@ future<tasks::task_manager::task_ptr> task_manager_module::start_table_offstrate
 static future<> run_upgrade_sstables_keyspace_compaction(sharded<replica::database>& db, std::string keyspace, lw_shared_ptr<std::vector<table_info>> tables, bool exclude_current_version, tasks::task_info task_info) {
     co_await db.invoke_on_all([&] (replica::database& local_db) -> future<> {
         auto& module = local_db.get_compaction_manager().get_task_manager_module();
-        auto task = co_await module.make_and_start_task<shard_upgrade_sstables_compaction_task_impl>(task_info, keyspace, task_info.get_id(), local_db, *tables, exclude_current_version);
+        auto task = co_await module.start_shard_upgrade_sstables_compaction(local_db, keyspace, *tables, exclude_current_version, task_info);
         co_await task->done();
     });
 }
@@ -803,23 +803,30 @@ future<tasks::task_manager::task_ptr> task_manager_module::start_upgrade_sstable
     });
 }
 
-static future<> run_shard_upgrade_sstables_compaction(task_manager_module& module, replica::database& db, std::string keyspace, const std::vector<table_info>& tables, bool exclude_current_version, tasks::task_info task_info) {
+static future<> run_shard_upgrade_sstables_compaction(task_manager_module& module, replica::database& db, std::string keyspace, lw_shared_ptr<std::vector<table_info>> tables, bool exclude_current_version, tasks::task_info task_info) {
     seastar::condition_variable cv;
     current_task_type current_task;
     std::vector<table_tasks_info> table_tasks;
-    for (auto& ti : tables) {
+    for (auto& ti : *tables) {
         table_tasks.emplace_back(co_await module.make_and_start_task<table_upgrade_sstables_compaction_task_impl>(task_info, keyspace, ti.name, task_info.get_id(), db, ti, cv, current_task, exclude_current_version), ti);
     }
 
     co_await run_table_tasks(db, std::move(table_tasks), cv, current_task, false);
 }
 
-future<> shard_upgrade_sstables_compaction_task_impl::run() {
-    return run_shard_upgrade_sstables_compaction(_db.get_compaction_manager().get_task_manager_module(), _db, _status.keyspace, _table_infos, _exclude_current_version, info());
-}
-
-future<std::optional<double>> shard_upgrade_sstables_compaction_task_impl::expected_total_workload() const {
-    co_return _expected_workload = _expected_workload ? _expected_workload : co_await get_shard_task_workload(_db, _status.keyspace, _table_infos);
+future<tasks::task_manager::task_ptr> task_manager_module::start_shard_upgrade_sstables_compaction(replica::database& db, std::string keyspace, const std::vector<table_info>& table_infos, bool exclude_current_version, tasks::task_info parent_info) {
+    auto tables = make_lw_shared<std::vector<table_info>>(table_infos);
+    tasks::task_manager::task_builder task_builder{shared_from_this(), upgrade_sstables_compaction_task_type};
+    task_builder.set_scope("shard")
+                .set_keyspace(keyspace)
+                .set_progress_units("bytes")
+                .set_parent_info(parent_info)
+                .set_workload_fn([&db, keyspace, tables] () -> future<std::optional<double>> {
+                    co_return co_await get_shard_task_workload(db, keyspace, *tables);
+                });
+    return std::move(task_builder).build([this, &db, keyspace = std::move(keyspace), tables, exclude_current_version] (tasks::task_manager::task::impl& self) {
+        return run_shard_upgrade_sstables_compaction(*this, db, keyspace, tables, exclude_current_version, self.info());
+    });
 }
 
 future<> table_upgrade_sstables_compaction_task_impl::run() {
