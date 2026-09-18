@@ -982,3 +982,174 @@ async def test_scylla_sstable_dump_scylla_metadata(manager: ScyllaClusterManager
         returncode, out, err = await run_scylla_sstable(bad_args)
         assert returncode != 0
         assert "is not one" in out + err, f"unexpected diagnosis: {out} {err}"
+
+
+@pytest.mark.parametrize('stop', ['graceful', 'kill'])
+async def test_registry_survives_restart(manager: ScyllaClusterManager, s3_storage, stop):
+    """SSTables that compaction deleted must not come back as live registry entries.
+
+    The registry lives in system.sstables, which distributed_loader reads while
+    loading non-system keyspaces - before the commitlog carrying its updates is
+    replayed. A SIGKILL therefore rolls the registry back to its last flushed
+    state, while the objects the rolled-back entries point at are already gone
+    from the bucket, so populating the keyspace aborts with a 404 and the node
+    never starts again.
+
+    Refs: https://scylladb.atlassian.net/browse/SCYLLADB-4603
+    """
+    cfg = {'enable_user_defined_functions': False,
+           'object_storage_endpoints': s3_storage.create_endpoint_conf()}
+    server = await manager.server_add(config=cfg)
+    cql = manager.get_cql()
+
+    # A single tablet keeps the whole table in one compaction group, so the two
+    # flushes below produce exactly two sstables and the major compaction has
+    # both of them as inputs.
+    ks_opts = keyspace_options(s3_storage) + " AND tablets = {'initial': 1}"
+    async with new_test_keyspace(manager, ks_opts) as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (name text PRIMARY KEY, value int);")
+
+        # Two sstables, so the major compaction below has inputs to delete.
+        rows = {}
+        for batch in range(2):
+            for k in range(4):
+                name = f'{batch}-{k}'
+                rows[name] = k
+                await cql.run_async(f"INSERT INTO {ks}.test (name, value) VALUES ('{name}', {k});")
+            await manager.api.keyspace_flush(server.ip_addr, ks)
+
+        table_id = await get_table_id(cql, ks, 'test')
+        host = (await wait_for_cql_and_get_hosts(cql, [server], time.time() + 60))[0]
+        node_owner = uuid.UUID(await manager.get_host_id(server.server_id))
+        entries = await cql.run_async(
+            SimpleStatement("SELECT generation, sstable_id, status FROM system.sstables"
+                            " WHERE table_id = %s AND node_owner = %s",
+                            consistency_level=ConsistencyLevel.ONE),
+            parameters=[table_id, node_owner], host=host)
+        assert len(entries) == 2 and all(e.status == 'sealed' for e in entries), \
+            f'Expected two sealed entries, got {entries}'
+        doomed = [e.sstable_id for e in entries]
+
+        # Flush system.sstables so those two sealed entries reach an sstable of
+        # their own. That is the state the registry reverts to when the node is
+        # killed; everything written from here on lives only in its memtable.
+        await manager.api.keyspace_flush(server.ip_addr, 'system', 'sstables')
+
+        # Compaction replaces both inputs and deletes their component objects,
+        # recording that in the registry - which is to say, in the memtable.
+        await manager.api.keyspace_compaction(server.ip_addr, ks)
+
+        bucket = s3_storage.get_resource().Bucket(s3_storage.bucket_name)
+
+        async def objects_deleted():
+            left = [o.key for sid in doomed
+                    for o in bucket.objects.filter(Prefix=f'sstables/{sid}/')]
+            return True if not left else None
+
+        await wait_for(objects_deleted, time.time() + 60)
+
+        # The kill loses the memtable, so the registry goes back to claiming the
+        # two compacted-away sstables are sealed and live.
+        # The graceful arm flushes the memtable on the way out and must always
+        # pass; it is the control that tells a registry rollback apart from
+        # object storage simply being unable to reload its sstables.
+        if stop == 'graceful':
+            await manager.server_stop_gracefully(server.server_id)
+        else:
+            await manager.server_stop(server.server_id, convict=False)
+        await manager.server_start(server.server_id)
+        cql = manager.get_cql()
+        # The session the test held was torn down with the node, so wait for the
+        # driver to reconnect rather than querying over the closed connection.
+        host = (await wait_for_cql_and_get_hosts(cql, [server], time.time() + 60))[0]
+
+        res = await cql.run_async(
+            SimpleStatement(f"SELECT * FROM {ks}.test;", consistency_level=ConsistencyLevel.ONE), host=host)
+        assert {r.name: r.value for r in res} == rows, 'Unexpected table content after restart'
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.parametrize('stop', ['graceful', 'kill'])
+async def test_registry_sealed_state_survives_ungraceful_restart(manager: ScyllaClusterManager, s3_storage, stop):
+    """A complete sstable must not lose its objects to the startup garbage collector.
+
+    The registry entry is created before the sstable's objects are written and
+    marked sealed after. If the entry reaches disk but the seal does not, an
+    ungraceful restart reads the entry as still 'creating' and garbage_collect()
+    deletes the objects of a complete, live sstable - with nothing in the log
+    beyond 'Removing dangling ... creating entry'.
+
+    Refs: https://scylladb.atlassian.net/browse/SCYLLADB-4603
+    """
+    cfg = {'enable_user_defined_functions': False,
+           'object_storage_endpoints': s3_storage.create_endpoint_conf()}
+    server = await manager.server_add(config=cfg)
+    cql = manager.get_cql()
+
+    ks_opts = keyspace_options(s3_storage) + " AND tablets = {'initial': 1}"
+    async with new_test_keyspace(manager, ks_opts) as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (name text PRIMARY KEY, value int);")
+        rows = {}
+        for k in range(4):
+            rows[str(k)] = k
+            await cql.run_async(f"INSERT INTO {ks}.test (name, value) VALUES ('{k}', {k});")
+
+        table_id = await get_table_id(cql, ks, 'test')
+        host = (await wait_for_cql_and_get_hosts(cql, [server], time.time() + 60))[0]
+        node_owner = uuid.UUID(await manager.get_host_id(server.server_id))
+
+        async def entries():
+            return await cql.run_async(
+                SimpleStatement("SELECT generation, sstable_id, status FROM system.sstables"
+                                " WHERE table_id = %s AND node_owner = %s",
+                                consistency_level=ConsistencyLevel.ONE),
+                parameters=[table_id, node_owner], host=host)
+
+        # Hold the flush with the sstable written but its entry not yet sealed.
+        injection = 'object_storage_seal_before_sealed_status'
+        await manager.api.enable_injection(server.ip_addr, injection, one_shot=True)
+        flush = asyncio.create_task(manager.api.keyspace_flush(server.ip_addr, ks))
+
+        async def creating_entry():
+            es = await entries()
+            return True if es and all(e.status == 'creating' for e in es) else None
+        await wait_for(creating_entry, time.time() + 60)
+
+        # Persist the entry in that state. The seal below lands only in the
+        # memtable, which is what the kill throws away.
+        await manager.api.keyspace_flush(server.ip_addr, 'system', 'sstables')
+
+        await manager.api.message_injection(server.ip_addr, injection)
+        await flush
+
+        sealed = await entries()
+        assert len(sealed) == 1 and sealed[0].status == 'sealed', \
+            f'Expected one sealed entry after the flush, got {sealed}'
+        sid = sealed[0].sstable_id
+        bucket = s3_storage.get_resource().Bucket(s3_storage.bucket_name)
+        assert list(bucket.objects.filter(Prefix=f'sstables/{sid}/')), \
+            f'Sealed sstable {sid} has no objects'
+
+        if stop == 'graceful':
+            await manager.server_stop_gracefully(server.server_id)
+        else:
+            await manager.server_stop(server.server_id, convict=False)
+        await manager.server_start(server.server_id)
+        cql = manager.get_cql()
+        host = (await wait_for_cql_and_get_hosts(cql, [server], time.time() + 60))[0]
+
+        # The sstable was complete and sealed before the kill, so the collector
+        # had no business reaping it. Its objects are not checked directly: the
+        # loader may legitimately relocate the sstable across shards, which on
+        # object storage writes a fresh sstable id and drops the old objects.
+        log = await manager.server_open_log(server.server_id)
+        reaped = await log.grep('Removing dangling')
+        assert not reaped, f'Garbage collector reaped a sealed sstable: {reaped}'
+
+        after = await entries()
+        assert len(after) == 1 and after[0].status == 'sealed', \
+            f'Expected one sealed entry after the restart, got {after}'
+
+        res = await cql.run_async(
+            SimpleStatement(f"SELECT * FROM {ks}.test;", consistency_level=ConsistencyLevel.ONE), host=host)
+        assert {r.name: r.value for r in res} == rows, 'Unexpected table content after restart'
