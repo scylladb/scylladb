@@ -9,6 +9,8 @@
 #include "http_client_error_processing.hh"
 #include <seastar/http/exception.hh>
 #include <gnutls/gnutls.h>
+#include <limits>
+#include <system_error>
 
 namespace utils::http {
 
@@ -48,6 +50,10 @@ retryable from_system_error(const std::system_error& system_error) {
     case static_cast<int>(std::errc::network_down):
     case static_cast<int>(std::errc::network_reset):
     case static_cast<int>(std::errc::no_buffer_space):
+    // A reply body that ends before its declared Content-Length. The http client
+    // reports that as a clean end of stream, so whoever notices has to raise it,
+    // and a fresh request for the same range usually gets it whole.
+    case static_cast<int>(std::errc::protocol_error):
     // GNU TLS section. Since we pack gnutls error codes in std::system_error and rethrow it as std::nested_exception we have to handle them here.
     case GNUTLS_E_PREMATURE_TERMINATION:
     case GNUTLS_E_AGAIN:
@@ -61,6 +67,19 @@ retryable from_system_error(const std::system_error& system_error) {
     default:
         return retryable::no;
     }
+}
+
+bool body_ended_early(const seastar::http::reply& rep) {
+    // A chunked reply carries no declared length: the counter sits at the sentinel
+    // until the body has been read and is zeroed then, so it says nothing here.
+    if (rep.left_content_length == std::numeric_limits<size_t>::max()) {
+        return false;
+    }
+    return rep.left_content_length != 0;
+}
+
+[[noreturn]] void throw_body_ended_early(std::string_view what) {
+    throw std::system_error(std::make_error_code(std::errc::protocol_error), std::string(what));
 }
 
 } // namespace utils::http
