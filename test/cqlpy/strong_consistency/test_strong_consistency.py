@@ -378,6 +378,39 @@ def test_lwt_on_sc_table(cql, sc_keyspace):
         assert cql.execute(f"SELECT v FROM {table} WHERE pk = 1").one().v == 1
 
 
+def test_reject_data_prefetch_on_sc_table(cql, sc_keyspace):
+    """
+    The strongly consistent write path does not support read-before-write
+    yet: the coordinator builds the mutation from the statement alone, with
+    no prefetched row, so a statement whose operations need the current row
+    is refused when it is prepared, rather than computed from nothing.
+
+    The operations which need the row are those reporting requires_read():
+    three list operations - removing by value, setting by index, deleting by
+    index - and setting a regular column from an expression over a non-key
+    column, like SET v = v + 1. The last one is refused on every table unless
+    it carries a condition, which is what makes it atomic, so it reaches the
+    strongly consistent refusal only with IF EXISTS; the prefetch check runs
+    before the refusal of conditions, which is why the message is still the
+    prefetch one.
+
+    An append needs no read and goes through, which is what separates a
+    refusal about prefetching from a refusal about collections.
+    """
+    with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, v int, l list<int>") as table:
+        cql.execute(f"INSERT INTO {table} (pk, v, l) VALUES (1, 1, [10, 20, 30])")
+        error_msg = "Strongly consistent updates don't support data prefetch"
+        for statement in [f"UPDATE {table} SET l = l - [20] WHERE pk = 1",
+                          f"UPDATE {table} SET l[0] = 99 WHERE pk = 1",
+                          f"DELETE l[0] FROM {table} WHERE pk = 1",
+                          f"UPDATE {table} SET v = v + 1 WHERE pk = 1 IF EXISTS"]:
+            with pytest.raises(InvalidRequest, match=error_msg):
+                cql.execute(statement)
+
+        cql.execute(f"UPDATE {table} SET l = l + [40] WHERE pk = 1")
+        assert list(cql.execute(f"SELECT v, l FROM {table} WHERE pk = 1")) == [(1, [10, 20, 30, 40])]
+
+
 def test_batch_attributes_on_sc_table(cql, sc_keyspace):
     """
     Batch-level USING TTL and USING TIMESTAMP are rejected on strongly
