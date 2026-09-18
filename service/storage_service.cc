@@ -4200,8 +4200,17 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
     // Called via run_with_no_api_lock (forwards to shard 0).
     SCYLLA_ASSERT(this_shard_id() == 0);
 
+    if (!_feature_service.prepare_migration_as_topology_operation) {
+        throw std::runtime_error("vnodes-to-tablets migration requires all nodes to support the"
+                " PREPARE_MIGRATION_AS_TOPOLOGY_OPERATION cluster feature");
+    }
+
+    slogger.info("Preparing vnodes-to-tablets migration for keyspace '{}'", ks_name);
+
+    utils::UUID request_id;
+
     while (true) {
-        auto guard = co_await _group0->client().start_operation(_group0_as);
+        auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
 
         auto& db = _db.local();
         const auto* trs = validate_keyspace_for_migration(db, ks_name, _topology_state_machine._topology);
@@ -4211,24 +4220,15 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
         std::vector<std::pair<table_id, sstring>> tables_to_migrate;
 
         for (const auto& [name, schema] : cf_meta_data) {
-            auto tid = schema->id();
-            auto& cf = db.find_column_family(tid);
-
-            if (cf.uses_tablets()) {
-                slogger.info("Table {}.{} already uses tablets, skipping", ks_name, name);
-                continue;
-            }
-            tables_to_migrate.push_back({tid, name});
-        }
-
-        if (tables_to_migrate.empty()) {
-            slogger.info("All tables in keyspace {} already use tablets, nothing to do", ks_name);
-            co_return;
+            tables_to_migrate.push_back({schema->id(), name});
         }
 
         // Estimate table sizes when pow2 convergence is enabled.
         // The estimates are used by the tablet allocator to determine the
         // target pow2 tablet count per table.
+        // This stays here rather than moving to the coordinator with the rest of the
+        // work: the estimate is this node's share of each table, so a node holding no
+        // replicas of the keyspace cannot make one. The targets travel with the request.
         target_pow2_per_table_map target_pow2s;
         bool use_pow2_presplit = bool(_feature_service.tablet_pow2_convergence);
         if (use_pow2_presplit) {
@@ -4237,69 +4237,36 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
             target_pow2s = co_await _tablet_allocator.local().compute_migration_target_pow2s(trs, estimated_sizes);
         }
 
-        // Build tablet map mutations for all tables and persist them to group0 (system.tablets)
-        // in a single command.
-        //
-        // FIXME: Tablet map mutations for large keyspaces should be split into
-        // multiple group0 commands to avoid hitting the command size limit.
-        // To maintain atomicity against concurrent migration requests
-        // (e.g., finalization) and prevent failures from group0 conflicts, we
-        // should turn this into a topology request.
-        group0_update_collector updates;
+        request_id = guard.new_group0_state_id();
 
-        {
-            auto erm = ks.get_static_effective_replication_map();
+        topology_mutation_builder builder(guard.write_timestamp());
+        builder.queue_global_topology_request_id(request_id);
 
-            auto append_tablet_map_mutations = [&] (table_id tid, const sstring& cf_name, const locator::tablet_map& tmap, size_t target_pow2) -> future<> {
-                slogger.info("Built tablet map for table {}.{} with {} tablet(s) (target pow2={})",
-                             ks_name, cf_name, tmap.tablet_count(), target_pow2);
+        topology_request_tracking_mutation_builder rtbuilder(request_id, _feature_service.topology_requests_type_column);
+        rtbuilder.set("done", false)
+                 .set("start_time", db_clock::now())
+                 .set("request_type", global_topology_request::prepare_migration)
+                 .set_prepare_migration_data(ks_name, target_pow2s);
 
-                co_await replica::tablet_map_to_mutations(
-                    tmap,
-                    tid,
-                    ks_name,
-                    cf_name,
-                    guard.write_timestamp(),
-                    _feature_service,
-                    [&] (mutation m) -> future<> {
-                        updates.emplace_back(co_await make_canonical_mutation_gently(m));
-                    });
-            };
-
-            if (use_pow2_presplit) {
-                for (const auto& [tid, cf_name] : tables_to_migrate) {
-                    size_t target_pow2 = 0;
-                    if (auto it = target_pow2s.find(tid); it != target_pow2s.end()) {
-                        target_pow2 = it->second;
-                    }
-                    auto tmap = co_await build_tablet_map_for_migration(erm, target_pow2);
-                    co_await append_tablet_map_mutations(tid, cf_name, tmap, target_pow2);
-                }
-            } else {
-                auto shared_tmap = co_await build_tablet_map_for_migration(erm, 0);
-                for (const auto& [tid, cf_name] : tables_to_migrate) {
-                    co_await append_tablet_map_mutations(tid, cf_name, shared_tmap, 0);
-                }
-            }
-        }
-
-        topology_change change{co_await updates.collect()};
+        topology_change change{{builder.build(), rtbuilder.build()}};
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard,
-            fmt::format("migrate keyspace {} to tablets", ks_name));
+            fmt::format("prepare vnodes-to-tablets migration for keyspace '{}'", ks_name));
 
         try {
-            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), _group0_as);
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), _group0_as, raft_timeout{});
         } catch (group0_concurrent_modification&) {
             slogger.info("migrate_to_tablets: concurrent modification, retrying");
             continue;
         }
-
-        for (const auto& [tid, cf_name] : tables_to_migrate) {
-            slogger.info("Successfully built tablet map for table {}.{}",
-                         ks_name, cf_name);
-        }
         break;
     }
+
+    auto error = co_await wait_for_topology_request_completion(request_id);
+    if (!error.empty()) {
+        throw std::runtime_error(fmt::format("Migration preparation failed for keyspace '{}': {}", ks_name, error));
+    }
+
+    slogger.info("Successfully prepared vnodes-to-tablets migration for keyspace '{}'", ks_name);
 }
 
 future<> storage_service::set_node_intended_storage_mode(intended_storage_mode mode) {

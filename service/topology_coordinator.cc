@@ -1517,6 +1517,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             co_await _group0.client().add_entry(std::move(g0_cmd), std::move(guard), _as);
         }
         break;
+        case global_topology_request::prepare_migration:
+            co_await handle_prepare_migration(std::move(guard), req_id, req_entry);
+            break;
         case global_topology_request::restore_tablets: {
             rtlogger.info("restore_tablets requested");
 
@@ -3177,6 +3180,119 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             } catch (group0_concurrent_modification&) {
             }
         }
+    }
+
+    // Builds the tablet maps of the tables of the keyspace which don't have one yet and
+    // appends them to `updates`.
+    //
+    // Does no group0 or raft I/O of its own, so the only thing it throws is a reason for
+    // the request to fail.
+    future<> build_tablet_maps_for_migration(const group0_guard& guard,
+            const db::system_keyspace::topology_requests_entry& req,
+            utils::chunked_vector<canonical_mutation>& updates) {
+        if (!req.prepare_migration_ks_name) {
+            throw std::runtime_error("prepare_migration request carries no keyspace name");
+        }
+        const sstring& ks_name = *req.prepare_migration_ks_name;
+
+        // The state may have changed since the API path asked the same questions.
+        validate_keyspace_for_migration(_db, ks_name, _topo_sm._topology);
+        auto& ks = _db.find_keyspace(ks_name);
+
+        const auto tmptr = get_token_metadata_ptr();
+        const auto erm = ks.get_static_effective_replication_map();
+
+        // A tablet map, not table::uses_tablets(), says what is left to do: uses_tablets()
+        // reflects this node's effective replication map, fixed at startup, while the map is
+        // the cluster-wide state this request produces. It also makes the request idempotent.
+        size_t all_tables = 0;
+        std::vector<std::pair<table_id, sstring>> tables_to_migrate;
+        for (const auto& [name, schema] : ks.metadata()->cf_meta_data()) {
+            ++all_tables;
+            if (!tmptr->tablets().has_tablet_map(schema->id())) {
+                tables_to_migrate.push_back({schema->id(), name});
+            }
+        }
+
+        if (tables_to_migrate.empty()) {
+            rtlogger.info("All tables of keyspace '{}' already have a tablet map", ks_name);
+            co_return;
+        }
+        if (tables_to_migrate.size() < all_tables) {
+            rtlogger.info("Resuming the preparation of keyspace '{}': {} of {} table(s) already have a tablet map",
+                          ks_name, all_tables - tables_to_migrate.size(), all_tables);
+        }
+
+        auto append_tablet_map_mutations = [&] (table_id tid, const sstring& cf_name, const locator::tablet_map& tmap, size_t target_pow2) -> future<> {
+            rtlogger.info("Built tablet map for table {}.{} with {} tablet(s) (target pow2={})",
+                          ks_name, cf_name, tmap.tablet_count(), target_pow2);
+
+            co_await replica::tablet_map_to_mutations(
+                tmap,
+                tid,
+                ks_name,
+                cf_name,
+                guard.write_timestamp(),
+                _feature_service,
+                [&] (mutation m) -> future<> {
+                    updates.emplace_back(co_await make_canonical_mutation_gently(m));
+                });
+        };
+
+        // A table created after the request was made has no target and gets the plain
+        // vnode-derived layout, which the load balancer splits later.
+        if (req.prepare_migration_target_pow2s) {
+            const auto& targets = *req.prepare_migration_target_pow2s;
+            for (const auto& [tid, cf_name] : tables_to_migrate) {
+                size_t target_pow2 = 0;
+                if (auto it = targets.find(tid); it != targets.end()) {
+                    target_pow2 = static_cast<size_t>(it->second);
+                }
+                auto tmap = co_await build_tablet_map_for_migration(erm, target_pow2);
+                co_await append_tablet_map_mutations(tid, cf_name, tmap, target_pow2);
+            }
+        } else {
+            auto shared_tmap = co_await build_tablet_map_for_migration(erm, 0);
+            for (const auto& [tid, cf_name] : tables_to_migrate) {
+                co_await append_tablet_map_mutations(tid, cf_name, shared_tmap, 0);
+            }
+        }
+    }
+
+    // Writes the tablet maps of the tables of a keyspace which don't have one yet, the
+    // first phase of a vnodes-to-tablets migration, and completes the request.
+    future<> handle_prepare_migration(group0_guard guard, utils::UUID req_id,
+                                      const db::system_keyspace::topology_requests_entry& req) {
+        const sstring ks_name = req.prepare_migration_ks_name.value_or("");
+        rtlogger.info("prepare_migration requested for keyspace '{}'", ks_name);
+
+        utils::chunked_vector<canonical_mutation> updates;
+        sstring error;
+
+        try {
+            co_await build_tablet_maps_for_migration(guard, req, updates);
+        } catch (const std::bad_alloc&) {
+            // Transient; let the coordinator run the pass again.
+            throw;
+        } catch (const std::exception& e) {
+            // The builder commits nothing of its own, so anything else it throws fails the
+            // request rather than asking for a retry.
+            error = e.what();
+            rtlogger.error("Couldn't process global_topology_request::prepare_migration for keyspace '{}': {}",
+                           ks_name, std::current_exception());
+            updates.clear();
+        }
+
+        updates.emplace_back(topology_request_tracking_mutation_builder(req_id)
+                                  .done(error)
+                                  .build());
+        updates.emplace_back(topology_mutation_builder(guard.write_timestamp())
+                                  .drop_first_global_topology_request_id(
+                                          _topo_sm._topology.global_requests_queue, req_id)
+                                  .build());
+
+        co_await update_topology_state(std::move(guard), std::move(updates),
+                fmt::format("prepare vnodes-to-tablets migration for keyspace '{}'", ks_name));
     }
 
     future<> handle_truncate_table(group0_guard guard) {
