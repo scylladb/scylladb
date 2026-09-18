@@ -17,6 +17,7 @@
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/condition-variable.hh>
 #include <seastar/core/rwlock.hh>
+#include <seastar/util/log.hh>
 #include "sstables/shared_sstable.hh"
 #include "utils/exponential_backoff_retry.hh"
 #include "utils/updateable_value.hh"
@@ -148,14 +149,29 @@ private:
 
     std::unordered_map<compaction::compaction_group_view*, compaction_state> _compaction_state;
 
-    // Purpose is to serialize all maintenance (non regular) compaction activity to reduce aggressiveness and space requirement.
+    // Semaphore names, shared between each named_semaphore_exception_factory below and the
+    // acquire_semaphore() call sites, so the two cannot drift apart.
+    static constexpr const char* maintenance_ops_sem_name = "maintenance operation";
+    static constexpr const char* topology_cleanup_sem_name = "topology cleanup";
+    static constexpr const char* off_strategy_sem_name = "off-strategy compaction";
+
+    // Purpose is to serialize maintenance (non regular) compaction activity to reduce aggressiveness and space requirement,
+    // except for topology-driven cleanup, which uses _topology_cleanup_sem instead so it is never queued behind a
+    // user maintenance operation.
     // If the operation must be serialized with regular, then the per-table write lock must be taken.
-    seastar::named_semaphore _maintenance_ops_sem = {1, named_semaphore_exception_factory{"maintenance operation"}};
+    seastar::named_semaphore _maintenance_ops_sem = {1, named_semaphore_exception_factory{maintenance_ops_sem_name}};
+
+    // Purpose is to serialize topology-driven cleanups among themselves only, so they are
+    // never queued behind a user maintenance operation holding _maintenance_ops_sem. The
+    // cluster-wide cleanup_all REST request (global=true, the default) is served by the same
+    // vnodes cleanup fiber as topology-driven cleanup and therefore also takes this semaphore;
+    // only keyspace_cleanup and cleanup_all?global=false keep queueing on _maintenance_ops_sem.
+    seastar::named_semaphore _topology_cleanup_sem = {1, named_semaphore_exception_factory{topology_cleanup_sem_name}};
 
     // This semaphore ensures that off-strategy compaction will be serialized for
     // all tables, to limit space requirement and protect against candidates
     // being picked more than once.
-    seastar::named_semaphore _off_strategy_sem = {1, named_semaphore_exception_factory{"off-strategy compaction"}};
+    seastar::named_semaphore _off_strategy_sem = {1, named_semaphore_exception_factory{off_strategy_sem_name}};
 
     utils::pluggable<db::system_keyspace> _sys_ks;
 
@@ -402,9 +418,11 @@ public:
     // Cleanup is about discarding keys that are no longer relevant for a
     // given sstable, e.g. after node loses part of its token range because
     // of a newly added node.
-    future<> perform_cleanup(owned_ranges_ptr sorted_owned_ranges, compaction::compaction_group_view& t, tasks::task_info info);
+    future<> perform_cleanup(owned_ranges_ptr sorted_owned_ranges, compaction::compaction_group_view& t, tasks::task_info info,
+                             compaction::is_topology_cleanup topology_cleanup);
 private:
-    future<> try_perform_cleanup(owned_ranges_ptr sorted_owned_ranges, compaction::compaction_group_view& t, tasks::task_info info);
+    future<> try_perform_cleanup(owned_ranges_ptr sorted_owned_ranges, compaction::compaction_group_view& t, tasks::task_info info,
+                                 compaction::is_topology_cleanup topology_cleanup);
 
     // Add sst to or remove it from the respective compaction_state.sstables_requiring_cleanup set.
     bool update_sstable_cleanup_state(compaction_group_view& t, const sstables::shared_sstable& sst, const dht::token_range_vector& sorted_owned_ranges);
@@ -641,8 +659,13 @@ protected:
 
     state switch_state(state new_state);
 
+    // A contended acquisition is logged at wait_log_level: debug by default, since user
+    // maintenance operations routinely queue on their shared semaphore in large numbers
+    // (one scrub of a tablets table fans out one executor per compaction group), and info
+    // only for the rare waits a user cannot see otherwise, such as a topology cleanup.
     template <typename ExceptionFactory>
-    future<semaphore_units<ExceptionFactory>> acquire_semaphore(basic_semaphore<ExceptionFactory>& sem, size_t units = 1);
+    future<semaphore_units<ExceptionFactory>> acquire_semaphore(basic_semaphore<ExceptionFactory>& sem, const char* sem_name,
+            size_t units = 1, log_level wait_log_level = log_level::debug);
 
     // Return true if the task isn't stopped
     // and the compaction manager allows proceeding.

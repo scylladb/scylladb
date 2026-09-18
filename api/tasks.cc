@@ -81,7 +81,7 @@ static future<tasks::task_manager::task_ptr> force_keyspace_cleanup(http_context
     }
 
     auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
-    co_return co_await compaction_module.start_cleanup_keyspace_compaction(db, std::move(keyspace), table_infos, compaction::flush_mode::all_tables, tasks::is_user_task::yes);
+    co_return co_await compaction_module.start_cleanup_keyspace_compaction(db, std::move(keyspace), table_infos, compaction::flush_mode::all_tables, tasks::is_user_task::yes, compaction::is_topology_cleanup::no);
 }
 
 static scrub_info parse_scrub_options(const http_context& ctx, std::unique_ptr<http::request> req) {
