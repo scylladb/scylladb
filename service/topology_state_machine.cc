@@ -294,7 +294,7 @@ future<sstring> topology_state_machine::wait_for_request_completion(db::system_k
     co_return sstring();
 }
 
-void topology_state_machine::generate_cancel_request_update(utils::chunked_vector<canonical_mutation>& muts,
+void topology_state_machine::generate_cancel_request_update(group0_update_collector& muts,
                                                             gms::feature_service& features,
                                                             const group0_guard& guard,
                                                             raft::server_id node,
@@ -342,11 +342,11 @@ void topology_state_machine::generate_cancel_request_update(utils::chunked_vecto
             break;
     }
 
-    muts.emplace_back(builder.build());
+    muts.add(builder.build());
 
     topology_request_tracking_mutation_builder rtbuilder(request_id);
     rtbuilder.done(std::move(reason));
-    muts.emplace_back(rtbuilder.build());
+    muts.add(rtbuilder.build());
 }
 
 future<> topology_state_machine::abort_request(service::raft_group0& group0,
@@ -356,7 +356,7 @@ future<> topology_state_machine::abort_request(service::raft_group0& group0,
     while (true) {
         auto guard = co_await group0.client().start_operation(as, raft_timeout{});
 
-        utils::chunked_vector<canonical_mutation> muts;
+        group0_update_collector muts;
 
         for (auto& [node, rs] : _topology.transition_nodes) {
             if (rs.request_id == request_id) {
@@ -385,8 +385,7 @@ future<> topology_state_machine::abort_request(service::raft_group0& group0,
             throw std::runtime_error(format("Don't know how to abort {}", request_id));
         }
 
-        topology_change change{std::move(muts)};
-        group0_command cmd = group0.client().prepare_command(std::move(change), guard,
+        group0_command cmd = co_await group0.client().prepare_command<topology_change>(std::move(muts), guard,
                                                               ::format("aborting topology request {}", request_id));
 
         try {

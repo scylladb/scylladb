@@ -80,26 +80,24 @@ seastar::future<> service::client_routes_service::notify_client_routes_change(co
 
 seastar::future<> service::client_routes_service::set_client_routes_inner(const std::vector<service::client_routes_service::client_route_entry>& route_entries) {
     auto guard = co_await _group0_client.start_operation(_abort_source, service::raft_timeout{});
-    utils::chunked_vector<canonical_mutation> cmuts;
+    service::group0_update_collector updates;
 
     for (const auto& entry : route_entries) {
-        auto mut = co_await make_update_client_route_mutation(guard.write_timestamp(), entry);
-        cmuts.emplace_back(std::move(mut));
+        updates.add_small(co_await make_update_client_route_mutation(guard.write_timestamp(), entry));
     }
-    auto cmd = _group0_client.prepare_command(service::write_mutations{std::move(cmuts)}, guard, "insert client routes");
+    auto cmd = co_await _group0_client.prepare_command<service::write_mutations>(std::move(updates), guard, "insert client routes");
     co_await _group0_client.add_entry(std::move(cmd), std::move(guard), _abort_source);
 }
 
 seastar::future<> service::client_routes_service::delete_client_routes_inner(const std::vector<service::client_routes_service::client_route_key>& route_keys) {
     auto guard = co_await _group0_client.start_operation(_abort_source, service::raft_timeout{});
-    utils::chunked_vector<canonical_mutation> cmuts;
+    service::group0_update_collector updates;
 
     for (const auto& route_key : route_keys) {
-        auto mut = co_await make_remove_client_route_mutation(guard.write_timestamp(), route_key);
-        cmuts.emplace_back(std::move(mut));
+        updates.add_small(co_await make_remove_client_route_mutation(guard.write_timestamp(), route_key));
     }
 
-    auto cmd = _group0_client.prepare_command(service::write_mutations{std::move(cmuts)}, guard, "delete client routes");
+    auto cmd = co_await _group0_client.prepare_command<service::write_mutations>(std::move(updates), guard, "delete client routes");
     co_await _group0_client.add_entry(std::move(cmd), std::move(guard), _abort_source);
 }
 
