@@ -73,6 +73,11 @@ tombstone_gc_state::get_gc_before_for_range_result tombstone_gc_state::get_gc_be
         return {gc_before, gc_before, knows_entire_range};
     }
 
+    if (s->is_view() && _shared_state && _shared_state->is_view_being_built(s->id())) {
+        dblog.trace("Get gc_before for ks={}, table={}, range={}: view is being built, no gc", s->ks_name(), s->cf_name(), range);
+        return {gc_clock::time_point::min(), gc_clock::time_point::min(), knows_entire_range};
+    }
+
     const auto& options = s->tombstone_gc_options();
     switch (options.mode()) {
     case tombstone_gc_mode::timeout: {
@@ -163,6 +168,11 @@ gc_clock::time_point tombstone_gc_state::get_gc_before_for_key(schema_ptr s, con
         const auto gc_before = get_gc_before_for_group0(s);
         dblog.trace("Get gc_before for ks={}, table={}, dk={}, mode=reconcile, gc_before={}", s->ks_name(), s->cf_name(), dk, gc_before);
         return gc_before;
+    }
+
+    if (s->is_view() && _shared_state && _shared_state->is_view_being_built(s->id())) {
+        dblog.trace("Get gc_before for ks={}, table={}, dk={}: view is being built, no gc", s->ks_name(), s->cf_name(), dk);
+        return gc_clock::time_point::min();
     }
 
     // if mode = timeout    // default option, if user does not specify tombstone_gc options
@@ -313,6 +323,11 @@ tombstone_gc_state_snapshot::tombstone_gc_state_snapshot(shared_tombstone_gc_sta
 { }
 
 gc_clock::time_point tombstone_gc_state_snapshot::get_gc_before_for_key(schema_ptr s, const dht::decorated_key& dk, bool check_commitlog) const {
+    if (s->is_view()) {
+        // A view build may start after the memtable took this snapshot and land
+        // rows with old timestamps in it. Only the timestamps decide for a view.
+        return gc_clock::time_point::min();
+    }
     return tombstone_gc_state(_shared_state, check_commitlog).get_gc_before_for_key(s, dk, _query_time);
 }
 
