@@ -68,6 +68,12 @@ def make_scylla_conf(mode: str, host_addr: str, seed_addrs: List[str], cluster_n
         'api_address': host_addr,
         'prometheus_address': host_addr,
         'alternator_address': host_addr,
+        # Both Web Shell listeners default to localhost, so they have to be
+        # spelled out for them to be reachable at the server's address. These
+        # have no effect unless a suite also sets webshell_http_port and/or
+        # webshell_https_port (both are 0 - disabled - by default).
+        'webshell_http_address': host_addr,
+        'webshell_https_address': host_addr,
         'seed_provider': [{
             'class_name': 'org.apache.cassandra.locator.SimpleSeedProvider',
             'parameters': [{
@@ -417,6 +423,8 @@ class ScyllaServer:
         self.config["api_address"] = ip_addr
         self.config["prometheus_address"] = ip_addr
         self.config["alternator_address"] = ip_addr
+        self.config["webshell_http_address"] = ip_addr
+        self.config["webshell_https_address"] = ip_addr
         self._write_config_file()
 
     @property
