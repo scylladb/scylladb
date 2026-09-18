@@ -2606,3 +2606,25 @@ async def test_no_raft_replay_into_a_tablet_that_moved_away(manager: ScyllaClust
                 rows = await cql.run_async(f"SELECT * FROM {table} WHERE pk = {i}")
                 assert len(rows) == 1, f"Expected 1 row for pk={i}, got {len(rows)}"
                 assert rows[0].c == i + 1, f"Expected c={i + 1} for pk={i}, got {rows[0].c}"
+
+
+async def test_bootstrap_with_existing_sc_table(manager: ScyllaClusterManager):
+    """
+    A node joining a cluster that already has a strongly-consistent table
+    receives system.tablets rows with raft_group_id in the group0 snapshot
+    before it learns the cluster's enabled features. Reading those rows
+    must not depend on the feature being enabled yet, otherwise the
+    snapshot transfer fails and the node never joins.
+    """
+    server = await manager.server_add(config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE)
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, c int") as table:
+            await cql.run_async(f"INSERT INTO {table} (pk, c) VALUES (1, 1)")
+
+            new_server = await manager.server_add(config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE)
+            cql, hosts = await manager.get_ready_cql([server, new_server])
+
+            rows = await cql.run_async(f"SELECT c FROM {table} WHERE pk = 1", host=hosts[1])
+            assert [r.c for r in rows] == [1]
