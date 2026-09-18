@@ -24,10 +24,8 @@ namespace cql3::statements::bm25_search {
 /// The search term an evaluated query value holds.
 sstring query_term(const cql3::raw_value& value);
 
-/// Checks the one relation a full-text search takes, WHERE BM25(column, term) > 0, against the
-/// search the rows are ranked by. Returns the WHERE term when a bind marker leaves the comparison
-/// with the ORDER BY term to execution.
-std::optional<expr::expression> validate_restriction(const expr::binary_operator& binop, const secondary_index::index& index,
-        const expr::expression& search_term);
+/// Checks the one relation a full-text search takes, WHERE BM25(column, term) > 0. Returns the
+/// WHERE term when a bind marker leaves its comparison with the ORDER BY term to execution.
+std::optional<expr::expression> validate_restriction(const expr::binary_operator& binop, const expr::expression& search_term);
 
 } // namespace cql3::statements::bm25_search

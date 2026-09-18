@@ -25,19 +25,12 @@ sstring query_term(const cql3::raw_value& value) {
     return value_cast<sstring>(utf8_type->deserialize(cql3::raw_value(value).to_bytes()));
 }
 
-std::optional<expr::expression> validate_restriction(const expr::binary_operator& binop, const secondary_index::index& index,
-        const expr::expression& search_term) {
-    // "WHERE BM25(c, t) > 0" arrives as BM25_SCORE(c, t) > 0 (see prepare_external_search_relation_lhs()),
-    // and a full-text query takes no other search function here, e.g. ANN().
+std::optional<expr::expression> validate_restriction(const expr::binary_operator& binop, const expr::expression& search_term) {
     const auto& fc = expr::as<expr::function_call>(binop.lhs);
-    const auto* fun = functions::as_external_search_function(fc);
-    if (fun->family() != functions::search_family::bm25) {
-        throw exceptions::invalid_request_exception(seastar::format("{}() is not supported in the WHERE clause", fun->display_name()));
-    }
-    auto [col, where_term] = external_search::extract_call_arguments(fc, fun->display_name());
-    if (col->name_as_text() != index.target_column()) {
-        throw exceptions::invalid_request_exception("Full-text search queries must reference the same column in both WHERE and ORDER BY clauses");
-    }
+    // "WHERE BM25(c, t) > 0" was rewritten to BM25_SCORE() when the relation was prepared, and
+    // BM25_RANK() was rejected there.
+    throwing_assert(expr::is_native_function_call(fc, functions::BM25_SCORE_FUNCTION_NAME));
+    auto where_term = external_search::extract_call_arguments(fc, "BM25").second;
 
     if (binop.op != expr::oper_t::GT) {
         throw exceptions::invalid_request_exception(

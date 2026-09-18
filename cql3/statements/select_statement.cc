@@ -2150,6 +2150,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     }
     const bool is_ann_query = plan.has_ann();
     const bool has_bm25_ordering = plan.has_bm25();
+    const bool is_external_search = !plan.empty();
 
     if (prepared_scoring_ordering && !is_ann_query && !has_bm25_ordering) {
         // A function call in ORDER BY that no scoring-function resolver claimed. The
@@ -2228,28 +2229,10 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
         throw exceptions::invalid_request_exception("PER PARTITION LIMIT is not allowed with aggregate queries.");
     }
 
-    auto restrictions = prepare_restrictions(db, schema, ctx, selection, _parameters->allow_filtering() || is_ann_query || has_bm25_ordering,
+    auto restrictions = prepare_restrictions(db, schema, ctx, selection, _parameters->allow_filtering() || is_external_search,
             restrictions::check_indexes(!_parameters->is_mutation_fragments()), _pinned_plan);
 
-    const auto& scoring_restrictions = restrictions->get_scoring_function_restrictions();
-
-    bool has_bm25_restriction = std::ranges::any_of(scoring_restrictions, [](const expr::binary_operator& binop) {
-        const auto* fun = functions::as_external_search_function(expr::as<expr::function_call>(binop.lhs));
-        return fun && fun->family() == functions::search_family::bm25;
-    });
-    bool is_fts_query = has_bm25_restriction || has_bm25_ordering;
-
-    if (is_ann_query && is_fts_query) {
-        throw exceptions::invalid_request_exception("BM25 and ANN cannot be combined in the same query");
-    }
-
-    // Scoring restrictions are held out of the filtering machinery, to be interpreted by the
-    // external index that owns the scoring function.  If no such query type was selected,
-    // nothing will interpret them and they would be silently dropped rather than applied.
-    if (!scoring_restrictions.empty() && !is_fts_query && !is_ann_query) {
-        throw exceptions::invalid_request_exception(
-                "A scoring function in the WHERE clause requires a matching ORDER BY clause");
-    }
+    plan.check_restrictions(*restrictions);
 
     if (_parameters->is_distinct()) {
         validate_distinct_selection(*schema, *selection, *restrictions);
@@ -2259,7 +2242,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
 
     auto orderings = _parameters->orderings();
 
-    if (!orderings.empty() && !is_ann_query && !is_fts_query) {
+    if (!orderings.empty() && !is_external_search) {
         std::visit([&](auto&& ordering) {
             using T = std::decay_t<decltype(ordering)>;
             if constexpr (!std::is_same_v<T, raw::select_statement::scoring_function_ordering>) {
@@ -2274,7 +2257,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     }
 
     std::vector<sstring> warnings;
-    if (!is_ann_query && !is_fts_query) {
+    if (!is_external_search) {
         check_needs_filtering(*restrictions, cfg.strict_allow_filtering(), warnings);
         ensure_filtering_columns_retrieval(db, *selection, *restrictions);
     }
@@ -2385,7 +2368,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
                 std::move(group_by_cell_indices), is_reversed_, std::move(ordering_comparator),
                 prepare_limit(db, ctx, _limit), prepare_limit(db, ctx, _per_partition_limit), stats, *plan.ann_ordering(),
                 std::move(prepared_attrs));
-    } else if (is_fts_query) {
+    } else if (has_bm25_ordering) {
         stmt = fulltext_indexed_table_select_statement::prepare(
             db,
             schema,

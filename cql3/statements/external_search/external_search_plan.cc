@@ -18,8 +18,10 @@
 #include "cql3/statements/external_search/external_function.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "exceptions/exceptions.hh"
+#include "cql3/restrictions/statement_restrictions.hh"
 #include "index/secondary_index_manager.hh"
 #include "types/types.hh"
+#include "utils/assert.hh"
 
 #include <algorithm>
 #include <cmath>
@@ -128,6 +130,10 @@ search_source& external_search_plan::search_of(const expr::function_call& fc, co
         return source.family == fun.family() && source.column == column;
     });
     if (it == _sources.end()) {
+        if (clause == search_clause::restrictions) {
+            throw exceptions::invalid_request_exception(seastar::format(
+                    "{}() in WHERE names a search that the ORDER BY clause does not run", fun.display_name()));
+        }
         if (clause == search_clause::ordering) {
             _sources.push_back(search_source{
                     .family = fun.family(),
@@ -142,6 +148,13 @@ search_source& external_search_plan::search_of(const expr::function_call& fc, co
     }
     auto* source = &*it;
 
+    if (clause == search_clause::restrictions) {
+        // The relation's query value is compared by the family's own restriction check.
+        return *source;
+    }
+
+    // Every call describes the one search of its family the rows are ranked by, so it has to use
+    // the query value the ORDER BY clause does.
     const auto values_equal = external_search::unevaluated_equality(query_value, source->query_value);
     if (values_equal != external_search::equality::always) {
         if (values_equal == external_search::equality::never) {
@@ -197,6 +210,17 @@ void external_search_plan::resolve_ordering(const expr::function_call& fc) {
         // A rescoring index ordered the rows by the score it reported for a quantized vector, which
         // is not the requested order: the coordinator recomputes the similarity and sorts by it.
         _ordering_expr = ann_search::similarity_expression(source.index, source.column, source.query_value, _db, _schema);
+    }
+}
+
+void external_search_plan::check_restrictions(const restrictions::select_restrictions& restrictions) {
+    // select_restrictions holds out the relations whose left-hand side is a call to an external
+    // search function; nothing else would apply them, so each has to name a search.
+    for (const auto& binop : restrictions.get_scoring_function_restrictions()) {
+        const auto& fc = expr::as<expr::function_call>(binop.lhs);
+        const auto* fun = functions::as_external_search_function(fc);
+        throwing_assert(fun);
+        search_of(fc, *fun, search_clause::restrictions);
     }
 }
 
