@@ -398,8 +398,12 @@ def validate_all_metrics(prefix, config_file, verbose=False, strict=True):
             metrics_count = len(metrics)
             total_metrics += metrics_count
             if unresolved_groups:
-                # The parser counts lines from zero, so report line + 1: that is both
-                # the line an editor shows and the key a 'groups' override needs.
+                # line counts from zero, so line + 1 is what an editor shows. It is
+                # also the 'groups' key that fixes this particular shape of call,
+                # because a key is consumed at the start of the line it names: a key
+                # of line (the add_group itself) would be overwritten moments later
+                # when that same line is parsed, while line + 1 lands on the first
+                # metric of the group, before any name is built from it.
                 problems.append("unresolved add_group() argument(s): " + ", ".join(
                     f"{expression} (line {line + 1})" for line, expression in unresolved_groups))
             invalid_names = find_invalid_metric_names(metrics)

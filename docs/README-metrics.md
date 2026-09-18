@@ -39,6 +39,18 @@ The system automatically handles most metrics extraction. You only need configur
     "80": query_processor
 ```
 
+A key is a line number, and the group takes effect from the start of that line
+onwards. The key therefore has to sit after anything that would overwrite it and
+before the first metric that needs it:
+
+- Where `add_group()` is followed by its metrics, use the line `add_group()` is
+  on. A key naming the line before it would be overwritten when that line is
+  parsed. This is the number the validation error reports.
+- Where the metrics are built into a vector and passed to `add_group()` further
+  down, the parser reaches them before it ever sees the group, so the key has to
+  name a line above the first metric. The `query_processor` entry above is this
+  shape: line 80 sits well before the first metric on line 115.
+
 **Skip files:**
 ```yaml
 "seastar/tests/unit/metrics_test.cc": skip
