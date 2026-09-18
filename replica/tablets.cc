@@ -915,7 +915,12 @@ struct tablet_metadata_builder {
                 current = {};
             } else {
                 auto tablet_count = row.get_as<int>("tablet_count");
-                auto with_raft_info = db->features().strongly_consistent_tables && row.has("raft_group_id");
+                // A row can carry raft_group_id only if the cluster feature was
+                // enabled when it was written, so the cell alone is the predicate.
+                // Checking db->features() here would fail on a joining node,
+                // which applies the schema part of the group0 snapshot before
+                // it learns the cluster's enabled features.
+                auto with_raft_info = row.has("raft_group_id");
                 auto tmap = tablet_map(tablet_count, with_raft_info, tablet_map::initialized_later());
                 auto first_tablet = tmap.first_tablet();
                 current = active_tablet_map{table, std::move(tmap), first_tablet};
