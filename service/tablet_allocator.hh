@@ -418,6 +418,14 @@ public:
     void on_leadership_lost();
 };
 
+/// Builds the initial tablet map of a table being migrated from vnodes to tablets: one
+/// tablet per vnode range, replicated like that vnode, additionally split at the
+/// boundaries of `target_pow2` evenly spaced tablets when `target_pow2` is not 0.
+/// Depends on nothing but its arguments, so it can be driven with a synthetic topology.
+future<locator::tablet_map> build_tablet_map_for_migration(
+        const locator::static_effective_replication_map_ptr& erm,
+        size_t target_pow2 = 0);
+
 future<bool> requires_rack_list_colocation(
         replica::database& db,
         locator::token_metadata_ptr tmptr,
