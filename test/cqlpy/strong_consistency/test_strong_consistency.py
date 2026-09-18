@@ -376,6 +376,43 @@ def test_batch_consistency_level_on_sc_table(cql, sc_keyspace):
         assert cql.execute(f"SELECT v FROM {table} WHERE pk = 1").one().v == 2
 
 
+def test_read_consistency_level_on_sc_table(cql, sc_keyspace):
+    """
+    A strongly consistent read accepts QUORUM/LOCAL_QUORUM, which it serves as
+    a linearizable read, and ONE/LOCAL_ONE, which it serves off a single
+    replica, and rejects every other consistency level - a wider set than the
+    write path takes, which is QUORUM/LOCAL_QUORUM only. The two lists below
+    are all the levels there are. The check precedes the generic validation of
+    a read level, so even a write-only level like ANY is refused with this
+    message rather than with the usual complaint about ANY not being a read
+    level.
+
+    Which of the two paths a level actually takes is not visible here: on a
+    single node with RF=1 a linearizable read and one served off a single
+    replica return the same thing. This pins the accept/reject split only; the
+    difference in behaviour belongs in test/cluster.
+    """
+    with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, v int") as table:
+        cql.execute(f"INSERT INTO {table} (pk, v) VALUES (1, 2)")
+        select = f"SELECT v FROM {table} WHERE pk = 1"
+
+        accepted = [ConsistencyLevel.QUORUM, ConsistencyLevel.LOCAL_QUORUM,
+                    ConsistencyLevel.ONE, ConsistencyLevel.LOCAL_ONE]
+        refused = [ConsistencyLevel.ANY, ConsistencyLevel.TWO, ConsistencyLevel.THREE,
+                   ConsistencyLevel.ALL, ConsistencyLevel.EACH_QUORUM,
+                   ConsistencyLevel.SERIAL, ConsistencyLevel.LOCAL_SERIAL]
+        # The claim of the test is that these are all of them.
+        assert sorted(accepted + refused) == sorted(ConsistencyLevel.name_to_value.values())
+
+        for cl in accepted:
+            assert cql.execute(SimpleStatement(select, consistency_level=cl)).one().v == 2
+
+        cl_error = "Strongly consistent reads must use QUORUM/LOCAL_QUORUM or ONE/LOCAL_ONE"
+        for cl in refused:
+            with pytest.raises(InvalidRequest, match=cl_error):
+                cql.execute(SimpleStatement(select, consistency_level=cl))
+
+
 def test_mixed_keyspace_batch_on_sc_table(cql, sc_keyspace, test_keyspace):
     """
     A CQL text batch that mixes statements on strongly consistent and
