@@ -17,7 +17,7 @@ from test.pylib.tablets import get_tablet_count, get_all_tablet_replicas
 from test.pylib.rest_client import HTTPError, read_barrier
 from test.pylib.internal_types import ServerInfo
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
-from test.cluster.util import new_test_keyspace, reconnect_driver
+from test.cluster.util import new_test_keyspace, reconnect_driver, get_coordinator_host, wait_new_coordinator_elected
 from test.cluster.tasks.task_manager_client import TaskManagerClient
 
 logger = logging.getLogger(__name__)
@@ -1121,6 +1121,71 @@ async def test_migration_tablet_maps_split_across_commands(manager: ScyllaCluste
         res = await cql.run_async(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{ks}'")
         assert len(res) == 1 and res[0].initial_tablets is not None, \
             "keyspace is still using vnodes after migration finalization"
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_migration_prepare_resumed_after_coordinator_change(manager: ScyllaClusterManager):
+    """Verify that preparing a migration survives losing the topology coordinator.
+
+    The tablet maps of a keyspace are written by several group0 commands, and the request
+    stays in the queue until the last one. If the coordinator dies in between, the next
+    coordinator has to pick the request up and write the maps which are still missing,
+    so that the keyspace doesn't end up with tablet maps for only some of its tables.
+    """
+    num_tables = 4
+
+    cfg = {'num_tokens': 16}
+    servers = await manager.servers_add(3, cmdline=['--smp', '2'], config=cfg)
+    cql, _ = await manager.get_ready_cql(servers)
+
+    coordinator = await get_coordinator_host(manager)
+    coordinator_host_id = await manager.get_host_id(coordinator.server_id)
+    other = [s for s in servers if s.server_id != coordinator.server_id]
+    logger.info(f"Topology coordinator is {coordinator.server_id}")
+
+    for s in servers:
+        await manager.api.enable_injection(s.ip_addr, 'prepare_migration_one_table_per_command',
+                                           one_shot=False)
+    # Only the current coordinator pauses; whoever takes over must run to completion.
+    await manager.api.enable_injection(coordinator.ip_addr, 'prepare_migration_after_part',
+                                       one_shot=True)
+    # The injection state comes back per shard, so the list is never empty by itself.
+    armed = await manager.api.get_injection(coordinator.ip_addr, 'prepare_migration_after_part')
+    assert any(shard['enabled'] for shard in armed), \
+        f"the pause injection is not armed on the coordinator: {armed}"
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'enabled': false}") as ks:
+        tables = [f't{i}' for i in range(num_tables)]
+        for t in tables:
+            await cql.run_async(f"CREATE TABLE {ks}.{t} (pk int PRIMARY KEY, c int)")
+
+        # Drive the request from a node which is not going away, so that the API call
+        # survives the coordinator being stopped.
+        logger.info("Starting prepare from a non-coordinator node")
+        prepare = asyncio.create_task(
+                manager.api.create_vnode_tablet_migration(other[0].ip_addr, ks))
+        try:
+            logger.info("Waiting for the coordinator to commit the first command")
+            await manager.api.wait_for_injection_enter(coordinator.ip_addr, 'prepare_migration_after_part')
+
+            # Kill it rather than shutting it down: a graceful stop waits for the topology
+            # coordinator fiber, which is parked in the injection, and this is meant to
+            # stand for a coordinator which dies in the middle of the request anyway.
+            logger.info(f"Killing the coordinator {coordinator.server_id}")
+            await manager.server_stop(coordinator.server_id, convict=True)
+            await wait_new_coordinator_elected(manager, coordinator_host_id, time.time() + 120)
+
+            logger.info("Waiting for the new coordinator to finish preparing")
+            await prepare
+        finally:
+            # Whatever failed above, don't leave the API call dangling, and surface its
+            # own error rather than a timeout waiting for something it never started.
+            if not prepare.done():
+                prepare.cancel()
+            await asyncio.gather(prepare, return_exceptions=True)
+
+        # Every table must have a map, including the ones the stopped coordinator wrote.
+        await assert_all_tables_have_tablet_map(manager, other[0], ks, tables)
 
 
 @pytest.mark.asyncio
