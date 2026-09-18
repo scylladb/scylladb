@@ -98,14 +98,14 @@ struct ring_slice {
     std::unordered_set<dht::token> tokens;
 };
 
-// The intended storage mode for a node during vnodes-to-tablets migration.
+// The storage mode of a node during vnodes-to-tablets migration.
 //
 // When migrating a table from vnodes to tablets, each node needs to reshard
 // its local SSTables on vnode boundaries. Conversely, SSTables need to be
 // resharded in the opposite direction (i.e., with the static sharder) when the
-// operation is rolled back. This property is an indicator that a node needs to
-// perform resharding on restart, and it declares the resharding direction.
-enum class intended_storage_mode : uint16_t {
+// operation is rolled back. A node reshards on restart, in the direction given
+// by replica_state::intended_storage_mode.
+enum class storage_mode : uint16_t {
     vnodes,
     tablets,
 };
@@ -121,7 +121,14 @@ struct replica_state {
     std::set<sstring> supported_features;
     cleanup_status cleanup;
     utils::UUID request_id; // id of the current request for the node or the last one if no current one exists
-    std::optional<intended_storage_mode> storage_mode;
+    // The storage mode the node is meant to run in. Set while a vnodes-to-tablets
+    // migration is in progress; the node switches to it on the next restart.
+    std::optional<storage_mode> intended_storage_mode;
+    // The storage mode the node is actually running in: the intended_storage_mode
+    // value it applied when it built its tables at boot, published only after the
+    // local resharding for that direction completed. Absent means the node has not
+    // restarted since the migration began, i.e. it still runs in vnodes mode.
+    std::optional<storage_mode> current_storage_mode;
 };
 
 struct topology_features {
@@ -366,7 +373,7 @@ std::optional<topology_request> try_topology_request_from_string(const sstring& 
 topology_request topology_request_from_string(const sstring& s);
 global_topology_request global_topology_request_from_string(const sstring&);
 cleanup_status cleanup_status_from_string(const sstring& s);
-intended_storage_mode intended_storage_mode_from_string(const sstring& s);
+storage_mode storage_mode_from_string(const sstring& s);
 }
 
 template <> struct fmt::formatter<service::cleanup_status> {
@@ -374,9 +381,9 @@ template <> struct fmt::formatter<service::cleanup_status> {
     auto format(service::cleanup_status status, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 
-template <> struct fmt::formatter<service::intended_storage_mode> {
+template <> struct fmt::formatter<service::storage_mode> {
     constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
-    auto format(service::intended_storage_mode mode, fmt::format_context& ctx) const -> decltype(ctx.out());
+    auto format(service::storage_mode mode, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 
 template <> struct fmt::formatter<service::fencing_token> : fmt::formatter<string_view> {

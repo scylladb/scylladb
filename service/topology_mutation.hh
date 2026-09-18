@@ -51,7 +51,7 @@ protected:
     Builder& set(const char* cell, const raft::server_id& value);
     Builder& set(const char* cell, const uint32_t& value);
     Builder& set(const char* cell, cleanup_status value);
-    Builder& set(const char* cell, intended_storage_mode value);
+    Builder& set(const char* cell, storage_mode value);
     Builder& set(const char* cell, const utils::UUID& value);
     Builder& set(const char* cell, bool value);
     Builder& set(const char* cell, const char* value);
