@@ -48,6 +48,10 @@ def test_reject_user_provided_timestamps(cql, sc_keyspace):
                 INSERT INTO {table} (pk, v) VALUES (0, 14);
                 APPLY BATCH
             """)
+        # A native protocol batch refers to statements prepared earlier, so
+        # the refusal has to land on PREPARE, before there is a batch at all.
+        with pytest.raises(InvalidRequest, match=error_msg):
+            cql.prepare(f"INSERT INTO {table} (pk, v) VALUES (?, ?) USING TIMESTAMP ?")
 
 
 @pytest.mark.parametrize("batch_mode", ["text", "prepared"], ids=["text", "prepared"])
