@@ -313,7 +313,7 @@ future<> server::shutdown() {
 }
 
 future<>
-server::listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_builder> builder, bool is_shard_aware, bool keepalive, std::optional<file_permissions> unix_domain_socket_permissions, bool proxy_protocol, std::function<server&()> get_shard_instance) {
+server::listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_builder> builder, bool keepalive, std::optional<file_permissions> unix_domain_socket_permissions, bool proxy_protocol, std::function<server&()> get_shard_instance, std::optional<server_socket::load_balancing_algorithm> lba) {
     // Note: We are making the assumption that if builder is provided it will be the same for each
     // invocation, regardless of address etc. In general, only CQL server will call this multiple times,
     // and if TLS, it will use the same cert set.
@@ -346,8 +346,8 @@ server::listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_bu
     lo.reuse_address = true;
     lo.unix_domain_socket_permissions = unix_domain_socket_permissions;
     lo.proxy_protocol = proxy_protocol;
-    if (is_shard_aware) {
-        lo.lba = server_socket::load_balancing_algorithm::port;
+    if (lba) {
+        lo.lba = *lba;
     }
     server_socket ss;
     bool is_tls = false;
