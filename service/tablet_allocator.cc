@@ -668,12 +668,6 @@ class load_balancer {
         absl::flat_hash_map<table_id, size_t> tablet_count_per_table;
         absl::flat_hash_map<table_id, uint64_t> tablet_sizes_per_table;
 
-        // Number of tablets which are streamed from this shard.
-        size_t streaming_read_load = 0;
-
-        // Number of tablets which are streamed to this shard.
-        size_t streaming_write_load = 0;
-
         // Tablets which still have a replica on this shard which are candidates for migrating away from this shard.
         // Grouped by table. Used when _use_table_aware_balancing == true.
         // The set of candidates per table may be empty.
@@ -950,6 +944,13 @@ class load_balancer {
     std::optional<locator::load_sketch> _load_sketch;
     // Holds the set of tablets already scheduled for transition during plan-making.
     std::unordered_set<global_tablet_id> _scheduled_tablets;
+    struct streaming_shard_load {
+        size_t read_load = 0;
+        size_t write_load = 0;
+    };
+    // Per-shard streaming load, covering the whole cluster and kept for the whole planning
+    // round, so that the streaming concurrency caps hold across all plan makers and DCs.
+    std::unordered_map<global_shard_id, streaming_shard_load> _streaming_load;
     // Holds tablet replica count per table in the balanced node set (within a single DC).
     absl::flat_hash_map<table_id, size_t> _tablet_count_per_table;
     // Holds total used storage per table in the DC
@@ -1093,6 +1094,9 @@ public:
         const locator::topology& topo = _tm->get_topology();
         migration_plan plan;
 
+        // Charge streaming load of transitions which are already in progress.
+        co_await consider_scheduled_load();
+
         auto rack_list_colocation = ongoing_rack_list_colocation();
         auto rf_change_prep = co_await prepare_per_rack_rf_change_plan(plan);
 
@@ -1114,7 +1118,7 @@ public:
         }
 
         if (rack_list_colocation) {
-            plan.merge(co_await make_rack_list_colocation_plan(plan));
+            plan.merge(co_await make_rack_list_colocation_plan());
         }
 
         // Merge table-wide resize decisions, may emit new decisions, revoke or finalize ongoing ones.
@@ -1223,7 +1227,7 @@ public:
         }
     }
 
-    future<> consider_scheduled_load(node_load_map& nodes) {
+    future<> consider_scheduled_load() {
         const locator::topology& topo = _tm->get_topology();
         for (auto&& [table, tables] : _tm->tablets().all_table_groups()) {
             if (is_migrating_table(table)) {
@@ -1234,22 +1238,9 @@ public:
                 co_await coroutine::maybe_yield();
                 if (is_streaming(&trinfo)) {
                     auto& tinfo = tmap.get_tablet_info(tid);
-                    apply_load(nodes, get_migration_streaming_info(topo, tinfo, trinfo));
+                    apply_load(get_migration_streaming_info(topo, tinfo, trinfo));
                 }
             }
-        }
-    }
-
-    future<> consider_planned_load(node_load_map& nodes, const migration_plan& mplan) {
-        const locator::topology& topo = _tm->get_topology();
-        auto& tablet_meta = _tm->tablets();
-
-        for (const tablet_migration_info& tmi : mplan.migrations()) {
-            co_await coroutine::maybe_yield();
-            auto& tmap = tablet_meta.get_tablet_map(tmi.tablet.table);
-            auto& tinfo = tmap.get_tablet_info(tmi.tablet.tablet);
-            auto streaming_info = get_migration_streaming_info(topo, tinfo, tmi);
-            apply_load(nodes, streaming_info);
         }
     }
 
@@ -1264,23 +1255,6 @@ public:
         }
 
         const locator::topology& topo = _tm->get_topology();
-
-        // Populate the load of the migration that is already in the plan
-        node_load_map nodes;
-        // TODO: share code with make_plan()
-        topo.for_each_node([&] (const locator::node& node) {
-            bool is_drained = node.get_state() == locator::node::state::being_decommissioned
-                              || node.get_state() == locator::node::state::being_removed;
-            if (node.get_state() == locator::node::state::normal || is_drained) {
-                ensure_node(nodes, node.host_id());
-            }
-        });
-
-        // Consider load that is already scheduled
-        co_await consider_scheduled_load(nodes);
-
-        // Consider load that is about to be scheduled
-        co_await consider_planned_load(nodes, mplan);
 
         service::auto_repair_stats auto_repair_stats;
 
@@ -1373,8 +1347,8 @@ public:
             co_await coroutine::maybe_yield();
             tablet_migration_streaming_info tmsi;
             tmsi = get_migration_streaming_info(topo, plan.tinfo, trinfo);
-            if (can_accept_load(nodes, tmsi)) {
-                apply_load(nodes, tmsi);
+            if (can_accept_load(tmsi)) {
+                apply_load(tmsi);
                 ret.add(plan.gid);
             }
         }
@@ -1410,8 +1384,7 @@ public:
     future<migration_plan> make_rack_list_colocation_plan_for_dc(
             const sstring& dc,
             const std::map<sstring, colocation_source_set>& racks,
-            const std::unordered_map<sstring, std::unordered_set<utils::UUID>>& requests_for_dc,
-            const migration_plan& mplan) {
+            const std::unordered_map<sstring, std::unordered_set<utils::UUID>>& requests_for_dc) {
         migration_plan plan;
         const locator::topology& topo = _tm->get_topology();
 
@@ -1421,12 +1394,6 @@ public:
                 ensure_node(nodes, node.host_id());
             }
         });
-
-        // Consider load that is already scheduled.
-        co_await consider_scheduled_load(nodes);
-
-        // Consider load that is about to be scheduled.
-        co_await consider_planned_load(nodes, mplan);
 
         // Rebuild the load sketch for this DC so that get_least_loaded_shard()
         // returns accurate results for nodes in this DC. Without this, the sketch
@@ -1498,8 +1465,8 @@ public:
                 auto& tmap = tmeta.get_tablet_map(source_tablets.table());
                 auto mig_streaming_info = get_migration_streaming_infos(topo, tmap, mig);
                 pick(*_load_sketch, dst.host, dst.shard, source_tablets);
-                if (can_accept_load(nodes, mig_streaming_info)) {
-                    apply_load(nodes, mig_streaming_info);
+                if (can_accept_load(mig_streaming_info)) {
+                    apply_load(mig_streaming_info);
                     lblogger.debug("Adding migration: {}", mig);
                     mark_as_scheduled(mig);
                     for (auto& m : mig) {
@@ -1512,7 +1479,7 @@ public:
         co_return plan;
     }
 
-    future<migration_plan> make_rack_list_colocation_plan(const migration_plan& mplan) {
+    future<migration_plan> make_rack_list_colocation_plan() {
         lblogger.debug("In make_rack_list_colocation_plan");
 
         migration_plan plan;
@@ -1525,7 +1492,7 @@ public:
 
         for (auto& [dc, racks] : colocation_state.dst_dc_rack_to_tablets) {
             auto requests_it = colocation_state.dst_to_requests.find(dc);
-            plan.merge(co_await make_rack_list_colocation_plan_for_dc(dc, racks, requests_it != colocation_state.dst_to_requests.end() ? requests_it->second : std::unordered_map<sstring, std::unordered_set<utils::UUID>>{}, mplan));
+            plan.merge(co_await make_rack_list_colocation_plan_for_dc(dc, racks, requests_it != colocation_state.dst_to_requests.end() ? requests_it->second : std::unordered_map<sstring, std::unordered_set<utils::UUID>>{}));
         }
 
         if (colocation_state.request_to_resume) {
@@ -1877,9 +1844,9 @@ public:
                         };
                         auto mig_streaming_info = get_migration_streaming_info(topo, ti, mig);
                         pick(*_load_sketch, dst.host, dst.shard, source_tablets);
-                        if (can_accept_load(nodes, mig_streaming_info)) {
+                        if (can_accept_load(mig_streaming_info)) {
                             lblogger.debug("Starting rebuild_v2 transition to {}.{} of tablet {}; new_replica = {}", dc, rack, gid, pending_replica);
-                            apply_load(nodes, mig_streaming_info);
+                            apply_load(mig_streaming_info);
                             mark_as_scheduled(mig);
                             mplan.add(std::move(mig));
                         }
@@ -1902,8 +1869,8 @@ public:
                         if (_load_sketch->has_node(replica->host) && !(rep_node && rep_node->is_excluded())) {
                             unload(*_load_sketch, replica->host, replica->shard, source_tablets);
                         }
-                        if (can_accept_load(nodes, mig_streaming_info)) {
-                            apply_load(nodes, mig_streaming_info);
+                        if (can_accept_load(mig_streaming_info)) {
+                            apply_load(mig_streaming_info);
                             mark_as_scheduled(mig);
                             mplan.add(std::move(mig));
                         }
@@ -2148,13 +2115,13 @@ public:
 
                 auto mig = create_migration_info(t2_id, src, dst);
                 auto mig_streaming_info = get_migration_streaming_info(_tm->get_topology(), *t2.info, mig);
-                if (!can_accept_load(nodes, mig_streaming_info)) {
+                if (!can_accept_load(mig_streaming_info)) {
                     // FIXME: we can try another pair of non-colocated replicas of same sibling tablets.
                     lblogger.debug("Load limit reached, unable to emit migration for replica ({}, {}) to co-habit the replica ({}, {})",
                         t2_id, src, t1_id, dst);
                     return make_ready_future<>();
                 }
-                apply_load(nodes, mig_streaming_info);
+                apply_load(mig_streaming_info);
 
                 lblogger.info("Created migration for replica ({}, {}) to co-habit same shard as ({}, {})", t2_id, src, t1_id, dst);
                 mark_as_scheduled(mig);
@@ -2780,41 +2747,33 @@ public:
         co_return std::move(resize_plan);
     }
 
-    void apply_load(node_load_map& nodes, const tablet_migration_streaming_info& info) {
+    void apply_load(const tablet_migration_streaming_info& info) {
         for (auto&& replica : info.read_from) {
-            if (nodes.contains(replica.host)) {
-                nodes[replica.host].shards[replica.shard].streaming_read_load += info.stream_weight;
-            }
+            _streaming_load[replica].read_load += info.stream_weight;
         }
         for (auto&& replica : info.written_to) {
-            if (nodes.contains(replica.host)) {
-                nodes[replica.host].shards[replica.shard].streaming_write_load += info.stream_weight;
-            }
+            _streaming_load[replica].write_load += info.stream_weight;
         }
     }
 
-    void apply_load(node_load_map& nodes, const migration_streaming_info_vector& infos) {
+    void apply_load(const migration_streaming_info_vector& infos) {
         for (auto& info : infos) {
-            apply_load(nodes, info);
+            apply_load(info);
         }
     }
 
-    bool can_accept_load(node_load_map& nodes, const tablet_migration_streaming_info& info) {
+    bool can_accept_load(const tablet_migration_streaming_info& info) {
         for (auto r : info.read_from) {
-            if (!nodes.contains(r.host)) {
-                continue;
-            }
-            auto load = nodes[r.host].shards[r.shard].streaming_read_load;
+            auto it = _streaming_load.find(r);
+            auto load = it != _streaming_load.end() ? it->second.read_load : 0;
             if (load > 0 && load + info.stream_weight > max_read_streaming_load) {
                 lblogger.debug("Migration skipped because of read load limit on {} ({})", r, load);
                 return false;
             }
         }
         for (auto r : info.written_to) {
-            if (!nodes.contains(r.host)) {
-                continue;
-            }
-            auto load = nodes[r.host].shards[r.shard].streaming_write_load;
+            auto it = _streaming_load.find(r);
+            auto load = it != _streaming_load.end() ? it->second.write_load : 0;
             if (load > 0 && load + info.stream_weight > max_write_streaming_load) {
                 lblogger.debug("Migration skipped because of write load limit on {} ({})", r, load);
                 return false;
@@ -2824,13 +2783,12 @@ public:
     }
 
     // Precondition: all migration streaming info have same source and destination.
-    //  FIXME: remove precondition but it's not easy without copying noad_load_map.
-    bool can_accept_load(node_load_map& nodes, const migration_streaming_info_vector& infos) {
+    bool can_accept_load(const migration_streaming_info_vector& infos) {
         // Since all migration info have the same source and destination, the load check can be easily done
         // by informing the number of migrations.
         auto info = infos[0];
         info.stream_weight = infos.size();
-        return can_accept_load(nodes, info);
+        return can_accept_load(info);
     }
 
     bool in_shuffle_mode() const {
@@ -3301,13 +3259,13 @@ public:
             auto& tmap = tmeta.get_tablet_map(tablets.table());
             auto mig_streaming_info = get_migration_streaming_infos(_tm->get_topology(), tmap, mig);
 
-            if (!can_accept_load(nodes, mig_streaming_info)) {
+            if (!can_accept_load(mig_streaming_info)) {
                 _current_stats->migrations_skipped++;
                 lblogger.debug("Unable to balance {}: load limit reached", host);
                 break;
             }
 
-            apply_load(nodes, mig_streaming_info);
+            apply_load(mig_streaming_info);
             lblogger.debug("Adding migration: {} size: {}", mig, tablets.tablet_set_disk_size);
             _current_stats->migrations_produced++;
             _current_stats->intranode_migrations_produced++;
@@ -4013,8 +3971,8 @@ public:
 
             pick(*_load_sketch, dst.host, dst.shard, source_tablets);
 
-            if (can_accept_load(nodes, mig_streaming_info)) {
-                apply_load(nodes, mig_streaming_info);
+            if (can_accept_load(mig_streaming_info)) {
+                apply_load(mig_streaming_info);
                 lblogger.debug("Adding migration: {} size: {}", mig, source_tablets.tablet_set_disk_size);
                 _current_stats->migrations_produced++;
                 mark_as_scheduled(mig);
@@ -4132,13 +4090,16 @@ public:
     using only_active = bool_class<struct only_active_tag>;
 
     void print_node_stats(node_load_map& nodes, only_active only_active_) {
+        std::unordered_map<host_id, streaming_shard_load> host_streaming_load;
+        for (auto& [replica, load] : _streaming_load) {
+            auto& host_load = host_streaming_load[replica.host];
+            host_load.read_load += load.read_load;
+            host_load.write_load += load.write_load;
+        }
         for (auto&& [host, load] : nodes) {
-            size_t read = 0;
-            size_t write = 0;
-            for (auto& shard_load : load.shards) {
-                read += shard_load.streaming_read_load;
-                write += shard_load.streaming_write_load;
-            }
+            auto it = host_streaming_load.find(host);
+            size_t read = it != host_streaming_load.end() ? it->second.read_load : 0;
+            size_t write = it != host_streaming_load.end() ? it->second.write_load : 0;
             auto level = !only_active_ || (read + write) > 0 ? seastar::log_level::info : seastar::log_level::debug;
             lblogger.log(level, "Node {}: {}/{} load={:.6f} tablets={} shards={} tablets/shard={:.3f} state={} cap={}"
                                 " rd={} wr={}",
@@ -4370,20 +4331,12 @@ public:
             auto migrating = [&] (std::optional<tablet_desc> t) {
                 return t && (bool(t->transition) || _scheduled_tablets.contains(global_tablet_id{table, t->tid}));
             };
-            auto maybe_apply_load = [&] (std::optional<tablet_desc> t) {
-                if (t && is_streaming(t->transition)) {
-                    apply_load(nodes, get_migration_streaming_info(topo, *t->info, *t->transition));
-                }
-            };
 
             // If a table is undergoing merge, co-located replicas of sibling tablets will be treated as a single migration candidate,
             // even though each tablet replica will be migrated independently. Next invocation of load balancer is able to exclude both
             // sibling if either haven't finished migration yet. That's to prevent load balancer from incorrectly considering that
             // they're not co-located if only one of them completed migration.
             co_await tmap.for_each_sibling_tablets([&, table = table] (tablet_desc t1, std::optional<tablet_desc> t2) -> future<> {
-                maybe_apply_load(t1);
-                maybe_apply_load(t2);
-
                 auto t1_replicas = get_replicas(t1);
                 // If t2 is disengaged, when tablet_count == 1, t2_replicas is empty and so will have no effect
                 // when adding t1 replicas as candidates.
