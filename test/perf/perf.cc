@@ -8,7 +8,10 @@
 
 #include "perf.hh"
 #include <seastar/core/reactor.hh>
+#include <seastar/core/map_reduce.hh>
 #include <seastar/core/memory.hh>
+#include <seastar/core/smp.hh>
+#include <ranges>
 #include "seastarx.hh"
 #include "reader_concurrency_semaphore.hh"
 #include "schema/schema.hh"
@@ -16,6 +19,7 @@
 #include "release.hh"
 #include <boost/algorithm/string.hpp>
 #include <fstream>
+#include <stdexcept>
 
 
 uint64_t perf_mallocs() {
@@ -28,6 +32,10 @@ uint64_t perf_logallocs() {
 
 uint64_t perf_tasks_processed() {
     return engine().get_sched_stats().tasks_processed;
+}
+
+uint64_t perf_reactor_polls() {
+    return engine().polls();
 }
 
 void scheduling_latency_measurer::schedule_tick() {
@@ -59,11 +67,16 @@ auto fmt::formatter<scheduling_latency_measurer>::format(const scheduling_latenc
 
 auto fmt::formatter<perf_result>::format(const perf_result& result, fmt::format_context& ctx) const
         -> decltype(ctx.out()) {
-    return fmt::format_to(ctx.out(), "{:.2f} tps ({:5.1f} allocs/op, {:5.1f} logallocs/op, {:5.1f} tasks/op, {:7.0f} insns/op, {:7.0f} cycles/op, {:8} errors)",
-            result.throughput, result.mallocs_per_op, result.logallocs_per_op, result.tasks_per_op, result.instructions_per_op, result.cpu_cycles_per_op, result.errors);
+    return fmt::format_to(ctx.out(), "{:.2f} tps ({:5.1f} allocs/op, {:5.1f} logallocs/op, {:5.1f} tasks/op, {:5.1f} polls/op, {:7.0f} insns/op, {:7.0f} cycles/op, {:8} errors)",
+            result.throughput, result.mallocs_per_op, result.logallocs_per_op, result.tasks_per_op, result.polls_per_op, result.instructions_per_op, result.cpu_cycles_per_op, result.errors);
 }
 
 aggregated_perf_results::aggregated_perf_results(std::vector<perf_result>& results) {
+    // Every statistic below indexes the results, so a run that measured nothing - a duration of
+    // zero iterations - would read past the end of an empty vector rather than say so.
+    if (results.empty()) {
+        throw std::invalid_argument("no measurement iterations to aggregate");
+    }
     stats["throughput"] = calculate_stats(results, std::mem_fn(&perf_result::throughput));
     median_by_throughput = results[results.size() / 2];
     stats["instructions_per_op"] = calculate_stats(results, std::mem_fn(&perf_result::instructions_per_op));
@@ -88,9 +101,13 @@ aggregated_perf_results::stats_t aggregated_perf_results::calculate_stats(std::v
     std::vector<double> abs_deviations;
     abs_deviations.reserve(results.size());
     for (const auto& pr : results) {
-        auto dev = get_stat(pr) - ret.mean;
-        abs_deviations.emplace_back(std::abs(dev));
+        auto stat = get_stat(pr);
+        auto dev = stat - ret.mean;
         var += dev * dev;
+        // The standard deviation is a spread around the mean, the median absolute deviation one
+        // around the median. Taking the latter around the mean is what lets a single outlying
+        // iteration move it, which is the opposite of what it is quoted for.
+        abs_deviations.emplace_back(std::abs(stat - ret.median));
     }
     // Since the results are samples of the total population
     // devide the sum of squared deviations by (n - 1) rather than by n
@@ -124,8 +141,57 @@ void aio_writes_result_mixin::update(aio_writes_result_mixin& result, const exec
 
 auto fmt::formatter<perf_result_with_aio_writes>::format(const perf_result_with_aio_writes& result, fmt::format_context& ctx) const
         -> decltype(ctx.out()) {
-    return fmt::format_to(ctx.out(), "{:.2f} tps ({:5.1f} allocs/op, {:5.1f} logallocs/op, {:5.1f} tasks/op, {:7.0f} insns/op, {:7.0f} cycles/op, {:8} errors, {:7.2f} bytes/op, {:5.1f} writes/op)",
-            result.throughput, result.mallocs_per_op, result.logallocs_per_op, result.tasks_per_op, result.instructions_per_op, result.cpu_cycles_per_op, result.errors, result.aio_write_bytes, result.aio_writes);
+    return fmt::format_to(ctx.out(), "{:.2f} tps ({:5.1f} allocs/op, {:5.1f} logallocs/op, {:5.1f} tasks/op, {:5.1f} polls/op, {:7.0f} insns/op, {:7.0f} cycles/op, {:8} errors, {:7.2f} bytes/op, {:5.1f} writes/op)",
+            result.throughput, result.mallocs_per_op, result.logallocs_per_op, result.tasks_per_op, result.polls_per_op, result.instructions_per_op, result.cpu_cycles_per_op, result.errors, result.aio_write_bytes, result.aio_writes);
+}
+
+io_counters io_counters::sample() {
+    auto shards = std::views::iota(0u, this_smp_shard_count());
+    return map_reduce(shards.begin(), shards.end(), [] (unsigned shard) {
+        return smp::submit_to(shard, [] {
+            const auto& stats = engine().get_io_stats();
+            return io_counters{
+                .reads = stats.aio_reads,
+                .read_bytes = stats.aio_read_bytes,
+                .writes = stats.aio_writes,
+                .write_bytes = stats.aio_write_bytes,
+            };
+        });
+    }, io_counters{}, [] (io_counters a, io_counters b) {
+        return io_counters{
+            .reads = a.reads + b.reads,
+            .read_bytes = a.read_bytes + b.read_bytes,
+            .writes = a.writes + b.writes,
+            .write_bytes = a.write_bytes + b.write_bytes,
+        };
+    }).get();
+}
+
+io_counters io_counters::operator-(const io_counters& other) const noexcept {
+    return io_counters{
+        .reads = reads - other.reads,
+        .read_bytes = read_bytes - other.read_bytes,
+        .writes = writes - other.writes,
+        .write_bytes = write_bytes - other.write_bytes,
+    };
+}
+
+void io_counters_updater::operator()(io_result_mixin& result, const executor_shard_stats& stats) {
+    auto sample = io_counters::sample();
+    auto done = sample - _last;
+    _last = sample;
+    result.reads = double(done.reads) / stats.invocations;
+    result.read_bytes = double(done.read_bytes) / stats.invocations;
+    result.writes = double(done.writes) / stats.invocations;
+    result.write_bytes = double(done.write_bytes) / stats.invocations;
+}
+
+auto fmt::formatter<perf_result_with_io>::format(const perf_result_with_io& result, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+    return fmt::format_to(ctx.out(), "{:.2f} tps ({:5.1f} allocs/op, {:5.1f} logallocs/op, {:5.1f} tasks/op, {:5.1f} polls/op, {:7.0f} insns/op, {:7.0f} cycles/op, {:8} errors,"
+            " {:5.2f} reads/op, {:8.0f} read bytes/op, {:5.2f} writes/op, {:8.0f} write bytes/op)",
+            result.throughput, result.mallocs_per_op, result.logallocs_per_op, result.tasks_per_op, result.polls_per_op, result.instructions_per_op, result.cpu_cycles_per_op, result.errors,
+            result.reads, result.read_bytes, result.writes, result.write_bytes);
 }
 
 namespace perf {
@@ -155,7 +221,8 @@ std::tuple<int, char**> cut_arg(int ac, char** av, std::string name, int num_arg
     return std::make_tuple(ac, av);
 }
 
-void write_json_result(const std::string& filename, const aggregated_perf_results& agg, const Json::Value& params, const std::string& test_type) {
+void write_json_result(const std::string& filename, const aggregated_perf_results& agg, const Json::Value& params, const std::string& test_type,
+        const Json::Value& extra_stats) {
     Json::Value results;
 
     results["parameters"] = params;
@@ -166,12 +233,24 @@ void write_json_result(const std::string& filename, const aggregated_perf_result
     stats["allocs_per_op"] = med.mallocs_per_op;
     stats["logallocs_per_op"] = med.logallocs_per_op;
     stats["tasks_per_op"] = med.tasks_per_op;
+    stats["polls_per_op"] = med.polls_per_op;
     stats["instructions_per_op"] = med.instructions_per_op;
     stats["cpu_cycles_per_op"] = med.cpu_cycles_per_op;
     const auto& tps = agg.stats.at("throughput");
     stats["mad tps"] = tps.median_absolute_deviation;
     stats["max tps"] = tps.max;
     stats["min tps"] = tps.min;
+    // The spread of the counters a change is argued from, so that a difference between two runs can
+    // be told apart from the spread within one.
+    const auto& instructions = agg.stats.at("instructions_per_op");
+    stats["mad instructions_per_op"] = instructions.median_absolute_deviation;
+    stats["min instructions_per_op"] = instructions.min;
+    stats["max instructions_per_op"] = instructions.max;
+    const auto& cycles = agg.stats.at("cpu_cycles_per_op");
+    stats["mad cpu_cycles_per_op"] = cycles.median_absolute_deviation;
+    for (const auto& name : extra_stats.getMemberNames()) {
+        stats[name] = extra_stats[name];
+    }
     results["stats"] = std::move(stats);
 
     results["test_properties"]["type"] = test_type;

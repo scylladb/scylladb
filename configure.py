@@ -694,6 +694,7 @@ scylla_tests = set([
     'test/perf/perf_commitlog',
     'test/perf/perf_cql_parser',
     'test/perf/perf_hash',
+    'test/perf/perf_logstor',
     'test/perf/perf_mutation',
     'test/perf/perf_collection',
     'test/perf/perf_row_cache_reads',
@@ -1829,6 +1830,7 @@ deps['test/boost/anchorless_list_test'] = ['test/boost/anchorless_list_test.cc']
 deps['test/perf/perf_canonical_mutation'] += ['seastar/tests/perf/linux_perf_event.cc']
 deps['test/perf/perf_mutation'] += ['seastar/tests/perf/linux_perf_event.cc']
 deps['test/perf/perf_commitlog'] += ['test/perf/perf.cc', 'seastar/tests/perf/linux_perf_event.cc']
+deps['test/perf/perf_logstor'] += ['test/perf/perf.cc', 'seastar/tests/perf/linux_perf_event.cc']
 deps['test/perf/perf_row_cache_reads'] += ['test/perf/perf.cc', 'seastar/tests/perf/linux_perf_event.cc']
 deps['test/boost/reusable_buffer_test'] = [
     "test/boost/reusable_buffer_test.cc",
