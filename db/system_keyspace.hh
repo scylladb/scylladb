@@ -163,6 +163,10 @@ class system_keyspace : public seastar::peering_sharded_service<system_keyspace>
     semaphore _peers_cache_lock{1};
     peers_cache* get_peers_cache();
     future<lw_shared_ptr<const peers_cache>> get_or_load_peers_cache();
+    // Removes the system.peers row of `ep` and drops it from the peers cache.
+    // The caller must hold `_peers_cache_lock` (or be sure that nobody else
+    // can touch the cache concurrently, e.g. `peers_table_read_fixup`).
+    future<> remove_endpoint_unlocked(gms::inet_address ep);
 
 public:
     static schema_ptr size_estimates();

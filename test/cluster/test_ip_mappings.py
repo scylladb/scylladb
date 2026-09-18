@@ -3,15 +3,17 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 import asyncio
+import time
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 
 import pytest
 import logging
 from uuid import UUID
 
+from test.pylib.internal_types import ServerUpState
 from test.pylib.rest_client import inject_error_one_shot, read_barrier
 from test.pylib.scylla_cluster import ReplaceConfig
-from test.pylib.util import gather_safely
+from test.pylib.util import gather_safely, wait_for
 from test.cluster.util import disable_schema_agreement_wait, new_test_keyspace, reconnect_driver
 
 from cassandra.cluster import ConsistencyLevel, SimpleStatement
@@ -153,3 +155,110 @@ async def test_full_shutdown_during_replace(manager: ScyllaClusterManager, reuse
                 peers = {(row.peer, row.host_id) for row in result}
                 expected = {(other.ip_addr, UUID(id)) for other, id in zip(live_servers, host_ids) if other != srv}
                 assert peers == expected
+
+
+async def peers_rows_for_host_id(cql, host, host_id: UUID) -> list[str]:
+    rows = await cql.run_async("SELECT peer, host_id FROM system.peers", host=host)
+    return sorted(str(r.peer) for r in rows if r.host_id == host_id)
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_bootstrapping_node_restarts_with_new_ip(manager: ScyllaClusterManager):
+    """
+    A node being bootstrapped crashes and comes back with a different IP address
+    while it is still in the `bootstrapping` state in system.topology (this is
+    what happens when the Kubernetes host of a joining pod is rebooted and the
+    pod is recreated elsewhere).
+
+    raft_topology_update_ip() used to insert the new IP into system.peers
+    without removing the row with the old IP. The next reload of the peers
+    cache then failed with the "duplicate IP for host_id" internal error and
+    every node that had learned the new IP through gossip aborted.
+
+    The test checks that the nodes survive and that system.peers ends up with
+    a single row for the joining node.
+
+    Regression test for https://github.com/scylladb/scylladb/issues/31762
+    """
+    servers = await manager.servers_add(2)
+    coordinator = servers[0]
+    logs = [await manager.server_open_log(s.server_id) for s in servers]
+    marks = [await log.mark() for log in logs]
+
+    logger.info(f"Blocking the topology coordinator {coordinator} in the bootstrapping state")
+    await manager.api.enable_injection(coordinator.ip_addr, 'delay_node_bootstrap', one_shot=False)
+
+    new_server = await manager.server_add(start=False)
+    await manager.server_start(new_server.server_id, connect_driver=False,
+                               expected_server_up_state=ServerUpState.PROCESS_STARTED)
+    await logs[0].wait_for('delay_node_bootstrap: waiting for message', from_mark=marks[0])
+    new_host_id = UUID(await manager.get_host_id(new_server.server_id))
+    old_ip = new_server.ip_addr
+
+    cql, hosts = await manager.get_ready_cql(servers)
+    for host in hosts:
+        assert await peers_rows_for_host_id(cql, host, new_host_id) == [old_ip]
+
+    logger.info(f"Restarting the bootstrapping node {new_server} with a different IP")
+    await manager.server_stop(new_server.server_id, convict=False)
+    new_ip = await manager.server_change_ip(new_server.server_id)
+    logger.info(f"{new_server}: {old_ip} -> {new_ip}")
+    await manager.server_start(new_server.server_id, connect_driver=False,
+                               expected_server_up_state=ServerUpState.PROCESS_STARTED)
+
+    async def peers_updated():
+        for host in hosts:
+            rows = await peers_rows_for_host_id(cql, host, new_host_id)
+            if rows != [new_ip]:
+                logger.info(f"{host}: system.peers rows for {new_host_id} are {rows}, waiting for [{new_ip}]")
+                return None
+        return True
+    await wait_for(peers_updated, time.time() + 60)
+
+    for server, log, mark in zip(servers, logs, marks):
+        assert not await log.grep('duplicate IP for host_id', from_mark=mark), \
+            f"{server} hit the duplicate IP internal error"
+
+    # A restarted joining node cannot resume its bootstrap (it waits for a fresh
+    # join request that nobody handles), so stop it, let the coordinator finish
+    # the operation and remove the dead node from the topology.
+    await manager.server_stop(new_server.server_id, convict=True)
+    logger.info(f"Unblocking the topology coordinator {coordinator}")
+    await manager.api.message_injection(coordinator.ip_addr, 'delay_node_bootstrap')
+    await manager.remove_node(coordinator.server_id, new_server.server_id)
+
+    cql, hosts = await manager.get_ready_cql(servers)
+    for host in hosts:
+        assert await peers_rows_for_host_id(cql, host, new_host_id) == []
+
+
+async def test_peers_table_read_fixup_does_not_deadlock(manager: ScyllaClusterManager):
+    """
+    peers_table_read_fixup() removes stale system.peers rows (two IPs for the
+    same host_id) on the first read of the table after startup. With Raft
+    topology the first read happens while starting group 0, from
+    get_or_load_peers_cache() which holds _peers_cache_lock; the removal used to
+    go through remove_endpoint() which takes the same non-reentrant lock, so
+    the node hung forever right after "starting group 0" on every restart.
+
+    Regression test for https://github.com/scylladb/scylladb/issues/31762
+    """
+    servers = await manager.servers_add(2)
+    cql, hosts = await manager.get_ready_cql(servers)
+    victim, other = servers
+    other_host_id = UUID(await manager.get_host_id(other.server_id))
+
+    # Plant a stale row for `other` with an older timestamp so that the fixup
+    # keeps the genuine row and removes this one.
+    stale_ip = '127.255.255.254'
+    await cql.run_async(f"INSERT INTO system.peers (peer, host_id) VALUES ('{stale_ip}', {other_host_id}) USING TIMESTAMP 1",
+                        host=hosts[0])
+    assert await peers_rows_for_host_id(cql, hosts[0], other_host_id) == sorted([stale_ip, other.ip_addr])
+
+    log = await manager.server_open_log(victim.server_id)
+    mark = await log.mark()
+    await manager.server_restart(victim.server_id, wait_others=1)
+    await log.wait_for('the record is stale, removing it', from_mark=mark)
+
+    cql, hosts = await manager.get_ready_cql(servers)
+    assert await peers_rows_for_host_id(cql, hosts[0], other_host_id) == [other.ip_addr]
