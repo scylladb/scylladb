@@ -99,7 +99,7 @@ public:
 
 template<typename C, typename Arg>
 struct result_wrapped_call_traits<C, Arg, true> {
-    static_assert(false && sizeof(Arg), "result_wrap_apply must be called with a result<std::tuple<...>> as a second argument");
+    static_assert(false, "result_wrap_apply must be called with a result<std::tuple<...>> as a second argument");
 };
 
 template<typename C, bool Unpack>
