@@ -110,7 +110,8 @@ void mapreduce_aggregates::merge(query::mapreduce_result &result, query::mapredu
     }
 
     for (size_t i = 0; i < _aggrs.size(); i++) {
-        result.query_results[i] = _aggrs[i].state_reduction_function->execute(std::vector({std::move(result.query_results[i]), std::move(other.query_results[i])}));
+        result.query_results[i] = to_bytes_opt(_aggrs[i].state_reduction_function->execute(
+                std::vector({to_managed_bytes_opt(result.query_results[i]), to_managed_bytes_opt(other.query_results[i])})));
     }
 }
 
@@ -121,9 +122,9 @@ void mapreduce_aggregates::finalize(query::mapreduce_result &result) {
         // as "WHERE p IN ()". We need to build a fake result with the result
         // of empty aggregation.
         for (size_t i = 0; i < _aggrs.size(); i++) {
-            result.query_results.push_back(_aggrs[i].state_to_result_function
+            result.query_results.push_back(to_bytes_opt(_aggrs[i].state_to_result_function
                     ? _aggrs[i].state_to_result_function->execute(std::vector({_aggrs[i].initial_state}))
-                    : _aggrs[i].initial_state);
+                    : _aggrs[i].initial_state));
         }
         return;
     }
@@ -139,7 +140,8 @@ void mapreduce_aggregates::finalize(query::mapreduce_result &result) {
 
     for (size_t i = 0; i < _aggrs.size(); i++) {
         result.query_results[i] = _aggrs[i].state_to_result_function
-            ? _aggrs[i].state_to_result_function->execute(std::vector({std::move(result.query_results[i])}))
+            ? to_bytes_opt(_aggrs[i].state_to_result_function->execute(
+                    std::vector({to_managed_bytes_opt(result.query_results[i])})))
             : result.query_results[i];
     }
 }

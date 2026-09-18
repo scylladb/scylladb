@@ -1354,7 +1354,7 @@ BOOST_AUTO_TEST_CASE(prepare_nested_overloaded_function_probing_is_not_exponenti
     auto make_overload = [&] (data_type t) {
         return functions::make_native_scalar_function<true>(
                 overloaded_test_fn, t, std::vector<data_type>{t},
-                [] (std::span<const bytes_opt> args) -> bytes_opt { return args[0]; });
+                [] (std::span<const managed_bytes_opt> args) -> managed_bytes_opt { return args[0]; });
     };
     // Snapshot the original registry, then install our two overloads. On scope exit we
     // commit the original snapshot back, so we do not leak them into other tests sharing
@@ -1407,7 +1407,7 @@ BOOST_AUTO_TEST_CASE(infer_collection_of_function_calls_keeps_narrow_overload) {
 
     auto narrow_fn = functions::make_native_scalar_function<true>(
             "expr_test_narrow_identity", byte_type, std::vector<data_type>{byte_type, byte_type},
-            [] (std::span<const bytes_opt> args) -> bytes_opt { return args[0]; });
+            [] (std::span<const managed_bytes_opt> args) -> managed_bytes_opt { return args[0]; });
     auto restore = functions::change_batch();
     {
         auto batch = functions::change_batch();
@@ -1489,7 +1489,7 @@ BOOST_AUTO_TEST_CASE(integer_literal_prefers_int_overload) {
     auto make_overload = [] (data_type t) {
         return functions::make_native_scalar_function<true>(
                 "expr_test_int_or_bigint", t, std::vector<data_type>{t},
-                [] (std::span<const bytes_opt> args) -> bytes_opt { return args[0]; });
+                [] (std::span<const managed_bytes_opt> args) -> managed_bytes_opt { return args[0]; });
     };
     auto restore = functions::change_batch();
     {
@@ -1543,7 +1543,7 @@ BOOST_AUTO_TEST_CASE(widening_converts_value) {
     auto make_overload = [] (data_type t) {
         return functions::make_native_scalar_function<true>(
                 "expr_test_iob", t, std::vector<data_type>{t},
-                [] (std::span<const bytes_opt> a) -> bytes_opt { return a[0]; });
+                [] (std::span<const managed_bytes_opt> a) -> managed_bytes_opt { return a[0]; });
     };
     auto restore = functions::change_batch();
     {

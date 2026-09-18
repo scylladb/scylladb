@@ -103,7 +103,7 @@ BOOST_AUTO_TEST_CASE(unevaluated_equality_leaves_the_rest_to_execution) {
     // one value, and proving when they do is not worth the code.
     auto fn = functions::make_native_scalar_function<true>(
             "external_search_test_fn", utf8_type, std::vector<data_type>{utf8_type},
-            [] (std::span<const bytes_opt> args) -> bytes_opt { return args[0]; });
+            [] (std::span<const managed_bytes_opt> args) -> managed_bytes_opt { return args[0]; });
     auto call = [&] () {
         return expression(function_call{.func = fn, .args = {marker(0, utf8_type)}});
     };

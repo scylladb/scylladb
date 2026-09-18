@@ -29,14 +29,14 @@ public:
                     , _schema(s) {
     }
 
-    bytes_opt execute(std::span<const bytes_opt> parameters) override {
+    managed_bytes_opt execute(std::span<const managed_bytes_opt> parameters) override {
         if (std::any_of(parameters.begin(), parameters.end(), [](const auto& param){ return !param; })) {
             return std::nullopt;
         }
         auto key = partition_key::from_optional_exploded(*_schema, parameters);
         auto tok = dht::get_token(*_schema, key);
         warn(unimplemented::cause::VALIDATION);
-        return tok.data();
+        return managed_bytes(tok.data());
     }
 };
 
