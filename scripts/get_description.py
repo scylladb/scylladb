@@ -18,6 +18,12 @@ string_match = re.compile(r'"([^"]+)"')
 sstring_match = re.compile(r'\s*sstring\(\s*("[^"]+")\s*\)\s*')
 metrics_directive = re.compile(r'.*@metrics\s*([^=]+)\s*=\s*(\[[^\]]*\]).*')
 format_match = re.compile(r'\s*(?:seastar::)?format\(\s*"([^"]+)"\s*,\s*(.*)\s*')
+# Characters that must never survive into a generated metric name. Whitespace
+# breaks the RST ".. metrics_option::" directive, which takes a single argument
+# with final_argument_whitespace=False; the rest are leftovers of an unresolved
+# C++ expression (e.g. an add_group("prefix"s + n, ...) the parser could not
+# evaluate) that would silently document a name no exporter ever emits.
+invalid_name_chars = re.compile(r'[\s"\'+()\[\]{},;*&<>/\\]')
 
 def handle_error(message, strict=True, verbose_mode=False):
     if strict:
@@ -309,6 +315,17 @@ def write_metrics_to_file(out_file, metrics, fmt="pipe"):
                 fo.write(l.replace('-','_')+'|' +'|'.join(metrics[l])+ '\n')
 
 
+def find_invalid_metric_names(metrics):
+    """Return the metric names that could not be fully resolved from the source.
+
+    A name is rejected when it still carries characters from the originating C++
+    expression. Those names break the docs build rather than the extraction, so
+    they pass every other check here and only surface much later as a Sphinx
+    error.
+    """
+    return sorted(name for name in metrics if invalid_name_chars.search(name))
+
+
 def validate_all_metrics(prefix, config_file, verbose=False, strict=True):
     """Validate all metrics files and report issues"""
 
@@ -352,7 +369,13 @@ def validate_all_metrics(prefix, config_file, verbose=False, strict=True):
             metrics = get_metrics_from_file(file_path, prefix, metrics_info, verbose, strict)
             metrics_count = len(metrics)
             total_metrics += metrics_count
-            if verbose:
+            invalid_names = find_invalid_metric_names(metrics)
+            if invalid_names:
+                reason = "unresolved metric name(s): " + ", ".join(invalid_names)
+                print(f"[ERROR] {file_path}")
+                print(f"   {reason}")
+                failed_files.append((file_path, reason))
+            elif verbose:
                 print(f"[OK] {file_path} - {metrics_count} metrics")
             else:
                 print(f"[OK] {file_path}")
@@ -366,7 +389,8 @@ def validate_all_metrics(prefix, config_file, verbose=False, strict=True):
         print("Failed files:")
         for file_path, error in failed_files:
             print(f"   - {file_path}: {error}")
-        print(f"\nAdd missing parameters to {config_file}")
+        print(f"\nAdd the missing parameters, or map the add_group() line to the\n"
+              f"group name(s) it produces at runtime, in {config_file}")
         return False
     else:
         working_files = total_files - len(failed_files)

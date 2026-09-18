@@ -63,3 +63,8 @@ The GitHub workflow `docs-validate-metrics.yml` automatically runs validation on
 - **"Parameter not found"**: Add parameter mapping to config `params` section
 - **"Could not resolve param"**: Check parameter name matches C++ code exactly
 - **"No group found"**: Add group mapping or verify `add_group()` calls
+- **"Unresolved metric name"**: The name still contains characters from the
+  originating C++ expression, usually because `add_group()` was called with a
+  computed value rather than a literal (e.g. `add_group("prefix"s + n, ...)`).
+  Map that line number to the group name(s) the code produces at runtime in the
+  `groups` section, listing each one if the call sits inside a loop.
