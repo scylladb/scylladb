@@ -150,7 +150,9 @@ public:
     // Must be called on shard 0
     void cancel_expiration(sstring tag, std::vector<sstring> ks_names = {}, sstring table_name = "");
 
-    future<> run_snapshot_modify_operation(noncopyable_function<future<>()>&&);
+    // The lock lives on shard 0, so a caller that wants to abort the wait for
+    // it must run there too.
+    future<> run_snapshot_modify_operation(noncopyable_function<future<>()>&&, seastar::abort_source* = nullptr);
     future<> run_snapshot_gate_operation(noncopyable_function<future<>()>&&);
 
 private:
