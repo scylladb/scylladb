@@ -215,7 +215,6 @@
 #include <seastar/core/scattered_message.hh>
 #include <seastar/core/scheduling.hh>
 #include <seastar/core/scheduling_specific.hh>
-#include <seastar/core/scollectd.hh>
 #include <seastar/core/seastar.hh>
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/sharded.hh>

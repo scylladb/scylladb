@@ -995,7 +995,7 @@ Process IDs
 CLI parameters including name and arguments
 ```
     fname: scylla
-    psargs: /home/xemul/src/scylla/build/dev/scylla --smp 2 -m 1G --collectd 0 --overprovis
+    psargs: /home/xemul/src/scylla/build/dev/scylla --smp 2 -m 1G --overprovis
 ```
 
 Signals information

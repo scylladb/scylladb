@@ -16,7 +16,6 @@
 
 #include <seastar/core/future-util.hh>
 #include <seastar/core/do_with.hh>
-#include <seastar/core/scollectd_api.hh>
 #include <seastar/core/file.hh>
 #include <seastar/core/seastar.hh>
 #include "utils/UUID_gen.hh"
