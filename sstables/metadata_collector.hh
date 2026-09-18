@@ -219,6 +219,12 @@ public:
     // pos must be in the clustered region
     void update_min_max_components(position_in_partition_view pos);
 
+    // pos must be in the clustered region.
+    void update_min(position_in_partition_view pos);
+
+    // pos must be in the clustered region.
+    void update_max(position_in_partition_view pos);
+
     void update(column_stats&& stats) {
         _timestamp_tracker.update(stats.timestamp_tracker);
         _min_live_timestamp_tracker.update(stats.min_live_timestamp_tracker);
