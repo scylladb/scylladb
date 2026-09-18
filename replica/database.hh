@@ -74,6 +74,7 @@
 #include "locator/tablets.hh"
 #include "utils/serialized_action.hh"
 #include "compaction/compaction_fwd.hh"
+#include "compaction/task_manager_module.hh"
 #include "compaction_group.hh"
 #include "service/qos/qos_configuration_change_subscriber.hh"
 #include "replica/tables_metadata_lock.hh"
@@ -1220,7 +1221,8 @@ public:
     future<bool> perform_offstrategy_compaction(tasks::task_info info);
     future<> perform_cleanup_compaction(compaction::owned_ranges_ptr sorted_owned_ranges,
                                         tasks::task_info info,
-                                        do_flush = do_flush::yes);
+                                        do_flush = do_flush::yes,
+                                        compaction::is_topology_cleanup = compaction::is_topology_cleanup::no);
     future<unsigned> estimate_pending_compactions() const;
 
     void set_compaction_strategy(compaction::compaction_strategy_type strategy);
