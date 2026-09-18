@@ -383,13 +383,6 @@ private:
     future<> snitch_reconfigured();
 
 public:
-    // Builds the initial tablet map for a vnodes-to-tablets migration. Depends on
-    // nothing but its arguments, so it is static and can be driven directly with a
-    // synthetic topology.
-    static future<locator::tablet_map> build_tablet_map_for_migration(
-            const locator::static_effective_replication_map_ptr& erm,
-            size_t target_pow2 = 0);
-
     future<std::unordered_map<table_id, uint64_t>> collect_table_sizes_for_migration(
         const sstring& ks_name,
         const locator::static_effective_replication_map_ptr& erm,
