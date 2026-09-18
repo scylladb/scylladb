@@ -1045,8 +1045,16 @@ public:
 
     future<> discard_segments(logstor_group&);
 
-    size_t get_memory_usage() const {
+    size_t get_memory_usage() const noexcept {
         return sizeof(_segment_descs);
+    }
+
+    uint64_t get_disk_usage() const noexcept {
+        return _file_mgr.allocated_file_count() * _cfg.file_size;
+    }
+
+    uint64_t get_segment_bytes_in_use() const noexcept {
+        return segments_in_use() * _cfg.segment_size;
     }
 
     future<owned_write_buffer> allocate_separator_buffer() {
@@ -1072,6 +1080,12 @@ public:
 
     uint64_t available_segment_count() const noexcept {
         return static_cast<uint64_t>(_free_segments.size()) + static_cast<uint64_t>(_segment_pool.size()) + allocatable_new_segment_count();
+    }
+
+    // The segments holding records: the ones the compaction groups own, the one being written and
+    // the ones a read still refers to. The rest of the segments are free for the next write.
+    uint64_t segments_in_use() const noexcept {
+        return _max_segments.actual - available_segment_count();
     }
 
     uint64_t available_segment_count(write_source src) const noexcept {
@@ -1293,7 +1307,7 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
     namespace sm = seastar::metrics;
 
     _metrics.add_group("logstor_sm", {
-        sm::make_gauge("segments_in_use", [this] { return _max_segments.actual - available_segment_count(); },
+        sm::make_gauge("segments_in_use", [this] { return segments_in_use(); },
                        sm::description("Counts number of segments currently in use.")),
         sm::make_gauge("free_segments", [this] { return available_segment_count(); },
                        sm::description("Counts number of free segments currently available.")),
@@ -1327,7 +1341,7 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
                        sm::description("Counts number of segments allocated.")),
         sm::make_counter("segments_freed", _stats.segments_freed,
                        sm::description("Counts number of segments freed.")),
-        sm::make_gauge("disk_usage", [this] { return _file_mgr.allocated_file_count() * _cfg.file_size; },
+        sm::make_gauge("disk_usage", [this] { return get_disk_usage(); },
                        sm::description("Total disk usage.")),
         sm::make_counter("compaction_bytes_written", _stats.bytes_written[static_cast<size_t>(write_source::compaction)],
                        sm::description("Counts number of bytes written to the disk by compaction.")),
@@ -1584,6 +1598,13 @@ future<> segment_manager_impl::write_full_segment(write_buffer& wb, logstor_grou
 
 void segment_manager_impl::on_add_record(log_location location) noexcept {
     auto& desc = get_segment_descriptor(location);
+    // A segment is handed to a compaction group only once it has been written and sealed, which is
+    // what lets the group count its live bytes once, when it takes it. Writing into a segment a
+    // group already owns would leave those bytes out of that count, and take it below zero when
+    // they are freed, so this is a correctness bug rather than a lost statistic.
+    if (desc.owner) {
+        on_fatal_internal_error(logstor_logger, format("adding a record to segment {}, which a compaction group already owns", location.segment));
+    }
     desc.on_write(location);
     _stats.live_record_bytes += location.size;
     _stats.live_record_count++;
@@ -1595,11 +1616,7 @@ void segment_manager_impl::on_free_record(log_location location) noexcept {
     _stats.live_record_bytes -= location.size;
     _stats.live_record_count--;
     if (desc.owner) {
-        try {
-            desc.owner->update_segment(desc);
-        } catch (...) {
-            logstor_logger.warn("Failed to update segments histogram: {:t}", std::current_exception());
-        }
+        desc.owner->update_segment(desc, location.size);
     }
     _stats.bytes_freed += location.size;
 }
@@ -2814,8 +2831,12 @@ future<> segment_manager::discard_segments(logstor_group& cg) {
     return _impl->discard_segments(cg);
 }
 
-size_t segment_manager::get_memory_usage() const {
-    return _impl->get_memory_usage();
+segment_manager_usage segment_manager::get_usage() const noexcept {
+    return segment_manager_usage{
+        .disk_usage = _impl->get_disk_usage(),
+        .segment_bytes_in_use = _impl->get_segment_bytes_in_use(),
+        .memory_usage = _impl->get_memory_usage(),
+    };
 }
 
 future<> segment_manager::await_pending_writes() {
