@@ -51,6 +51,15 @@ struct snapshot_sstable_entry {
     int64_t index_size;
 };
 
+// One snapshot_sstables row as needed by residue cleanup code in topology coordinator
+struct snapshot_sstable_cleanup_entry {
+    sstables::sstable_id sstable_id;
+    dht::token first_token;
+    sstring toc_name;
+    locator::host_id node;
+    int64_t write_timestamp;
+};
+
 struct snapshot_sstables_progress {
     size_t nr_sstables;
     size_t nr_downloaded_sstables;
