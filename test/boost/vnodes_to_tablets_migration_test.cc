@@ -609,6 +609,14 @@ size_t prepare_parts(cql_test_env& e, const sstring& ks) {
     });
 }
 
+// Runs `f` and requires it to fail with an error which says `what`.
+void require_error(noncopyable_function<void()> f, std::string_view what) {
+    BOOST_REQUIRE_EXCEPTION(f(), std::runtime_error, [what] (const std::runtime_error& ex) {
+        BOOST_TEST_MESSAGE(fmt::format("got error: {}", ex.what()));
+        return std::string_view(ex.what()).find(what) != std::string_view::npos;
+    });
+}
+
 } // anonymous namespace
 
 // Verify that a keyspace whose tablet maps don't fit into one group0 command is prepared
@@ -630,6 +638,34 @@ SEASTAR_TEST_CASE(test_prepare_splits_tablet_maps_across_commands) {
         BOOST_REQUIRE_EQUAL(prepare_parts(e, ks), tables.size() - 1);
         require_mapped(e, ks, tables, tables.size());
         require_status(e, ks, migration_status::migrating_to_tablets);
+    });
+}
+
+// Verify that a preparation which fails halfway drops the maps it wrote, so that it
+// leaves the keyspace as it found it, and that preparing it again then starts from
+// scratch.
+SEASTAR_TEST_CASE(test_failed_preparation_drops_its_maps) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    return make_ready_future<>();
+#endif
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        scoped_error_injection one_table_per_command("prepare_migration_one_table_per_command");
+        // Fails the request on its second command, once the first table has its map.
+        scoped_error_injection fail_on_resume("prepare_migration_fail_on_resume", true);
+        const sstring ks = "test_migration_ks";
+        auto tables = create_vnode_keyspace(e, ks, 4);
+        auto& ss = e.get_storage_service().local();
+
+        require_error([&] { ss.prepare_for_tablets_migration(ks).get(); }, "injected prepare_migration failure");
+        require_mapped(e, ks, tables, 0);
+        require_status(e, ks, migration_status::vnodes);
+
+        ss.prepare_for_tablets_migration(ks).get();
+        require_mapped(e, ks, tables, tables.size());
+        require_status(e, ks, migration_status::migrating_to_tablets);
+        // The failed request left one part, and the second one, starting from scratch,
+        // left one per table but the last.
+        BOOST_REQUIRE_EQUAL(prepare_parts(e, ks), tables.size());
     });
 }
 
