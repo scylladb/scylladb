@@ -58,7 +58,7 @@ static future<tasks::task_manager::task_ptr> upgrade_sstables(sharded<replica::d
     apilog.info("upgrade_sstables: keyspace={} tables={} exclude_current_version={}", keyspace, table_infos, exclude_current_version);
 
     auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
-    return compaction_module.make_and_start_task<compaction::upgrade_sstables_compaction_task_impl>(tasks::make_empty_task_info(), std::move(keyspace), db, table_infos, exclude_current_version);
+    return compaction_module.start_upgrade_sstables_keyspace_compaction(db, std::move(keyspace), std::move(table_infos), exclude_current_version);
 }
 
 void set_tasks_compaction_module(http_context& ctx, routes& r, sharded<replica::database>& db, sharded<db::snapshot_ctl>& snap_ctl) {

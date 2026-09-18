@@ -159,32 +159,7 @@ protected:
     virtual future<> run() override = 0;
 };
 
-class upgrade_sstables_compaction_task_impl : public sstables_compaction_task_impl {
-private:
-    sharded<replica::database>& _db;
-    std::vector<table_info> _table_infos;
-    bool _exclude_current_version;
-public:
-    upgrade_sstables_compaction_task_impl(tasks::task_manager::module_ptr module,
-            std::string keyspace,
-            sharded<replica::database>& db,
-            std::vector<table_info> table_infos,
-            bool exclude_current_version) noexcept
-        : sstables_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), "keyspace", std::move(keyspace), "", "", tasks::task_id::create_null_id())
-        , _db(db)
-        , _table_infos(std::move(table_infos))
-        , _exclude_current_version(exclude_current_version)
-    {}
-
-    virtual std::string type() const override {
-        return "upgrade " + sstables_compaction_task_impl::type();
-    }
-
-    tasks::is_user_task is_user_task() const noexcept override;
-protected:
-    virtual future<> run() override;
-    virtual future<std::optional<double>> expected_total_workload() const override;
-};
+inline constexpr auto upgrade_sstables_compaction_task_type = "upgrade sstables compaction";
 
 class shard_upgrade_sstables_compaction_task_impl : public sstables_compaction_task_impl {
 private:
@@ -205,7 +180,7 @@ public:
     {}
 
     virtual std::string type() const override {
-        return "upgrade " + sstables_compaction_task_impl::type();
+        return upgrade_sstables_compaction_task_type;
     }
 protected:
     virtual future<> run() override;
@@ -238,7 +213,7 @@ public:
     {}
 
     virtual std::string type() const override {
-        return "upgrade " + sstables_compaction_task_impl::type();
+        return upgrade_sstables_compaction_task_type;
     }
 protected:
     virtual future<> run() override;
@@ -524,6 +499,9 @@ public:
     // Starts an offstrategy compaction of a single table on this shard, once the turn is taken by the created task.
     // needed is set if the table had sstables to compact.
     future<tasks::task_manager::task_ptr> start_table_offstrategy_compaction(replica::database& db, std::string keyspace, const table_info& info, compaction_turn& turn, bool& needed, tasks::task_info parent_info);
+
+    // Starts an sstable upgrade of the given tables of a keyspace on all the shards.
+    future<tasks::task_manager::task_ptr> start_upgrade_sstables_keyspace_compaction(sharded<replica::database>& db, std::string keyspace, std::vector<table_info> table_infos, bool exclude_current_version);
 };
 
 class regular_compaction_task_impl : public compaction_task_impl {
