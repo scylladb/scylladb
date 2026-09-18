@@ -21,6 +21,10 @@
 #include <vector>
 
 
+namespace data_dictionary {
+class keyspace_metadata;
+}
+
 namespace cql3 {
 
 class query_processor;
@@ -72,6 +76,12 @@ mutation colocated_tablet_map_to_mutation(table_id,
                                         api::timestamp_type);
 
 mutation make_drop_tablet_map_mutation(table_id, api::timestamp_type);
+
+/// Whether any table of the keyspace has a tablet map. For a keyspace which uses tablets
+/// that is simply how it works; for one which still uses vnodes it means that a migration
+/// to tablets has been prepared for it, in full or, after a preparation which stopped
+/// halfway, in part.
+bool has_any_tablet_map(const locator::tablet_metadata&, const data_dictionary::keyspace_metadata&);
 
 /// Stores a given tablet_metadata in system.tablets.
 ///
