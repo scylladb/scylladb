@@ -26,6 +26,10 @@
 #include "cql3/statements/create_index_statement.hh"
 #include "cql3/statements/alter_table_statement.hh"
 #include "cql3/statements/update_statement.hh"
+#include "cql3/statements/raw/modification_statement.hh"
+#include "cql3/statements/raw/insert_statement.hh"
+#include "cql3/statements/raw/update_statement.hh"
+#include "cql3/statements/raw/delete_statement.hh"
 #include "db/cql_type_parser.hh"
 #include "db/config.hh"
 #include "db/extensions.hh"
@@ -307,6 +311,31 @@ std::vector<schema_ptr> do_load_schemas(const db::config& cfg, std::string_view 
         if (!cf_statement->has_keyspace()) {
             throw std::runtime_error("tools::do_load_schemas(): CQL statement does not have keyspace specified");
         }
+        // The only modification statement the loader understands is a dropped
+        // column record inserted into system_schema.dropped_columns, which is
+        // also the only table the mock database above has. Reject anything else
+        // here, before preparing it, so it is refused with a helpful message
+        // instead of failing somewhere deep inside prepare() -- or worse, being
+        // silently reinterpreted as a dropped column record.
+        if (dynamic_cast<cql3::statements::raw::modification_statement*>(raw_statement.get())) {
+            if (cf_statement->keyspace() != db::schema_tables::NAME || cf_statement->column_family() != db::schema_tables::DROPPED_COLUMNS) {
+                throw std::runtime_error(fmt::format("tools::do_load_schemas(): expected modification statement to be against {}.{}, but it is against {}.{}",
+                            db::schema_tables::NAME, db::schema_tables::DROPPED_COLUMNS, cf_statement->keyspace(), cf_statement->column_family()));
+            }
+            // Only INSERT and UPDATE make sense for recording a dropped column;
+            // both prepare into cql3::statements::update_statement, which is what
+            // the dispatch below knows how to apply. Everything else is rejected
+            // here, naming the kind, because the prepared statement can no longer
+            // tell them apart.
+            if (!dynamic_cast<cql3::statements::raw::insert_statement*>(raw_statement.get())
+                    && !dynamic_cast<cql3::statements::raw::update_statement*>(raw_statement.get())) {
+                const auto* kind = dynamic_cast<cql3::statements::raw::delete_statement*>(raw_statement.get()) ? "a DELETE"
+                        : dynamic_cast<cql3::statements::raw::insert_json_statement*>(raw_statement.get()) ? "an INSERT JSON"
+                        : "an unsupported kind of modification statement";
+                throw std::runtime_error(fmt::format("tools::do_load_schemas(): expected the modification statement against {}.{} to be an INSERT or an UPDATE, but it is {}",
+                            db::schema_tables::NAME, db::schema_tables::DROPPED_COLUMNS, kind));
+            }
+        }
         auto ks = find_or_create_keyspace(cf_statement->keyspace());
         auto prepared_statement = cf_statement->prepare(db, cql_stats, cql3::default_cql_config);
         auto* statement = prepared_statement->statement.get();
@@ -347,10 +376,6 @@ std::vector<schema_ptr> do_load_schemas(const db::config& cfg, std::string_view 
             auto view = p->create_view_for_index(it->schema, index, db);
             real_db.tables.emplace_back(dd_impl, dd_impl.unwrap(ks), view, true);
         } else if (auto p = dynamic_cast<cql3::statements::update_statement*>(statement)) {
-            if (p->keyspace() != db::schema_tables::NAME && p->column_family() != db::schema_tables::DROPPED_COLUMNS) {
-                throw std::runtime_error(fmt::format("tools::do_load_schemas(): expected modification statement to be against {}.{}, but it is against {}.{}",
-                            db::schema_tables::NAME, db::schema_tables::DROPPED_COLUMNS, p->keyspace(), p->column_family()));
-            }
             auto schema = db::schema_tables::dropped_columns();
             cql3::statements::modification_statement::json_cache_opt json_cache{};
             cql3::update_parameters params(schema, cql3::query_options::DEFAULT, api::new_timestamp(), schema->default_time_to_live(), cql3::update_parameters::prefetch_data(schema));
@@ -399,7 +424,7 @@ std::vector<schema_ptr> do_load_schemas(const db::config& cfg, std::string_view 
             it->schema = std::move(new_schema);
         } else {
             throw std::runtime_error(fmt::format("tools::do_load_schemas(): expected statement to be one of (create keyspace, create type, create table, create view, create index, update, alter table), got: {}",
-                        typeid(statement).name()));
+                        typeid(*statement).name()));
         }
     }
 
