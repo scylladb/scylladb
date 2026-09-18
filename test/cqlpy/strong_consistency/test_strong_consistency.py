@@ -13,6 +13,7 @@
 
 import collections
 import re
+import time
 
 import pytest
 from cassandra.cluster import ConsistencyLevel
@@ -50,6 +51,57 @@ def test_reject_user_provided_timestamps(cql, sc_keyspace):
         # the refusal has to land on PREPARE, before there is a batch at all.
         with pytest.raises(InvalidRequest, match=error_msg):
             cql.prepare(f"INSERT INTO {table} (pk, v) VALUES (?, ?) USING TIMESTAMP ?")
+
+
+def test_protocol_timestamp_ignored_on_sc_table(cql, sc_keyspace, test_keyspace):
+    """
+    The CQL USING TIMESTAMP clause is rejected on a strongly consistent table,
+    but the protocol level timestamp - which every driver with client side
+    timestamps on, python's among them, puts on every request - is silently
+    ignored instead: the raft leader assigns the timestamp and never looks at
+    what the client sent. Rejecting it would refuse every statement from such
+    a driver, so ignoring is the deliberate choice, and it means the same
+    client code orders writes differently on the two kinds of table.
+
+    The eventually consistent half is not decoration, it is the control: it is
+    what shows the client timestamp is still being sent at all. Were the driver
+    to stop consulting the generator, both writes would get ordinary timestamps
+    and that half would fail, instead of the strongly consistent half passing
+    for the wrong reason.
+
+    A last write, with a client timestamp far above the row, is the sanity
+    check: honoured or ignored, it is the newest write, so it has to land on
+    both tables. It is what shows a write sent with a custom client timestamp
+    is applied at all, which the shadowed write on the eventually consistent
+    table cannot show.
+    """
+    def insert_with_client_timestamp(table, v, timestamp):
+        # The driver has no per-statement client timestamp, so the generator
+        # on the cluster is the only lever - and that cluster is shared with
+        # every other test in the run, hence the restore.
+        generator = cql.cluster.timestamp_generator
+        cql.cluster.timestamp_generator = lambda: timestamp
+        try:
+            cql.execute(f"INSERT INTO {table} (pk, v) VALUES (1, {v})")
+        finally:
+            cql.cluster.timestamp_generator = generator
+
+    # A day ahead, in microseconds: far above the row, yet well within the 3
+    # days restrict_future_timestamp tolerates.
+    far_above = int((time.time() + 24 * 60 * 60) * 1_000_000)
+    for keyspace, honours_client_timestamp in [(sc_keyspace, False), (test_keyspace, True)]:
+        kind = "eventually" if honours_client_timestamp else "strongly"
+        with new_test_table(cql, keyspace, "pk int PRIMARY KEY, v int") as table:
+            cql.execute(f"INSERT INTO {table} (pk, v) VALUES (1, 1)")
+            insert_with_client_timestamp(table, 2, 1000)  # 1970, far below the row
+            # Honoured, the write is shadowed by the older row; ignored, it wins.
+            expected = 1 if honours_client_timestamp else 2
+            assert cql.execute(f"SELECT v FROM {table} WHERE pk = 1").one().v == expected, \
+                f"{kind} consistent table: expected v={expected}"
+
+            insert_with_client_timestamp(table, 3, far_above)
+            assert cql.execute(f"SELECT v FROM {table} WHERE pk = 1").one().v == 3, \
+                f"{kind} consistent table: expected the write far above the row to land"
 
 
 @pytest.mark.parametrize("batch_mode", ["text", "prepared"], ids=["text", "prepared"])
