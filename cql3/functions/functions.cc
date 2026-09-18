@@ -112,6 +112,7 @@ functions::init() noexcept {
     declare(error_injection::make_enabled_injections_function());
 
     declare(make_bm25_function());
+    declare(make_bm25_highlight_function());
 
     // also needed for smp:
 #if 0

@@ -514,6 +514,22 @@ The ``BM25()`` operator is not a reserved word. If a user-defined function named
 ``bm25`` exists in a keyspace, unqualified ``BM25()`` becomes ambiguous; qualify
 the built-in operator as ``system.bm25(...)`` to disambiguate it.
 
+Selecting an excerpt
+^^^^^^^^^^^^^^^^^^^^
+
+``BM25_HIGHLIGHT(column, term)`` returns an excerpt of the searched text with the
+matched terms wrapped in ``<b>`` and ``</b>``::
+
+    SELECT id, BM25_HIGHLIGHT(body, 'distributed database') AS excerpt FROM articles
+        WHERE BM25(body, 'distributed database') > 0
+        ORDER BY BM25(body, 'distributed database')
+        LIMIT 10;
+
+It is accepted only in the ``SELECT`` clause, under the same rules as ``BM25()``
+there. The result is of type ``text`` and is ``null`` for a row in which no
+fragment could be found; the row itself is still returned. See
+:ref:`Highlighting <fulltext-highlighting>` for the details.
+
 For the full list of query constraints and requirements, see
 :doc:`Full-Text Search </features/fulltext-search>`.
 
