@@ -1088,8 +1088,7 @@ future<> storage_service::sstable_vnodes_cleanup_fiber(raft::server& server, gat
                     auto& [ks_name, table_infos] = item;
                     auto& compaction_module = _db.local().get_compaction_manager().get_task_manager_module();
                     // we flush all tables before cleanup the keyspaces individually, so skip the flush-tables step here
-                    auto task = co_await compaction_module.make_and_start_task<compaction::cleanup_keyspace_compaction_task_impl>(
-                        tasks::make_empty_task_info(), ks_name, _db, table_infos, compaction::flush_mode::skip, tasks::is_user_task::no);
+                    auto task = co_await compaction_module.start_cleanup_keyspace_compaction(_db, ks_name, table_infos, compaction::flush_mode::skip, tasks::is_user_task::no);
                     try {
                         rtlogger.info("vnodes_cleanup {} started", ks_name);
                         co_await task->done();
