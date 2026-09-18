@@ -337,6 +337,9 @@ future<> parse(const schema&, sstable_version_types, random_access_reader& in, d
 
 template <typename T>
 future<> parse(const schema&, sstable_version_types, random_access_reader& in, T& len, bytes& s) {
+    if (len > in.size()) {
+        throw_malformed_sstable_exception(format("String length {} exceeds component size {}", len, in.size()));
+    }
     return in.read_exactly(len).then([&s, len] (auto buf) {
         check_buf_size(buf, len);
         // Likely a different type of char. Most bufs are unsigned, whereas the bytes type is signed.
@@ -467,6 +470,9 @@ template <typename Size, typename Members>
 future<> parse(const schema& s, sstable_version_types v, random_access_reader& in, disk_array<Size, Members>& arr) {
     Size len;
     co_await parse(s, v, in, len);
+    if (len > in.size()) {
+        throw_malformed_sstable_exception(format("Array length {} exceeds component size {}", len, in.size()));
+    }
     arr.elements.reserve(len);
     co_await parse(s, v, in, len, arr.elements);
 }
@@ -590,6 +596,10 @@ future<> parse(const schema& schema, sstable_version_types v, random_access_read
                      s.header.memory_size,
                      s.header.sampling_level,
                      s.header.size_at_full_sampling);
+    if (s.header.size >= in.size() / sizeof(pos_type) || s.header.memory_size > in.size()) {
+        throw_malformed_sstable_exception(format("Summary header is inconsistent with component size {}: size={}, memory_size={}",
+                in.size(), s.header.size, s.header.memory_size));
+    }
     // Positions are encoded in little-endian.
     s.positions.reserve(s.header.size + 1);
     while (s.positions.size() != s.header.size) {
@@ -607,6 +617,17 @@ future<> parse(const schema& schema, sstable_version_types v, random_access_read
     // can guarantee that no conditionals are used, and we can always
     // query the position of the "next" index.
     s.positions.push_back(s.header.memory_size);
+
+    // Each entry is a key followed by a 64-bit position, and entries are laid
+    // out back to back, so positions must be strictly increasing with at least
+    // the position field between them. Validate before computing entry sizes
+    // from their differences.
+    for (size_t i = 0; i + 1 < s.positions.size(); ++i) {
+        if (s.positions[i] >= s.positions[i + 1] || s.positions[i + 1] - s.positions[i] < sizeof(uint64_t)) {
+            throw_malformed_sstable_exception(format("Summary entry {} has invalid position range [{}, {})",
+                    i, s.positions[i], s.positions[i + 1]));
+        }
+    }
 
     co_await in.seek(sizeof(summary::header) + s.header.memory_size);
     co_await parse(schema, v, in, s.first_key, s.last_key);
@@ -726,6 +747,16 @@ future<> parse(const schema& schema, sstable_version_types v, random_access_read
                 throw_malformed_sstable_exception(fmt::format("Invalid metadata type at Statistics file: {} ", int(type)));
             }
         }
+        // Every writer we read from (Cassandra 2.x/3.x, Scylla) emits all of
+        // these; the accessors assume their presence.
+        for (auto type : {metadata_type::Validation, metadata_type::Compaction, metadata_type::Stats}) {
+            if (!s.contents.contains(type)) {
+                throw_malformed_sstable_exception(fmt::format("Statistics is malformed: missing metadata type {}", int(type)));
+            }
+        }
+        if (v >= sstable_version_types::mc && !s.contents.contains(metadata_type::Serialization)) {
+            throw_malformed_sstable_exception("Statistics is malformed: missing Serialization header");
+        }
     } catch (const malformed_sstable_exception&) {
         throw;
     } catch (...) {
@@ -758,6 +789,9 @@ future<> parse(const schema& s, sstable_version_types v, random_access_reader& i
     eh.buckets.reserve(length);
 
     auto type_size = sizeof(uint64_t) * 2;
+    if (length > in.size() / type_size) {
+        throw_malformed_sstable_exception(format("Estimated histogram length {} exceeds component size {}", length, in.size()));
+    }
     auto buf = co_await in.read_exactly(length * type_size);
     check_buf_size(buf, length * type_size);
 
@@ -859,7 +893,7 @@ void write(sstable_version_types v, file_writer& out, const commitlog_interval& 
     write(v, out, ci.end);
 }
 
-future<> parse(const schema& s, sstable_version_types v, random_access_reader& in, compression& c) {
+static future<> do_parse_compression(const schema& s, sstable_version_types v, random_access_reader& in, compression& c) {
     uint64_t data_len = 0;
     uint32_t chunk_len = 0;
 
@@ -873,15 +907,34 @@ future<> parse(const schema& s, sstable_version_types v, random_access_reader& i
     uint32_t len = 0;
     compression::segmented_offsets::writer offsets = c.offsets.get_writer();
     co_await parse(s, v, in, len);
+    // One offset per chunk of uncompressed data, no more, no less.
+    const uint64_t expected_chunks = (data_len + chunk_len - 1) / chunk_len;
+    if (len != expected_chunks) {
+        throw_malformed_sstable_exception(format("CompressionInfo is malformed: {} chunk offsets, expected {} for data_len={} chunk_len={}",
+                len, expected_chunks, data_len, chunk_len));
+    }
     auto eoarr = [&c, &len] { return c.offsets.size() == len; };
 
     while (!eoarr()) {
         auto now = std::min(len - c.offsets.size(), 100000 / sizeof(uint64_t));
         auto buf = co_await in.read_exactly(now * sizeof(uint64_t));
+        check_buf_size(buf, now * sizeof(uint64_t));
         for (size_t i = 0; i < now; ++i) {
             uint64_t value = read_unaligned<uint64_t>(buf.get() + i * sizeof(uint64_t));
+            // Throws std::invalid_argument on offsets that go backwards or
+            // jump further than the encoding allows. Converted below.
             offsets.push_back(net::ntoh(value));
         }
+    }
+}
+
+future<> parse(const schema& s, sstable_version_types v, random_access_reader& in, compression& c) {
+    try {
+        co_await do_parse_compression(s, v, in, c);
+    } catch (const malformed_sstable_exception&) {
+        throw;
+    } catch (...) {
+        throw_malformed_sstable_exception(fmt::format("CompressionInfo is malformed: {:t}", std::current_exception()));
     }
 }
 
@@ -1251,7 +1304,17 @@ future<> sstable::read_compression() {
     }
 
     co_await read_simple_and_verify_digest<component_type::CompressionInfo>(_components->compression);
-    auto compressor = co_await manager().get_compressor_factory().make_compressor_for_reading(_components->compression);
+    compressor_ptr compressor;
+    try {
+        // Interprets the algorithm name and options read from the component;
+        // anything it rejects is a problem with the component, not with us.
+        compressor = co_await manager().get_compressor_factory().make_compressor_for_reading(_components->compression);
+    } catch (const malformed_sstable_exception&) {
+        throw;
+    } catch (...) {
+        throw_malformed_sstable_exception(fmt::format("Failed to create decompressor from CompressionInfo: {:t}", std::current_exception()),
+                filename(component_type::CompressionInfo));
+    }
     _components->compression.set_compressor(std::move(compressor));
     _components->compression.discard_hidden_options();
 }
@@ -1268,11 +1331,11 @@ void sstable::write_compression() {
 void sstable::validate_partitioner() {
     auto entry = _components->statistics.contents.find(metadata_type::Validation);
     if (entry == _components->statistics.contents.end()) {
-        throw std::runtime_error("Validation metadata not available");
+        throw_malformed_sstable_exception("Validation metadata not available", get_filename(component_type::Statistics));
     }
     auto& p = entry->second;
     if (!p) {
-        throw std::runtime_error("Validation is malformed");
+        throw_malformed_sstable_exception("Validation is malformed", get_filename(component_type::Statistics));
     }
 
     validation_metadata& v = *static_cast<validation_metadata *>(p.get());
@@ -1395,11 +1458,11 @@ future<> sstable::validate_digests(sstable::skip_data_digest skip_data) {
 void sstable::validate_min_max_metadata() {
     auto entry = _components->statistics.contents.find(metadata_type::Stats);
     if (entry == _components->statistics.contents.end()) {
-        throw std::runtime_error(fmt::format("Stats metadata not available for SSTable {}", get_filename()));
+        throw_malformed_sstable_exception("Stats metadata not available", get_filename(component_type::Statistics));
     }
     auto& p = entry->second;
     if (!p) {
-        throw std::runtime_error(fmt::format("Statistics is malformed for SSTable {}", get_filename()));
+        throw_malformed_sstable_exception("Statistics is malformed", get_filename(component_type::Statistics));
     }
 
     stats_metadata& s = *static_cast<stats_metadata *>(p.get());
@@ -3494,6 +3557,11 @@ future<lw_shared_ptr<checksum>> sstable::read_checksum_from_file(file f) {
         auto buf = co_await crc_stream.read_exactly(size);
         check_buf_size(buf, size);
         checksum->chunk_size = net::ntoh(read_unaligned<uint32_t>(buf.get()));
+        // The checksummed readers index chunks with shifts and masks derived
+        // from the chunk size, so it must be a non-zero power of two.
+        if (!std::has_single_bit(checksum->chunk_size)) {
+            throw_malformed_sstable_exception(format("CRC chunk size {} is not a power of two", checksum->chunk_size));
+        }
 
         buf = co_await crc_stream.read_exactly(size);
         while (!buf.empty()) {
@@ -3513,7 +3581,12 @@ future<lw_shared_ptr<checksum>> sstable::read_checksum_from_file(file f) {
 
 
 future<lw_shared_ptr<checksum>> sstable::read_checksum(file f) {
-    auto checksum = co_await read_checksum_from_file(std::move(f));
+    lw_shared_ptr<sstables::checksum> checksum;
+    try {
+        checksum = co_await read_checksum_from_file(std::move(f));
+    } catch (const malformed_sstable_exception& e) {
+        throw malformed_sstable_exception(e.what(), filename(component_type::CRC));
+    }
 
     if (!_components->checksum) {
         _components->checksum = checksum->weak_from_this();
@@ -3692,7 +3765,7 @@ void sstable::set_sstable_level(uint32_t new_level) {
     }
     auto& p = entry->second;
     if (!p) {
-        throw std::runtime_error("Statistics is malformed");
+        throw_malformed_sstable_exception("Statistics is malformed", get_filename(component_type::Statistics));
     }
     stats_metadata& s = *static_cast<stats_metadata *>(p.get());
     sstlog.debug("set level of {} with generation {} from {} to {}", get_filename(), _generation, s.sstable_level, new_level);
@@ -3711,7 +3784,7 @@ void sstable::mutate_sstable_level(uint32_t new_level) {
 
     auto& p = entry->second;
     if (!p) {
-        throw std::runtime_error("Statistics is malformed");
+        throw_malformed_sstable_exception("Statistics is malformed", get_filename(component_type::Statistics));
     }
     stats_metadata& s = *static_cast<stats_metadata *>(p.get());
     if (s.sstable_level == new_level) {
@@ -4715,9 +4788,9 @@ generation_type::from_string(const std::string& s) {
         }
         utils::UUID_gen::decimicroseconds timestamp = {};
         auto decode_base36 = [](const std::string& s) {
-            std::size_t pos{};
-            auto n = std::stoull(s, &pos, 36);
-            if (pos != s.size()) {
+            uint64_t n = 0;
+            auto [ptr, ec] = std::from_chars(s.data(), s.data() + s.size(), n, 36);
+            if (ec != std::errc{} || ptr != s.data() + s.size()) {
                 throw std::invalid_argument(fmt::format("invalid part in UUID: {}", s));
             }
             return n;
