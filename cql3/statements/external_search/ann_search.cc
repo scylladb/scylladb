@@ -26,14 +26,10 @@
 namespace cql3::statements::ann_search {
 
 secondary_index::index index_for(data_dictionary::database db, const schema_ptr& schema, const column_definition& column) {
-    auto cf = db.find_column_family(schema);
-    auto& sim = cf.get_index_manager();
-
-    auto indexes = sim.list_indexes();
-    auto it = std::ranges::find_if(indexes, [&column] (const auto& ind) {
-        return secondary_index::vector_index::is_vector_index_on_column(ind.metadata(), column.name_as_text());
+    auto indexes = db.find_column_family(schema).get_index_manager().list_indexes();
+    auto it = std::ranges::find_if(indexes, [&column] (const auto& index) {
+        return secondary_index::vector_index::is_vector_index_on_column(index.metadata(), column.name_as_text());
     });
-
     if (it == indexes.end()) {
         throw exceptions::invalid_request_exception("ANN ordering by vector requires the column to be indexed using 'vector_index'");
     }

@@ -45,13 +45,13 @@ search-term expression is captured during prepare so that bind markers are corre
 evaluated at execute time.
 
 `BM25()` and `BM25_HIGHLIGHT()` in `SELECT` report two values of the same search: the row's
-relevance score and an excerpt of its matched text. `prepare_bm25_selectors()` handles both with
-the same rules, and replaces each call with an `expr::temporary`, a slot `external_search::values_provider`
-fills per row. One slot serves every occurrence of a value, since all of them must name the same
-column and search term. The score is matched to a row by primary key, so the key columns are added
-to the selection even when the query does not select them. The excerpt is matched by position, but
-the highlighted column is added to the selection because its text has to be read to be sent to the
-index. `BM25_HIGHLIGHT()` is accepted only in the `SELECT` clause.
+relevance score and an excerpt of its matched text. `external_search_plan::replace_selectors()`
+handles both with the same rules, and replaces each call with an `expr::temporary`, a slot
+`values_provider` fills per row. One slot serves every occurrence of a value, since all of them must
+name the same column and search term. The score is matched to a row by primary key, so the key
+columns are added to the selection even when the query does not select them. The excerpt is matched
+by position, but the highlighted column is added to the selection because its text has to be read to
+be sent to the index. `BM25_HIGHLIGHT()` is accepted only in the `SELECT` clause.
 
 Additionally, at execute time the search term values in `WHERE` and `ORDER BY` are evaluated
 and compared - they must be identical. This catches mismatches that cannot be detected at

@@ -22,15 +22,11 @@
 namespace cql3::statements::bm25_search {
 
 secondary_index::index index_for(data_dictionary::database db, const schema_ptr& schema, const column_definition& column) {
-    auto cf = db.find_column_family(schema);
-    auto& sim = cf.get_index_manager();
-
-    for (const auto& idx : sim.list_indexes()) {
-        if (idx.supports_bm25_expression(column)) {
-            return idx;
+    for (const auto& index : db.find_column_family(schema).get_index_manager().list_indexes()) {
+        if (index.supports_bm25_expression(column)) {
+            return index;
         }
     }
-
     throw exceptions::invalid_request_exception("No fulltext index found for full-text search query");
 }
 
