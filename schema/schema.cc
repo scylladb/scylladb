@@ -632,6 +632,7 @@ bool operator==(const schema& x, const schema& y)
         && x._raw._indices_by_name == y._raw._indices_by_name
         && x._raw._is_counter == y._raw._is_counter
         && x._raw._in_memory == y._raw._in_memory
+        && x._raw._aggregated_metrics == y._raw._aggregated_metrics
         && x._raw._props == y._raw._props
         ;
 }
@@ -724,6 +725,7 @@ table_schema_version schema::calculate_digest(const schema::raw_schema& r) {
 
     feed_hash(h, r._props.tablet_options);
     feed_hash(h, r._large_data_guardrails_enabled);
+    feed_hash(h, r._aggregated_metrics);
 
     return table_schema_version(utils::UUID_gen::get_name_UUID(h.finalize()));
 }
