@@ -13,6 +13,7 @@
 #include "gms/inet_address.hh"
 #include "repair/repair.hh"
 #include "repair/task_manager_module.hh"
+#include "service/tablet_operation.hh"
 #include "service/topology_guard.hh"
 #include "tasks/task_manager.hh"
 #include "locator/abstract_replication_strategy.hh"
@@ -114,6 +115,7 @@ public:
         utils::updateable_value<bool> enable_small_table_optimization_for_rbno = utils::updateable_value<bool>(true);
         utils::updateable_value<uint64_t> small_table_optimization_for_rbno_max_table_size = utils::updateable_value<uint64_t>(1073741824);
         utils::updateable_value<uint32_t> repair_hints_batchlog_flush_cache_time_in_ms = utils::updateable_value<uint32_t>(60*1000);
+        utils::updateable_value<uint32_t> repair_hints_batchlog_flush_timeout_in_seconds = utils::updateable_value<uint32_t>(300);
         utils::updateable_value<double> repair_partition_count_estimation_ratio = utils::updateable_value<double>(0.1);
         utils::updateable_value<float> critical_disk_utilization_level = utils::updateable_value<float>(0.98);
         utils::updateable_value<uint64_t> repair_multishard_reader_buffer_hint_size = utils::updateable_value<uint64_t>(1024 * 1024);
@@ -172,7 +174,7 @@ private:
     gc_clock::time_point _flush_hints_batchlog_time;
     future<std::tuple<bool, bool, gc_clock::time_point>> flush_hints(repair_uniq_id id,
             sstring keyspace, std::vector<sstring> cfs,
-            std::unordered_set<locator::host_id> ignore_nodes);
+            std::unordered_set<locator::host_id> ignore_nodes, abort_source& as);
 
     config _config;
     static config default_config() { return {}; }
@@ -248,14 +250,14 @@ private:
     future<> reset_node_ops_progress(streaming::stream_reason reason);
 
 public:
-    future<gc_clock::time_point> repair_tablet(gms::gossip_address_map& addr_map, locator::tablet_metadata_guard& guard, locator::global_tablet_id gid, tasks::task_info global_tablet_repair_task_info, service::frozen_topology_guard topo_guard, std::optional<locator::tablet_replica_set> rebuild_replicas, locator::tablet_transition_stage stage);
+    future<gc_clock::time_point> repair_tablet(gms::gossip_address_map& addr_map, locator::tablet_metadata_guard& guard, locator::global_tablet_id gid, tasks::task_info global_tablet_repair_task_info, service::frozen_topology_guard topo_guard, std::optional<locator::tablet_replica_set> rebuild_replicas, locator::tablet_transition_stage stage, service::tablet_repair_flush_info flush);
 
 private:
     struct tablet_repair_result {
         gc_clock::time_point flush_time;
         bool should_flush_and_flush_failed;
     };
-    future<tablet_repair_result> run_tablet_repair(sstring keyspace, std::vector<sstring> tables, std::vector<tablet_repair_task_meta> metas, std::optional<int> ranges_parallelism, service::frozen_topology_guard topo_guard, bool skip_flush, tablet_repair_sched_info sched_info, streaming::stream_reason reason, tasks::task_info parent_data, repair_uniq_id id);
+    future<tablet_repair_result> run_tablet_repair(sstring keyspace, std::vector<sstring> tables, std::vector<tablet_repair_task_meta> metas, std::optional<int> ranges_parallelism, service::frozen_topology_guard topo_guard, service::tablet_repair_flush_info flush, tablet_repair_sched_info sched_info, streaming::stream_reason reason, tasks::task_info parent_data, repair_uniq_id id);
     future<> run_user_requested_repair(lw_shared_ptr<locator::global_static_effective_replication_map> germs, std::vector<sstring> cfs, dht::token_range_vector ranges, std::vector<sstring> hosts, std::vector<sstring> data_centers, std::unordered_set<locator::host_id> ignore_nodes, bool small_table_optimization, std::optional<int> ranges_parallelism, abort_source& as, sstring keyspace, tasks::task_info parent_data, repair_uniq_id id);
     future<> run_data_sync_repair(size_t& cfs_size, dht::token_range_vector ranges, std::unordered_map<dht::token_range, repair_neighbors> neighbors, streaming::stream_reason reason, abort_source& as, service::frozen_topology_guard frozen_topology_guard, sstring keyspace, tasks::task_info task_data, repair_uniq_id id);
 
