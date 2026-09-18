@@ -7,13 +7,17 @@
 import string
 import random
 import collections
+import logging
 import ssl
 import time
+import uuid
 import requests
 import json
+import boto3
 import pytest
 from contextlib import contextmanager
 from botocore import UNSIGNED
+from botocore.exceptions import ClientError
 from botocore.hooks import HierarchicalEmitter
 
 from test.pylib.skip_types import skip_env
@@ -121,6 +125,8 @@ def freeze(item):
         return frozenset((key, freeze(value)) for key, value in item.items())
     elif isinstance(item, list):
         return tuple(freeze(value) for value in item)
+    elif isinstance(item, (set, frozenset)):
+        return frozenset(freeze(value) for value in item)
     elif isinstance(item, bytearray):
         return bytes(item)
     return item
@@ -239,6 +245,92 @@ def is_aws(dynamodb):
     except AttributeError:
         # If not, it must be a resource (table for example), which has meta.client object, which has the _endpoint.host attribute.
         return dynamodb.meta.client._endpoint.host.endswith('.amazonaws.com')
+
+# The S3 helpers below are shared by the tests for the DynamoDB APIs which
+# read or write S3 - ExportTableToPointInTime in test_export.py and
+# ImportTable in test_import.py. Those services reach into S3 themselves,
+# so the objects have to really be there and cannot be faked.
+
+# Helper to create a unique S3 bucket name. `kind` says which test file made it,
+# so a leftover bucket can be told apart from another's when hunting them by
+# hand; it defaults to the export tests, which were here first.
+def unique_bucket_name(kind="export"):
+    return f"alternator-{kind}-test-{uuid.uuid4().hex[:12]}"
+
+
+# Create an S3 client using the same endpoint configuration as the DynamoDB
+# fixture where possible. On AWS, the default S3 client is used. On Scylla,
+# we will use MinIo (or something similar capable of pretending S3).
+# The code has branch to handle both cases, but the MinIo path is not covered as
+# Scylla implementation is not ready - it's here as a placeholder.
+def make_s3_client(dynamodb):
+    if is_aws(dynamodb):
+        return boto3.client('s3')
+    # Placeholder for MinIo configuration for local Scylla testing.
+    assert False, "MinIo S3 client configuration for local Scylla testing is not implemented yet"
+
+
+# Attach an explicit Deny on PutObject so an in-progress DynamoDB export
+# cannot recreate objects while we purge the bucket. Delete/List are left
+# alone, so cleanup still works with our own credentials.
+def block_bucket_writes_on_s3(s3_client, bucket_name):
+    policy = {
+        'Version': '2012-10-17',
+        'Statement': [{
+            'Sid': 'BlockWrites',
+            'Effect': 'Deny',
+            'Principal': '*',
+            'Action': ['s3:PutObject', 's3:PutObjectAcl'],
+            'Resource': f'arn:aws:s3:::{bucket_name}/*',
+        }],
+    }
+    s3_client.put_bucket_policy(Bucket=bucket_name, Policy=json.dumps(policy))
+
+# Context manager that creates a uniquely-named S3 bucket and deletes it (including all objects) on exit.
+@contextmanager
+def new_s3_bucket(s3_client, bucket_name=None, kind="export"):
+    if bucket_name is None:
+        bucket_name = unique_bucket_name(kind)
+    region = s3_client.meta.region_name
+    kwargs: dict = {'Bucket': bucket_name}
+    # us-east-1 does not accept a LocationConstraint - in other words if you want `us-east-1` bucket, you need to omit `LocationConstraint` entirely,
+    # in all other cases supply `LocationConstraint` - this is AWS quirk.
+    if region and region != 'us-east-1':
+        kwargs['CreateBucketConfiguration'] = {'LocationConstraint': region}
+    s3_client.create_bucket(**kwargs)
+    try:
+        yield bucket_name
+    finally:
+        # We will try hard to cleanup on AWS (leftovers are costly)
+        # We don't care for local (Minio or similar) - cleanup is not critical there.
+        if is_aws(s3_client):
+            # An export may still be running and writing into this bucket; deny
+            # further writes first so the purge below cannot race with it.
+            try:
+                block_bucket_writes_on_s3(s3_client, bucket_name)
+            except ClientError as ce:
+                logging.error("Failed to block bucket writes on S3 for bucket %s: %s", bucket_name, ce)
+                # Not yet fatal - fall through to the retry loop below.
+
+            # Delete all objects before deleting the bucket
+            deadline = time.time() + 60 # 60-second timeout for bucket deletion
+            while time.time() < deadline:
+                paginator = s3_client.get_paginator('list_objects_v2')
+                for page in paginator.paginate(Bucket=bucket_name):
+                    if 'Contents' in page:
+                        s3_client.delete_objects(
+                            Bucket=bucket_name,
+                            Delete={'Objects': [{'Key': obj['Key']} for obj in page['Contents']]}
+                        )
+                try:
+                    s3_client.delete_bucket(Bucket=bucket_name)
+                    break
+                except ClientError as ce:
+                    if ce.response['Error']['Code'] != 'BucketNotEmpty':
+                        raise
+                    time.sleep(2)
+            else:
+                assert False, f"Failed to delete S3 bucket {bucket_name} within the timeout of 1 minute"
 
 # Return the AWS region name, or the Scylla data center name.
 def get_region(dynamodb):

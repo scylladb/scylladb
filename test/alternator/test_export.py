@@ -7,11 +7,9 @@
 
 import base64
 import collections
-import logging
 from urllib import response
 
 import pytest
-import boto3
 import time
 import uuid
 import json
@@ -21,9 +19,10 @@ import gzip
 import decimal
 
 from botocore.exceptions import ClientError
-from contextlib import contextmanager, ExitStack
+from contextlib import ExitStack
 
-from test.alternator.util import is_aws, new_test_table
+from test.alternator.util import (is_aws, make_s3_client, new_s3_bucket,
+                                  new_test_table, unique_bucket_name)
 
 # NOTE: tests here use `pytest.mark.xfail(reason="Not yet implemented on Scylla and MinIO is not started")` as xfail marker as the implementation is ongoing.
 # The tests will pass against AWS.
@@ -43,85 +42,6 @@ def get_table_arn(table):
     desc = table.meta.client.describe_table(TableName=table.name)
     return desc['Table']['TableArn']
 
-
-# Helper to create a unique S3 bucket name.
-def unique_bucket_name():
-    return f"alternator-export-test-{uuid.uuid4().hex[:12]}"
-
-
-# Create an S3 client using the same endpoint configuration as the DynamoDB
-# fixture where possible. On AWS, the default S3 client is used. On Scylla,
-# we will use MinIo (or something similar capable of pretending S3).
-# The code has branch to handle both cases, but the MinIo path is not covered as
-# Scylla implementation is not ready - it's here as a placeholder.
-def make_s3_client(dynamodb):
-    if is_aws(dynamodb):
-        return boto3.client('s3')
-    # Placeholder for MinIo configuration for local Scylla testing.
-    assert False, "MinIo S3 client configuration for local Scylla testing is not implemented yet"
-
-
-# Attach an explicit Deny on PutObject so an in-progress DynamoDB export
-# cannot recreate objects while we purge the bucket. Delete/List are left
-# alone, so cleanup still works with our own credentials.
-def block_bucket_writes_on_s3(s3_client, bucket_name):
-    policy = {
-        'Version': '2012-10-17',
-        'Statement': [{
-            'Sid': 'BlockWrites',
-            'Effect': 'Deny',
-            'Principal': '*',
-            'Action': ['s3:PutObject', 's3:PutObjectAcl'],
-            'Resource': f'arn:aws:s3:::{bucket_name}/*',
-        }],
-    }
-    s3_client.put_bucket_policy(Bucket=bucket_name, Policy=json.dumps(policy))
-
-# Context manager that creates a uniquely-named S3 bucket and deletes it (including all objects) on exit.
-@contextmanager
-def new_s3_bucket(s3_client, bucket_name=None):
-    if bucket_name is None:
-        bucket_name = unique_bucket_name()
-    region = s3_client.meta.region_name
-    kwargs: dict = {'Bucket': bucket_name}
-    # us-east-1 does not accept a LocationConstraint - in other words if you want `us-east-1` bucket, you need to omit `LocationConstraint` entirely,
-    # in all other cases supply `LocationConstraint` - this is AWS quirk.
-    if region and region != 'us-east-1':
-        kwargs['CreateBucketConfiguration'] = {'LocationConstraint': region}
-    s3_client.create_bucket(**kwargs)
-    try:
-        yield bucket_name
-    finally:
-        # We will try hard to cleanup on AWS (leftovers are costly)
-        # We don't care for local (Minio or similar) - cleanup is not critical there.
-        if is_aws(s3_client):
-            # An export may still be running and writing into this bucket; deny
-            # further writes first so the purge below cannot race with it.
-            try:
-                block_bucket_writes_on_s3(s3_client, bucket_name)
-            except ClientError as ce:
-                logging.error("Failed to block bucket writes on S3 for bucket %s: %s", bucket_name, ce)
-                # Not yet fatal - fall through to the retry loop below.
-
-            # Delete all objects before deleting the bucket
-            deadline = time.time() + 60 # 60-second timeout for bucket deletion
-            while time.time() < deadline:
-                paginator = s3_client.get_paginator('list_objects_v2')
-                for page in paginator.paginate(Bucket=bucket_name):
-                    if 'Contents' in page:
-                        s3_client.delete_objects(
-                            Bucket=bucket_name,
-                            Delete={'Objects': [{'Key': obj['Key']} for obj in page['Contents']]}
-                        )
-                try:
-                    s3_client.delete_bucket(Bucket=bucket_name)
-                    break
-                except ClientError as ce:
-                    if ce.response['Error']['Code'] != 'BucketNotEmpty':
-                        raise
-                    time.sleep(2)
-            else:
-                assert False, f"Failed to delete S3 bucket {bucket_name} within the timeout of 1 minute"
 
 # Helper: enable PITR on a table (required for ExportTableToPointInTime on
 # DynamoDB). Returns the client used.
