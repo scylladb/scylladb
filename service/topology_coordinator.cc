@@ -2732,13 +2732,49 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         auto replicas = tinfo.replicas;
 
                         rtlogger.info("Restoring tablet={} on {}", gid, replicas);
-                        co_await coroutine::parallel_for_each(replicas, [this, gid] (locator::tablet_replica r) -> future<> {
-                            auto dst = raft::server_id(r.host.uuid());
-                            if (!is_excluded(dst)) {
-                                co_await ser::sstables_loader_rpc_verbs::send_restore_tablet(&_messaging, r.host, dst, gid);
-                                rtlogger.debug("Tablet {} restored on {}", gid, r.host);
+
+                        // A tablet is restored only once every replica has downloaded its share,
+                        // so the first failure already decides the outcome. Keep it as the error to
+                        // report - parallel_for_each() would report an arbitrary one - and abort the
+                        // downloads still running, which nothing is going to use.
+                        abort_source as;
+                        // Chained so that a coordinator which is stopping doesn't have to wait for
+                        // restore RPCs it is no longer going to act on.
+                        auto sub = _as.subscribe([&as] () noexcept { as.request_abort(); });
+                        std::exception_ptr error;
+                        auto fail = [&] (std::exception_ptr ex) {
+                            if (!error) {
+                                error = std::move(ex);
                             }
+                            as.request_abort();
+                        };
+
+                        co_await coroutine::parallel_for_each(replicas, [this, gid, &as, &fail] (locator::tablet_replica r) -> future<> {
+                            auto dst = raft::server_id(r.host.uuid());
+                            if (is_excluded(dst)) {
+                                co_return;
+                            }
+                            // Only a tablet's own replicas can download its sstables, so a replica
+                            // which is down leaves nobody to do it. Don't send it the RPC: the verb
+                            // has no timeout, and a node which no longer serves requests but still
+                            // accepts connections is never going to answer it.
+                            if (!_gossiper.is_alive(r.host)) {
+                                fail(std::make_exception_ptr(std::runtime_error(
+                                        fmt::format("Cannot restore tablet {} because host {} is down", gid, r.host))));
+                                co_return;
+                            }
+                            auto f = co_await coroutine::as_future(
+                                    ser::sstables_loader_rpc_verbs::send_restore_tablet(&_messaging, r.host, as, dst, gid));
+                            if (f.failed()) {
+                                fail(f.get_exception());
+                                co_return;
+                            }
+                            rtlogger.debug("Tablet {} restored on {}", gid, r.host);
                         });
+
+                        if (error) {
+                            std::rethrow_exception(error);
+                        }
                     })) {
                         rtlogger.debug("Clearing restore transition for {}", gid);
                         _tablets.erase(gid);

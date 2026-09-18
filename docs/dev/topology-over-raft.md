@@ -1148,6 +1148,19 @@ The existing tablet migration handler then processes the restore transitions by 
 that are contained in the tablet's token range. If the operation succeeds or fails, the
 transition is cleared.
 
+The restore of a tablet fails as soon as one of its replicas fails, so the `RESTORE_TABLET`
+RPCs to the remaining replicas are aborted rather than left to download what nothing is
+going to use.
+
+A replica which is down cannot restore its tablet, so the coordinator fails the tablet's
+restore rather than send it the RPC. An RPC which is already in flight when a node goes down
+does resolve, because marking the node down closes its RPC connection and the waiter gets
+`closed_error`. One sent to a node which is already down need not: `RESTORE_TABLET` has no
+timeout, so a node which no longer serves requests but still accepts connections leaves the
+call outstanding indefinitely. With rf=1 there is no other replica to ask instead, which makes
+failing the only way for such a request to finish. The restore can be retried once the node is
+back or has been removed from the cluster.
+
 After the load balancer detects that no restore transitions remain for the table, it reports
 restore completion. The topology coordinator then removes the request from
 `ongoing_restore_requests` and marks it done. If any transition failed, the error is recorded
