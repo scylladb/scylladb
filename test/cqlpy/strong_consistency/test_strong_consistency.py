@@ -359,6 +359,36 @@ def test_lwt_on_sc_table(cql, sc_keyspace):
         assert cql.execute(f"SELECT v FROM {table} WHERE pk = 1").one().v == 1
 
 
+def test_reject_data_prefetch_on_sc_table(cql, sc_keyspace):
+    """
+    A strongly consistent update is a single raft log entry, so it cannot read
+    the row first and then decide what to write. Every list operation which
+    needs read-before-write is therefore refused - removing by value, setting
+    by index, deleting by index - while an append, which needs no read, goes
+    through. This is the same reasoning as the refusal of conditions, which is
+    a prefetch of a different shape.
+
+    Those three are all the operations there are, rather than a sample of
+    them: requires_read() is overridden only in cql3/lists.hh, and returns
+    true only for these three. setter_by_uuid returns false, and sets and maps
+    override nothing at all, because removing an element from either is a
+    tombstone on its cell and needs no read.
+    """
+    with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, l list<int>") as table:
+        cql.execute(f"INSERT INTO {table} (pk, l) VALUES (1, [10, 20, 30])")
+        error_msg = "Strongly consistent updates don't support data prefetch"
+        for statement in [f"UPDATE {table} SET l = l - [20] WHERE pk = 1",
+                          f"UPDATE {table} SET l[0] = 99 WHERE pk = 1",
+                          f"DELETE l[0] FROM {table} WHERE pk = 1"]:
+            with pytest.raises(InvalidRequest, match=error_msg):
+                cql.execute(statement)
+
+        # An append needs no read of the existing list, so it is allowed -
+        # the refusal is about the prefetch, not about collections.
+        cql.execute(f"UPDATE {table} SET l = l + [40] WHERE pk = 1")
+        assert cql.execute(f"SELECT l FROM {table} WHERE pk = 1").one().l == [10, 20, 30, 40]
+
+
 def test_batch_attributes_on_sc_table(cql, sc_keyspace):
     """
     Batch-level USING TTL and USING TIMESTAMP are rejected on strongly
