@@ -3182,12 +3182,13 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         }
     }
 
-    // Builds the tablet maps of the tables of the keyspace which don't have one yet and
-    // appends them to `updates`.
+    // Builds the tablet maps of as many tables of the keyspace without one as fit into a
+    // group0 command and appends them to `updates`. Returns whether every table of the
+    // keyspace has a map once they commit, i.e. whether the request is complete.
     //
     // Does no group0 or raft I/O of its own, so the only thing it throws is a reason for
     // the request to fail.
-    future<> build_tablet_maps_for_migration(const group0_guard& guard,
+    future<bool> build_tablet_maps_for_migration(const group0_guard& guard,
             const db::system_keyspace::topology_requests_entry& req,
             utils::chunked_vector<canonical_mutation>& updates) {
         if (!req.prepare_migration_ks_name) {
@@ -3200,16 +3201,18 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         validate_keyspace_for_migration(_db, ks_name, _topo_sm._topology);
         auto& ks = _db.find_keyspace(ks_name);
 
-        // One snapshot of the ring and of the keyspace's replication for the whole request,
-        // so that every map comes from the same view of the cluster.
+        // One snapshot of the ring and of the keyspace's replication for the whole pass,
+        // so that every map built here comes from the same view of the cluster.
         const auto tmptr = get_token_metadata_ptr();
         const auto erm = ks.get_static_effective_replication_map();
 
         // Presence of a tablet map, rather than table::uses_tablets(), decides what is
         // left to do. The latter reflects the flavor of this node's effective replication
         // map, which is node-local and only changes on restart, while the tablet map is
-        // the cluster-wide state this request produces. Keying off the map also makes the
-        // request idempotent, which resuming an interrupted one will rely on.
+        // the cluster-wide state this request produces, and every node learns of it as
+        // soon as the command carrying it commits. Keying off the map also makes the
+        // request idempotent: a coordinator taking over, or a prepare of a keyspace whose
+        // previous prepare failed halfway, continues instead of starting over.
         struct table_to_migrate {
             size_t target_pow2;
             table_id id;
@@ -3225,7 +3228,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         }
         if (tables_to_migrate.empty()) {
             rtlogger.info("All tables of keyspace '{}' already have a tablet map", ks_name);
-            co_return;
+            co_return true;
         }
         if (tables_to_migrate.size() < all_tables) {
             rtlogger.info("Resuming the preparation of keyspace '{}': {} of {} table(s) already have a tablet map",
@@ -3246,41 +3249,126 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         }
 
         // Tables which share a target share their map, so grouping them means only one map
-        // has to be held at a time.
+        // has to be held at a time, and the size measured for one of them is what the next
+        // one is expected to take. Every pass sorts the same way, so they are written in a
+        // stable order.
         std::ranges::sort(tables_to_migrate, [] (const auto& a, const auto& b) {
             return std::make_pair(a.target_pow2, a.id) < std::make_pair(b.target_pow2, b.id);
         });
 
+        // Keep well below max_command_size: a command also has to travel as a
+        // RAFT_APPEND_ENTRIES message, whose size is estimated as 3x the serialized size
+        // and checked against a fraction of the shard's memory, so max_command_size alone
+        // can still be too much for a node with little memory per shard.
+        const size_t max_command_size = _raft.max_command_size();
+        size_t batch_budget = std::min<size_t>(max_command_size / 2, 4 * 1024 * 1024);
+        if (utils::get_local_injector().is_enabled("prepare_migration_one_table_per_command")) {
+            // Makes every table go out in its own command, so that tests can exercise
+            // the splitting without a keyspace large enough to need it.
+            batch_budget = 0;
+        }
+        // Room for the request tracking mutations, the group0 history entry and the
+        // command's own framing next to a tablet map in the same command.
+        constexpr size_t command_size_headroom = 64 * 1024;
+
         std::optional<locator::tablet_map> tmap;
         size_t tmap_target = 0;
+        std::optional<size_t> measured;
+        size_t batch_size = 0;
+        size_t written = 0;
         for (const auto& [target_pow2, tid, cf_name] : tables_to_migrate) {
+            if (written > 0 && batch_size >= batch_budget) {
+                // Whatever this table takes, it would put the command over the budget.
+                break;
+            }
             if (!tmap || target_pow2 != tmap_target) {
                 tmap = co_await build_tablet_map_for_migration(erm, target_pow2);
                 tmap_target = target_pow2;
+                measured.reset();
+            } else if (written > 0 && measured && batch_size + *measured > batch_budget) {
+                // Known not to fit; leave it for the next pass rather than building and
+                // serializing its map only to drop it. Being a few bytes off, which the
+                // length of the table name can make it, only moves a table one pass on.
+                break;
             }
 
+            utils::chunked_vector<canonical_mutation> table_updates;
+            size_t table_size = 0;
             co_await replica::tablet_map_to_mutations(*tmap, tid, ks_name, cf_name, guard.write_timestamp(),
                     _feature_service, [&] (mutation m) -> future<> {
-                        updates.emplace_back(co_await make_canonical_mutation_gently(m));
+                        auto cm = co_await make_canonical_mutation_gently(m);
+                        table_size += cm.representation().size();
+                        table_updates.emplace_back(std::move(cm));
                     });
+            measured = table_size;
 
-            rtlogger.info("Built tablet map for table {}.{} with {} tablet(s) (target pow2={})",
-                          ks_name, cf_name, tmap->tablet_count(), target_pow2);
+            // A single map which doesn't fit into a command can't be split any further:
+            // its rows have to be applied together, or the table is left with a map which
+            // covers part of the ring.
+            if (table_size + command_size_headroom > max_command_size) {
+                throw std::runtime_error(fmt::format(
+                        "The tablet map of table {}.{} takes {} bytes, more than a group0 command can carry ({} bytes)",
+                        ks_name, cf_name, table_size, max_command_size));
+            }
+            if (written == 0 && table_size > batch_budget) {
+                // For the same reason the first table of a command is written whatever its
+                // size, so that a keyspace with a map this large is migrated rather than
+                // refused, at the cost of one command over the budget.
+                rtlogger.warn("The tablet map of table {}.{} takes {} bytes, more than the {} bytes a command of"
+                              " this preparation should carry; it goes out in a command of its own",
+                              ks_name, cf_name, table_size, batch_budget);
+            }
+            // Commit what has accumulated before a table which would push the command
+            // over the budget; the next pass starts from that table.
+            if (written > 0 && batch_size + table_size > batch_budget) {
+                break;
+            }
+            for (auto&& cm : table_updates) {
+                updates.emplace_back(std::move(cm));
+            }
+            batch_size += table_size;
+            ++written;
+
+            rtlogger.info("Built tablet map for table {}.{} with {} tablet(s) (target pow2={}, {} bytes)",
+                          ks_name, cf_name, tmap->tablet_count(), target_pow2, table_size);
         }
+
+        if (written < tables_to_migrate.size()) {
+            rtlogger.info("Tablet maps of {} of the {} remaining table(s) of keyspace '{}' fit into this"
+                          " command, the rest are left for the next pass",
+                          written, tables_to_migrate.size(), ks_name);
+            co_return false;
+        }
+        co_return true;
     }
 
     // Writes the tablet maps of the tables of a keyspace which don't have one yet, the
-    // first phase of a vnodes-to-tablets migration, and completes the request.
+    // first phase of a vnodes-to-tablets migration.
+    //
+    // The maps of a keyspace with many tables don't fit into a single group0 command, so
+    // each call writes as many of them as fit into one and, if that isn't all of them,
+    // leaves the request in the queue: the coordinator calls this again with a fresh
+    // guard, and the next pass skips the tables which already have a map. The same
+    // mechanism makes the request survive a coordinator change and a table created while
+    // it runs, and lets a request which failed halfway be completed by preparing the
+    // keyspace again. Every command is a guarded topology_change, so every node applies
+    // each part as soon as it commits, and which tables still need a map is the same
+    // question on every node.
+    //
+    // Nothing is rolled back on failure. The maps written so far are visible and harmless:
+    // finalization refuses a keyspace whose tables don't all have one, and the next prepare
+    // picks up where this one stopped.
     future<> handle_prepare_migration(group0_guard guard, utils::UUID req_id,
                                       const db::system_keyspace::topology_requests_entry& req) {
         const sstring ks_name = req.prepare_migration_ks_name.value_or("");
         rtlogger.info("prepare_migration requested for keyspace '{}'", ks_name);
 
         utils::chunked_vector<canonical_mutation> updates;
+        bool complete = true;
         sstring error;
 
         try {
-            co_await build_tablet_maps_for_migration(guard, req, updates);
+            complete = co_await build_tablet_maps_for_migration(guard, req, updates);
         } catch (const std::bad_alloc&) {
             // The node couldn't build the maps right now, which says nothing about whether
             // the request can succeed; let the coordinator run the pass again.
@@ -3293,18 +3381,33 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             rtlogger.error("Couldn't process global_topology_request::prepare_migration for keyspace '{}': {}",
                            ks_name, std::current_exception());
             updates.clear();
+            complete = true;
         }
 
-        updates.emplace_back(topology_request_tracking_mutation_builder(req_id)
-                                  .done(error)
-                                  .build());
-        updates.emplace_back(topology_mutation_builder(guard.write_timestamp())
-                                  .drop_first_global_topology_request_id(
-                                          _topo_sm._topology.global_requests_queue, req_id)
-                                  .build());
+        sstring reason = fmt::format("prepare vnodes-to-tablets migration for keyspace '{}'", ks_name);
+        if (complete) {
+            updates.emplace_back(topology_request_tracking_mutation_builder(req_id)
+                                      .done(error)
+                                      .build());
+            updates.emplace_back(topology_mutation_builder(guard.write_timestamp())
+                                      .drop_first_global_topology_request_id(
+                                              _topo_sm._topology.global_requests_queue, req_id)
+                                      .build());
+        } else {
+            // The request stays in the queue, and the next pass continues with the tables
+            // which still have no map.
+            reason += ", part";
+        }
 
-        co_await update_topology_state(std::move(guard), std::move(updates),
-                fmt::format("prepare vnodes-to-tablets migration for keyspace '{}'", ks_name));
+        co_await update_topology_state(std::move(guard), std::move(updates), reason);
+
+        if (!complete) {
+            // Logged after the command is applied, so that it stands for a part which was
+            // really committed; a pass which loses its guard commits nothing and logs
+            // nothing. Tests count the parts of a request by this line.
+            rtlogger.info("Committed a part of the vnodes-to-tablets migration preparation of keyspace '{}'",
+                          ks_name);
+        }
     }
 
     future<> handle_truncate_table(group0_guard guard) {
