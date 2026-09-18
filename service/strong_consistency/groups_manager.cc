@@ -273,7 +273,17 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
         .snapshot_threshold_log_size = 10 * 1024 * 1024, // 10MB
         .max_log_size = 20 * 1024 * 1024, // 20MB
         .enable_forwarding = false,
-        .on_background_error = [tablet, group_id](std::exception_ptr e) {
+        .on_background_error = [this, tablet, group_id](std::exception_ptr e) {
+            if (_mm.get_abort_source().abort_requested()) {
+                // The node is shutting down: migration_manager::drain() runs at
+                // the beginning of storage_service::stop_transport(), while the
+                // raft groups are stopped only in groups_manager::stop(). An
+                // apply() in between can fail because what it depends on is
+                // already gone, which is not an internal error.
+                logger.warn("table {}, tablet {} raft group {} background error while shutting down: {}",
+                    tablet.table, tablet.tablet, group_id, e);
+                return;
+            }
             on_internal_error(logger, 
                 ::format("table {}, tablet {} raft group {} background error {}", 
                     tablet.table, tablet.tablet, group_id, e));
