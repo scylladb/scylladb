@@ -9,6 +9,7 @@
 #
 
 import os
+from pathlib import Path
 
 from scylla_util import parse_scylla_dirs_with_default
 
@@ -16,7 +17,7 @@ from scylla_util import parse_scylla_dirs_with_default
 # try to write data to a sysfs path, expect problems
 def try_write(path, data):
     try:
-        open(path, 'w').write(data)
+        path.write_text(data)
     except Exception:
         print("warning: unable to tune {} to {}".format(path, data))
 
@@ -28,9 +29,9 @@ def tune_path(path, data, check=None):
         return current == data
     if check is None:
         check = default_check
-    if not os.path.exists(path):
+    if not path.exists():
         return
-    if check(open(path).read().strip()):
+    if check(path.read_text().strip()):
         print('already tuned: {}'.format(path))
         return
     print('tuning: {} {}'.format(path, data))
@@ -43,8 +44,7 @@ tuned_blockdevs = set()
 # tune a blockdevice (sysfs node); updates I/O scheduler
 # and merge behavior.  Tunes dependent devices
 def tune_blockdev(path, nomerges):
-    from os.path import join, exists, dirname, realpath
-    path = realpath(path)
+    path = Path(path).resolve()
     print('tuning {}'.format(path))
     if path in tuned_blockdevs:
         return
@@ -54,16 +54,16 @@ def tune_blockdev(path, nomerges):
         return current == 'none' or '[noop]' in current
 
     if not nomerges:
-        tune_path(join(path, 'queue', 'scheduler'), 'noop', check_sched)
-        tune_path(join(path, 'queue', 'nomerges'), '2')
+        tune_path(path / 'queue' / 'scheduler', 'noop', check_sched)
+        tune_path(path / 'queue' / 'nomerges', '2')
     else:
-        tune_path(join(path, 'queue', 'nomerges'), nomerges)
-    slaves = join(path, 'slaves')
-    if exists(slaves):
-        for slave in os.listdir(slaves):
-            tune_blockdev(join(slaves, slave), nomerges)
-    if exists(join(path, 'partition')):
-        tune_blockdev(dirname(path), nomerges)
+        tune_path(path / 'queue' / 'nomerges', nomerges)
+    slaves = path / 'slaves'
+    if slaves.exists():
+        for slave in slaves.iterdir():
+            tune_blockdev(slave, nomerges)
+    if (path / 'partition').exists():
+        tune_blockdev(path.parent, nomerges)
 
 
 # tunes a /dev/foo blockdev
