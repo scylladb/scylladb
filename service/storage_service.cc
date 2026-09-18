@@ -1399,9 +1399,17 @@ future<> storage_service::raft_initialize_discovery_leader(const join_node_reque
     insert_join_request_mutations.emplace_back(co_await _sys_ks.local().make_view_builder_version_mutation(write_timestamp, db::system_keyspace::view_builder_version_t::v2));
 
     if (!skip_service_levels_v2_initialization) {
-        auto sl_driver_mutations = co_await qos::service_level_controller::get_create_driver_service_level_mutations(_sys_ks.local(), write_timestamp);
-        for (auto& m : sl_driver_mutations) {
-            insert_join_request_mutations.emplace_back(m);
+        const auto supported = [&params] (std::string_view feature) {
+            return std::ranges::contains(params.supported_features, feature, [] (const sstring& f) { return std::string_view(f); });
+        };
+        for (const auto& internal_sl : qos::service_level_controller::internal_service_levels) {
+            if (!supported(internal_sl.feature_name)) {
+                continue;
+            }
+            auto sl_mutations = co_await qos::service_level_controller::get_create_internal_service_level_mutations(_sys_ks.local(), write_timestamp, internal_sl.name);
+            for (auto& m : sl_mutations) {
+                insert_join_request_mutations.emplace_back(m);
+            }
         }
     }
 
@@ -7080,9 +7088,11 @@ void storage_service::init_messaging_service() {
                 std::move(muts.begin(), muts.end(), std::back_inserter(mutations));
             }
 
-            auto sl_driver_created_mut = co_await ss._sys_ks.local().get_service_level_driver_created_mutation();
-            if (sl_driver_created_mut) {
-                mutations.push_back(canonical_mutation(*sl_driver_created_mut));
+            for (const auto& internal_sl : qos::service_level_controller::internal_service_levels) {
+                auto sl_created_mut = co_await ss._sys_ks.local().get_service_level_created_mutation(internal_sl.name);
+                if (sl_created_mut) {
+                    mutations.push_back(canonical_mutation(*sl_created_mut));
+                }
             }
 
             auto sl_version_mut = co_await ss._sys_ks.local().get_service_levels_version_mutation();

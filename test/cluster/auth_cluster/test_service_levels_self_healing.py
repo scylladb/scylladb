@@ -88,7 +88,7 @@ async def test_self_heals_service_levels_v1_after_restart(manager: ScyllaCluster
     cql = await reconnect_driver(manager)
     await manager.api.reload_raft_topology_state(server.ip_addr)
 
-    expected_service_levels = {**V1_SERVICE_LEVELS, "driver": (None, "batch", 200)}
+    expected_service_levels = {**V1_SERVICE_LEVELS, "driver": (None, "batch", 200), "default_batch": (None, "batch", 100)}
 
     async def service_levels_v2_healed():
         version_rows = await cql.run_async(SERVICE_LEVEL_VER_QUERY)
