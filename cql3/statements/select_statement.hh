@@ -27,6 +27,9 @@ namespace service {
     class storage_proxy;
     class storage_proxy_coordinator_query_options;
     class storage_proxy_coordinator_query_result;
+    namespace pager {
+        class query_pager;
+    }
 } // namespace service
 
 namespace cql3 {
@@ -180,6 +183,13 @@ protected:
 
     uint64_t get_limit(const query_options& options, const std::optional<expr::expression>& limit, bool is_per_partition_limit = false) const;
     static uint64_t get_inner_loop_limit(uint64_t limit, bool is_aggregate);
+
+    // Drains the pager into one result set, grouped by _group_by_cell_indices.
+    // For the cases where the client must get the whole result at once:
+    // aggregates, GROUP BY included, and filtering without paging.
+    future<::shared_ptr<cql_transport::messages::result_message>> execute_aggregate_or_nonpaged_filtering(
+        std::unique_ptr<service::pager::query_pager> pager, const query_options& options, gc_clock::time_point now,
+        int32_t page_size, db::timeout_clock::time_point timeout, uint64_t limit) const;
 
     virtual bool needs_post_filtering() const {
         return _restrictions_need_filtering;
