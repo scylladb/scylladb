@@ -1424,6 +1424,13 @@ async def assert_all_tables_have_tablet_map(manager: ScyllaClusterManager, serve
     assert not missing, f"tables of {ks} without a tablet map: {missing}"
 
 
+# Logged by the topology coordinator after it commits a command of a prepare_migration
+# request which leaves the request in the queue, i.e. after every command but the last.
+# The coordinator logs it once the command is applied, so a pass which loses its guard and
+# retries doesn't add to the count.
+PREPARE_PART_LOG = r"Committed a part of the vnodes-to-tablets migration preparation of keyspace"
+
+
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_migration_prepare_resumed_after_coordinator_change(manager: ScyllaClusterManager, scale_timeout):
     """Verify that preparing a migration survives losing the topology coordinator.
@@ -1489,6 +1496,55 @@ async def test_migration_prepare_resumed_after_coordinator_change(manager: Scyll
 
         # Every table must have a map, including the ones the stopped coordinator wrote.
         await assert_all_tables_have_tablet_map(manager, other[0], ks, tables)
+
+
+@pytest.mark.slow
+async def test_migration_tablet_maps_exceed_command_size(manager: ScyllaClusterManager):
+    """Verify a keyspace whose tablet maps really exceed what one group0 command carries.
+
+    Unlike the unit test test_prepare_splits_tablet_maps_across_commands, which shrinks
+    the budget to nothing with an error injection, this one builds a keyspace whose maps
+    exceed the real per-command budget - half of max_command_size, or the largest message
+    rpc admits, whichever is smaller - so that the size accounting itself is exercised:
+    with 512 tokens on each of 3 nodes a table has 1537 tablets, and a tablet row with 3
+    replicas takes a few hundred bytes, so a table is around half a megabyte and a few
+    dozen of them pass the budget.
+
+    This is the shape of keyspace SCYLLADB-1149 is about; before the maps were written by
+    several commands, a keyspace like this could not be migrated at all.
+    """
+    # The budget is not a fixed number - it follows the memory a shard has - so aim past
+    # it rather than at it: these tables come to about twice what one command carries. The
+    # assertion below catches it if that stops being true.
+    num_tables = 60
+
+    cfg = {'num_tokens': 512}
+    property_file = [{"dc": "dc1", "rack": f"rack{i}"} for i in range(1, 4)]
+    servers = await manager.servers_add(3, cmdline=['--smp', '2'], config=cfg, property_file=property_file)
+    cql, _ = await manager.get_ready_cql(servers)
+
+    async with new_migrating_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'enabled': false}") as ks:
+        tables = [f't{i}' for i in range(num_tables)]
+        logger.info(f"Creating {num_tables} tables")
+        for t in tables:
+            await cql.run_async(f"CREATE TABLE {ks}.{t} (pk int PRIMARY KEY, c int)")
+
+        coordinator = await get_coordinator_host(manager)
+        log = await manager.server_open_log(coordinator.server_id)
+        mark = await log.mark()
+
+        logger.info("Preparing the migration")
+        await manager.api.create_vnode_tablet_migration(servers[0].ip_addr, ks)
+
+        # The maps have to have needed more than one command, otherwise the test isn't
+        # covering what it says it does.
+        parts = await log.grep(PREPARE_PART_LOG, from_mark=mark)
+        assert len(parts) > 0, \
+            f"the tablet maps fit into a single command ({len(parts)} partial command(s)),"\
+            " so the test no longer covers the splitting; raise num_tables"
+        logger.info(f"Tablet maps were written by {len(parts) + 1} commands")
+
+        await assert_all_tables_have_tablet_map(manager, servers[0], ks, tables)
 
 
 async def test_migration_multiple_tables(manager: ScyllaClusterManager, scale_timeout):

@@ -3869,6 +3869,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         if (remaining_tables < all_tables) {
             rtlogger.info("Resuming the preparation of keyspace '{}': {} of {} table(s) already have a tablet map",
                           ks_name, all_tables - remaining_tables, all_tables);
+            co_await utils::get_local_injector().inject("prepare_migration_fail_on_resume", [] {
+                return std::make_exception_ptr(std::runtime_error("injected prepare_migration failure"));
+            });
         }
 
         const auto& targets = *req.prepare_migration_tables;
