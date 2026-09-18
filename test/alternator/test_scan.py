@@ -300,6 +300,17 @@ def test_scan_parallel_with_exclusive_start_key(filled_test_table):
     with pytest.raises(ClientError, match='ValidationException.*Exclusive'):
         full_scan(test_table, TotalSegments=1000000, Segment=0, ExclusiveStartKey={'p': '0', 'c': '0'})
 
+# Scan's Limit used to be read directly with GetUint64() with no preceding
+# IsUint64() check, so a Limit too large to fit (e.g. 2**64) got an
+# InternalServerError. Unlike Query and ListTables, real DynamoDB doesn't
+# actually reject an oversized Limit here, despite documenting it
+# identically: it's simply treated as infinite. Alternator now matches
+# that for compatibility - though as with a missing Limit, a page is still
+# capped at around 1MB, so it's not really infinite in practice (see
+# test_scan_paging_missing_limit()).
+def test_scan_invalid_limit_type(test_table):
+    test_table.scan(Limit=2**64)
+
 # We used to have a bug with formatting of LastEvaluatedKey in the response
 # of Query and Scan with bytes keys (issue #7768). In test_query_paging_byte()
 # (test_query.py) we tested the case of bytes *sort* keys. In the following

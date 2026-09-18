@@ -38,6 +38,17 @@ std::optional<int> get_int_attribute(const rjson::value& value, std::string_view
     return attribute_value->GetInt();
 }
 
+std::optional<uint64_t> get_uint64_attribute(const rjson::value& value, std::string_view attribute_name) {
+    const rjson::value* attribute_value = rjson::find(value, attribute_name);
+    if (!attribute_value)
+        return {};
+    if (!attribute_value->IsUint64()) {
+        throw api_error::validation(fmt::format("Expected non-negative integer value for attribute {}, got: {}",
+                attribute_name, value));
+    }
+    return attribute_value->GetUint64();
+}
+
 std::string get_string_attribute(const rjson::value& value, std::string_view attribute_name, const char* default_return) {
     const rjson::value* attribute_value = rjson::find(value, attribute_name);
     if (!attribute_value)
