@@ -1697,6 +1697,7 @@ deps['test/boost/combined_tests'] += [
     'test/boost/sstable_compressor_factory_test.cc',
     'test/boost/sstable_compression_config_test.cc',
     'test/boost/sstable_directory_test.cc',
+    'test/boost/sstables_manager_subscription_test.cc',
     'test/boost/sstable_set_test.cc',
     'test/boost/statement_restrictions_test.cc',
     'test/boost/storage_proxy_test.cc',
