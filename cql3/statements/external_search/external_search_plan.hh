@@ -26,9 +26,6 @@ class select_restrictions;
 
 namespace cql3::statements {
 
-/// The rejection of a SELECT call whose query value differs from the ORDER BY one.
-sstring query_value_mismatch_message(functions::search_family family, std::string_view function_name);
-
 /// The clause a search call was written in. Only ORDER BY introduces a search.
 enum class search_clause {
     ordering,
@@ -36,12 +33,18 @@ enum class search_clause {
     restrictions,
 };
 
-/// A query value that prepare could not compare with the ORDER BY one because of a bind marker.
-/// Execution compares the bound values; `function_name` is the function the call was written with,
-/// for the error message.
+/// The rejection of a call whose query value differs from the one the search it names runs with.
+/// `clause` is where the call was written: in ORDER BY it collides with another call on the same
+/// column, elsewhere with the search ORDER BY introduced.
+sstring query_value_mismatch_message(functions::search_family family, std::string_view function_name, search_clause clause);
+
+/// A query value that prepare could not compare with the search's own because of a bind marker.
+/// Execution compares the bound values; `function_name` and `clause` describe the call it was
+/// written in, for the error message.
 struct deferred_query_value {
     expr::expression value;
     sstring function_name;
+    search_clause clause;
 };
 
 /// One search an external index runs for the statement, identified by its family and column, and

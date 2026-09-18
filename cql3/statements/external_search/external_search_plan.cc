@@ -74,7 +74,14 @@ bool has_other_restrictions(const restrictions::select_restrictions& restriction
 
 } // anonymous namespace
 
-sstring query_value_mismatch_message(functions::search_family family, std::string_view function_name) {
+sstring query_value_mismatch_message(functions::search_family family, std::string_view function_name, search_clause clause) {
+    // A column is searched once per query, so two ORDER BY calls on one column are one search and
+    // have to agree; a call anywhere else has to agree with the search ORDER BY introduced.
+    if (clause == search_clause::ordering) {
+        return family == functions::search_family::ann
+                ? seastar::format("{}() in ORDER BY must use the same query vector as the other calls on the same column", function_name)
+                : seastar::format("{}() in ORDER BY must use the same search term as the other calls on the same column", function_name);
+    }
     return family == functions::search_family::ann
             ? seastar::format("{}() in SELECT must use the same query vector as the ANN ordering", function_name)
             : seastar::format("{}() in SELECT must use the same search term as BM25() in WHERE and ORDER BY", function_name);
@@ -123,11 +130,11 @@ search_source& external_search_plan::search_of(const expr::function_call& fc, co
     const auto values_equal = external_search::unevaluated_equality(query_value, source->query_value);
     if (values_equal != external_search::equality::always) {
         if (values_equal == external_search::equality::never) {
-            throw exceptions::invalid_request_exception(query_value_mismatch_message(fun.family(), fun.display_name()));
+            throw exceptions::invalid_request_exception(query_value_mismatch_message(fun.family(), fun.display_name(), clause));
         }
         // Taken out of the selector tree, so nothing else registers a bind marker in this value.
         expr::fill_prepare_context(query_value, _ctx);
-        source->deferred.push_back({std::move(query_value), sstring(fun.display_name())});
+        source->deferred.push_back({std::move(query_value), sstring(fun.display_name()), clause});
     }
     return *source;
 }
@@ -211,6 +218,14 @@ void external_search_plan::check_restrictions(const restrictions::select_restric
         search_of(fc, *fun, search_clause::restrictions);
     }
     if (_sources.empty()) {
+        return;
+    }
+
+    if (_sources.size() > 1) {
+        // A vector index prefilters and a full-text index does not, and how to combine them is not decided.
+        if (!scoring.empty() || has_other_restrictions(restrictions)) {
+            throw exceptions::invalid_request_exception("A query running several searches does not support a WHERE clause");
+        }
         return;
     }
 
