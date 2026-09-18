@@ -3234,6 +3234,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         if (tables_to_migrate.size() < all_tables) {
             rtlogger.info("Resuming the preparation of keyspace '{}': {} of {} table(s) already have a tablet map",
                           ks_name, all_tables - tables_to_migrate.size(), all_tables);
+            // Lets tests fail a request which has already written some of its maps.
+            co_await utils::get_local_injector().inject("prepare_migration_fail_on_resume", [] {
+                return std::make_exception_ptr(std::runtime_error("injected prepare_migration failure"));
+            });
         }
 
         // The tablet count targets were computed once, when the request was made, from the
