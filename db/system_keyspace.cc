@@ -1399,6 +1399,13 @@ future<> system_keyspace::peers_table_read_fixup() {
     }
     _peers_table_read_fixup_done = true;
 
+    // This function is reached through load_host_ids() & co, which are also
+    // called from get_or_load_peers_cache() while it holds _peers_cache_lock.
+    // The semaphore is not reentrant, so the stale rows must be removed with
+    // remove_endpoint_unlocked() -- calling remove_endpoint() here would wait
+    // for the lock held by our own caller forever and the node would hang
+    // right after "starting group 0" on every restart.
+
     const auto cql = format("SELECT peer, host_id, WRITETIME(host_id) as ts from system.{}", PEERS);
     std::unordered_map<utils::UUID, std::pair<net::inet_address, int64_t>> map{};
     const auto cql_result = co_await execute_cql(cql);
@@ -1407,14 +1414,14 @@ future<> system_keyspace::peers_table_read_fixup() {
         if (!row.has("host_id")) {
             slogger.error("Peer {} has no host_id in system.{}, the record is broken, removing it",
                 peer, system_keyspace::PEERS);
-            co_await remove_endpoint(gms::inet_address{peer});
+            co_await remove_endpoint_unlocked(gms::inet_address{peer});
             continue;
         }
         const auto host_id = row.get_as<utils::UUID>("host_id");
         if (!host_id) {
             slogger.error("Peer {} has null host_id in system.{}, the record is broken, removing it",
                 peer, system_keyspace::PEERS);
-            co_await remove_endpoint(gms::inet_address{peer});
+            co_await remove_endpoint_unlocked(gms::inet_address{peer});
             continue;
         }
         const auto ts = row.get_as<int64_t>("ts");
@@ -1426,11 +1433,11 @@ future<> system_keyspace::peers_table_read_fixup() {
         if (it->second.second >= ts) {
             slogger.error("Peer {} with host_id {} has newer IP {} in system.{}, the record is stale, removing it",
                 peer, host_id, it->second.first, system_keyspace::PEERS);
-            co_await remove_endpoint(gms::inet_address{peer});
+            co_await remove_endpoint_unlocked(gms::inet_address{peer});
         } else {
             slogger.error("Peer {} with host_id {} has newer IP {} in system.{}, the record is stale, removing it",
                 it->second.first, host_id, peer, system_keyspace::PEERS);
-            co_await remove_endpoint(gms::inet_address{it->second.first});
+            co_await remove_endpoint_unlocked(gms::inet_address{it->second.first});
             it->second = {peer, ts};
         }
     }
@@ -1999,10 +2006,14 @@ future<> system_keyspace::update_schema_version(table_schema_version version) {
  * Remove stored tokens being used by another node
  */
 future<> system_keyspace::remove_endpoint(gms::inet_address ep) {
+    const auto guard = co_await get_units(_peers_cache_lock, 1);
+    co_await remove_endpoint_unlocked(ep);
+}
+
+future<> system_keyspace::remove_endpoint_unlocked(gms::inet_address ep) {
     const sstring req = format("DELETE FROM system.{} WHERE peer = ?", PEERS);
     slogger.debug("DELETE FROM system.{} WHERE peer = {}", PEERS, ep);
 
-    const auto guard = co_await get_units(_peers_cache_lock, 1);
     try {
         co_await execute_cql(req, ep.addr()).discard_result();
         if (auto* cache = get_peers_cache()) {
@@ -2010,7 +2021,12 @@ future<> system_keyspace::remove_endpoint(gms::inet_address ep) {
             if (it != cache->inet_ip_to_host_id.end()) {
                 const auto id = it->second;
                 cache->inet_ip_to_host_id.erase(it);
-                cache->host_id_to_inet_ip.erase(id);
+                // update_peer_info(new_ip, id) may have already run and stored
+                // id -> new_ip; do not throw that mapping away together with the
+                // old address.
+                if (const auto hit = cache->host_id_to_inet_ip.find(id); hit != cache->host_id_to_inet_ip.end() && hit->second == ep) {
+                    cache->host_id_to_inet_ip.erase(hit);
+                }
             }
         }
     } catch (...) {

@@ -153,3 +153,40 @@ async def test_full_shutdown_during_replace(manager: ScyllaClusterManager, reuse
                 peers = {(row.peer, row.host_id) for row in result}
                 expected = {(other.ip_addr, UUID(id)) for other, id in zip(live_servers, host_ids) if other != srv}
                 assert peers == expected
+
+
+async def peers_rows_for_host_id(cql, host, host_id: UUID) -> list[str]:
+    rows = await cql.run_async("SELECT peer, host_id FROM system.peers", host=host)
+    return sorted(str(r.peer) for r in rows if r.host_id == host_id)
+
+
+async def test_peers_table_read_fixup_does_not_deadlock(manager: ScyllaClusterManager):
+    """
+    peers_table_read_fixup() removes stale system.peers rows (two IPs for the
+    same host_id) on the first read of the table after startup. With Raft
+    topology the first read happens while starting group 0, from
+    get_or_load_peers_cache() which holds _peers_cache_lock; the removal used to
+    go through remove_endpoint() which takes the same non-reentrant lock, so
+    the node hung forever right after "starting group 0" on every restart.
+
+    Regression test for https://github.com/scylladb/scylladb/issues/31762
+    """
+    servers = await manager.servers_add(2)
+    cql, hosts = await manager.get_ready_cql(servers)
+    victim, other = servers
+    other_host_id = UUID(await manager.get_host_id(other.server_id))
+
+    # Plant a stale row for `other` with an older timestamp so that the fixup
+    # keeps the genuine row and removes this one.
+    stale_ip = '127.255.255.254'
+    await cql.run_async(f"INSERT INTO system.peers (peer, host_id) VALUES ('{stale_ip}', {other_host_id}) USING TIMESTAMP 1",
+                        host=hosts[0])
+    assert await peers_rows_for_host_id(cql, hosts[0], other_host_id) == sorted([stale_ip, other.ip_addr])
+
+    log = await manager.server_open_log(victim.server_id)
+    mark = await log.mark()
+    await manager.server_restart(victim.server_id, wait_others=1)
+    await log.wait_for('the record is stale, removing it', from_mark=mark)
+
+    cql, hosts = await manager.get_ready_cql(servers)
+    assert await peers_rows_for_host_id(cql, hosts[0], other_host_id) == [other.ip_addr]
