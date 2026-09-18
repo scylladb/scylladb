@@ -653,17 +653,13 @@ future<> evictable_reader::fast_forward_to(const dht::partition_range& pr) {
         co_return;
     }
     if (auto reader_opt = try_resume()) {
-        std::exception_ptr ex;
-        try {
-            co_await reader_opt->fast_forward_to(pr);
-            _range_override.reset();
-        } catch (...) {
-            ex = std::current_exception();
-        }
-        if (ex) {
+        // Use coroutine::as_future: a timed out fast-forward is an expected
+        // outcome here, not worth a real C++ throw/catch.
+        if (auto f = co_await coroutine::as_future(reader_opt->fast_forward_to(pr)); f.failed()) {
             co_await reader_opt->close();
-            std::rethrow_exception(std::move(ex));
+            co_await std::move(f);
         }
+        _range_override.reset();
         maybe_pause(std::move(*reader_opt));
     }
 }
@@ -880,38 +876,34 @@ future<> shard_reader::do_fill_buffer(std::optional<buffer_fill_hint> hint) {
                 }
                 auto underlying_reader = _lifecycle_policy->create_reader(s, permit, *_pr, _ps, _trace_state, _fwd_mr);
 
-                std::exception_ptr ex;
-
-                try {
-                    // The reader might have been saved from a previous page and
-                    // missed some fast-forwarding since the new page started.
-                    // Fast forward it to the correct range if that is the case.
-                    if (auto pr = _lifecycle_policy->get_read_range(); pr && _pr->start() && pr->after(_pr->start()->value(), dht::ring_position_comparator(*_schema))) {
-                        auto new_pr = _pr.get_owner_shard() == this_shard_id() ? _pr.release() : make_lw_shared<const dht::partition_range>(*_pr);
-                        co_await underlying_reader.fast_forward_to(*new_pr);
-                        _lifecycle_policy->update_read_range(new_pr);
-                        _pr = make_foreign(std::move(new_pr));
+                // The reader might have been saved from a previous page and
+                // missed some fast-forwarding since the new page started.
+                // Fast forward it to the correct range if that is the case.
+                if (auto pr = _lifecycle_policy->get_read_range(); pr && _pr->start() && pr->after(_pr->start()->value(), dht::ring_position_comparator(*_schema))) {
+                    auto new_pr = _pr.get_owner_shard() == this_shard_id() ? _pr.release() : make_lw_shared<const dht::partition_range>(*_pr);
+                    // Use coroutine::as_future: a timed out fast-forward is an expected
+                    // outcome here, not worth a real C++ throw/catch.
+                    if (auto f = co_await coroutine::as_future(underlying_reader.fast_forward_to(*new_pr)); f.failed()) {
+                        co_await underlying_reader.close();
+                        co_await std::move(f);
                     }
-                } catch (...) {
-                    ex = std::current_exception();
-                }
-                if (ex) {
-                    co_await underlying_reader.close();
-                    std::rethrow_exception(std::move(ex));
+                    _lifecycle_policy->update_read_range(new_pr);
+                    _pr = make_foreign(std::move(new_pr));
                 }
 
                 auto rreader = make_foreign(std::make_unique<evictable_reader>(evictable_reader::auto_pause::yes, std::move(ms),
                             std::move(underlying_reader), s, std::move(permit), *_pr, _ps, _trace_state, _fwd_mr));
 
-                try {
-                    tracing::trace(_trace_state, "Creating shard reader on shard: {}", this_shard_id());
-                    auto res = co_await coroutine::try_future(fill_reader_buffer(*rreader, hint));
-                    co_return reader_and_buffer_fill_result{std::move(rreader), std::move(res)};
-                } catch (...) {
-                    ex = std::current_exception();
+                tracing::trace(_trace_state, "Creating shard reader on shard: {}", this_shard_id());
+                // Use coroutine::as_future: try_future would destroy this coroutine and
+                // forward the exception without resuming it on failure, skipping the
+                // close() below and leaking rreader.
+                auto f = co_await coroutine::as_future(fill_reader_buffer(*rreader, hint));
+                if (f.failed()) {
+                    co_await rreader->close();
+                    co_await std::move(f);
                 }
-                co_await rreader->close();
-                std::rethrow_exception(std::move(ex));
+                co_return reader_and_buffer_fill_result{std::move(rreader), f.get()};
             })));
             _reader = std::move(res.reader);
             co_return std::move(res.result);
