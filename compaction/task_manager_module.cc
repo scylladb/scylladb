@@ -829,24 +829,27 @@ future<tasks::task_manager::task_ptr> task_manager_module::start_shard_upgrade_s
     });
 }
 
-future<> table_upgrade_sstables_compaction_task_impl::run() {
-    co_await wait_for_your_turn(_cv, _current_task, _status.id);
+static future<> run_table_upgrade_sstables_compaction(replica::database& db, std::string keyspace, const table_info& ti, seastar::condition_variable& cv, current_task_type& current_task, bool exclude_current_version, tasks::task_info task_info) {
+    co_await wait_for_your_turn(cv, current_task, task_info.get_id());
     auto get_owned_ranges = [&] (std::string_view keyspace_name) -> future<owned_ranges_ptr> {
-        const auto& ks = _db.find_keyspace(keyspace_name);
+        const auto& ks = db.find_keyspace(keyspace_name);
         if (ks.get_replication_strategy().is_per_table()) {
             co_return nullptr;
         }
         const auto& erm = ks.get_static_effective_replication_map();
-        co_return compaction::make_owned_ranges_ptr(co_await _db.get_keyspace_local_ranges(erm));
+        co_return compaction::make_owned_ranges_ptr(co_await db.get_keyspace_local_ranges(erm));
     };
-    auto owned_ranges_ptr = co_await get_owned_ranges(_status.keyspace);
-    auto info = this->info();
-    co_await run_on_table("upgrade_sstables", _db, _status.keyspace, _ti, [&] (replica::table& t) -> future<> {
+    auto owned_ranges_ptr = co_await get_owned_ranges(keyspace);
+    co_await run_on_table("upgrade_sstables", db, keyspace, ti, [&] (replica::table& t) -> future<> {
         return t.parallel_foreach_compaction_group_view([&] (compaction::compaction_group_view& ts) -> future<> {
             auto lock_holder = co_await t.get_compaction_manager().get_incremental_repair_read_lock(ts, "upgrade_sstables_compaction");
-            co_await t.get_compaction_manager().perform_sstable_upgrade(owned_ranges_ptr, ts, _exclude_current_version, info);
+            co_await t.get_compaction_manager().perform_sstable_upgrade(owned_ranges_ptr, ts, exclude_current_version, task_info);
         });
     });
+}
+
+future<> table_upgrade_sstables_compaction_task_impl::run() {
+    return run_table_upgrade_sstables_compaction(_db, _status.keyspace, _ti, _cv, _current_task, _exclude_current_version, info());
 }
 
 future<std::optional<double>> table_upgrade_sstables_compaction_task_impl::expected_total_workload() const {
