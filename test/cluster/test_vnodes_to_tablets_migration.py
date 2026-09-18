@@ -1280,6 +1280,47 @@ async def test_migration_tablet_maps_exceed_command_size(manager: ScyllaClusterM
         await assert_all_tables_have_tablet_map(manager, servers[0], ks, tables)
 
 
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_migration_partially_prepared_keyspace_can_be_rolled_back(manager: ScyllaClusterManager):
+    """Verify that a keyspace prepared only in part can be rolled back.
+
+    A prepare which fails halfway leaves tablet maps for some tables of the keyspace.
+    Finalizing forward needs every table to have a map, so the way out of that state is
+    either preparing it again or rolling it back: finalizing with no node marked for
+    upgrade has to accept such a keyspace and drop the maps it does have, after which it
+    can be prepared again from scratch.
+    """
+    num_tables = 4
+    server, cql = await setup_single_node(manager)
+
+    await manager.api.enable_injection(server.ip_addr, 'prepare_migration_one_table_per_command',
+                                       one_shot=False)
+    await manager.api.enable_injection(server.ip_addr, 'prepare_migration_fail_on_resume',
+                                       one_shot=True)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}") as ks:
+        tables = [f't{i}' for i in range(num_tables)]
+        for t in tables:
+            await cql.run_async(f"CREATE TABLE {ks}.{t} (pk int PRIMARY KEY, c int)")
+
+        logger.info("Preparing the migration, failing after the first command")
+        with pytest.raises(HTTPError, match="injected prepare_migration failure"):
+            await manager.api.create_vnode_tablet_migration(server.ip_addr, ks)
+        mapped = await tables_with_tablet_map(manager, server, ks, tables)
+        assert len(mapped) == 1, f"expected exactly one table with a tablet map, got {mapped}"
+
+        logger.info("Rolling the migration back")
+        await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks)
+        mapped = await tables_with_tablet_map(manager, server, ks, tables)
+        assert not mapped, f"tables still with a tablet map after the rollback: {mapped}"
+        status = await manager.api.get_vnode_tablet_migration_status(server.ip_addr, ks)
+        assert status['status'] == 'vnodes', f"expected keyspace to be back to vnodes, got '{status['status']}'"
+
+        logger.info("Preparing the migration again from scratch")
+        await manager.api.create_vnode_tablet_migration(server.ip_addr, ks)
+        await assert_all_tables_have_tablet_map(manager, server, ks, tables)
+
+
 @pytest.mark.asyncio
 async def test_migration_multiple_tables(manager: ScyllaClusterManager):
     """Verify vnodes-to-tablets migration on keyspace with multiple tables.
