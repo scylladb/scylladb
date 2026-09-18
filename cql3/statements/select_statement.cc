@@ -2158,11 +2158,12 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
         throw exceptions::invalid_request_exception("Only ANN() and BM25() are supported as scoring functions in ORDER BY");
     }
 
-    if (prepared_selectors.empty() && (!_group_by_columns.empty() || plan.is_rescoring())) {
-        // We have a "SELECT * GROUP BY" or "SELECT * ORDER BY ANN" with rescoring enabled. If we leave prepared_selectors
-        // empty, below we choose selection::wildcard() for SELECT *, and either:
+    if (prepared_selectors.empty() && (!_group_by_columns.empty() || plan.ordering_expr())) {
+        // We have a "SELECT * GROUP BY", or a "SELECT *" whose rows have to be ranked by a score
+        // computed here. If we leave prepared_selectors empty, below we choose selection::wildcard()
+        // for SELECT *, and either:
         //  - forget to do the "levellize" trick needed for the GROUP BY. See #16531.
-        //  - forget to add the similarity function needed for ORDER BY ANN with rescoring. See below.
+        //  - have nowhere to put the score selector the comparator reads. See below.
         // So we need to set prepared_selectors. 
         auto all_columns = selection::selection::wildcard_columns(schema);
         std::vector<::shared_ptr<selection::raw_selector>> select_all;
@@ -2186,8 +2187,14 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
 
     select_statement::ordering_comparator_type ordering_comparator;
     bool hide_last_column = false;
-    if (plan.is_rescoring()) {
-        ordering_comparator = rescored_similarity_ordering(prepared_selectors, *plan.ann_ordering(), db, schema);
+    if (const auto& score = plan.ordering_expr()) {
+        // The rows are sorted here rather than returned in the index's order. Sorting reads a
+        // column of the result row, so the score is appended as a trailing selector, hidden from
+        // the client below.
+        // The comparator reads the column as a float; nothing in the types says a score is one.
+        throwing_assert(expr::type_of(*score) == float_type);
+        prepared_selectors.push_back(selection::prepared_selector{.expr = *score, .alias = nullptr});
+        ordering_comparator = descending_score_comparator(prepared_selectors.size() - 1);
         hide_last_column = true;
     }
 
@@ -2209,8 +2216,8 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
                      : selection::selection::from_selectors(db, schema, keyspace(), levellized_prepared_selectors,
                                                             std::move(temporaries_allocator));
 
-    if (is_ann_query && hide_last_column) {
-        // Hide the similarity selector from the client by reducing column_count
+    if (hide_last_column) {
+        // Hide the score selector from the client by reducing column_count
         selection->get_result_metadata()->hide_last_column();
     }
 

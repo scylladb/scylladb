@@ -22,6 +22,7 @@
 #include "types/types.hh"
 
 #include <algorithm>
+#include <cmath>
 #include <ranges>
 
 namespace cql3::statements {
@@ -69,42 +70,10 @@ sstring query_value_mismatch_message(const functions::external_search_function& 
             : seastar::format("{}() in SELECT must use the same search term as BM25() in WHERE and ORDER BY", fun.display_name());
 }
 
-/// Orders by a score column of the result row, descending, rows without a usable score last.
-select_statement::ordering_comparator_type descending_score_comparator(size_t score_column_index) {
-    return [score_column_index, type = float_type] (const raw::select_statement::result_row_type& r1, const raw::select_statement::result_row_type& r2) {
-        auto& c1 = r1[score_column_index];
-        auto& c2 = r2[score_column_index];
-        auto f1 = c1 ? value_cast<float>(type->deserialize(*c1)) : std::numeric_limits<float>::quiet_NaN();
-        auto f2 = c2 ? value_cast<float>(type->deserialize(*c2)) : std::numeric_limits<float>::quiet_NaN();
-        if (std::isfinite(f1) && std::isfinite(f2)) {
-            return f1 > f2;
-        }
-        return std::isfinite(f1);
-    };
-}
-
 } // anonymous namespace
 
 bool search_source::rescores() const {
     return family == functions::search_family::ann && secondary_index::vector_index::is_rescoring_enabled(index.metadata().options());
-}
-
-select_statement::ordering_comparator_type rescored_similarity_ordering(
-        std::vector<selection::prepared_selector>& prepared_selectors,
-        const ann_ordering_info& ann_ordering_info,
-        data_dictionary::database db,
-        schema_ptr schema) {
-    auto similarity = ann_search::similarity_expression(ann_ordering_info.index, ann_ordering_info.prepared_ann_ordering.first,
-            ann_ordering_info.prepared_ann_ordering.second, db, schema);
-    // The comparator reads the column as a float; every similarity function returns one, but
-    // nothing in the types says so.
-    throwing_assert(expr::type_of(similarity) == float_type);
-
-    prepared_selectors.push_back(selection::prepared_selector{
-        .expr = std::move(similarity),
-        .alias = nullptr,
-    });
-    return descending_score_comparator(prepared_selectors.size() - 1);
 }
 
 const search_source* external_search_plan::find(functions::search_family family) const {
@@ -223,7 +192,12 @@ void external_search_plan::resolve_ordering(const expr::function_call& fc) {
     if (!fun || fun->value() != functions::search_value::score_and_rank) {
         return;
     }
-    search_of(fc, *fun, search_clause::ordering);
+    auto& source = search_of(fc, *fun, search_clause::ordering);
+    if (source.rescores()) {
+        // A rescoring index ordered the rows by the score it reported for a quantized vector, which
+        // is not the requested order: the coordinator recomputes the similarity and sorts by it.
+        _ordering_expr = ann_search::similarity_expression(source.index, source.column, source.query_value, _db, _schema);
+    }
 }
 
 void external_search_plan::replace_selectors(std::vector<selection::prepared_selector>& prepared_selectors) {
@@ -234,6 +208,19 @@ void external_search_plan::replace_selectors(std::vector<selection::prepared_sel
         ps.expr = replace_search_calls(ps.expr, search_clause::selectors);
         external_search::name_selector_as_written(ps, written);
     }
+}
+
+select_statement::ordering_comparator_type descending_score_comparator(size_t score_column_index) {
+    return [score_column_index, type = float_type] (const raw::select_statement::result_row_type& r1, const raw::select_statement::result_row_type& r2) {
+        auto& c1 = r1[score_column_index];
+        auto& c2 = r2[score_column_index];
+        auto f1 = c1 ? value_cast<float>(type->deserialize(*c1)) : std::numeric_limits<float>::quiet_NaN();
+        auto f2 = c2 ? value_cast<float>(type->deserialize(*c2)) : std::numeric_limits<float>::quiet_NaN();
+        if (std::isfinite(f1) && std::isfinite(f2)) {
+            return f1 > f2;
+        }
+        return std::isfinite(f1);
+    };
 }
 
 } // namespace cql3::statements

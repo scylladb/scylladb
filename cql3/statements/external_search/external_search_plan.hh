@@ -46,16 +46,6 @@ struct search_source {
     bool rescores() const;
 };
 
-/// The order the rows come back in when the index rescores: the Vector Store ordered them by the
-/// score it reported, which is not the requested order then. Sorting reads a column of the result
-/// row, so this appends a trailing selector holding the recomputed similarity - the column the
-/// returned comparator sorts by, and the one the caller has to hide from the client.
-select_statement::ordering_comparator_type rescored_similarity_ordering(
-        std::vector<selection::prepared_selector>& prepared_selectors,
-        const ann_ordering_info& ann_ordering_info,
-        data_dictionary::database db,
-        schema_ptr schema);
-
 /// The external searches one statement runs, and the replacement of the calls that refer to them.
 ///
 /// A call to a search function (ANN(), BM25(), ...) cannot be evaluated from its arguments: only
@@ -71,6 +61,7 @@ class external_search_plan {
     prepare_context& _ctx;
     expr::temporary_allocator& _temporaries_allocator;
     std::vector<search_source> _sources;
+    std::optional<expr::expression> _ordering_expr;
 
 public:
     external_search_plan(data_dictionary::database db, schema_ptr schema, prepare_context& ctx,
@@ -83,6 +74,12 @@ public:
 
     /// Resolves the search the ORDER BY call names, if it names one.
     void resolve_ordering(const expr::function_call& fc);
+
+    /// The score the rows are sorted by, when it is not the index's own order. select_statement::prepare()
+    /// adds it as a hidden trailing selector for the comparator to read.
+    const std::optional<expr::expression>& ordering_expr() const {
+        return _ordering_expr;
+    }
 
     /// Replaces every search call in the SELECT clause, nested occurrences included, with a read
     /// of its search's temporary.
@@ -99,12 +96,6 @@ public:
 
     bool has_bm25() const {
         return find(functions::search_family::bm25) != nullptr;
-    }
-
-    /// True when the coordinator, not the index, decides the order of the rows.
-    bool is_rescoring() const {
-        const auto* source = find(functions::search_family::ann);
-        return source && source->rescores();
     }
 
     /// The ordering_info the statement of each family takes, empty when the statement runs no search
@@ -128,5 +119,8 @@ private:
     const search_source* find(functions::search_family family) const;
     search_source* find(functions::search_family family);
 };
+
+/// Orders by a score column of the result row, descending, rows without a usable score last.
+select_statement::ordering_comparator_type descending_score_comparator(size_t score_column_index);
 
 } // namespace cql3::statements
