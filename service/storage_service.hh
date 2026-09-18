@@ -320,6 +320,10 @@ public:
     struct keyspace_migration_status {
         sstring keyspace;
         migration_status status;
+        // How many of the keyspace's tables have a tablet map. Fewer than all of them, but
+        // more than none, means a preparation which did not finish.
+        size_t tables_with_tablet_map = 0;
+        size_t tables_total = 0;
         std::vector<node_migration_status> nodes;
     };
 
