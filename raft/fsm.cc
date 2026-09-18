@@ -84,11 +84,14 @@ fsm::fsm(server_id id, sstring tag, term_t current_term, server_id voted_for, lo
     }
 }
 
-future<semaphore_units<>> fsm::wait_for_memory_permit(seastar::abort_source* as, size_t size) {
+future<fsm::memory_permit> fsm::wait_for_memory_permit(seastar::abort_source* as, size_t size) {
     check_is_leader();
 
-    auto& sm = *leader_state().log_limiter_semaphore;
-    return as ? get_units(sm, size, *as) : get_units(sm, size);
+    auto sm = leader_state().log_limiter_semaphore;
+    auto f_units = as ? get_units(*sm, size, *as) : get_units(*sm, size);
+    return f_units.then([sm = std::move(sm)] (auto&& units) mutable {
+        return memory_permit(std::move(sm), std::move(units));
+    });
 }
 
 const configuration& fsm::get_configuration() const {
