@@ -48,7 +48,8 @@ public:
     sstable_run(shared_sstable);
     // Returns false if sstable being inserted cannot satisfy the disjoint invariant. Then caller should pick another run for it.
     [[nodiscard]] bool insert(shared_sstable sst);
-    void erase(shared_sstable sst);
+    // Returns false if sst was not tracked by this run.
+    [[nodiscard]] bool erase(shared_sstable sst);
     bool empty() const noexcept {
         return _all.empty();
     }
