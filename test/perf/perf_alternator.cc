@@ -72,10 +72,15 @@ static future<> make_request(http::client& cli, sstring operation, sstring body)
     auto req = http::request::make("POST", "localhost", "/");
     req._headers["X-Amz-Target:"] = "DynamoDB_20120810." + operation;
     req.write_body("application/x-amz-json-1.0", std::move(body));
-    return cli.make_request(std::move(req), [] (const http::reply& rep, input_stream<char>&& in_) {
-        return do_with(std::move(in_), [] (auto& in) {
-            return util::skip_entire_stream(in).then([&in] () {
-                return in.close();
+    return cli.make_request(std::move(req), [operation] (const http::reply& rep, input_stream<char>&& in_) {
+        return do_with(std::move(in_), rep._status, [operation] (auto& in, auto status) {
+            return util::read_entire_stream_contiguous(in).then([&in, status, operation] (sstring body) {
+                return in.close().then([status, operation, body = std::move(body)] {
+                    if (status < http::reply::status_type::ok || status >= http::reply::status_type::multiple_choices) {
+                        throw std::runtime_error(seastar::format("{} failed with HTTP status {}: {}", operation,
+                                static_cast<int>(status), body.substr(0, 200)));
+                    }
+                });
             });
         });
     });
