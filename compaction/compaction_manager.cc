@@ -585,7 +585,7 @@ protected:
         co_await coroutine::switch_to(_cm.maintenance_sg());
 
         switch_state(state::pending);
-        auto units = co_await acquire_semaphore(_cm._maintenance_ops_sem);
+        auto units = co_await acquire_semaphore(_cm._maintenance_ops_sem, "maintenance operation");
         // Write lock is used to synchronize selection of sstables for compaction and their registration.
         // Also used to synchronize with regular compaction, so major waits for regular to cease before selecting candidates.
         auto lock_holder = co_await _compaction_state.lock.hold_write_lock();
@@ -704,7 +704,7 @@ protected:
             co_return std::nullopt;
         }
         switch_state(state::pending);
-        auto units = co_await acquire_semaphore(_cm._maintenance_ops_sem);
+        auto units = co_await acquire_semaphore(_cm._maintenance_ops_sem, "maintenance operation");
 
         if (!can_proceed(throw_if_stopping::yes)) {
             co_return std::nullopt;
@@ -1022,8 +1022,23 @@ sstables::shared_sstable sstables_task_executor::consume_sstable() {
     return sst;
 }
 
-future<semaphore_units<named_semaphore_exception_factory>> compaction_task_executor::acquire_semaphore(named_semaphore& sem, size_t units) {
-    return seastar::get_units(sem, units, _compaction_data.abort).handle_exception_type([this] (const abort_requested_exception& e) {
+future<semaphore_units<named_semaphore_exception_factory>> compaction_task_executor::acquire_semaphore(named_semaphore& sem, std::string_view sem_name, size_t units) {
+    // Make a contended acquisition visible, as it's otherwise a silent and unbounded wait.
+    auto contended = sem.available_units() < ssize_t(units);
+    auto start = seastar::lowres_clock::now();
+    if (contended) {
+        cmlog.info("{}: waiting for {} ({} waiters ahead)", *this, sem_name, sem.waiters());
+    }
+    auto fut = seastar::get_units(sem, units, _compaction_data.abort);
+    if (contended) {
+        // Reported only when the wait ends in success, an aborted one throws below instead.
+        fut = std::move(fut).then([this, sem_name, start] (semaphore_units<named_semaphore_exception_factory> permit) {
+            cmlog.info("{}: acquired {} after waiting for {} ms", *this, sem_name,
+                    std::chrono::duration_cast<std::chrono::milliseconds>(seastar::lowres_clock::now() - start).count());
+            return permit;
+        });
+    }
+    return std::move(fut).handle_exception_type([this] (const abort_requested_exception& e) {
         auto s = _compacting_table->schema();
         return make_exception_future<semaphore_units<named_semaphore_exception_factory>>(
                 compaction_stopped_exception(s->ks_name(), s->cf_name(), e.what()));
@@ -1771,7 +1786,7 @@ protected:
                 co_return std::nullopt;
             }
             switch_state(state::pending);
-            auto units = co_await acquire_semaphore(_cm._off_strategy_sem);
+            auto units = co_await acquire_semaphore(_cm._off_strategy_sem, "off-strategy compaction");
             if (!can_proceed()) {
                 co_return std::nullopt;
             }
@@ -1844,7 +1859,7 @@ protected:
         compaction_stats stats{};
 
         switch_state(state::pending);
-        auto maintenance_permit = co_await acquire_semaphore(_cm._maintenance_ops_sem);
+        auto maintenance_permit = co_await acquire_semaphore(_cm._maintenance_ops_sem, "maintenance operation");
 
         while (!_sstables.empty() && can_proceed()) {
             auto sst = consume_sstable();
@@ -1920,7 +1935,7 @@ protected:
         compaction_stats stats{};
 
         switch_state(state::pending);
-        auto maintenance_permit = co_await acquire_semaphore(_cm._maintenance_ops_sem);
+        auto maintenance_permit = co_await acquire_semaphore(_cm._maintenance_ops_sem, "maintenance operation");
 
         while (!_sstables.empty()) {
             auto sst = consume_sstable();
@@ -2200,15 +2215,17 @@ class cleanup_sstables_compaction_task_executor : public compaction_task_executo
     owned_ranges_ptr _owned_ranges_ptr;
     compacting_sstable_registration _compacting;
     std::vector<compaction_descriptor> _pending_cleanup_jobs;
+    const is_topology_cleanup _topology_cleanup;
 public:
     cleanup_sstables_compaction_task_executor(compaction_manager& mgr, throw_if_stopping do_throw_if_stopping, compaction_group_view* t, tasks::task_id parent_id, compaction_type_options options, owned_ranges_ptr owned_ranges_ptr,
-                                     std::vector<sstables::shared_sstable> candidates, compacting_sstable_registration compacting)
+                                     std::vector<sstables::shared_sstable> candidates, compacting_sstable_registration compacting, is_topology_cleanup topology_cleanup)
             : compaction_task_executor(mgr, do_throw_if_stopping, t, options.type(), sstring(to_string(options.type())))
             , cleanup_compaction_task_impl(mgr._task_manager_module, tasks::task_id::create_random_id(), 0, "compaction group", t->schema()->ks_name(), t->schema()->cf_name(), "", parent_id)
             , _cleanup_options(std::move(options))
             , _owned_ranges_ptr(std::move(owned_ranges_ptr))
             , _compacting(std::move(compacting))
             , _pending_cleanup_jobs(t->get_compaction_strategy().get_cleanup_compaction_jobs(*t, std::move(candidates)))
+            , _topology_cleanup(topology_cleanup)
     {
         // Cleanup is made more resilient under disk space pressure, by cleaning up smaller jobs first, so larger jobs
         // will have more space available released by previous jobs.
@@ -2241,7 +2258,9 @@ protected:
 
     virtual future<compaction_manager::compaction_stats_opt>  do_run() override {
         switch_state(state::pending);
-        auto maintenance_permit = co_await acquire_semaphore(_cm._maintenance_ops_sem);
+        // Topology-driven cleanup takes a semaphore of its own, so it's never queued behind a user maintenance operation.
+        auto maintenance_permit = co_await acquire_semaphore(_topology_cleanup ? _cm._topology_cleanup_sem : _cm._maintenance_ops_sem,
+                _topology_cleanup ? "topology cleanup" : "maintenance operation");
 
         while (!_pending_cleanup_jobs.empty() && can_proceed()) {
             auto active_job = std::move(_pending_cleanup_jobs.back());
@@ -2356,7 +2375,7 @@ const std::unordered_set<sstables::shared_sstable>& compaction_manager::sstables
     return cs.sstables_requiring_cleanup();
 }
 
-future<> compaction_manager::perform_cleanup(owned_ranges_ptr sorted_owned_ranges, compaction_group_view& t, tasks::task_info info) {
+future<> compaction_manager::perform_cleanup(owned_ranges_ptr sorted_owned_ranges, compaction_group_view& t, tasks::task_info info, is_topology_cleanup topology_cleanup) {
     auto gh = start_compaction(t);
     if (!gh) {
         co_return;
@@ -2366,7 +2385,7 @@ future<> compaction_manager::perform_cleanup(owned_ranges_ptr sorted_owned_range
     constexpr auto max_idle_duration = std::chrono::seconds(300);
     auto& cs = get_compaction_state(&t);
 
-    co_await try_perform_cleanup(sorted_owned_ranges, t, info);
+    co_await try_perform_cleanup(sorted_owned_ranges, t, info, topology_cleanup);
     auto last_idle = seastar::lowres_clock::now();
 
     while (cs.has_sstables_requiring_cleanup()) {
@@ -2396,12 +2415,12 @@ future<> compaction_manager::perform_cleanup(owned_ranges_ptr sorted_owned_range
         if (!has_sstables_eligible_for_compaction()) {
             continue;
         }
-        co_await try_perform_cleanup(sorted_owned_ranges, t, info);
+        co_await try_perform_cleanup(sorted_owned_ranges, t, info, topology_cleanup);
         last_idle = seastar::lowres_clock::now();
     }
 }
 
-future<> compaction_manager::try_perform_cleanup(owned_ranges_ptr sorted_owned_ranges, compaction_group_view& t, tasks::task_info info) {
+future<> compaction_manager::try_perform_cleanup(owned_ranges_ptr sorted_owned_ranges, compaction_group_view& t, tasks::task_info info, is_topology_cleanup topology_cleanup) {
     auto check_for_cleanup = [this, &t] {
         return std::ranges::any_of(_tasks, [&t] (auto& task) {
             return task.compacting_table() == &t && task.compaction_type() == compaction_type::Cleanup;
@@ -2455,7 +2474,7 @@ future<> compaction_manager::try_perform_cleanup(owned_ranges_ptr sorted_owned_r
     };
 
     co_await perform_task_on_all_files<cleanup_sstables_compaction_task_executor>("cleanup", info, t, compaction_type_options::make_cleanup(), std::move(sorted_owned_ranges),
-                                                                         std::move(get_sstables), throw_if_stopping::yes);
+                                                                         std::move(get_sstables), throw_if_stopping::yes, topology_cleanup);
 
 }
 

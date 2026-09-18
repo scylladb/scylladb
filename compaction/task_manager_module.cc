@@ -520,7 +520,7 @@ future<> cleanup_keyspace_compaction_task_impl::run() {
             co_await db.flush_all_tables();
         }
         auto& module = db.get_compaction_manager().get_task_manager_module();
-        auto task = co_await module.make_and_start_task<shard_cleanup_keyspace_compaction_task_impl>({_status.id, _status.shard}, _status.keyspace, _status.id, db, _table_infos);
+        auto task = co_await module.make_and_start_task<shard_cleanup_keyspace_compaction_task_impl>({_status.id, _status.shard}, _status.keyspace, _status.id, db, _table_infos, _is_user_task);
         co_await task->done();
     });
 }
@@ -548,7 +548,7 @@ future<> global_cleanup_compaction_task_impl::run() {
             auto& module = db.get_compaction_manager().get_task_manager_module();
             const tasks::task_info task_info{_status.id, _status.shard};
             auto task = co_await module.make_and_start_task<shard_cleanup_keyspace_compaction_task_impl>(
-                task_info, ks, _status.id, db, std::move(tables));
+                task_info, ks, _status.id, db, std::move(tables), tasks::is_user_task::yes);
             co_await task->done();
         });
     });
@@ -577,7 +577,7 @@ future<> shard_cleanup_keyspace_compaction_task_impl::run() {
     tasks::task_info parent_info{_status.id, _status.shard};
     std::vector<table_tasks_info> table_tasks;
     for (auto& ti : _local_tables) {
-        table_tasks.emplace_back(co_await _module->make_and_start_task<table_cleanup_keyspace_compaction_task_impl>(parent_info, _status.keyspace, ti.name, _status.id, _db, ti, cv, current_task), ti);
+        table_tasks.emplace_back(co_await _module->make_and_start_task<table_cleanup_keyspace_compaction_task_impl>(parent_info, _status.keyspace, ti.name, _status.id, _db, ti, cv, current_task, _is_user_task), ti);
     }
 
     co_await run_table_tasks(_db, std::move(table_tasks), cv, current_task, true);
@@ -601,7 +601,8 @@ future<> table_cleanup_keyspace_compaction_task_impl::run() {
     auto owned_ranges_ptr = co_await get_owned_ranges(_status.keyspace);
     co_await run_on_table("force_keyspace_cleanup", _db, _status.keyspace, _ti, [&] (replica::table& t) {
         // skip the flush, as cleanup_keyspace_compaction_task_impl::run should have done this.
-        return t.perform_cleanup_compaction(owned_ranges_ptr, tasks::task_info{_status.id, _status.shard}, replica::table::do_flush::no);
+        return t.perform_cleanup_compaction(owned_ranges_ptr, tasks::task_info{_status.id, _status.shard}, replica::table::do_flush::no,
+                compaction::is_topology_cleanup(_is_user_task == tasks::is_user_task::no));
     });
 }
 

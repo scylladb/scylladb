@@ -59,6 +59,10 @@ enum class flush_mode {
     all_tables          // Flush all tables in the database prior to compaction
 };
 
+// Set for a cleanup driven by a topology change, i.e. one started by sstable_vnodes_cleanup_fiber,
+// as opposed to a cleanup requested by the user.
+using is_topology_cleanup = bool_class<struct is_topology_cleanup_tag>;
+
 class major_compaction_task_impl : public compaction_task_impl {
 public:
     major_compaction_task_impl(tasks::task_manager::module_ptr module,
@@ -259,15 +263,20 @@ class shard_cleanup_keyspace_compaction_task_impl : public cleanup_compaction_ta
 private:
     replica::database& _db;
     std::vector<table_info> _local_tables;
+    // Explicitly carried down from the task which started the cleanup. Do not use the
+    // inherited is_user_task() virtual, which is not overridden here and defaults to no.
+    tasks::is_user_task _is_user_task;
 public:
     shard_cleanup_keyspace_compaction_task_impl(tasks::task_manager::module_ptr module,
             std::string keyspace,
             tasks::task_id parent_id,
             replica::database& db,
-            std::vector<table_info> local_tables) noexcept
+            std::vector<table_info> local_tables,
+            tasks::is_user_task is_user_task) noexcept
         : cleanup_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, "shard", std::move(keyspace), "", "", parent_id)
         , _db(db)
         , _local_tables(std::move(local_tables))
+        , _is_user_task(is_user_task)
     {}
 protected:
     virtual future<> run() override;
@@ -280,6 +289,9 @@ private:
     table_info _ti;
     seastar::condition_variable& _cv;
     current_task_type& _current_task;
+    // Explicitly carried down from the task which started the cleanup. Do not use the
+    // inherited is_user_task() virtual, which is not overridden here and defaults to no.
+    tasks::is_user_task _is_user_task;
 public:
     table_cleanup_keyspace_compaction_task_impl(tasks::task_manager::module_ptr module,
             std::string keyspace,
@@ -288,12 +300,14 @@ public:
             replica::database& db,
             table_info ti,
             seastar::condition_variable& cv,
-            current_task_type& current_task) noexcept
+            current_task_type& current_task,
+            tasks::is_user_task is_user_task) noexcept
         : cleanup_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, "table", std::move(keyspace), std::move(table), "", parent_id)
         , _db(db)
         , _ti(std::move(ti))
         , _cv(cv)
         , _current_task(current_task)
+        , _is_user_task(is_user_task)
     {}
 protected:
     virtual future<> run() override;
