@@ -1405,17 +1405,6 @@ private:
     }
 
     void replace_remaining_exhausted_sstables() {
-        if (!_sstables.empty() || !used_garbage_collected_sstables().empty()) {
-            std::vector<sstables::shared_sstable> old_sstables;
-            std::move(_sstables.begin(), _sstables.end(), std::back_inserter(old_sstables));
-
-            // Remove Garbage Collected SSTables from the SSTable set if any was previously added.
-            auto& used_gc_sstables = used_garbage_collected_sstables();
-            old_sstables.insert(old_sstables.end(), used_gc_sstables.begin(), used_gc_sstables.end());
-
-            _replacer(get_compaction_completion_desc(std::move(old_sstables), std::move(_new_unused_sstables)));
-         }
-
         // A GC sstable can still be unused at this point: mutation_compactor seals
         // the GC writer *before* the regular one at end of stream, so if the
         // regular writer had already rotated shut (e.g. the tail of the stream is
@@ -1431,14 +1420,40 @@ private:
         // deleted, and invisible until the next restart rescans the data
         // directory.
         //
-        // Done after the replacement above so the GC sstable, which guards against
+        // Marked on the way out rather than inline, because the replacement below
+        // can throw, and this is the last chance to do it: compaction::run() calls
+        // finish(), and with it on_end_of_compaction(), outside the try/catch that
+        // invokes on_interrupt(), so delete_sstables_for_interrupted_compaction()
+        // -- the only other place that marks them -- would not run either.
+        //
+        // Done after the replacement below so the GC sstable, which guards against
         // data resurrection, outlives the atomic swap of inputs for outputs.
-        for (auto& sst : _unused_garbage_collected_sstables) {
-            log_debug("Deleting unused garbage collected sstable {} for {}.{}",
-                      sst->get_filename(), _schema->ks_name(), _schema->cf_name());
-            sst->mark_for_deletion();
+        auto mark_unused_gc_sstables = defer([this] () noexcept {
+            for (auto& sst : _unused_garbage_collected_sstables) {
+                // Kept clear of the marking below, which is what must not be
+                // skipped: this allocates, and the guard is noexcept, so letting
+                // a formatting failure escape would abort the node with the
+                // sstables still unmarked.
+                try {
+                    log_debug("Deleting unused garbage collected sstable {} for {}.{}",
+                              sst->get_filename(), _schema->ks_name(), _schema->cf_name());
+                } catch (...) {
+                }
+                sst->mark_for_deletion();
+            }
+            _unused_garbage_collected_sstables.clear();
+        });
+
+        if (!_sstables.empty() || !used_garbage_collected_sstables().empty()) {
+            std::vector<sstables::shared_sstable> old_sstables;
+            std::move(_sstables.begin(), _sstables.end(), std::back_inserter(old_sstables));
+
+            // Remove Garbage Collected SSTables from the SSTable set if any was previously added.
+            auto& used_gc_sstables = used_garbage_collected_sstables();
+            old_sstables.insert(old_sstables.end(), used_gc_sstables.begin(), used_gc_sstables.end());
+
+            _replacer(get_compaction_completion_desc(std::move(old_sstables), std::move(_new_unused_sstables)));
         }
-        _unused_garbage_collected_sstables.clear();
     }
 
     void update_pending_ranges() {
