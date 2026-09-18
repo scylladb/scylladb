@@ -3366,6 +3366,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             // Tests count the parts of a request by this line.
             rtlogger.info("Committed a part of the vnodes-to-tablets migration preparation of keyspace '{}'",
                           ks_name);
+            co_await utils::get_local_injector().inject("prepare_migration_after_part",
+                    utils::wait_for_message(std::chrono::minutes(5), &_as));
         }
     }
 
