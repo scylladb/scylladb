@@ -4488,6 +4488,20 @@ future<storage_service::keyspace_migration_status> storage_service::get_tablets_
     result.keyspace = ks_name;
     result.status = get_tablets_migration_status(ks_name);
 
+    // A keyspace with maps for only some of its tables reports as vnodes, because it is
+    // not ready to be migrated, but it is not untouched either: a preparation stopped
+    // halfway and left those maps behind. The counts are what tells the two apart, so
+    // they are taken from the same tablet metadata the status is read from.
+    auto count_tables_with_tablet_map = [&] {
+        const auto& tablet_metadata = get_token_metadata().tablets();
+        const auto tables = _db.local().find_keyspace(ks_name).metadata()->tables();
+        result.tables_total = tables.size();
+        result.tables_with_tablet_map = std::ranges::count_if(tables, [&] (const schema_ptr& schema) {
+            return tablet_metadata.has_tablet_map(schema->id());
+        });
+    };
+    count_tables_with_tablet_map();
+
     // Only finalization sets this, and nothing unsets it, so a local reading of it needs
     // no confirmation. Answering here keeps an already-migrated keyspace off group0.
     if (result.status == migration_status::tablets) {
@@ -4512,6 +4526,7 @@ future<storage_service::keyspace_migration_status> storage_service::get_tablets_
     }
 
     result.status = get_tablets_migration_status(ks_name);
+    count_tables_with_tablet_map();
 
     if (result.status != migration_status::migrating_to_tablets) {
         co_return result;
