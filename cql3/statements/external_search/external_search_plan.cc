@@ -231,4 +231,14 @@ select_statement::ordering_comparator_type rescored_similarity_ordering(
     return descending_score_comparator(prepared_selectors.size() - 1);
 }
 
+void external_search_plan::resolve_ordering(const expr::function_call& fc) {
+    _ann = get_ann_ordering_info(_db, _schema, fc);
+    _bm25 = get_bm25_ordering_info(_db, _schema, fc);
+}
+
+void external_search_plan::replace_selectors(std::vector<selection::prepared_selector>& prepared_selectors) {
+    prepare_bm25_selectors(prepared_selectors, _bm25, _temporaries_allocator, _ctx);
+    prepare_ann_selectors(prepared_selectors, _ann, _temporaries_allocator, _db, _schema, _ctx);
+}
+
 } // namespace cql3::statements

@@ -2143,13 +2143,15 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
             ? expr::as_if<expr::function_call>(&*prepared_scoring_ordering)
             : nullptr;
 
-    std::optional<ann_ordering_info> ann_ordering_info_opt =
-            scoring_call ? get_ann_ordering_info(db, schema, *scoring_call) : std::nullopt;
-    bool is_ann_query = ann_ordering_info_opt.has_value();
-
-    std::optional<bm25_ordering_info> bm25_ordering_info_opt =
-            scoring_call ? get_bm25_ordering_info(db, schema, *scoring_call) : std::nullopt;
-    bool has_bm25_ordering = bm25_ordering_info_opt.has_value();
+    expr::temporary_allocator temporaries_allocator;
+    auto plan = external_search_plan(db, schema, ctx, temporaries_allocator);
+    if (scoring_call) {
+        plan.resolve_ordering(*scoring_call);
+    }
+    auto& ann_ordering_info_opt = plan.ann();
+    auto& bm25_ordering_info_opt = plan.bm25();
+    const bool is_ann_query = plan.has_ann();
+    const bool has_bm25_ordering = plan.has_bm25();
 
     if (prepared_scoring_ordering && !is_ann_query && !has_bm25_ordering) {
         // A function call in ORDER BY that no scoring-function resolver claimed. The
@@ -2175,13 +2177,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
         prepared_selectors = selection::raw_selector::to_prepared_selectors(select_all, *schema, db, keyspace());
     }
 
-    // Prepare BM25() calls in SELECT: reject when absent from ORDER BY, or replace
-    // with temporary nodes that an external_values_provider fills at execution time.
-    expr::temporary_allocator temporaries_allocator;
-    prepare_bm25_selectors(prepared_selectors, bm25_ordering_info_opt, temporaries_allocator, ctx);
-
-    // Likewise for ANN(), except that a rescoring index computes the score locally, filling no slot.
-    prepare_ann_selectors(prepared_selectors, ann_ordering_info_opt, temporaries_allocator, db, schema, ctx);
+    plan.replace_selectors(prepared_selectors);
 
     for (auto& ps : prepared_selectors) {
         expr::fill_prepare_context(ps.expr, ctx);
