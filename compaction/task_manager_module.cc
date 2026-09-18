@@ -781,13 +781,16 @@ tasks::is_user_task upgrade_sstables_compaction_task_impl::is_user_task() const 
     return tasks::is_user_task::yes;
 }
 
-future<> upgrade_sstables_compaction_task_impl::run() {
-    auto parent_info = info();
-    co_await _db.invoke_on_all([&] (replica::database& db) -> future<> {
-        auto& compaction_module = db.get_compaction_manager().get_task_manager_module();
-        auto task = co_await compaction_module.make_and_start_task<shard_upgrade_sstables_compaction_task_impl>(parent_info, _status.keyspace, _status.id, db, _table_infos, _exclude_current_version);
+static future<> run_upgrade_sstables_keyspace_compaction(sharded<replica::database>& db, std::string keyspace, const std::vector<table_info>& tables, bool exclude_current_version, tasks::task_info task_info) {
+    co_await db.invoke_on_all([&] (replica::database& local_db) -> future<> {
+        auto& module = local_db.get_compaction_manager().get_task_manager_module();
+        auto task = co_await module.make_and_start_task<shard_upgrade_sstables_compaction_task_impl>(task_info, keyspace, task_info.get_id(), local_db, tables, exclude_current_version);
         co_await task->done();
     });
+}
+
+future<> upgrade_sstables_compaction_task_impl::run() {
+    return run_upgrade_sstables_keyspace_compaction(_db, _status.keyspace, _table_infos, _exclude_current_version, info());
 }
 
 future<std::optional<double>> upgrade_sstables_compaction_task_impl::expected_total_workload() const {
