@@ -3227,6 +3227,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         if (tables_to_migrate.size() < all_tables) {
             rtlogger.info("Resuming the preparation of keyspace '{}': {} of {} table(s) already have a tablet map",
                           ks_name, all_tables - tables_to_migrate.size(), all_tables);
+            co_await utils::get_local_injector().inject("prepare_migration_fail_on_resume", [] {
+                return std::make_exception_ptr(std::runtime_error("injected prepare_migration failure"));
+            });
         }
 
         // A table created after the request was made has no target and gets the plain
