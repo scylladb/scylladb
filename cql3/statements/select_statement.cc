@@ -2825,6 +2825,65 @@ std::vector<size_t> select_statement::prepare_group_by(const schema& schema, sel
 
 }
 
+size_t select_statement::external_memory_usage() const {
+    size_t s = cql_statement::external_memory_usage();
+
+    // _selection (polymorphic — virtual object_size + external_memory_usage)
+    if (_selection) {
+        s += _selection->object_size() + _selection->external_memory_usage();
+    }
+
+    // _restrictions
+    if (_restrictions) {
+        s += sizeof(restrictions::statement_restrictions) + _restrictions->external_memory_usage();
+    }
+
+    // _limit and _per_partition_limit (optional expressions)
+    if (_limit) {
+        s += _limit->external_memory_usage();
+    }
+    if (_per_partition_limit) {
+        s += _per_partition_limit->external_memory_usage();
+    }
+
+    // _group_by_cell_indices
+    if (_group_by_cell_indices) {
+        s += sizeof(std::vector<size_t>) + _group_by_cell_indices->capacity() * sizeof(size_t);
+    }
+
+    // _attrs
+    if (_attrs) {
+        s += sizeof(cql3::attributes) + _attrs->external_memory_usage();
+    }
+
+    // _parameters: raw::select_statement::prepare() allocates a fresh instance per
+    // statement (see its constructor call), it is only shared with _default_parameters
+    // for statements with no parameters at all. Count it when it isn't that shared default.
+    if (_parameters && _parameters != _default_parameters) {
+        s += sizeof(parameters);
+        s += vector_external_memory_usage(_parameters->orderings());
+        for (const auto& [col, ord] : _parameters->orderings()) {
+            if (col) {
+                s += sizeof(column_identifier::raw);
+                s += sstring_external_memory_usage(col->text());
+            }
+            if (auto* scoring = std::get_if<raw::select_statement::scoring_function_ordering>(&ord)) {
+                s += scoring->func_expr.external_memory_usage();
+            }
+        }
+    }
+
+    // _ordering_comparator: get_ordering_comparator() captures a `sorters` vector
+    // (one entry per ordering column) by move; that vector's own heap buffer is
+    // always present regardless of std::function SBO. Exact capture size isn't
+    // introspectable, so approximate using the ordering count.
+    if (_ordering_comparator && _parameters) {
+        s += _parameters->orderings().size() * sizeof(std::pair<uint32_t, data_type>);
+    }
+
+    return s;
+}
+
 }
 
 namespace util {

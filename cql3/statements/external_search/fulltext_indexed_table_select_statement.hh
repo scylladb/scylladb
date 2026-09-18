@@ -76,6 +76,19 @@ private:
 
     future<::shared_ptr<cql_transport::messages::result_message>> execute_search(
             query_processor& qp, service::query_state& state, const query_options& options, uint64_t limit) const override;
+
+    size_t object_size() const override { return sizeof(*this); }
+    size_t external_memory_usage() const override {
+        size_t s = external_index_select_statement::external_memory_usage();
+        s += secondary_index_external_memory_usage(_bm25_ordering_info.index);
+        s += _bm25_ordering_info.search_term.external_memory_usage();
+        s += vector_external_memory_usage(_bm25_ordering_info.deferred_select_terms);
+        for (const auto& e : _bm25_ordering_info.deferred_select_terms) {
+            s += e.external_memory_usage();
+        }
+        s += optional_external_memory_usage(_bm25_ordering_info.deferred_where_term);
+        return s;
+    }
 };
 
 } // namespace cql3::statements
