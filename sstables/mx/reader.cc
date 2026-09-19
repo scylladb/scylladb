@@ -958,6 +958,8 @@ private:
                     ? _consumer.consume_static_row_start()
                     : _consumer.consume_row_start(_row_key);
             }
+            // The key was copied out; drop the shares so they don't pin the (now large) input buffer.
+            _row_key.clear();
             if (ret == row_processing_result::skip_row) {
                 _state = state::FLAGS;
                 auto current_pos = this->position() - _processing_data->size();

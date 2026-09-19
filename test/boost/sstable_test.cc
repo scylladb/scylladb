@@ -814,6 +814,111 @@ SEASTAR_TEST_CASE(test_skipping_in_compressed_stream) {
     });
 }
 
+// The compressed data source should hand out every whole chunk buffered
+// from one underlying read as a single buffer, and stay correct across
+// skips into the middle of such a buffer and across chunk corruption.
+SEASTAR_TEST_CASE(test_compressed_stream_coalesces_chunks) {
+    return seastar::async([] {
+        tests::reader_concurrency_semaphore_wrapper semaphore;
+
+        tmpdir tmp;
+        auto file_path = (tmp.path() / "test").string();
+        file f = open_file_dma(file_path, open_flags::create | open_flags::wo).get();
+
+        constexpr size_t chunk_len = 4 * 1024;
+        constexpr size_t nchunks = 300;
+        file_input_stream_options opts;
+        opts.buffer_size = 128 * 1024;
+        opts.read_ahead = 4;
+
+        compression_parameters cp({
+            { compression_parameters::SSTABLE_COMPRESSION, "LZ4Compressor" },
+            { compression_parameters::CHUNK_LENGTH_KB, std::to_string(chunk_len / 1024) },
+        });
+
+        sstables::compression c;
+        auto os = make_file_output_stream(f, file_output_stream_options()).get();
+        auto out = make_compressed_file_m_format_output_stream(std::move(os), &c, cp, make_lz4_sstable_compressor_for_tests());
+
+        // Mildly compressible so many chunks fit in one 128 KB read.
+        bytes data(bytes::initialized_later(), nchunks * chunk_len);
+        for (size_t i = 0; i < data.size(); ++i) {
+            data[i] = static_cast<bytes::value_type>((i * 7919 / 3) & 0x3f);
+        }
+        out.write(reinterpret_cast<const char*>(data.data()), data.size()).get();
+        out.close().get();
+        c.update(seastar::file_size(file_path).get());
+
+        auto make_is = [&] {
+            f = open_file_dma(file_path, open_flags::ro).get();
+            auto stream_creator = [f](uint64_t pos, uint64_t len, file_input_stream_options options)->future<input_stream<char>> {
+                co_return input_stream<char>(make_file_data_source(std::move(f), pos, len, std::move(options)));
+            };
+            return make_compressed_file_m_format_input_stream(stream_creator, &c, 0, data.size(), opts, semaphore.make_permit(), std::nullopt);
+        };
+
+        // Reads one data-source buffer per iteration; returns the bytes and the buffer count.
+        auto drain = [] (input_stream<char>& in) {
+            bytes result;
+            size_t buffers = 0;
+            while (true) {
+                auto b = in.read().get();
+                if (b.empty()) {
+                    break;
+                }
+                ++buffers;
+                result.append(reinterpret_cast<const bytes::value_type*>(b.get()), b.size());
+            }
+            return std::make_pair(std::move(result), buffers);
+        };
+
+        {
+            auto in = make_is();
+            auto [got, buffers] = drain(in);
+            BOOST_REQUIRE(got == data);
+#ifndef SEASTAR_DEBUG
+            // Debug builds make need_preempt() always true, which stops coalescing after one chunk.
+            BOOST_REQUIRE_LE(buffers, data.size() / opts.buffer_size + 2);
+#endif
+            in.close().get();
+        }
+
+        for (size_t skip : {size_t(1), chunk_len - 1, chunk_len, 3 * chunk_len + 100, opts.buffer_size + 5, data.size() - 1}) {
+            auto in = make_is();
+            in.skip(skip).get();
+            auto [got, buffers] = drain(in);
+            BOOST_REQUIRE(bytes_view(got) == bytes_view(data).substr(skip));
+            in.close().get();
+        }
+
+        {
+            // Skip after a partial read trims the block already buffered.
+            auto in = make_is();
+            auto head = in.read_exactly(chunk_len + 10).get();
+            BOOST_REQUIRE(bytes_view(reinterpret_cast<const bytes::value_type*>(head.get()), head.size()) == bytes_view(data).substr(0, chunk_len + 10));
+            in.skip(5 * chunk_len).get();
+            auto [got, buffers] = drain(in);
+            BOOST_REQUIRE(bytes_view(got) == bytes_view(data).substr(6 * chunk_len + 10));
+            in.close().get();
+        }
+
+        {
+            // Corrupt a byte inside chunk 5; reading must still fail.
+            auto chunk_start = c.offsets.get_accessor().at(5);
+            f = open_file_dma(file_path, open_flags::rw).get();
+            auto wbuf = allocate_aligned_buffer<char>(f.disk_write_dma_alignment(), f.memory_dma_alignment());
+            auto aligned_pos = align_down<uint64_t>(chunk_start + 1, f.disk_write_dma_alignment());
+            f.dma_read(aligned_pos, wbuf.get(), f.disk_write_dma_alignment()).get();
+            wbuf.get()[chunk_start + 1 - aligned_pos] ^= 0x55;
+            f.dma_write(aligned_pos, wbuf.get(), f.disk_write_dma_alignment()).get();
+            f.close().get();
+            auto in = make_is();
+            BOOST_REQUIRE_THROW(drain(in), malformed_sstable_exception);
+            in.close().get();
+        }
+    });
+}
+
 // Test that sstables::key_view::tri_compare(const schema& s, partition_key_view other)
 // should correctly compare empty keys. The fact we did this incorrectly was
 // noticed while fixing #9375, and a separate issue on it is #10178.
