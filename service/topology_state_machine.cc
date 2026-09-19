@@ -47,6 +47,51 @@ bool topology::is_busy() const {
     return tstate.has_value();
 }
 
+// has_replica_on() scans all tables/tablets/replicas per call; collect the set of
+// hosts with any live or pending replica in one pass instead of calling it per node.
+static std::unordered_set<locator::host_id> hosts_with_tablet_replicas(const locator::tablet_metadata& tablets) {
+    std::unordered_set<locator::host_id> hosts;
+    for (auto&& [id, map] : tablets.all_tables_ungrouped()) {
+        for (auto&& tablet : map->tablet_ids()) {
+            auto& tinfo = map->get_tablet_info(tablet);
+            for (auto&& r : tinfo.replicas) {
+                hosts.insert(r.host);
+            }
+            auto* trinfo = map->get_tablet_transition_info(tablet);
+            if (trinfo && trinfo->pending_replica) {
+                hosts.insert(trinfo->pending_replica->host);
+            }
+        }
+    }
+    return hosts;
+}
+
+void topology::update_tablet_dependent_state(const locator::tablet_metadata& tablets, bool parallel_tablet_draining) {
+    auto hosts_with_replicas = hosts_with_tablet_replicas(tablets);
+
+    // left_nodes_rs / excluded_tablet_nodes: drop nodes that no longer have a
+    // tablet replica; new `left` nodes are added by the caller, not here.
+    std::erase_if(left_nodes_rs, [&] (auto& kv) {
+        return !hosts_with_replicas.contains(locator::host_id(kv.first.uuid()));
+    });
+    excluded_tablet_nodes = ignored_nodes;
+    for (const auto& [id, _] : left_nodes_rs) {
+        excluded_tablet_nodes.insert(id);
+    }
+
+    if (parallel_tablet_draining) {
+        // paused_requests is fully derived from requests + tablet placement,
+        // so rebuild it from scratch rather than only ever adding to it.
+        paused_requests.clear();
+        for (auto&& [node, req] : requests) {
+            if ((req == topology_request::leave || req == topology_request::remove)
+                    && hosts_with_replicas.contains(locator::host_id(node.uuid()))) {
+                paused_requests.emplace(node, req);
+            }
+        }
+    }
+}
+
 raft::server_id topology::parse_replaced_node(const std::optional<request_param>& req_param) {
     if (req_param) {
         auto *param = std::get_if<replace_param>(&*req_param);
