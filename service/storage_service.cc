@@ -4270,33 +4270,9 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
         auto guard = co_await _group0->client().start_operation(_group0_as);
 
         auto& db = _db.local();
+        const auto* trs = validate_keyspace_for_migration(db, ks_name, _topology_state_machine._topology);
         auto& ks = db.find_keyspace(ks_name);
-
-        if (ks.uses_tablets()) {
-            throw std::runtime_error(fmt::format("Keyspace {} already uses tablets", ks_name));
-        }
-
-        const auto& cf_meta_data = ks.metadata().get()->cf_meta_data();
-        if (cf_meta_data.empty()) {
-            throw std::runtime_error(fmt::format("Keyspace {} has no tables to migrate. To use tablets, recreate the keyspace with tablets enabled", ks_name));
-        }
-
-        auto topology = co_await get_system_keyspace().load_topology_state({});
-        for (const auto& [server_id, replica_state]: topology.normal_nodes) {
-            if (replica_state.intended_storage_mode) {
-                throw std::runtime_error(fmt::format("Another migration is in progress (node '{}' has intended storage mode '{}') - cannot start tablets migration."
-                        " Please wait for the current migration to finish and retry.",
-                        server_id, *replica_state.intended_storage_mode));
-            }
-            // A seeded vnodes is expected before anything is marked. A tablets is not:
-            // finalization clears both modes together and a node only publishes while
-            // its row records an intent, so a switch with nothing to switch for means
-            // one of those invariants broke.
-            if (replica_state.current_storage_mode == storage_mode::tablets) {
-                on_internal_error(slogger, fmt::format("Node '{}' has no intended storage mode but still records current storage mode '{}'",
-                        server_id, *replica_state.current_storage_mode));
-            }
-        }
+        const auto& cf_meta_data = ks.metadata()->cf_meta_data();
 
         std::vector<std::pair<table_id, sstring>> tables_to_migrate;
 
@@ -4319,14 +4295,6 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
         // Estimate table sizes when pow2 convergence is enabled.
         // The estimates are used by the tablet allocator to determine the
         // target pow2 tablet count per table.
-        auto& rs = ks.get_replication_strategy();
-        const auto* trs = dynamic_cast<const locator::tablet_aware_replication_strategy*>(&rs);
-        if (!trs) {
-            throw std::runtime_error(fmt::format(
-                "Keyspace '{}' uses a replication strategy that does not support tablets. Please convert to NetworkTopologyStrategy first.",
-                ks_name));
-        }
-
         target_pow2_per_table_map target_pow2s;
         bool use_pow2_presplit = bool(_feature_service.tablet_pow2_convergence);
         if (use_pow2_presplit) {
@@ -4391,7 +4359,7 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
         // every node reading as null - the same state an older node's prepare leaves.
         if (_feature_service.topology_current_storage_mode) {
             topology_mutation_builder builder(guard.write_timestamp());
-            for (const auto& [node_id, _] : topology.normal_nodes) {
+            for (const auto& [node_id, _] : _topology_state_machine._topology.normal_nodes) {
                 builder.with_node(node_id).set("current_storage_mode", storage_mode::vnodes);
             }
             updates.emplace_back(builder.build());
