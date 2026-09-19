@@ -595,7 +595,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_write_buffer_record_and_header_serializati
 
     seastar::simple_memory_input_stream in(wb.data(), wb.serialized_size());
     auto bh = ser::deserialize(in, std::type_identity<ondisk::buffer_header>{});
-    BOOST_REQUIRE(raw_write_buffer::validate_header(bh));
+    BOOST_REQUIRE(ondisk::validate_header(bh));
     BOOST_REQUIRE(bh.kind == segment_kind::full);
     BOOST_REQUIRE_EQUAL(bh.segment_seq.value, 17u);
     BOOST_REQUIRE_EQUAL(bh.records_size, expected_records_size);
