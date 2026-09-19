@@ -56,6 +56,7 @@ This section describes the layouts and usage of `system.*` tables.
 - [system.token_ring](#systemtoken_ring)
 - [system.topology](#systemtopology)
 - [system.topology_requests](#systemtopology_requests)
+- [system.toppartitions](#systemtoppartitions)
 - [system.truncated](#systemtruncated)
 - [system.versions](#systemversions)
 - [system.view_build_status_v2](#systemview_build_status_v2)
@@ -76,7 +77,7 @@ This section describes the layouts and usage of `system.*` tables.
 | **Lightweight Transactions (Paxos)** | [paxos](#systempaxos) |
 | **Compaction** | [compaction_history](#systemcompaction_history) |
 | **Repair** | [repair_history](#systemrepair_history), [repair_tasks](#systemrepair_tasks) |
-| **Diagnostic and Monitoring** | [large_partitions](#systemlarge_partitions), [large_rows](#systemlarge_rows), [large_cells](#systemlarge_cells), [clients](#systemclients), [client_routes](#systemclient_routes), [corrupt_data](#systemcorrupt_data), [protocol_servers](#systemprotocol_servers), [runtime_info](#systemruntime_info) |
+| **Diagnostic and Monitoring** | [large_partitions](#systemlarge_partitions), [large_rows](#systemlarge_rows), [large_cells](#systemlarge_cells), [clients](#systemclients), [client_routes](#systemclient_routes), [corrupt_data](#systemcorrupt_data), [protocol_servers](#systemprotocol_servers), [runtime_info](#systemruntime_info), [toppartitions](#systemtoppartitions) |
 | **Configuration** | [config](#systemconfig), [versions](#systemversions) |
 | **Batchlog** | [batchlog](#systembatchlog), [batchlog_v2](#systembatchlog_v2) |
 | **Truncation** | [truncated](#systemtruncated) |
@@ -1736,6 +1737,42 @@ CREATE TABLE system.topology_requests (
 
 ---
 
+## system.toppartitions
+
+Virtual table that samples live reads and writes for the duration of the query and reports the hottest partitions. Equivalent of the `nodetool toppartitions` command. Superuser only: the query installs sampling listeners on every shard, so a plain `SELECT` grant is not enough.
+
+Schema:
+```cql
+CREATE TABLE system.toppartitions (
+    keyspace_name text,
+    table_name text,
+    capacity int,
+    list_size int,
+    kind text,
+    rank int,
+    partition_key text,
+    count bigint,
+    error bigint,
+    PRIMARY KEY ((keyspace_name, table_name), capacity, list_size, kind, rank)
+);
+```
+
+**Columns:**
+- `keyspace_name`, `table_name`: Table sampled. Restrict with `=` or `IN`; leave unrestricted to sample all tables in one window
+- `capacity`: Sampler capacity (`-s`), an input: must be an equality, default 256, max 4096
+- `list_size`: Number of partitions reported per kind (`-k`), an input: must be an equality and smaller than `capacity`, default 10
+- `kind`: `read` or `write`; restrict it to select samplers (`-a`). It follows `capacity` and `list_size` in the clustering key, so restricting it needs both of them or `ALLOW FILTERING`
+- `rank`: Position within the (table, kind) list, 0 is hottest
+- `partition_key`: Partition key of the sampled partition
+- `count`: Number of operations seen during the sampling window
+- `error`: Margin of error of `count`
+
+The sampling window is the statement timeout (`USING TIMEOUT`) minus a one-second margin for collecting results; a timeout too short to sample is rejected. Each page is a separate sampling window, so query with `PAGING OFF` or a `LIMIT` that fits one page. Argument errors currently surface as `ReadFailure` rather than `InvalidRequest`. Concurrent sampling windows (a partition-key `IN`, or parallel queries) are not capped; the superuser requirement is the only limiter.
+
+Implemented by `toppartitions_table` in `db/virtual_tables.cc`.
+
+---
+
 ## system.truncated
 
 Holds truncation replay positions per table and shard. When a table is truncated, SSTables are removed and the current replay position for each shard is recorded here. During commitlog replay (in case of a crash), this data is used to filter mutations and ensure truncated data is not resurrected.
@@ -1889,6 +1926,7 @@ The following system tables are virtual tables:
 - [snapshots](#systemsnapshots)
 - [tablet_sizes](#systemtablet_sizes)
 - [token_ring](#systemtoken_ring)
+- [toppartitions](#systemtoppartitions)
 - [versions](#systemversions)
 
 For more details see [virtual-tables.md](virtual-tables.md).

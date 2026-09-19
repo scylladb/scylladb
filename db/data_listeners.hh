@@ -124,9 +124,12 @@ public:
 private:
     top_k _top_k_read;
     top_k _top_k_write;
+    bool _track_read;
+    bool _track_write;
 
 public:
-    toppartitions_data_listener(replica::database& db, std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash> table_filters, std::unordered_set<sstring> keyspace_filters);
+    toppartitions_data_listener(replica::database& db, std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash> table_filters, std::unordered_set<sstring> keyspace_filters, size_t capacity = 256,
+            bool track_read = true, bool track_write = true);
     ~toppartitions_data_listener();
 
     virtual mutation_reader on_read(const schema_ptr& s, const dht::partition_range& range,
@@ -144,11 +147,13 @@ class toppartitions_query {
     std::chrono::milliseconds _duration;
     size_t _list_size;
     size_t _capacity;
+    // Selects a single kind to sample; unset means both (mixed/unbound/ranged kind restriction).
+    std::optional<sstring> _kind;
     std::unique_ptr<sharded<toppartitions_data_listener>> _query;
 
 public:
     toppartitions_query(seastar::sharded<replica::database>& xdb, std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash>&& table_filters,
-        std::unordered_set<sstring>&& keyspace_filters, std::chrono::milliseconds duration, size_t list_size, size_t capacity);
+        std::unordered_set<sstring>&& keyspace_filters, std::chrono::milliseconds duration, size_t list_size, size_t capacity, std::optional<sstring> kind = std::nullopt);
 
     struct results {
         toppartitions_data_listener::top_k read;
