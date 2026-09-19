@@ -67,8 +67,8 @@ future<std::optional<segment_header>> read_segment_header(seastar::input_stream<
 }
 
 log_record deserialize_log_record(simple_memory_input_stream buf_stream) {
-    auto rh_stream = buf_stream.read_substream(ondisk::record_header_size);
-    auto rh = ser::deserialize(rh_stream, std::type_identity<ondisk::record_header>{});
+    auto rh_stream = buf_stream.read_substream(ondisk::record_frame_header_size);
+    auto rh = ser::deserialize(rh_stream, std::type_identity<ondisk::record_frame_header>{});
     auto header_stream = buf_stream.read_substream(ondisk::log_record_header_size(rh.key_size));
     auto data_stream = buf_stream.read_substream(rh.data_size);
 
@@ -145,8 +145,8 @@ future<> scan_segment(seastar::input_stream<char>& in,
         // TODO crc, torn writes
 
         const auto buffer_data_end_position = current_position + bh.data_size;
-        // The smallest record: a record_header and a log_record_header with an empty key.
-        constexpr size_t min_record_size = ondisk::record_header_size + ondisk::log_record_header_fixed_size;
+        // The smallest record: a record_frame_header and a log_record_header with an empty key.
+        constexpr size_t min_record_size = ondisk::record_frame_header_size + ondisk::log_record_header_fixed_size;
 
         while (current_position < buffer_data_end_position) {
             // Read record header
@@ -160,13 +160,13 @@ future<> scan_segment(seastar::input_stream<char>& in,
             if (buffer_bytes_left < min_record_size) {
                 break;
             }
-            auto size_buf = co_await in.read_exactly(ondisk::record_header_size);
-            current_position += ondisk::record_header_size;
-            if (size_buf.size() < ondisk::record_header_size) {
+            auto size_buf = co_await in.read_exactly(ondisk::record_frame_header_size);
+            current_position += ondisk::record_frame_header_size;
+            if (size_buf.size() < ondisk::record_frame_header_size) {
                 break;
             }
-            auto rh = ser::deserialize_from_buffer(size_buf, std::type_identity<ondisk::record_header>{});
-            if (!ondisk::validate_record_header(rh) || size_t(rh.key_size) + rh.data_size > buffer_bytes_left - min_record_size) {
+            auto rh = ser::deserialize_from_buffer(size_buf, std::type_identity<ondisk::record_frame_header>{});
+            if (!ondisk::validate_record_frame_header(rh) || size_t(rh.key_size) + rh.data_size > buffer_bytes_left - min_record_size) {
                 // invalid record size
                 break;
             }
@@ -187,7 +187,7 @@ future<> scan_segment(seastar::input_stream<char>& in,
             log_location loc {
                 .segment = segment_id,
                 .offset = static_cast<uint32_t>(record_offset),
-                .size = static_cast<uint32_t>(ondisk::record_header_size + header_size + rh.data_size)
+                .size = static_cast<uint32_t>(ondisk::record_frame_header_size + header_size + rh.data_size)
             };
 
             if (on_record_header(loc, record_header) == want_data::yes) {

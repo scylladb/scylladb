@@ -144,7 +144,7 @@ struct buffered_write_result {
 // layout is:
 //   buffer_header
 //   (segment_header)?                 // for segment_kind::full only
-//   record_header + log_record_header (fixed fields + partition key) + record value
+//   record_frame_header + log_record_header (fixed fields + partition key) + record value
 //   ...
 //   zero padding to the requested final alignment
 //
@@ -216,7 +216,7 @@ public:
     // they carry ahead of their records, so a record can fit a buffer of one kind and not of the
     // other.
     static constexpr size_t max_record_size(size_t buffer_size, segment_kind kind) noexcept {
-        const size_t overhead = header_size(kind) + ondisk::record_header_size;
+        const size_t overhead = header_size(kind) + ondisk::record_frame_header_size;
         return buffer_size > overhead ? buffer_size - overhead : 0;
     }
 
@@ -264,8 +264,8 @@ public:
         return ondisk::validate_header(bh);
     }
 
-    static bool validate_record_header(const ondisk::record_header& rh) {
-        return ondisk::validate_record_header(rh);
+    static bool validate_record_frame_header(const ondisk::record_frame_header& rh) {
+        return ondisk::validate_record_frame_header(rh);
     }
 
     void seal(segment_sequence segment_seq, std::optional<table_id> table, size_t alignment);

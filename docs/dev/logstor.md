@@ -229,13 +229,13 @@ A serialized form of `write_buffer::segment_header`.
 Each record within the buffer is structured as:
 
 ```
-record_header        (8 bytes)
+record_frame_header  (8 bytes)
 log_record_header    (32 + key_size bytes)
 record_value         (data_size bytes)
 zero_padding         -- to align to record_alignment (8 bytes)
 ```
 
-**Record Header** (`ondisk::record_header`):
+**Record Frame Header** (`ondisk::record_frame_header`):
 
 | Offset | Size | Field       | Description |
 |--------|------|-------------|-------------|
@@ -259,6 +259,6 @@ The `data_size` bytes immediately following the log record header are the encode
 
 **Record Location** (`log_location`):
 
-The `log_location` stored in the index for each record points to the start of the `record_header`:
-- `offset`: byte offset from the start of the segment to the `record_header`.
-- `size`: total size including `record_header` + `log_record_header` + `record_value`
+The `log_location` stored in the index for each record points to the start of the `record_frame_header`:
+- `offset`: byte offset from the start of the segment to the `record_frame_header`.
+- `size`: total size including `record_frame_header` + `log_record_header` + `record_value`
