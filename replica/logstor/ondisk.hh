@@ -72,7 +72,7 @@ struct segment_header {
 
 // A record is stored on disk as a record frame: this header, the record header it sizes,
 // and the record value, followed by padding to record_alignment. The frame header is what a
-// log_location points at, and it is the only fixed-size part of a frame.
+// record_location points at, and it is the only fixed-size part of a frame.
 struct record_frame_header {
     uint32_t key_size;   // size of the partition key inside the record_header that follows
     uint32_t value_size; // size of the record value that follows the record_header

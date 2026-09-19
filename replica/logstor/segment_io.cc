@@ -78,7 +78,7 @@ log_record deserialize_log_record(simple_memory_input_stream buf_stream) {
     };
 }
 
-future<log_record> read_log_record(seastar::input_stream<char>& in, log_location loc) {
+future<log_record> read_log_record(seastar::input_stream<char>& in, record_location loc) {
     auto buf = co_await in.read_exactly(loc.size);
     if (buf.size() < loc.size) {
         throw std::runtime_error(fmt::format("Truncated log record at {}", loc));
@@ -183,7 +183,7 @@ future<> scan_segment(seastar::input_stream<char>& in,
             auto header_stream = simple_memory_input_stream(header_buf.get(), header_buf.size());
             auto header = ondisk::read_record_header(header_stream, frame_header.key_size);
 
-            log_location loc {
+            record_location loc {
                 .segment = segment_id,
                 .offset = static_cast<uint32_t>(record_offset),
                 .size = static_cast<uint32_t>(ondisk::record_frame_header_size + header_size + frame_header.value_size)
@@ -236,7 +236,7 @@ future<> scan_segment(seastar::input_stream<char>& in,
         record_consumer on_record) {
     co_await scan_segment(in, segment_id, segment_size,
             std::move(on_segment_info), std::move(on_record_header),
-            [on_record = std::move(on_record)] (log_location loc, const record_header& header, log_record_bytes_view record_view) mutable -> future<> {
+            [on_record = std::move(on_record)] (record_location loc, const record_header& header, log_record_bytes_view record_view) mutable -> future<> {
                 co_await on_record(loc, log_record{header, record_value(record_view.value)});
             });
 }
