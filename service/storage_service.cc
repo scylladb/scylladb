@@ -4281,124 +4281,6 @@ future<std::unordered_map<table_id, uint64_t>> storage_service::collect_table_si
     co_return table_sizes;
 }
 
-// Validates that a keyspace's replication factors will be valid once it
-// migrates from vnodes to tablets.
-//
-// Tablet-based keyspaces must not have an RF larger than the number of
-// token-owning nodes in a datacenter: allocating tablets for new tables fails
-// otherwise. Vnode-based keyspaces allow it, so the migration rejects such
-// keyspaces up front.
-//
-// Additionally, tablet-based keyspaces must be RF-rack-valid if:
-// - they have materialized views, or
-// - the rf_rack_valid_keyspaces config option is enabled.
-// Nodes refuse to start otherwise, so the migration rejects such
-// keyspaces up front.
-//
-// Finally, the migration cannot run at all if the enforce_rack_list config
-// option enabled. The option causes nodes to refuse to start if a tablet-based
-// keyspace has a numeric replication factor. Vnode-based keyspaces only have
-// numeric replication factors, which the migration carries to the tablets world.
-// FIXME: Convert numeric RFs to rack lists on migration finalization if
-// enforce_rack_list is enabled.
-static void validate_rf_for_tablets_migration(const replica::database& db,
-        const locator::token_metadata_ptr& tmptr,
-        const locator::network_topology_strategy& nts,
-        const sstring& ks_name) {
-    const auto& ks = db.find_keyspace(ks_name);
-
-    if (db.get_config().enforce_rack_list()) {
-        throw std::runtime_error(fmt::format(
-                "Cannot migrate keyspace {} to tablets: the enforce_rack_list option is enabled, but the migrated"
-                " keyspace would keep its numeric replication factors. Disable enforce_rack_list, migrate, convert"
-                " the replication factors to rack lists with ALTER KEYSPACE, then enable it again.", ks_name));
-    }
-
-    // Check that RF <= #nodes.
-    // (copied from `natural_endpoints_tracker::check_enough_endpoints()`)
-    auto dc_token_owners = tmptr->get_datacenter_token_owners();
-    for (const auto& dc : nts.get_datacenters()) {
-        auto it = dc_token_owners.find(dc);
-        auto node_count = it != dc_token_owners.end() ? it->second.size() : size_t(0);
-        auto rf = nts.get_replication_factor(dc);
-        if (rf > node_count) {
-            throw std::runtime_error(fmt::format(
-                    "Cannot migrate keyspace {} to tablets: datacenter {} doesn't have enough token-owning nodes"
-                    " for replication_factor={}", ks_name, dc, rf));
-        }
-    }
-
-    // Check the keyspace as it will look after the migration: the same
-    // replication options, but with tablets.
-    locator::replication_strategy_params params(nts.get_config_options(), 0, std::nullopt);
-    auto tablet_rs = locator::abstract_replication_strategy::create_replication_strategy(
-            ks.metadata()->strategy_name(), params, tmptr->get_topology());
-    try {
-        locator::assert_rf_rack_valid_keyspace(ks_name, tmptr, *tablet_rs);
-    } catch (const std::invalid_argument& e) {
-        if (db.enforce_rf_rack_validity_for_keyspace(ks)) {
-            throw std::runtime_error(fmt::format("Cannot migrate keyspace {} to tablets: {}", ks_name, e.what()));
-        }
-        // e.what() states that RF-rack-validity is required, which doesn't
-        // hold here, so don't include it.
-        slogger.warn("Keyspace '{}' will not be RF-rack-valid after the migration to tablets: the replication"
-                " factor doesn't match the rack count in at least one datacenter. A rack failure may reduce"
-                " availability.", ks_name);
-    }
-}
-
-// Validates that the materialized views of a keyspace can be migrated from
-// vnodes to tablets.
-//
-// Views whose partition key consists of exactly the base table's partition
-// key columns, in the same order, are migrated as tables co-located with
-// their base table, sharing the base table's tablet map. Other views,
-// including the backing views of global secondary indexes, get a tablet map
-// of their own, derived from the vnodes the same way as the base table's.
-//
-// Views must be fully built on all normal nodes. The migration
-// doesn't hand over in-progress builds: once the keyspace uses tablets, the
-// node-local view builder ignores it, and the view building coordinator only
-// builds views it has build tasks for. Those tasks are created by CREATE
-// MATERIALIZED VIEW on a tablets keyspace, so a view created under vnodes
-// never gets any. A partially built view would never be completed, and the
-// tablet bookkeeping would treat it as unbuilt, because not all of its
-// entries in system.view_build_status_v2 are SUCCESS.
-//
-// Co-located tables don't support the 'repair' tombstone_gc mode, but views
-// using it are accepted: finalizing the migration switches them to 'timeout'.
-//
-// Throws std::runtime_error if any view cannot be migrated.
-static future<> validate_keyspace_views_for_tablets_migration(
-        replica::database& db,
-        db::system_keyspace& sys_ks,
-        const topology& topology,
-        const sstring& ks_name) {
-    auto& ks = db.find_keyspace(ks_name);
-    auto views = ks.metadata()->views();
-    if (views.empty()) {
-        co_return;
-    }
-
-    auto build_statuses = co_await sys_ks.get_view_build_status_map();
-
-    for (const auto& view : views) {
-        auto it = build_statuses.find({view->ks_name(), view->cf_name()});
-        for (const auto& server_id : topology.normal_nodes | std::views::keys) {
-            auto host_id = locator::host_id{server_id.uuid()};
-            bool built = it != build_statuses.end()
-                    && it->second.contains(host_id)
-                    && it->second.at(host_id) == db::view::build_status::SUCCESS;
-            if (!built) {
-                throw std::runtime_error(fmt::format(
-                        "Cannot migrate keyspace {} to tablets: materialized view {}.{} is not built on node {}."
-                        " Wait for the view build to finish and retry.",
-                        ks_name, ks_name, view->cf_name(), host_id));
-            }
-        }
-    }
-}
-
 future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) {
     // Called via run_with_no_api_lock (forwards to shard 0).
     SCYLLA_ASSERT(this_shard_id() == 0);
@@ -4407,43 +4289,16 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
         auto guard = co_await _group0->client().start_operation(_group0_as);
 
         auto& db = _db.local();
+        const auto* nts = validate_keyspace_for_migration(db, ks_name, _topology_state_machine._topology);
         auto& ks = db.find_keyspace(ks_name);
+        const auto& cf_meta_data = ks.metadata()->cf_meta_data();
 
-        if (ks.uses_tablets()) {
-            throw std::runtime_error(fmt::format("Keyspace {} already uses tablets", ks_name));
+        if (!validate_rf_for_tablets_migration(db, get_token_metadata_ptr(), *nts, ks_name)) {
+            slogger.warn("Keyspace '{}' will not be RF-rack-valid after the migration to tablets: the replication"
+                    " factor doesn't match the rack count in at least one datacenter. A rack failure may reduce"
+                    " availability.", ks_name);
         }
-
-        const auto& cf_meta_data = ks.metadata().get()->cf_meta_data();
-        if (cf_meta_data.empty()) {
-            throw std::runtime_error(fmt::format("Keyspace {} has no tables to migrate. To use tablets, recreate the keyspace with tablets enabled", ks_name));
-        }
-
-        auto topology = co_await get_system_keyspace().load_topology_state({});
-        for (const auto& [server_id, replica_state]: topology.normal_nodes) {
-            if (replica_state.intended_storage_mode) {
-                throw std::runtime_error(fmt::format("Another migration is in progress (node '{}' has intended storage mode '{}') - cannot start tablets migration."
-                        " Please wait for the current migration to finish and retry.",
-                        server_id, *replica_state.intended_storage_mode));
-            }
-            // A seeded vnodes is expected before anything is marked. A tablets is not:
-            // finalization clears both modes together and a node only publishes while
-            // its row records an intent, so a switch with nothing to switch for means
-            // one of those invariants broke.
-            if (replica_state.current_storage_mode == storage_mode::tablets) {
-                on_internal_error(slogger, fmt::format("Node '{}' has no intended storage mode but still records current storage mode '{}'",
-                        server_id, *replica_state.current_storage_mode));
-            }
-        }
-
-        const auto* nts = dynamic_cast<const locator::network_topology_strategy*>(&ks.get_replication_strategy());
-        if (!nts) {
-            throw std::runtime_error(fmt::format(
-                "Keyspace '{}' uses a replication strategy that does not support tablets. Please convert to NetworkTopologyStrategy first.",
-                ks_name));
-        }
-
-        validate_rf_for_tablets_migration(db, get_token_metadata_ptr(), *nts, ks_name);
-        co_await validate_keyspace_views_for_tablets_migration(db, get_system_keyspace(), topology, ks_name);
+        co_await validate_keyspace_views_for_tablets_migration(db, get_system_keyspace(), _topology_state_machine._topology, ks_name);
 
         // Tables that get a tablet map of their own: base tables, and views
         // that cannot be co-located with their base table.
@@ -4571,7 +4426,7 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
         // every node reading as null - the same state an older node's prepare leaves.
         if (_feature_service.topology_current_storage_mode) {
             topology_mutation_builder builder(guard.write_timestamp());
-            for (const auto& [node_id, _] : topology.normal_nodes) {
+            for (const auto& [node_id, _] : _topology_state_machine._topology.normal_nodes) {
                 builder.with_node(node_id).set("current_storage_mode", storage_mode::vnodes);
             }
             updates.emplace_back(builder.build());
