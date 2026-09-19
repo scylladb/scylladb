@@ -24,7 +24,7 @@
 namespace replica::logstor {
 
 void log_record_writer::write(ostream& out) const {
-    ondisk::write_log_record_header(out, _record.header);
+    ondisk::write_record_header(out, _record.header);
     for (bytes_view frag : _record.value.representation().fragments()) {
         out.write(reinterpret_cast<const char*>(frag.data()), frag.size());
     }
@@ -71,7 +71,7 @@ bool raw_write_buffer::has_data() const noexcept {
 }
 
 template <std::invocable<raw_write_buffer::ostream&> WriteRecordPayload>
-raw_write_buffer::append_result raw_write_buffer::append_record(const log_record_header& header,
+raw_write_buffer::append_result raw_write_buffer::append_record(const record_header& header,
         size_t header_size, size_t data_size, WriteRecordPayload write_payload) {
     const auto payload_size = header_size + data_size;
     if (!can_fit(payload_size)) {
@@ -81,16 +81,16 @@ raw_write_buffer::append_result raw_write_buffer::append_record(const log_record
         throw std::runtime_error("Cannot write empty record");
     }
 
-    if (header_size < ondisk::log_record_header_fixed_size) {
-        on_internal_error(logstor_logger, fmt::format("Log record header size {} is below its fixed size {}", header_size, ondisk::log_record_header_fixed_size));
+    if (header_size < ondisk::record_header_fixed_size) {
+        on_internal_error(logstor_logger, fmt::format("Record header size {} is below its fixed size {}", header_size, ondisk::record_header_fixed_size));
     }
 
     size_t record_header_offset = offset_in_buffer();
-    auto rh = ondisk::record_frame_header {
-        .key_size = static_cast<uint32_t>(header_size - ondisk::log_record_header_fixed_size),
+    auto frame_header = ondisk::record_frame_header {
+        .key_size = static_cast<uint32_t>(header_size - ondisk::record_header_fixed_size),
         .data_size = static_cast<uint32_t>(data_size)
     };
-    ser::serialize(_stream, rh);
+    ser::serialize(_stream, frame_header);
 
     // write_payload writes the serialized record header and then the serialized record data
     auto payload_out = _stream.write_substream(payload_size);
@@ -309,13 +309,13 @@ bool ondisk::validate_header(const ondisk::buffer_header& bh) {
     return bh.calculate_crc() == bh.crc;
 }
 
-bool ondisk::validate_record_frame_header(const ondisk::record_frame_header& rh) {
+bool ondisk::validate_record_frame_header(const ondisk::record_frame_header& frame_header) {
     // A record always carries an encoded value, so a zero data_size cannot come from a record
     // this code wrote. It is what a scan sees in the zero-filled tail of a torn
     // buffer, and rejecting it stops the scan there instead of walking the tail as a run of
     // zero-length records. The key bound rejects a corrupt header before its key_size is
     // trusted to size a read or an allocation.
-    return rh.data_size != 0 && rh.key_size <= ondisk::max_key_size;
+    return frame_header.data_size != 0 && frame_header.key_size <= ondisk::max_key_size;
 }
 
 // write_buffer_pool

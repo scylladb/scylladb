@@ -180,7 +180,7 @@ std::vector<scanned_record> scan_buffer_records(const temporary_buffer<char>& bu
         [] (const segment_header&) {
             return make_ready_future<>();
         },
-        [] (log_location, const log_record_header&) {
+        [] (log_location, const record_header&) {
             return want_data::yes;
         },
         [&records] (log_location loc, log_record rec) {
@@ -366,8 +366,8 @@ std::map<api::timestamp_type, size_t> count_records_by_timestamp(logstor& ls, ut
         }).get();
         scan_segment(in, snap.segment_id, segment_size,
             [] (const segment_header&) { return make_ready_future<>(); },
-            [&counts] (log_location, const log_record_header& rh) {
-                counts[rh.timestamp]++;
+            [&counts] (log_location, const record_header& header) {
+                counts[header.timestamp]++;
                 return want_data::no;
             },
             [] (log_location, log_record) { return make_ready_future<>(); }
@@ -471,12 +471,12 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_ondisk_serialized_sizes) {
     });
 }
 
-// Checks that the log record header encoding round-trips, including a key longer than the inline size of
+// Checks that the record header encoding round-trips, including a key longer than the inline size of
 // managed_bytes, and that its size is the fixed part plus the key.
-SEASTAR_THREAD_TEST_CASE(test_logstor_log_record_header_round_trip) {
+SEASTAR_THREAD_TEST_CASE(test_logstor_record_header_round_trip) {
     auto schema = make_kv_schema();
     auto m = make_kv_mutation(schema, sstring(100, 'k'), "v");
-    log_record_header header {
+    record_header header {
         .key = m.decorated_key(),
         .timestamp = api::timestamp_type(0x0f0e0d0c0b0a0908),
         .table = table_id(utils::UUID(int64_t(0x1122334455667788), int64_t(0x99aabbccddeeff00))),
@@ -485,20 +485,20 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_log_record_header_round_trip) {
     const auto key_size = header.key.key().representation().size();
     BOOST_REQUIRE_GE(key_size, 100u);
 
-    const auto expected_size = ondisk::log_record_header_fixed_size + key_size;
-    BOOST_REQUIRE_EQUAL(ondisk::log_record_header_size(header), expected_size);
+    const auto expected_size = ondisk::record_header_fixed_size + key_size;
+    BOOST_REQUIRE_EQUAL(ondisk::record_header_size(header), expected_size);
 
     seastar::measuring_output_stream ms;
-    ondisk::write_log_record_header(ms, header);
+    ondisk::write_record_header(ms, header);
     BOOST_REQUIRE_EQUAL(ms.size(), expected_size);
 
     std::vector<char> buf(expected_size);
     seastar::simple_memory_output_stream out(buf.data(), buf.size());
-    ondisk::write_log_record_header(out, header);
+    ondisk::write_record_header(out, header);
     BOOST_REQUIRE_EQUAL(out.size(), 0u);
 
     seastar::simple_memory_input_stream in(buf.data(), buf.size());
-    auto read_back = ondisk::read_log_record_header(in, key_size);
+    auto read_back = ondisk::read_record_header(in, key_size);
     BOOST_REQUIRE_EQUAL(in.size(), 0u);
     BOOST_REQUIRE(read_back == header);
     BOOST_REQUIRE(read_back.key.equal(*schema, header.key));
@@ -1162,7 +1162,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_mixed_buffers_report_readable
     auto in = seastar::util::as_input_stream(std::move(segment));
 
     std::vector<segment_header> seen_segment_headers;
-    std::vector<log_record_header> seen_record_headers;
+    std::vector<record_header> seen_headers;
     std::vector<log_location> seen_locations;
 
     scan_segment(in, log_segment_id{3}, segment_size,
@@ -1170,8 +1170,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_mixed_buffers_report_readable
             seen_segment_headers.push_back(sh);
             return make_ready_future<>();
         },
-        [&seen_record_headers, &seen_locations] (log_location loc, const log_record_header& rh) {
-            seen_record_headers.push_back(rh);
+        [&seen_headers, &seen_locations] (log_location loc, const record_header& header) {
+            seen_headers.push_back(header);
             seen_locations.push_back(loc);
             return want_data::yes;
         },
@@ -1189,17 +1189,17 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_mixed_buffers_report_readable
         BOOST_REQUIRE_EQUAL(sh.segment_seq.value, 23u);
     }
 
-    BOOST_REQUIRE_EQUAL(seen_record_headers.size(), 4u);
-    BOOST_REQUIRE_EQUAL(seen_record_headers[0].timestamp, api::timestamp_type(11));
-    BOOST_REQUIRE_EQUAL(seen_record_headers[1].timestamp, api::timestamp_type(12));
-    BOOST_REQUIRE_EQUAL(seen_record_headers[2].timestamp, api::timestamp_type(13));
-    BOOST_REQUIRE_EQUAL(seen_record_headers[3].timestamp, api::timestamp_type(14));
-    BOOST_REQUIRE_EQUAL(seen_record_headers[0].table, schema->id());
-    BOOST_REQUIRE_EQUAL(seen_record_headers[1].table, schema->id());
-    BOOST_REQUIRE_EQUAL(seen_record_headers[2].table, schema->id());
-    BOOST_REQUIRE_EQUAL(seen_record_headers[3].table, schema->id());
-    BOOST_REQUIRE(seen_record_headers[0].key.equal(*schema, expected0.decorated_key()));
-    BOOST_REQUIRE(seen_record_headers[3].key.equal(*schema, expected3.decorated_key()));
+    BOOST_REQUIRE_EQUAL(seen_headers.size(), 4u);
+    BOOST_REQUIRE_EQUAL(seen_headers[0].timestamp, api::timestamp_type(11));
+    BOOST_REQUIRE_EQUAL(seen_headers[1].timestamp, api::timestamp_type(12));
+    BOOST_REQUIRE_EQUAL(seen_headers[2].timestamp, api::timestamp_type(13));
+    BOOST_REQUIRE_EQUAL(seen_headers[3].timestamp, api::timestamp_type(14));
+    BOOST_REQUIRE_EQUAL(seen_headers[0].table, schema->id());
+    BOOST_REQUIRE_EQUAL(seen_headers[1].table, schema->id());
+    BOOST_REQUIRE_EQUAL(seen_headers[2].table, schema->id());
+    BOOST_REQUIRE_EQUAL(seen_headers[3].table, schema->id());
+    BOOST_REQUIRE(seen_headers[0].key.equal(*schema, expected0.decorated_key()));
+    BOOST_REQUIRE(seen_headers[3].key.equal(*schema, expected3.decorated_key()));
 
     BOOST_REQUIRE_EQUAL(seen_locations.size(), 4u);
     assert_that(to_mutation(read_record_at_location(segment_copy, seen_locations[0]), schema)).is_equal_to(expected0);
@@ -1243,8 +1243,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_rejects_corrupt_key_size) {
             [] (const segment_header&) {
                 return make_ready_future<>();
             },
-            [&seen] (log_location, const log_record_header& rh) {
-                seen.push_back(rh.timestamp);
+            [&seen] (log_location, const record_header& header) {
+                seen.push_back(header.timestamp);
                 return want_data::no;
             },
             [] (log_location, log_record) {
@@ -1296,9 +1296,9 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_returns_only_selected_records
         [] (const segment_header&) {
             return make_ready_future<>();
         },
-        [&seen_header_timestamps] (log_location, const log_record_header& rh) {
-            seen_header_timestamps.push_back(rh.timestamp);
-            return (rh.timestamp == api::timestamp_type(72) || rh.timestamp == api::timestamp_type(74))
+        [&seen_header_timestamps] (log_location, const record_header& header) {
+            seen_header_timestamps.push_back(header.timestamp);
+            return (header.timestamp == api::timestamp_type(72) || header.timestamp == api::timestamp_type(74))
                     ? want_data::yes : want_data::no;
         },
         [&selected_records] (log_location, log_record rec) {
@@ -1345,7 +1345,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_reads_full_buffer_records_wit
             seen_segment_headers.push_back(sh);
             return make_ready_future<>();
         },
-        [] (log_location, const log_record_header&) {
+        [] (log_location, const record_header&) {
             return want_data::yes;
         },
         [&seen_records] (log_location, log_record rec) {
@@ -1413,7 +1413,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_stops_on_mixed_buffer_lower_s
     auto in = seastar::util::as_input_stream(std::move(segment));
 
     std::vector<segment_header> seen_segment_headers;
-    std::vector<log_record_header> seen_record_headers;
+    std::vector<record_header> seen_headers;
     std::vector<log_record> seen_records;
 
     scan_segment(in, log_segment_id{5}, segment_size,
@@ -1421,8 +1421,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_stops_on_mixed_buffer_lower_s
             seen_segment_headers.push_back(sh);
             return make_ready_future<>();
         },
-        [&seen_record_headers] (log_location, const log_record_header& rh) {
-            seen_record_headers.push_back(rh);
+        [&seen_headers] (log_location, const record_header& header) {
+            seen_headers.push_back(header);
             return want_data::yes;
         },
         [&seen_records] (log_location, log_record rec) {
@@ -1435,9 +1435,9 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_stops_on_mixed_buffer_lower_s
     BOOST_REQUIRE(seen_segment_headers.front().kind == segment_kind::mixed);
     BOOST_REQUIRE_EQUAL(seen_segment_headers.front().segment_seq.value, 61u);
 
-    BOOST_REQUIRE_EQUAL(seen_record_headers.size(), 2u);
-    BOOST_REQUIRE_EQUAL(seen_record_headers[0].timestamp, api::timestamp_type(51));
-    BOOST_REQUIRE_EQUAL(seen_record_headers[1].timestamp, api::timestamp_type(52));
+    BOOST_REQUIRE_EQUAL(seen_headers.size(), 2u);
+    BOOST_REQUIRE_EQUAL(seen_headers[0].timestamp, api::timestamp_type(51));
+    BOOST_REQUIRE_EQUAL(seen_headers[1].timestamp, api::timestamp_type(52));
 
     BOOST_REQUIRE_EQUAL(seen_records.size(), 2u);
     assert_that(to_mutation(seen_records[0], schema)).is_equal_to(expected0);
@@ -1471,7 +1471,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_stops_on_corrupted_later_mixe
     auto in = seastar::util::as_input_stream(std::move(segment));
 
     std::vector<segment_header> seen_segment_headers;
-    std::vector<log_record_header> seen_record_headers;
+    std::vector<record_header> seen_headers;
     std::vector<log_record> seen_records;
 
     scan_segment(in, log_segment_id{6}, segment_size,
@@ -1479,8 +1479,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_stops_on_corrupted_later_mixe
             seen_segment_headers.push_back(sh);
             return make_ready_future<>();
         },
-        [&seen_record_headers] (log_location, const log_record_header& rh) {
-            seen_record_headers.push_back(rh);
+        [&seen_headers] (log_location, const record_header& header) {
+            seen_headers.push_back(header);
             return want_data::yes;
         },
         [&seen_records] (log_location, log_record rec) {
@@ -1490,10 +1490,10 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_stops_on_corrupted_later_mixe
     in.close().get();
 
     BOOST_REQUIRE_EQUAL(seen_segment_headers.size(), 1u);
-    BOOST_REQUIRE_EQUAL(seen_record_headers.size(), 2u);
+    BOOST_REQUIRE_EQUAL(seen_headers.size(), 2u);
     BOOST_REQUIRE_EQUAL(seen_records.size(), 2u);
-    BOOST_REQUIRE_EQUAL(seen_record_headers[0].timestamp, api::timestamp_type(91));
-    BOOST_REQUIRE_EQUAL(seen_record_headers[1].timestamp, api::timestamp_type(92));
+    BOOST_REQUIRE_EQUAL(seen_headers[0].timestamp, api::timestamp_type(91));
+    BOOST_REQUIRE_EQUAL(seen_headers[1].timestamp, api::timestamp_type(92));
     assert_that(to_mutation(seen_records[0], schema)).is_equal_to(expected0);
     assert_that(to_mutation(seen_records[1], schema)).is_equal_to(expected1);
 }
@@ -1525,7 +1525,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_streamed_segment_rewriter_rewrites_initial
             seen_segment_headers.push_back(sh);
             return make_ready_future<>();
         },
-        [] (log_location, const log_record_header&) {
+        [] (log_location, const record_header&) {
             return want_data::yes;
         },
         [&seen_records] (log_location, log_record rec) {

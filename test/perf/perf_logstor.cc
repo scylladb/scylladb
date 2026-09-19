@@ -445,21 +445,21 @@ size_t serialized_size_of(const T& v) {
 
 // What one record is made of, all of it measured through the serializers the write path uses.
 struct record_sizes {
-    size_t header{};    // the encoded log_record_header
+    size_t header{};    // the encoded record_header
     size_t value{};     // the record value, the partition as encode_record_value() encodes it
     size_t mapping{};   // of the value, the column mapping of the schema
     size_t partition{}; // of the value, the partition itself
-    size_t record{};    // the frame header, the log record header and the value
+    size_t record{};    // the frame header, the record header and the value
     size_t padding{};   // what aligning the next record after this one costs
 
     // What the value spends on neither the mapping nor the partition: the table id, the schema
-    // version, the copy of the partition key that the log record header already carries, and the
+    // version, the copy of the partition key that the record header already carries, and the
     // framing of all of them.
     size_t value_rest() const noexcept { return value - mapping - partition; }
 };
 
 record_sizes measure_record(const schema& s, const mutation& m) {
-    const log_record_header header {
+    const record_header header {
         .key = m.decorated_key(),
         .timestamp = api::new_timestamp(),
         .table = s.id(),
@@ -470,7 +470,7 @@ record_sizes measure_record(const schema& s, const mutation& m) {
     mutation_partition_serializer(s, m.partition()).write(partition);
 
     record_sizes sizes {
-        .header = ondisk::log_record_header_size(header),
+        .header = ondisk::record_header_size(header),
         .value = encode_record_value(m).size(),
         .mapping = serialized_size_of(s.get_column_mapping()),
         .partition = partition.size(),
@@ -889,8 +889,8 @@ private:
         return *_cached_keys[tests::random::get_int<size_t>(_cached_keys.size() - 1)];
     }
 
-    log_record_header make_record_header(const dht::decorated_key& key) const {
-        return log_record_header{
+    record_header make_record_header(const dht::decorated_key& key) const {
+        return record_header{
             .key = key,
             .timestamp = api::new_timestamp(),
             .table = _schema->id(),
