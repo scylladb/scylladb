@@ -489,8 +489,8 @@ struct separator_buffer {
         return !buf || !buf->has_data();
     }
 
-    size_t offset_in_buffer() const noexcept {
-        return buf ? buf->offset_in_buffer() : 0;
+    size_t serialized_size() const noexcept {
+        return buf ? buf->serialized_size() : 0;
     }
 
     future<> close() {

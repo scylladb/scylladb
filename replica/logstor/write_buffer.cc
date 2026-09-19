@@ -66,7 +66,7 @@ bool raw_write_buffer::can_fit(size_t record_size) const noexcept {
 }
 
 bool raw_write_buffer::has_data() const noexcept {
-    return offset_in_buffer() > header_size();
+    return serialized_size() > buffer_headers_size();
 }
 
 template <std::invocable<raw_write_buffer::ostream&> WriteRecord>
@@ -84,7 +84,7 @@ raw_write_buffer::append_result raw_write_buffer::append_record(const record_hea
         on_internal_error(logstor_logger, fmt::format("Record header size {} is below its fixed size {}", header_size, ondisk::record_header_fixed_size));
     }
 
-    const size_t frame_offset = offset_in_buffer();
+    const size_t frame_offset = serialized_size();
     auto frame_header = ondisk::record_frame_header {
         .key_size = static_cast<uint32_t>(header_size - ondisk::record_header_fixed_size),
         .value_size = static_cast<uint32_t>(value_size)
@@ -123,12 +123,11 @@ raw_write_buffer::append_result raw_write_buffer::append(const Writer& writer) {
 }
 
 size_t raw_write_buffer::sealed_size(size_t alignment) const noexcept {
-    auto size = offset_in_buffer();
-    return align_up(size, alignment);
+    return align_up(serialized_size(), alignment);
 }
 
 void raw_write_buffer::pad_to_alignment(size_t alignment) {
-    auto current_pos = offset_in_buffer();
+    auto current_pos = serialized_size();
     auto next_pos = align_up(current_pos, alignment);
     auto padding = next_pos - current_pos;
     if (padding > 0) {
@@ -137,7 +136,7 @@ void raw_write_buffer::pad_to_alignment(size_t alignment) {
 }
 
 void raw_write_buffer::finalize(size_t alignment) {
-    _buffer_header.records_size = static_cast<uint32_t>(offset_in_buffer() - header_size());
+    _buffer_header.records_size = static_cast<uint32_t>(serialized_size() - buffer_headers_size());
     pad_to_alignment(alignment);
 }
 
@@ -260,10 +259,7 @@ size_t raw_write_buffer::estimate_required_segments(size_t record_bytes, size_t 
         return 0;
     }
 
-    size_t fixed_overhead = ondisk::buffer_header_size;
-    if (kind == segment_kind::full) {
-        fixed_overhead += ondisk::segment_header_size;
-    }
+    const size_t fixed_overhead = buffer_headers_size(kind);
 
     if (segment_size <= fixed_overhead) {
         return 1;
