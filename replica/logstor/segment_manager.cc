@@ -1021,10 +1021,10 @@ public:
     future<> write(write_buffer&);
     future<> write_full_segment(write_buffer&, logstor_group&, write_source);
 
-    future<log_record> read(log_location);
+    future<log_record> read(record_location);
 
-    void on_add_record(log_location) noexcept;
-    void on_free_record(log_location) noexcept;
+    void on_add_record(record_location) noexcept;
+    void on_free_record(record_location) noexcept;
 
     template <record_consumer_like RecordConsumer>
     future<> for_each_record(log_segment_id segment_id,
@@ -1171,7 +1171,7 @@ private:
         return _segment_descs[segment_id.value];
     }
 
-    segment_descriptor& get_segment_descriptor(log_location loc) noexcept {
+    segment_descriptor& get_segment_descriptor(record_location loc) noexcept {
         return _segment_descs[loc.segment.value];
     }
 
@@ -1620,14 +1620,14 @@ future<> segment_manager_impl::write_full_segment(write_buffer& wb, logstor_grou
     add_to_group_failed.cancel();
 }
 
-void segment_manager_impl::on_add_record(log_location location) noexcept {
+void segment_manager_impl::on_add_record(record_location location) noexcept {
     auto& desc = get_segment_descriptor(location);
     desc.on_write(location);
     _stats.live_record_bytes += location.size;
     _stats.live_record_count++;
 }
 
-void segment_manager_impl::on_free_record(log_location location) noexcept {
+void segment_manager_impl::on_free_record(record_location location) noexcept {
     auto& desc = get_segment_descriptor(location);
     desc.on_free(location);
     _stats.live_record_bytes -= location.size;
@@ -1642,7 +1642,7 @@ void segment_manager_impl::on_free_record(log_location location) noexcept {
     _stats.bytes_freed += location.size;
 }
 
-future<log_record> segment_manager_impl::read(log_location location) {
+future<log_record> segment_manager_impl::read(record_location location) {
     auto holder = _async_gate.hold();
 
     if (location.offset + location.size > _cfg.segment_size) [[unlikely]] {
@@ -2224,7 +2224,7 @@ struct compaction_buffer {
     // Rewrite a single live record into this buffer, updating the index atomically.
     // Returns immediately after queuing the write; caller must co_await close()/flush()
     // to ensure all pending updates complete.
-    future<> rewrite_record(primary_index& index, log_location read_location, const record_header& header, log_record_bytes_view record_view) {
+    future<> rewrite_record(primary_index& index, record_location read_location, const record_header& header, log_record_bytes_view record_view) {
         auto* index_ptr = &index;
         auto key = header.index_key();
 
@@ -2236,7 +2236,7 @@ struct compaction_buffer {
 
         auto write_and_update_index = buf->write(std::move(writer)).then_unpack(
                 [this, index_ptr, key = std::move(key), read_location]
-                (log_location new_location, seastar::gate::holder op) {
+                (record_location new_location, seastar::gate::holder op) {
             utils::get_local_injector().inject("logstor_compaction_fail_index_update", [] {
                 throw std::runtime_error("compaction index update failed by injection");
             });
@@ -2294,14 +2294,14 @@ future<> compaction_manager_impl::do_compaction(logstor_group& cg, abort_source&
             compaction_buffer(_sm, co_await _sm._compaction_buffer_pool.allocate(as), cg),
             [this, &index, &nonempty_segments] (compaction_buffer& cb) -> future<compaction_buffer_stats> {
         co_await _sm.for_each_record(nonempty_segments,
-            [&index, &cb] (log_location read_location, const record_header& header) -> want_data {
+            [&index, &cb] (record_location read_location, const record_header& header) -> want_data {
                 if (!index.is_record_alive(header.index_key(), read_location)) {
                     cb.stats.records_skipped++;
                     return want_data::no;
                 }
                 return want_data::yes;
             },
-            [&index, &cb] (log_location read_location, const record_header& header, log_record_bytes_view record_view) -> future<> {
+            [&index, &cb] (record_location read_location, const record_header& header, log_record_bytes_view record_view) -> future<> {
                 co_await cb.rewrite_record(index, read_location, header, record_view);
             }
         );
@@ -2408,13 +2408,13 @@ future<> compaction_manager_impl::do_split_compaction(logstor_group& src, mutati
                 },
                 [this, &index, &classifier, &nonempty_segments] (split_buffer_pair& bufs) -> future<compaction_buffer_stats> {
             co_await _sm.for_each_record(nonempty_segments,
-                [&index] (log_location read_location, const record_header& header) -> want_data {
+                [&index] (record_location read_location, const record_header& header) -> want_data {
                     if (!index.is_record_alive(header.index_key(), read_location)) {
                         return want_data::no;
                     }
                     return want_data::yes;
                 },
-                [&index, &bufs, &classifier] (log_location read_location, const record_header& header, log_record_bytes_view record_view) -> future<> {
+                [&index, &bufs, &classifier] (record_location read_location, const record_header& header, log_record_bytes_view record_view) -> future<> {
                     auto& cb = bufs.bufs[classifier(header.key.token())];
                     co_await cb.rewrite_record(index, read_location, header, record_view);
                 }
@@ -2450,7 +2450,7 @@ future<> compaction_manager_impl::flush_all_separator_buffers(std::optional<segm
     });
 }
 
-void separator_index_update::operator()(log_location new_location, seastar::gate::holder) const {
+void separator_index_update::operator()(record_location new_location, seastar::gate::holder) const {
     index->update_record_location(key, prev_location, new_location);
 }
 
@@ -2698,7 +2698,7 @@ future<> segment_manager_impl::recover_segment(replica::database& db, log_segmen
             on_segment_info(seg_info);
             return make_ready_future<>();
         },
-        [&db, &cmp] (log_location loc, const record_header& header) -> want_data {
+        [&db, &cmp] (record_location loc, const record_header& header) -> want_data {
             logstor_logger.trace("Recovery: read record at {} key {} ts {}", loc, header.key, header.timestamp);
 
             index_entry new_entry {
@@ -2718,17 +2718,17 @@ future<> segment_manager_impl::recover_segment(replica::database& db, log_segmen
 
             return want_data::no;
         },
-        [] (log_location, log_record) {
+        [] (record_location, log_record) {
             // we don't read record data, only headers.
             return make_ready_future<>();
         });
 }
 
-void segment_manager::on_add_record(log_location location) noexcept {
+void segment_manager::on_add_record(record_location location) noexcept {
     get_impl().on_add_record(location);
 }
 
-void segment_manager::on_free_record(log_location location) noexcept {
+void segment_manager::on_free_record(record_location location) noexcept {
     get_impl().on_free_record(location);
 }
 
@@ -2765,7 +2765,7 @@ future<> segment_manager_impl::add_segment_to_compaction_group(replica::database
             seg_ref.set_flush_failure();
         });
         co_await for_each_record(seg_id,
-            [&db] (log_location prev_loc, const record_header& header) -> want_data {
+            [&db] (record_location prev_loc, const record_header& header) -> want_data {
                 try {
                     auto& t = db.find_column_family(header.table);
                     return t.uses_logstor() && t.logstor_index().is_record_alive(header.index_key(), prev_loc)
@@ -2774,7 +2774,7 @@ future<> segment_manager_impl::add_segment_to_compaction_group(replica::database
                     return want_data::no;
                 }
             },
-            [seg_ref, &db] (log_location prev_loc, const record_header& header, log_record_bytes_view record_view) -> future<> {
+            [seg_ref, &db] (record_location prev_loc, const record_header& header, log_record_bytes_view record_view) -> future<> {
                 try {
                     auto& t = db.find_column_family(header.table);
                     auto key = header.index_key();
@@ -2857,7 +2857,7 @@ future<> segment_manager::write(write_buffer& wb) {
     return _impl->write(wb);
 }
 
-future<log_record> segment_manager::read(log_location location) {
+future<log_record> segment_manager::read(record_location location) {
     return _impl->read(location);
 }
 

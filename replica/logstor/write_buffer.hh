@@ -120,13 +120,13 @@ concept log_record_writer_concept = requires(const T& w, seastar::simple_memory_
     { w.write(out) };
 };
 
-using log_location_with_holder = std::tuple<log_location, seastar::gate::holder>;
+using record_location_with_holder = std::tuple<record_location, seastar::gate::holder>;
 
 // Where a record whose frame sits at `frame_offset` of a buffer ends up, once that buffer has been
 // written to a segment at `buffer_position`. A buffer learns where it was written once, and the
 // location of every record in it follows from that.
-inline log_location record_location(segment_position buffer_position, size_t frame_offset, size_t frame_size) noexcept {
-    return log_location {
+inline record_location locate_record(segment_position buffer_position, size_t frame_offset, size_t frame_size) noexcept {
+    return record_location {
         .segment = buffer_position.segment,
         .offset = static_cast<uint32_t>(buffer_position.offset + frame_offset),
         .size = static_cast<uint32_t>(frame_size),
@@ -134,7 +134,7 @@ inline log_location record_location(segment_position buffer_position, size_t fra
 }
 
 struct buffered_write_result {
-    future<log_location_with_holder> persisted;
+    future<record_location_with_holder> persisted;
 };
 
 // Serializes one in-memory logstor buffer.
@@ -158,7 +158,7 @@ public:
     using ostream = seastar::simple_memory_output_stream;
 
     // Where the appended record frame starts in the buffer, and how many bytes it takes
-    // without its padding - which is what log_location::size holds.
+    // without its padding - which is what record_location::size holds.
     struct append_result {
         size_t frame_offset;
         size_t frame_size;
@@ -295,7 +295,7 @@ private:
 //
 // This is the buffer type used by the segment manager, buffered_writer,
 // compaction, and separator flows. write() appends a record to the underlying
-// raw buffer and returns a future that resolves to the final log_location once
+// raw buffer and returns a future that resolves to the final record_location once
 // the buffer is flushed. The returned gate holder keeps the buffer alive for
 // follow-up work such as index updates. For mixed buffers it also keeps copies
 // of appended records so separator rewriting can replay them after the flush.
@@ -310,8 +310,8 @@ public:
         size_t frame_size;
         write_target target;
 
-        log_location location(segment_position buffer_position) const noexcept {
-            return record_location(buffer_position, frame_offset, frame_size);
+        record_location location(segment_position buffer_position) const noexcept {
+            return locate_record(buffer_position, frame_offset, frame_size);
         }
     };
 
@@ -360,11 +360,11 @@ public:
     }
 
     // Write a record to the buffer.
-    // Returns a future that will be resolved with the log location once flushed and a gate holder
+    // Returns a future that will be resolved with the record location once flushed and a gate holder
     // that keeps the write buffer open. The gate should be held for index updates after the write
     // is done.
     template <log_record_writer_concept Writer>
-    future<log_location_with_holder> write(Writer writer, write_target target = {});
+    future<record_location_with_holder> write(Writer writer, write_target target = {});
 
     // Complete all tracked writes with their locations when the buffer is flushed to buffer_position
     future<> complete_writes(segment_position buffer_position);
@@ -385,8 +385,8 @@ private:
 extern template raw_write_buffer::append_result raw_write_buffer::append<log_record_writer>(const log_record_writer&);
 extern template raw_write_buffer::append_result raw_write_buffer::append<log_record_bytes_writer>(const log_record_bytes_writer&);
 
-extern template future<log_location_with_holder> write_buffer::write<log_record_writer>(log_record_writer, write_target);
-extern template future<log_location_with_holder> write_buffer::write<log_record_bytes_writer>(log_record_bytes_writer, write_target);
+extern template future<record_location_with_holder> write_buffer::write<log_record_writer>(log_record_writer, write_target);
+extern template future<record_location_with_holder> write_buffer::write<log_record_bytes_writer>(log_record_bytes_writer, write_target);
 
 class write_buffer_pool;
 
@@ -553,7 +553,7 @@ class buffered_writer {
 
     struct queued_write {
         seastar::promise<buffered_write_result> accepted_pr; // written to buffer
-        seastar::promise<log_location_with_holder> persisted_pr; // written to a segment
+        seastar::promise<record_location_with_holder> persisted_pr; // written to a segment
         log_record_writer writer;
         write_target target;
         // Keeps the writer from finishing its stop() while the record is on the queue. It is held
@@ -633,7 +633,7 @@ class buffered_writer {
     bool should_rotate_head_for_flush() const noexcept;
     bool maybe_advance_head() noexcept;
 
-    std::optional<future<log_location_with_holder>> append_to_head_buffer(log_record_writer&, write_target&);
+    std::optional<future<record_location_with_holder>> append_to_head_buffer(log_record_writer&, write_target&);
 
     // Puts a record that found no room in the ring on the queue of writes waiting for some, and
     // waits there for it to be taken into a buffer.

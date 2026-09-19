@@ -216,7 +216,7 @@ bool write_buffer::is_closed() const noexcept {
 }
 
 template <log_record_writer_concept Writer>
-future<log_location_with_holder> write_buffer::write(Writer writer, write_target target) {
+future<record_location_with_holder> write_buffer::write(Writer writer, write_target target) {
     auto append_result = _raw.append(writer);
 
     if (with_record_copy()) {
@@ -240,12 +240,12 @@ future<log_location_with_holder> write_buffer::write(Writer writer, write_target
     return _written.get_shared_future().then(
             [frame_offset = append_result.frame_offset, frame_size = append_result.frame_size, op = std::move(op)]
             (segment_position buffer_position) mutable {
-        return std::make_tuple(record_location(buffer_position, frame_offset, frame_size), std::move(op));
+        return std::make_tuple(locate_record(buffer_position, frame_offset, frame_size), std::move(op));
     });
 }
 
-template future<log_location_with_holder> write_buffer::write<log_record_writer>(log_record_writer, write_target);
-template future<log_location_with_holder> write_buffer::write<log_record_bytes_writer>(log_record_bytes_writer, write_target);
+template future<record_location_with_holder> write_buffer::write<log_record_writer>(log_record_writer, write_target);
+template future<record_location_with_holder> write_buffer::write<log_record_bytes_writer>(log_record_bytes_writer, write_target);
 
 template raw_write_buffer::append_result raw_write_buffer::append<log_record_writer>(const log_record_writer&);
 template raw_write_buffer::append_result raw_write_buffer::append<log_record_bytes_writer>(const log_record_bytes_writer&);
@@ -535,7 +535,7 @@ bool buffered_writer::maybe_advance_head() noexcept {
 // The target is taken by reference and moved from only once the record is in a buffer: a caller
 // whose append does not happen goes on to queue the record, and the write target it queues has to
 // be the one it came with, holders and all.
-std::optional<future<log_location_with_holder>> buffered_writer::append_to_head_buffer(log_record_writer& writer, write_target& target) {
+std::optional<future<record_location_with_holder>> buffered_writer::append_to_head_buffer(log_record_writer& writer, write_target& target) {
     if (!head_buf().can_fit(writer) && !maybe_advance_head()) {
         return std::nullopt;
     }

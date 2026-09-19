@@ -109,7 +109,7 @@ temporary_buffer<char> concat_serialized_buffers(std::initializer_list<const tem
     return out;
 }
 
-log_record read_record_at_location(const temporary_buffer<char>& segment, log_location loc) {
+log_record read_record_at_location(const temporary_buffer<char>& segment, record_location loc) {
     BOOST_REQUIRE_EQUAL(loc.offset + loc.size <= segment.size(), true);
 
     temporary_buffer<char> buf(loc.size);
@@ -166,7 +166,7 @@ rewritten_stream_result rewrite_streamed_segment(log_segment_id segment_id, segm
 }
 
 struct scanned_record {
-    log_location location;
+    record_location location;
     log_record record;
 };
 
@@ -180,10 +180,10 @@ std::vector<scanned_record> scan_buffer_records(const temporary_buffer<char>& bu
         [] (const segment_info&) {
             return make_ready_future<>();
         },
-        [] (log_location, const record_header&) {
+        [] (record_location, const record_header&) {
             return want_data::yes;
         },
-        [&records] (log_location loc, log_record rec) {
+        [&records] (record_location loc, log_record rec) {
             records.push_back(scanned_record{.location = loc, .record = std::move(rec)});
             return make_ready_future<>();
         }).get();
@@ -235,7 +235,7 @@ log_record make_buffered_writer_record(schema_ptr schema, size_t idx, const sstr
     return make_log_record(schema, sstring(fmt::format("pk{:04}", idx)), value, ts);
 }
 
-log_location wait_for_persisted(future<log_location_with_holder>& fut) {
+record_location wait_for_persisted(future<record_location_with_holder>& fut) {
     auto [loc, op] = fut.get();
     return loc;
 }
@@ -365,11 +365,11 @@ std::map<api::timestamp_type, size_t> count_records_by_timestamp(logstor& ls, ut
         }).get();
         scan_segment(in, snap.segment_id, segment_size,
             [] (const segment_info&) { return make_ready_future<>(); },
-            [&counts] (log_location, const record_header& header) {
+            [&counts] (record_location, const record_header& header) {
                 counts[header.timestamp]++;
                 return want_data::no;
             },
-            [] (log_location, log_record) { return make_ready_future<>(); }
+            [] (record_location, log_record) { return make_ready_future<>(); }
         ).get();
         in.close().get();
     }
@@ -884,27 +884,27 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_space_accounting) {
         ssize_t live_bytes = 0;
         size_t add_calls = 0;
         size_t free_calls = 0;
-        std::vector<log_location> added_locations;
-        std::vector<log_location> freed_locations;
+        std::vector<record_location> added_locations;
+        std::vector<record_location> freed_locations;
 
-        bool is_live(log_location loc) const {
+        bool is_live(record_location loc) const {
             return std::count(added_locations.begin(), added_locations.end(), loc)
                  > std::count(freed_locations.begin(), freed_locations.end(), loc);
         }
 
         size_t live_location_count() const {
-            return std::count_if(added_locations.begin(), added_locations.end(), [&] (log_location loc) {
+            return std::count_if(added_locations.begin(), added_locations.end(), [&] (record_location loc) {
                 return is_live(loc);
             });
         }
 
-        void on_add_record(log_location loc) noexcept override {
+        void on_add_record(record_location loc) noexcept override {
             live_bytes += loc.size;
             ++add_calls;
             added_locations.push_back(loc);
         }
 
-        void on_free_record(log_location loc) noexcept override {
+        void on_free_record(record_location loc) noexcept override {
             live_bytes -= loc.size;
             ++free_calls;
             BOOST_REQUIRE(is_live(loc));
@@ -918,13 +918,13 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_space_accounting) {
     const auto pk1 = make_index_key(*schema, make_kv_mutation(schema, "pk1", "v1").decorated_key());
     const auto pk2 = make_index_key(*schema, make_kv_mutation(schema, "pk2", "v2").decorated_key());
 
-    const log_location loc0{.segment = log_segment_id{1}, .offset = 0, .size = 11};
-    const log_location loc0_old{.segment = log_segment_id{1}, .offset = 16, .size = 7};
-    const log_location loc1{.segment = log_segment_id{2}, .offset = 0, .size = 17};
-    const log_location loc2{.segment = log_segment_id{3}, .offset = 0, .size = 13};
-    const log_location loc3{.segment = log_segment_id{4}, .offset = 0, .size = 19};
-    const log_location loc4{.segment = log_segment_id{5}, .offset = 0, .size = 23};
-    const log_location loc5{.segment = log_segment_id{6}, .offset = 0, .size = 29};
+    const record_location loc0{.segment = log_segment_id{1}, .offset = 0, .size = 11};
+    const record_location loc0_old{.segment = log_segment_id{1}, .offset = 16, .size = 7};
+    const record_location loc1{.segment = log_segment_id{2}, .offset = 0, .size = 17};
+    const record_location loc2{.segment = log_segment_id{3}, .offset = 0, .size = 13};
+    const record_location loc3{.segment = log_segment_id{4}, .offset = 0, .size = 19};
+    const record_location loc4{.segment = log_segment_id{5}, .offset = 0, .size = 23};
+    const record_location loc5{.segment = log_segment_id{6}, .offset = 0, .size = 29};
 
     // insert(pk0, loc0): new entry, succeeds, no previous entry to free  →  {pk0: loc0}
     auto outcome0 = index.insert(pk0, index_entry{.location = loc0, .timestamp = api::timestamp_type(10)});
@@ -1054,14 +1054,14 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_range_erase_and_clear_space_
         ssize_t live_bytes = 0;
         size_t add_calls = 0;
         size_t free_calls = 0;
-        std::vector<log_location> freed_locations;
+        std::vector<record_location> freed_locations;
 
-        void on_add_record(log_location loc) noexcept override {
+        void on_add_record(record_location loc) noexcept override {
             live_bytes += loc.size;
             ++add_calls;
         }
 
-        void on_free_record(log_location loc) noexcept override {
+        void on_free_record(record_location loc) noexcept override {
             live_bytes -= loc.size;
             ++free_calls;
             freed_locations.push_back(loc);
@@ -1072,7 +1072,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_range_erase_and_clear_space_
 
     struct entry {
         primary_index_key key;
-        log_location loc;
+        record_location loc;
     };
 
     std::vector<entry> entries = {
@@ -1132,7 +1132,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_range_erase_and_clear_space_
 }
 
 // Checks that scan_segment() returns mixed-buffer log locations that can be used to read back the expected records.
-SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_mixed_buffers_report_readable_log_locations) {
+SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_mixed_buffers_report_readable_record_locations) {
     auto schema = make_kv_schema();
     // A key well past the inline size of managed_bytes, so the variable part of the record header is exercised.
     const sstring long_pk(100, 'k');
@@ -1162,19 +1162,19 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_mixed_buffers_report_readable
 
     std::vector<segment_info> seen_segment_infos;
     std::vector<record_header> seen_headers;
-    std::vector<log_location> seen_locations;
+    std::vector<record_location> seen_locations;
 
     scan_segment(in, log_segment_id{3}, segment_size,
         [&seen_segment_infos] (const segment_info& sh) {
             seen_segment_infos.push_back(sh);
             return make_ready_future<>();
         },
-        [&seen_headers, &seen_locations] (log_location loc, const record_header& header) {
+        [&seen_headers, &seen_locations] (record_location loc, const record_header& header) {
             seen_headers.push_back(header);
             seen_locations.push_back(loc);
             return want_data::yes;
         },
-        [] (log_location, log_record) {
+        [] (record_location, log_record) {
             return make_ready_future<>();
          }).get();
     in.close().get();
@@ -1242,11 +1242,11 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_rejects_corrupt_key_size) {
             [] (const segment_info&) {
                 return make_ready_future<>();
             },
-            [&seen] (log_location, const record_header& header) {
+            [&seen] (record_location, const record_header& header) {
                 seen.push_back(header.timestamp);
                 return want_data::no;
             },
-            [] (log_location, log_record) {
+            [] (record_location, log_record) {
                 return make_ready_future<>();
             }).get();
         in.close().get();
@@ -1295,12 +1295,12 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_returns_only_selected_records
         [] (const segment_info&) {
             return make_ready_future<>();
         },
-        [&seen_header_timestamps] (log_location, const record_header& header) {
+        [&seen_header_timestamps] (record_location, const record_header& header) {
             seen_header_timestamps.push_back(header.timestamp);
             return (header.timestamp == api::timestamp_type(72) || header.timestamp == api::timestamp_type(74))
                     ? want_data::yes : want_data::no;
         },
-        [&selected_records] (log_location, log_record rec) {
+        [&selected_records] (record_location, log_record rec) {
             selected_records.push_back(std::move(rec));
             return make_ready_future<>();
         }).get();
@@ -1344,10 +1344,10 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_reads_full_buffer_records_wit
             seen_segment_infos.push_back(sh);
             return make_ready_future<>();
         },
-        [] (log_location, const record_header&) {
+        [] (record_location, const record_header&) {
             return want_data::yes;
         },
-        [&seen_records] (log_location, log_record rec) {
+        [&seen_records] (record_location, log_record rec) {
             seen_records.push_back(std::move(rec));
             return make_ready_future<>();
         }).get();
@@ -1420,11 +1420,11 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_stops_on_mixed_buffer_lower_s
             seen_segment_infos.push_back(sh);
             return make_ready_future<>();
         },
-        [&seen_headers] (log_location, const record_header& header) {
+        [&seen_headers] (record_location, const record_header& header) {
             seen_headers.push_back(header);
             return want_data::yes;
         },
-        [&seen_records] (log_location, log_record rec) {
+        [&seen_records] (record_location, log_record rec) {
             seen_records.push_back(std::move(rec));
             return make_ready_future<>();
         }).get();
@@ -1478,11 +1478,11 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_stops_on_corrupted_later_mixe
             seen_segment_infos.push_back(sh);
             return make_ready_future<>();
         },
-        [&seen_headers] (log_location, const record_header& header) {
+        [&seen_headers] (record_location, const record_header& header) {
             seen_headers.push_back(header);
             return want_data::yes;
         },
-        [&seen_records] (log_location, log_record rec) {
+        [&seen_records] (record_location, log_record rec) {
             seen_records.push_back(std::move(rec));
             return make_ready_future<>();
         }).get();
@@ -1524,10 +1524,10 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_streamed_segment_rewriter_rewrites_initial
             seen_segment_infos.push_back(sh);
             return make_ready_future<>();
         },
-        [] (log_location, const record_header&) {
+        [] (record_location, const record_header&) {
             return want_data::yes;
         },
-        [&seen_records] (log_location, log_record rec) {
+        [&seen_records] (record_location, log_record rec) {
             seen_records.push_back(std::move(rec));
             return make_ready_future<>();
         }).get();
@@ -1617,7 +1617,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_buffered_writer_basic_flushes_records) {
     });
 
     std::vector<log_record> expected;
-    std::vector<future<log_location_with_holder>> persisted;
+    std::vector<future<record_location_with_holder>> persisted;
     for (size_t i = 0; i < 3; ++i) {
         auto record = make_buffered_writer_record(schema, i, sstring(fmt::format("value{}", i)), api::timestamp_type(100 + i));
         expected.push_back(record);
@@ -1625,7 +1625,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_buffered_writer_basic_flushes_records) {
         persisted.push_back(std::move(accepted.persisted));
     }
 
-    std::vector<log_location> locations;
+    std::vector<record_location> locations;
     for (auto& fut : persisted) {
         locations.push_back(wait_for_persisted(fut));
     }
@@ -1657,7 +1657,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_buffered_writer_flushes_partial_buffer_wit
     });
 
     std::vector<log_record> expected;
-    std::vector<future<log_location_with_holder>> persisted;
+    std::vector<future<record_location_with_holder>> persisted;
     for (size_t i = 0; i < 3; ++i) {
         auto record = make_buffered_writer_record(schema, i, sstring(fmt::format("value{}", i)), api::timestamp_type(150 + i));
         expected.push_back(record);
@@ -1670,7 +1670,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_buffered_writer_flushes_partial_buffer_wit
     auto flush = writer.flush();
     flush_ctl.wait_for_flush_starts(1);
 
-    std::vector<log_location> locations;
+    std::vector<record_location> locations;
     for (auto& fut : persisted) {
         locations.push_back(wait_for_persisted(fut));
     }
@@ -2737,7 +2737,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_split_compaction_splits_segments_between_t
         index_keys.push_back(make_index_key(*schema, m.decorated_key()));
     }
 
-    std::vector<log_location> locations_before;
+    std::vector<record_location> locations_before;
     for (const auto& key : index_keys) {
         auto entry = index.get(key);
         BOOST_REQUIRE(entry);
@@ -2770,7 +2770,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_split_compaction_splits_segments_between_t
     const auto left_ids = snapshot_segment_ids(left_snapshot);
     const auto right_ids = snapshot_segment_ids(right_snapshot);
 
-    std::vector<log_location> locations_after;
+    std::vector<record_location> locations_after;
     for (const auto& key : index_keys) {
         auto entry = index.get(key);
         BOOST_REQUIRE(entry);

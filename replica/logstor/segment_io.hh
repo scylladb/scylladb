@@ -37,23 +37,23 @@ struct segment_info {
 
 using want_data = seastar::bool_class<class want_data_tag>;
 
-using record_header_consumer = std::function<want_data(log_location, const record_header&)>;
-using record_consumer = std::function<future<>(log_location, log_record)>;
-using record_bytes_consumer = std::function<future<>(log_location, const record_header&, log_record_bytes_view)>;
+using record_header_consumer = std::function<want_data(record_location, const record_header&)>;
+using record_consumer = std::function<future<>(record_location, log_record)>;
+using record_bytes_consumer = std::function<future<>(record_location, const record_header&, log_record_bytes_view)>;
 using segment_info_consumer = std::function<future<>(const segment_info&)>;
 using streamed_buffer_consumer = std::function<future<>(bytes_view)>;
 
 template <typename Consumer>
 concept record_consumer_like =
-    (std::invocable<Consumer&, log_location, log_record> &&
-     std::same_as<std::invoke_result_t<Consumer&, log_location, log_record>, future<>>) ||
-    (std::invocable<Consumer&, log_location, const record_header&, log_record_bytes_view> &&
-     std::same_as<std::invoke_result_t<Consumer&, log_location, const record_header&, log_record_bytes_view>, future<>>);
+    (std::invocable<Consumer&, record_location, log_record> &&
+     std::same_as<std::invoke_result_t<Consumer&, record_location, log_record>, future<>>) ||
+    (std::invocable<Consumer&, record_location, const record_header&, log_record_bytes_view> &&
+     std::same_as<std::invoke_result_t<Consumer&, record_location, const record_header&, log_record_bytes_view>, future<>>);
 
 future<std::optional<segment_info>> read_segment_info(seastar::input_stream<char>& in);
 
 log_record deserialize_log_record(simple_memory_input_stream);
-future<log_record> read_log_record(seastar::input_stream<char>& in, log_location loc);
+future<log_record> read_log_record(seastar::input_stream<char>& in, record_location loc);
 
 future<> scan_segment(seastar::input_stream<char>& in,
         log_segment_id segment_id,

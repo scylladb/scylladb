@@ -243,7 +243,7 @@ them are otherwise easy to confuse:
 | `header_size`  | The serialized `record_header`: its fixed part plus `key_size`. |
 | `value_size`   | The serialized `record_value`. Stored in the frame header. |
 | `record_size`  | `header_size + value_size` — the record without its frame header. This is what `max_record_size()` bounds. |
-| `frame_size`   | `record_frame_header_size + record_size` — the frame without its padding. This is what `log_location::size` holds. |
+| `frame_size`   | `record_frame_header_size + record_size` — the frame without its padding. This is what `record_location::size` holds. |
 | `records_size` | All the frames of one buffer, their padding included. Stored in the buffer header. |
 | `record_bytes` | The frame sizes of a set of records summed, their padding excluded. What a `segment_descriptor` and the `live_record_bytes` metric count. |
 
@@ -269,8 +269,11 @@ Written by `ondisk::write_record_header()`. The fixed fields come first, at cons
 
 The `value_size` bytes immediately following the record header are the encoded partition. They are opaque to everything but `encode_record_value()` and `decode_record_value()` in `replica/logstor/record_value.hh`: compaction, the separator and segment streaming copy a value as it is. The encoding is the IDL-serialized `canonical_mutation` of the partition, written without the length prefix the IDL puts around it, since `value_size` already gives the size.
 
-**Record Location** (`log_location`):
+**Record Location** (`record_location`):
 
-The `log_location` stored in the index for each record points to the start of the `record_frame_header`:
+The `record_location` stored in the index for each record points to the start of the `record_frame_header`:
+- `segment`: the `log_segment_id` holding the frame.
 - `offset`: byte offset from the start of the segment to the `record_frame_header`.
-- `size`: total size including `record_frame_header` + `record_header` + `record_value`
+- `size`: the `frame_size` — `record_frame_header` + `record_header` + `record_value`, without the padding that follows the frame. Reading exactly these bytes at this offset yields the whole record, which is what `segment_manager::read()` does.
+
+Where a sealed buffer itself landed is a `segment_position` instead: the segment and the offset, with no size. Each record location is derived from it by adding the record's frame offset within the buffer. The two are separate types so that a buffer position cannot be read as a record location.

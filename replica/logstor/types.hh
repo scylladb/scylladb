@@ -30,12 +30,15 @@ struct segment_position {
     bool operator==(const segment_position& other) const noexcept = default;
 };
 
-struct log_location {
+// Where a record frame lives. `size` is its frame size: the record frame header, the record header
+// and the value, without the padding that follows the frame inside a buffer. It is what
+// segment_manager::read() reads and what the space accounting counts.
+struct record_location {
     log_segment_id segment;
     uint32_t offset;
     uint32_t size;
 
-    bool operator==(const log_location& other) const noexcept = default;
+    bool operator==(const record_location& other) const noexcept = default;
 };
 
 struct primary_index_key {
@@ -63,7 +66,7 @@ struct primary_index_key {
 };
 
 struct index_entry {
-    log_location location;
+    record_location location;
     api::timestamp_type timestamp;
 
     bool operator==(const index_entry& other) const noexcept = default;
@@ -149,8 +152,8 @@ enum class segment_kind : uint8_t {
 class space_accounting_subscriber {
 public:
     virtual ~space_accounting_subscriber() = default;
-    virtual void on_add_record(log_location location) noexcept = 0;
-    virtual void on_free_record(log_location location) noexcept = 0;
+    virtual void on_add_record(record_location location) noexcept = 0;
+    virtual void on_free_record(record_location location) noexcept = 0;
 };
 
 }
@@ -173,9 +176,9 @@ struct fmt::formatter<replica::logstor::segment_position> : fmt::formatter<strin
 };
 
 template <>
-struct fmt::formatter<replica::logstor::log_location> : fmt::formatter<string_view> {
+struct fmt::formatter<replica::logstor::record_location> : fmt::formatter<string_view> {
     template <typename FormatContext>
-    auto format(const replica::logstor::log_location& loc, FormatContext& ctx) const {
+    auto format(const replica::logstor::record_location& loc, FormatContext& ctx) const {
         return fmt::format_to(ctx.out(), "{{segment:{}, offset:{}, size:{}}}",
                              loc.segment, loc.offset, loc.size);
     }

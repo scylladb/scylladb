@@ -72,13 +72,13 @@ struct segment_header {
 
 // A record is stored on disk as a record frame: this header, the record header it sizes,
 // and the record value, followed by padding to record_alignment. The frame header is what a
-// log_location points at, and it is the only fixed-size part of a frame.
+// record_location points at, and it is the only fixed-size part of a frame.
 //
 // The sizes involved, as they are named throughout logstor:
 //   header_size         the serialized record_header, its fixed part plus key_size
 //   value_size          the serialized record value
 //   record_size         header_size + value_size, the record without its frame header
-//   frame_size          record_frame_header_size + record_size, which is log_location::size
+//   frame_size          record_frame_header_size + record_size, which is record_location::size
 //   records_size        the frames of a whole buffer, their padding included
 //   record_bytes        the frame sizes of a set of records summed, their padding excluded
 struct record_frame_header {

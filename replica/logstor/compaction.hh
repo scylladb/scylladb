@@ -47,9 +47,9 @@ class logstor_group;
 struct separator_index_update {
     primary_index* index;
     primary_index_key key;
-    log_location prev_location;
+    record_location prev_location;
 
-    void operator()(log_location new_location, seastar::gate::holder) const;
+    void operator()(record_location new_location, seastar::gate::holder) const;
 };
 
 using split_target_group = std::function<logstor_group&(log_segment_id, dht::token first_token, dht::token last_token)>;
@@ -236,7 +236,7 @@ struct segment_descriptor : public log_heap_hook<segment_descriptor_hist_options
         record_count += cnt;
     }
 
-    void on_write(log_location loc) noexcept {
+    void on_write(record_location loc) noexcept {
         on_write(loc.size);
     }
 
@@ -245,7 +245,7 @@ struct segment_descriptor : public log_heap_hook<segment_descriptor_hist_options
         record_count -= cnt;
     }
 
-    void on_free(log_location loc) noexcept {
+    void on_free(record_location loc) noexcept {
         on_free(loc.size);
     }
 };

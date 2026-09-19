@@ -422,7 +422,7 @@ mutation_reader logstor::make_reader(schema_ptr schema, const primary_index& ind
         // One entry of a batch: where its record lives, and the mutation once it is available,
         // either taken from the cache while the index entry was still in hand or read from the log.
         struct batch_slot {
-            log_location location;
+            record_location location;
             std::optional<pending_mutation> mut;
         };
 
