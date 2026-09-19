@@ -11,6 +11,7 @@
 #include "cql3/statements/cf_prop_defs.hh"
 #include "cql3/statements/property_definitions.hh"
 #include "cql3/statements/request_validations.hh"
+#include "compaction/compaction_strategy_impl.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "db/extensions.hh"
 #include "db/tags/extension.hh"
@@ -129,12 +130,12 @@ void cf_prop_defs::validate(const data_dictionary::database db, sstring ks_name,
         if (strategy == compaction_type_options.end()) {
             throw exceptions::configuration_exception(sstring("Missing sub-option '") + COMPACTION_STRATEGY_CLASS_KEY + "' for the '" + KW_COMPACTION + "' option.");
         }
-        _compaction_strategy_class = compaction::compaction_strategy::type(strategy->second);
+        auto compaction_strategy_class = compaction::compaction_strategy::type(strategy->second);
+        // Validate before recording the class: the recorded class is the marker
+        // that skips this block when a prepared statement is executed again.
+        compaction::compaction_strategy_impl::validate_options_for_strategy_type(compaction_type_options, compaction_strategy_class);
+        _compaction_strategy_class = compaction_strategy_class;
         remove_from_map_if_exists(KW_COMPACTION, COMPACTION_STRATEGY_CLASS_KEY);
-
-#if 0
-       CFMetaData.validateCompactionOptions(compactionStrategyClass, compactionOptions);
-#endif
     }
 
     auto compression_options = get_compression_options();
