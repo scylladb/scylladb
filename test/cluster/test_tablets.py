@@ -646,10 +646,12 @@ async def test_enforce_rack_list_option(request: pytest.FixtureRequest, manager:
     injection = "create_with_numeric"
     config = {"tablets_mode_for_new_keyspaces": "enabled", "error_injections_at_startup": [injection]}
 
-    servers = [await manager.server_add(config=config, cmdline=['--smp=2'], property_file={'dc': 'dc1', 'rack': 'rack1a'}),
-                await manager.server_add(config=config, cmdline=['--smp=2'], property_file={'dc': 'dc1', 'rack': 'rack1b'}),
-                await manager.server_add(config=config, cmdline=['--smp=2'], property_file={'dc': 'dc2', 'rack': 'rack2a'}),
-                await manager.server_add(config=config, cmdline=['--smp=2'], property_file={'dc': 'dc2', 'rack': 'rack2b'})]
+    servers = await manager.servers_add(4, config=config, cmdline=['--smp=2'], property_file=[
+        {'dc': 'dc1', 'rack': 'rack1a'},
+        {'dc': 'dc1', 'rack': 'rack1b'},
+        {'dc': 'dc2', 'rack': 'rack2a'},
+        {'dc': 'dc2', 'rack': 'rack2b'},
+    ])
 
     cql = manager.get_cql()
     host = (await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + 30))[0]
@@ -1256,9 +1258,11 @@ async def test_failed_tablet_rebuild_is_retried(request: pytest.FixtureRequest, 
         '--smp=2',
     ]
 
-    servers = [await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc1', 'rack': 'rack1a'}),
-                await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc1', 'rack': 'rack1b'}),
-                await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc1', 'rack': 'rack1c'})]
+    servers = await manager.servers_add(3, config=config, cmdline=cmdline, property_file=[
+        {'dc': 'dc1', 'rack': 'rack1a'},
+        {'dc': 'dc1', 'rack': 'rack1b'},
+        {'dc': 'dc1', 'rack': 'rack1c'},
+    ])
 
     cql = manager.get_cql()
 
