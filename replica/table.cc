@@ -2692,6 +2692,12 @@ compaction_group::update_sstable_sets_on_compaction_completion(compaction::compa
     cache.refresh_snapshot();
 
     _t.rebuild_statistics();
+    // desc.new_gc_sstables are deliberately left out. They hold only data this
+    // compaction is dropping, they exist just long enough to keep a crash from
+    // resurrecting it, and they are released by the same compaction that
+    // created them. Their large-partition, large-row and large-collection
+    // records describe garbage, so feeding them to the guardrail would report
+    // limit violations for data that is on its way out.
     for (auto& sst : desc.new_sstables) {
         _t._large_data_guardrail->register_sstable(sst);
     }
