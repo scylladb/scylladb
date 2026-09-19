@@ -19,7 +19,6 @@
 #include "serializer_impl.hh"
 #include <seastar/core/align.hh>
 #include <seastar/core/aligned_buffer.hh>
-#include "utils/crc.hh"
 
 namespace replica::logstor {
 
@@ -263,46 +262,6 @@ size_t raw_write_buffer::estimate_required_segments(size_t record_bytes, size_t 
         records_per_segment = 1;
     }
     return (record_count + records_per_segment - 1) / records_per_segment;
-}
-
-uint32_t ondisk::buffer_header::calculate_crc() const {
-    utils::crc32 c;
-    c.process_le(magic);
-    c.process_le(static_cast<uint8_t>(kind));
-    c.process_le(version);
-    c.process_le(reserved);
-    c.process_le(segment_seq.value);
-    c.process_le(records_size);
-    return c.get();
-}
-
-bool ondisk::validate_header(const ondisk::buffer_header& bh) {
-    if (bh.magic != ondisk::buffer_header_magic) {
-        return false;
-    }
-
-    switch (bh.kind) {
-    case segment_kind::mixed:
-    case segment_kind::full:
-        break;
-    default:
-        return false;
-    }
-
-    if (bh.version != ondisk::current_version) {
-        return false;
-    }
-
-    return bh.calculate_crc() == bh.crc;
-}
-
-bool ondisk::validate_record_frame_header(const ondisk::record_frame_header& frame_header) {
-    // A record always carries an encoded value, so a zero value_size cannot come from a record
-    // this code wrote. It is what a scan sees in the zero-filled tail of a torn
-    // buffer, and rejecting it stops the scan there instead of walking the tail as a run of
-    // zero-length records. The key bound rejects a corrupt header before its key_size is
-    // trusted to size a read or an allocation.
-    return frame_header.value_size != 0 && frame_header.key_size <= ondisk::max_key_size;
 }
 
 // write_buffer_pool

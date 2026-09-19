@@ -267,14 +267,6 @@ public:
         return buffer_headers_size(_segment_kind);
     }
 
-    static bool validate_header(const ondisk::buffer_header& bh) {
-        return ondisk::validate_header(bh);
-    }
-
-    static bool validate_record_frame_header(const ondisk::record_frame_header& frame_header) {
-        return ondisk::validate_record_frame_header(frame_header);
-    }
-
     void seal(segment_sequence segment_seq, std::optional<table_id> table, size_t alignment);
 
 private:
