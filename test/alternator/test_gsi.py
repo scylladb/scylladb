@@ -255,7 +255,14 @@ def test_gsi_describe(test_table_gsi_1):
                                 {'KeyType': 'RANGE', 'AttributeName': 'p'}]
     # The index's ARN should look like the table's ARN followed by /index/<indexname>.
     assert gsi['IndexArn'] == desc['Table']['TableArn'] + '/index/hello'
-    # TODO: check also ProvisionedThroughput
+    # A GSI has its own ProvisionedThroughput, which DynamoDB reports separately
+    # from the base table's - as zeros in this table's PAY_PER_REQUEST mode.
+    # While it was missing, the Terraform AWS Provider before 6.27.0 recorded
+    # this index with an empty name and the next apply tried to delete a GSI
+    # named "". Reproduces issue #19718 and CUSTOMER-705.
+    assert gsi['ProvisionedThroughput']['ReadCapacityUnits'] == 0
+    assert gsi['ProvisionedThroughput']['WriteCapacityUnits'] == 0
+    assert gsi['ProvisionedThroughput']['NumberOfDecreasesToday'] == 0
 
 # Test that an already-existing GSI should be listed by DescribeTable with
 # IndexStatus=ACTIVE. A GSI that was just created with UpdateTable and being
@@ -278,6 +285,11 @@ def test_gsi_describe_indexstatus(test_table_gsi_1):
     gsi = gsis[0]
     assert 'IndexStatus' in gsi
     assert gsi['IndexStatus'] == 'ACTIVE'
+    # A built GSI's WarmThroughput reports ACTIVE too. DynamoDB documents this
+    # field as only ever UPDATING or ACTIVE, never CREATING like IndexStatus.
+    assert isinstance(gsi['WarmThroughput']['ReadUnitsPerSecond'], int)
+    assert isinstance(gsi['WarmThroughput']['WriteUnitsPerSecond'], int)
+    assert gsi['WarmThroughput']['Status'] == 'ACTIVE'
 
 # In addition to the basic listing of an GSI in DescribeTable tested above,
 # in this test we check additional fields that should appear in each GSI's

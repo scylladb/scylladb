@@ -19,7 +19,8 @@ Moreover, DynamoDB's per-table provisioning (`BillingMode=PROVISIONED`) is
 not yet supported by Scylla. The BillingMode and ProvisionedThroughput options
 on a table need to be valid but are ignored, and ScyllaDB behaves like DynamoDB's
 `BillingMode=PAY_PER_REQUEST`: All requests are accepted without a per-table
-throughput cap.
+throughput cap. The values provisioned for a table and for each of its GSIs
+are remembered and returned by `DescribeTable`, but are not enforced.
 
 ## Load balancing
 
@@ -518,8 +519,11 @@ they should be easy to detect. Here is a list of these unimplemented features:
 
 * Alternator does not support the table option WarmThroughput that can be
   used to check or guarantee that the database has "warmed" to handle a
-  particular throughput. This table option was added to DynamoDB in
-  November 2024.
+  particular throughput. Alternator has no throughput caps and nothing to
+  pre-warm, so a table's WarmThroughput is remembered and returned by
+  `DescribeTable` but never enforced; a table which never set one reports zero
+  units, as does each of its active GSIs. This table option was added to
+  DynamoDB in November 2024.
   <https://github.com/scylladb/scylladb/issues/21853>
 
 * Alternator does not support the table option MultiRegionConsistency
