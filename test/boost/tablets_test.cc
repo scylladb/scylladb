@@ -40,6 +40,7 @@
 #include "compaction/compaction_manager.hh"
 #include "replica/tablet_mutation_builder.hh"
 #include "locator/tablets.hh"
+#include "cql3/query_options.hh"
 #include "service/tablet_allocator.hh"
 #include "locator/tablet_replication_strategy.hh"
 #include "locator/tablet_sharder.hh"
@@ -7339,6 +7340,245 @@ SEASTAR_TEST_CASE(test_tablet_cleanup_stats_non_negative) {
             BOOST_REQUIRE_GE(stats.live_sstable_count, 0);
         }).get();
     }, cfg);
+}
+
+// The shard holding one tablet of ks.cf.
+static shard_id shard_of(cql_test_env& e, locator::tablet_id tid) {
+    auto s = e.local_db().find_schema("ks", "cf");
+    return e.local_db().get_token_metadata().tablets().get_tablet_map(s->id()).get_tablet_info(tid).replicas.front().shard;
+}
+
+// Truncates one tablet of ks.cf on the shard holding it.
+static future<> truncate_tablet_locally(cql_test_env& e, locator::tablet_id tid) {
+    return e.db().invoke_on(shard_of(e, tid), [tid] (replica::database& db) {
+        return db.find_column_family("ks", "cf").truncate_tablet_locally(db, tid);
+    });
+}
+
+// The tablet of ks.cf holding partition pk.
+static locator::tablet_id tablet_of(cql_test_env& e, int pk) {
+    auto s = e.local_db().find_schema("ks", "cf");
+    auto key = partition_key::from_single_value(*s, int32_type->decompose(pk));
+    return e.local_db().get_token_metadata().tablets().get_tablet_map(s->id()).get_tablet_id(dht::get_token(*s, key));
+}
+
+// Writes v into every step-th row below rows of partition pk of ks.cf.
+static void write_partition(cql_test_env& e, int pk, int rows, int v, int step = 1) {
+    for (int ck = 0; ck < rows; ck += step) {
+        e.execute_cql(format("insert into ks.cf (pk, ck, v) values ({}, {}, {})", pk, ck, v)).get();
+    }
+}
+
+// Reads one partition of ks.cf page by page the way a driver does: the paging state of
+// one page is handed to the next, so between pages the querier sits parked in the
+// querier cache as an inactive read.
+class paged_partition_read {
+    cql_test_env& _e;
+    sstring _query;
+    int32_t _page_size;
+    lw_shared_ptr<const service::pager::paging_state> _state;
+    bool _more = true;
+public:
+    using rows_type = std::vector<std::pair<int32_t, int32_t>>; // (ck, v)
+
+    paged_partition_read(cql_test_env& e, int pk, int32_t page_size)
+        : _e(e), _query(format("select ck, v from ks.cf where pk = {}", pk)), _page_size(page_size) {}
+
+    bool more() const { return _more; }
+
+    rows_type next_page() {
+        auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, std::vector<cql3::raw_value>{},
+                cql3::query_options::specific_options{_page_size, _state, {}, api::new_timestamp()});
+        auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(_e.execute_cql(_query, std::move(qo)).get());
+        BOOST_REQUIRE(rows);
+        rows_type page;
+        for (auto& row : rows->rs().result_set().rows()) {
+            page.emplace_back(value_cast<int32_t>(int32_type->deserialize(*row[0])),
+                              value_cast<int32_t>(int32_type->deserialize(*row[1])));
+        }
+        _state = rows->rs().get_metadata().paging_state();
+        _more = rows->rs().get_metadata().flags().contains(cql3::metadata::flag::HAS_MORE_PAGES);
+        return page;
+    }
+
+    rows_type rest() {
+        rows_type all;
+        while (_more) {
+            auto page = next_page();
+            all.insert(all.end(), page.begin(), page.end());
+        }
+        return all;
+    }
+};
+
+// truncate_tablet_locally() has to drop the memtables, the sstables and the cached rows
+// of one tablet, leave the other tablets alone and keep the truncated tablet writable.
+SEASTAR_TEST_CASE(test_truncate_tablet_locally) {
+    auto cfg = tablet_cql_test_config();
+    cfg.initial_tablets = 2;
+
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("create table ks.cf (pk int, ck int, v text, primary key (pk, ck))").get();
+        auto s = e.local_db().find_schema("ks", "cf");
+        const auto tid = locator::tablet_id(0);
+        const auto& tmap = e.local_db().get_token_metadata().tablets().get_tablet_map(s->id());
+        const auto owner = tmap.get_tablet_info(tid).replicas.front().shard;
+        const auto range = tmap.get_token_range(tid);
+
+        auto in_tablet = [&] (int pk) {
+            auto key = partition_key::from_single_value(*s, int32_type->decompose(pk));
+            return range.contains(dht::get_token(*s, key), dht::token_comparator());
+        };
+        auto row_count = [&] {
+            auto res = e.execute_cql("select * from ks.cf").get();
+            auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(res);
+            BOOST_REQUIRE(rows);
+            return rows->rs().result_set().size();
+        };
+        auto insert_all = [&] (const char* v) {
+            for (int i = 0; i < 100; i++) {
+                // Half of the rows land in sstables, the other half stays in the memtables.
+                if (i == 50) {
+                    replica::database::flush_table_on_all_shards(e.db(), "ks", "cf").get();
+                }
+                e.execute_cql(format("insert into ks.cf (pk, ck, v) values ({}, {}, '{}')", i, i, v)).get();
+            }
+        };
+        auto tablet_count = [&] {
+            return e.db().invoke_on(owner, [] (replica::database& db) {
+                return db.find_column_family("ks", "cf").get_stats().tablet_count;
+            }).get();
+        };
+        auto truncate = [&] {
+            truncate_tablet_locally(e, tid).get();
+        };
+        auto check_no_sstables_in_tablet = [&] {
+            e.db().invoke_on(owner, [&] (replica::database& db) {
+                auto& cf = db.find_column_family("ks", "cf");
+                BOOST_REQUIRE(!cf.tablet_has_compacted_undeleted_sstables(tid));
+                auto ssts = cf.get_sstables();
+                for (auto& sst : *ssts) {
+                    BOOST_REQUIRE(!range.contains(sst->get_first_decorated_key().token(), dht::token_comparator()));
+                }
+            }).get();
+        };
+
+        const auto tablets_on_owner = tablet_count();
+        insert_all("before");
+        size_t other_rows = 0;
+        for (int i = 0; i < 100; i++) {
+            other_rows += !in_tablet(i);
+        }
+        BOOST_REQUIRE(other_rows > 0 && other_rows < 100);
+        // Populates the row cache, so a stale entry would show up as a resurrected row below.
+        BOOST_REQUIRE_EQUAL(row_count(), 100);
+
+        truncate();
+        BOOST_REQUIRE_EQUAL(row_count(), other_rows);
+        BOOST_REQUIRE_EQUAL(tablet_count(), tablets_on_owner);
+        check_no_sstables_in_tablet();
+
+        // The storage group is still there and writable, and its fresh memtables flush fine.
+        insert_all("after");
+        BOOST_REQUIRE_EQUAL(row_count(), 100);
+        replica::database::flush_table_on_all_shards(e.db(), "ks", "cf").get();
+        BOOST_REQUIRE_EQUAL(row_count(), 100);
+
+        // Once with sstables only, then once more with nothing left to drop.
+        truncate();
+        truncate();
+        BOOST_REQUIRE_EQUAL(row_count(), other_rows);
+        BOOST_REQUIRE_EQUAL(tablet_count(), tablets_on_owner);
+        check_no_sstables_in_tablet();
+    }, cfg);
+}
+
+// A paged read parked between two pages must not go on reading the truncated data:
+// clear_inactive_reads_for_tablet() evicts it, so the next page starts a fresh reader
+// and finds the tablet empty.
+SEASTAR_TEST_CASE(test_truncate_tablet_locally_evicts_parked_paged_read) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("create table ks.cf (pk int, ck int, v int, primary key (pk, ck))").get();
+        write_partition(e, 0, 100, 1);
+
+        paged_partition_read read(e, 0, 10);
+        BOOST_REQUIRE_EQUAL(read.next_page().size(), 10);
+        BOOST_REQUIRE(read.more());
+        truncate_tablet_locally(e, tablet_of(e, 0)).get();
+        BOOST_REQUIRE(read.rest().empty());
+    }, tablet_cql_test_config());
+}
+
+// The truncate is paused at an injection point while a paged read fetches its first page
+// and parks its querier. Every row is in the sstable as v=1 and every even row again in the
+// memtables as v=2, so a read returning anything has to return the whole partition: an even
+// row with v=1 is the memtables' version lost from under the read, a missing odd row is a
+// partition torn between the swapped sstables and the live memtables.
+SEASTAR_TEST_CASE(test_truncate_tablet_locally_under_parked_paged_read) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+        fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+        return;
+#endif
+        e.execute_cql("create table ks.cf (pk int, ck int, v int, primary key (pk, ck))").get();
+        const auto tid = tablet_of(e, 0);
+        const auto owner = shard_of(e, tid);
+        constexpr int rows = 100;
+        constexpr int page_size = 7;
+
+        auto check = [&] (const paged_partition_read::rows_type& got, size_t expected_rows) {
+            BOOST_REQUIRE_EQUAL(got.size(), expected_rows);
+            for (int i = 0; i < int(got.size()); i++) {
+                BOOST_REQUIRE_EQUAL(got[i].first, i);
+                BOOST_REQUIRE_EQUAL(got[i].second, i % 2 ? 1 : 2);
+            }
+        };
+
+        struct {
+            const char* pause;
+            size_t expected_rows;
+        } cases[] = {
+            // Parked after clear_inactive_reads_for_tablet(), so the read is not evicted. Its
+            // querier still sees the memtables and the cache entry it captured, but its epoch
+            // is behind the table's, so the next page drops it and reads the emptied tablet.
+            {"truncate_tablet_locally_before_swap", page_size},
+            // The sstables are gone and the memtables still hold the even rows. A reader created
+            // now would return a torn partition, so wait_for_tablet_truncate() parks the read
+            // until the memtables are retired too, and it finds the tablet empty.
+            {"truncate_tablet_locally_before_retiring_memtables", 0},
+        };
+        for (const auto& [pause, expected_rows] : cases) {
+            testlog.info("pausing the truncate at {}", pause);
+            write_partition(e, 0, rows, 1);
+            replica::database::flush_table_on_all_shards(e.db(), "ks", "cf").get();
+            write_partition(e, 0, rows, 2, 2);
+            // Puts the sstable version of the partition into the cache.
+            check(paged_partition_read(e, 0, rows).rest(), rows);
+
+            smp::submit_to(owner, [pause] { utils::get_local_injector().enable(pause); }).get();
+            auto truncate = truncate_tablet_locally(e, tid);
+            BOOST_REQUIRE(eventually_true([&] {
+                return smp::submit_to(owner, [pause] { return utils::get_local_injector().waiters(pause) > 0; }).get();
+            }));
+
+            paged_partition_read read(e, 0, page_size);
+            auto first_page = seastar::async([&] { return read.next_page(); });
+            if (expected_rows == rows) {
+                // Not gated before the swap: the page completes while the truncate is paused.
+                BOOST_REQUIRE(eventually_true([&] { return first_page.available(); }));
+            }
+
+            smp::submit_to(owner, [pause] { utils::get_local_injector().receive_message(pause); }).get();
+            truncate.get();
+            smp::submit_to(owner, [pause] { utils::get_local_injector().disable(pause); }).get();
+
+            auto got = first_page.get();
+            auto rest = read.rest();
+            got.insert(got.end(), rest.begin(), rest.end());
+            check(got, expected_rows);
+            BOOST_REQUIRE(paged_partition_read(e, 0, page_size).rest().empty());
+        }
+    }, tablet_cql_test_config());
 }
 
 namespace {

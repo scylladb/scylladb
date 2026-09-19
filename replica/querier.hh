@@ -69,6 +69,10 @@ protected:
     std::variant<mutation_reader, reader_concurrency_semaphore::inactive_read_handle> _reader;
     dht::partition_ranges_view _query_ranges;
     querier_config _qr_config;
+    // table::truncate_epoch() when the querier was created. A saved querier whose epoch
+    // is behind the table's reads sources a local tablet truncate has since dropped, so
+    // database::query() closes it instead of serving the next page from it.
+    uint64_t _truncate_epoch = 0;
 
 public:
     querier_base(reader_permit permit, lw_shared_ptr<const dht::partition_range> range,
@@ -118,6 +122,14 @@ public:
 
     size_t memory_usage() const {
         return _permit.consumed_resources().memory;
+    }
+
+    uint64_t truncate_epoch() const noexcept {
+        return _truncate_epoch;
+    }
+
+    void set_truncate_epoch(uint64_t epoch) noexcept {
+        _truncate_epoch = epoch;
     }
 
     future<> close() noexcept;
