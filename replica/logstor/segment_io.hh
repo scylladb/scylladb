@@ -38,13 +38,16 @@ struct segment_info {
 using want_data = seastar::bool_class<class want_data_tag>;
 
 using record_header_consumer = std::function<want_data(record_location, const record_header&)>;
-using record_consumer = std::function<future<>(record_location, log_record)>;
-using record_bytes_consumer = std::function<future<>(record_location, const record_header&, log_record_bytes_view)>;
+// Called for each record the scan was asked for, with the record decoded.
+using log_record_consumer = std::function<future<>(record_location, log_record)>;
+// The same, with the record's header and value as views into the buffer's bytes, for a consumer
+// that copies them rather than decoding them.
+using log_record_bytes_consumer = std::function<future<>(record_location, const record_header&, log_record_bytes_view)>;
 using segment_info_consumer = std::function<future<>(const segment_info&)>;
 using streamed_buffer_consumer = std::function<future<>(bytes_view)>;
 
 template <typename Consumer>
-concept record_consumer_like =
+concept log_record_consumer_like =
     (std::invocable<Consumer&, record_location, log_record> &&
      std::same_as<std::invoke_result_t<Consumer&, record_location, log_record>, future<>>) ||
     (std::invocable<Consumer&, record_location, const record_header&, log_record_bytes_view> &&
@@ -59,14 +62,14 @@ future<> scan_segment(seastar::input_stream<char>& in,
         size_t segment_size,
         segment_info_consumer on_segment_info,
         record_header_consumer on_record_header,
-        record_bytes_consumer on_record);
+        log_record_bytes_consumer on_record);
 
 future<> scan_segment(seastar::input_stream<char>& in,
         log_segment_id segment_id,
         size_t segment_size,
         segment_info_consumer on_segment_info,
         record_header_consumer on_record_header,
-        record_consumer on_record);
+        log_record_consumer on_record);
 
 // Rewrites the initial streamed logstor buffer header to the local segment sequence and
 // forwards subsequent bytes unchanged. This preserves the current branch's streaming
