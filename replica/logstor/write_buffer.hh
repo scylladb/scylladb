@@ -197,10 +197,11 @@ public:
     raw_write_buffer& operator=(raw_write_buffer&&) noexcept = default;
 
     const char* data() const noexcept { return _buffer.get(); }
-    size_t serialized_size() const noexcept { return offset_in_buffer(); }
+
+    // The bytes written to the buffer so far, which after seal() is the whole buffer to write out.
+    size_t serialized_size() const noexcept { return _buffer_size - _stream.size(); }
 
     size_t get_buffer_size() const noexcept { return _buffer_size; }
-    size_t offset_in_buffer() const noexcept { return _buffer_size - _stream.size(); }
 
     bool can_fit(size_t record_size) const noexcept;
 
@@ -219,7 +220,7 @@ public:
     // empty buffer of this size and kind. The kinds differ in what they carry ahead of their
     // records, so a record can fit a buffer of one kind and not of the other.
     static constexpr size_t max_record_size(size_t buffer_size, segment_kind kind) noexcept {
-        const size_t overhead = header_size(kind) + ondisk::record_frame_header_size;
+        const size_t overhead = buffer_headers_size(kind) + ondisk::record_frame_header_size;
         return buffer_size > overhead ? buffer_size - overhead : 0;
     }
 
@@ -252,7 +253,9 @@ public:
         return _segment_kind == segment_kind::full;
     }
 
-    static constexpr size_t header_size(segment_kind kind) noexcept {
+    // What a buffer of this kind carries ahead of its records: the buffer header, and the
+    // segment header too for a full segment.
+    static constexpr size_t buffer_headers_size(segment_kind kind) noexcept {
         size_t s = ondisk::buffer_header_size;
         if (kind == segment_kind::full) {
             s += ondisk::segment_header_size;
@@ -260,8 +263,8 @@ public:
         return s;
     }
 
-    size_t header_size() const noexcept {
-        return header_size(_segment_kind);
+    size_t buffer_headers_size() const noexcept {
+        return buffer_headers_size(_segment_kind);
     }
 
     static bool validate_header(const ondisk::buffer_header& bh) {
@@ -338,7 +341,6 @@ public:
     size_t serialized_size() const noexcept { return _raw.serialized_size(); }
 
     size_t get_buffer_size() const noexcept { return _raw.get_buffer_size(); }
-    size_t offset_in_buffer() const noexcept { return _raw.offset_in_buffer(); }
 
     bool can_fit(size_t record_size) const noexcept { return _raw.can_fit(record_size); }
     template <log_record_writer_concept Writer>

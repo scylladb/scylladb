@@ -19,8 +19,8 @@ namespace replica::logstor {
 
 extern seastar::logger logstor_logger;
 
-segment_header make_segment_header(const ondisk::buffer_header& bh, std::optional<ondisk::segment_header> sh) {
-    segment_header seg_hdr {
+segment_info make_segment_info(const ondisk::buffer_header& bh, std::optional<ondisk::segment_header> sh) {
+    segment_info seg_info {
         .kind = bh.kind,
         .segment_seq = bh.segment_seq,
     };
@@ -30,20 +30,20 @@ segment_header make_segment_header(const ondisk::buffer_header& bh, std::optiona
         if (!sh) {
             throw std::runtime_error("Full segment buffer header without segment header");
         }
-        seg_hdr.v = segment_header::full {
+        seg_info.v = segment_info::full {
             .table = sh->table,
             .first_token = sh->first_token,
             .last_token = sh->last_token,
         };
         break;
     case segment_kind::mixed:
-        seg_hdr.v = segment_header::mixed{};
+        seg_info.v = segment_info::mixed{};
         break;
     }
-    return seg_hdr;
+    return seg_info;
 }
 
-future<std::optional<segment_header>> read_segment_header(seastar::input_stream<char>& in) {
+future<std::optional<segment_info>> read_segment_info(seastar::input_stream<char>& in) {
     auto bh_buf = co_await in.read_exactly(ondisk::buffer_header_size);
     if (bh_buf.size() < ondisk::buffer_header_size) {
         co_return std::nullopt;
@@ -63,7 +63,7 @@ future<std::optional<segment_header>> read_segment_header(seastar::input_stream<
         sh = ser::deserialize_from_buffer(sh_buf, std::type_identity<ondisk::segment_header>{});
     }
 
-    co_return make_segment_header(bh, sh);
+    co_return make_segment_info(bh, sh);
 }
 
 log_record deserialize_log_record(simple_memory_input_stream buf_stream) {
@@ -89,7 +89,7 @@ future<log_record> read_log_record(seastar::input_stream<char>& in, log_location
 future<> scan_segment(seastar::input_stream<char>& in,
         log_segment_id segment_id,
         size_t segment_size,
-        segment_header_consumer on_segment_header,
+        segment_info_consumer on_segment_info,
         record_header_consumer on_record_header,
         record_bytes_consumer on_record) {
     size_t current_position = 0;
@@ -139,8 +139,8 @@ future<> scan_segment(seastar::input_stream<char>& in,
             sh = ser::deserialize_from_buffer(segment_header_buf, std::type_identity<ondisk::segment_header>{});
         }
 
-        auto seg_hdr = make_segment_header(bh, sh);
-        co_await on_segment_header(seg_hdr);
+        auto seg_info = make_segment_info(bh, sh);
+        co_await on_segment_info(seg_info);
 
         // TODO crc, torn writes
 
@@ -214,7 +214,7 @@ future<> scan_segment(seastar::input_stream<char>& in,
             }
         }
 
-        if (seg_hdr.kind == segment_kind::full) {
+        if (seg_info.kind == segment_kind::full) {
             // A segment of this kind has only a single buffer
             break;
         }
@@ -231,11 +231,11 @@ future<> scan_segment(seastar::input_stream<char>& in,
 future<> scan_segment(seastar::input_stream<char>& in,
         log_segment_id segment_id,
         size_t segment_size,
-        segment_header_consumer on_segment_header,
+        segment_info_consumer on_segment_info,
         record_header_consumer on_record_header,
         record_consumer on_record) {
     co_await scan_segment(in, segment_id, segment_size,
-            std::move(on_segment_header), std::move(on_record_header),
+            std::move(on_segment_info), std::move(on_record_header),
             [on_record = std::move(on_record)] (log_location loc, const record_header& header, log_record_bytes_view record_view) mutable -> future<> {
                 co_await on_record(loc, log_record{header, record_value(record_view.value)});
             });

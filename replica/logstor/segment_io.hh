@@ -21,7 +21,7 @@
 
 namespace replica::logstor {
 
-struct segment_header {
+struct segment_info {
     segment_kind kind;
     segment_sequence segment_seq;
 
@@ -40,7 +40,7 @@ using want_data = seastar::bool_class<class want_data_tag>;
 using record_header_consumer = std::function<want_data(log_location, const record_header&)>;
 using record_consumer = std::function<future<>(log_location, log_record)>;
 using record_bytes_consumer = std::function<future<>(log_location, const record_header&, log_record_bytes_view)>;
-using segment_header_consumer = std::function<future<>(const segment_header&)>;
+using segment_info_consumer = std::function<future<>(const segment_info&)>;
 using streamed_buffer_consumer = std::function<future<>(bytes_view)>;
 
 template <typename Consumer>
@@ -50,7 +50,7 @@ concept record_consumer_like =
     (std::invocable<Consumer&, log_location, const record_header&, log_record_bytes_view> &&
      std::same_as<std::invoke_result_t<Consumer&, log_location, const record_header&, log_record_bytes_view>, future<>>);
 
-future<std::optional<segment_header>> read_segment_header(seastar::input_stream<char>& in);
+future<std::optional<segment_info>> read_segment_info(seastar::input_stream<char>& in);
 
 log_record deserialize_log_record(simple_memory_input_stream);
 future<log_record> read_log_record(seastar::input_stream<char>& in, log_location loc);
@@ -58,14 +58,14 @@ future<log_record> read_log_record(seastar::input_stream<char>& in, log_location
 future<> scan_segment(seastar::input_stream<char>& in,
         log_segment_id segment_id,
         size_t segment_size,
-        segment_header_consumer on_segment_header,
+        segment_info_consumer on_segment_info,
         record_header_consumer on_record_header,
         record_bytes_consumer on_record);
 
 future<> scan_segment(seastar::input_stream<char>& in,
         log_segment_id segment_id,
         size_t segment_size,
-        segment_header_consumer on_segment_header,
+        segment_info_consumer on_segment_info,
         record_header_consumer on_record_header,
         record_consumer on_record);
 

@@ -121,11 +121,11 @@ void flip_byte(temporary_buffer<char>& buf, size_t offset) {
     buf.get_write()[offset] ^= char(0x1);
 }
 
-std::optional<segment_header> read_segment_header_from_bytes(const temporary_buffer<char>& buf) {
+std::optional<segment_info> read_segment_info_from_bytes(const temporary_buffer<char>& buf) {
     temporary_buffer<char> copy(buf.size());
     std::copy_n(buf.get(), buf.size(), copy.get_write());
     auto in = seastar::util::as_input_stream(std::move(copy));
-    auto header = read_segment_header(in).get();
+    auto header = read_segment_info(in).get();
     in.close().get();
     return header;
 }
@@ -177,7 +177,7 @@ std::vector<scanned_record> scan_buffer_records(const temporary_buffer<char>& bu
     std::vector<scanned_record> records;
 
     scan_segment(in, segment_id, buf.size(),
-        [] (const segment_header&) {
+        [] (const segment_info&) {
             return make_ready_future<>();
         },
         [] (log_location, const record_header&) {
@@ -365,7 +365,7 @@ std::map<api::timestamp_type, size_t> count_records_by_timestamp(logstor& ls, ut
             .read_ahead = 1,
         }).get();
         scan_segment(in, snap.segment_id, segment_size,
-            [] (const segment_header&) { return make_ready_future<>(); },
+            [] (const segment_info&) { return make_ready_future<>(); },
             [&counts] (log_location, const record_header& header) {
                 counts[header.timestamp]++;
                 return want_data::no;
@@ -1161,13 +1161,13 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_mixed_buffers_report_readable
     const auto* segment_data = segment.get();
     auto in = seastar::util::as_input_stream(std::move(segment));
 
-    std::vector<segment_header> seen_segment_headers;
+    std::vector<segment_info> seen_segment_infos;
     std::vector<record_header> seen_headers;
     std::vector<log_location> seen_locations;
 
     scan_segment(in, log_segment_id{3}, segment_size,
-        [&seen_segment_headers] (const segment_header& sh) {
-            seen_segment_headers.push_back(sh);
+        [&seen_segment_infos] (const segment_info& sh) {
+            seen_segment_infos.push_back(sh);
             return make_ready_future<>();
         },
         [&seen_headers, &seen_locations] (log_location loc, const record_header& header) {
@@ -1183,8 +1183,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_mixed_buffers_report_readable
     temporary_buffer<char> segment_copy(segment_size);
     std::copy_n(segment_data, segment_size, segment_copy.get_write());
 
-    BOOST_REQUIRE_EQUAL(seen_segment_headers.size(), 2u);
-    for (const auto& sh : seen_segment_headers) {
+    BOOST_REQUIRE_EQUAL(seen_segment_infos.size(), 2u);
+    for (const auto& sh : seen_segment_infos) {
         BOOST_REQUIRE(sh.kind == segment_kind::mixed);
         BOOST_REQUIRE_EQUAL(sh.segment_seq.value, 23u);
     }
@@ -1207,11 +1207,11 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_mixed_buffers_report_readable
     assert_that(to_mutation(read_record_at_location(segment_copy, seen_locations[2]), schema)).is_equal_to(expected2);
     assert_that(to_mutation(read_record_at_location(segment_copy, seen_locations[3]), schema)).is_equal_to(expected3);
 
-    auto maybe_header = read_segment_header_from_bytes(segment_copy);
+    auto maybe_header = read_segment_info_from_bytes(segment_copy);
     BOOST_REQUIRE(maybe_header);
     BOOST_REQUIRE(maybe_header->kind == segment_kind::mixed);
     BOOST_REQUIRE_EQUAL(maybe_header->segment_seq.value, 23u);
-    BOOST_REQUIRE(std::holds_alternative<segment_header::mixed>(maybe_header->v));
+    BOOST_REQUIRE(std::holds_alternative<segment_info::mixed>(maybe_header->v));
 }
 
 // Checks that scan_segment() stops at a record whose key_size is corrupt instead of trusting it, and
@@ -1240,7 +1240,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_rejects_corrupt_key_size) {
 
         std::vector<api::timestamp_type> seen;
         scan_segment(in, log_segment_id{5}, segment_size,
-            [] (const segment_header&) {
+            [] (const segment_info&) {
                 return make_ready_future<>();
             },
             [&seen] (log_location, const record_header& header) {
@@ -1293,7 +1293,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_returns_only_selected_records
     std::vector<log_record> selected_records;
 
     scan_segment(in, log_segment_id{4}, segment_size,
-        [] (const segment_header&) {
+        [] (const segment_info&) {
             return make_ready_future<>();
         },
         [&seen_header_timestamps] (log_location, const record_header& header) {
@@ -1334,15 +1334,15 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_reads_full_buffer_records_wit
     wb.seal(segment_sequence{41}, schema->id(), ondisk::block_alignment);
 
     auto serialized = make_serialized_buffer_copy(wb);
-    auto maybe_header = read_segment_header_from_bytes(serialized);
+    auto maybe_header = read_segment_info_from_bytes(serialized);
     auto in = seastar::util::as_input_stream(std::move(serialized));
 
-    std::vector<segment_header> seen_segment_headers;
+    std::vector<segment_info> seen_segment_infos;
     std::vector<log_record> seen_records;
 
     scan_segment(in, log_segment_id{7}, wb.serialized_size(),
-        [&seen_segment_headers] (const segment_header& sh) {
-            seen_segment_headers.push_back(sh);
+        [&seen_segment_infos] (const segment_info& sh) {
+            seen_segment_infos.push_back(sh);
             return make_ready_future<>();
         },
         [] (log_location, const record_header&) {
@@ -1354,10 +1354,10 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_reads_full_buffer_records_wit
         }).get();
     in.close().get();
 
-    BOOST_REQUIRE_EQUAL(seen_segment_headers.size(), 1u);
-    BOOST_REQUIRE(seen_segment_headers.front().kind == segment_kind::full);
-    BOOST_REQUIRE_EQUAL(seen_segment_headers.front().segment_seq.value, 41u);
-    BOOST_REQUIRE(std::holds_alternative<segment_header::full>(seen_segment_headers.front().v));
+    BOOST_REQUIRE_EQUAL(seen_segment_infos.size(), 1u);
+    BOOST_REQUIRE(seen_segment_infos.front().kind == segment_kind::full);
+    BOOST_REQUIRE_EQUAL(seen_segment_infos.front().segment_seq.value, 41u);
+    BOOST_REQUIRE(std::holds_alternative<segment_info::full>(seen_segment_infos.front().v));
     BOOST_REQUIRE_EQUAL(seen_records.size(), 3u);
     BOOST_REQUIRE_EQUAL(seen_records[0].header.table, schema->id());
     BOOST_REQUIRE_EQUAL(seen_records[1].header.table, schema->id());
@@ -1372,8 +1372,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_reads_full_buffer_records_wit
     BOOST_REQUIRE(maybe_header);
     BOOST_REQUIRE(maybe_header->kind == segment_kind::full);
     BOOST_REQUIRE_EQUAL(maybe_header->segment_seq.value, 41u);
-    BOOST_REQUIRE(std::holds_alternative<segment_header::full>(maybe_header->v));
-    auto& full = std::get<segment_header::full>(maybe_header->v);
+    BOOST_REQUIRE(std::holds_alternative<segment_info::full>(maybe_header->v));
+    auto& full = std::get<segment_info::full>(maybe_header->v);
     auto expected_first_token = std::min({
         seen_records[0].header.key.token(),
         seen_records[1].header.key.token(),
@@ -1412,13 +1412,13 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_stops_on_mixed_buffer_lower_s
     const auto segment_size = segment.size();
     auto in = seastar::util::as_input_stream(std::move(segment));
 
-    std::vector<segment_header> seen_segment_headers;
+    std::vector<segment_info> seen_segment_infos;
     std::vector<record_header> seen_headers;
     std::vector<log_record> seen_records;
 
     scan_segment(in, log_segment_id{5}, segment_size,
-        [&seen_segment_headers] (const segment_header& sh) {
-            seen_segment_headers.push_back(sh);
+        [&seen_segment_infos] (const segment_info& sh) {
+            seen_segment_infos.push_back(sh);
             return make_ready_future<>();
         },
         [&seen_headers] (log_location, const record_header& header) {
@@ -1431,9 +1431,9 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_stops_on_mixed_buffer_lower_s
         }).get();
     in.close().get();
 
-    BOOST_REQUIRE_EQUAL(seen_segment_headers.size(), 1u);
-    BOOST_REQUIRE(seen_segment_headers.front().kind == segment_kind::mixed);
-    BOOST_REQUIRE_EQUAL(seen_segment_headers.front().segment_seq.value, 61u);
+    BOOST_REQUIRE_EQUAL(seen_segment_infos.size(), 1u);
+    BOOST_REQUIRE(seen_segment_infos.front().kind == segment_kind::mixed);
+    BOOST_REQUIRE_EQUAL(seen_segment_infos.front().segment_seq.value, 61u);
 
     BOOST_REQUIRE_EQUAL(seen_headers.size(), 2u);
     BOOST_REQUIRE_EQUAL(seen_headers[0].timestamp, api::timestamp_type(51));
@@ -1470,13 +1470,13 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_stops_on_corrupted_later_mixe
     const auto segment_size = segment.size();
     auto in = seastar::util::as_input_stream(std::move(segment));
 
-    std::vector<segment_header> seen_segment_headers;
+    std::vector<segment_info> seen_segment_infos;
     std::vector<record_header> seen_headers;
     std::vector<log_record> seen_records;
 
     scan_segment(in, log_segment_id{6}, segment_size,
-        [&seen_segment_headers] (const segment_header& sh) {
-            seen_segment_headers.push_back(sh);
+        [&seen_segment_infos] (const segment_info& sh) {
+            seen_segment_infos.push_back(sh);
             return make_ready_future<>();
         },
         [&seen_headers] (log_location, const record_header& header) {
@@ -1489,7 +1489,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_stops_on_corrupted_later_mixe
         }).get();
     in.close().get();
 
-    BOOST_REQUIRE_EQUAL(seen_segment_headers.size(), 1u);
+    BOOST_REQUIRE_EQUAL(seen_segment_infos.size(), 1u);
     BOOST_REQUIRE_EQUAL(seen_headers.size(), 2u);
     BOOST_REQUIRE_EQUAL(seen_records.size(), 2u);
     BOOST_REQUIRE_EQUAL(seen_headers[0].timestamp, api::timestamp_type(91));
@@ -1517,12 +1517,12 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_streamed_segment_rewriter_rewrites_initial
 
     auto rewritten_size = rewritten.data.size();
     auto in = seastar::util::as_input_stream(rewritten.data.share());
-    std::vector<segment_header> seen_segment_headers;
+    std::vector<segment_info> seen_segment_infos;
     std::vector<log_record> seen_records;
 
     scan_segment(in, log_segment_id{33}, rewritten_size,
-        [&seen_segment_headers] (const segment_header& sh) {
-            seen_segment_headers.push_back(sh);
+        [&seen_segment_infos] (const segment_info& sh) {
+            seen_segment_infos.push_back(sh);
             return make_ready_future<>();
         },
         [] (log_location, const record_header&) {
@@ -1537,10 +1537,10 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_streamed_segment_rewriter_rewrites_initial
     BOOST_REQUIRE_EQUAL(rewritten.write_count, 1u);
     BOOST_REQUIRE(ondisk::validate_header(bh));
     BOOST_REQUIRE_EQUAL(bh.segment_seq.value, 221u);
-    BOOST_REQUIRE_EQUAL(seen_segment_headers.size(), 1u);
-    BOOST_REQUIRE(seen_segment_headers.front().kind == segment_kind::full);
-    BOOST_REQUIRE_EQUAL(seen_segment_headers.front().segment_seq.value, 221u);
-    BOOST_REQUIRE(std::holds_alternative<segment_header::full>(seen_segment_headers.front().v));
+    BOOST_REQUIRE_EQUAL(seen_segment_infos.size(), 1u);
+    BOOST_REQUIRE(seen_segment_infos.front().kind == segment_kind::full);
+    BOOST_REQUIRE_EQUAL(seen_segment_infos.front().segment_seq.value, 221u);
+    BOOST_REQUIRE(std::holds_alternative<segment_info::full>(seen_segment_infos.front().v));
     BOOST_REQUIRE_EQUAL(seen_records.size(), 3u);
     BOOST_REQUIRE_EQUAL(seen_records[0].header.timestamp, api::timestamp_type(201));
     BOOST_REQUIRE_EQUAL(seen_records[1].header.timestamp, api::timestamp_type(202));
