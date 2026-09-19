@@ -1026,7 +1026,7 @@ public:
     void on_add_record(record_location) noexcept;
     void on_free_record(record_location) noexcept;
 
-    template <record_consumer_like RecordConsumer>
+    template <log_record_consumer_like RecordConsumer>
     future<> for_each_record(log_segment_id segment_id,
                             record_header_consumer on_record_header,
                             RecordConsumer on_record)
@@ -1036,7 +1036,7 @@ public:
             std::move(on_record_header), std::move(on_record));
     }
 
-    template <std::ranges::input_range Segments, record_consumer_like RecordConsumer>
+    template <std::ranges::input_range Segments, log_record_consumer_like RecordConsumer>
         requires std::same_as<std::ranges::range_value_t<Segments>, log_segment_id>
     future<> for_each_record(Segments&& segments,
                             record_header_consumer on_record_header,
@@ -1135,7 +1135,7 @@ private:
     // `on_record_header` is called with the record header of each record and returns
     // whether the record value should be read and passed to `on_record`, or skipped.
     // `on_record` is invoked only for records whose value was requested.
-    template <record_consumer_like RecordConsumer>
+    template <log_record_consumer_like RecordConsumer>
     future<> scan_segment(log_segment_id segment_id,
                           segment_info_consumer on_segment_info,
                           record_header_consumer on_record_header,
@@ -1874,7 +1874,7 @@ future<std::optional<segment_info>> segment_manager_impl::read_segment_info(log_
     co_return result.get();
 }
 
-template <record_consumer_like RecordConsumer>
+template <log_record_consumer_like RecordConsumer>
 future<> segment_manager_impl::scan_segment(log_segment_id segment_id,
                                 segment_info_consumer on_segment_info,
                                 record_header_consumer on_record_header,
