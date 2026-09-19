@@ -1670,7 +1670,8 @@ future<log_record> segment_manager_impl::read(record_location location) {
     }
     buf.trim(location.size);
     _stats.bytes_read += location.size;
-    co_return deserialize_log_record(simple_memory_input_stream(buf.begin(), buf.size()));
+    auto frame = simple_memory_input_stream(buf.begin(), buf.size());
+    co_return ondisk::read_record_frame(frame);
 }
 
 future<> segment_manager_impl::request_segment_switch() {

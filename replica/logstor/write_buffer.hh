@@ -73,8 +73,8 @@ public:
         return header_size() + value_size();
     }
 
-    // Write the record to an output stream
-    void write(ostream& out) const;
+    // Write the record's frame - frame header, record header, value - to an output stream.
+    void write_frame(ostream& out) const;
 
     const log_record& record() const {
         return _record;
@@ -108,7 +108,7 @@ public:
     size_t value_size() const { return _value_bytes.size(); }
     size_t record_size() const { return header_size() + value_size(); }
 
-    void write(ostream& out) const;
+    void write_frame(ostream& out) const;
 };
 
 template <typename T>
@@ -117,7 +117,7 @@ concept log_record_writer_concept = requires(const T& w, seastar::simple_memory_
     { w.header_size() } -> std::convertible_to<size_t>;
     { w.value_size() } -> std::convertible_to<size_t>;
     { w.record_size() } -> std::convertible_to<size_t>;
-    { w.write(out) };
+    { w.write_frame(out) };
 };
 
 using record_location_with_holder = std::tuple<record_location, seastar::gate::holder>;
@@ -282,8 +282,8 @@ private:
     // table is set for segment_kind::full
     void write_header(segment_sequence segment_seq, std::optional<table_id> table);
 
-    template <std::invocable<ostream&> WriteRecord>
-    append_result append_record(const record_header& header, size_t header_size, size_t value_size, WriteRecord write_record);
+    template <std::invocable<ostream&> WriteFrame>
+    append_result append_record(const record_header& header, size_t header_size, size_t value_size, WriteFrame write_frame);
 
     void pad_to_alignment(size_t alignment);
     void finalize(size_t alignment);

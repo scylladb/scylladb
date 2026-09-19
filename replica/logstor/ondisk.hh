@@ -264,4 +264,50 @@ record_header read_record_header(Input& in, uint32_t key_size) {
     };
 }
 
+// The bytes a record frame takes, its padding excluded - what record_location::size holds.
+constexpr size_t record_frame_size(size_t header_size, size_t value_size) noexcept {
+    return record_frame_header_size + header_size + value_size;
+}
+
+inline size_t record_frame_size(const log_record& r) noexcept {
+    return record_frame_size(record_header_size(r.header), r.value.size());
+}
+
+template <typename Output>
+void write_record_frame(Output& out, const record_header& header, const record_value& value) {
+    const size_t header_size = record_header_size(header);
+    ser::serializer<record_frame_header>::write(out, record_frame_header {
+        .key_size = static_cast<uint32_t>(header_size - record_header_fixed_size),
+        .value_size = static_cast<uint32_t>(value.size()),
+    });
+    write_record_header(out, header);
+    for (bytes_view frag : value.representation().fragments()) {
+        out.write(reinterpret_cast<const char*>(frag.data()), frag.size());
+    }
+}
+
+// The same frame for a record whose header and value are already serialized.
+template <typename Output>
+void write_record_frame(Output& out, log_record_bytes_view record_view) {
+    ser::serializer<record_frame_header>::write(out, record_frame_header {
+        .key_size = static_cast<uint32_t>(record_view.header.size() - record_header_fixed_size),
+        .value_size = static_cast<uint32_t>(record_view.value.size()),
+    });
+    out.write(reinterpret_cast<const char*>(record_view.header.data()), record_view.header.size());
+    out.write(reinterpret_cast<const char*>(record_view.value.data()), record_view.value.size());
+}
+
+template <typename Input>
+log_record read_record_frame(Input& in) {
+    auto frame_header = ser::serializer<record_frame_header>::read(in);
+
+    auto header_stream = in.read_substream(record_header_size(frame_header.key_size));
+    auto value_stream = in.read_substream(frame_header.value_size);
+
+    return log_record {
+        .header = read_record_header(header_stream, frame_header.key_size),
+        .value = record_value(bytes_view(reinterpret_cast<const int8_t*>(value_stream.begin()), value_stream.size())),
+    };
+}
+
 } // namespace replica::logstor::ondisk
