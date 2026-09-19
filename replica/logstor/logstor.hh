@@ -25,6 +25,8 @@
 #include "mutation/mutation.hh"
 #include "dht/decorated_key.hh"
 
+class frozen_mutation;
+
 namespace replica {
 
 class database;
@@ -76,7 +78,11 @@ public:
 
     std::unique_ptr<primary_index> make_primary_index(bool cache_enabled);
 
-    future<> write(const mutation&, write_target target, db::timeout_clock::time_point timeout);
+    future<> write(const mutation&, write_target target, db::timeout_clock::time_point timeout) noexcept;
+
+    // Writes a frozen mutation without unfreezing it. s must be the schema version that the
+    // mutation was frozen with.
+    future<> write(const frozen_mutation&, const schema& s, write_target target, db::timeout_clock::time_point timeout) noexcept;
 
     future<std::optional<mutation>> read(schema_ptr schema, const primary_index&, const dht::decorated_key&, const query::partition_slice&);
 
@@ -101,6 +107,9 @@ public:
 
     future<> flush_to_separator();
 
+private:
+    future<> do_write(const schema&, dht::decorated_key, api::timestamp_type, record_value,
+            write_target target, db::timeout_clock::time_point timeout);
 };
 
 } // namespace logstor

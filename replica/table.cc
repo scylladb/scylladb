@@ -5130,7 +5130,7 @@ future<> table::apply(const frozen_mutation& m, schema_ptr m_schema, db::rp_hand
 
     if (_logstor) [[unlikely]] {
         auto ss_holder = cg.sstable_add_gate().hold();
-        return _logstor->write(m.unfreeze(m_schema), logstor::write_target(&cg.as_logstor_group(), std::move(ss_holder), std::move(holder)), timeout);
+        return _logstor->write(m, *m_schema, logstor::write_target(&cg.as_logstor_group(), std::move(ss_holder), std::move(holder)), timeout);
     }
 
     return dirty_memory_region_group().run_when_memory_available([this, &m, m_schema = std::move(m_schema), h = std::move(h), &cg, holder = std::move(holder), guardrails = std::move(guardrails), violations_out]() mutable {
