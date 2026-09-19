@@ -1218,7 +1218,7 @@ const logstor::logstor_group& compaction_group::as_logstor_group() const noexcep
 }
 
 compaction_group_logstor_state::compaction_group_logstor_state(compaction_group& cg) noexcept
-    : logstor_group(cg.get_logstor_segment_manager().get_segment_size())
+    : logstor_group(cg.get_logstor_segment_manager().get_segment_size(), &cg.get_logstor_segment_manager().shard_segment_stats())
     , _cg(&cg) {
 }
 

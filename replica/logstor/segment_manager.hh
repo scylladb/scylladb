@@ -22,6 +22,7 @@
 #include "replica/logstor/segment_io.hh"
 #include "replica/logstor/write_buffer.hh"
 #include "replica/logstor/compaction.hh"
+#include "replica/logstor/segment_stats.hh"
 #include "types.hh"
 #include "utils/updateable_value.hh"
 
@@ -155,6 +156,12 @@ public:
     const compaction_manager& get_compaction_manager() const noexcept;
 
     uint64_t get_segment_size() const noexcept;
+
+    // The statistics of the segments that the compaction groups of this shard own, with their
+    // distribution by utilization. The segment_set of each group adds its changes to them. A group
+    // gives a pointer to them to the constructor of its segment_set.
+    segment_stats& shard_segment_stats() noexcept;
+    const segment_stats& shard_segment_stats() const noexcept;
 
     // Returns the path of the file holding the given segment (for debug/introspection).
     // The path is computed from the segment id, the segment is not looked up, so the file
