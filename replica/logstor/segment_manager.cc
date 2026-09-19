@@ -91,7 +91,7 @@ class writeable_segment : public segment {
     // new segment.
     bool _failed = false;
 
-    future<> do_write(log_location , bytes_view data);
+    future<> do_write(segment_position, bytes_view data);
 
     bool can_fit(size_t size) const noexcept {
         return _current_offset + size <= _max_size;
@@ -105,7 +105,7 @@ public:
     future<> stop();
 
     struct append_reservation {
-        log_location loc;
+        segment_position pos;
         seastar::semaphore_units<> units;
     };
 
@@ -116,11 +116,11 @@ public:
     // expected to move on to another segment.
     future<std::optional<append_reservation>> reserve(size_t size);
 
-    future<log_location> write_reserved(append_reservation reservation, bytes_view data);
+    future<segment_position> write_reserved(append_reservation reservation, bytes_view data);
 
     // Convenience helper for callers that do not need to split reservation and write.
     // Fails if the segment cannot fit the write.
-    future<log_location> append(bytes_view data);
+    future<segment_position> append(bytes_view data);
 
     size_t bytes_remaining() const noexcept {
         return _max_size - _current_offset;
@@ -178,10 +178,9 @@ future<std::optional<writeable_segment::append_reservation>> writeable_segment::
     }
 
     append_reservation reservation {
-        .loc = log_location {
+        .pos = segment_position {
             .segment = _id,
             .offset = _current_offset,
-            .size = static_cast<uint32_t>(size)
         },
         .units = std::move(*units),
     };
@@ -191,8 +190,8 @@ future<std::optional<writeable_segment::append_reservation>> writeable_segment::
     co_return std::move(reservation);
 }
 
-future<log_location> writeable_segment::write_reserved(append_reservation reservation, bytes_view data) {
-    auto write_result = co_await coroutine::as_future(do_write(reservation.loc, data));
+future<segment_position> writeable_segment::write_reserved(append_reservation reservation, bytes_view data) {
+    auto write_result = co_await coroutine::as_future(do_write(reservation.pos, data));
     if (write_result.failed()) {
         auto ex = write_result.get_exception();
 
@@ -204,10 +203,10 @@ future<log_location> writeable_segment::write_reserved(append_reservation reserv
 
         co_await coroutine::return_exception_ptr(std::move(ex));
     }
-    co_return reservation.loc;
+    co_return reservation.pos;
 }
 
-future<log_location> writeable_segment::append(bytes_view data) {
+future<segment_position> writeable_segment::append(bytes_view data) {
     auto reservation = co_await reserve(data.size());
     if (!reservation) {
         co_return coroutine::return_exception(std::runtime_error(_failed
@@ -217,7 +216,7 @@ future<log_location> writeable_segment::append(bytes_view data) {
     co_return co_await write_reserved(std::move(*reservation), data);
 }
 
-future<> writeable_segment::do_write(log_location loc, bytes_view data) {
+future<> writeable_segment::do_write(segment_position pos, bytes_view data) {
     utils::get_local_injector().inject("logstor_fail_segment_write", [] {
         throw std::runtime_error("segment write failed by injection");
     });
@@ -231,7 +230,7 @@ future<> writeable_segment::do_write(log_location loc, bytes_view data) {
 
     const auto alignment = _file.disk_write_dma_alignment();
     const uint64_t total = data.size();
-    auto base_offset = absolute_offset(loc.offset);
+    auto base_offset = absolute_offset(pos.offset);
     uint64_t written = 0;
 
     while (written < total) {
@@ -929,7 +928,7 @@ struct separator_task {
     std::vector<write_buffer::record_in_buffer> records;
     // Where the buffer holding the records was written, which is what the records' own locations are
     // relative to.
-    log_location buffer_location{};
+    segment_position buffer_position{};
     segment_ref seg_ref;
     segment_sequence seq_num{};
     utils::phased_barrier::operation write_op;
@@ -1124,7 +1123,7 @@ private:
     }
     future<> run_separator_fiber();
 
-    future<> write_to_separator(std::vector<write_buffer::record_in_buffer>&, log_location buffer_location, segment_ref, segment_sequence);
+    future<> write_to_separator(std::vector<write_buffer::record_in_buffer>&, segment_position buffer_position, segment_ref, segment_sequence);
 
     future<std::optional<segment_info>> read_segment_info(log_segment_id);
 
@@ -1495,7 +1494,7 @@ future<> segment_manager_impl::run_separator_fiber() {
         });
 
         try {
-            co_await write_to_separator(task.records, task.buffer_location, std::move(task.seg_ref), task.seq_num);
+            co_await write_to_separator(task.records, task.buffer_position, std::move(task.seg_ref), task.seq_num);
             write_to_separator_failed.cancel();
         } catch (...) {
             ++_stats.separator_task_failures;
@@ -1551,21 +1550,21 @@ future<> segment_manager_impl::write(write_buffer& wb) {
             co_await wb.abort_writes(ex);
             co_await coroutine::return_exception_ptr(std::move(ex));
         }
-        auto loc = append_result.get();
+        auto pos = append_result.get();
 
         _stats.bytes_written[static_cast<size_t>(source)] += data.size();
         _stats.data_bytes_written[static_cast<size_t>(source)] += wb.record_bytes();
 
         // complete all buffered writes with their individual locations and wait
         // for them to be updated in the index.
-        co_await wb.complete_writes(loc);
+        co_await wb.complete_writes(pos);
 
         auto records = wb.take_separator_records();
         if (!records.empty()) {
             co_await with_semaphore(_separator_enqueue_sem, 1, [&] {
                 return _separator_task_queue.push_eventually(separator_task{
                     .records = std::move(records),
-                    .buffer_location = loc,
+                    .buffer_position = pos,
                     .seg_ref = seg_ref,
                     .seq_num = seq_num,
                     .write_op = std::move(write_op),
@@ -1597,7 +1596,7 @@ future<> segment_manager_impl::write_full_segment(write_buffer& wb, logstor_grou
         co_await wb.abort_writes(ex);
         co_await coroutine::return_exception_ptr(std::move(ex));
     }
-    auto loc = append_result.get();
+    auto pos = append_result.get();
 
     _stats.bytes_written[static_cast<size_t>(source)] += data.size();
     _stats.data_bytes_written[static_cast<size_t>(source)] += wb.record_bytes();
@@ -1612,7 +1611,7 @@ future<> segment_manager_impl::write_full_segment(write_buffer& wb, logstor_grou
         logstor_logger.warn("Failed to add segment {} to a compaction group, it will not be reclaimed", seg_ref.id());
     });
 
-    co_await wb.complete_writes(loc);
+    co_await wb.complete_writes(pos);
     co_await seg->stop();
 
     // add the segment after all index updates are completed.
@@ -2455,7 +2454,7 @@ void separator_index_update::operator()(log_location new_location, seastar::gate
     index->update_record_location(key, prev_location, new_location);
 }
 
-future<> segment_manager_impl::write_to_separator(std::vector<write_buffer::record_in_buffer>& records, log_location buffer_location,
+future<> segment_manager_impl::write_to_separator(std::vector<write_buffer::record_in_buffer>& records, segment_position buffer_position,
         segment_ref seg_ref, segment_sequence segment_seq_num) {
     static constexpr size_t separator_group_write_concurrency = 4;
 
@@ -2481,12 +2480,12 @@ future<> segment_manager_impl::write_to_separator(std::vector<write_buffer::reco
     }
 
     co_await seastar::max_concurrent_for_each(groups, separator_group_write_concurrency,
-            [buffer_location, seg_ref, segment_seq_num] (separator_group_records& group) -> future<> {
+            [buffer_position, seg_ref, segment_seq_num] (separator_group_records& group) -> future<> {
         for (auto* record : group.records) {
             separator_index_update update {
                 .index = &group.cg->logstor_index(),
                 .key = record->writer.record().header.index_key(),
-                .prev_location = record->location(buffer_location),
+                .prev_location = record->location(buffer_position),
             };
 
             co_await group.cg->write_to_separator(std::move(record->writer), seg_ref, segment_seq_num, std::move(update));
