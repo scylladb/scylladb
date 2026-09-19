@@ -983,17 +983,54 @@ database::init_logstor() {
     co_return;
 }
 
+// Logstor startup is one-shot: its fibers cannot be safely restarted, so a failed
+// attempt is remembered and rethrown rather than retried.
+future<>
+database::ensure_logstor_started() {
+    if (!_logstor) {
+        co_return;
+    }
+    // A table can be created (via schema_applier, during group0 log replay) before
+    // recover_logstor() runs at boot; wait for recovery so start() never races it
+    // for the free-segment list / compaction-group membership.
+    co_await ensure_logstor_recovered();
+    if (!_logstor_start) {
+        _logstor_start.emplace(_logstor->start().then([this] {
+            _dirty_memory_threshold_controller.arm_periodic(std::chrono::seconds(5));
+        }));
+    }
+    co_await _logstor_start->get_future();
+}
+
+future<>
+database::ensure_logstor_recovered() {
+    if (!_logstor) {
+        co_return;
+    }
+    if (!_logstor_recovery) {
+        _logstor_recovery.emplace(_logstor->do_recovery(*this));
+    }
+    co_await _logstor_recovery->get_future();
+}
+
 future<>
 database::recover_logstor() {
     if (!_logstor) {
         co_return;
     }
 
-    co_await _logstor->do_recovery(*this);
+    // Recovery must always run: it shrinks away segment files left by a dropped table.
+    // Only the write buffer and its replenisher fiber stay lazy.
+    co_await ensure_logstor_recovered();
 
-    co_await _logstor->start();
+    bool any_table_uses_logstor = false;
+    get_tables_metadata().for_each_table([&any_table_uses_logstor] (table_id, lw_shared_ptr<table> t) {
+        any_table_uses_logstor |= t->uses_logstor();
+    });
 
-    _dirty_memory_threshold_controller.arm_periodic(std::chrono::seconds(5));
+    if (any_table_uses_logstor) {
+        co_await ensure_logstor_started();
+    }
 }
 
 future<> database::modify_keyspace_on_all_shards(sharded<database>& sharded_db, std::function<future<>(replica::database&)> func) {
@@ -1258,6 +1295,10 @@ void database::add_column_family(keyspace& ks, schema_ptr schema, column_family:
 }
 
 future<> database::make_column_family_directory(schema_ptr schema) {
+    // Lazily start logstor: recover_logstor() only runs once, at boot.
+    if (schema->logstor_enabled()) {
+        co_await ensure_logstor_started();
+    }
     auto& cf = find_column_family(schema);
     cf.get_index_manager().reload();
     co_await cf.init_storage();

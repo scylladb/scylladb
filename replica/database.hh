@@ -1767,6 +1767,8 @@ private:
     // Declared ahead of the tables, since a logstor table holds a pointer to it and its compaction
     // groups reach for its compaction manager as they are destroyed, so it has to outlive them.
     std::unique_ptr<logstor::logstor> _logstor;
+    std::optional<shared_future<>> _logstor_recovery;
+    std::optional<shared_future<>> _logstor_start;
 
     flat_hash_map<sstring, keyspace> _keyspaces;
     tables_metadata _tables_metadata;
@@ -1829,6 +1831,8 @@ public:
     future<> init_commitlog();
     future<> init_logstor();
     future<> recover_logstor();
+    future<> ensure_logstor_recovered();
+    future<> ensure_logstor_started();
     const gms::feature_service& features() const { return _feat; }
     future<> apply_in_memory(const frozen_mutation& m, schema_ptr m_schema, db::rp_handle&&,
                                db::timeout_clock::time_point timeout,
