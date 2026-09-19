@@ -968,6 +968,7 @@ class segment_manager_impl {
     abort_source _separator_buffer_abort;
 
     static constexpr size_t separator_queue_depth = 16;
+    static constexpr float min_separator_shares = 1.0f;
 
     seastar::queue<separator_task> _separator_task_queue;
     seastar::semaphore _separator_enqueue_sem{1};
@@ -976,6 +977,9 @@ class segment_manager_impl {
     utils::phased_barrier _writes_phaser{"logstor_sm_writes"};
 
     utils::observer<double> _trigger_threshold_observer;
+    utils::observer<float> _separator_shares_observer;
+
+    void set_separator_shares(float shares);
 
 public:
     static constexpr size_t block_alignment = ondisk::block_alignment;
@@ -1270,7 +1274,13 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
             _compaction_mgr.refresh_free_segment_watermarks();
             _compaction_mgr.schedule_auto_compaction();
       }))
+    , _separator_shares_observer(_cfg.separator_shares.observe([this] (float new_shares) {
+            logstor_logger.info("Updating logstor separator shares to {}", new_shares);
+            set_separator_shares(new_shares);
+      }))
     {
+
+    set_separator_shares(_cfg.separator_shares.get());
 
     if (_segments_per_file == 0) {
         throw exceptions::configuration_exception(fmt::format("Segment size {} must be less than or equal to file size {}", config.segment_size, config.file_size));
@@ -1378,6 +1388,14 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
         sm::make_gauge("separator_task_queue_size", [this]() { return _separator_task_queue.size(); },
                        sm::description("Current number of pending tasks in the separator task queue.")),
     });
+}
+
+void segment_manager_impl::set_separator_shares(float shares) {
+    if (shares < min_separator_shares) {
+        logstor_logger.warn("logstor_separator_shares of {} is too low, using {}", shares, min_separator_shares);
+        shares = min_separator_shares;
+    }
+    _cfg.separator_sg.set_shares(shares);
 }
 
 future<> segment_manager_impl::start() {

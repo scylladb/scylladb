@@ -281,6 +281,7 @@ public:
     named_value<bool> logstor_sparse_files;
     named_value<double> logstor_compaction_trigger_threshold;
     named_value<float> logstor_compaction_max_shares;
+    named_value<float> logstor_separator_shares;
     named_value<uint32_t> file_cache_size_in_mb;
     named_value<uint32_t> memtable_flush_queue_size;
     named_value<uint32_t> memtable_flush_writers;
