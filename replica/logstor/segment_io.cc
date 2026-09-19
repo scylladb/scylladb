@@ -66,24 +66,13 @@ future<std::optional<segment_info>> read_segment_info(seastar::input_stream<char
     co_return make_segment_info(bh, sh);
 }
 
-log_record deserialize_log_record(simple_memory_input_stream buf_stream) {
-    auto frame_header = ser::deserialize(buf_stream, std::type_identity<ondisk::record_frame_header>{});
-
-    auto header_stream = buf_stream.read_substream(ondisk::record_header_size(frame_header.key_size));
-    auto value_stream = buf_stream.read_substream(frame_header.value_size);
-
-    return log_record {
-        .header = ondisk::read_record_header(header_stream, frame_header.key_size),
-        .value = record_value(bytes_view(reinterpret_cast<const int8_t*>(value_stream.begin()), value_stream.size())),
-    };
-}
-
 future<log_record> read_log_record(seastar::input_stream<char>& in, record_location loc) {
     auto buf = co_await in.read_exactly(loc.size);
     if (buf.size() < loc.size) {
         throw std::runtime_error(fmt::format("Truncated log record at {}", loc));
     }
-    co_return deserialize_log_record(simple_memory_input_stream(buf.begin(), buf.size()));
+    auto frame = simple_memory_input_stream(buf.begin(), buf.size());
+    co_return ondisk::read_record_frame(frame);
 }
 
 future<> scan_segment(seastar::input_stream<char>& in,
@@ -186,7 +175,7 @@ future<> scan_segment(seastar::input_stream<char>& in,
             record_location loc {
                 .segment = segment_id,
                 .offset = static_cast<uint32_t>(record_offset),
-                .size = static_cast<uint32_t>(ondisk::record_frame_header_size + header_size + frame_header.value_size)
+                .size = static_cast<uint32_t>(ondisk::record_frame_size(header_size, frame_header.value_size))
             };
 
             if (on_record_header(loc, header) == want_data::yes) {

@@ -114,7 +114,8 @@ log_record read_record_at_location(const temporary_buffer<char>& segment, record
 
     temporary_buffer<char> buf(loc.size);
     std::copy_n(segment.get() + loc.offset, loc.size, buf.get_write());
-    return deserialize_log_record(simple_memory_input_stream(buf.begin(), buf.size()));
+    auto frame = simple_memory_input_stream(buf.begin(), buf.size());
+    return ondisk::read_record_frame(frame);
 }
 
 void flip_byte(temporary_buffer<char>& buf, size_t offset) {
@@ -468,6 +469,64 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_ondisk_serialized_sizes) {
         .key_size = 0x0a0b0c0d,
         .value_size = 0xcafebabe,
     });
+}
+
+// Serializes a record frame and returns its bytes, checking that the frame took exactly the size
+// ondisk::record_frame_size() predicts.
+std::vector<char> serialize_record_frame(const log_record& record) {
+    const auto expected_size = ondisk::record_frame_size(record);
+
+    seastar::measuring_output_stream ms;
+    ondisk::write_record_frame(ms, record.header, record.value);
+    BOOST_REQUIRE_EQUAL(ms.size(), expected_size);
+
+    std::vector<char> buf(expected_size);
+    seastar::simple_memory_output_stream out(buf.data(), buf.size());
+    ondisk::write_record_frame(out, record.header, record.value);
+    BOOST_REQUIRE_EQUAL(out.size(), 0u);
+    return buf;
+}
+
+// Checks that ondisk::write_record_frame() and ondisk::read_record_frame() are inverses: the frame
+// the write path puts in a buffer is exactly what the read path takes out, and writing the record
+// that came back produces the same bytes. Also checks that the two write overloads agree, since
+// compaction and the separator rewrite a record through the bytes one.
+SEASTAR_THREAD_TEST_CASE(test_logstor_record_frame_round_trip) {
+    auto schema = make_kv_schema();
+
+    // A key longer than the inline size of managed_bytes, so the fragmented paths are exercised,
+    // and an empty key, which is the smallest frame a scan has to accept.
+    for (const auto& pk : {sstring("pk0"), sstring(100, 'k'), sstring("")}) {
+        auto record = make_log_record(schema, pk, "a-value-of-some-length", api::timestamp_type(0x0f0e0d0c0b0a0908));
+        const auto header_size = ondisk::record_header_size(record.header);
+        const auto value_size = record.value.size();
+
+        auto frame = serialize_record_frame(record);
+
+        // Read it back and compare.
+        seastar::simple_memory_input_stream in(frame.data(), frame.size());
+        auto read_back = ondisk::read_record_frame(in);
+        BOOST_REQUIRE_EQUAL(in.size(), 0u);
+        BOOST_REQUIRE(read_back.header == record.header);
+        BOOST_REQUIRE(read_back.header.key.equal(*schema, record.header.key));
+        BOOST_REQUIRE(read_back.value == record.value);
+
+        // Writing what came back gives the same bytes.
+        BOOST_REQUIRE(serialize_record_frame(read_back) == frame);
+
+        // The bytes overload, given the header and value slices of the frame as a scan hands them
+        // out, writes the same frame.
+        const auto* frame_bytes = reinterpret_cast<const int8_t*>(frame.data());
+        log_record_bytes_view record_view {
+            .header = bytes_view(frame_bytes + ondisk::record_frame_header_size, header_size),
+            .value = bytes_view(frame_bytes + ondisk::record_frame_header_size + header_size, value_size),
+        };
+        std::vector<char> from_bytes(frame.size());
+        seastar::simple_memory_output_stream bytes_out(from_bytes.data(), from_bytes.size());
+        ondisk::write_record_frame(bytes_out, record_view);
+        BOOST_REQUIRE_EQUAL(bytes_out.size(), 0u);
+        BOOST_REQUIRE(from_bytes == frame);
+    }
 }
 
 // Checks that the record header encoding round-trips, including a key longer than the inline size of

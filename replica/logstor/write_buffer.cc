@@ -23,16 +23,12 @@
 
 namespace replica::logstor {
 
-void log_record_writer::write(ostream& out) const {
-    ondisk::write_record_header(out, _record.header);
-    for (bytes_view frag : _record.value.representation().fragments()) {
-        out.write(reinterpret_cast<const char*>(frag.data()), frag.size());
-    }
+void log_record_writer::write_frame(ostream& out) const {
+    ondisk::write_record_frame(out, _record.header, _record.value);
 }
 
-void log_record_bytes_writer::write(ostream& out) const {
-    out.write(reinterpret_cast<const char*>(_header_bytes.data()), _header_bytes.size());
-    out.write(reinterpret_cast<const char*>(_value_bytes.data()), _value_bytes.size());
+void log_record_bytes_writer::write_frame(ostream& out) const {
+    ondisk::write_record_frame(out, log_record_bytes_view{_header_bytes, _value_bytes});
 }
 
 // raw_write_buffer
@@ -69,9 +65,9 @@ bool raw_write_buffer::has_data() const noexcept {
     return serialized_size() > buffer_headers_size();
 }
 
-template <std::invocable<raw_write_buffer::ostream&> WriteRecord>
+template <std::invocable<raw_write_buffer::ostream&> WriteFrame>
 raw_write_buffer::append_result raw_write_buffer::append_record(const record_header& header,
-        size_t header_size, size_t value_size, WriteRecord write_record) {
+        size_t header_size, size_t value_size, WriteFrame write_frame) {
     const auto record_size = header_size + value_size;
     if (!can_fit(record_size)) {
         throw std::runtime_error(fmt::format("Write size {} exceeds buffer size {}", record_size, _stream.size()));
@@ -85,17 +81,13 @@ raw_write_buffer::append_result raw_write_buffer::append_record(const record_hea
     }
 
     const size_t frame_offset = serialized_size();
-    auto frame_header = ondisk::record_frame_header {
-        .key_size = static_cast<uint32_t>(header_size - ondisk::record_header_fixed_size),
-        .value_size = static_cast<uint32_t>(value_size)
-    };
-    ser::serialize(_stream, frame_header);
+    const size_t frame_size = ondisk::record_frame_size(header_size, value_size);
 
-    // write_record writes the serialized record header and then the serialized value
-    auto record_out = _stream.write_substream(record_size);
-    write_record(record_out);
-
-    const size_t frame_size = ondisk::record_frame_header_size + record_size;
+    auto frame_out = _stream.write_substream(frame_size);
+    write_frame(frame_out);
+    if (frame_out.size() != 0) {
+        on_internal_error(logstor_logger, fmt::format("Record frame of {} bytes left {} unwritten", frame_size, frame_out.size()));
+    }
 
     _record_bytes += frame_size;
     _record_count++;
@@ -117,8 +109,8 @@ raw_write_buffer::append_result raw_write_buffer::append_record(const record_hea
 
 template <log_record_writer_concept Writer>
 raw_write_buffer::append_result raw_write_buffer::append(const Writer& writer) {
-    return append_record(writer.header(), writer.header_size(), writer.value_size(), [&writer] (ostream& record_out) {
-        writer.write(record_out);
+    return append_record(writer.header(), writer.header_size(), writer.value_size(), [&writer] (ostream& frame_out) {
+        writer.write_frame(frame_out);
     });
 }
 

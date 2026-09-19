@@ -52,7 +52,6 @@ concept record_consumer_like =
 
 future<std::optional<segment_info>> read_segment_info(seastar::input_stream<char>& in);
 
-log_record deserialize_log_record(simple_memory_input_stream);
 future<log_record> read_log_record(seastar::input_stream<char>& in, record_location loc);
 
 future<> scan_segment(seastar::input_stream<char>& in,
