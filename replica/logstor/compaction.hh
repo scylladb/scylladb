@@ -40,7 +40,17 @@ struct separator_buffer;
 class segment_ref;
 class logstor_group;
 
-using separator_write_completion = seastar::noncopyable_function<void(log_location, seastar::gate::holder)>;
+// What the separator owes the index for one record it rewrote: the entry that pointed at the record
+// in the segment it came from has to point at the copy the separator wrote. There is one of these
+// per record, which is why it is a struct rather than a closure - a closure carrying a key does not
+// fit inside a noncopyable_function and would take a heap allocation of its own on every write.
+struct separator_index_update {
+    primary_index* index;
+    primary_index_key key;
+    log_location prev_location;
+
+    void operator()(log_location new_location, seastar::gate::holder) const;
+};
 
 using split_target_group = std::function<logstor_group&(log_segment_id, dht::token first_token, dht::token last_token)>;
 
@@ -411,7 +421,7 @@ struct separator_buffer {
     ~separator_buffer();
 
     template <log_record_writer_concept Writer>
-    void write(segment_ref seg_ref, std::optional<segment_sequence> segment_seq_num, Writer writer, separator_write_completion after_written) {
+    void write(segment_ref seg_ref, std::optional<segment_sequence> segment_seq_num, Writer writer, separator_index_update after_written) {
         // The separator buffer holds a reference to the source segment until its updates are durable.
         if (held_segments.empty() || held_segments.back().id() != seg_ref.id()) {
             held_segments.push_back(std::move(seg_ref));
@@ -546,7 +556,7 @@ public:
     }
 
     template <log_record_writer_concept Writer>
-    future<> write_to_separator(Writer, segment_ref, std::optional<segment_sequence>, separator_write_completion);
+    future<> write_to_separator(Writer, segment_ref, std::optional<segment_sequence>, separator_index_update);
 
     future<> flush_separator(std::optional<segment_sequence> seq_num = std::nullopt);
 
