@@ -877,6 +877,9 @@ public:
 
 private:
     friend class group0_state_machine;
+    // Grants test/boost/tablets_test.cc unit-level access to topology_state_load()
+    // and state_change_hint, to test the reload-scope decision directly.
+    friend struct topology_state_load_test_access;
 
 private:
     future<> _raft_state_monitor = make_ready_future<>();

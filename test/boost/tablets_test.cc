@@ -60,6 +60,19 @@
 #include <boost/regex.hpp>
 #include <atomic>
 
+namespace service {
+// Unit-test access to storage_service::topology_state_load(), which is
+// private outside group0_state_machine (see the friend declaration in
+// storage_service.hh), to test the reload-scope decision directly.
+struct topology_state_load_test_access {
+    static future<> reload(storage_service& ss, topology_change_hint::scope scope) {
+        storage_service::state_change_hint hint;
+        hint.topology_hint = topology_change_hint{.reload_scope = scope};
+        return ss.topology_state_load(std::move(hint));
+    }
+};
+}
+
 BOOST_AUTO_TEST_SUITE(tablets_test)
 
 using namespace locator;
@@ -1420,6 +1433,31 @@ SEASTAR_TEST_CASE(test_topology_change_hint) {
 
             BOOST_REQUIRE(db::get_topology_change_hint(muts).get().reload_scope == scope::tablets_only);
         }
+    }, tablet_cql_test_config());
+}
+
+// Regression test for the tablet-rebuild-drain scope gap: a tablets_only hint
+// (no system.topology mutation) must still take the non-full reload path even
+// when left_nodes_rs is currently non-empty, and must narrow left_nodes_rs/
+// excluded_tablet_nodes once the node's tablet replicas are gone.
+SEASTAR_TEST_CASE(test_topology_state_load_tablets_only_reload_with_left_nodes_rs) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto h_leaving = raft::server_id::create_random_id();
+
+        auto& topology = e.get_topology_state_machine().local()._topology;
+        // Sentinel: only a full reload re-reads this from system.topology (where
+        // it would come back as the default initial_version), so it staying put
+        // is proof the non-full path was taken.
+        topology.version = 12345;
+        topology.left_nodes_rs.emplace(h_leaving, replica_state{});
+        topology.excluded_tablet_nodes.insert(h_leaving);
+
+        service::topology_state_load_test_access::reload(e.get_storage_service().local(),
+                service::topology_change_hint::scope::tablets_only).get();
+
+        BOOST_REQUIRE_EQUAL(topology.version, 12345);
+        BOOST_REQUIRE(!topology.left_nodes_rs.contains(h_leaving));
+        BOOST_REQUIRE(!topology.excluded_tablet_nodes.contains(h_leaving));
     }, tablet_cql_test_config());
 }
 
