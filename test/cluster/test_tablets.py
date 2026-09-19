@@ -1256,9 +1256,11 @@ async def test_failed_tablet_rebuild_is_retried(request: pytest.FixtureRequest, 
         '--smp=2',
     ]
 
-    servers = [await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc1', 'rack': 'rack1a'}),
-                await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc1', 'rack': 'rack1b'}),
-                await manager.server_add(config=config, cmdline=cmdline, property_file={'dc': 'dc1', 'rack': 'rack1c'})]
+    servers = await manager.servers_add(3, config=config, cmdline=cmdline, property_file=[
+        {'dc': 'dc1', 'rack': 'rack1a'},
+        {'dc': 'dc1', 'rack': 'rack1b'},
+        {'dc': 'dc1', 'rack': 'rack1c'},
+    ])
 
     cql = manager.get_cql()
 
