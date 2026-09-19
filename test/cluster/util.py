@@ -498,10 +498,20 @@ async def trigger_snapshot(manager, server: ServerInfo) -> None:
     host = cql.cluster.metadata.get_host(server.ip_addr)
     await manager.api.client.post(f"/raft/trigger_snapshot/{group0_id}", host=server.ip_addr)
 
-async def trigger_stepdown(manager, server: ServerInfo) -> None:
-    cql = manager.get_cql()
-    host = cql.cluster.metadata.get_host(server.ip_addr)
-    await manager.api.client.post("/raft/trigger_stepdown", host=server.ip_addr)
+async def trigger_stepdown(manager, server: ServerInfo, group_id: str | None = None,
+                           target_host_id: Optional[HostID] = None) -> None:
+    """Make `server` step down as the leader of `group_id`, or of group0 if not given.
+
+    Fails if `server` is not the leader of that group. If `target_host_id` is given,
+    leadership is handed to that node; it must be a voter of the group other than
+    `server`, otherwise the transfer cannot complete and the call fails after a timeout.
+    """
+    params = {}
+    if group_id is not None:
+        params["group_id"] = group_id
+    if target_host_id is not None:
+        params["target_host_id"] = target_host_id
+    await manager.api.client.post("/raft/trigger_stepdown", host=server.ip_addr, params=params or None)
 
 
 
@@ -555,6 +565,8 @@ async def ensure_group0_leader_on(manager: ScyllaClusterManager, server: ServerI
     """
     Ensure that raft group0 leader runs on a given server, triggering stepdowns if necessary.
     Assumes that servers are not added concurrently.
+    The given server must be a group0 voter throughout the call: stepdowns transfer
+    leadership directly to it, and a non-voter can never receive leadership.
     """
 
     deadline = time.time() + timeout_seconds
@@ -576,8 +588,8 @@ async def ensure_group0_leader_on(manager: ScyllaClusterManager, server: ServerI
 
         logger.info(f"group0 leader is {coord}, want {desired_host_id}")
         coord_host = servers_by_host[coord]
-        logger.info(f"triggering stepdown of {coord}/{coord_host.ip_addr}")
-        await manager.api.client.post("/raft/trigger_stepdown", host=coord_host.ip_addr)
+        logger.info(f"triggering stepdown of {coord}/{coord_host.ip_addr} in favor of {desired_host_id}")
+        await trigger_stepdown(manager, coord_host, target_host_id=desired_host_id)
 
 async def get_non_coordinator_host(manager: ScyllaClusterManager) -> ServerInfo | None:
     """Get first non-coordinator ServerInfo."""

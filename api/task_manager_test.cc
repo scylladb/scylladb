@@ -74,20 +74,17 @@ void set_task_manager_test(http_context& ctx, routes& r, sharded<tasks::task_man
 
     tmt::register_test_task.set(r, [&tm] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         sharded<tasks::task_manager>& tms = tm;
-        const auto id_param = req->get_query_param("task_id");
-        auto id = !id_param.empty() ? tasks::task_id{utils::UUID{id_param}} : tasks::task_id::create_null_id();
-        const auto shard_param = req->get_query_param("shard");
-        unsigned shard = shard_param.empty() ? 0 : boost::lexical_cast<unsigned>(shard_param);
+        auto id = get_query_param<tasks::task_id>(*req, "task_id");
+        unsigned shard = get_query_param<unsigned>(*req, "shard");
         std::string keyspace = req->get_query_param("keyspace");
         std::string table = req->get_query_param("table");
         std::string entity = req->get_query_param("entity");
         auto data = tasks::make_empty_task_info();
-        if (auto parent_id = req->get_query_param("parent_id"); !parent_id.empty()) {
-            auto pid = tasks::task_id{utils::UUID{parent_id}};
-            auto parent_ptr = co_await tasks::task_manager::lookup_task_on_all_shards(tm, pid);
-            data = tasks::make_node_task_info(pid, parent_ptr->get_status().shard, parent_ptr->get_status().sequence_number);
+        if (auto pid = try_get_query_param<tasks::task_id>(*req, "parent_id")) {
+            auto parent_ptr = co_await tasks::task_manager::lookup_task_on_all_shards(tm, *pid);
+            data = tasks::make_node_task_info(*pid, parent_ptr->get_status().shard, parent_ptr->get_status().sequence_number);
         }
-        auto user_task = tasks::is_user_task{req_param<bool>(*req, "user_task", false)};
+        auto user_task = get_query_param<tasks::is_user_task>(*req, "user_task");
 
         auto module = tms.local().find_module("test");
         id = co_await make_test_task(module->get_task_manager(), module->get_name(), shard, id, keyspace, table, entity, data, user_task);
@@ -95,7 +92,7 @@ void set_task_manager_test(http_context& ctx, routes& r, sharded<tasks::task_man
     });
 
     tmt::unregister_test_task.set(r, [&tm] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
-        auto id = tasks::task_id{utils::UUID{req->get_query_param("task_id")}};
+        auto id = require_query_param<tasks::task_id>(*req, "task_id");
         try {
             co_await tasks::task_manager::invoke_on_task(tm, id, [] (tasks::task_manager::task_variant task_v, tasks::virtual_task_hint) -> future<> {
                 return std::visit(overloaded_functor{
@@ -115,7 +112,7 @@ void set_task_manager_test(http_context& ctx, routes& r, sharded<tasks::task_man
     });
 
     tmt::finish_test_task.set(r, [&tm] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
-        auto id = tasks::task_id{utils::UUID{req->get_path_param("task_id")}};
+        auto id = require_path_param<tasks::task_id>(*req, "task_id");
         std::string error = req->get_query_param("error");
         bool fail = !error.empty();
 

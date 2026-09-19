@@ -116,6 +116,14 @@
                      "paramType":"query"
                   },
                   {
+                     "name":"target_host_id",
+                     "description":"Host ID of the node to transfer leadership to. It must be a voting member of the group other than the current leader; otherwise the transfer cannot complete and the endpoint fails after the timeout. If not provided, any up-to-date voter may become the new leader.",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
                      "name":"timeout",
                      "description":"Timeout in seconds after which the endpoint returns a failure. If not provided, 60s is used.",
                      "required":false,

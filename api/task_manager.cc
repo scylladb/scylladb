@@ -97,7 +97,7 @@ void set_task_manager(http_context& ctx, routes& r, sharded<tasks::task_manager>
 
     tm::get_tasks.set(r, [&tm] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         using chunked_stats = utils::chunked_vector<tasks::task_stats>;
-        auto internal = tasks::is_internal{req_param<bool>(*req, "internal", false)};
+        auto internal = get_query_param<tasks::is_internal>(*req, "internal");
         std::vector<chunked_stats> res = co_await tm.map([&req, internal] (tasks::task_manager& tm) {
             tasks::task_manager::module_ptr module;
             std::optional<std::string> keyspace = std::nullopt;
@@ -148,7 +148,7 @@ void set_task_manager(http_context& ctx, routes& r, sharded<tasks::task_manager>
     });
 
     tm::get_task_status.set(r, [&tm, &gossiper] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
-        auto id = tasks::task_id{utils::UUID{req->get_path_param("task_id")}};
+        auto id = require_path_param<tasks::task_id>(*req, "task_id");
         tasks::task_status status;
         try {
             auto task = tasks::task_handler{tm.local(), id};
@@ -160,7 +160,7 @@ void set_task_manager(http_context& ctx, routes& r, sharded<tasks::task_manager>
     });
 
     tm::abort_task.set(r, [&tm] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
-        auto id = tasks::task_id{utils::UUID{req->get_path_param("task_id")}};
+        auto id = require_path_param<tasks::task_id>(*req, "task_id");
         try {
             auto task = tasks::task_handler{tm.local(), id};
             co_await task.abort();
@@ -173,12 +173,9 @@ void set_task_manager(http_context& ctx, routes& r, sharded<tasks::task_manager>
     });
 
     tm::wait_task.set(r, [&tm, &gossiper] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
-        auto id = tasks::task_id{utils::UUID{req->get_path_param("task_id")}};
+        auto id = require_path_param<tasks::task_id>(*req, "task_id");
         tasks::task_status status;
-        std::optional<std::chrono::seconds> timeout = std::nullopt;
-        if (auto param = req->get_query_param("timeout"); !param.empty()) {
-            timeout = std::chrono::seconds(boost::lexical_cast<uint32_t>(param));
-        }
+        const auto timeout = try_get_query_param<std::chrono::seconds>(*req, "timeout");
         try {
             auto task = tasks::task_handler{tm.local(), id};
             status = co_await task.wait_for_task(timeout);
@@ -192,7 +189,7 @@ void set_task_manager(http_context& ctx, routes& r, sharded<tasks::task_manager>
 
     tm::get_task_status_recursively.set(r, [&_tm = tm, &gossiper] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto& tm = _tm;
-        auto id = tasks::task_id{utils::UUID{req->get_path_param("task_id")}};
+        auto id = require_path_param<tasks::task_id>(*req, "task_id");
         try {
             auto task = tasks::task_handler{tm.local(), id};
             auto res = co_await task.get_status_recursively(true);

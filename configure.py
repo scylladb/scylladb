@@ -1476,6 +1476,7 @@ api = ['api/api.cc',
        'api/cql_server_test.cc',
        'api/service_levels.cc',
        Json2Code('api/api-doc/service_levels.json'),
+       'api/utils.cc',
        ]
 
 alternator = [
@@ -2575,6 +2576,7 @@ cpp_jwt_encryption_sources = [
     'ent/encryption/encryption_config.cc',
     'ent/encryption/gcp_host.cc',
     'ent/encryption/gcp_key_provider.cc',
+    'ent/encryption/key_cache.cc',
     'ent/encryption/kmip_host.cc',
     'ent/encryption/kmip_key_provider.cc',
     'ent/encryption/kms_host.cc',
