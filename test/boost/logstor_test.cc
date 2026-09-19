@@ -2657,30 +2657,30 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_set_live_bytes) {
     };
 
     // An empty set holds nothing.
-    BOOST_REQUIRE_EQUAL(segments.live_bytes(), 0);
+    BOOST_REQUIRE_EQUAL(segments.live_record_bytes(), 0);
 
     // A segment joins with the records it already holds.
     auto& sparse = add_segment(segments, 1);
     auto& dense = add_segment(segments, 16);
-    BOOST_REQUIRE_EQUAL(segments.live_bytes(), 17 * record_size);
+    BOOST_REQUIRE_EQUAL(segments.live_record_bytes(), 17 * record_size);
 
     // Freeing records takes off exactly the space they gave back.
     dense.on_free(6 * record_size, 6);
     segments.update_segment(dense, 6 * record_size);
-    BOOST_REQUIRE_EQUAL(segments.live_bytes(), 11 * record_size);
+    BOOST_REQUIRE_EQUAL(segments.live_record_bytes(), 11 * record_size);
 
     // Merging hands the segments over together with their live bytes.
     segment_set other{segment_size};
     other.merge(segments).get();
-    BOOST_REQUIRE_EQUAL(segments.live_bytes(), 0);
-    BOOST_REQUIRE_EQUAL(other.live_bytes(), 11 * record_size);
+    BOOST_REQUIRE_EQUAL(segments.live_record_bytes(), 0);
+    BOOST_REQUIRE_EQUAL(other.live_record_bytes(), 11 * record_size);
 
     // Removing a segment takes its bytes out of the set.
     other.remove_segment(sparse);
-    BOOST_REQUIRE_EQUAL(other.live_bytes(), 10 * record_size);
+    BOOST_REQUIRE_EQUAL(other.live_record_bytes(), 10 * record_size);
 
     other.clear();
-    BOOST_REQUIRE_EQUAL(other.live_bytes(), 0);
+    BOOST_REQUIRE_EQUAL(other.live_record_bytes(), 0);
 }
 
 // Checks that compaction candidate selection chooses segments in ascending utilization order,
@@ -2760,6 +2760,151 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_select_compaction_batch) {
     // An empty group has nothing to compact.
     segment_set empty{segment_size};
     BOOST_REQUIRE(!select_compaction_batch(empty, segment_size, min_segments_per_compaction));
+}
+
+// A segment set does not walk its segments to get its statistics. It updates them when it links or
+// unlinks a segment, and when a record is freed. Thus, each of these paths must keep the statistics
+// equal to the segments in the set, and to the shard-wide statistics.
+SEASTAR_THREAD_TEST_CASE(test_logstor_segment_set_stats) {
+    constexpr uint64_t segment_size = 128 * 1024;
+    // Each record frame fills one utilization bucket. Thus, a segment with n records goes into
+    // bucket n.
+    constexpr size_t frame_size = segment_size / utilization_bucket_count;
+
+    // The sets link the descriptors intrusively. Thus, the descriptors must not move, and all the
+    // sets must be destroyed before the descriptors.
+    std::deque<segment_descriptor> descs;
+    segment_stats shard;
+    segment_set segments{segment_size, &shard};
+    segment_set other{segment_size, &shard};
+
+    auto add_segment = [&] (segment_set& set, size_t live_records) -> segment_descriptor& {
+        auto& desc = descs.emplace_back();
+        desc.reset(segment_size);
+        desc.on_write(live_records * frame_size, live_records);
+        set.add_segment(desc);
+        return desc;
+    };
+
+    auto check_stats = [&] (const segment_set& set, uint64_t expected_segments, uint64_t expected_live_record_bytes) {
+        const auto& stats = set.stats();
+        BOOST_REQUIRE_EQUAL(stats.segment_count, expected_segments);
+        BOOST_REQUIRE_EQUAL(stats.live_record_bytes, expected_live_record_bytes);
+        BOOST_REQUIRE_EQUAL(set.live_record_bytes(), expected_live_record_bytes);
+        // The maintained statistics must agree with the segments, for all the paths that changed
+        // the set.
+        BOOST_REQUIRE(set.recompute_stats_for_test() == stats);
+        // Each segment of the set is in exactly one bucket.
+        uint64_t counted = 0;
+        for (auto count : stats.utilization) {
+            counted += count;
+        }
+        BOOST_REQUIRE_EQUAL(counted, expected_segments);
+    };
+
+    // The shard statistics are the sum of the statistics of the two sets, after all operations.
+    auto check_shard = [&] {
+        segment_stats expected;
+        for (const auto* set : {&segments, &other}) {
+            expected.segment_count += set->stats().segment_count;
+            expected.live_record_bytes += set->stats().live_record_bytes;
+            for (size_t i = 0; i < utilization_bucket_count; ++i) {
+                expected.utilization[i] += set->stats().utilization[i];
+            }
+        }
+        BOOST_REQUIRE(shard == expected);
+    };
+
+    auto bucket_of = [&] (const segment_set& set, size_t bucket) {
+        return set.stats().utilization[bucket];
+    };
+
+    // An empty set has zero statistics.
+    check_stats(segments, 0, 0);
+    check_shard();
+
+    // A segment goes into the bucket of its utilization. A segment with a utilization of 1 goes
+    // into the last bucket, not into a bucket after the end of the histogram.
+    auto& sparse = add_segment(segments, 1);
+    auto& full = add_segment(segments, utilization_bucket_count);
+    check_stats(segments, 2, (utilization_bucket_count + 1) * frame_size);
+    BOOST_REQUIRE_EQUAL(bucket_of(segments, 1), 1);
+    BOOST_REQUIRE_EQUAL(bucket_of(segments, utilization_bucket_count - 1), 1);
+    check_shard();
+
+    // A free of records moves a segment down the histogram. The live record bytes decrease by
+    // exactly the freed record bytes.
+    constexpr size_t freed_records = utilization_bucket_count / 2;
+    full.on_free(freed_records * frame_size, freed_records);
+    segments.update_segment(full, freed_records * frame_size);
+    check_stats(segments, 2, (freed_records + 1) * frame_size);
+    BOOST_REQUIRE_EQUAL(bucket_of(segments, utilization_bucket_count - 1), 0);
+    BOOST_REQUIRE_EQUAL(bucket_of(segments, freed_records), 1);
+    check_shard();
+
+    // A merge moves the segments and their statistics to the other set. The shard statistics do not
+    // change.
+    other.merge(segments).get();
+    check_stats(segments, 0, 0);
+    check_stats(other, 2, (freed_records + 1) * frame_size);
+    BOOST_REQUIRE_EQUAL(bucket_of(other, 1), 1);
+    BOOST_REQUIRE_EQUAL(bucket_of(other, freed_records), 1);
+    check_shard();
+    BOOST_REQUIRE_EQUAL(shard.segment_count, 2);
+
+    // A removal takes the segment and its bytes out of the set and out of the shard statistics.
+    other.remove_segment(sparse);
+    check_stats(other, 1, freed_records * frame_size);
+    BOOST_REQUIRE_EQUAL(bucket_of(other, 1), 0);
+    check_shard();
+
+    other.clear();
+    check_stats(other, 0, 0);
+    check_shard();
+    BOOST_REQUIRE(shard == segment_stats{});
+}
+
+// The metric exports the utilization histogram as a Prometheus histogram. The buckets of a
+// Prometheus histogram are cumulative, and the sum is the sum of the utilizations of the segments.
+SEASTAR_THREAD_TEST_CASE(test_logstor_segment_utilization_histogram_export) {
+    constexpr uint64_t segment_size = 128 * 1024;
+    constexpr size_t frame_size = segment_size / utilization_bucket_count;
+
+    auto add_segment = [&] (segment_stats& stats, uint64_t live_record_bytes) {
+        stats.add_segment(live_record_bytes, utilization_bucket_of(live_record_bytes, segment_size));
+    };
+
+    // An empty histogram has zero values.
+    const auto empty = to_metrics_histogram(segment_stats{}, segment_size);
+    BOOST_REQUIRE_EQUAL(empty.buckets.size(), utilization_bucket_count);
+    BOOST_REQUIRE_EQUAL(empty.sample_count, 0);
+    BOOST_REQUIRE_EQUAL(empty.sample_sum, 0);
+    for (const auto& bucket : empty.buckets) {
+        BOOST_REQUIRE_EQUAL(bucket.count, 0);
+    }
+
+    // Two segments without live records go into the first bucket. One segment goes into bucket 3.
+    // A full segment goes into the last bucket.
+    segment_stats stats;
+    add_segment(stats, 0);
+    add_segment(stats, 0);
+    add_segment(stats, 3 * frame_size);
+    add_segment(stats, segment_size);
+
+    const auto hist = to_metrics_histogram(stats, segment_size);
+    BOOST_REQUIRE_EQUAL(hist.buckets.size(), utilization_bucket_count);
+    for (size_t i = 0; i < utilization_bucket_count; ++i) {
+        // The limit of bucket i is the upper limit of its utilization range.
+        BOOST_REQUIRE_EQUAL(hist.buckets[i].upper_bound, double(i + 1) / utilization_bucket_count);
+        // Each bucket counts its segments and the segments of all the buckets before it.
+        const uint64_t expected_count = i < 3 ? 2 : i < utilization_bucket_count - 1 ? 3 : 4;
+        BOOST_REQUIRE_EQUAL(hist.buckets[i].count, expected_count);
+    }
+    BOOST_REQUIRE_EQUAL(hist.buckets.back().upper_bound, 1.0);
+    BOOST_REQUIRE_EQUAL(hist.sample_count, 4);
+    // The utilizations are 0, 0, 3 / utilization_bucket_count and 1. These values are exact in
+    // binary floating point.
+    BOOST_REQUIRE_EQUAL(hist.sample_sum, 3.0 / utilization_bucket_count + 1.0);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_logstor_group_compaction_rewrites_live_records) {

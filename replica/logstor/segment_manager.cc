@@ -972,6 +972,9 @@ class segment_manager_impl {
     uint64_t _next_new_segment_id{0};
 
     stats _stats;
+    // The statistics of the segments that the groups of this shard own, with their distribution by
+    // utilization. Each segment_set of the shard adds its changes to them, see segment_set.
+    segment_stats _segment_stats;
     seastar::metrics::metric_groups _metrics;
 
     static constexpr size_t segment_pool_size = 128;
@@ -1080,6 +1083,14 @@ public:
 
     uint64_t get_segment_bytes_in_use() const noexcept {
         return segments_in_use() * _cfg.segment_size;
+    }
+
+    segment_stats& shard_segment_stats() noexcept {
+        return _segment_stats;
+    }
+
+    const segment_stats& shard_segment_stats() const noexcept {
+        return _segment_stats;
     }
 
     future<owned_write_buffer> allocate_separator_buffer() {
@@ -1378,6 +1389,12 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
                        sm::description("Counts number of segments freed.")),
         sm::make_gauge("disk_usage", [this] { return get_disk_usage(); },
                        sm::description("Total disk usage.")),
+        sm::make_gauge("owned_segments", [this] { return _segment_stats.segment_count; },
+                       sm::description("Number of sealed segments that the compaction groups of this shard own. The other segments in use are open for writes, or wait to go into a group, or wait to be freed.")),
+        sm::make_gauge("owned_segments_live_record_bytes", [this] { return _segment_stats.live_record_bytes; },
+                       sm::description("Record bytes of the live records in the segments that the compaction groups of this shard own. Dead records use the remaining space of these segments. Compaction frees that space.")),
+        sm::make_histogram("segment_utilization", [this] { return to_metrics_histogram(_segment_stats, _cfg.segment_size); },
+                       sm::description("Distribution by utilization of the segments that the compaction groups of this shard own. The utilization of a segment is the record bytes of its live records divided by the segment size.")),
         sm::make_counter("compaction_bytes_written", _stats.bytes_written[static_cast<size_t>(write_source::compaction)],
                        sm::description("Counts number of bytes written to the disk by compaction.")),
         sm::make_counter("compaction_data_bytes_written", _stats.data_bytes_written[static_cast<size_t>(write_source::compaction)],
@@ -2887,6 +2904,14 @@ const compaction_manager& segment_manager::get_compaction_manager() const noexce
 
 uint64_t segment_manager::get_segment_size() const noexcept {
     return _impl->get_segment_size();
+}
+
+segment_stats& segment_manager::shard_segment_stats() noexcept {
+    return _impl->shard_segment_stats();
+}
+
+const segment_stats& segment_manager::shard_segment_stats() const noexcept {
+    return _impl->shard_segment_stats();
 }
 
 sstring segment_manager::get_segment_file_path(log_segment_id segment_id) const {
