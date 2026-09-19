@@ -44,6 +44,10 @@
 //       --disk-size-in-mb 4096
 //   perf_logstor --test write --concurrency 1     # ... and 16, and 64
 //
+// What a record takes on disk, for a matrix of row shapes, with no logstor and no disk in it:
+//
+//   perf_logstor --record-size-report --report-columns 1,5,30 --report-value-sizes 20,300
+//
 // Options:
 //
 //   --test                       comma separated test names, or `all`
@@ -60,14 +64,33 @@
 //   --compaction                 let compaction run. On by default, see below
 //   --dir                        where to put the logstor files. Defaults to a temporary directory
 //   --json-result                write one file per test, suffixed with the name of the test
+//   --record-size-report         print what a record takes on disk for a matrix of row shapes and
+//                                exit, without building a logstor
+//   --report-key-sizes,
+//   --report-columns,
+//   --report-value-sizes         the partition key sizes, the column counts and the column value
+//                                sizes of that matrix
 //
 // The dataset is written once and serves every test. Its index has the cache enabled, and
 // `read-disk` takes the segment by bypassing the cache per read rather than by disabling it, so
 // that both read paths are measured against the same data. The run prints what one record of the
-// dataset takes in a segment against the bytes of value it carries, and warns when the dataset does
-// not leave the pool room for the dead records the overwrites of the write test will leave behind.
-// The files are preallocated rather than sparse, as a node's are, so `--disk-size-in-mb` costs that
-// much disk and that much formatting before the run starts measuring.
+// dataset takes in a segment against the bytes of the row it carries, and warns when the dataset
+// does not leave the pool room for the dead records the overwrites of the write test will leave
+// behind. The files are preallocated rather than sparse, as a node's are, so `--disk-size-in-mb`
+// costs that much disk and that much formatting before the run starts measuring.
+//
+//
+// The record size report
+// ======================
+//
+// `--record-size-report` answers what a record takes on disk and where those bytes go, for as many
+// row shapes as one run is given, and then exits. It builds no logstor and touches no disk, so it
+// runs in a second and has no variance at all: it serializes one record per shape through the code
+// the write path uses and prints the parts of it against the bytes of the row a write was handed.
+// The difference between the two is what the format of a record costs, which is paid on every
+// write, on every byte of the segment pool and on every read that goes to a segment, and it is what
+// a change to the format is measured by. The `record:` line a measured run prints is the same
+// number for the one shape that run used.
 //
 //
 // The tests
@@ -227,6 +250,7 @@
 // functions are on the path, then add a test here for the ones that look expensive - a method on
 // `logstor_bench` and a name in `test_kinds`.
 
+#include <charconv>
 #include <filesystem>
 #include <ranges>
 #include <vector>
@@ -251,6 +275,7 @@
 #include "keys/keys.hh"
 #include "mutation/canonical_mutation.hh"
 #include "mutation/mutation.hh"
+#include "mutation/mutation_partition_serializer.hh"
 #include "partition_slice_builder.hh"
 #include "replica/logstor/index.hh"
 #include "replica/logstor/logstor.hh"
@@ -365,6 +390,120 @@ schema_ptr make_kv_schema(unsigned columns) {
         sb.with_column(to_bytes(fmt::format("v{}", i)), bytes_type);
     }
     return sb.set_logstor().build();
+}
+
+// The row one record of the size report holds: the partition key, the columns of the table, and
+// the value of one of them. A logstor partition is at most one row, so this is the whole shape of
+// a record.
+struct row_shape {
+    size_t key_size;
+    size_t columns;
+    size_t value_size;
+
+    // The bytes of the row a write is handed. What a record takes beyond this is what the format
+    // of a record costs.
+    size_t payload_size() const noexcept { return key_size + columns * value_size; }
+};
+
+// The partition of one record of the report: the row with the empty clustering key, with a live
+// marker and a live cell in every column of the schema.
+mutation make_report_mutation(schema_ptr s, const row_shape& shape) {
+    bytes key(bytes::initialized_later(), shape.key_size);
+    std::ranges::fill(key, int8_t('k'));
+    mutation m(s, dht::decorate_key(*s, partition_key::from_single_value(*s, key)));
+    const auto ts = api::new_timestamp();
+    auto& row = m.partition().clustered_row(*s, clustering_key::make_empty());
+    row.apply(row_marker(ts));
+    bytes value(bytes::initialized_later(), shape.value_size);
+    std::ranges::fill(value, int8_t('v'));
+    for (const auto& value_def : s->regular_columns()) {
+        row.cells().apply(value_def, atomic_cell::make_live(*value_def.type, ts, value));
+    }
+    return m;
+}
+
+template <typename T>
+size_t serialized_size_of(const T& v) {
+    seastar::measuring_output_stream ms;
+    ser::serialize(ms, v);
+    return ms.size();
+}
+
+// What one record is made of, all of it measured through the serializers the write path uses.
+struct record_sizes {
+    size_t header{};    // the serialized log_record_header
+    size_t value{};     // the serialized canonical_mutation the record carries
+    size_t mapping{};   // of the value, the column mapping of the schema
+    size_t partition{}; // of the value, the partition itself
+    size_t record{};    // the record header, the log record header and the value
+    size_t padding{};   // what aligning the next record after this one costs
+
+    // What the value spends on neither the mapping nor the partition: the table id, the schema
+    // version, the copy of the partition key that the log record header already carries, and the
+    // framing of all of them.
+    size_t value_rest() const noexcept { return value - mapping - partition; }
+};
+
+record_sizes measure_record(const schema& s, const mutation& m) {
+    const log_record_header header {
+        .key = primary_index_key{m.decorated_key()},
+        .timestamp = api::new_timestamp(),
+        .table = s.id(),
+    };
+    // The partition as the canonical_mutation of the record writes it, which is the only part of a
+    // record that holds anything the write was given.
+    bytes_ostream partition;
+    mutation_partition_serializer(s, m.partition()).write(partition);
+
+    record_sizes sizes {
+        .header = serialized_size_of(header),
+        .value = serialized_size_of(canonical_mutation(m)),
+        .mapping = serialized_size_of(s.get_column_mapping()),
+        .partition = partition.size(),
+    };
+    sizes.record = ondisk::record_header_size + sizes.header + sizes.value;
+    sizes.padding = align_up(sizes.record, ondisk::record_alignment) - sizes.record;
+    return sizes;
+}
+
+// Prints what a record takes on disk for every combination of the three lists, and where those
+// bytes go. See the record size report in the comment at the top of this file.
+void print_record_size_report(const std::vector<size_t>& key_sizes, const std::vector<size_t>& column_counts,
+        const std::vector<size_t>& value_sizes) {
+    fmt::print("What a record takes on disk, by row shape. All sizes are bytes.\n"
+            "\n"
+            "payload is the row a write is handed: the partition key and the cells. What a record\n"
+            "takes beyond it is the overhead of the format, which is paid on every write, on every\n"
+            "byte of the segment pool and on every read that goes to a segment. pad is what\n"
+            "aligning the next record after this one costs, which logstor counts against the\n"
+            "buffer rather than against the record, so it is not part of the overhead here.\n"
+            "\n"
+            "value is the canonical_mutation the record carries, split into the column mapping of\n"
+            "the schema, which every record written under a version repeats, the partition itself,\n"
+            "and what is left of it: the table id, the schema version, the second copy of the\n"
+            "partition key and the framing of all of them.\n"
+            "\n");
+    fmt::print("{:>4} {:>5} {:>6} {:>8} | {:>7} {:>7} {:>7} {:>4} | {:>9} {:>6} | {:>8} {:>10} {:>8}\n",
+            "key", "cols", "value", "payload",
+            "header", "value", "record", "pad",
+            "overhead", "ratio",
+            "mapping", "partition", "ids+key");
+    for (auto columns : column_counts) {
+        auto s = make_kv_schema(static_cast<unsigned>(columns));
+        for (auto value_size : value_sizes) {
+            for (auto key_size : key_sizes) {
+                const row_shape shape{.key_size = key_size, .columns = columns, .value_size = value_size};
+                const auto sizes = measure_record(*s, make_report_mutation(s, shape));
+                const auto payload = shape.payload_size();
+                fmt::print("{:>4} {:>5} {:>6} {:>8} | {:>7} {:>7} {:>7} {:>4} | {:>9} {:>6.2f} | {:>8} {:>10} {:>8}\n",
+                        key_size, columns, value_size, payload,
+                        sizes.header, sizes.value, sizes.record, sizes.padding,
+                        sizes.record - payload,
+                        payload ? double(sizes.record) / payload : 0.0,
+                        sizes.mapping, sizes.partition, sizes.value_rest());
+            }
+        }
+    }
 }
 
 // One logstor of one shard, with a dataset written to it, which is what a shard of a node has: the
@@ -695,11 +834,22 @@ public:
     // more use than one that ends here.
     uint64_t cache_misses() const noexcept { return _cache.shared_tracker.get_stats().partition_misses; }
 
-    // What one record of the dataset takes in a segment, against the bytes of value it carries. The
-    // difference between the two is what the format of a record costs, which is paid on every write,
-    // on every disk byte and on every read that goes to a segment.
+    // The partition key of the dataset is an int64 - see populate() - which is what the payload of
+    // one of its records counts as its key.
+    static constexpr size_t dataset_key_size = sizeof(int64_t);
+
+    // What one record of the dataset takes in a segment, against the bytes of the row it carries.
+    // The difference between the two is what the format of a record costs, which is paid on every
+    // write, on every disk byte and on every read that goes to a segment. The record size report
+    // prints the same two numbers, and the parts they are made of, for shapes the run did not use.
     size_t record_size() const noexcept { return _serialized_record.size(); }
-    size_t payload_size() const noexcept { return size_t(_cfg.columns) * _cfg.value_size; }
+    size_t payload_size() const noexcept {
+        return row_shape{
+            .key_size = dataset_key_size,
+            .columns = _cfg.columns,
+            .value_size = _cfg.value_size,
+        }.payload_size();
+    }
 
 private:
     primary_index& index() noexcept {
@@ -902,6 +1052,24 @@ std::vector<test_kind> parse_tests(const std::string& names) {
     return kinds;
 }
 
+// A comma separated list of sizes, which is how the row shapes of the record size report are given.
+std::vector<size_t> parse_size_list(std::string_view option, std::string_view values) {
+    std::vector<size_t> sizes;
+    for (const auto& part : std::views::split(values, std::string_view(","))) {
+        const auto text = std::string_view(part.begin(), part.end());
+        size_t size = 0;
+        const auto [end, ec] = std::from_chars(text.data(), text.data() + text.size(), size);
+        if (ec != std::errc() || end != text.data() + text.size()) {
+            throw std::invalid_argument(fmt::format("--{} takes comma separated numbers, got '{}'", option, text));
+        }
+        sizes.push_back(size);
+    }
+    if (sizes.empty()) {
+        throw std::invalid_argument(fmt::format("--{} takes at least one number", option));
+    }
+    return sizes;
+}
+
 run_config make_run_config(const boost::program_options::variables_map& config) {
     auto seed = config["random-seed"];
     run_config run{
@@ -967,11 +1135,25 @@ int main(int argc, char** argv) {
         ("dir", bpo::value<std::string>(), "directory for the logstor files (default: a temporary directory)")
         ("stop-on-error", bpo::value<bool>()->default_value(true), "stop after encountering the first error")
         ("json-result", bpo::value<std::string>(), "name of the json result file, suffixed with the name of the test")
+        ("record-size-report", bpo::bool_switch(), "print what a record takes on disk for a matrix of row shapes and exit, without building a logstor")
+        ("report-key-sizes", bpo::value<std::string>()->default_value("8,16,64"), "comma separated partition key sizes of that matrix")
+        ("report-columns", bpo::value<std::string>()->default_value("1,5,30"), "comma separated value column counts of that matrix")
+        ("report-value-sizes", bpo::value<std::string>()->default_value("20,100,300"), "comma separated column value sizes of that matrix")
         ;
 
     set_abort_on_internal_error(true);
 
     return app.run(argc, argv, [&app] () -> future<> {
+        const auto& options = app.configuration();
+        // The report needs neither a dataset nor a disk, so it runs before anything is built and
+        // leaves the rest of the configuration, which describes a measured run, unread.
+        if (options["record-size-report"].as<bool>()) {
+            print_record_size_report(
+                    parse_size_list("report-key-sizes", options["report-key-sizes"].as<std::string>()),
+                    parse_size_list("report-columns", options["report-columns"].as<std::string>()),
+                    parse_size_list("report-value-sizes", options["report-value-sizes"].as<std::string>()));
+            co_return;
+        }
         auto run = make_run_config(app.configuration());
         const auto& cfg = run.test;
         fmt::print("random-seed={}\n", run.seed);
@@ -1000,7 +1182,7 @@ int main(int argc, char** argv) {
             co_await seastar::async([&] {
                 const auto record_bytes = bench.local().record_size();
                 const auto payload_bytes = bench.local().payload_size();
-                fmt::print("record: {} bytes in a segment for {} bytes of value ({:.2f}x)\n",
+                fmt::print("record: {} bytes in a segment for {} bytes of row ({:.2f}x)\n",
                         record_bytes, payload_bytes, payload_bytes ? double(record_bytes) / payload_bytes : 0.0);
                 for (auto kind : run.tests) {
                     fmt::print("\n{}:\n", name_of(kind));
