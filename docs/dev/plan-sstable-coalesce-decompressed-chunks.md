@@ -118,9 +118,12 @@ trim `_buf`; else drop `_buf` and forward the remainder to
    chunk k after the same wait as today, plus bounded CPU for chunks
    k+1.. that are already resident.
 2. **Cap the output.** `options.buffer_size` (128 KB in production) worth
-   of decompressed bytes per call, and never past `_end_pos`. Any number of
-   whole chunks is a valid return; the parser does not assume chunk-sized
-   buffers.
+   of decompressed bytes per call. Any number of whole chunks is a valid
+   return; the parser does not assume chunk-sized buffers. The last chunk
+   is returned whole, not trimmed at `_end_pos`, matching the old reader:
+   single-partition readers open the stream to the partition end and then
+   `skip()` within the chunk's tail, which `input_stream` serves from that
+   already-returned buffer.
 3. **Yield to the reactor.** `need_preempt()` between chunks. Returning
    early is the yield; no `maybe_yield()`. `need_preempt()` is two relaxed
    loads (seastar preempt.hh:50-62), ≈ 1 ns per 4 KB chunk against ≈ 1 µs of
@@ -146,6 +149,14 @@ the tracked read buffer the permit already carries for the same stream
 the parser pins the same value bytes in fewer, larger fragments. We request
 the exact produced size once, after the loop, so under memory pressure a
 call that produced one chunk asks for one chunk, as today.
+
+Larger fragments also raise the cost of any share that outlives its
+value. The mx reader kept the clustering-key shares in `_row_key` until
+the next row, so every open reader pinned one whole 128 KB block for the
+life of the row (54 readers × 120 KB in
+`test_reader_concurrency_semaphore_memory_limit_engages`, enough to
+cross its kill limit). `_row_key` is now cleared right after
+`consume_row_start` copies the key.
 
 Ordering change: the output buffer is allocated before the permit grant
 rather than after. The bytes exist for at most the duration of the
