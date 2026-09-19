@@ -15,7 +15,9 @@ Logstor consists of several key components:
 
 #### Primary Index
 
-The primary index is entirely in memory and it maps a partition key to its location in the log segments. It consists of a B-tree per each table that is ordered token.
+The primary index is entirely in memory and it maps a partition key to its location in the log segments. It consists of a B-tree per each table that is ordered by token.
+
+An index entry does not hold the partition key itself but a `primary_index_key`: the token and a 128-bit XXH3 hash of the key's internal representation, seeded with a value drawn at random when the process starts. This keeps every entry the same small size regardless of the key length. Keys that share a token are ordered by their hash rather than by ring order; the range reader restores ring order after reading the records, which carry the full key. The hash exists only in memory: records store the partition key, and recovery recomputes the hash from it, so the seed is never persisted. A read verifies the key found in the record against the requested key, so a hash collision surfaces as an error rather than as another partition's data.
 
 #### Segment Manager
 
@@ -176,6 +178,9 @@ zero_padding            -- to align the entire buffer to block_alignment (4096 b
 
 buffer_header, segment_header, and records are aligned by `record_alignment` (8 bytes).
 
+All integer fields in the structures below are serialized little-endian, including the two
+64-bit halves of a UUID.
+
 #### Buffer Header
 
 A serialized form of `write_buffer::buffer_header`.
@@ -210,24 +215,28 @@ Each record within the buffer is structured as:
 
 ```
 record_header        (8 bytes)
-log_record_header    (header_size bytes)
+log_record_header    (32 + key_size bytes)
 canonical_mutation   (data_size bytes)
 zero_padding         -- to align to record_alignment (8 bytes)
 ```
 
-**Record Header** (`write_buffer::record_header`):
+**Record Header** (`ondisk::record_header`):
 
-| Offset | Size | Field         | Description |
-|--------|------|---------------|-------------|
-| 0      | 4    | `header_size` | Size in bytes of the serialized `log_record_header` that follows. |
-| 4      | 4    | `data_size`   | Size in bytes of the serialized `canonical_mutation` that follows `log_record_header`. |
+| Offset | Size | Field       | Description |
+|--------|------|-------------|-------------|
+| 0      | 4    | `key_size`  | Size in bytes of the partition key at the end of the `log_record_header` that follows. |
+| 4      | 4    | `data_size` | Size in bytes of the serialized `canonical_mutation` that follows the `log_record_header`. |
 
 **Log Record Header** (`log_record_header`):
 
-The `header_size` bytes immediately following the record header are the IDL-serialized form of `log_record_header`, which contains:
-- `key`: the partition key (`primary_index_key`), including a `decorated_key` with a token and partition key bytes.
-- `timestamp`: the timestamp of the record, used to resolve conflicts by keeping the record with the latest timestamp.
-- `table`: UUID of the table this record belongs to.
+Written by `ondisk::write_log_record_header()`. The fixed fields come first, at constant offsets, and the partition key is the only variable part.
+
+| Offset | Size       | Field       | Description |
+|--------|------------|-------------|-------------|
+| 0      | 8          | `token`     | Raw token number of the partition key. |
+| 8      | 8          | `timestamp` | `api::timestamp_type` — timestamp used for conflict resolution. |
+| 16     | 16         | `table`     | `table_id` (UUID) — the table this record belongs to, written as its most significant and then its least significant 64-bit half. |
+| 32     | `key_size` | `key`       | The partition key in its internal representation (`partition_key::representation()`). |
 
 **Mutation Data**:
 

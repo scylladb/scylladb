@@ -8,11 +8,16 @@
 
 #pragma once
 
+#include <limits>
+
 #include "idl/uuid.dist.hh"
 #include "idl/uuid.dist.impl.hh"
 #include "dht/token.hh"
+#include "dht/decorated_key.hh"
+#include "keys/keys.hh"
 #include "replica/logstor/types.hh"
 #include "serializer.hh"
+#include "utils/managed_bytes.hh"
 
 namespace replica::logstor {
 
@@ -22,6 +27,26 @@ static constexpr size_t block_alignment = 4096;
 static constexpr size_t record_alignment = 8;
 static constexpr uint8_t current_version = 1;
 static constexpr uint32_t buffer_header_magic = 0x4c475342;
+
+// The on-disk header types below all have a fixed serialized size. Their encoding lives in the
+// ser::serializer<> specializations at the bottom of this file, where each specialization declares
+// its own serialized_size next to the write()/read()/skip() that produce and consume those bytes.
+// The ondisk::*_size constants are aliases of those, so there is a single source of truth.
+//
+// The log record header is the exception: it carries the partition key, so its size varies per
+// record. Its encoding is the pair of write_log_record_header()/read_log_record_header() at the
+// bottom of this file, and record_header carries the key size that the reader needs.
+//
+// serialized_size must stay in sync with write()/read()/skip(): it is what sizes the substreams in
+// write_buffer and the reads in segment_io, so a mismatch silently truncates or pads records on disk
+// instead of failing. Nothing enforces this at compile time - the serializers bottom out in
+// reinterpret_cast, which cannot be evaluated in a constant expression - so it is verified at runtime
+// by test_logstor_ondisk_serialized_sizes in test/boost/logstor_test.cc.
+//
+// When adding a field to one of these types, or adding a new fixed-size on-disk type: update or write
+// all four of write(), read(), skip() and serialized_size together, add an alias in the ondisk block
+// at the bottom of the file if the size is needed elsewhere, and add a check_serialized_size() call
+// for the type to that test with a value whose fields are all distinct and non-zero.
 
 struct buffer_header {
     uint32_t magic;
@@ -33,35 +58,28 @@ struct buffer_header {
     uint32_t crc;
 
     uint32_t calculate_crc() const;
-};
 
-static constexpr size_t buffer_header_size =
-    sizeof(uint32_t)
-    + sizeof(std::underlying_type_t<segment_kind>)
-    + sizeof(uint8_t)
-    + sizeof(uint16_t)
-    + sizeof(segment_sequence)
-    + sizeof(uint32_t)
-    + sizeof(uint32_t);
-static_assert(buffer_header_size % record_alignment == 0, "Buffer header size must be aligned by record_alignment");
+    bool operator==(const buffer_header& other) const noexcept = default;
+};
 
 struct segment_header {
     table_id table;
     dht::token first_token;
     dht::token last_token;
-};
 
-static constexpr size_t segment_header_size =
-    sizeof(table_id)
-    + 2 * sizeof(int64_t);
-static_assert(segment_header_size % record_alignment == 0, "Segment header size must be aligned by record_alignment");
+    bool operator==(const segment_header& other) const noexcept = default;
+};
 
 struct record_header {
-    uint32_t header_size; // size of the serialized log_record_header
-    uint32_t data_size;   // size of the serialized canonical_mutation
+    uint32_t key_size;  // size of the partition key inside the log_record_header that follows
+    uint32_t data_size; // size of the serialized canonical_mutation
+
+    bool operator==(const record_header& other) const noexcept = default;
 };
 
-static constexpr size_t record_header_size = 2 * sizeof(uint32_t);
+// The largest partition key a record can carry. CQL caps the serialized key at this size (see
+// validation::max_key_size), so a larger key_size can only come from corruption.
+static constexpr size_t max_key_size = std::numeric_limits<uint16_t>::max();
 
 bool validate_header(const buffer_header& bh);
 bool validate_record_header(const record_header& rh);
@@ -73,6 +91,15 @@ namespace ser {
 
 template <>
 struct serializer<replica::logstor::ondisk::buffer_header> {
+    static constexpr size_t serialized_size =
+        sizeof(uint32_t)            // magic
+        + sizeof(uint8_t)           // kind
+        + sizeof(uint8_t)           // version
+        + sizeof(uint16_t)          // reserved
+        + sizeof(uint64_t)          // segment_seq
+        + sizeof(uint32_t)          // data_size
+        + sizeof(uint32_t);         // crc
+
     template <typename Output>
     static void write(Output& out, const replica::logstor::ondisk::buffer_header& h) {
         serializer<uint32_t>::write(out, h.magic);
@@ -111,6 +138,10 @@ struct serializer<replica::logstor::ondisk::buffer_header> {
 
 template <>
 struct serializer<replica::logstor::ondisk::segment_header> {
+    static constexpr size_t serialized_size =
+        2 * sizeof(int64_t)         // table id, written by serializer<table_id> as two int64
+        + 2 * sizeof(int64_t);      // first and last token
+
     template <typename Output>
     static void write(Output& out, const replica::logstor::ondisk::segment_header& h) {
         serializer<table_id>::write(out, h.table);
@@ -137,16 +168,20 @@ struct serializer<replica::logstor::ondisk::segment_header> {
 
 template <>
 struct serializer<replica::logstor::ondisk::record_header> {
+    static constexpr size_t serialized_size =
+        sizeof(uint32_t)            // key_size
+        + sizeof(uint32_t);         // data_size
+
     template <typename Output>
     static void write(Output& out, const replica::logstor::ondisk::record_header& h) {
-        serializer<uint32_t>::write(out, h.header_size);
+        serializer<uint32_t>::write(out, h.key_size);
         serializer<uint32_t>::write(out, h.data_size);
     }
 
     template <typename Input>
     static replica::logstor::ondisk::record_header read(Input& in) {
         replica::logstor::ondisk::record_header h;
-        h.header_size = serializer<uint32_t>::read(in);
+        h.key_size = serializer<uint32_t>::read(in);
         h.data_size = serializer<uint32_t>::read(in);
         return h;
     }
@@ -159,3 +194,63 @@ struct serializer<replica::logstor::ondisk::record_header> {
 };
 
 } // namespace ser
+
+namespace replica::logstor::ondisk {
+
+// The on-disk sizes are aliases of the serializers above, so that each size is stated
+// next to the code that writes it.
+static constexpr size_t buffer_header_size = ser::serializer<buffer_header>::serialized_size;
+static constexpr size_t segment_header_size = ser::serializer<segment_header>::serialized_size;
+static constexpr size_t record_header_size = ser::serializer<record_header>::serialized_size;
+
+static_assert(buffer_header_size % record_alignment == 0, "Buffer header size must be aligned by record_alignment");
+static_assert(segment_header_size % record_alignment == 0, "Segment header size must be aligned by record_alignment");
+
+// The log record header is logstor's own on-disk format, so its encoding lives here rather than
+// in an IDL definition. It is the token, the timestamp and the table id as four little-endian
+// 64-bit words, followed by the partition key in its internal representation. The fixed fields
+// come first so that they are at constant offsets; the key is the only variable part, and its
+// size is stored in the record_header ahead of the log record header.
+static constexpr size_t log_record_header_fixed_size =
+    sizeof(int64_t)                 // token
+    + sizeof(api::timestamp_type)   // timestamp
+    + 2 * sizeof(int64_t);          // table id
+
+constexpr size_t log_record_header_size(size_t key_size) noexcept {
+    return log_record_header_fixed_size + key_size;
+}
+
+inline size_t log_record_header_size(const log_record_header& h) noexcept {
+    return log_record_header_size(h.key.key().representation().size());
+}
+
+template <typename Output>
+void write_log_record_header(Output& out, const log_record_header& h) {
+    ser::serializer<int64_t>::write(out, h.key.token().raw());
+    ser::serializer<api::timestamp_type>::write(out, h.timestamp);
+    ser::serializer<int64_t>::write(out, h.table.uuid().get_most_significant_bits());
+    ser::serializer<int64_t>::write(out, h.table.uuid().get_least_significant_bits());
+    for (bytes_view frag : fragment_range(managed_bytes_view(h.key.key().representation()))) {
+        out.write(reinterpret_cast<const char*>(frag.data()), frag.size());
+    }
+}
+
+// key_size comes from the record_header that precedes the log record header on disk.
+template <typename Input>
+log_record_header read_log_record_header(Input& in, uint32_t key_size) {
+    auto token = dht::token::from_int64(ser::serializer<int64_t>::read(in));
+    auto timestamp = ser::serializer<api::timestamp_type>::read(in);
+    auto msb = ser::serializer<int64_t>::read(in);
+    auto lsb = ser::serializer<int64_t>::read(in);
+    managed_bytes key(managed_bytes::initialized_later(), key_size);
+    for (bytes_mutable_view frag : fragment_range(managed_bytes_mutable_view(key))) {
+        in.read(reinterpret_cast<char*>(frag.data()), frag.size());
+    }
+    return log_record_header{
+        .key = dht::decorated_key(token, partition_key::from_bytes(std::move(key))),
+        .timestamp = timestamp,
+        .table = table_id(utils::UUID(msb, lsb)),
+    };
+}
+
+} // namespace replica::logstor::ondisk
