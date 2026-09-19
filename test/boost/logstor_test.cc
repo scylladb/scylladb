@@ -748,6 +748,75 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_record_value_rejects_the_schema_of_another
     assert_that(decode_record_value(value, schema, header)).is_equal_to(m);
 }
 
+// Checks that the frozen and the unfrozen forms of a mutation give the same record value and the
+// same timestamp.
+SEASTAR_THREAD_TEST_CASE(test_logstor_frozen_record_value_matches_the_unfrozen_one) {
+    auto schema = make_multi_column_schema();
+    const auto ts = api::timestamp_type(41);
+
+    // One mutation per kind of row marker and per source of the record timestamp. Each has its own
+    // partition key, and the record timestamp of each is ts.
+    std::vector<mutation> ms;
+    const auto add = [&] (const sstring& pk) -> mutation& {
+        auto key = partition_key::from_single_value(*schema, serialized(pk));
+        return ms.emplace_back(schema, dht::decorate_key(*schema, key));
+    };
+    const auto row = [&] (mutation& m) -> deletable_row& {
+        return m.partition().clustered_row(*schema, clustering_key::make_empty());
+    };
+
+    // A live marker and cells that are live, expiring and dead.
+    ms.push_back(make_multi_column_mutation(schema, "pk0", ts));
+
+    // A row with an expiring marker.
+    row(add("pk1")).apply(row_marker(ts, std::chrono::hours(1), gc_clock::now() + std::chrono::hours(1)));
+
+    // A row with a dead marker. The timestamp comes from the tombstone of the marker.
+    row(add("pk2")).apply(row_marker(tombstone(ts, gc_clock::now())));
+
+    // A partition tombstone and no rows. The timestamp comes from the partition tombstone.
+    add("pk3").partition().apply(tombstone(ts, gc_clock::now()));
+
+    // A row with cells and no marker, and a partition tombstone.
+    {
+        auto& m = add("pk4");
+        const auto& v_def = *schema->get_column_definition("v");
+        row(m).cells().apply(v_def, atomic_cell::make_live(*v_def.type, ts, serialized(sstring("value"))));
+        m.partition().apply(tombstone(ts, gc_clock::now()));
+    }
+
+    for (const auto& m : ms) {
+        const auto frozen = freeze(m);
+        BOOST_REQUIRE(encode_record_value(frozen, *schema) == encode_record_value(m));
+        BOOST_REQUIRE_EQUAL(record_timestamp(m), ts);
+        BOOST_REQUIRE_EQUAL(record_timestamp(frozen), ts);
+
+        // The value decodes to the original mutation.
+        assert_that(decode_record_value(encode_record_value(frozen, *schema), schema, make_header(m, ts))).is_equal_to(m);
+    }
+}
+
+// Checks that record_timestamp() throws for both forms of a mutation that has no row marker and
+// no partition tombstone.
+SEASTAR_THREAD_TEST_CASE(test_logstor_record_timestamp_requires_a_marker_or_a_tombstone) {
+    auto schema = make_multi_column_schema();
+    auto key = partition_key::from_single_value(*schema, serialized(sstring("pk0")));
+
+    mutation empty(schema, dht::decorate_key(*schema, key));
+    BOOST_REQUIRE_THROW(record_timestamp(empty), std::runtime_error);
+    BOOST_REQUIRE_THROW(record_timestamp(freeze(empty)), std::runtime_error);
+
+    // A row with cells and no marker.
+    mutation cells_only(schema, dht::decorate_key(*schema, key));
+    {
+        auto& row = cells_only.partition().clustered_row(*schema, clustering_key::make_empty());
+        const auto& v_def = *schema->get_column_definition("v");
+        row.cells().apply(v_def, atomic_cell::make_live(*v_def.type, api::timestamp_type(51), serialized(sstring("v"))));
+    }
+    BOOST_REQUIRE_THROW(record_timestamp(cells_only), std::runtime_error);
+    BOOST_REQUIRE_THROW(record_timestamp(freeze(cells_only)), std::runtime_error);
+}
+
 // Checks that a raw write buffer can hold and seal a record whose serialized size is exactly max_record_size().
 SEASTAR_THREAD_TEST_CASE(test_logstor_write_buffer_accepts_record_at_max_record_size) {
     auto schema = make_kv_schema();
