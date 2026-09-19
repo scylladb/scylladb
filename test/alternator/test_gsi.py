@@ -2476,3 +2476,100 @@ def test_gsi_query_exclusivestartkey_spurious_column(test_table_gsi_5):
     exclusive_start_key['y'] = 'meerkat'
     with pytest.raises(ClientError, match='ValidationException.*starting key'):
         test_table_gsi_5.query(ExclusiveStartKey=exclusive_start_key, **query_args)
+
+###### Tests for batch_write_item() with GSI-key validation.
+# executor::batch_write_item() precomputes per-table GSI/LSI key-attribute
+# metadata once per table (not once per item) - these tests check that per-item
+# validation and per-table isolation still hold after that optimization.
+
+# Same attribute name ('x') as a GSI hash key, but declared as type N here -
+# test_table_gsi_2's GSI hash key 'x' is type S. Used to prove one table's
+# batch items aren't validated against another table's GSI metadata.
+@pytest.fixture(scope="module")
+def test_table_gsi_2_x_n(dynamodb):
+    table = create_test_table(dynamodb,
+        KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
+        AttributeDefinitions=[
+                    { 'AttributeName': 'p', 'AttributeType': 'S' },
+                    { 'AttributeName': 'x', 'AttributeType': 'N' },
+        ],
+        GlobalSecondaryIndexes=[
+            {   'IndexName': 'hello',
+                'KeySchema': [
+                    { 'AttributeName': 'x', 'KeyType': 'HASH' },
+                ],
+                'Projection': { 'ProjectionType': 'ALL' }
+            }
+        ])
+    yield table
+    table.delete()
+
+# A late item (not the first) in a batch violating the GSI key type must
+# still be rejected - if validation had been hoisted along with the metadata,
+# only item 0 would be checked.
+def test_gsi_batch_write_validates_every_item(test_table_gsi_2, scylla_only):
+    p = test_table_gsi_2.name
+    items = [{'PutRequest': {'Item': {'p': random_string(), 'x': random_string()}}} for i in range(49)]
+    items.append({'PutRequest': {'Item': {'p': random_string(), 'x': 42}}})  # wrong type for GSI key 'x'
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_gsi_2.meta.client.batch_write_item(RequestItems={p: items})
+
+# The single most important regression test: two tables share a GSI hash-key
+# attribute name ('x') but declare it with different types (S vs N). One
+# batch writes to both; each table's items must be validated against its own
+# table's GSI metadata, not the other's. If the hoist were done per-request
+# instead of per-table, whichever table's metadata "won" would cause either
+# a wrongly-accepted or wrongly-rejected item on the other table.
+def test_gsi_batch_write_per_table_isolation(test_table_gsi_2, test_table_gsi_2_x_n):
+    table_s = test_table_gsi_2.name
+    table_n = test_table_gsi_2_x_n.name
+    # x='hello' (string) is valid for table_s (x:S) and invalid for table_n (x:N).
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_gsi_2.meta.client.batch_write_item(RequestItems={
+            table_s: [{'PutRequest': {'Item': {'p': random_string(), 'x': random_string()}}}],
+            table_n: [{'PutRequest': {'Item': {'p': random_string(), 'x': random_string()}}}],
+        })
+    # x=3 (number) is valid for table_n (x:N) and invalid for table_s (x:S).
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_gsi_2.meta.client.batch_write_item(RequestItems={
+            table_s: [{'PutRequest': {'Item': {'p': random_string(), 'x': 3}}}],
+            table_n: [{'PutRequest': {'Item': {'p': random_string(), 'x': 3}}}],
+        })
+    # Each item matching its own table's declared type: both accepted in one batch.
+    test_table_gsi_2.meta.client.batch_write_item(RequestItems={
+        table_s: [{'PutRequest': {'Item': {'p': random_string(), 'x': random_string()}}}],
+        table_n: [{'PutRequest': {'Item': {'p': random_string(), 'x': 3}}}],
+    })
+
+# Empty-string rejection for a GSI key attribute (driven by si_key_attributes)
+# must still fire on a late item, not just the first.
+def test_gsi_batch_write_empty_string_late_item(test_table_gsi_2, scylla_only):
+    p = test_table_gsi_2.name
+    items = [{'PutRequest': {'Item': {'p': random_string(), 'x': random_string()}}} for i in range(49)]
+    items.append({'PutRequest': {'Item': {'p': random_string(), 'x': ''}}})
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_gsi_2.meta.client.batch_write_item(RequestItems={p: items})
+
+# Mixed PutRequest/DeleteRequest in the same batch - DeleteRequest doesn't
+# use the GSI/vector-index metadata at all, so it must be unaffected.
+def test_gsi_batch_write_mixed_put_delete(test_table_gsi_2):
+    p = test_table_gsi_2.name
+    put_items = [{'p': random_string(), 'x': random_string()} for i in range(5)]
+    with test_table_gsi_2.batch_writer() as batch:
+        for item in put_items:
+            batch.put_item(item)
+    requests = [{'DeleteRequest': {'Key': {'p': item['p']}}} for item in put_items]
+    requests.append({'PutRequest': {'Item': {'p': random_string(), 'x': random_string()}}})
+    test_table_gsi_2.meta.client.batch_write_item(RequestItems={p: requests})
+    for item in put_items:
+        assert 'Item' not in test_table_gsi_2.get_item(Key={'p': item['p']}, ConsistentRead=True)
+
+# A table with no GSI at all must still accept normal batch writes - the
+# hoisted metadata maps are empty in that case.
+def test_gsi_batch_write_no_gsi_table(test_table_s):
+    p = test_table_s.name
+    items = [{'PutRequest': {'Item': {'p': random_string(), 'x': random_string()}}} for i in range(10)]
+    test_table_s.meta.client.batch_write_item(RequestItems={p: items})
+    for item in items:
+        got = test_table_s.get_item(Key={'p': item['PutRequest']['Item']['p']}, ConsistentRead=True)
+        assert got['Item']['x'] == item['PutRequest']['Item']['x']
