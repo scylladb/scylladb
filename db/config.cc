@@ -1396,7 +1396,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Maximum cached permission entries. Must have a non-zero value if permissions caching is enabled (see a permissions_validity_in_ms description).")
     , server_encryption_options(this, "server_encryption_options", value_status::Used, {/*none*/},
         "Enable or disable inter-node encryption. You must also generate keys and provide the appropriate key and trust store locations and passwords. The available options are:\n"
-        "* internode_encryption: (Default: none) Enable or disable encryption of inter-node communication using the TLS_RSA_WITH_AES_128_CBC_SHA cipher suite for authentication, key exchange, and encryption of data transfers. The available inter-node options are:\n"
+        "* internode_encryption: (Default: none) Enable or disable encryption of inter-node communication using TLS. The available inter-node options are:\n"
         "   * all: Encrypt all inter-node communications.\n"
         "   * none: No encryption.\n"
         "   * dc: Encrypt the traffic between the data centers (server only).\n"
