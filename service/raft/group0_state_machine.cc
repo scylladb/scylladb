@@ -330,7 +330,7 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
         modules_to_reload = get_modules_to_reload(chng.mutations);
         topology_state_change_hint = {
             .tablets_hint = replica::get_tablet_metadata_change_hint(chng.mutations),
-            .topology_hint = db::get_topology_change_hint(chng.mutations),
+            .topology_hint = co_await db::get_topology_change_hint(chng.mutations),
         };
         co_await write_mutations_to_database(_ss, _sp, cmd.creator_addr, std::move(chng.mutations));
     },

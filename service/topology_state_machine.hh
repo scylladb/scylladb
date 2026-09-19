@@ -139,11 +139,17 @@ struct topology_features {
     std::set<sstring> calculate_not_yet_enabled_features() const;
 };
 
-// A hint that the mutations behind a group0 command touched only the
-// `version`/`fence_version` static cells of system.topology's static row,
-// so the in-memory topology state can be patched in place instead of
-// re-read and reparsed from system.topology in full.
+// Scope of a system.topology change detected in a group0 command's mutations,
+// reused directly as the kind of reload topology_state_load() performs.
+// std::nullopt (no topology_change_hint at all) means "unknown, do a full reload".
+// An engaged hint's `reload_scope` says how narrow the reload can be.
 struct topology_change_hint {
+    enum class scope {
+        tablets_only,  // command carried no system.topology mutations at all
+        versions_only, // only version/fence_version static cells changed
+        full,          // some other static column, a clustering row, or a tombstone changed
+    };
+    scope reload_scope = scope::tablets_only;
     std::optional<int64_t> version;
     std::optional<int64_t> fence_version;
 };

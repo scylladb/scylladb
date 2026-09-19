@@ -3100,22 +3100,25 @@ static bool must_have_tokens(service::node_state nst) {
     }
 }
 
-std::optional<service::topology_change_hint> get_topology_change_hint(const utils::chunked_vector<canonical_mutation>& mutations) {
+future<service::topology_change_hint> get_topology_change_hint(const utils::chunked_vector<canonical_mutation>& mutations) {
     auto s = system_keyspace::topology();
     auto& version_cdef = *s->get_column_definition("version");
     auto& fence_version_cdef = *s->get_column_definition("fence_version");
 
-    std::optional<service::topology_change_hint> hint;
+    // Starting assumption: nothing in system.topology changed, so at most
+    // tablet-dependent state needs refreshing. The loop below only widens it.
+    service::topology_change_hint hint{.reload_scope = service::topology_change_hint::scope::tablets_only};
 
     for (const auto& cm : mutations) {
         if (cm.column_family_id() != s->id()) {
             continue;
         }
-        auto m = cm.to_mutation(s);
+        auto m = co_await to_mutation_gently(cm, s);
         auto& mp = m.partition();
 
         if (mp.partition_tombstone() || !mp.row_tombstones().empty() || !mp.clustered_rows().empty()) {
-            return std::nullopt;
+            hint.reload_scope = service::topology_change_hint::scope::full;
+            co_return hint;
         }
 
         auto& static_row = mp.static_row().get();
@@ -3123,11 +3126,11 @@ std::optional<service::topology_change_hint> get_topology_change_hint(const util
             continue;
         }
 
-        if (!hint) {
-            hint.emplace();
-        }
-
         size_t known_cells = 0;
+        // Overwrites out-param in mutation-vector order, not by atomic-cell timestamp:
+        // relies on group0_state_machine_merger::merge() having already folded any
+        // same-partition mutations via mutation::apply() before they reach here.
+        // Revisit if a caller ever bypasses the merger.
         auto set_if_live = [&] (const column_definition& cdef, std::optional<int64_t>& out) {
             auto* cell = static_row.find_cell(cdef.id);
             if (!cell) {
@@ -3142,15 +3145,18 @@ std::optional<service::topology_change_hint> get_topology_change_hint(const util
             return true;
         };
 
-        if (!set_if_live(version_cdef, hint->version) || !set_if_live(fence_version_cdef, hint->fence_version)) {
-            return std::nullopt;
+        if (!set_if_live(version_cdef, hint.version) || !set_if_live(fence_version_cdef, hint.fence_version)) {
+            hint.reload_scope = service::topology_change_hint::scope::full;
+            co_return hint;
         }
         if (known_cells != static_row.size()) {
-            return std::nullopt;
+            hint.reload_scope = service::topology_change_hint::scope::full;
+            co_return hint;
         }
+        hint.reload_scope = service::topology_change_hint::scope::versions_only;
     }
 
-    return hint;
+    co_return hint;
 }
 
 future<service::topology> system_keyspace::load_topology_state(const std::unordered_set<locator::host_id>& force_load_hosts) {
