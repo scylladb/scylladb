@@ -18,6 +18,7 @@
 #include "replica/database.hh"
 #include "service/migration_listener.hh"
 #include "service/tablet_allocator.hh"
+#include "service/topology_state_machine.hh"
 #include "utils/UUID.hh"
 #include "utils/assert.hh"
 #include "utils/error_injection.hh"
@@ -5066,6 +5067,36 @@ void tablet_allocator::on_leadership_lost() {
 
 load_balancer_stats_manager& tablet_allocator::stats() {
     return impl().stats();
+}
+
+const locator::tablet_aware_replication_strategy* validate_keyspace_for_migration(
+        replica::database& db, const sstring& ks_name, const topology& topo) {
+    if (!db.has_keyspace(ks_name)) {
+        throw std::runtime_error(fmt::format("Keyspace '{}' does not exist", ks_name));
+    }
+    auto& ks = db.find_keyspace(ks_name);
+    if (ks.uses_tablets()) {
+        throw std::runtime_error(fmt::format("Keyspace '{}' already uses tablets", ks_name));
+    }
+    if (ks.metadata()->cf_meta_data().empty()) {
+        throw std::runtime_error(fmt::format("Keyspace '{}' has no tables to migrate."
+                " To use tablets, recreate the keyspace with tablets enabled", ks_name));
+    }
+    for (const auto& [node_id, replica_state] : topo.normal_nodes) {
+        if (replica_state.storage_mode) {
+            throw std::runtime_error(fmt::format(
+                    "Another migration is in progress (node '{}' has intended storage mode '{}')"
+                    " - cannot prepare tablets migration for keyspace '{}'",
+                    node_id, *replica_state.storage_mode, ks_name));
+        }
+    }
+    const auto* trs = dynamic_cast<const locator::tablet_aware_replication_strategy*>(&ks.get_replication_strategy());
+    if (!trs) {
+        throw std::runtime_error(fmt::format(
+                "Keyspace '{}' uses a replication strategy that does not support tablets."
+                " Please convert to NetworkTopologyStrategy first.", ks_name));
+    }
+    return trs;
 }
 
 // Build a tablet_map from vnode token boundaries.
