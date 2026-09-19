@@ -230,7 +230,7 @@ Each record within the buffer is structured as:
 
 ```
 record_frame_header  (8 bytes)
-log_record_header    (32 + key_size bytes)
+record_header        (32 + key_size bytes)
 record_value         (data_size bytes)
 zero_padding         -- to align to record_alignment (8 bytes)
 ```
@@ -239,12 +239,12 @@ zero_padding         -- to align to record_alignment (8 bytes)
 
 | Offset | Size | Field       | Description |
 |--------|------|-------------|-------------|
-| 0      | 4    | `key_size`  | Size in bytes of the partition key at the end of the `log_record_header` that follows. |
-| 4      | 4    | `data_size` | Size in bytes of the `record_value` that follows the `log_record_header`. |
+| 0      | 4    | `key_size`  | Size in bytes of the partition key at the end of the `record_header` that follows. |
+| 4      | 4    | `data_size` | Size in bytes of the `record_value` that follows the `record_header`. |
 
-**Log Record Header** (`log_record_header`):
+**Record Header** (`record_header`):
 
-Written by `ondisk::write_log_record_header()`. The fixed fields come first, at constant offsets, and the partition key is the only variable part.
+Written by `ondisk::write_record_header()`. The fixed fields come first, at constant offsets, and the partition key is the only variable part.
 
 | Offset | Size       | Field       | Description |
 |--------|------------|-------------|-------------|
@@ -255,10 +255,10 @@ Written by `ondisk::write_log_record_header()`. The fixed fields come first, at 
 
 **Record Value** (`record_value`):
 
-The `data_size` bytes immediately following the log record header are the encoded partition. They are opaque to everything but `encode_record_value()` and `decode_record_value()` in `replica/logstor/record_value.hh`: compaction, the separator and segment streaming copy a value as it is. The encoding is the IDL-serialized `canonical_mutation` of the partition, written without the length prefix the IDL puts around it, since `data_size` already gives the size.
+The `data_size` bytes immediately following the record header are the encoded partition. They are opaque to everything but `encode_record_value()` and `decode_record_value()` in `replica/logstor/record_value.hh`: compaction, the separator and segment streaming copy a value as it is. The encoding is the IDL-serialized `canonical_mutation` of the partition, written without the length prefix the IDL puts around it, since `data_size` already gives the size.
 
 **Record Location** (`log_location`):
 
 The `log_location` stored in the index for each record points to the start of the `record_frame_header`:
 - `offset`: byte offset from the start of the segment to the `record_frame_header`.
-- `size`: total size including `record_frame_header` + `log_record_header` + `record_value`
+- `size`: total size including `record_frame_header` + `record_header` + `record_value`

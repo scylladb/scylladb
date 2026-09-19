@@ -18,7 +18,7 @@ record_value encode_record_value(const mutation& m) {
     return record_value(std::move(cm.representation()));
 }
 
-mutation decode_record_value(const record_value& v, schema_ptr s, const log_record_header&) {
+mutation decode_record_value(const record_value& v, schema_ptr s, const record_header&) {
     return canonical_mutation(v.representation()).to_mutation(std::move(s));
 }
 

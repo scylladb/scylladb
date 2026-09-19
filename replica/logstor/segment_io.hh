@@ -37,9 +37,9 @@ struct segment_header {
 
 using want_data = seastar::bool_class<class want_data_tag>;
 
-using record_header_consumer = std::function<want_data(log_location, const log_record_header&)>;
+using record_header_consumer = std::function<want_data(log_location, const record_header&)>;
 using record_consumer = std::function<future<>(log_location, log_record)>;
-using record_bytes_consumer = std::function<future<>(log_location, const log_record_header&, log_record_bytes_view)>;
+using record_bytes_consumer = std::function<future<>(log_location, const record_header&, log_record_bytes_view)>;
 using segment_header_consumer = std::function<future<>(const segment_header&)>;
 using streamed_buffer_consumer = std::function<future<>(bytes_view)>;
 
@@ -47,8 +47,8 @@ template <typename Consumer>
 concept record_consumer_like =
     (std::invocable<Consumer&, log_location, log_record> &&
      std::same_as<std::invoke_result_t<Consumer&, log_location, log_record>, future<>>) ||
-    (std::invocable<Consumer&, log_location, const log_record_header&, log_record_bytes_view> &&
-     std::same_as<std::invoke_result_t<Consumer&, log_location, const log_record_header&, log_record_bytes_view>, future<>>);
+    (std::invocable<Consumer&, log_location, const record_header&, log_record_bytes_view> &&
+     std::same_as<std::invoke_result_t<Consumer&, log_location, const record_header&, log_record_bytes_view>, future<>>);
 
 future<std::optional<segment_header>> read_segment_header(seastar::input_stream<char>& in);
 

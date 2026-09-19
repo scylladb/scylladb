@@ -62,7 +62,7 @@ struct index_entry {
     bool operator==(const index_entry& other) const noexcept = default;
 };
 
-struct log_record_header {
+struct record_header {
     dht::decorated_key key;
     api::timestamp_type timestamp;
     table_id table;
@@ -73,7 +73,7 @@ struct log_record_header {
         return primary_index_key(key);
     }
 
-    bool operator==(const log_record_header& other) const noexcept {
+    bool operator==(const record_header& other) const noexcept {
         return key.token() == other.key.token()
             && key.key().representation() == other.key.key().representation()
             && timestamp == other.timestamp
@@ -103,7 +103,7 @@ public:
 };
 
 struct log_record {
-    log_record_header header;
+    record_header header;
     record_value value;
 };
 

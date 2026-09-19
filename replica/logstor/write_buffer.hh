@@ -61,7 +61,7 @@ public:
     {}
 
     size_t header_size() const {
-        return ondisk::log_record_header_size(_record.header);
+        return ondisk::record_header_size(_record.header);
     }
 
     size_t data_size() const {
@@ -80,7 +80,7 @@ public:
         return _record;
     }
 
-    const log_record_header& header() const {
+    const record_header& header() const {
         return _record.header;
     }
 };
@@ -91,18 +91,18 @@ class log_record_bytes_writer {
 
     using ostream = seastar::simple_memory_output_stream;
 
-    log_record_header _header;
+    record_header _header;
     bytes_view _header_bytes;
     bytes_view _data_bytes;
 
 public:
-    log_record_bytes_writer(log_record_header header, log_record_bytes_view record_bytes)
+    log_record_bytes_writer(record_header header, log_record_bytes_view record_bytes)
         : _header(std::move(header))
         , _header_bytes(record_bytes.header)
         , _data_bytes(record_bytes.data)
     {}
 
-    const log_record_header& header() const { return _header; }
+    const record_header& header() const { return _header; }
 
     size_t header_size() const { return _header_bytes.size(); }
     size_t data_size() const { return _data_bytes.size(); }
@@ -113,7 +113,7 @@ public:
 
 template <typename T>
 concept log_record_writer_concept = requires(const T& w, seastar::simple_memory_output_stream& out) {
-    { w.header() } -> std::convertible_to<const log_record_header&>;
+    { w.header() } -> std::convertible_to<const record_header&>;
     { w.header_size() } -> std::convertible_to<size_t>;
     { w.data_size() } -> std::convertible_to<size_t>;
     { w.size() } -> std::convertible_to<size_t>;
@@ -144,7 +144,7 @@ struct buffered_write_result {
 // layout is:
 //   buffer_header
 //   (segment_header)?                 // for segment_kind::full only
-//   record_frame_header + log_record_header (fixed fields + partition key) + record value
+//   record_frame_header + record_header (fixed fields + partition key) + record value
 //   ...
 //   zero padding to the requested final alignment
 //
@@ -264,8 +264,8 @@ public:
         return ondisk::validate_header(bh);
     }
 
-    static bool validate_record_frame_header(const ondisk::record_frame_header& rh) {
-        return ondisk::validate_record_frame_header(rh);
+    static bool validate_record_frame_header(const ondisk::record_frame_header& frame_header) {
+        return ondisk::validate_record_frame_header(frame_header);
     }
 
     void seal(segment_sequence segment_seq, std::optional<table_id> table, size_t alignment);
@@ -276,7 +276,7 @@ private:
     void write_header(segment_sequence segment_seq, std::optional<table_id> table);
 
     template <std::invocable<ostream&> WriteRecordPayload>
-    append_result append_record(const log_record_header& header, size_t header_size, size_t data_size, WriteRecordPayload write_payload);
+    append_result append_record(const record_header& header, size_t header_size, size_t data_size, WriteRecordPayload write_payload);
 
     void pad_to_alignment(size_t alignment);
     void finalize(size_t alignment);
