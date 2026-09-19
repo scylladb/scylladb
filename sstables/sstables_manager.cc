@@ -70,10 +70,10 @@ sstables_manager::~sstables_manager() {
 void sstables_manager::subscribe(sstables_manager_event_handler& handler) {
     handler.subscribe(_signal_source.connect([this, &handler] (sstables::generation_type gen, notification_event_type event) mutable -> future<> {
         if (auto gh = _signal_gate.try_hold()) {
-            switch (event) {
-            case notification_event_type::deleted:
-                co_await handler.deleted_sstable(gen);
-            }
+            // Note: the slot must not touch its captures after suspending.
+            // The connection, and with it this closure, may be gone by the
+            // time it is resumed.
+            co_await handler.notify(gen, event);
         }
     }));
 }
