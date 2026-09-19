@@ -449,7 +449,7 @@ struct record_sizes {
     size_t value{};     // the record value, the partition as encode_record_value() encodes it
     size_t mapping{};   // of the value, the column mapping of the schema
     size_t partition{}; // of the value, the partition itself
-    size_t record{};    // the record header, the log record header and the value
+    size_t record{};    // the frame header, the log record header and the value
     size_t padding{};   // what aligning the next record after this one costs
 
     // What the value spends on neither the mapping nor the partition: the table id, the schema
@@ -475,7 +475,7 @@ record_sizes measure_record(const schema& s, const mutation& m) {
         .mapping = serialized_size_of(s.get_column_mapping()),
         .partition = partition.size(),
     };
-    sizes.record = ondisk::record_header_size + sizes.header + sizes.value;
+    sizes.record = ondisk::record_frame_header_size + sizes.header + sizes.value;
     sizes.padding = align_up(sizes.record, ondisk::record_alignment) - sizes.record;
     return sizes;
 }

@@ -61,7 +61,7 @@ void raw_write_buffer::reset() {
 
 bool raw_write_buffer::can_fit(size_t data_size) const noexcept {
     // Calculate total space needed including header, data, and alignment padding
-    auto total_size = ondisk::record_header_size + data_size;
+    auto total_size = ondisk::record_frame_header_size + data_size;
     auto aligned_size = align_up(total_size, ondisk::record_alignment);
     return aligned_size <= _stream.size();
 }
@@ -86,7 +86,7 @@ raw_write_buffer::append_result raw_write_buffer::append_record(const log_record
     }
 
     size_t record_header_offset = offset_in_buffer();
-    auto rh = ondisk::record_header {
+    auto rh = ondisk::record_frame_header {
         .key_size = static_cast<uint32_t>(header_size - ondisk::log_record_header_fixed_size),
         .data_size = static_cast<uint32_t>(data_size)
     };
@@ -96,7 +96,7 @@ raw_write_buffer::append_result raw_write_buffer::append_record(const log_record
     auto payload_out = _stream.write_substream(payload_size);
     write_payload(payload_out);
 
-    const size_t total_size = ondisk::record_header_size + payload_size;
+    const size_t total_size = ondisk::record_frame_header_size + payload_size;
 
     _net_data_size += total_size;
     _record_count++;
@@ -309,7 +309,7 @@ bool ondisk::validate_header(const ondisk::buffer_header& bh) {
     return bh.calculate_crc() == bh.crc;
 }
 
-bool ondisk::validate_record_header(const ondisk::record_header& rh) {
+bool ondisk::validate_record_frame_header(const ondisk::record_frame_header& rh) {
     // A record always carries an encoded value, so a zero data_size cannot come from a record
     // this code wrote. It is what a scan sees in the zero-filled tail of a torn
     // buffer, and rejecting it stops the scan there instead of walking the tail as a run of

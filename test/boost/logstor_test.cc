@@ -465,7 +465,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_ondisk_serialized_sizes) {
         .last_token = dht::token::from_int64(0x7fffffffffffffff),
     });
 
-    check_serialized_size("record_header", ondisk::record_header {
+    check_serialized_size("record_frame_header", ondisk::record_frame_header {
         .key_size = 0x0a0b0c0d,
         .data_size = 0xcafebabe,
     });
@@ -528,7 +528,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_write_buffer_record_and_header_serializati
 
     raw_write_buffer wb(32 * 1024, segment_kind::full);
     auto writer = log_record_writer(expected);
-    auto expected_data_size = size_t(ondisk::record_header_size) + writer.size();
+    auto expected_data_size = size_t(ondisk::record_frame_header_size) + writer.size();
     expected_data_size = ((expected_data_size + ondisk::record_alignment - 1) / ondisk::record_alignment) * ondisk::record_alignment;
     wb.append(std::move(writer));
     wb.seal(segment_sequence{17}, schema->id(), ondisk::block_alignment);
@@ -1242,7 +1242,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_rejects_corrupt_key_size) {
 
         auto serialized0 = make_serialized_buffer_copy(wb0);
         auto serialized1 = make_serialized_buffer_copy(wb1);
-        // The first record_header of the first buffer follows the buffer header; key_size is its first field.
+        // The first record_frame_header of the first buffer follows the buffer header; key_size is its first field.
         seastar::simple_memory_output_stream out(serialized0.get_write() + ondisk::buffer_header_size, sizeof(uint32_t));
         ser::serialize(out, key_size);
 
@@ -1266,7 +1266,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_rejects_corrupt_key_size) {
         return seen;
     };
 
-    // Above the partition key size cap: rejected by validate_record_header().
+    // Above the partition key size cap: rejected by validate_record_frame_header().
     auto seen = scan_with_corrupt_key_size(ondisk::max_key_size + 1);
     BOOST_REQUIRE_EQUAL(seen.size(), 1u);
     BOOST_REQUIRE_EQUAL(seen[0], api::timestamp_type(33));
