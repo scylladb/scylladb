@@ -29,7 +29,7 @@ The `segment_manager` handles the allocation and management of fixed-size segmen
 - **Recovery**: Scans segments on startup to rebuild the index
 - **Separator**: Writes to all _compaction groups_ (tablets and even tables) go to a single active segment. The separator splits these mixed segments, which have records from different compaction groups, into segments that each has a single compaction group. This separation is useful when migrating tablets.
 
-The data in the segments consists of records of type `log_record`. Each record contains the value for some key as an encoded partition (`record_value`) and additional metadata.
+The data in the segments consists of records of type `log_record`. Each record contains the value for some key as an encoded partition (`record_value`) and additional metadata. On disk a record is stored as a **record frame**, described under [Record Frames](#record-frames) below, which is also the unit the index points at.
 
 The `segment_manager` receives new writes via a `write_buffer` and writes them sequentially to the active segment with 4k-block alignment.
 
@@ -184,21 +184,21 @@ A buffer within a segment has the following layout:
 ```
 buffer_header
 (segment_header)?       -- present only when kind == full
-record_1
-record_2
+record_frame_1
+record_frame_2
 ...
-record_n
+record_frame_n
 zero_padding            -- to align the entire buffer to block_alignment (4096 bytes)
 ```
 
-buffer_header, segment_header, and records are aligned by `record_alignment` (8 bytes).
+buffer_header, segment_header, and record frames are aligned by `record_alignment` (8 bytes).
 
 All integer fields in the structures below are serialized little-endian, including the two
 64-bit halves of a UUID.
 
 #### Buffer Header
 
-A serialized form of `write_buffer::buffer_header`.
+A serialized form of `ondisk::buffer_header`.
 
 | Offset | Size | Field       | Description |
 |--------|------|-------------|-------------|
@@ -216,7 +216,7 @@ The buffer header is 24 bytes long, which keeps it aligned to `record_alignment`
 
 Immediately follows the buffer header when `kind == full`.
 
-A serialized form of `write_buffer::segment_header`.
+A serialized form of `ondisk::segment_header`.
 
 | Offset | Size | Field         | Description |
 |--------|------|---------------|-------------|
@@ -224,9 +224,9 @@ A serialized form of `write_buffer::segment_header`.
 | 40     | 8    | `first_token` | Minimum token of all records in the segment (raw token number). |
 | 48     | 8    | `last_token`  | Maximum token of all records in the segment (raw token number). |
 
-#### Records
+#### Record Frames
 
-Each record within the buffer is structured as:
+Each record within the buffer is stored as a record frame:
 
 ```
 record_frame_header  (8 bytes)
@@ -234,6 +234,18 @@ record_header        (32 + key_size bytes)
 record_value         (value_size bytes)
 zero_padding         -- to align to record_alignment (8 bytes)
 ```
+
+The sizes of the parts of a frame are named consistently throughout the code, since several of
+them are otherwise easy to confuse:
+
+| Name | Bytes |
+|------|-------|
+| `header_size`  | The serialized `record_header`: its fixed part plus `key_size`. |
+| `value_size`   | The serialized `record_value`. Stored in the frame header. |
+| `record_size`  | `header_size + value_size`, the record without its frame header. This is what `max_record_size()` bounds. |
+| `frame_size`   | `record_frame_header_size + record_size`, the frame without its padding. This is what `log_location::size` holds. |
+| `records_size` | All the frames of one buffer, their padding included. Stored in the buffer header. |
+| `record_bytes` | The frame sizes of a set of records summed, their padding excluded. What a `segment_descriptor` and the `live_record_bytes` metric count. |
 
 **Record Frame Header** (`ondisk::record_frame_header`):
 
