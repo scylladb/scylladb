@@ -23,7 +23,8 @@ To build a self-signed certificate chain, begin by creating a certificate config
    [v3_ca]
    subjectKeyIdentifier=hash
    authorityKeyIdentifier=keyid:always,issuer:always
-   basicConstraints = CA:true
+   basicConstraints = critical,CA:true
+   keyUsage = critical, keyCertSign, cRLSign
    [v3_req]
    # Extensions to add to a certificate request
    basicConstraints = CA:FALSE
@@ -50,7 +51,8 @@ Substitute the values in <> with whichever suits your organization. For this exa
    [v3_ca]
    subjectKeyIdentifier=hash
    authorityKeyIdentifier=keyid:always,issuer:always
-   basicConstraints = CA:true
+   basicConstraints = critical,CA:true
+   keyUsage = critical, keyCertSign, cRLSign
    [v3_req]
    # Extensions to add to a certificate request
    basicConstraints = CA:FALSE
@@ -68,13 +70,20 @@ And using this, a certificate signing authority:
 
 .. code-block:: shell
 
-   openssl req -x509 -new -nodes -key cadb.key -days 3650 -config db.cfg -out cadb.pem
+   openssl req -x509 -new -nodes -key cadb.key -days 3650 -config db.cfg -extensions v3_ca -out cadb.pem
 
 Now, generate a private key for our certificate:
 
 .. code-block:: shell
 
    openssl genrsa -out db.key 4096
+
+.. note::
+   The node signs with this key on every TLS handshake, on the shard that
+   accepted the connection. Larger RSA keys make that signature slower
+   (RSA-4096 takes several milliseconds). An ECDSA key, for example
+   ``openssl ecparam -name prime256v1 -genkey -noout -out db.key``, is
+   accepted by ScyllaDB and signs in well under a millisecond.
 
 And from this, a signing request:
 
