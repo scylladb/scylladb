@@ -69,8 +69,6 @@ public:
 
     virtual ~segment() = default;
 
-    future<log_record> read(log_location);
-
     log_segment_id id() const noexcept { return _id; }
     seastar::file& get_file() noexcept { return _file; }
 
@@ -146,17 +144,6 @@ segment::segment(log_segment_id id, seastar::file file, uint64_t file_offset, ui
     , _file(std::move(file))
     , _file_offset(file_offset)
     , _max_size(max_size) {
-}
-
-future<log_record> segment::read(log_location loc) {
-    if (loc.offset + loc.size > _max_size) [[unlikely]] {
-        throw std::runtime_error(fmt::format("Read beyond end of segment {}: offset {} + size {} > max_size {}",
-                                             _id, loc.offset, loc.size, _max_size));
-    }
-
-    return _file.dma_read_exactly<char>(absolute_offset(loc.offset), loc.size).then([] (temporary_buffer<char> buf) {
-        return deserialize_log_record(simple_memory_input_stream(buf.begin(), buf.size()));
-    });
 }
 
 void writeable_segment::start(segment_ref seg_ref, segment_sequence seq_num) {
@@ -321,9 +308,10 @@ public:
     // Opens the file and puts it in the cache. The caller must have checked that it is not open.
     future<seastar::file> do_open_file(file_id_t);
 
-    // The file, if it is already open, which after startup it always is. A caller that finds it
-    // here pays for no coroutine of its own to get at it. Returns an unset file otherwise, which is
-    // when get_file() has to open it.
+    // The file, if it is already open, which after startup it always is. A caller that finds it here
+    // gets at it without the call and the future that get_file() costs even when it waits for
+    // nothing. Returns an unset file otherwise, which is what tells a caller that has something to
+    // do about it - allocate the file, or refuse - that get_file() would have to open it.
     seastar::file opened_file(file_id_t file_id) const {
         if (file_id >= _open_files.size()) [[unlikely]] {
             on_internal_error(logstor_logger, "Attempted to access file beyond actual disk capacity");
@@ -518,16 +506,19 @@ future<> file_manager::allocate_file(file_id_t file_id) {
     }
 }
 
+// Not a coroutine: every file is opened at startup and held for the life of the shard, so this ends
+// in a value it already has, and in continuation style it hands that value back without allocating
+// a frame for a wait that does not happen.
 future<seastar::file> file_manager::get_file(file_id_t file_id) {
-    if (file_id >= _open_files.size()) {
+    if (file_id >= _open_files.size()) [[unlikely]] {
         on_internal_error(logstor_logger, "Attempted to access file beyond actual disk capacity");
     }
 
     if (auto& cached_file = _open_files[file_id]) {
-        co_return cached_file;
+        return make_ready_future<seastar::file>(cached_file);
     }
 
-    co_return co_await do_open_file(file_id);
+    return do_open_file(file_id);
 }
 
 // The handle is shared by the read and the write paths, so it is opened read-write even when a read
@@ -1606,12 +1597,24 @@ void segment_manager_impl::on_free_record(log_location location) noexcept {
 
 future<log_record> segment_manager_impl::read(log_location location) {
     auto holder = _async_gate.hold();
+
+    if (location.offset + location.size > _cfg.segment_size) [[unlikely]] {
+        co_return coroutine::exception(std::make_exception_ptr(std::runtime_error(fmt::format(
+            "Read beyond end of segment {}: offset {} + size {} > segment size {}",
+            location.segment, location.offset, location.size, _cfg.segment_size))));
+    }
+
     auto [file_id, file_offset] = segment_id_to_file_location(location.segment);
-    auto file = co_await _file_mgr.get_file(file_id);
-    segment seg(location.segment, file, file_offset, _cfg.segment_size);
-    auto record = co_await seg.read(location);
+    // The file it reads from outlives the read: it is held here, on the frame of this coroutine,
+    // because the read is issued on it and seastar keeps reading from it after the first suspension.
+    auto file = _file_mgr.opened_file(file_id);
+    if (!file) [[unlikely]] {
+        file = co_await _file_mgr.get_file(file_id);
+    }
+
+    auto buf = co_await file.dma_read_exactly<char>(file_offset + location.offset, location.size);
     _stats.bytes_read += location.size;
-    co_return std::move(record);
+    co_return deserialize_log_record(simple_memory_input_stream(buf.begin(), buf.size()));
 }
 
 future<> segment_manager_impl::request_segment_switch() {
