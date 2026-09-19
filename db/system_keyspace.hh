@@ -750,9 +750,9 @@ public:
     }
 }; // class system_keyspace
 
-// See service::topology_change_hint for what this detects. nullopt means:
-// fall back to a full system.topology reload.
-std::optional<service::topology_change_hint> get_topology_change_hint(const utils::chunked_vector<canonical_mutation>& mutations);
+// Always returns an engaged hint; see service::topology_change_hint::scope
+// for what its reload_scope means.
+future<service::topology_change_hint> get_topology_change_hint(const utils::chunked_vector<canonical_mutation>& mutations);
 
 } // namespace db
 
