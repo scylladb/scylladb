@@ -123,12 +123,12 @@ concept log_record_writer_concept = requires(const T& w, seastar::simple_memory_
 using log_location_with_holder = std::tuple<log_location, seastar::gate::holder>;
 
 // Where a record whose frame sits at `frame_offset` of a buffer ends up, once that buffer has been
-// written to a segment at `buffer_location`. A buffer learns where it was written once, and the
+// written to a segment at `buffer_position`. A buffer learns where it was written once, and the
 // location of every record in it follows from that.
-inline log_location record_location(log_location buffer_location, size_t frame_offset, size_t frame_size) noexcept {
+inline log_location record_location(segment_position buffer_position, size_t frame_offset, size_t frame_size) noexcept {
     return log_location {
-        .segment = buffer_location.segment,
-        .offset = static_cast<uint32_t>(buffer_location.offset + frame_offset),
+        .segment = buffer_position.segment,
+        .offset = static_cast<uint32_t>(buffer_position.offset + frame_offset),
         .size = static_cast<uint32_t>(frame_size),
     };
 }
@@ -305,19 +305,19 @@ public:
         log_record_writer writer;
         // Where the record's frame sits in the buffer, rather than a future of where it ended up:
         // the separator only ever looks at these once the buffer has been written, so a record can
-        // be located from the buffer's own location instead of waiting for one of its own.
+        // be located from the buffer's own position instead of waiting for one of its own.
         size_t frame_offset;
         size_t frame_size;
         write_target target;
 
-        log_location location(log_location buffer_location) const noexcept {
-            return record_location(buffer_location, frame_offset, frame_size);
+        log_location location(segment_position buffer_position) const noexcept {
+            return record_location(buffer_position, frame_offset, frame_size);
         }
     };
 
 private:
     raw_write_buffer _raw;
-    shared_promise<log_location> _written;
+    shared_promise<segment_position> _written;
     seastar::gate _write_gate;
 
     std::vector<record_in_buffer> _records_copy;
@@ -366,8 +366,8 @@ public:
     template <log_record_writer_concept Writer>
     future<log_location_with_holder> write(Writer writer, write_target target = {});
 
-    // Complete all tracked writes with their locations when the buffer is flushed to base_location
-    future<> complete_writes(log_location base_location);
+    // Complete all tracked writes with their locations when the buffer is flushed to buffer_position
+    future<> complete_writes(segment_position buffer_position);
     future<> abort_writes(std::exception_ptr);
 
 private:

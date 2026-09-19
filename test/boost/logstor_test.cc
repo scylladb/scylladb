@@ -243,7 +243,7 @@ log_location wait_for_persisted(future<log_location_with_holder>& fut) {
 struct test_flush_controller {
     struct flushed_buffer {
         temporary_buffer<char> data;
-        log_location base_location;
+        segment_position base_position;
         size_t record_count;
     };
 
@@ -269,17 +269,16 @@ struct test_flush_controller {
         }
 
         wb.seal(segment_sequence{next_sequence++}, std::nullopt, ondisk::block_alignment);
-        auto base_location = log_location{
+        auto base_position = segment_position{
             .segment = log_segment_id{next_segment_id++},
             .offset = 0,
-            .size = static_cast<uint32_t>(wb.serialized_size()),
         };
         flushed_buffers.push_back(flushed_buffer{
             .data = make_serialized_buffer_copy(wb),
-            .base_location = base_location,
+            .base_position = base_position,
             .record_count = wb.record_count(),
         });
-        co_await wb.complete_writes(base_location);
+        co_await wb.complete_writes(base_position);
     }
 
     void wait_for_flush_starts(size_t target_count) {
@@ -294,7 +293,7 @@ struct test_flush_controller {
 
     const temporary_buffer<char>& buffer_for_segment(log_segment_id segment_id) const {
         for (const auto& flushed : flushed_buffers) {
-            if (flushed.base_location.segment == segment_id) {
+            if (flushed.base_position.segment == segment_id) {
                 return flushed.data;
             }
         }
@@ -304,7 +303,7 @@ struct test_flush_controller {
     std::vector<scanned_record> all_records() const {
         std::vector<scanned_record> records;
         for (const auto& flushed : flushed_buffers) {
-            auto buffer_records = scan_buffer_records(flushed.data, flushed.base_location.segment);
+            auto buffer_records = scan_buffer_records(flushed.data, flushed.base_position.segment);
             records.insert(records.end(), std::make_move_iterator(buffer_records.begin()), std::make_move_iterator(buffer_records.end()));
         }
         return records;

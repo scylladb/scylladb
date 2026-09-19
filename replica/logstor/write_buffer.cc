@@ -171,8 +171,8 @@ void raw_write_buffer::write_header(segment_sequence segment_seq, std::optional<
     }
 }
 
-future<> write_buffer::complete_writes(log_location base_location) {
-    _written.set_value(base_location);
+future<> write_buffer::complete_writes(segment_position buffer_position) {
+    _written.set_value(buffer_position);
     co_await close();
 }
 
@@ -239,8 +239,8 @@ future<log_location_with_holder> write_buffer::write(Writer writer, write_target
 
     return _written.get_shared_future().then(
             [frame_offset = append_result.frame_offset, frame_size = append_result.frame_size, op = std::move(op)]
-            (log_location buffer_location) mutable {
-        return std::make_tuple(record_location(buffer_location, frame_offset, frame_size), std::move(op));
+            (segment_position buffer_position) mutable {
+        return std::make_tuple(record_location(buffer_position, frame_offset, frame_size), std::move(op));
     });
 }
 

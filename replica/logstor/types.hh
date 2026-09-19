@@ -23,6 +23,13 @@ struct log_segment_id {
     auto operator<=>(const log_segment_id& other) const noexcept = default;
 };
 
+struct segment_position {
+    log_segment_id segment;
+    uint32_t offset;
+
+    bool operator==(const segment_position& other) const noexcept = default;
+};
+
 struct log_location {
     log_segment_id segment;
     uint32_t offset;
@@ -154,6 +161,14 @@ struct fmt::formatter<replica::logstor::log_segment_id> : fmt::formatter<string_
     template <typename FormatContext>
     auto format(const replica::logstor::log_segment_id& id, FormatContext& ctx) const {
         return fmt::format_to(ctx.out(), "segment({})", id.value);
+    }
+};
+
+template <>
+struct fmt::formatter<replica::logstor::segment_position> : fmt::formatter<string_view> {
+    template <typename FormatContext>
+    auto format(const replica::logstor::segment_position& pos, FormatContext& ctx) const {
+        return fmt::format_to(ctx.out(), "{{segment:{}, offset:{}}}", pos.segment, pos.offset);
     }
 };
 
