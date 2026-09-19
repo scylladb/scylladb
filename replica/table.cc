@@ -2905,11 +2905,11 @@ future<logstor::table_segment_stats> table::get_logstor_segment_stats() const {
         // segments may be added or removed. such changes during the loop may leave
         // a segment counted twice or not at all, which is fine for a histogram.
         for (size_t i = 0; i < cg_segments.segment_count(); ++i) {
-            auto data_size = cg_segments._segment_list[i]->net_data_size(segment_size);
-            auto bucket_index = std::min<size_t>(data_size / bucket_size, bucket_count - 1);
+            auto record_bytes = cg_segments._segment_list[i]->record_bytes(segment_size);
+            auto bucket_index = std::min<size_t>(record_bytes / bucket_size, bucket_count - 1);
             auto& bucket = result.histogram[bucket_index];
             bucket.count++;
-            bucket.max_data_size = std::max(bucket.max_data_size, data_size);
+            bucket.max_data_size = std::max(bucket.max_data_size, record_bytes);
             co_await coroutine::maybe_yield();
         }
     });

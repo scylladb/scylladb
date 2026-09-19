@@ -394,7 +394,7 @@ void close_and_return(owned_write_buffer buf) {
 }
 
 size_t record_size_with_value(schema_ptr schema, const sstring& pk, size_t value_size) {
-    return log_record_writer(make_log_record(schema, pk, sstring(value_size, 'x'))).size();
+    return log_record_writer(make_log_record(schema, pk, sstring(value_size, 'x'))).record_size();
 }
 
 // Builds a mutation whose log record serializes to exactly `record_size` bytes, by sizing its value
@@ -455,7 +455,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_ondisk_serialized_sizes) {
         .version = ondisk::current_version,
         .reserved = 0x1234,
         .segment_seq = segment_sequence{0x0102030405060708},
-        .data_size = 0xdeadbeef,
+        .records_size = 0xdeadbeef,
         .crc = 0xfeedface,
     });
 
@@ -467,7 +467,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_ondisk_serialized_sizes) {
 
     check_serialized_size("record_frame_header", ondisk::record_frame_header {
         .key_size = 0x0a0b0c0d,
-        .data_size = 0xcafebabe,
+        .value_size = 0xcafebabe,
     });
 }
 
@@ -528,8 +528,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_write_buffer_record_and_header_serializati
 
     raw_write_buffer wb(32 * 1024, segment_kind::full);
     auto writer = log_record_writer(expected);
-    auto expected_data_size = size_t(ondisk::record_frame_header_size) + writer.size();
-    expected_data_size = ((expected_data_size + ondisk::record_alignment - 1) / ondisk::record_alignment) * ondisk::record_alignment;
+    auto expected_records_size = size_t(ondisk::record_frame_header_size) + writer.record_size();
+    expected_records_size = ((expected_records_size + ondisk::record_alignment - 1) / ondisk::record_alignment) * ondisk::record_alignment;
     wb.append(std::move(writer));
     wb.seal(segment_sequence{17}, schema->id(), ondisk::block_alignment);
 
@@ -540,7 +540,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_write_buffer_record_and_header_serializati
     BOOST_REQUIRE(raw_write_buffer::validate_header(bh));
     BOOST_REQUIRE(bh.kind == segment_kind::full);
     BOOST_REQUIRE_EQUAL(bh.segment_seq.value, 17u);
-    BOOST_REQUIRE_EQUAL(bh.data_size, expected_data_size);
+    BOOST_REQUIRE_EQUAL(bh.records_size, expected_records_size);
 
     auto sh = ser::deserialize(in, std::type_identity<ondisk::segment_header>{});
     BOOST_REQUIRE_EQUAL(sh.table, schema->id());
@@ -559,13 +559,13 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_write_buffer_accepts_record_at_max_record_
     auto record = make_log_record(schema, "pk", "", api::timestamp_type(27));
     log_record_writer writer(record);
 
-    while (writer.size() < max_size) {
+    while (writer.record_size() < max_size) {
         value += "x";
         record = make_log_record(schema, "pk", value, api::timestamp_type(27));
         writer = log_record_writer(record);
     }
 
-    BOOST_REQUIRE_EQUAL(writer.size(), max_size);
+    BOOST_REQUIRE_EQUAL(writer.record_size(), max_size);
     BOOST_REQUIRE(wb.can_fit(writer));
 
     wb.append(writer);
@@ -1913,7 +1913,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_buffered_writer_rejects_when_max_queued_wr
     const auto large_value = make_single_buffer_value(schema, buffer_size);
 
     auto record0 = make_buffered_writer_record(schema, 0, large_value, api::timestamp_type(400));
-    const auto queued_write_budget = log_record_writer(record0).size() * 2;
+    const auto queued_write_budget = log_record_writer(record0).record_size() * 2;
 
     test_flush_controller flush_ctl{.pause_flushes = true};
     buffered_writer writer(make_buffered_writer_config(buffer_size, 2, queued_write_budget), [&flush_ctl] (write_buffer& wb) {
@@ -2523,11 +2523,11 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_select_compaction_batch) {
         BOOST_REQUIRE_EQUAL(batch.score.n_in, batch.segments.size());
         BOOST_REQUIRE_GT(batch.score.reclaimed(), 0u);
         uint64_t live_bytes = 0;
-        size_t prev_net_data_size = 0;
+        size_t prev_record_bytes = 0;
         for (const auto* desc : batch.segments) {
-            BOOST_REQUIRE_GE(desc->net_data_size(segment_size), prev_net_data_size);
-            prev_net_data_size = desc->net_data_size(segment_size);
-            live_bytes += desc->net_data_size(segment_size);
+            BOOST_REQUIRE_GE(desc->record_bytes(segment_size), prev_record_bytes);
+            prev_record_bytes = desc->record_bytes(segment_size);
+            live_bytes += desc->record_bytes(segment_size);
         }
         BOOST_REQUIRE_EQUAL(batch.score.live_bytes, live_bytes);
     };
@@ -2540,7 +2540,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_select_compaction_batch) {
     // into an almost fully live one would cost far more than the segment it reclaims.
     BOOST_REQUIRE_EQUAL(batch->segments.size(), sparse_count);
     for (const auto* desc : batch->segments) {
-        BOOST_REQUIRE_EQUAL(desc->net_data_size(segment_size), sparse_records * record_size);
+        BOOST_REQUIRE_EQUAL(desc->record_bytes(segment_size), sparse_records * record_size);
     }
 
     // The cap bounds the candidate set, not only the prefix chosen out of it.

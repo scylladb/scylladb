@@ -54,7 +54,7 @@ struct buffer_header {
     uint8_t version;
     uint16_t reserved;
     segment_sequence segment_seq;
-    uint32_t data_size; // size of all records data following the header(s)
+    uint32_t records_size; // size of the record frames following the header(s), padding included
     uint32_t crc;
 
     uint32_t calculate_crc() const;
@@ -74,8 +74,8 @@ struct segment_header {
 // and the record value, followed by padding to record_alignment. The frame header is what a
 // log_location points at, and it is the only fixed-size part of a frame.
 struct record_frame_header {
-    uint32_t key_size;  // size of the partition key inside the record_header that follows
-    uint32_t data_size; // size of the record value that follows the record_header
+    uint32_t key_size;   // size of the partition key inside the record_header that follows
+    uint32_t value_size; // size of the record value that follows the record_header
 
     bool operator==(const record_frame_header& other) const noexcept = default;
 };
@@ -100,7 +100,7 @@ struct serializer<replica::logstor::ondisk::buffer_header> {
         + sizeof(uint8_t)           // version
         + sizeof(uint16_t)          // reserved
         + sizeof(uint64_t)          // segment_seq
-        + sizeof(uint32_t)          // data_size
+        + sizeof(uint32_t)          // records_size
         + sizeof(uint32_t);         // crc
 
     template <typename Output>
@@ -110,7 +110,7 @@ struct serializer<replica::logstor::ondisk::buffer_header> {
         serializer<uint8_t>::write(out, h.version);
         serializer<uint16_t>::write(out, h.reserved);
         serializer<uint64_t>::write(out, h.segment_seq.value);
-        serializer<uint32_t>::write(out, h.data_size);
+        serializer<uint32_t>::write(out, h.records_size);
         serializer<uint32_t>::write(out, h.crc);
     }
 
@@ -122,7 +122,7 @@ struct serializer<replica::logstor::ondisk::buffer_header> {
         h.version = serializer<uint8_t>::read(in);
         h.reserved = serializer<uint16_t>::read(in);
         h.segment_seq = replica::logstor::segment_sequence{serializer<uint64_t>::read(in)};
-        h.data_size = serializer<uint32_t>::read(in);
+        h.records_size = serializer<uint32_t>::read(in);
         h.crc = serializer<uint32_t>::read(in);
         return h;
     }
@@ -173,19 +173,19 @@ template <>
 struct serializer<replica::logstor::ondisk::record_frame_header> {
     static constexpr size_t serialized_size =
         sizeof(uint32_t)            // key_size
-        + sizeof(uint32_t);         // data_size
+        + sizeof(uint32_t);         // value_size
 
     template <typename Output>
     static void write(Output& out, const replica::logstor::ondisk::record_frame_header& h) {
         serializer<uint32_t>::write(out, h.key_size);
-        serializer<uint32_t>::write(out, h.data_size);
+        serializer<uint32_t>::write(out, h.value_size);
     }
 
     template <typename Input>
     static replica::logstor::ondisk::record_frame_header read(Input& in) {
         replica::logstor::ondisk::record_frame_header h;
         h.key_size = serializer<uint32_t>::read(in);
-        h.data_size = serializer<uint32_t>::read(in);
+        h.value_size = serializer<uint32_t>::read(in);
         return h;
     }
 
