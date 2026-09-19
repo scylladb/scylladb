@@ -32,7 +32,7 @@ void log_record_writer::write(ostream& out) const {
 
 void log_record_bytes_writer::write(ostream& out) const {
     out.write(reinterpret_cast<const char*>(_header_bytes.data()), _header_bytes.size());
-    out.write(reinterpret_cast<const char*>(_data_bytes.data()), _data_bytes.size());
+    out.write(reinterpret_cast<const char*>(_value_bytes.data()), _value_bytes.size());
 }
 
 // raw_write_buffer
@@ -52,32 +52,31 @@ void raw_write_buffer::reset() {
         _segment_header_stream = _stream.write_substream(ondisk::segment_header_size);
     }
     _buffer_header = {};
-    _net_data_size = 0;
+    _record_bytes = 0;
     _record_count = 0;
     _min_token = std::nullopt;
     _max_token = std::nullopt;
     _sealed = false;
 }
 
-bool raw_write_buffer::can_fit(size_t data_size) const noexcept {
-    // Calculate total space needed including header, data, and alignment padding
-    auto total_size = ondisk::record_frame_header_size + data_size;
-    auto aligned_size = align_up(total_size, ondisk::record_alignment);
-    return aligned_size <= _stream.size();
+bool raw_write_buffer::can_fit(size_t record_size) const noexcept {
+    // The record with its frame header and the padding that follows the frame.
+    const auto frame_size = ondisk::record_frame_header_size + record_size;
+    return align_up(frame_size, ondisk::record_alignment) <= _stream.size();
 }
 
 bool raw_write_buffer::has_data() const noexcept {
     return offset_in_buffer() > header_size();
 }
 
-template <std::invocable<raw_write_buffer::ostream&> WriteRecordPayload>
+template <std::invocable<raw_write_buffer::ostream&> WriteRecord>
 raw_write_buffer::append_result raw_write_buffer::append_record(const record_header& header,
-        size_t header_size, size_t data_size, WriteRecordPayload write_payload) {
-    const auto payload_size = header_size + data_size;
-    if (!can_fit(payload_size)) {
-        throw std::runtime_error(fmt::format("Write size {} exceeds buffer size {}", payload_size, _stream.size()));
+        size_t header_size, size_t value_size, WriteRecord write_record) {
+    const auto record_size = header_size + value_size;
+    if (!can_fit(record_size)) {
+        throw std::runtime_error(fmt::format("Write size {} exceeds buffer size {}", record_size, _stream.size()));
     }
-    if (payload_size == 0) {
+    if (record_size == 0) {
         throw std::runtime_error("Cannot write empty record");
     }
 
@@ -85,20 +84,20 @@ raw_write_buffer::append_result raw_write_buffer::append_record(const record_hea
         on_internal_error(logstor_logger, fmt::format("Record header size {} is below its fixed size {}", header_size, ondisk::record_header_fixed_size));
     }
 
-    size_t record_header_offset = offset_in_buffer();
+    const size_t frame_offset = offset_in_buffer();
     auto frame_header = ondisk::record_frame_header {
         .key_size = static_cast<uint32_t>(header_size - ondisk::record_header_fixed_size),
-        .data_size = static_cast<uint32_t>(data_size)
+        .value_size = static_cast<uint32_t>(value_size)
     };
     ser::serialize(_stream, frame_header);
 
-    // write_payload writes the serialized record header and then the serialized record data
-    auto payload_out = _stream.write_substream(payload_size);
-    write_payload(payload_out);
+    // write_record writes the serialized record header and then the serialized value
+    auto record_out = _stream.write_substream(record_size);
+    write_record(record_out);
 
-    const size_t total_size = ondisk::record_frame_header_size + payload_size;
+    const size_t frame_size = ondisk::record_frame_header_size + record_size;
 
-    _net_data_size += total_size;
+    _record_bytes += frame_size;
     _record_count++;
     if (!_min_token || header.key.token() < *_min_token) {
         _min_token = header.key.token();
@@ -107,19 +106,19 @@ raw_write_buffer::append_result raw_write_buffer::append_record(const record_hea
         _max_token = header.key.token();
     }
 
-    // Add padding to align record
+    // Add padding to align the record frame
     pad_to_alignment(ondisk::record_alignment);
 
     return append_result {
-        .record_header_offset = record_header_offset,
-        .total_size = total_size,
+        .frame_offset = frame_offset,
+        .frame_size = frame_size,
     };
 }
 
 template <log_record_writer_concept Writer>
 raw_write_buffer::append_result raw_write_buffer::append(const Writer& writer) {
-    return append_record(writer.header(), writer.header_size(), writer.data_size(), [&writer] (ostream& payload_out) {
-        writer.write(payload_out);
+    return append_record(writer.header(), writer.header_size(), writer.value_size(), [&writer] (ostream& record_out) {
+        writer.write(record_out);
     });
 }
 
@@ -138,7 +137,7 @@ void raw_write_buffer::pad_to_alignment(size_t alignment) {
 }
 
 void raw_write_buffer::finalize(size_t alignment) {
-    _buffer_header.data_size = static_cast<uint32_t>(offset_in_buffer() - header_size());
+    _buffer_header.records_size = static_cast<uint32_t>(offset_in_buffer() - header_size());
     pad_to_alignment(alignment);
 }
 
@@ -225,8 +224,8 @@ future<log_location_with_holder> write_buffer::write(Writer writer, write_target
         if constexpr (std::same_as<Writer, log_record_writer>) {
             _records_copy.push_back(record_in_buffer {
                 .writer = std::move(writer),
-                .offset_in_buffer = append_result.record_header_offset,
-                .size = append_result.total_size,
+                .frame_offset = append_result.frame_offset,
+                .frame_size = append_result.frame_size,
                 .target = std::move(target)
             });
         } else {
@@ -240,9 +239,9 @@ future<log_location_with_holder> write_buffer::write(Writer writer, write_target
     auto op = _write_gate.hold();
 
     return _written.get_shared_future().then(
-            [offset_in_buffer = append_result.record_header_offset, size = append_result.total_size, op = std::move(op)]
+            [frame_offset = append_result.frame_offset, frame_size = append_result.frame_size, op = std::move(op)]
             (log_location buffer_location) mutable {
-        return std::make_tuple(record_location(buffer_location, offset_in_buffer, size), std::move(op));
+        return std::make_tuple(record_location(buffer_location, frame_offset, frame_size), std::move(op));
     });
 }
 
@@ -256,8 +255,8 @@ std::vector<write_buffer::record_in_buffer> write_buffer::take_separator_records
     return std::move(_records_copy);
 }
 
-size_t raw_write_buffer::estimate_required_segments(size_t net_data_size, size_t record_count, size_t segment_size, segment_kind kind) {
-    if (record_count == 0 || net_data_size == 0) {
+size_t raw_write_buffer::estimate_required_segments(size_t record_bytes, size_t record_count, size_t segment_size, segment_kind kind) {
+    if (record_count == 0 || record_bytes == 0) {
         return 0;
     }
 
@@ -271,7 +270,7 @@ size_t raw_write_buffer::estimate_required_segments(size_t net_data_size, size_t
     }
 
     const auto usable_bytes = segment_size - fixed_overhead;
-    auto records_per_segment = (usable_bytes * record_count) / net_data_size;
+    auto records_per_segment = (usable_bytes * record_count) / record_bytes;
     if (records_per_segment == 0) {
         records_per_segment = 1;
     }
@@ -285,7 +284,7 @@ uint32_t ondisk::buffer_header::calculate_crc() const {
     c.process_le(version);
     c.process_le(reserved);
     c.process_le(segment_seq.value);
-    c.process_le(data_size);
+    c.process_le(records_size);
     return c.get();
 }
 
@@ -310,12 +309,12 @@ bool ondisk::validate_header(const ondisk::buffer_header& bh) {
 }
 
 bool ondisk::validate_record_frame_header(const ondisk::record_frame_header& frame_header) {
-    // A record always carries an encoded value, so a zero data_size cannot come from a record
+    // A record always carries an encoded value, so a zero value_size cannot come from a record
     // this code wrote. It is what a scan sees in the zero-filled tail of a torn
     // buffer, and rejecting it stops the scan there instead of walking the tail as a run of
     // zero-length records. The key bound rejects a corrupt header before its key_size is
     // trusted to size a read or an allocation.
-    return frame_header.data_size != 0 && frame_header.key_size <= ondisk::max_key_size;
+    return frame_header.value_size != 0 && frame_header.key_size <= ondisk::max_key_size;
 }
 
 // write_buffer_pool
@@ -742,9 +741,9 @@ future<buffered_write_result> buffered_writer::write_to_buffer(log_record_writer
     // fits the buffer it is written to first would be accepted here and then never fit anywhere the
     // separator could put it.
     const size_t max_size = raw_write_buffer::max_record_size_any_kind(head_buf().get_buffer_size());
-    if (writer.size() > max_size) [[unlikely]] {
+    if (writer.record_size() > max_size) [[unlikely]] {
         return make_exception_future<buffered_write_result>(std::runtime_error(
-                fmt::format("Write size {} exceeds the maximum record size {}", writer.size(), max_size)));
+                fmt::format("Write size {} exceeds the maximum record size {}", writer.record_size(), max_size)));
     }
 
     // fast path - if there are no queued writes and there is space in the current head buffer or the next, advance the
@@ -767,12 +766,12 @@ future<buffered_write_result> buffered_writer::write_to_buffer(log_record_writer
 // write, which is what has to outlive the wait.
 future<buffered_write_result> buffered_writer::queue_write(log_record_writer writer, db::timeout_clock::time_point timeout,
         write_target target, seastar::gate::holder holder) {
-    if (_max_queued_write_bytes != 0 && _queued_write_bytes + writer.size() > _max_queued_write_bytes) {
+    if (_max_queued_write_bytes != 0 && _queued_write_bytes + writer.record_size() > _max_queued_write_bytes) {
         return make_exception_future<buffered_write_result>(replica::rate_limit_exception());
     }
 
     const bool queue_was_empty = _queued_writes.empty();
-    const auto write_size = writer.size();
+    const auto write_size = writer.record_size();
     queued_write request(std::move(writer), std::move(target), std::move(holder), timeout, _next_queued_write_id++, write_size);
     auto accepted = request.accepted_pr.get_future();
     _queued_write_bytes += write_size;

@@ -93,7 +93,7 @@
 // the write path uses and prints the parts of it against the bytes of the row a write was handed.
 // The difference between the two is what the format of a record costs, which is paid on every
 // write, on every byte of the segment pool and on every read that goes to a segment, and it is what
-// a change to the format is measured by. The `record:` line a measured run prints is the same
+// a change to the format is measured by. The `frame:` line a measured run prints is the same
 // number for the one shape that run used.
 //
 //
@@ -445,17 +445,17 @@ size_t serialized_size_of(const T& v) {
 
 // What one record is made of, all of it measured through the serializers the write path uses.
 struct record_sizes {
-    size_t header{};    // the encoded record_header
-    size_t value{};     // the record value, the partition as encode_record_value() encodes it
-    size_t mapping{};   // of the value, the column mapping of the schema
-    size_t partition{}; // of the value, the partition itself
-    size_t record{};    // the frame header, the record header and the value
-    size_t padding{};   // what aligning the next record after this one costs
+    size_t header_size{}; // the serialized record_header
+    size_t value_size{};  // the record value, the partition as encode_record_value() encodes it
+    size_t mapping{};     // of the value, the column mapping of the schema
+    size_t partition{};   // of the value, the partition itself
+    size_t frame_size{};  // the record frame: the frame header, the record header and the value
+    size_t padding{};     // what aligning the next frame after this one costs
 
     // What the value spends on neither the mapping nor the partition: the table id, the schema
     // version, the copy of the partition key that the record header already carries, and the
     // framing of all of them.
-    size_t value_rest() const noexcept { return value - mapping - partition; }
+    size_t value_rest() const noexcept { return value_size - mapping - partition; }
 };
 
 record_sizes measure_record(const schema& s, const mutation& m) {
@@ -470,13 +470,13 @@ record_sizes measure_record(const schema& s, const mutation& m) {
     mutation_partition_serializer(s, m.partition()).write(partition);
 
     record_sizes sizes {
-        .header = ondisk::record_header_size(header),
-        .value = encode_record_value(m).size(),
+        .header_size = ondisk::record_header_size(header),
+        .value_size = encode_record_value(m).size(),
         .mapping = serialized_size_of(s.get_column_mapping()),
         .partition = partition.size(),
     };
-    sizes.record = ondisk::record_frame_header_size + sizes.header + sizes.value;
-    sizes.padding = align_up(sizes.record, ondisk::record_alignment) - sizes.record;
+    sizes.frame_size = ondisk::record_frame_header_size + sizes.header_size + sizes.value_size;
+    sizes.padding = align_up(sizes.frame_size, ondisk::record_alignment) - sizes.frame_size;
     return sizes;
 }
 
@@ -486,7 +486,7 @@ void print_record_size_report(const std::vector<size_t>& key_sizes, const std::v
         const std::vector<size_t>& value_sizes) {
     fmt::print("{:>4} {:>5} {:>6} {:>8} | {:>7} {:>7} {:>7} {:>4} | {:>9} {:>6} | {:>8} {:>10} {:>8}\n",
             "key", "cols", "value", "payload",
-            "header", "value", "record", "pad",
+            "header", "value", "frame", "pad",
             "overhead", "ratio",
             "mapping", "partition", "ids+key");
     for (auto columns : column_counts) {
@@ -498,9 +498,9 @@ void print_record_size_report(const std::vector<size_t>& key_sizes, const std::v
                 const auto payload = shape.payload_size();
                 fmt::print("{:>4} {:>5} {:>6} {:>8} | {:>7} {:>7} {:>7} {:>4} | {:>9} {:>6.2f} | {:>8} {:>10} {:>8}\n",
                         key_size, columns, value_size, payload,
-                        sizes.header, sizes.value, sizes.record, sizes.padding,
-                        sizes.record - payload,
-                        payload ? double(sizes.record) / payload : 0.0,
+                        sizes.header_size, sizes.value_size, sizes.frame_size, sizes.padding,
+                        sizes.frame_size - payload,
+                        payload ? double(sizes.frame_size) / payload : 0.0,
                         sizes.mapping, sizes.partition, sizes.value_rest());
             }
         }
@@ -863,11 +863,12 @@ public:
     // one of its records counts as its key.
     static constexpr size_t dataset_key_size = sizeof(int64_t);
 
-    // What one record of the dataset takes in a segment, against the bytes of the row it carries.
+    // The frame of one record of the dataset, which is what the record takes in a segment, against
+    // the bytes of the row it carries.
     // The difference between the two is what the format of a record costs, which is paid on every
     // write, on every disk byte and on every read that goes to a segment. The record size report
     // prints the same two numbers, and the parts they are made of, for shapes the run did not use.
-    size_t record_size() const noexcept { return _serialized_record.size(); }
+    size_t frame_size() const noexcept { return _serialized_record.size(); }
     size_t payload_size() const noexcept {
         return row_shape{
             .key_size = dataset_key_size,
@@ -943,8 +944,8 @@ private:
         _record_writer.emplace(*_record);
         _serialization_buffer->reset();
         auto appended = _serialization_buffer->append(*_record_writer);
-        _serialized_record = temporary_buffer<char>(_serialization_buffer->data() + appended.record_header_offset,
-                appended.total_size);
+        _serialized_record = temporary_buffer<char>(_serialization_buffer->data() + appended.frame_offset,
+                appended.frame_size);
     }
 };
 
@@ -1026,7 +1027,7 @@ std::vector<perf_result_with_io> run_test(sharded<logstor_bench>& bench, test_ki
 }
 
 void write_json_result(const std::string& file, const test_config& cfg, test_kind kind, const aggregated_perf_results& agg,
-        const perf_result_with_io& median, size_t record_bytes, size_t payload_bytes) {
+        const perf_result_with_io& median, size_t frame_size, size_t payload_bytes) {
     Json::Value params;
     params["partitions"] = cfg.partitions;
     params["columns"] = cfg.columns;
@@ -1044,7 +1045,7 @@ void write_json_result(const std::string& file, const test_config& cfg, test_kin
     extra_stats["read_bytes_per_op"] = median.read_bytes;
     extra_stats["writes_per_op"] = median.writes;
     extra_stats["write_bytes_per_op"] = median.write_bytes;
-    extra_stats["record_bytes"] = Json::UInt64(record_bytes);
+    extra_stats["frame_size"] = Json::UInt64(frame_size);
     extra_stats["payload_bytes"] = Json::UInt64(payload_bytes);
 
     perf::write_json_result(file, agg, params, fmt::format("logstor_{}", name_of(kind)), extra_stats);
@@ -1212,10 +1213,10 @@ int main(int argc, char** argv) {
         try {
             co_await bench.invoke_on_all(&logstor_bench::start);
             co_await seastar::async([&] {
-                const auto record_bytes = bench.local().record_size();
+                const auto frame_size = bench.local().frame_size();
                 const auto payload_bytes = bench.local().payload_size();
-                fmt::print("record: {} bytes in a segment for {} bytes of row ({:.2f}x)\n",
-                        record_bytes, payload_bytes, payload_bytes ? double(record_bytes) / payload_bytes : 0.0);
+                fmt::print("frame: {} bytes in a segment for {} bytes of row ({:.2f}x)\n",
+                        frame_size, payload_bytes, payload_bytes ? double(frame_size) / payload_bytes : 0.0);
                 for (auto kind : run.tests) {
                     fmt::print("\n{}:\n", name_of(kind));
                     auto results = run_test(bench, kind, cfg);
@@ -1229,7 +1230,7 @@ int main(int argc, char** argv) {
                     fmt::print("median: {}\n", median);
                     if (!run.json_result.empty()) {
                         write_json_result(fmt::format("{}.{}", run.json_result, name_of(kind)), cfg, kind, agg, median,
-                                record_bytes, payload_bytes);
+                                frame_size, payload_bytes);
                     }
                 }
             });

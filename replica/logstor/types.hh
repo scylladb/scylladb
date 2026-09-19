@@ -109,7 +109,7 @@ struct log_record {
 
 struct log_record_bytes_view {
     bytes_view header;
-    bytes_view data;
+    bytes_view value;
 };
 
 struct segment_sequence {
