@@ -95,6 +95,7 @@ protected:
 public:
     backlog_controller(backlog_controller&&) = default;
     float backlog_of_shares(float shares) const;
+    float current_backlog() const { return _current_backlog(); }
 };
 
 // memtable flush CPU controller.
