@@ -561,7 +561,7 @@ def check_increases_operation(metrics, operation_names, metric_name = 'scylla_al
     yield
     the_metrics = get_metrics(metrics)
     for op in operation_names:
-        if expected_value:
+        if expected_value is not None:
             assert expected_value == get_metric(metrics, metric_name, {'op': op}, the_metrics) - saved_metrics[op]
         else:
             assert saved_metrics[op] < get_metric(metrics, metric_name, {'op': op}, the_metrics)
@@ -573,7 +573,7 @@ def check_table_increases_operation(metrics, operation_names, table, metric_name
     yield
     the_metrics = get_metrics(metrics)
     for op in operation_names:
-        if expected_value:
+        if expected_value is not None:
             assert expected_value == get_metric(metrics, metric_name, {'op': op, 'cf': table}, the_metrics) - saved_metrics[op]
         else:
             assert saved_metrics[op] < get_metric(metrics, metric_name, {'op': op, 'cf': table}, the_metrics)
