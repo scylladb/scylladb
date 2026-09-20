@@ -2730,3 +2730,56 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_split_compaction_splits_segments_between_t
     BOOST_REQUIRE(left_records == expected_left);
     BOOST_REQUIRE(right_records == expected_right);
 }
+
+// get_memory_usage() counts the B+tree, get_entries_memory_usage() does not, so it has to be the
+// larger of the two and it has to follow the index up and back down.
+SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_memory_usage) {
+    auto schema = make_kv_schema();
+    struct accounting_subscriber : space_accounting_subscriber {
+        void on_add_record(log_location) noexcept override {}
+        void on_free_record(log_location) noexcept override {}
+    } accounting;
+
+    primary_index index(schema, accounting);
+
+    // The tree builds its root on the first insert, so an untouched index holds nothing.
+    BOOST_REQUIRE_EQUAL(index.get_entries_memory_usage(), 0u);
+    BOOST_REQUIRE_EQUAL(index.get_memory_usage(), 0u);
+
+    constexpr size_t key_count = 2000;
+    std::vector<primary_index_key> keys;
+    keys.reserve(key_count);
+    for (size_t i = 0; i < key_count; ++i) {
+        keys.push_back(primary_index_key{make_kv_mutation(schema, format("pk{:06d}", i), "v").decorated_key()});
+    }
+
+    for (size_t i = 0; i < key_count; ++i) {
+        index.insert(keys[i], index_entry{
+                .location = log_location{.segment = log_segment_id{1}, .offset = uint32_t(i * 64), .size = 32},
+                .timestamp = api::timestamp_type(i + 1)});
+    }
+    BOOST_REQUIRE_EQUAL(index.get_key_count(), key_count);
+
+    const size_t entries = index.get_entries_memory_usage();
+    const size_t allocated = index.get_memory_usage();
+    BOOST_REQUIRE_GT(entries, 0u);
+    BOOST_REQUIRE_GT(allocated, entries);
+    testlog.info("primary index over {} keys: entries {} bytes, allocated {} bytes", key_count, entries, allocated);
+
+    // Erasing gives back both.
+    for (size_t i = 0; i < key_count / 2; ++i) {
+        BOOST_REQUIRE(index.erase(keys[i],
+                log_location{.segment = log_segment_id{1}, .offset = uint32_t(i * 64), .size = 32}));
+    }
+    BOOST_REQUIRE_LT(index.get_entries_memory_usage(), entries);
+    BOOST_REQUIRE_LT(index.get_memory_usage(), allocated);
+    BOOST_REQUIRE_GT(index.get_memory_usage(), index.get_entries_memory_usage());
+
+    // Clearing gives back everything but the root, which an element-wise erase leaves standing.
+    // More than that left behind would mean the accounting had drifted.
+    index.clear().get();
+    BOOST_REQUIRE_EQUAL(index.get_key_count(), 0u);
+    BOOST_REQUIRE_EQUAL(index.get_entries_memory_usage(), 0u);
+    const size_t after_clear = index.get_memory_usage();
+    testlog.info("primary index after clear: allocated {} bytes", after_clear);
+}

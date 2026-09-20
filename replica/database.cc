@@ -617,6 +617,9 @@ database::setup_metrics() {
 
         sm::make_gauge("logstor_bytes", [this] { return get_logstor_memory_usage(); },
                        sm::description("Holds the current size of memory used by logstor in bytes.")),
+
+        sm::make_gauge("logstor_index_entry_bytes", [this] { return get_logstor_index_entries_bytes(); },
+                       sm::description("Holds the size of the logstor primary index entries in bytes.")),
     });
 
     _metrics.add_group("memtables", {
@@ -3073,6 +3076,21 @@ size_t database::get_logstor_memory_usage() const {
     get_tables_metadata().for_each_table([&m] (table_id, lw_shared_ptr<replica::table> table) {
         if (table->uses_logstor()) {
             m += table->get_logstor_memory_usage();
+        }
+    });
+
+    return m;
+}
+
+size_t database::get_logstor_index_entries_bytes() const {
+    if (!_logstor) {
+        return 0;
+    }
+    size_t m = 0;
+
+    get_tables_metadata().for_each_table([&m] (table_id, lw_shared_ptr<replica::table> table) {
+        if (table->uses_logstor()) {
+            m += table->get_logstor_index_entries_bytes();
         }
     });
 
