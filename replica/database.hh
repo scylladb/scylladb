@@ -935,7 +935,10 @@ public:
         return *_logstor_index;
     }
 
+    // Everything the index holds, its B+tree included.
     size_t get_logstor_memory_usage() const;
+    // Only what the index entries themselves take.
+    size_t get_logstor_index_entries_memory_usage() const;
 
     // Creates a mutation reader which covers all data sources for this column family.
     // Caller needs to ensure that column_family remains live (FIXME: relax this).
@@ -2213,6 +2216,7 @@ public:
     static future<> flush_logstor_separator_on_all_shards(sharded<database>& sharded_db);
     future<> flush_logstor_separator(std::optional<logstor::segment_sequence> seq_num = std::nullopt);
     size_t get_logstor_memory_usage() const;
+    size_t get_logstor_index_entries_memory_usage() const;
     void update_dirty_memory_threshold(size_t reserved_memory);
     // Space the logstor segments holding data take on this shard, which is less than the space of
     // the files logstor has allocated to hold them. Zero when logstor is unused.

@@ -617,7 +617,11 @@ database::setup_metrics() {
                        sm::description("Holds the size of all (\"regular\" and \"system\") used memory in bytes. Compare it to \"dirty_bytes\" to see how many memory is wasted (neither used nor available).")),
 
         sm::make_gauge("logstor_bytes", [this] { return get_logstor_memory_usage(); },
-                       sm::description("Holds the current size of memory used by logstor in bytes.")),
+                       sm::description("Bytes of memory that logstor holds and cannot evict: the primary indexes with their B+trees, "
+                                       "the segment descriptors, the write buffers and the queued writes. The logstor cache is not included.")),
+
+        sm::make_gauge("logstor_index_entries_bytes", [this] { return get_logstor_index_entries_memory_usage(); },
+                       sm::description("Bytes of memory that the logstor primary index entries take, without the nodes and buckets of the B+trees.")),
     });
 
     _metrics.add_group("memtables", {
@@ -3109,6 +3113,21 @@ size_t database::get_logstor_memory_usage() const {
     get_tables_metadata().for_each_table([&m] (table_id, lw_shared_ptr<replica::table> table) {
         if (table->uses_logstor()) {
             m += table->get_logstor_memory_usage();
+        }
+    });
+
+    return m;
+}
+
+size_t database::get_logstor_index_entries_memory_usage() const {
+    if (!_logstor) {
+        return 0;
+    }
+    size_t m = 0;
+
+    get_tables_metadata().for_each_table([&m] (table_id, lw_shared_ptr<replica::table> table) {
+        if (table->uses_logstor()) {
+            m += table->get_logstor_index_entries_memory_usage();
         }
     });
 
