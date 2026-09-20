@@ -94,7 +94,7 @@ ninja build/<mode>/scylla
 - Stability matters. Tests should be stable. New tests should be executed 100 times at least to ensure they pass 100 out of 100 times. (use --repeat 100 --max-failures 1 when running it)
 - Unit tests should ideally test one thing only.
 - Tests for bug fixes should run before the fix - and show the failure and after the fix - and show they now pass.
-- Tests for bug fixes should have in their comments which bug fixes (GitHub or JIRA issue) they test.
+- Tests for bug fixes should have in their comments which bug fixes (GitHub or JIRA issue) they test. This is for tests that are added to prevent a regression from a reported bug; fixes for existing flaky tests, or regression tests added as part of a new feature are exempt.
 - Tests in debug are always slower, so if needed, reduce number of iterations, rows, data used, cycles, etc. in debug mode.
 - Tests should strive to be repeatable, and not use random input that will make their results unpredictable.
 - Tests should consume as little resources as possible. Prefer running tests on a single node if it is sufficient, for example.
