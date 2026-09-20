@@ -1766,6 +1766,7 @@ private:
     dirty_memory_manager _dirty_memory_manager;
 
     timer<lowres_clock> _dirty_memory_threshold_controller;
+    bool _dirty_memory_threshold_at_floor = false;
 
     database_config _dbcfg;
     flush_controller _memtable_controller;
