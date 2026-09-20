@@ -2553,8 +2553,13 @@ public:
             if (utils::get_local_injector().enter("tablet_force_tablet_count_increase")) {
                 target_tablet_count = {tablet_count * 2, "force_tablet_count_increase"};
             } else if (utils::get_local_injector().enter("tablet_force_tablet_count_decrease")) {
-                auto size = std::max(size_t(1), tablet_count / 2);
-                target_tablet_count = {size, "force_tablet_count_decrease"};
+                auto for_table_id_str_opt = utils::get_local_injector().inject_parameter<std::string_view>("tablet_force_tablet_count_decrease", "for_table_id");
+                auto for_table_id_opt = for_table_id_str_opt.transform( [] (const std::string_view& table_id_str) { return table_id(utils::UUID(table_id_str)); });
+                if (!for_table_id_opt || *for_table_id_opt == table) {
+                    lblogger.debug("tablet_force_tablet_count_decrease for table ks:{} table:{}", s->ks_name(), s->cf_name());
+                    auto size = std::max(size_t(1), tablet_count / 2);
+                    target_tablet_count = {size, "force_tablet_count_decrease"};
+                }
             }
 
             result.target = target_tablet_count;
