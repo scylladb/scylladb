@@ -96,6 +96,25 @@ def test_filter_with_only_static(cql, table1):
     # return a row with only the static value - which doesn't match the filter.
     assert list(cql.execute(f'SELECT p, s, c, r FROM {table1} WHERE p={p} AND r=4 ALLOW FILTERING')) == []
 
+# Verify that "INSERT ... JSON" correctly sets a static column's value,
+# just like the ordinary VALUES-form INSERT already does.
+# Reproduces issue SCYLLADB-4465, where insert_prepared_json_statement's
+# execute_operations_for_key() only iterated the table's *regular* columns
+# when turning the parsed JSON document into cells, so any static column's
+# value present in the JSON was silently discarded and never written -
+# even though the JSON was correctly parsed against *all* columns
+# (including static ones) by maybe_prepare_json_cache().
+def test_insert_json_static_column(cql, table1):
+    p = unique_key_int()
+    # The ordinary VALUES-form INSERT correctly sets the static column s:
+    cql.execute(f'INSERT INTO {table1} (p, c, s, r) VALUES ({p}, 2, 7, 8)')
+    assert list(cql.execute(f'SELECT p, c, s, r FROM {table1} WHERE p={p}')) == [(p, 2, 7, 8)]
+    # INSERT ... JSON with an equivalent document should produce exactly the
+    # same result - in particular s should be 7, not null.
+    p = unique_key_int()
+    cql.execute(f'INSERT INTO {table1} JSON \'{{"p": {p}, "c": 2, "s": 7, "r": 8}}\'')
+    assert list(cql.execute(f'SELECT p, c, s, r FROM {table1} WHERE p={p}')) == [(p, 2, 7, 8)]
+
 # The CREATE TABLE syntax allows either "PRIMARY KEY" or "STATIC" to follow
 # a column's definition, but it's forbidden to use both at once!
 def test_syntax_primary_key_and_static(cql, test_keyspace):
