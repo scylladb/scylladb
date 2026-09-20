@@ -37,7 +37,7 @@ raft_rpc::raft_rpc(raft_state_machine& sm, netw::messaging_service& ms,
     , _failure_detector(std::move(failure_detector))
     , _shutdown_gate("raft_rpc::shutdown")
     , _append_entries_semaphore(append_entries_semaphore_limit_bytes)
-    , _stats(stats ? std::move(stats) : make_lw_shared<raft_rpc::stats>())
+    , _stats(std::move(stats))
 {}
 
 template <raft_rpc::one_way_kind rpc_kind, typename Verb, typename Msg> void

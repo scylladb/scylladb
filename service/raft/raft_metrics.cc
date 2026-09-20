@@ -20,7 +20,7 @@ static const sm::label log_entry_type("log_entry_type");
 static const sm::label message_type("message_type");
 const sm::label raft_blocked_reason_label("reason");
 
-// @metrics options.group_name = ["raft"]
+// @metrics options.group_name = ["raft", "strong_consistency_raft"]
 void register_raft_server_stats_metrics(sm::metric_groups& metrics,
         const raft::server_stats& s, const raft_metrics_options& options) {
     const auto& aggregate = options.aggregate_labels;
@@ -145,7 +145,7 @@ void register_raft_server_metrics(sm::metric_groups& metrics,
     });
 }
 
-// @metrics options.group_name = ["raft_group0"]
+// @metrics options.group_name = ["raft_group0", "strong_consistency_raft"]
 void register_raft_rpc_stats_metrics(sm::metric_groups& metrics,
         const raft_rpc::stats& s, const raft_metrics_options& options) {
     metrics.add_group(options.group_name, {
