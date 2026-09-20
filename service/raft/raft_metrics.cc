@@ -96,4 +96,17 @@ void register_raft_server_stats_metrics(sm::metric_groups& metrics,
     });
 }
 
+// @metrics options.group_name = ["raft_group0"]
+void register_raft_rpc_stats_metrics(sm::metric_groups& metrics,
+        const raft_rpc::stats& s, const raft_metrics_options& options) {
+    metrics.add_group(options.group_name, {
+        sm::make_total_operations("append_entries_memory_waits", s.append_entries_memory_waits,
+            sm::description("Number of append requests that had to wait for the memory of other in-flight append requests to be released"), options.labels).aggregate(options.aggregate_labels).set_skip_when_empty(options.skip_when_empty),
+        sm::make_gauge("append_entries_memory_waiters", s.append_entries_memory_waiters,
+            sm::description("Number of append requests currently waiting for the memory of other in-flight append requests to be released"), options.labels).aggregate(options.aggregate_labels),
+        sm::make_gauge("append_entries_in_flight_bytes", s.append_entries_in_flight_bytes,
+            sm::description("Bytes of append requests currently being sent, as charged against the in-flight memory limit"), options.labels).aggregate(options.aggregate_labels),
+    });
+}
+
 } // namespace service

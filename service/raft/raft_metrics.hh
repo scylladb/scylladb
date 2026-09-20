@@ -11,6 +11,7 @@
 #include <seastar/core/metrics.hh>
 #include <seastar/core/sstring.hh>
 #include "raft/raft.hh"
+#include "service/raft/raft_rpc.hh"
 
 namespace service {
 
@@ -32,5 +33,9 @@ extern const seastar::metrics::label raft_blocked_reason_label;
 // The counters a server accumulates. They must outlive the metric group.
 void register_raft_server_stats_metrics(seastar::metrics::metric_groups& metrics,
         const raft::server_stats& stats, const raft_metrics_options& options);
+
+// The counters an RPC module accumulates. They must outlive the metric group.
+void register_raft_rpc_stats_metrics(seastar::metrics::metric_groups& metrics,
+        const raft_rpc::stats& stats, const raft_metrics_options& options);
 
 } // namespace service
