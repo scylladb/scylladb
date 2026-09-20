@@ -866,6 +866,8 @@ struct server_stats {
     uint64_t read_quorum_received = 0;
     uint64_t read_quorum_reply_sent = 0;
     uint64_t read_quorum_reply_received = 0;
+    // Number of times adding an entry had to wait for log memory.
+    uint64_t log_limiter_waits = 0;
 };
 
 // Everything a server reports about itself on demand, read in one call so
@@ -885,6 +887,8 @@ struct server_status {
     index_t applied_idx;
     index_t last_snapshot_idx;
     term_t last_snapshot_term;
+    // Number of entries waiting for the log to shrink below max_log_size.
+    size_t log_limiter_waiters = 0;
 };
 
 } // namespace raft

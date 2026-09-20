@@ -468,6 +468,10 @@ protected: // For testing
         return _log;
     }
 
+    bool is_stepping_down() const {
+        return is_leader() && bool(leader_state().stepdown);
+    }
+
 public:
     class memory_permit {
     private:
@@ -564,9 +568,10 @@ public:
 
     // Call this function to wait for the total size in bytes of log entries to
     // go below max_log_size.
-    // Can only be called on a leader.
+    // Can only be called on a leader. Counts a wait that had to block in `stats`.
     // On abort throws `semaphore_aborted`.
-    future<memory_permit> wait_for_memory_permit(seastar::abort_source* as, size_t size);
+    future<memory_permit> wait_for_memory_permit(seastar::abort_source* as, size_t size,
+            server_stats& stats);
 
     // Return current configuration.
     const configuration& get_configuration() const;

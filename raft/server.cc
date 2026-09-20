@@ -670,7 +670,8 @@ future<entry_id> server_impl::add_entry_on_leader(command cmd, seastar::abort_so
     // Wait for sufficient memory to become available
     fsm::memory_permit memory_permit;
     try {
-        memory_permit = co_await _fsm->wait_for_memory_permit(as, log::memory_usage_of(cmd, _config.max_command_size));
+        memory_permit = co_await _fsm->wait_for_memory_permit(as,
+                log::memory_usage_of(cmd, _config.max_command_size), *_stats);
     } catch (semaphore_aborted&) {
         throw request_aborted(
             format("Semaphore aborted while waiting for memory availability for adding entry on leader in term: {}, on server: {}, current term: {}",

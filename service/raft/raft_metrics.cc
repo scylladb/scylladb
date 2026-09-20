@@ -92,6 +92,9 @@ void register_raft_server_stats_metrics(sm::metric_groups& metrics,
              sm::description("Number of log entries applied"), labels()).aggregate(aggregate).set_skip_when_empty(skip),
         sm::make_total_operations("snapshots_taken", s.snapshots_taken,
              sm::description("Number of times user's state machine snapshotted"), labels()).aggregate(aggregate).set_skip_when_empty(skip),
+
+        sm::make_total_operations("log_limiter_waits", s.log_limiter_waits,
+             sm::description("Number of times adding an entry had to wait for the in-memory log to shrink below max_log_size"), labels()).aggregate(aggregate).set_skip_when_empty(skip),
     });
 }
 
@@ -129,6 +132,8 @@ void register_raft_server_metrics(sm::metric_groups& metrics,
              sm::description("commit index"), labels()).aggregate(aggregate),
         sm::make_gauge("apply_index", status([] (const auto& s) { return s.applied_idx.value(); }),
              sm::description("applied index"), labels()).aggregate(aggregate),
+        sm::make_gauge("log_limiter_waiters", status([] (const auto& s) { return s.log_limiter_waiters; }),
+             sm::description("Number of entries currently waiting for the in-memory log to shrink below max_log_size"), labels()).aggregate(aggregate),
     });
 }
 
