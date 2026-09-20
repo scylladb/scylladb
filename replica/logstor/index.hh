@@ -14,6 +14,7 @@
 #include "dht/token.hh"
 #include "types.hh"
 #include "utils/bptree.hh"
+#include "utils/counting_allocation_strategy.hh"
 #include "utils/double-decker.hh"
 #include "utils/on_internal_error.hh"
 #include "utils/phased_barrier.hh"
@@ -284,7 +285,9 @@ public:
 private:
     partitions_type _partitions;
     size_t _key_count = 0;
-    size_t _memory_usage = 0;
+    size_t _entries_memory_usage = 0;
+
+    counting_allocation_strategy _tree_allocator{standard_allocator(), logstor_logger};
 
     mutable utils::phased_barrier _reads_phaser{"logstor_primary_index"};
 
@@ -297,23 +300,25 @@ private:
     space_accounting_subscriber& _space_accounting;
 
     void on_entry_added(const primary_index_entry& e) noexcept {
-        _memory_usage += e.memory_usage();
+        _entries_memory_usage += e.memory_usage();
         ++_key_count;
     }
 
     void on_entry_removed(const primary_index_entry& e) noexcept {
-        _memory_usage -= e.memory_usage();
+        _entries_memory_usage -= e.memory_usage();
         --_key_count;
     }
 
     auto make_entry_disposer() noexcept {
         return [this] (primary_index_entry* e) noexcept {
-            if (_cache_tracker) {
-                try {
-                    _cache_tracker->evict(*e);
-                } catch (...) {}
-            }
-            _space_accounting.on_free_record(e->_e.location);
+            with_allocator(standard_allocator(), [this, e] () noexcept {
+                if (_cache_tracker) {
+                    try {
+                        _cache_tracker->evict(*e);
+                    } catch (...) {}
+                }
+                _space_accounting.on_free_record(e->_e.location);
+            });
             on_entry_removed(*e);
         };
     }
@@ -328,12 +333,12 @@ private:
             for (size_t i = 0; i < chunk_size && chunk_end != end; ++i, ++chunk_end);
 
             if (chunk_end == end) {
-                _partitions.erase_and_dispose(begin, chunk_end, dispose);
+                with_allocator(_tree_allocator, [&] { _partitions.erase_and_dispose(begin, chunk_end, dispose); });
                 co_return;
             }
 
             auto next_key = chunk_end->key();
-            _partitions.erase_and_dispose(begin, chunk_end, dispose);
+            with_allocator(_tree_allocator, [&] { _partitions.erase_and_dispose(begin, chunk_end, dispose); });
             co_await coroutine::maybe_yield();
             begin = _partitions.lower_bound(next_key, primary_index_key_cmp{});
         }
@@ -369,6 +374,10 @@ public:
         , _cache_tracker(ct)
         , _space_accounting(space_accounting)
         {}
+
+    ~primary_index() {
+        with_allocator(_tree_allocator, [this] { _partitions.clear(); });
+    }
 
     future<> drain_cache() {
         if (_cache_tracker) {
@@ -512,7 +521,9 @@ public:
             }
         }
 
-        auto it = _partitions.emplace_before(i, key.token().raw(), hint, key, std::move(new_entry));
+        auto it = with_allocator(_tree_allocator, [&] {
+            return _partitions.emplace_before(i, key.token().raw(), hint, key, std::move(new_entry));
+        });
         _space_accounting.on_add_record(it->_e.location);
         on_entry_added(*it);
         return {insert_result::inserted, std::nullopt};
@@ -521,7 +532,9 @@ public:
     bool erase(const primary_index_key& key, log_location loc) {
         auto it = find_key(key);
         if (it != _partitions.end() && it->_e.location == loc) {
-            it.erase_and_dispose(dht::raw_token_less_comparator{}, make_entry_disposer());
+            with_allocator(_tree_allocator, [&] {
+                it.erase_and_dispose(dht::raw_token_less_comparator{}, make_entry_disposer());
+            });
             return true;
         }
         return false;
@@ -540,14 +553,18 @@ public:
                 [this] { return _partitions.end(); }
             );
 
-        if (_key_count != 0 || _memory_usage != 0) {
-            on_internal_error(logstor_logger, format("primary_index::clear ended with key_count {} and memory_usage {}", _key_count, _memory_usage));
+        if (_key_count != 0 || _entries_memory_usage != 0) {
+            on_internal_error(logstor_logger, format("primary_index::clear ended with key_count {}, entries memory usage {} and memory usage {}",
+                    _key_count, _entries_memory_usage, _tree_allocator.allocated_memory()));
         }
     }
 
     bool empty() const noexcept { return _partitions.empty(); }
     size_t get_key_count() const noexcept { return _key_count; }
-    size_t get_memory_usage() const noexcept { return _memory_usage; }
+    // The entries alone, without the B+tree.
+    size_t get_entries_memory_usage() const noexcept { return _entries_memory_usage; }
+    // Everything the index holds, the B+tree's nodes and buckets included.
+    size_t get_memory_usage() const noexcept { return _tree_allocator.allocated_memory(); }
 
 };
 
