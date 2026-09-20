@@ -94,6 +94,21 @@ future<fsm::memory_permit> fsm::wait_for_memory_permit(seastar::abort_source* as
     });
 }
 
+server_status fsm::get_status() const {
+    server_status status {
+        .is_leader = is_leader(),
+        .state = state_to_metric(),
+        .in_memory_log_size = in_memory_log_size(),
+        .log_memory_usage = log_memory_usage(),
+        .last_idx = _log.last_idx(),
+        .last_term = _log.last_term(),
+        .commit_idx = _commit_idx,
+        .last_snapshot_idx = _log.get_snapshot().idx,
+        .last_snapshot_term = _log.get_snapshot().term,
+    };
+    return status;
+}
+
 const configuration& fsm::get_configuration() const {
     return _log.get_configuration();
 }
