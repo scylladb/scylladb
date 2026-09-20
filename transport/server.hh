@@ -303,9 +303,10 @@ private:
         cql_protocol_version_type _version = 0;
         cql_compression _compression = cql_compression::none;
         service::client_state _client_state;
-        timer<lowres_clock> _shedding_timer;
         scheduling_group _current_scheduling_group;
-        bool _shed_incoming_requests = false;
+        // Once a request has waited this long for memory, incoming requests are
+        // shed until a request completes; checked when the next frame arrives.
+        lowres_clock::time_point _shed_after = lowres_clock::time_point::max();
         bool _ready = false;
         bool _authenticating = false;
         bool _tenant_switch = false;
