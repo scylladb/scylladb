@@ -1215,11 +1215,12 @@ future<> query_processor::announce_schema_statement(const statements::schema_alt
         co_await remote_.get().mm.announce<service::topology_change>(std::move(m), std::move(guard), description);
         // TODO: eliminate timeout from alter ks statement on the cqlsh/driver side
         auto error = co_await remote_.get().ss.wait_for_topology_request_completion(request_id);
-        co_await remote_.get().ss.wait_for_topology_not_busy();
         if (!error.empty()) {
+            // The request failed; nothing of ours is left for the topology to finish.
             log.error("CQL statement \"{}\" with topology request_id \"{}\" failed with error: \"{}\"", stmt.raw_cql_statement.linearize(), request_id, error);
             throw exceptions::request_execution_exception(exceptions::exception_code::INVALID, error);
         }
+        co_await remote_.get().ss.wait_for_topology_not_busy();
         co_return;
     }
     co_await remote_.get().mm.announce(std::move(m), std::move(guard), description);
