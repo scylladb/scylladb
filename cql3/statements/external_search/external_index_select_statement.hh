@@ -65,6 +65,11 @@ protected:
         return false; // All filtering is done by the index query, so no post-filtering is allowed.
     }
 
+    size_t object_size() const override { return sizeof(*this); }
+    size_t external_memory_usage() const override {
+        return select_statement::external_memory_usage() + secondary_index_external_memory_usage(_index);
+    }
+
 private:
     virtual std::string_view index_search_type_name() const = 0;
 

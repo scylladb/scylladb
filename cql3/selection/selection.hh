@@ -224,6 +224,20 @@ public:
      */
     bool is_trivial() const { return _is_trivial; }
 
+    /// Returns the actual size of the derived object.
+    virtual size_t object_size() const { return sizeof(*this); }
+
+    /// Returns heap memory owned by this object beyond sizeof(*this).
+    virtual size_t external_memory_usage() const;
+
+protected:
+    /// Heap memory of the column_specification/column_identifier objects _names
+    /// points to. Only correct for names that are freshly allocated per-statement
+    /// (e.g. selection_with_processing); schema-owned names (e.g. simple_selection)
+    /// must not be counted here, to avoid double-counting against the schema.
+    size_t names_pointee_external_memory_usage() const;
+
+public:
     friend class result_set_builder;
 };
 

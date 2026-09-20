@@ -10,6 +10,7 @@
 
 #include "cql3/selection/selection.hh"
 #include "cql3/selection/raw_selector.hh"
+#include "cql3/memory_usage.hh"
 #include "cql3/result_set.hh"
 #include "cql3/query_options.hh"
 #include "cql3/restrictions/statement_restrictions.hh"
@@ -101,6 +102,9 @@ bool selection::processes_selection(const std::vector<prepared_selector>& prepar
 class simple_selection : public selection {
 private:
     const bool _is_wildcard;
+    // Whether _names' column_specifications were freshly allocated for this
+    // selection (from_selectors()) rather than schema-owned (make()).
+    const bool _names_are_owned;
 public:
     static ::shared_ptr<simple_selection> make(schema_ptr schema, std::vector<const column_definition*> columns, bool is_wildcard) {
         std::vector<lw_shared_ptr<column_specification>> metadata;
@@ -108,7 +112,7 @@ public:
         for (auto&& col : columns) {
             metadata.emplace_back(col->column_specification);
         }
-        return ::make_shared<simple_selection>(schema, std::move(columns), std::move(metadata), is_wildcard);
+        return ::make_shared<simple_selection>(schema, std::move(columns), std::move(metadata), is_wildcard, false);
     }
 
     /*
@@ -117,9 +121,10 @@ public:
      * get much duplicate in practice, it's more efficient not to bother.
      */
     simple_selection(schema_ptr schema, std::vector<const column_definition*> columns,
-        std::vector<lw_shared_ptr<column_specification>> metadata, bool is_wildcard)
+        std::vector<lw_shared_ptr<column_specification>> metadata, bool is_wildcard, bool names_are_owned = false)
             : selection(schema, std::move(columns), std::move(metadata), false, false, false, trivial::yes)
             , _is_wildcard(is_wildcard)
+            , _names_are_owned(names_are_owned)
     { }
 
     virtual bool is_wildcard() const override { return _is_wildcard; }
@@ -165,6 +170,19 @@ protected:
 
     std::unique_ptr<selectors> new_selectors() const override {
         return std::make_unique<simple_selectors>();
+    }
+
+    size_t object_size() const override { return sizeof(*this); }
+
+    // _names here are the columns' own schema-owned column_specification
+    // objects when built via make(), already accounted for by the schema.
+    // from_selectors() builds fresh names instead, tracked by _names_are_owned.
+    size_t external_memory_usage() const override {
+        size_t s = selection::external_memory_usage();
+        if (_names_are_owned) {
+            s += names_pointee_external_memory_usage();
+        }
+        return s;
     }
 };
 
@@ -520,6 +538,32 @@ protected:
     std::unique_ptr<selectors> new_selectors() const override  {
         return std::make_unique<selectors_with_processing>(*this);
     }
+
+    size_t object_size() const override { return sizeof(*this); }
+
+    size_t external_memory_usage() const override {
+        size_t s = selection::external_memory_usage();
+        // _names entries here are fresh column_specification/column_identifier
+        // objects built for this statement (e.g. function-result or aliased
+        // columns), not schema-owned, so they must be counted.
+        s += names_pointee_external_memory_usage();
+        s += vector_external_memory_usage(_selectors);
+        for (const auto& e : _selectors) {
+            s += e.external_memory_usage();
+        }
+        s += vector_external_memory_usage(_inner_loop);
+        for (const auto& step : _inner_loop) {
+            s += step.expr.external_memory_usage();
+            if (step.initial_value.is_value()) {
+                s += step.initial_value.view().size_bytes();
+            }
+        }
+        s += vector_external_memory_usage(_outer_loop);
+        for (const auto& e : _outer_loop) {
+            s += e.external_memory_usage();
+        }
+        return s;
+    }
 };
 
 // Return a list of columns that "SELECT *" should show - these are all
@@ -586,7 +630,7 @@ uint32_t selection::add_column_for_post_processing(const column_definition& c) {
                 prepared_selectors | std::views::transform(std::mem_fn(&prepared_selector::expr)) | std::ranges::to<std::vector>(),
                 std::move(temporaries_allocator));
     } else {
-        return ::make_shared<simple_selection>(schema, std::move(defs), std::move(metadata), false);
+        return ::make_shared<simple_selection>(schema, std::move(defs), std::move(metadata), false, true);
     }
 }
 
@@ -931,6 +975,29 @@ size_t result_set_builder::result_set_size() const {
 
 bytes_opt result_set_builder::get_value(data_type t, query::result_atomic_cell_view c) {
     return {c.value().linearize()};
+}
+
+size_t selection::names_pointee_external_memory_usage() const {
+    size_t s = 0;
+    if (_metadata) {
+        for (const auto& name : _metadata->get_names()) {
+            if (name) {
+                s += column_specification_external_memory_usage(*name);
+            }
+        }
+    }
+    return s;
+}
+
+size_t selection::external_memory_usage() const {
+    size_t s = 0;
+    s += _columns.capacity() * sizeof(const column_definition*);
+    if (_metadata) {
+        s += sizeof(metadata);
+        s += sizeof(metadata::column_info);
+        s += _metadata->get_names().capacity() * sizeof(lw_shared_ptr<column_specification>);
+    }
+    return s;
 }
 
 }
