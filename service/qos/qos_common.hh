@@ -56,7 +56,7 @@ struct service_level_options {
         bool operator==(const delete_marker&) const { return true; };
     };
 
-    enum class workload_type {
+    enum class workload_type : uint8_t {
         unspecified, batch, interactive, delete_marker
     };
 
