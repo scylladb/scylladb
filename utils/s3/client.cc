@@ -1479,10 +1479,20 @@ class client::chunked_download_source final : public seastar::data_source_impl {
     future<> _filling_fiber = make_ready_future<>();
 
     future<> make_filling_fiber() {
+        // The reply handler consumes the body as it arrives, so the transport cannot
+        // replay a request for this fiber. It re-issues from the loop below instead and
+        // drives the strategy itself: should_retry() reports the outcome to the send
+        // brake, backs off, waits on it, and answers whether to dispatch again.
         seastar::http::no_retry_strategy no_retry;
+        aws::default_aws_retry_strategy retry_strategy{aws::default_aws_retry_strategy::default_max_retries, *_client->_request_limiter};
         s3l.trace("Fiber starts cycle for object '{}'", _object_name);
         auto units = try_get_units(_client->_buffered_dl_sem, 1);
+        // Retries already made for the request in flight, reset by one that completes.
+        // The strategy keeps no count of its own -- seastar passes it the attempt number
+        // for a request it replays, and here this loop is what re-issues.
+        unsigned retries = 0;
         while (!_is_finished) {
+            std::exception_ptr failure;
             try {
                 if (!_is_finished && _buffers_size >= _max_buffers_size * _buffers_low_watermark) {
                     co_await _bg_fiber_cv.when([this] { return _is_finished || (_buffers_size < _max_buffers_size * _buffers_low_watermark); });
@@ -1605,13 +1615,22 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                     _as);
                 _is_contiguous_mode = _buffers_size < _max_buffers_size * _buffers_high_watermark;
             } catch (...) {
-                auto ex = std::current_exception();
-                auto aws_ex = aws::aws_error::from_exception_ptr(ex);
-                if (!aws_ex.is_retryable()) {
-                    s3l.info("Fiber for object '{}' failed: {}, exiting", _object_name, ex);
-                    _get_cv.broken(ex);
-                    co_return;
-                }
+                failure = std::current_exception();
+            }
+            if (!failure) {
+                retries = 0;
+                continue;
+            }
+            // Out here because a catch block cannot co_await. should_retry() answers
+            // false both for an error worth no second attempt and for a budget that is
+            // spent, and reports either to the brake on the way.
+            if (!co_await retry_strategy.should_retry(failure, retries++)) {
+                s3l.info("Fiber for object '{}' gives up after {} failed requests, last error: {}", _object_name, retries, failure);
+                // Leaving through _get_cv.broken() rather than through the loop
+                // condition: a fiber that just stops parks its reader in _get_cv.wait()
+                // with nothing left to signal it.
+                _get_cv.broken(failure);
+                co_return;
             }
         }
         s3l.trace("Fiber for object '{}' completed", _object_name);
