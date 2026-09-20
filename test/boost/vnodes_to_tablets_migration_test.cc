@@ -24,6 +24,9 @@
 #include "db/view/view_builder.hh"
 #include "utils/UUID_gen.hh"
 #include "utils/error_injection.hh"
+#include "test/lib/error_injection.hh"
+#include "cql3/query_processor.hh"
+#include "cql3/untyped_result_set.hh"
 
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/util/defer.hh>
@@ -957,6 +960,81 @@ SEASTAR_TEST_CASE(test_block_index_schema_changes_during_migration) {
         e.execute_cql(format("ALTER MATERIALIZED VIEW {}.local_idx_index WITH gc_grace_seconds = 3600", ks)).get();
         // Creating an index that already exists doesn't change the set of tables.
         e.execute_cql(format("CREATE INDEX IF NOT EXISTS local_idx ON {}.t ((pk), v)", ks)).get();
+    });
+}
+
+namespace {
+
+using migration_status = service::storage_service::migration_status;
+
+// Creates a vnode keyspace with tables t0, t1, ... and returns their names.
+std::vector<sstring> create_vnode_keyspace(cql_test_env& e, const sstring& ks, size_t num_tables) {
+    e.execute_cql(format("CREATE KEYSPACE {} "
+            "WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} "
+            "AND tablets = {{'enabled': false}}", ks)).get();
+    std::vector<sstring> tables;
+    for (size_t i = 0; i < num_tables; ++i) {
+        tables.push_back(format("t{}", i));
+        e.execute_cql(format("CREATE TABLE {}.{} (pk int PRIMARY KEY, c int)", ks, tables.back())).get();
+    }
+    return tables;
+}
+
+// Requires `expected` of the tables `tables` of `ks` to have a tablet map, and returns the
+// ones which do. This node runs the coordinator, so it has applied every command the
+// coordinator committed.
+std::vector<sstring> require_mapped(cql_test_env& e, const sstring& ks, const std::vector<sstring>& tables, size_t expected) {
+    const auto tmptr = e.local_token_metadata_ptr();
+    auto mapped = tables
+            | std::views::filter([&] (const sstring& table) {
+                return tmptr->tablets().has_tablet_map(e.local_db().find_schema(ks, table)->id());
+            })
+            | std::ranges::to<std::vector<sstring>>();
+    BOOST_REQUIRE_MESSAGE(mapped.size() == expected, fmt::format(
+            "expected {} of the {} tables of {} to have a tablet map, found {}: {}",
+            expected, tables.size(), ks, mapped.size(), mapped));
+    return mapped;
+}
+
+// Requires the migration status of `ks` to be `status`.
+void require_status(cql_test_env& e, const sstring& ks, migration_status status) {
+    auto result = e.get_storage_service().local().get_tablets_migration_status_with_node_details(ks).get();
+    BOOST_REQUIRE_MESSAGE(result.status == status, fmt::format(
+            "expected keyspace {} to be {}, got {}", ks, status, result.status));
+}
+
+// How many commands of preparations of `ks` left the request queued: the coordinator
+// describes each of them as a part of the request, and group0 history keeps that.
+size_t prepare_parts(cql_test_env& e, const sstring& ks) {
+    const auto prefix = format("prepare vnodes-to-tablets migration for keyspace '{}', part: ", ks);
+    auto rows = e.local_qp().execute_internal("SELECT description FROM system.group0_history",
+            db::consistency_level::ONE, cql3::query_processor::cache_internal::no).get();
+    return std::ranges::count_if(*rows, [&] (const cql3::untyped_result_set_row& row) {
+        return row.has("description") && row.get_as<sstring>("description").starts_with(prefix);
+    });
+}
+
+} // anonymous namespace
+
+// Verify that a keyspace whose tablet maps don't fit into one group0 command is prepared
+// by several, the request staying queued until the last of them, and that every table
+// ends up with a map. The injection sends every table in a command of its own, so that a
+// few tables are enough.
+SEASTAR_TEST_CASE(test_prepare_splits_tablet_maps_across_commands) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    return make_ready_future<>();
+#endif
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        scoped_error_injection one_table_per_command("prepare_migration_one_table_per_command");
+        const sstring ks = "test_migration_ks";
+        auto tables = create_vnode_keyspace(e, ks, 5);
+
+        e.get_storage_service().local().prepare_for_tablets_migration(ks).get();
+
+        // Every table but the last goes out in a command which leaves the request queued.
+        BOOST_REQUIRE_EQUAL(prepare_parts(e, ks), tables.size() - 1);
+        require_mapped(e, ks, tables, tables.size());
+        require_status(e, ks, migration_status::migrating_to_tablets);
     });
 }
 
