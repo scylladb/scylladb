@@ -2533,9 +2533,21 @@ SEASTAR_TEST_CASE(test_dirty_memory_threshold_follows_reserved_memory) {
         db.update_dirty_memory_threshold(0);
         BOOST_REQUIRE_EQUAL(dmm.throttle_threshold(), whole_budget);
 
-        // More than the shard has is not negative memory, it is none.
+        // Past the floor the threshold stops following the reservation down.
+        const size_t floored_threshold = size_t(available * 0.10) / 2;
+        db.update_dirty_memory_threshold(available);
+        BOOST_REQUIRE_EQUAL(dmm.throttle_threshold(), floored_threshold);
+
+        // More than the shard has is not negative memory.
         db.update_dirty_memory_threshold(available * 2);
-        BOOST_REQUIRE_EQUAL(dmm.throttle_threshold(), 0);
+        BOOST_REQUIRE_EQUAL(dmm.throttle_threshold(), floored_threshold);
+
+        // The floor takes over at 80% reserved. Exactly 80% lands on either side depending on how
+        // the truncations fall, so check either side of it rather than the crossover itself.
+        db.update_dirty_memory_threshold(size_t(available * 0.85));
+        BOOST_REQUIRE_EQUAL(dmm.throttle_threshold(), floored_threshold);
+        db.update_dirty_memory_threshold(size_t(available * 0.70));
+        BOOST_REQUIRE_EQUAL(dmm.throttle_threshold(), expected_throttle_threshold(size_t(available * 0.70)));
 
         db.update_dirty_memory_threshold(0);
         BOOST_REQUIRE_EQUAL(dmm.throttle_threshold(), whole_budget);
@@ -2573,8 +2585,9 @@ SEASTAR_TEST_CASE(test_memtable_flush_backlog_follows_dirty_memory_threshold) {
         BOOST_REQUIRE_CLOSE(backlog_with_half_budget, 2 * backlog_with_whole_budget, 1.0);
 
         // With no budget left at all, the backlog is at its maximum and the flusher gets every
-        // share the controller can give it.
-        db.update_dirty_memory_threshold(available);
+        // share the controller can give it. update_dirty_memory_threshold() never goes below the
+        // floor, so set the threshold directly.
+        dmm.update_threshold(0);
         BOOST_REQUIRE_GE(mc.current_backlog(), 1.0f);
 
         // Giving the memory back takes the backlog down again.
@@ -2596,18 +2609,15 @@ SEASTAR_TEST_CASE(test_lowering_dirty_memory_threshold_triggers_flush) {
         auto& db = e.local_db();
         database_test_wrapper t(db);
         auto& dmm = t.get_dirty_memory_manager();
-        const size_t available = t.available_memory();
         const size_t dirty = dmm.unspooled_dirty_memory();
         BOOST_REQUIRE_GT(dirty, 0);
         BOOST_REQUIRE(!dmm.region_group().over_unspooled_soft_limit());
 
         // Leave the memtables a budget whose soft limit sits below what they already hold, but
         // whose hard limit is above it, so the writes are asked to flush rather than blocked.
-        // The threshold is half of the memory the reservation leaves behind, so leaving 4 * dirty
-        // behind puts the hard limit at dirty and the soft limit at 0.6 of it.
-        const size_t leave_behind = 4 * dirty;
-        BOOST_REQUIRE_LT(leave_behind, available);
-        db.update_dirty_memory_threshold(available - leave_behind);
+        // A threshold of 2 * dirty puts the hard limit at dirty and the soft limit at 0.6 of it.
+        // That is far below the floor, so set it directly rather than through a reservation.
+        dmm.update_threshold(2 * dirty);
         BOOST_REQUIRE(dmm.region_group().over_unspooled_soft_limit());
 
         // The flush brings the dirty memory back under the soft limit, which relieves the pressure.
