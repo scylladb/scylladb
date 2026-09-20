@@ -13,6 +13,7 @@
 #include "raft/raft.hh"
 #include "service/raft/group0_fwd.hh"
 #include "service/raft/raft_group0.hh"
+#include "service/raft/raft_metrics.hh"
 #include "service/raft/raft_rpc.hh"
 #include "service/raft/raft_sys_table_storage.hh"
 #include "service/raft/group0_state_machine.hh"
@@ -33,6 +34,7 @@
 #include "service/topology_mutation.hh"
 #include "utils/assert.hh"
 #include "utils/error_injection.hh"
+#include "utils/per_task_value.hh"
 
 #include <seastar/core/smp.hh>
 #include <seastar/core/sleep.hh>
@@ -220,7 +222,8 @@ const raft::server_id& raft_group0::load_my_id() {
 }
 
 raft_server_for_group raft_group0::create_server_for_group0(raft::group_id gid, raft::server_id my_id, service::storage_service& ss, cql3::query_processor& qp,
-                                                            service::migration_manager& mm, bool enable_sm_immediately) {
+                                                            service::migration_manager& mm, bool enable_sm_immediately,
+                                                            lw_shared_ptr<raft::server_stats> server_stats) {
     auto state_machine = std::make_unique<group0_state_machine>(
             _client, mm, qp.proxy(), ss, _gossiper, _feat, enable_sm_immediately);
     auto& state_machine_ref = *state_machine;
@@ -247,7 +250,7 @@ raft_server_for_group raft_group0::create_server_for_group0(raft::group_id gid, 
         config.snapshot_trailing_size = config.snapshot_threshold_log_size / 2;
     };
     auto server = raft::create_server(my_id, std::move(rpc), std::move(state_machine),
-            std::move(storage), _raft_gr.failure_detector(), config);
+            std::move(storage), _raft_gr.failure_detector(), config, std::move(server_stats));
 
     // initialize the corresponding timer to tick the raft server instance
     auto ticker = std::make_unique<raft_ticker_type>([srv = server.get()] { srv->tick(); });
@@ -439,6 +442,7 @@ future<> raft_group0::do_abort_and_drain() {
 
 void raft_group0::destroy() {
     if (auto* group0_id = std::get_if<raft::group_id>(&_group0)) {
+        _server_metrics.clear();
         _raft_gr.destroy_server(*group0_id);
     }
 }
@@ -449,7 +453,8 @@ future<> raft_group0::start_server_for_group0(raft::group_id group0_id, service:
     // to an existing Raft Group 0 leader.
     auto my_id = load_my_id();
     group0_log.info("Server {} is starting group 0 with id {}", my_id, group0_id);
-    auto srv_for_group0 = create_server_for_group0(group0_id, my_id, ss, qp, mm, enable_sm_immediately);
+    auto server_stats = make_lw_shared<raft::server_stats>();
+    auto srv_for_group0 = create_server_for_group0(group0_id, my_id, ss, qp, mm, enable_sm_immediately, server_stats);
     auto& persistence = srv_for_group0.persistence;
     auto& server = *srv_for_group0.server;
     co_await with_scheduling_group(_sg, [this, &srv_for_group0, group0_id] (this auto self) -> future<> {
@@ -460,6 +465,7 @@ future<> raft_group0::start_server_for_group0(raft::group_id group0_id, service:
         // even if enable_group0_state_machine() or later steps throw.
         _group0.emplace<raft::group_id>(group0_id);
     });
+    register_server_metrics(my_id, server, *server_stats);
 
     // Fix for scylladb/scylladb#16683:
     // If the snapshot index is 0, trigger creation of a new snapshot
@@ -953,6 +959,38 @@ void raft_group0::register_metrics() {
     _metrics.add_group("raft_group0", {
         sm::make_gauge("status", [this] { return static_cast<uint8_t>(_status_for_monitoring); },
             sm::description("status of the raft group, 1 - normal, 2 - aborted"))
+    });
+}
+
+static const seastar::metrics::label server_id_label("id");
+
+void raft_group0::register_server_metrics(raft::server_id my_id, const raft::server& server, const raft::server_stats& stats) {
+    namespace sm = seastar::metrics;
+    const auto id = server_id_label(my_id);
+    // The group name predates the "raft_group0" one used elsewhere and is kept
+    // so that the existing dashboards keep working.
+    register_raft_server_stats_metrics(_server_metrics, stats, raft_metrics_options{.group_name = "raft", .labels = {id}});
+    // One sweep feeds every gauge of a scrape.
+    auto sample = make_lw_shared(utils::per_task_value([&server] { return server.get_status(); }));
+    _server_metrics.add_group("raft", {
+        sm::make_gauge("in_memory_log_size", [sample] { return sample->get().in_memory_log_size; },
+             sm::description("size of in-memory part of the log"), {id}),
+        sm::make_gauge("log_memory_usage", [sample] { return sample->get().log_memory_usage; },
+             sm::description("memory usage of in-memory part of the log in bytes"), {id}),
+        sm::make_gauge("log_last_index", [sample] { return sample->get().last_idx.value(); },
+             sm::description("index of the last log entry"), {id}),
+        sm::make_gauge("log_last_term", [sample] { return sample->get().last_term.value(); },
+             sm::description("term of the last log entry"), {id}),
+        sm::make_gauge("snapshot_last_index", [sample] { return sample->get().last_snapshot_idx.value(); },
+             sm::description("index of the snapshot"), {id}),
+        sm::make_gauge("snapshot_last_term", [sample] { return sample->get().last_snapshot_term.value(); },
+             sm::description("term of the snapshot"), {id}),
+        sm::make_gauge("state", [sample] { return sample->get().state; },
+             sm::description("current state: 0 - follower, 1 - candidate, 2 - leader"), {id}),
+        sm::make_gauge("commit_index", [sample] { return sample->get().commit_idx.value(); },
+             sm::description("commit index"), {id}),
+        sm::make_gauge("apply_index", [sample] { return sample->get().applied_idx.value(); },
+             sm::description("applied index"), {id}),
     });
 }
 

@@ -276,11 +276,6 @@ public:
     //     Thrown if the stepdown process is already in progress.
     virtual future<> stepdown(logical_clock::duration timeout, server_id target = {}) = 0;
 
-    // Register metrics for this server. Metric are global but their names
-    // depend on the server's ID, so it is possible to register metrics
-    // of two servers iff their IDs are different.
-    virtual void register_metrics() = 0;
-
     virtual server_status get_status() const = 0;
 
     // Returns true if this servers thinks that it is the leader.

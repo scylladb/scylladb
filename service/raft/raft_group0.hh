@@ -119,6 +119,9 @@ class raft_group0 {
 
     seastar::metrics::metric_groups _metrics;
     void register_metrics();
+    // Refers to the group 0 server, so it is cleared before the server is destroyed.
+    seastar::metrics::metric_groups _server_metrics;
+    void register_server_metrics(raft::server_id my_id, const raft::server& server, const raft::server_stats& stats);
 
     // Status of the raft group0 for monitoring.
     enum class status_for_monitoring : uint8_t {
@@ -288,7 +291,7 @@ private:
     future<group0_peer_exchange> peer_exchange(discovery::peer_list peers);
 
     raft_server_for_group create_server_for_group0(raft::group_id id, raft::server_id my_id, service::storage_service& ss, cql3::query_processor& qp,
-        service::migration_manager& mm, bool enable_sm_immediately);
+        service::migration_manager& mm, bool enable_sm_immediately, lw_shared_ptr<raft::server_stats> server_stats);
 
     // Start a Raft server for the cluster-wide group 0 and join it to the group.
     // Called during bootstrap or upgrade.
