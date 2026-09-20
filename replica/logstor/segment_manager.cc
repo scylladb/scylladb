@@ -1074,7 +1074,9 @@ public:
     future<> discard_segments(logstor_group&);
 
     size_t get_memory_usage() const {
-        return sizeof(_segment_descs);
+        return _segment_descs.capacity() * sizeof(segment_descriptor)
+                + _compaction_buffer_pool.memory_usage()
+                + _separator_buffer_pool.memory_usage();
     }
 
     future<owned_write_buffer> allocate_separator_buffer() {
