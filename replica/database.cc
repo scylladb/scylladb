@@ -403,14 +403,16 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     , _dirty_memory_manager(*this, dbcfg.available_memory * 0.50, cfg.unspooled_dirty_soft_limit(), dbcfg.statement_scheduling_group)
     , _dirty_memory_threshold_controller([this] {
         if (_logstor) {
-            size_t logstor_memory_usage = get_logstor_memory_usage();
-            size_t available_memory = _dbcfg.available_memory > logstor_memory_usage ? _dbcfg.available_memory - logstor_memory_usage : 0;
-            _dirty_memory_manager.update_threshold(available_memory * 0.50);
+            update_dirty_memory_threshold(get_logstor_memory_usage());
         }
     })
     , _dbcfg(dbcfg)
-    , _memtable_controller(make_flush_controller(_cfg, _dbcfg, [this, limit = float(_dirty_memory_manager.throttle_threshold())] {
-        auto backlog = (_dirty_memory_manager.unspooled_dirty_memory()) / limit;
+    , _memtable_controller(make_flush_controller(_cfg, _dbcfg, [this] {
+        // The threshold moves with the memory reserved elsewhere, so read it every time.
+        auto limit = float(_dirty_memory_manager.throttle_threshold());
+        auto dirty = _dirty_memory_manager.unspooled_dirty_memory();
+        // No threshold means no room, so anything still held is already over the limit.
+        auto backlog = limit > 0 ? dirty / limit : (dirty > 0 ? 1.0f : 0.0f);
         if (_dirty_memory_manager.has_extraneous_flushes_requested()) {
             backlog = std::max(backlog, _memtable_controller.backlog_of_shares(200));
         }
@@ -3047,6 +3049,16 @@ future<> database::flush_logstor_separator(std::optional<logstor::segment_sequen
 
 future<logstor::table_segment_stats> database::get_logstor_table_segment_stats(table_id table) const {
     return find_column_family(table).get_logstor_segment_stats();
+}
+
+// Memtables share the shard's memory with everything else that holds on to it, so memory that is
+// reserved - held by something that is not a memtable and that cannot be evicted to make room for
+// one - has to come off the memtables' share of it. As the reservation grows the threshold drops,
+// which puts the dirty memory manager under soft pressure and makes it flush; as the memory is
+// given back the threshold rises again and the pressure is relieved.
+void database::update_dirty_memory_threshold(size_t reserved_memory) {
+    size_t available_memory = _dbcfg.available_memory > reserved_memory ? _dbcfg.available_memory - reserved_memory : 0;
+    _dirty_memory_manager.update_threshold(available_memory * 0.50);
 }
 
 size_t database::get_logstor_memory_usage() const {
