@@ -2843,6 +2843,7 @@ future<> database::start(sharded<qos::service_level_controller>& sl_controller, 
 
 future<> database::shutdown() {
     _shutdown = true;
+    _dirty_memory_threshold_controller.cancel();
     auto b = defer([this] noexcept { _stop_barrier.abort(); });
     co_await _stop_barrier.arrive_and_wait();
     b.cancel();
