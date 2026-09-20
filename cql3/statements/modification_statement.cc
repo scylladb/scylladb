@@ -199,21 +199,30 @@ bool modification_statement::applies_to(const selection::selection* selection,
     return expr::evaluate(_condition, inputs) == true_value;
 }
 
-utils::chunked_vector<mutation> modification_statement::apply_updates(
-        const std::vector<dht::partition_range>& keys,
-        const std::vector<query::clustering_range>& ranges,
-        const update_parameters& params,
-        const json_cache_opt& json_cache) const {
+void modification_statement::classify_exists_condition(bool restricts_clustering_columns) {
+    /*
+     * If there's no clustering columns restriction, we may assume that EXISTS
+     * check only selects static columns and hence we can use any row from the
+     * partition to check conditions.
+     */
+    if (_if_exists || _if_not_exists) {
+        throwing_assert(!_has_static_column_conditions && !_has_regular_column_conditions);
+        if (s->has_static_columns() && !restricts_clustering_columns) {
+            _has_static_column_conditions = true;
+        } else {
+            _has_regular_column_conditions = true;
+        }
+    }
+}
+
+utils::chunked_vector<mutation> modification_statement::make_mutations(
+        const std::vector<dht::partition_range>& keys) const {
 
     utils::chunked_vector<mutation> mutations;
     mutations.reserve(keys.size());
     for (auto key : keys) {
         // We know key.start() must be defined since we only allow EQ relations on the partition key.
         mutations.emplace_back(s, std::move(*key.start()->value().key()));
-        auto& m = mutations.back();
-        for (auto&& r : ranges) {
-            this->add_update_for_key(m, r, params, json_cache);
-        }
     }
     return mutations;
 }
@@ -228,20 +237,6 @@ modification_statement::read_command(query_processor& qp, query::clustering_row_
     query::partition_slice ps(std::move(ranges), *s, columns_to_read(), update_parameters::options);
     const auto max_result_size = qp.proxy().get_max_result_size(ps);
     return make_lw_shared<query::read_command>(s->id(), s->version(), std::move(ps), query::max_result_size(max_result_size), query::tombstone_limit::max);
-}
-
-std::vector<query::clustering_range>
-modification_statement::create_clustering_ranges(const query_options& options, const json_cache_opt& json_cache) const {
-    return _restrictions->get_clustering_bounds(options);
-}
-
-dht::partition_range_vector
-modification_statement::build_partition_keys(const query_options& options, const json_cache_opt& json_cache) const {
-    auto keys = _restrictions->get_partition_key_ranges(options);
-    for (auto const& k : keys) {
-        validation::validate_cql_key(*s, *k.start()->value().key());
-    }
-    return keys;
 }
 
 struct modification_statement_executor {
@@ -289,7 +284,7 @@ modification_statement::do_execute(query_processor& qp, service::query_state& qs
                                "set in the configuration.", cl, cl))));
     }
 
-    _restrictions->validate_primary_key(options);
+    validate_primary_key(options);
 
     if (has_conditions()) {
         auto result = co_await execute_with_condition(qp, qs, options);
@@ -537,74 +532,6 @@ void modification_statement::build_cas_result_set_metadata() {
     _metadata = seastar::make_shared<cql3::metadata>(std::move(columns));
 }
 
-void
-modification_statement::process_where_clause(data_dictionary::database db, expr::expression where_clause, prepare_context& ctx) {
-    _restrictions = restrictions::analyze_statement_restrictions(db, s, type, where_clause, ctx,
-            applies_only_to_static_columns(), false /* for_view */, false /* allow_filtering */, restrictions::check_indexes::no);
-    /*
-     * If there's no clustering columns restriction, we may assume that EXISTS
-     * check only selects static columns and hence we can use any row from the
-     * partition to check conditions.
-     */
-    if (_if_exists || _if_not_exists) {
-        throwing_assert(!_has_static_column_conditions && !_has_regular_column_conditions);
-        if (s->has_static_columns() && !_restrictions->has_clustering_columns_restriction()) {
-            _has_static_column_conditions = true;
-        } else {
-            _has_regular_column_conditions = true;
-        }
-    }
-    if (_restrictions->has_token_restrictions()) {
-        throw exceptions::invalid_request_exception(format("The token function cannot be used in WHERE clauses for UPDATE and DELETE statements: {}",
-                to_string(_restrictions->get_partition_key_restrictions())));
-    }
-    if (!_restrictions->get_non_pk_restriction().empty()) {
-        throw exceptions::invalid_request_exception(seastar::format("Invalid where clause contains non PRIMARY KEY columns: {}",
-                                                                    fmt::join(_restrictions->get_non_pk_restriction()
-                                         | std::views::keys
-                                         | std::views::transform([](const column_definition* c) {
-                                             return c->name_as_text();
-                                         }), ", ")));
-    }
-    const expr::expression& ck_restrictions = _restrictions->get_clustering_columns_restrictions();
-    if (has_slice(ck_restrictions) && !allow_clustering_key_slices()) {
-        throw exceptions::invalid_request_exception(
-                format("Invalid operator in where clause {}", to_string(ck_restrictions)));
-    }
-    if (_restrictions->has_unrestricted_clustering_columns() && !applies_only_to_static_columns() && !s->is_dense()) {
-        // Tomek: Origin had "&& s->comparator->is_composite()" in the condition below.
-        // Comparator is a thrift concept, not CQL concept, and we want to avoid
-        // using thrift concepts here. I think it's safe to drop this here because the only
-        // case in which we would get a non-composite comparator here would be if the cell
-        // name type is SimpleSparse, which means:
-        //   (a) CQL compact table without clustering columns
-        //   (b) thrift static CF with non-composite comparator
-        // Those tables don't have clustering columns so we wouldn't reach this code, thus
-        // the check seems redundant.
-        if (require_full_clustering_key()) {
-            throw exceptions::invalid_request_exception(format("Missing mandatory PRIMARY KEY part {}",
-                _restrictions->unrestricted_column(column_kind::clustering_key).name_as_text()));
-        }
-        // In general, we can't modify specific columns if not all clustering columns have been specified.
-        // However, if we modify only static columns, it's fine since we won't really use the prefix anyway.
-        if (!has_slice(ck_restrictions)) {
-            for (auto&& op : _column_operations) {
-                if (!op->column.is_static()) {
-                    throw exceptions::invalid_request_exception(format("Primary key column '{}' must be specified in order to modify column '{}'",
-                        _restrictions->unrestricted_column(column_kind::clustering_key).name_as_text(), op->column.name_as_text()));
-                }
-            }
-        }
-    }
-    if (_restrictions->has_partition_key_unrestricted_components()) {
-        throw exceptions::invalid_request_exception(format("Missing mandatory PRIMARY KEY part {}",
-            _restrictions->unrestricted_column(column_kind::partition_key).name_as_text()));
-    }
-    if (has_conditions()) {
-        validate_where_clause_for_conditions();
-    }
-}
-
 namespace raw {
 
 std::unique_ptr<prepared_statement>
@@ -676,7 +603,7 @@ modification_statement::prepare(data_dictionary::database db, prepare_context& c
     // Since this cache is only meaningful for LWT queries, just clear the ids
     // if it's not a conditional statement so that the AST nodes don't
     // participate in the caching mechanism later.
-    if (!prepared_stmt->has_conditions() && prepared_stmt->_restrictions) {
+    if (!prepared_stmt->has_conditions()) {
         ctx.clear_pk_function_calls_cache();
     }
     prepared_stmt->_may_use_token_aware_routing = ctx.get_partition_key_bind_indexes(*schema).size() != 0;
@@ -866,39 +793,18 @@ bool modification_statement::has_if_exist_condition() const {
     return _if_exists;
 }
 
-void modification_statement::validate_where_clause_for_conditions() const {
+void modification_statement::reject_in_relations_with_conditions(bool key_is_in_relation, bool clustering_key_has_IN) const {
     // We don't support IN for CAS operation so far
-    if (_restrictions->key_is_in_relation()) {
+    if (key_is_in_relation) {
         throw exceptions::invalid_request_exception(
                 format("IN on the partition key is not supported with conditional {}",
                     type.is_update() ? "updates" : "deletions"));
     }
 
-    if (_restrictions->clustering_key_restrictions_has_IN()) {
+    if (clustering_key_has_IN) {
         throw exceptions::invalid_request_exception(
                 format("IN on the clustering key columns is not supported with conditional {}",
                     type.is_update() ? "updates" : "deletions"));
-    }
-    if (type.is_delete() && (_restrictions->has_unrestricted_clustering_columns() ||
-                !_restrictions->clustering_key_restrictions_has_only_eq())) {
-
-        bool deletes_regular_columns = _column_operations.empty() ||
-            std::any_of(_column_operations.begin(), _column_operations.end(), [] (auto&& op) {
-                return !op->column.is_static();
-            });
-        // For example, primary key is (a, b, c), only a and b are restricted
-        if (deletes_regular_columns) {
-            throw exceptions::invalid_request_exception(
-                    "DELETE statements must restrict all PRIMARY KEY columns with equality relations"
-                    " in order to delete non static columns");
-        }
-
-        // All primary key parts must be specified, unless this statement has only static column conditions
-        if (_has_regular_column_conditions) {
-            throw exceptions::invalid_request_exception(
-                    "DELETE statements must restrict all PRIMARY KEY columns with equality relations"
-                    " in order to use IF condition on non static columns");
-        }
     }
 }
 

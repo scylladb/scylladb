@@ -36,14 +36,12 @@ query::clustering_row_ranges slice(
         const sstring& table_name = "t", const sstring& keyspace_name = "ks") {
     prepare_context ctx;
     ctx.set_bound_variables({}, internal_dialect());
-    return restrictions::analyze_statement_restrictions(
+    return restrictions::analyze_select_restrictions(
             env.data_dictionary(),
             env.local_db().find_schema(keyspace_name, table_name),
-            statements::statement_type::SELECT,
             expr::conjunction{where_clause},
             ctx,
-            /*contains_only_static_columns=*/false,
-            /*for_view=*/false,
+            /*selects_only_static_columns=*/false,
             /*allow_filtering=*/true,
             restrictions::check_indexes::yes)
             ->get_clustering_bounds(query_options({}));
@@ -406,14 +404,12 @@ SEASTAR_TEST_CASE(index_selection) {
             auto factors = where_clause.empty()
                 ? std::vector<expr::expression>{}
                 : boolean_factors(cql3::util::where_clause_to_relations(where_clause, cql3::dialect{}));
-            auto sr = restrictions::analyze_statement_restrictions(
+            auto sr = restrictions::analyze_select_restrictions(
                     e.data_dictionary(),
                     schema,
-                    statements::statement_type::SELECT,
                     expr::conjunction{std::move(factors)},
                     ctx,
-                    /*contains_only_static_columns=*/false,
-                    /*for_view=*/false,
+                    /*selects_only_static_columns=*/false,
                     /*allow_filtering=*/true,
                     restrictions::check_indexes::yes);
             auto idx = sr->find_idx(sim);
@@ -514,17 +510,15 @@ SEASTAR_TEST_CASE(index_selection) {
 // loop would lose that space on every rejection, megabytes over 32768
 // combinations; do not inline this into the loop.
 [[gnu::noinline]]
-static shared_ptr<const restrictions::statement_restrictions> try_analyze_restrictions(
+static shared_ptr<const restrictions::select_restrictions> try_analyze_restrictions(
         cql_test_env& e, schema_ptr schema, const expr::expression& where_expr, prepare_context& ctx) {
     try {
-        return restrictions::analyze_statement_restrictions(
+        return restrictions::analyze_select_restrictions(
                 e.data_dictionary(),
                 schema,
-                statements::statement_type::SELECT,
                 where_expr,
                 ctx,
-                /*contains_only_static_columns=*/false,
-                /*for_view=*/false,
+                /*selects_only_static_columns=*/false,
                 /*allow_filtering=*/true,
                 restrictions::check_indexes::yes);
     } catch (const exceptions::invalid_request_exception&) {
@@ -724,7 +718,7 @@ SEASTAR_TEST_CASE(combinatorial_restrictions) {
             // comb_pk1 index selection:
             // Requires: pk1 restricted with EQ and PK incomplete
             // (_is_key_range).  PK restrictions are iterated first in
-            // _index_restrictions, so comb_pk1 (global, score 1) beats
+            // the index search groups, so comb_pk1 (global, score 1) beats
             // all same-score indexes that come later.
             bool selects_comb_pk1 = (mask & PK1) && !(mask & PK2);
 
@@ -734,7 +728,7 @@ SEASTAR_TEST_CASE(combinatorial_restrictions) {
             // no multi-column.
             // In legal combos, CK1_EQ set → no MULTI_* possible.
             // When pk1 is also restricted, comb_pk1 takes priority (PK
-            // group comes before CK group in _index_restrictions).
+            // group comes before CK group in the index search groups).
             bool selects_comb_ck1 = (mask & CK1_EQ) && !(mask & CK1_IN);
 
             // Index clustering range multiplier:
@@ -910,7 +904,7 @@ SEASTAR_TEST_CASE(combinatorial_restrictions) {
             auto idx_opt = sr->find_idx(sim);
 
             // Determine expected index.  The scoring algorithm:
-            //   - do_find_idx iterates _index_restrictions (PK group, then
+            //   - do_find_idx iterates the index search groups (PK group, then
             //     CK group, then non-PK group in WHERE-clause order).
             //   - Multi-column restrictions are skipped (line 1358).
             //   - Score: local index with full PK = 2, global = 1, local
@@ -921,7 +915,7 @@ SEASTAR_TEST_CASE(combinatorial_restrictions) {
             //   (a) pk1 is restricted with EQ, and
             //   (b) PK is incomplete (_is_key_range), which triggers
             //       _uses_secondary_indexing via _has_queriable_pk_index.
-            // PK restrictions are iterated first in _index_restrictions, so
+            // PK restrictions are iterated first in the index search groups, so
             // comb_pk1 (score 1) beats all later global indexes (tie → first
             // wins).
             //
@@ -936,7 +930,7 @@ SEASTAR_TEST_CASE(combinatorial_restrictions) {
             //   (e) pk1 is NOT restricted (otherwise comb_pk1 wins first).
             //
             // When comb_ck1 qualifies it is iterated after PK but before
-            // non-PK in _index_restrictions, and its score 1 ties with any
+            // non-PK in the index search groups, and its score 1 ties with any
             // non-PK global, so it wins.
 
             std::optional<sstring> expected_idx;
@@ -1048,11 +1042,6 @@ SEASTAR_TEST_CASE(combinatorial_restrictions) {
                 sr->is_empty() == (mask == 0),
                 ctx_msg("is_empty"));
 
-            // --- get_not_null_columns: none of our fragments use IS NOT NULL ---
-            BOOST_CHECK_MESSAGE(
-                sr->get_not_null_columns().empty(),
-                ctx_msg("get_not_null_columns should be empty"));
-
             // --- get_partition_key_ranges ---
             // Always returns exactly 1 range.  Full PK → singular range
             // (specific partition).  Otherwise → open-ended range.
@@ -1161,7 +1150,7 @@ SEASTAR_TEST_CASE(combinatorial_restrictions) {
 }
 
 /// Helper to get statement_restrictions from a parsed WHERE clause string.
-static shared_ptr<const restrictions::statement_restrictions> make_restrictions(
+static shared_ptr<const restrictions::select_restrictions> make_restrictions(
         std::string_view where_clause, cql_test_env& env,
         const sstring& table_name = "t", const sstring& keyspace_name = "ks") {
     prepare_context ctx;
@@ -1169,14 +1158,12 @@ static shared_ptr<const restrictions::statement_restrictions> make_restrictions(
     auto factors = where_clause.empty()
             ? std::vector<expr::expression>{}
             : boolean_factors(cql3::util::where_clause_to_relations(where_clause, cql3::dialect{}));
-    return restrictions::analyze_statement_restrictions(
+    return restrictions::analyze_select_restrictions(
             env.data_dictionary(),
             env.local_db().find_schema(keyspace_name, table_name),
-            statements::statement_type::SELECT,
             expr::conjunction{std::move(factors)},
             ctx,
-            /*contains_only_static_columns=*/false,
-            /*for_view=*/false,
+            /*selects_only_static_columns=*/false,
             /*allow_filtering=*/true,
             restrictions::check_indexes::yes);
 }
