@@ -9,9 +9,8 @@ from itertools import count
 import pytest
 from botocore.exceptions import ClientError
 
-from test.alternator.util import random_string
+from test.alternator.util import random_string, metrics, get_metrics, get_metric
 from test.cqlpy.util import config_value_context
-from test.alternator.test_metrics import metrics, get_metrics, get_metric
 
 # This file contains tests for the Alternator expression caching.
 # It tests caching for UpdateExpression, ConditionExpression and ProjectionExpression, based on the metrics: 

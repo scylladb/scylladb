@@ -23,8 +23,7 @@ import pytest
 from botocore.exceptions import ClientError
 
 from test.alternator.test_streams import create_stream_test_table, wait_for_active_stream
-from test.alternator.test_metrics import check_increases_metric_exact, metrics
-from test.alternator.util import multiset, new_test_table, random_string, scylla_inject_error
+from test.alternator.util import multiset, new_test_table, random_string, scylla_inject_error, check_increases_metric_exact, metrics
 
 # Test for checking that returning partial results as UnprocessedKeys
 # is properly handled. This test relies on error injection available
