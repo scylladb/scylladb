@@ -13,6 +13,7 @@
 #include "cql3/prepare_context.hh"
 #include "cql3/column_identifier.hh"
 #include "cql3/column_specification.hh"
+#include "cql3/functions/function.hh"
 #include "exceptions/exceptions.hh"
 
 namespace cql3 {
@@ -87,23 +88,20 @@ const dialect& prepare_context::get_dialect() const {
     return *_dialect;
 }
 
-void prepare_context::clear_pk_function_calls_cache() {
-    for (::shared_ptr<std::optional<uint8_t>>& cache_id : _pk_function_calls_cache_ids) {
-        if (cache_id.get() != nullptr) {
-            *cache_id = std::nullopt;
-        }
-    }
-}
-
-void prepare_context::add_pk_function_call(expr::function_call& fn) {
+void prepare_context::add_pk_function_call(expr::expression& e) {
+    // The slot index travels between shards as a uint8_t, see
+    // cql3::computed_function_values.
     constexpr auto fn_limit = std::numeric_limits<uint8_t>::max();
-    if (_pk_function_calls_cache_ids.size() == fn_limit) {
+    if (_pk_function_calls.size() == fn_limit) {
         throw exceptions::invalid_request_exception(
             format("Too many function calls within one statement. Max supported number is {}", fn_limit));
     }
 
-    fn.lwt_cache_id = ::make_shared<std::optional<uint8_t>>(_pk_function_calls_cache_ids.size());
-    _pk_function_calls_cache_ids.emplace_back(fn.lwt_cache_id);
+    auto& fn = expr::as<expr::function_call>(e);
+    auto type = std::get<shared_ptr<db::functions::function>>(fn.func)->return_type();
+    size_t index = _pk_function_calls.size();
+    _pk_function_calls.push_back(e);
+    e = expr::temporary{.index = index, .type = std::move(type), .replaced_expr = std::move(fn)};
 }
 
 
