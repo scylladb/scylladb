@@ -2805,14 +2805,19 @@ def write_build_file(f,
     use_precompiled_header = not args.disable_precompiled_header
     warnings = get_warning_options(args.cxx)
     rustc_target = pick_rustc_target('wasm32-wasi', 'wasm32-wasip1')
-    # If compiler cache is available, prefix the compiler with it
-    cxx_with_cache = f'{compiler_cache} {args.cxx}' if compiler_cache else args.cxx
+    # If a compiler cache is available, compilations are run through it as a
+    # launcher. Only compilations are wrapped, never links: a compiler cache
+    # has nothing to cache for a link, and sccache drops the jobserver it was
+    # handed, which serializes an LTO link. See
+    # https://github.com/mozilla/sccache/issues/2855
+    cxx_launcher = compiler_cache if compiler_cache else ''
     # For Rust, sccache is used via RUSTC_WRAPPER environment variable
     rustc_wrapper = f'RUSTC_WRAPPER={compiler_cache} ' if compiler_cache and 'sccache' in compiler_cache and args.sccache_rust else ''
     f.write(textwrap.dedent('''\
         configure_args = {configure_args}
         builddir = {outdir}
         cxx = {cxx}
+        cxx_launcher = {cxx_launcher}
         cxxflags = -std=gnu++26 {user_cflags} {warnings} {defines}
         ldflags = {linker_flags} {user_ldflags}
         ldflags_build = {linker_flags}
@@ -2890,7 +2895,8 @@ def write_build_file(f,
           command = llvm-profdata merge $in -output=$out
         ''').format(configure_args=configure_args,
                     outdir=outdir,
-                    cxx=cxx_with_cache,
+                    cxx=args.cxx,
+                    cxx_launcher=cxx_launcher,
                     user_cflags=user_cflags,
                     warnings=warnings,
                     defines=defines,
@@ -2931,15 +2937,15 @@ def write_build_file(f,
             seastar_libs_{mode} = {seastar_libs}
             seastar_testing_libs_{mode} = {seastar_testing_libs}
             rule cxx.{mode}
-              command = $cxx -MD -MT $out -MF $out.d {seastar_cflags} $cxxflags_{mode} $cxxflags $obj_cxxflags -c -o $out $in
+              command = $cxx_launcher $cxx -MD -MT $out -MF $out.d {seastar_cflags} $cxxflags_{mode} $cxxflags $obj_cxxflags -c -o $out $in
               description = CXX $out
               depfile = $out.d
             rule cxx_build_precompiled_header.{mode}
-              command = $cxx -MD -MT $out -MF $out.d {seastar_cflags} $cxxflags_{mode} $cxxflags $obj_cxxflags -c -o $out $in -Winvalid-pch -fpch-instantiate-templates -Xclang -emit-pch -DSCYLLA_USE_PRECOMPILED_HEADER
+              command = $cxx_launcher $cxx -MD -MT $out -MF $out.d {seastar_cflags} $cxxflags_{mode} $cxxflags $obj_cxxflags -c -o $out $in -Winvalid-pch -fpch-instantiate-templates -Xclang -emit-pch -DSCYLLA_USE_PRECOMPILED_HEADER
               description = CXX-PRECOMPILED-HEADER $out
               depfile = $out.d
             rule cxx_with_pch.{mode}
-              command = $cxx -MD -MT $out -MF $out.d {seastar_cflags} $cxxflags_{mode} $cxxflags $obj_cxxflags -c -o $out $in -Winvalid-pch -Xclang -include-pch -Xclang $builddir/{mode}/stdafx.hh.pch
+              command = $cxx_launcher $cxx -MD -MT $out -MF $out.d {seastar_cflags} $cxxflags_{mode} $cxxflags $obj_cxxflags -c -o $out $in -Winvalid-pch -Xclang -include-pch -Xclang $builddir/{mode}/stdafx.hh.pch
               description = CXX $out
               depfile = $out.d
             rule link.{mode}
@@ -2975,7 +2981,7 @@ def write_build_file(f,
                         $builddir/{mode}/gen/${{stem}}Parser.cpp
                 description = ANTLR3 $in
             rule checkhh.{mode}
-              command = $cxx -MD -MT $out -MF $out.d {seastar_cflags} $cxxflags $cxxflags_{mode} $obj_cxxflags -include $in -c -o $out $builddir/{mode}/gen/empty.cc -USCYLLA_USE_PRECOMPILED_HEADER
+              command = $cxx_launcher $cxx -MD -MT $out -MF $out.d {seastar_cflags} $cxxflags $cxxflags_{mode} $obj_cxxflags -include $in -c -o $out $builddir/{mode}/gen/empty.cc -USCYLLA_USE_PRECOMPILED_HEADER
               description = CHECKHH $in
               depfile = $out.d
             rule test.{mode}
