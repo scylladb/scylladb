@@ -8,6 +8,7 @@
 
 #include "service/raft/raft_metrics.hh"
 
+#include "service/raft/raft_rpc.hh"
 #include "utils/per_task_value.hh"
 
 namespace service {
@@ -141,6 +142,19 @@ void register_raft_server_metrics(sm::metric_groups& metrics,
              sm::description("Number of followers the leader cannot send entries to, the reason label can be probe (waiting for the reply to a probe of the follower's log), pipeline_full (the maximal number of append requests is in flight) or snapshot (waiting for a snapshot transfer); followers the failure detector reports down are not counted"), labels({raft_blocked_reason_label("pipeline_full")})).aggregate(aggregate),
         sm::make_gauge("blocked_followers", status([] (const auto& s) { return s.blocked.snapshot; }),
              sm::description("Number of followers the leader cannot send entries to, the reason label can be probe (waiting for the reply to a probe of the follower's log), pipeline_full (the maximal number of append requests is in flight) or snapshot (waiting for a snapshot transfer); followers the failure detector reports down are not counted"), labels({raft_blocked_reason_label("snapshot")})).aggregate(aggregate),
+    });
+}
+
+// @metrics options.group_name = ["raft_group0"]
+void register_raft_rpc_stats_metrics(sm::metric_groups& metrics,
+        const raft_rpc::stats& s, const raft_metrics_options& options) {
+    metrics.add_group(options.group_name, {
+        sm::make_total_operations("append_entries_memory_waits", s.append_entries_memory_waits,
+            sm::description("Number of append requests that had to wait for the memory of other in-flight append requests to be released"), options.labels).aggregate(options.aggregate_labels).set_skip_when_empty(options.skip_when_empty),
+        sm::make_gauge("append_entries_memory_waiters", s.append_entries_memory_waiters,
+            sm::description("Number of append requests currently waiting for the memory of other in-flight append requests to be released"), options.labels).aggregate(options.aggregate_labels),
+        sm::make_gauge("append_entries_in_flight_bytes", s.append_entries_in_flight_bytes,
+            sm::description("Bytes of append requests currently being sent, as charged against the in-flight memory limit"), options.labels).aggregate(options.aggregate_labels),
     });
 }
 

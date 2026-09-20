@@ -11,6 +11,7 @@
 #include <seastar/core/metrics.hh>
 #include <seastar/core/sstring.hh>
 #include "raft/server.hh"
+#include "service/raft/raft_rpc.hh"
 
 namespace service {
 
@@ -39,5 +40,9 @@ void register_raft_server_stats_metrics(seastar::metrics::metric_groups& metrics
 // The state a server reports on demand. It must outlive the metric group.
 void register_raft_server_metrics(seastar::metrics::metric_groups& metrics,
         const raft::server& server, const raft_metrics_options& options);
+
+// The counters an RPC module accumulates. They must outlive the metric group.
+void register_raft_rpc_stats_metrics(seastar::metrics::metric_groups& metrics,
+        const raft_rpc::stats& stats, const raft_metrics_options& options);
 
 } // namespace service

@@ -151,8 +151,9 @@ class group0_rpc: public service::raft_rpc {
 public:
     explicit group0_rpc(direct_failure_detector::failure_detector& direct_fd,
             raft_state_machine& sm, netw::messaging_service& ms,
-            shared_ptr<raft::failure_detector> raft_fd, raft::group_id gid, raft::server_id srv_id)
-        : raft_rpc(sm, ms, std::move(raft_fd), gid, srv_id)
+            shared_ptr<raft::failure_detector> raft_fd, raft::group_id gid, raft::server_id srv_id,
+            lw_shared_ptr<raft_rpc::stats> shared_stats)
+        : raft_rpc(sm, ms, std::move(raft_fd), gid, srv_id, std::move(shared_stats))
         , _direct_fd(direct_fd)
     {}
 
@@ -225,7 +226,7 @@ raft_server_for_group raft_group0::create_server_for_group0(raft::group_id gid, 
     auto state_machine = std::make_unique<group0_state_machine>(
             _client, mm, qp.proxy(), ss, _gossiper, _feat, enable_sm_immediately);
     auto& state_machine_ref = *state_machine;
-    auto rpc = std::make_unique<group0_rpc>(_raft_gr.direct_fd(), *state_machine, _ms.local(), _raft_gr.failure_detector(), gid, my_id);
+    auto rpc = std::make_unique<group0_rpc>(_raft_gr.direct_fd(), *state_machine, _ms.local(), _raft_gr.failure_detector(), gid, my_id, _rpc_stats);
     // Keep a reference to a specific RPC class.
     auto& rpc_ref = *rpc;
     auto storage = std::make_unique<raft_sys_table_storage>(qp, gid, my_id);
@@ -963,6 +964,7 @@ void raft_group0::register_metrics() {
         sm::make_gauge("status", [this] { return static_cast<uint8_t>(_status_for_monitoring); },
             sm::description("status of the raft group, 1 - normal, 2 - aborted"))
     });
+    register_raft_rpc_stats_metrics(_metrics, *_rpc_stats, raft_metrics_options{.group_name = "raft_group0"});
 }
 
 } // end of namespace service

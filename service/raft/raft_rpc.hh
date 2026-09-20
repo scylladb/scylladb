@@ -8,6 +8,7 @@
 #pragma once
 
 #include <seastar/core/gate.hh>
+#include <seastar/core/shared_ptr.hh>
 #include <seastar/util/std-compat.hh>
 #include "raft/raft.hh"
 #include "message/messaging_service_fwd.hh"
@@ -21,6 +22,18 @@ class raft_state_machine;
 // Uses `netw::messaging_service` as an underlying implementation for
 // actually sending RPC messages.
 class raft_rpc : public raft::rpc {
+public:
+    // Instances sharing one object, passed to the constructor, accumulate
+    // into the same counters.
+    struct stats {
+        // Requests that had to wait for in-flight requests to free memory.
+        uint64_t append_entries_memory_waits = 0;
+        // The ones waiting right now.
+        int64_t append_entries_memory_waiters = 0;
+        // Bytes of the requests being sent, as charged against the limit.
+        int64_t append_entries_in_flight_bytes = 0;
+    };
+
 protected:
     raft_state_machine& _sm;
     raft::group_id _group_id;
@@ -32,8 +45,13 @@ protected:
     // Limits the total memory usage of raft::append_request messages that are currently being sent
     seastar::semaphore _append_entries_semaphore;
 
+    // Instances given the same object accumulate into it.
+    lw_shared_ptr<stats> _stats;
+
+    // A null `stats` gives this instance counters of its own.
     explicit raft_rpc(raft_state_machine& sm, netw::messaging_service& ms,
-             shared_ptr<raft::failure_detector> failure_detector, raft::group_id gid, raft::server_id my_id);
+             shared_ptr<raft::failure_detector> failure_detector, raft::group_id gid, raft::server_id my_id,
+             lw_shared_ptr<stats> stats = nullptr);
 
 private:
     enum class one_way_kind { request, reply };
