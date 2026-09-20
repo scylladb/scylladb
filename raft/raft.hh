@@ -868,6 +868,25 @@ struct server_stats {
     uint64_t read_quorum_reply_received = 0;
 };
 
+// Everything a server reports about itself on demand, read in one call so
+// that the values are consistent with each other and can be summed over
+// several servers.
+struct server_status {
+    bool is_leader = false;
+    // 0 - follower, 1 - candidate, 2 - leader.
+    size_t state = 0;
+    // Number of entries in the in-memory part of the log.
+    size_t in_memory_log_size = 0;
+    // Bytes used by the in-memory part of the log.
+    size_t log_memory_usage = 0;
+    index_t last_idx;
+    term_t last_term;
+    index_t commit_idx;
+    index_t applied_idx;
+    index_t last_snapshot_idx;
+    term_t last_snapshot_term;
+};
+
 } // namespace raft
 
 template <>

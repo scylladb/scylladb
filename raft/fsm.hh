@@ -515,6 +515,9 @@ public:
     size_t state_to_metric() const {
         return _state.index();
     }
+    // Everything reported about this server on demand. The applied index is
+    // not tracked here, the caller fills it in.
+    server_status get_status() const;
     index_t log_last_idx() const {
         return _log.last_idx();
     }

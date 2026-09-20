@@ -281,6 +281,10 @@ public:
     // of two servers iff their IDs are different.
     virtual void register_metrics() = 0;
 
+    // All zeros before the server is started, so that it can be registered
+    // as a source of metrics as soon as it is created.
+    virtual server_status get_status() const = 0;
+
     // Returns true if this servers thinks that it is the leader.
     // The information is only relevant for the current_term() only
     virtual bool is_leader() = 0;

@@ -124,6 +124,7 @@ public:
     future<> modify_config(std::vector<config_member> add, std::vector<server_id> del, seastar::abort_source* as) override;
     future<entry_id> add_entry_on_leader(command command, seastar::abort_source* as, term_t append_in_term);
     void register_metrics() override;
+    server_status get_status() const override;
     size_t max_command_size() const override;
 private:
     seastar::condition_variable _events;
@@ -1853,6 +1854,15 @@ server_impl::get_configuration() const {
     return _fsm->get_configuration();
 }
 
+server_status server_impl::get_status() const {
+    if (!_fsm) {
+        return {};
+    }
+    auto status = _fsm->get_status();
+    status.applied_idx = _applied_idx;
+    return status;
+}
+
 void server_impl::register_metrics() {
     namespace sm = seastar::metrics;
     _metrics.add_group("raft", {
@@ -1920,23 +1930,23 @@ void server_impl::register_metrics() {
         sm::make_total_operations("snapshots_taken", _stats->snapshots_taken,
              sm::description("Number of times user's state machine snapshotted"), {server_id_label(_id)}),
 
-        sm::make_gauge("in_memory_log_size", [this] { return _fsm->in_memory_log_size(); },
+        sm::make_gauge("in_memory_log_size", [this] { return get_status().in_memory_log_size; },
                        sm::description("size of in-memory part of the log"), {server_id_label(_id)}),
-        sm::make_gauge("log_memory_usage", [this] { return _fsm->log_memory_usage(); },
+        sm::make_gauge("log_memory_usage", [this] { return get_status().log_memory_usage; },
                        sm::description("memory usage of in-memory part of the log in bytes"), {server_id_label(_id)}),
-        sm::make_gauge("log_last_index", [this] { return _fsm->log_last_idx().value(); },
+        sm::make_gauge("log_last_index", [this] { return get_status().last_idx.value(); },
                        sm::description("index of the last log entry"), {server_id_label(_id)}),
-        sm::make_gauge("log_last_term", [this] { return _fsm->log_last_term().value(); },
+        sm::make_gauge("log_last_term", [this] { return get_status().last_term.value(); },
                        sm::description("term of the last log entry"), {server_id_label(_id)}),
-        sm::make_gauge("snapshot_last_index", [this] { return _fsm->log_last_snapshot_idx().value(); },
+        sm::make_gauge("snapshot_last_index", [this] { return get_status().last_snapshot_idx.value(); },
                        sm::description("index of the snapshot"), {server_id_label(_id)}),
-        sm::make_gauge("snapshot_last_term", [this] { return _fsm->log_term_for(_fsm->log_last_snapshot_idx()).value().value(); },
+        sm::make_gauge("snapshot_last_term", [this] { return get_status().last_snapshot_term.value(); },
                        sm::description("term of the snapshot"), {server_id_label(_id)}),
-        sm::make_gauge("state", [this] { return _fsm->state_to_metric(); },
+        sm::make_gauge("state", [this] { return get_status().state; },
                        sm::description("current state: 0 - follower, 1 - candidate, 2 - leader"), {server_id_label(_id)}),
-        sm::make_gauge("commit_index", [this] { return _fsm->commit_idx().value(); },
+        sm::make_gauge("commit_index", [this] { return get_status().commit_idx.value(); },
                        sm::description("commit index"), {server_id_label(_id)}),
-        sm::make_gauge("apply_index", [this] { return _applied_idx.value(); },
+        sm::make_gauge("apply_index", [this] { return get_status().applied_idx.value(); },
                        sm::description("applied index"), {server_id_label(_id)}),
     });
 }
