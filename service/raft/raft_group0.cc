@@ -13,6 +13,7 @@
 #include "raft/raft.hh"
 #include "service/raft/group0_fwd.hh"
 #include "service/raft/raft_group0.hh"
+#include "service/raft/raft_metrics.hh"
 #include "service/raft/raft_rpc.hh"
 #include "service/raft/raft_sys_table_storage.hh"
 #include "service/raft/group0_state_machine.hh"
@@ -246,20 +247,28 @@ raft_server_for_group raft_group0::create_server_for_group0(raft::group_id gid, 
         config.snapshot_threshold_log_size = config.max_log_size / 2;
         config.snapshot_trailing_size = config.snapshot_threshold_log_size / 2;
     };
+    auto server_stats = make_lw_shared<raft::server_stats>();
     auto server = raft::create_server(my_id, std::move(rpc), std::move(state_machine),
-            std::move(storage), _raft_gr.failure_detector(), config);
+            std::move(storage), _raft_gr.failure_detector(), config, server_stats);
 
     // initialize the corresponding timer to tick the raft server instance
     auto ticker = std::make_unique<raft_ticker_type>([srv = server.get()] { srv->tick(); });
-    return raft_server_for_group{
+    auto result = raft_server_for_group{
         .gid = std::move(gid),
         .server = std::move(server),
         .ticker = std::move(ticker),
         .rpc = rpc_ref,
         .persistence = persistence_ref,
         .state_machine = state_machine_ref,
-        .default_op_timeout_in_ms = qp.proxy().get_db().local().get_config().group0_raft_op_timeout_in_ms
+        .default_op_timeout_in_ms = qp.proxy().get_db().local().get_config().group0_raft_op_timeout_in_ms,
+        .server_stats = std::move(server_stats)
     };
+    // The group name predates the "raft_group0" one used elsewhere and is kept
+    // so that the existing dashboards keep working.
+    const auto options = raft_metrics_options{.group_name = "raft", .labels = {raft_server_id_label(my_id)}};
+    register_raft_server_stats_metrics(result.metrics, *result.server_stats, options);
+    register_raft_server_metrics(result.metrics, *result.server, options);
+    return result;
 }
 
 future<group0_info>

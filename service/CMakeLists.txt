@@ -29,6 +29,7 @@ target_sources(service
     raft/raft_group0.cc
     raft/raft_group0_client.cc
     raft/raft_group_registry.cc
+    raft/raft_metrics.cc
     raft/raft_rpc.cc
     raft/raft_sys_table_storage.cc
     session.cc

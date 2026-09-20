@@ -21,7 +21,6 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/as_future.hh>
 #include <seastar/core/pipe.hh>
-#include <seastar/core/metrics.hh>
 #include <seastar/rpc/rpc_types.hh>
 #include <absl/container/flat_hash_map.h>
 #include <seastar/core/gate.hh>
@@ -53,10 +52,6 @@ struct awaited_conf_change {
     seastar::promise<> promise;
     optimized_optional<abort_source::subscription> abort;
 };
-
-static const seastar::metrics::label server_id_label("id");
-static const seastar::metrics::label log_entry_type("log_entry_type");
-static const seastar::metrics::label message_type("message_type");
 
 // Result types for do_on_leader_with_retries action lambda.
 // retry_with_leader: retry on the specified leader. If the leader is the
@@ -123,7 +118,6 @@ public:
     future<> stepdown(logical_clock::duration timeout, server_id target) override;
     future<> modify_config(std::vector<config_member> add, std::vector<server_id> del, seastar::abort_source* as) override;
     future<entry_id> add_entry_on_leader(command command, seastar::abort_source* as, term_t append_in_term);
-    void register_metrics() override;
     server_status get_status() const override;
     size_t max_command_size() const override;
 private:
@@ -279,8 +273,6 @@ private:
 
     future<> _applier_status = make_ready_future<>();
     future<> _io_status = make_ready_future<>();
-
-    seastar::metrics::metric_groups _metrics;
 
     // Server address set to be used by RPC module to maintain its address
     // mappings.
@@ -1861,94 +1853,6 @@ server_status server_impl::get_status() const {
     auto status = _fsm->get_status();
     status.applied_idx = _applied_idx;
     return status;
-}
-
-void server_impl::register_metrics() {
-    namespace sm = seastar::metrics;
-    _metrics.add_group("raft", {
-        sm::make_total_operations("add_entries", _stats->add_command,
-             sm::description("Number of entries added on this node, the log_entry_type label can be command, dummy or config"), {server_id_label(_id), log_entry_type("command")}),
-        sm::make_total_operations("add_entries", _stats->add_dummy,
-             sm::description("Number of entries added on this node, the log_entry_type label can be command, dummy or config"), {server_id_label(_id), log_entry_type("dummy")}),
-        sm::make_total_operations("add_entries", _stats->add_config,
-             sm::description("Number of entries added on this node, the log_entry_type label can be command, dummy or config"), {server_id_label(_id), log_entry_type("config")}),
-
-        sm::make_total_operations("messages_received", _stats->append_entries_received,
-             sm::description("Number of messages received, the message_type determines the type of message"), {server_id_label(_id), message_type("append_entries")}),
-        sm::make_total_operations("messages_received", _stats->append_entries_reply_received,
-             sm::description("Number of messages received, the message_type determines the type of message"), {server_id_label(_id), message_type("append_entries_reply")}),
-        sm::make_total_operations("messages_received", _stats->request_vote_received,
-             sm::description("Number of messages received, the message_type determines the type of message"), {server_id_label(_id), message_type("request_vote")}),
-        sm::make_total_operations("messages_received", _stats->request_vote_reply_received,
-             sm::description("Number of messages received, the message_type determines the type of message"), {server_id_label(_id), message_type("request_vote_reply")}),
-        sm::make_total_operations("messages_received", _stats->timeout_now_received,
-             sm::description("Number of messages received, the message_type determines the type of message"), {server_id_label(_id), message_type("timeout_now")}),
-        sm::make_total_operations("messages_received", _stats->read_quorum_received,
-             sm::description("Number of messages received, the message_type determines the type of message"), {server_id_label(_id), message_type("read_quorum")}),
-        sm::make_total_operations("messages_received", _stats->read_quorum_reply_received,
-             sm::description("Number of messages received, the message_type determines the type of message"), {server_id_label(_id), message_type("read_quorum_reply")}),
-
-        sm::make_total_operations("messages_sent", _stats->append_entries_sent,
-             sm::description("Number of messages sent, the message_type determines the type of message"), {server_id_label(_id), message_type("append_entries")}),
-        sm::make_total_operations("messages_sent", _stats->append_entries_reply_sent,
-             sm::description("Number of messages sent, the message_type determines the type of message"), {server_id_label(_id), message_type("append_entries_reply")}),
-        sm::make_total_operations("messages_sent", _stats->vote_request_sent,
-             sm::description("Number of messages sent, the message_type determines the type of message"), {server_id_label(_id), message_type("request_vote")}),
-        sm::make_total_operations("messages_sent", _stats->vote_request_reply_sent,
-             sm::description("Number of messages sent, the message_type determines the type of message"), {server_id_label(_id), message_type("request_vote_reply")}),
-        sm::make_total_operations("messages_sent", _stats->install_snapshot_sent,
-             sm::description("Number of messages sent, the message_type determines the type of message"), {server_id_label(_id), message_type("install_snapshot")}),
-        sm::make_total_operations("messages_sent", _stats->snapshot_reply_sent,
-             sm::description("Number of messages sent, the message_type determines the type of message"), {server_id_label(_id), message_type("snapshot_reply")}),
-        sm::make_total_operations("messages_sent", _stats->timeout_now_sent,
-             sm::description("Number of messages sent, the message_type determines the type of message"), {server_id_label(_id), message_type("timeout_now")}),
-        sm::make_total_operations("messages_sent", _stats->read_quorum_sent,
-             sm::description("Number of messages sent, the message_type determines the type of message"), {server_id_label(_id), message_type("read_quorum")}),
-        sm::make_total_operations("messages_sent", _stats->read_quorum_reply_sent,
-             sm::description("Number of messages sent, the message_type determines the type of message"), {server_id_label(_id), message_type("read_quorum_reply")}),
-
-        sm::make_total_operations("waiter_awoken", _stats->waiters_awoken,
-             sm::description("Number of waiters that got result back"), {server_id_label(_id)}),
-        sm::make_total_operations("waiter_dropped", _stats->waiters_dropped,
-             sm::description("Number of waiters that did not get result back"), {server_id_label(_id)}),
-        sm::make_total_operations("polls", _stats->polls,
-             sm::description("Number of times raft state machine polled"), {server_id_label(_id)}),
-        sm::make_total_operations("store_term_and_vote", _stats->store_term_and_vote,
-             sm::description("Number of times term and vote persisted"), {server_id_label(_id)}),
-        sm::make_total_operations("store_snapshot", _stats->store_snapshot,
-             sm::description("Number of snapshots persisted"), {server_id_label(_id)}),
-        sm::make_total_operations("sm_load_snapshot", _stats->sm_load_snapshot,
-             sm::description("Number of times user state machine reloaded with a snapshot"), {server_id_label(_id)}),
-        sm::make_total_operations("truncate_persisted_log", _stats->truncate_persisted_log,
-             sm::description("Number of times log truncated on storage"), {server_id_label(_id)}),
-        sm::make_total_operations("persisted_log_entries", _stats->persisted_log_entries,
-             sm::description("Number of log entries persisted"), {server_id_label(_id)}),
-        sm::make_total_operations("queue_entries_for_apply", _stats->queue_entries_for_apply,
-             sm::description("Number of log entries queued to be applied"), {server_id_label(_id)}),
-        sm::make_total_operations("applied_entries", _stats->applied_entries,
-             sm::description("Number of log entries applied"), {server_id_label(_id)}),
-        sm::make_total_operations("snapshots_taken", _stats->snapshots_taken,
-             sm::description("Number of times user's state machine snapshotted"), {server_id_label(_id)}),
-
-        sm::make_gauge("in_memory_log_size", [this] { return get_status().in_memory_log_size; },
-                       sm::description("size of in-memory part of the log"), {server_id_label(_id)}),
-        sm::make_gauge("log_memory_usage", [this] { return get_status().log_memory_usage; },
-                       sm::description("memory usage of in-memory part of the log in bytes"), {server_id_label(_id)}),
-        sm::make_gauge("log_last_index", [this] { return get_status().last_idx.value(); },
-                       sm::description("index of the last log entry"), {server_id_label(_id)}),
-        sm::make_gauge("log_last_term", [this] { return get_status().last_term.value(); },
-                       sm::description("term of the last log entry"), {server_id_label(_id)}),
-        sm::make_gauge("snapshot_last_index", [this] { return get_status().last_snapshot_idx.value(); },
-                       sm::description("index of the snapshot"), {server_id_label(_id)}),
-        sm::make_gauge("snapshot_last_term", [this] { return get_status().last_snapshot_term.value(); },
-                       sm::description("term of the snapshot"), {server_id_label(_id)}),
-        sm::make_gauge("state", [this] { return get_status().state; },
-                       sm::description("current state: 0 - follower, 1 - candidate, 2 - leader"), {server_id_label(_id)}),
-        sm::make_gauge("commit_index", [this] { return get_status().commit_idx.value(); },
-                       sm::description("commit index"), {server_id_label(_id)}),
-        sm::make_gauge("apply_index", [this] { return get_status().applied_idx.value(); },
-                       sm::description("applied index"), {server_id_label(_id)}),
-    });
 }
 
 void server_impl::wait_until_candidate() {
