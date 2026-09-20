@@ -26,6 +26,9 @@ struct raft_metrics_options {
     bool skip_when_empty = false;
 };
 
+// The reason a leader cannot send entries to a follower.
+extern const seastar::metrics::label raft_blocked_reason_label;
+
 // The counters a server accumulates. They must outlive the metric group.
 void register_raft_server_stats_metrics(seastar::metrics::metric_groups& metrics,
         const raft::server_stats& stats, const raft_metrics_options& options);

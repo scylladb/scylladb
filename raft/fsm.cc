@@ -121,6 +121,22 @@ server_status fsm::get_status() const {
     if (!is_stepping_down()) {
         status.log_limiter_waiters = leader_state().log_limiter_semaphore->waiters();
     }
+    for (const auto& [id, progress] : leader_state().tracker) {
+        if (id == _my_id || progress.can_send_to() || !_failure_detector.is_alive(id)) {
+            continue;
+        }
+        switch (progress.state) {
+        case follower_progress::state::PROBE:
+            status.blocked.probe++;
+            break;
+        case follower_progress::state::PIPELINE:
+            status.blocked.pipeline_full++;
+            break;
+        case follower_progress::state::SNAPSHOT:
+            status.blocked.snapshot++;
+            break;
+        }
+    }
     return status;
 }
 

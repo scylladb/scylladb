@@ -14,6 +14,7 @@ namespace sm = seastar::metrics;
 
 static const sm::label log_entry_type("log_entry_type");
 static const sm::label message_type("message_type");
+const sm::label raft_blocked_reason_label("reason");
 
 // @metrics options.group_name = ["raft"]
 void register_raft_server_stats_metrics(sm::metric_groups& metrics,

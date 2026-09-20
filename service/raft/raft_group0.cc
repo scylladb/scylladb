@@ -993,6 +993,12 @@ void raft_group0::register_server_metrics(raft::server_id my_id, const raft::ser
              sm::description("applied index"), {id}),
         sm::make_gauge("log_limiter_waiters", [sample] { return sample->get().log_limiter_waiters; },
              sm::description("Number of entries currently waiting for the in-memory log to shrink below max_log_size"), {id}),
+        sm::make_gauge("blocked_followers", [sample] { return sample->get().blocked.probe; },
+             sm::description("Number of followers the leader cannot send entries to, the reason label can be probe (waiting for the reply to a probe of the follower's log), pipeline_full (the maximal number of append requests is in flight) or snapshot (waiting for a snapshot transfer); followers the failure detector reports down are not counted"), {id, raft_blocked_reason_label("probe")}),
+        sm::make_gauge("blocked_followers", [sample] { return sample->get().blocked.pipeline_full; },
+             sm::description("Number of followers the leader cannot send entries to, the reason label can be probe (waiting for the reply to a probe of the follower's log), pipeline_full (the maximal number of append requests is in flight) or snapshot (waiting for a snapshot transfer); followers the failure detector reports down are not counted"), {id, raft_blocked_reason_label("pipeline_full")}),
+        sm::make_gauge("blocked_followers", [sample] { return sample->get().blocked.snapshot; },
+             sm::description("Number of followers the leader cannot send entries to, the reason label can be probe (waiting for the reply to a probe of the follower's log), pipeline_full (the maximal number of append requests is in flight) or snapshot (waiting for a snapshot transfer); followers the failure detector reports down are not counted"), {id, raft_blocked_reason_label("snapshot")}),
     });
 }
 
