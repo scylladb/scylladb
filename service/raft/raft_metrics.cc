@@ -17,6 +17,7 @@ namespace sm = seastar::metrics;
 const sm::label raft_server_id_label("id");
 static const sm::label log_entry_type("log_entry_type");
 static const sm::label message_type("message_type");
+const sm::label raft_blocked_reason_label("reason");
 
 // @metrics options.group_name = ["raft"]
 void register_raft_server_stats_metrics(sm::metric_groups& metrics,
@@ -134,6 +135,12 @@ void register_raft_server_metrics(sm::metric_groups& metrics,
              sm::description("applied index"), labels()).aggregate(aggregate),
         sm::make_gauge("log_limiter_waiters", status([] (const auto& s) { return s.log_limiter_waiters; }),
              sm::description("Number of entries currently waiting for the in-memory log to shrink below max_log_size"), labels()).aggregate(aggregate),
+        sm::make_gauge("blocked_followers", status([] (const auto& s) { return s.blocked.probe; }),
+             sm::description("Number of followers the leader cannot send entries to, the reason label can be probe (waiting for the reply to a probe of the follower's log), pipeline_full (the maximal number of append requests is in flight) or snapshot (waiting for a snapshot transfer); followers the failure detector reports down are not counted"), labels({raft_blocked_reason_label("probe")})).aggregate(aggregate),
+        sm::make_gauge("blocked_followers", status([] (const auto& s) { return s.blocked.pipeline_full; }),
+             sm::description("Number of followers the leader cannot send entries to, the reason label can be probe (waiting for the reply to a probe of the follower's log), pipeline_full (the maximal number of append requests is in flight) or snapshot (waiting for a snapshot transfer); followers the failure detector reports down are not counted"), labels({raft_blocked_reason_label("pipeline_full")})).aggregate(aggregate),
+        sm::make_gauge("blocked_followers", status([] (const auto& s) { return s.blocked.snapshot; }),
+             sm::description("Number of followers the leader cannot send entries to, the reason label can be probe (waiting for the reply to a probe of the follower's log), pipeline_full (the maximal number of append requests is in flight) or snapshot (waiting for a snapshot transfer); followers the failure detector reports down are not counted"), labels({raft_blocked_reason_label("snapshot")})).aggregate(aggregate),
     });
 }
 

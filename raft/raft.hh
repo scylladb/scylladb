@@ -833,6 +833,17 @@ public:
     virtual bool is_alive(server_id server) = 0;
 };
 
+// Number of followers the leader cannot send entries to, by reason. Followers
+// the failure detector reports down are not counted.
+struct blocked_followers {
+    // Waiting for the reply to a probe of the follower's log.
+    size_t probe = 0;
+    // The maximal number of append requests is in flight.
+    size_t pipeline_full = 0;
+    // Waiting for a snapshot transfer to complete.
+    size_t snapshot = 0;
+};
+
 // Counters of a server. Servers given the same instance accumulate into it,
 // so a whole set of them can be exported as one metric series.
 struct server_stats {
@@ -889,6 +900,7 @@ struct server_status {
     term_t last_snapshot_term;
     // Number of entries waiting for the log to shrink below max_log_size.
     size_t log_limiter_waiters = 0;
+    blocked_followers blocked;
 };
 
 } // namespace raft
