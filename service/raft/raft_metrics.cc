@@ -89,6 +89,9 @@ void register_raft_server_stats_metrics(sm::metric_groups& metrics,
              sm::description("Number of log entries applied"), labels()).aggregate(aggregate).set_skip_when_empty(skip),
         sm::make_total_operations("snapshots_taken", s.snapshots_taken,
              sm::description("Number of times user's state machine snapshotted"), labels()).aggregate(aggregate).set_skip_when_empty(skip),
+
+        sm::make_total_operations("log_limiter_waits", s.log_limiter_waits,
+             sm::description("Number of times appending an entry had to wait for the in-memory log to shrink below max_log_size; an entry waiting for its turn to be appended is counted only if it still has to wait once its turn comes"), labels()).aggregate(aggregate).set_skip_when_empty(skip),
     });
 }
 

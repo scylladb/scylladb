@@ -84,10 +84,19 @@ fsm::fsm(server_id id, sstring tag, term_t current_term, server_id voted_for, lo
     }
 }
 
-future<fsm::memory_permit> fsm::wait_for_memory_permit(seastar::abort_source* as, size_t size) {
+future<fsm::memory_permit> fsm::wait_for_memory_permit(seastar::abort_source* as, size_t size,
+        server_stats& stats) {
     check_is_leader();
 
     auto sm = leader_state().log_limiter_semaphore;
+    if (auto units = try_get_units(*sm, size)) {
+        return make_ready_future<memory_permit>(memory_permit(std::move(sm), std::move(*units)));
+    }
+    // A leadership transfer takes all the log memory to stop admitting
+    // entries, so waiting through one is not a shortage of log memory.
+    if (!is_stepping_down()) {
+        stats.log_limiter_waits++;
+    }
     auto f_units = as ? get_units(*sm, size, *as) : get_units(*sm, size);
     return f_units.then([sm = std::move(sm)] (auto&& units) mutable {
         return memory_permit(std::move(sm), std::move(units));
@@ -106,6 +115,12 @@ server_status fsm::get_status() const {
         .last_snapshot_idx = _log.get_snapshot().idx,
         .last_snapshot_term = _log.get_snapshot().term,
     };
+    if (!is_leader()) {
+        return status;
+    }
+    if (!is_stepping_down()) {
+        status.log_limiter_waiters = leader_state().log_limiter_semaphore->waiters();
+    }
     return status;
 }
 

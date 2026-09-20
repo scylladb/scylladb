@@ -991,6 +991,8 @@ void raft_group0::register_server_metrics(raft::server_id my_id, const raft::ser
              sm::description("commit index"), {id}),
         sm::make_gauge("apply_index", [sample] { return sample->get().applied_idx.value(); },
              sm::description("applied index"), {id}),
+        sm::make_gauge("log_limiter_waiters", [sample] { return sample->get().log_limiter_waiters; },
+             sm::description("Number of entries currently waiting for the in-memory log to shrink below max_log_size"), {id}),
     });
 }
 
