@@ -9,6 +9,7 @@
 #include <seastar/core/abort_source.hh>
 #include "raft.hh"
 #include <functional>
+#include <seastar/core/shared_ptr.hh>
 
 namespace raft {
 
@@ -352,9 +353,12 @@ public:
     virtual size_t max_command_size() const = 0;
 };
 
+// A null `stats` gives the server counters of its own; passing the same
+// instance to several servers accumulates their counters together.
 std::unique_ptr<server> create_server(server_id uuid, std::unique_ptr<rpc> rpc,
         std::unique_ptr<state_machine> state_machine, std::unique_ptr<persistence> persistence,
-        seastar::shared_ptr<failure_detector> failure_detector, server::configuration config);
+        seastar::shared_ptr<failure_detector> failure_detector, server::configuration config,
+        seastar::lw_shared_ptr<server_stats> stats = nullptr);
 
 } // namespace raft
 

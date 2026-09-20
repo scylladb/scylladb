@@ -105,6 +105,37 @@ SEASTAR_THREAD_TEST_CASE(test_release_memory_if_add_entry_throws) {
 #endif
 }
 
+// Servers sharing a stats object accumulate their counters into it, so a
+// whole set of servers can be exported as one metric series.
+SEASTAR_THREAD_TEST_CASE(test_shared_stats) {
+    auto shared = make_lw_shared<raft::server_stats>();
+    const size_t node_count = 3;
+    test_case test_config {
+        .nodes = node_count,
+        .stats = shared
+    };
+    // apply_entries must exceed the entries added below, or the state
+    // machine's done promise fires prematurely.
+    auto cluster = raft_cluster<std::chrono::steady_clock>{
+        std::move(test_config),
+        ::apply_changes,
+        100,  // apply_entries
+        0,
+        0, false, tick_delay, rpc_config{}
+    };
+    cluster.start_all().get();
+    auto stop = defer([&cluster] noexcept { cluster.stop_all().get(); });
+
+    const size_t entries = 10;
+    cluster.add_entries(entries, 0).get();
+    cluster.read(read_value{0, entries}).get();
+
+    BOOST_CHECK_EQUAL(shared->add_command, entries);
+    BOOST_CHECK_GE(shared->applied_entries, entries);
+    // Every node persists what the leader adds, so all of them count here.
+    BOOST_CHECK_GE(shared->persisted_log_entries, node_count * entries);
+}
+
 // A simple test verifying the most basic properties of `wait_for_state_change`:
 // * Triggering the passed abort_source will abort the operation.
 //   The future will be resolved.
