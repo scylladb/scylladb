@@ -833,6 +833,41 @@ public:
     virtual bool is_alive(server_id server) = 0;
 };
 
+// Counters of a server. Servers given the same instance accumulate into it,
+// so a whole set of them can be exported as one metric series.
+struct server_stats {
+    uint64_t add_command = 0;
+    uint64_t add_dummy = 0;
+    uint64_t add_config = 0;
+    uint64_t append_entries_received = 0;
+    uint64_t append_entries_reply_received = 0;
+    uint64_t request_vote_received = 0;
+    uint64_t request_vote_reply_received = 0;
+    uint64_t waiters_awoken = 0;
+    uint64_t waiters_dropped = 0;
+    uint64_t append_entries_reply_sent = 0;
+    uint64_t append_entries_sent = 0;
+    uint64_t vote_request_sent = 0;
+    uint64_t vote_request_reply_sent = 0;
+    uint64_t install_snapshot_sent = 0;
+    uint64_t snapshot_reply_sent = 0;
+    uint64_t polls = 0;
+    uint64_t store_term_and_vote = 0;
+    uint64_t store_snapshot = 0;
+    uint64_t sm_load_snapshot = 0;
+    uint64_t truncate_persisted_log = 0;
+    uint64_t persisted_log_entries = 0;
+    uint64_t queue_entries_for_apply = 0;
+    uint64_t applied_entries = 0;
+    uint64_t snapshots_taken = 0;
+    uint64_t timeout_now_sent = 0;
+    uint64_t timeout_now_received = 0;
+    uint64_t read_quorum_sent = 0;
+    uint64_t read_quorum_received = 0;
+    uint64_t read_quorum_reply_sent = 0;
+    uint64_t read_quorum_reply_received = 0;
+};
+
 } // namespace raft
 
 template <>
