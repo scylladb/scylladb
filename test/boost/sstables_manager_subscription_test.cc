@@ -69,7 +69,7 @@ public:
         co_await probe.resume.get_future();
 
         // Round-trip through another shard, like the real callback does.
-        co_await smp::submit_to((this_shard_id() + 1) % smp::count, [] { });
+        co_await smp::submit_to((this_shard_id() + 1) % this_smp_shard_count(), [] { });
 
         // The real callback dereferences the handler here (it calls
         // _task.on_sstable_deletion(gen)). Check that the handler is still
