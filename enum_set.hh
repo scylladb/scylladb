@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <stdexcept>
 #include <type_traits>
@@ -120,8 +121,25 @@ public:
 
 template<typename Enum>
 class enum_set {
+private:
+    // The number of bits needed to represent all the enumeration values.
+    static constexpr size_t required_bit_count = size_t(Enum::max_sequence) + 1;
+
+    // The widest mask we are able to accept in from_mask(), and the widest
+    // mask type we can possibly use for storage.
+    using widest_mask_type = uint64_t;
+    static constexpr int widest_mask_digits = std::numeric_limits<widest_mask_type>::digits;
+
+    static_assert(required_bit_count <= widest_mask_digits, "too many enumeration values for a mask");
+
+    // The smallest unsigned integer type which can hold all the enumeration values.
+    using smallest_sufficient_mask_type =
+            std::conditional_t<required_bit_count <= 8, uint8_t,
+            std::conditional_t<required_bit_count <= 16, uint16_t,
+            std::conditional_t<required_bit_count <= 32, uint32_t, uint64_t>>>;
+
 public:
-    using mask_type = size_t; // TODO: use the smallest sufficient type
+    using mask_type = smallest_sufficient_mask_type;
     using enum_type = typename Enum::enum_type;
 
 private:
@@ -150,18 +168,21 @@ public:
     /**
      * \throws \ref bad_enum_set_mask
      */
-    static constexpr enum_set from_mask(mask_type mask) {
-        const auto bit_range = seastar::bitsets::for_each_set(std::bitset<mask_digits>(mask));
+    static constexpr enum_set from_mask(widest_mask_type mask) {
+        const auto bit_range = seastar::bitsets::for_each_set(std::bitset<widest_mask_digits>(mask));
 
         if (!std::all_of(bit_range.begin(), bit_range.end(), &Enum::is_valid_sequence)) {
             throw bad_enum_set_mask();
         }
 
-        return enum_set(mask);
+        return enum_set(static_cast<mask_type>(mask));
     }
 
     static constexpr mask_type full_mask() {
-        return ~(std::numeric_limits<mask_type>::max() << (Enum::max_sequence + 1));
+        const auto all_bits_set = std::numeric_limits<widest_mask_type>::max();
+        return static_cast<mask_type>(required_bit_count == widest_mask_digits
+                ? all_bits_set
+                : ~(all_bits_set << required_bit_count));
     }
 
     static constexpr enum_set full() {
@@ -169,12 +190,12 @@ public:
     }
 
     static inline mask_type mask_for(enum_type e) {
-        return mask_type(1) << Enum::sequence_for(e);
+        return static_cast<mask_type>(mask_type(1) << Enum::sequence_for(e));
     }
 
     template<enum_type Elem>
     static constexpr mask_type mask_for() {
-        return mask_type(1) << shift_for<Elem>();
+        return static_cast<mask_type>(mask_type(1) << shift_for<Elem>());
     }
 
     struct prepared {
@@ -193,7 +214,7 @@ public:
         return {mask_for<e>()};
     }
 
-    static_assert(std::numeric_limits<mask_type>::max() >= ((size_t)1 << Enum::max_sequence), "mask type too small");
+    static_assert(std::numeric_limits<mask_type>::max() >= (widest_mask_type(1) << Enum::max_sequence), "mask type too small");
 
     template<enum_type e>
     constexpr bool contains() const {
@@ -210,11 +231,11 @@ public:
 
     template<enum_type e>
     void remove() {
-        _mask &= ~mask_for<e>();
+        _mask &= static_cast<mask_type>(~mask_for<e>());
     }
 
     void remove(enum_type e) {
-        _mask &= ~mask_for(e);
+        _mask &= static_cast<mask_type>(~mask_for(e));
     }
 
     template<enum_type e>
@@ -224,7 +245,7 @@ public:
 
     template<enum_type e>
     void set_if(bool condition) {
-        _mask |= mask_type(condition) << shift_for<e>();
+        _mask |= static_cast<mask_type>(mask_type(condition) << shift_for<e>());
     }
 
     void set(enum_type e) {
@@ -273,22 +294,22 @@ public:
 
         template<enum_type first, enum_type second, enum_type... rest>
         static constexpr mask_type make_mask() {
-            return mask_for<first>() | make_mask<second, rest...>();
+            return static_cast<mask_type>(mask_for<first>() | make_mask<second, rest...>());
         }
 
         static constexpr mask_type mask = make_mask<items...>();
 
         template<enum_type Elem>
         static constexpr bool contains() {
-            return mask & mask_for<Elem>();
+            return bool(mask & mask_for<Elem>());
         }
 
         static bool contains(enum_type e) {
-            return mask & mask_for(e);
+            return bool(mask & mask_for(e));
         }
 
         static bool contains(prepared e) {
-            return mask & e.mask;
+            return bool(mask & e.mask);
         }
 
         static constexpr enum_set<Enum> unfreeze() {
