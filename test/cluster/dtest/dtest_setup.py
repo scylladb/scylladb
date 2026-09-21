@@ -10,6 +10,7 @@ import logging
 import os
 import pprint
 import re
+import threading
 from functools import partial, partialmethod
 from typing import TYPE_CHECKING
 
@@ -57,6 +58,49 @@ def _should_retry_no_host(e):
     return not any(isinstance(err, AuthenticationFailed) for err in e.errors.values())
 
 
+class _Runner:
+    """Run `func(i)` with an incrementing `i` in a background thread until stopped.
+
+    Any exception `func` raises is stashed rather than propagated, so the
+    background thread never crashes the process; `check()`/`stop()` re-raise
+    it in the caller instead, at a point of the caller's choosing.
+    """
+
+    def __init__(self, func, sleep=1.0):
+        self._func = func
+        self._sleep = sleep
+        self._exception = None
+        self._stop_event = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def _run(self):
+        i = 0
+        while not self._stop_event.is_set():
+            try:
+                self._func(i)
+            except Exception as e:  # noqa: BLE001
+                self._exception = e
+                return
+            i += 1
+            # Pause between calls, as scylla-dtest's Runner: without it the function runs
+            # thousands of times instead of once a second.
+            self._stop_event.wait(self._sleep)
+
+    def check(self):
+        """Re-raise `func`'s exception, if it has raised one so far."""
+
+        if self._exception is not None:
+            raise self._exception
+
+    def stop(self):
+        """Stop the background thread and re-raise any exception it hit."""
+
+        self._stop_event.set()
+        self._thread.join()
+        self.check()
+
+
 class DTestSetup:
     def __init__(self,
                  dtest_config: DTestConfig | None = None,
@@ -70,7 +114,15 @@ class DTestSetup:
         self.ignore_log_patterns = []
         self.ignore_cores_log_patterns = []
         self.ignore_cores = []
-        self.cluster = ScyllaCluster(manager=manager, scylla_mode=scylla_mode)
+        self.cluster = ScyllaCluster(
+            manager=manager,
+            scylla_mode=scylla_mode,
+            # scylla-dtest built every cluster this way (its dtest_setup.py).
+            # It makes a bare cluster.start() wait for CQL and for the other
+            # nodes to notice the new one, which is what the ported tests
+            # assume when they call start() with no arguments.
+            force_wait_for_cluster_start=True,
+        )
         self.cluster_options: dict[str, Any] = {}
         self.replacement_node = None
         self.allow_log_errors = False
@@ -322,6 +374,15 @@ class DTestSetup:
             self.connections.append(session)
 
         return session
+
+    def go(self, func):
+        """Run `func(i)`, with an incrementing `i`, in a background thread until stopped.
+
+        Returns a `_Runner`: call `.check()` to re-raise anything `func` has
+        thrown so far without stopping it, or `.stop()` to stop it and raise.
+        """
+
+        return _Runner(func)
 
     def patient_cql_connection(  # noqa: PLR0913
         self,
