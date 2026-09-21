@@ -26,7 +26,7 @@ from ccmlib.scylla_node import ScyllaNode
 
 from dtest_class import Tester
 from dtest_scylla_manager import ScyllaManagerMixin
-from manager_backup_tests import DESTINATION_BUCKET, ManagerBackupMixin, fake_gcs_docker, minio_docker
+from manager_backup_tests import DESTINATION_BUCKET, ManagerBackupMixin
 from tools.cluster_topology import generate_cluster_topology
 from tools.files import get_node_cf_dir, get_sstables_files
 
@@ -52,9 +52,9 @@ class TestBackupRestoreObjectStorage(Tester, ManagerBackupMixin, ScyllaManagerMi
         self.cluster.set_configuration_options(values={"task_ttl_in_seconds": 60})
         # endpoints are setup differently based on the backend, see https://github.com/scylladb/scylladb/issues/26570
         if self.backend == "s3":
-            self.endpoint = self.storage_endpoint_docker.address
+            self.endpoint = self.storage_endpoint_host
         elif self.backend == "gcs":
-            self.endpoint = self.storage_endpoint_docker.endpoint_url
+            self.endpoint = self.storage_endpoint_url
         self.setup_object_storage()
         logger.debug(f"{self.cluster._config_options['object_storage_endpoints']=}")
         self.cluster.start(wait_for_binary_proto=True, wait_other_notice=True)
