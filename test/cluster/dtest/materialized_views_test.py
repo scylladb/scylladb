@@ -26,7 +26,7 @@ from ccmlib.node import Node, NodetoolError
 from ccmlib.scylla_cluster import ScyllaCluster
 from packaging.version import Version
 
-from dtest_class import Tester, create_cf, create_ks, wait_for
+from dtest_class import Tester, create_cf, create_ks, read_barrier, wait_for
 from tools.assertions import (
     assert_all,
     assert_all_or_none,
@@ -289,7 +289,7 @@ class TestMaterializedViews(CommonUtils):
     ):
         configuration_options = {"range_request_timeout_in_ms": self.count_request_timeout * 1000}
         session = self.prepare(rf=rf, nodes=nodes, options=configuration_options, request_timeout=self.count_request_timeout)
-        mv_profile = os.path.abspath(os.path.join("test_data", "cassandra-mv-profile", "cs_mv_profile.yaml"))
+        mv_profile = os.path.join(os.path.dirname(__file__), "test_data", "cassandra-mv-profile", "cs_mv_profile.yaml")
 
         node1 = self.cluster.nodelist()[0]
         n = 10000
@@ -346,7 +346,7 @@ class TestMaterializedViews(CommonUtils):
         """
         configuration_options = {"range_request_timeout_in_ms": self.count_request_timeout * 1000}
         session = self.prepare(rf={"dc1": 2, "dc2": 1}, nodes=[3, 3], options=configuration_options, request_timeout=self.count_request_timeout)
-        mv_profile = os.path.abspath(os.path.join("test_data", "cassandra-mv-profile", "cs_mv_multidc_profile.yaml"))
+        mv_profile = os.path.join(os.path.dirname(__file__), "test_data", "cassandra-mv-profile", "cs_mv_multidc_profile.yaml")
 
         node1_dc1 = next(node for node in self.cluster.nodelist() if node.data_center == "dc1")
         proc_functions = [
@@ -378,7 +378,7 @@ class TestMaterializedViews(CommonUtils):
         know exactly what was truncated.
         """
         session = self.prepare(nodes=3, rf=3, options={"auto_snapshot": auto_snapshot})
-        mv_profile = os.path.abspath(os.path.join("test_data", "cassandra-mv-profile", "cs_mv_profile.yaml"))
+        mv_profile = os.path.join(os.path.dirname(__file__), "test_data", "cassandra-mv-profile", "cs_mv_profile.yaml")
 
         node1 = self.cluster.nodelist()[0]
         proc_functions = [
@@ -3022,6 +3022,9 @@ class TestMaterializedViews(CommonUtils):
         # from the live node, including the view_virtual_columns table.
         node2.start(wait_other_notice=True, wait_for_binary_proto=True)
         session2 = self.patient_exclusive_cql_connection(node2)
+        # node2 serves CQL before it has necessarily caught up with the schema
+        # changed while it was down; a read barrier makes it catch up first.
+        read_barrier(session2)
         result2 = list(session2.execute("SELECT * FROM system_schema.view_virtual_columns WHERE keyspace_name='ks' ALLOW FILTERING"))
         logger.debug(result2)
         assert len(result2) == 1, "expecting one virtual column"
