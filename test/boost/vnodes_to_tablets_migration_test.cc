@@ -13,6 +13,7 @@
 #include "test/lib/cql_test_env.hh"
 #include "locator/tablets.hh"
 #include "service/storage_service.hh"
+#include "service/topology_state_machine.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "locator/network_topology_strategy.hh"
 #include "locator/token_metadata.hh"
@@ -549,6 +550,133 @@ SEASTAR_TEST_CASE(test_table_size_estimate_fails_on_rf_0_dc) {
                         return sstring(ex.what()).find("replication factor for local DC") != sstring::npos;
                     });
         });
+    });
+}
+
+namespace {
+
+service::topology make_topology(std::vector<std::optional<service::intended_storage_mode>> modes) {
+    service::topology topo;
+    for (auto mode : modes) {
+        auto id = raft::server_id{utils::UUID_gen::get_time_UUID()};
+        topo.normal_nodes.emplace(id, service::replica_state{.storage_mode = mode});
+    }
+    return topo;
+}
+
+} // anonymous namespace
+
+// SCYLLADB-1169: a table created while a keyspace is migrating has to know which way
+// the migration is heading, and unlike finalization it cannot assume the nodes agree.
+//
+// Right after "migrate-to-tablets start" every node is unset, because
+// prepare_for_tablets_migration() refuses to start while any node has an intended
+// mode. That is a forward migration that has not moved yet - the very moment an
+// operator is most likely to create a table - and must not read as a rollback.
+BOOST_AUTO_TEST_CASE(test_migration_direction_just_started_is_forward) {
+    BOOST_REQUIRE(service::get_vnodes_to_tablets_direction(
+                make_topology({std::nullopt, std::nullopt, std::nullopt}))
+            == service::vnodes_to_tablets_direction::forward);
+}
+
+// Nodes the operator has upgraded so far, plus ones not reached yet.
+BOOST_AUTO_TEST_CASE(test_migration_direction_partially_upgraded_is_forward) {
+    BOOST_REQUIRE(service::get_vnodes_to_tablets_direction(
+                make_topology({service::intended_storage_mode::tablets, std::nullopt, std::nullopt}))
+            == service::vnodes_to_tablets_direction::forward);
+    BOOST_REQUIRE(service::get_vnodes_to_tablets_direction(
+                make_topology({service::intended_storage_mode::tablets, service::intended_storage_mode::tablets}))
+            == service::vnodes_to_tablets_direction::forward);
+}
+
+// One explicit vnodes is enough: it is written by "migrate-to-tablets downgrade"
+// alone, so a rollback is visible from the first node the operator downgrades,
+// while the rest are still on tablets.
+BOOST_AUTO_TEST_CASE(test_migration_direction_first_downgrade_is_rollback) {
+    BOOST_REQUIRE(service::get_vnodes_to_tablets_direction(
+                make_topology({service::intended_storage_mode::vnodes, service::intended_storage_mode::tablets,
+                               service::intended_storage_mode::tablets}))
+            == service::vnodes_to_tablets_direction::rollback);
+    BOOST_REQUIRE(service::get_vnodes_to_tablets_direction(
+                make_topology({service::intended_storage_mode::vnodes, service::intended_storage_mode::vnodes}))
+            == service::vnodes_to_tablets_direction::rollback);
+}
+
+// No nodes at all is not a rollback; there is nothing being rolled back.
+BOOST_AUTO_TEST_CASE(test_migration_direction_no_nodes_is_forward) {
+    BOOST_REQUIRE(service::get_vnodes_to_tablets_direction(make_topology({}))
+            == service::vnodes_to_tablets_direction::forward);
+}
+
+// SCYLLADB-1169: a table created while its keyspace is being migrated to tablets has
+// to get a tablet map of its own, built the same way prepare_for_tablets_migration()
+// builds the others - one tablet per vnode range, plus MAX_TOKEN - or the migration
+// can never be finalized. No pow2 pre-split target is expected: the table is empty.
+//
+// This runs the real CREATE TABLE path, so it also covers the guards in
+// storage_service::allocate_tablets_for_new_tables_under_migration().
+SEASTAR_TEST_CASE(test_new_table_in_migrating_keyspace_gets_tablet_map) {
+    std::vector<int64_t> tokens = {-4611686018427387904, 0, 4611686018427387904};
+
+    cql_test_config cfg;
+    cfg.db_config->initial_token.set(fmt::format("{}", fmt::join(tokens, ", ")));
+
+    return do_with_cql_env_thread([tokens] (cql_test_env& e) {
+        auto ks_name = sstring("test_new_table_ks");
+        e.execute_cql(format("CREATE KEYSPACE {} "
+                "WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} "
+                "AND tablets = {{'enabled': false}}", ks_name)).get();
+        e.execute_cql(format("CREATE TABLE {}.t (pk int PRIMARY KEY)", ks_name)).get();
+
+        e.get_storage_service().local().prepare_for_tablets_migration(ks_name).get();
+
+        e.execute_cql(format("CREATE TABLE {}.t2 (pk int PRIMARY KEY)", ks_name)).get();
+
+        auto t2 = e.local_db().find_schema(ks_name, "t2")->id();
+        auto& stm = e.shared_token_metadata().local();
+        BOOST_REQUIRE_MESSAGE(stm.get()->tablets().has_tablet_map(t2),
+                "Table created during migration did not get a tablet map");
+
+        auto& tmap = stm.get()->tablets().get_tablet_map(t2);
+
+        std::set<dht::token> boundaries;
+        for (size_t i = 0; i < tmap.tablet_count(); ++i) {
+            boundaries.insert(tmap.get_last_token(locator::tablet_id(i)));
+        }
+
+        std::set<dht::token> expected;
+        for (auto t : tokens) {
+            expected.insert(dht::token(t));
+        }
+        expected.insert(dht::last_token());
+
+        BOOST_REQUIRE_MESSAGE(boundaries == expected,
+                fmt::format("Tablet map boundaries {} do not match the vnode boundaries {}",
+                        fmt::join(boundaries, ", "), fmt::join(expected, ", ")));
+
+        // Empty table, so no layout to converge: it must carry no pow2 target, unlike
+        // the tables prepare_for_tablets_migration() pre-splits.
+        BOOST_REQUIRE(!tmap.is_converging_to_pow2());
+    }, cfg);
+}
+
+// SCYLLADB-1169: the converse - a keyspace that is merely on vnodes, with no migration
+// under way, must keep getting plain vnode tables.
+SEASTAR_TEST_CASE(test_new_table_in_vnodes_keyspace_gets_no_tablet_map) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto ks_name = sstring("test_plain_vnodes_ks");
+        e.execute_cql(format("CREATE KEYSPACE {} "
+                "WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} "
+                "AND tablets = {{'enabled': false}}", ks_name)).get();
+        e.execute_cql(format("CREATE TABLE {}.t (pk int PRIMARY KEY)", ks_name)).get();
+        e.execute_cql(format("CREATE TABLE {}.t2 (pk int PRIMARY KEY)", ks_name)).get();
+
+        auto& stm = e.shared_token_metadata().local();
+        for (auto cf_name : {"t", "t2"}) {
+            auto id = e.local_db().find_schema(ks_name, cf_name)->id();
+            BOOST_REQUIRE_MESSAGE(!stm.get()->tablets().has_tablet_map(id),
+                    fmt::format("Table {}.{} got a tablet map without a migration", ks_name, cf_name));
+        }
     });
 }
 
