@@ -186,7 +186,7 @@ def remove_files_in_folder(folder, in_root_folder_only=True):
 
 def wipe_node_data_directories(node):
     node.stop(wait_other_notice=True)
-    commitlog_dir = os.path.join(node.get_path(), "commitlogs")
+    commitlog_dir = os.path.join(node.get_path(), "commitlog")
     data_dir = os.path.join(node.get_path(), "data")
     logger.debug(f"Deleting {data_dir}")
     node.rmtree(data_dir)
