@@ -102,7 +102,7 @@ future<> cluster_backup_task::run() {
     });
 }
 
-std::string db::snapshot::sstables_location(std::string_view prefix, const replica::table& t, std::string_view snapshot_name) {
+std::string db::snapshot::sstables_location(std::string_view prefix) {
     auto pp = prefix.empty() ? "" : "/";
     return fmt::format("{}{}{}",  prefix, pp, "sstables");
 }
@@ -110,6 +110,17 @@ std::string db::snapshot::sstables_location(std::string_view prefix, const repli
 std::string db::snapshot::snapshot_meta_location(std::string_view prefix, const replica::table& t, std::string_view snapshot_name) {
     auto pp = prefix.empty() ? "" : "/";
     return fmt::format("{}{}{}/{}/{}/{}",  prefix, pp, "snapshots", t.schema()->ks_name(), t.schema()->cf_name(), snapshot_name);
+}
+
+std::string db::snapshot::snapshot_prefix_from_manifest(std::string_view manifest_path) {
+    // manifest_path = <prefix>/snapshots/<ks>/<cf>/<snapshot>/manifest.json
+    return std::filesystem::path(manifest_path)
+        .parent_path() // <prefix>/snapshots/<ks>/<cf>/<snapshot>
+        .parent_path() // <prefix>/snapshots/<ks>/<cf>
+        .parent_path() // <prefix>/snapshots/<ks>
+        .parent_path() // <prefix>/snapshots/
+        .parent_path() // <prefix>
+        .string();
 }
 
 future<> cluster_backup_task::do_backup() {
@@ -296,7 +307,7 @@ future<> cluster_backup_task::do_backup() {
             snap_log.info("Requesting backup of {}: {}", node.node, sstable_ids);
 
             try {
-                auto prefix = db::snapshot::sstables_location(dst.prefix, t, _snapshot);
+                auto prefix = db::snapshot::sstables_location(dst.prefix);
                 co_await ser::snapshot_backup_rpc_verbs::send_backup_snapshot_sstables(&_snap_ctl.ms(), node.node, tid, _snapshot, dst.endpoint, dst.bucket, prefix, first_token, last_token, std::move(sstable_ids), _remove_on_uploaded);
                 _total_progress.completed += 1;
             } catch (...) {
