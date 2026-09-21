@@ -285,6 +285,15 @@ class TestCqlshCopy(CqlshPrepare):
         yield
         unmonkeypatch_driver(cached_driver_methods)
 
+    @pytest.fixture(scope="function", autouse=True)
+    def reset_copy_test_failures(self):
+        # The failure injection tests set CQLSH_COPY_TEST_FAILURES in os.environ, which every cqlsh started
+        # later by the same worker process inherits: an `exit_range` left behind makes the next test's
+        # COPY TO children exit, so it exports only part of the table.
+        os.environ.pop("CQLSH_COPY_TEST_FAILURES", None)
+        yield
+        os.environ.pop("CQLSH_COPY_TEST_FAILURES", None)
+
     @pytest.fixture(scope="function")
     def clean_temp(self):
         yield
@@ -1440,7 +1449,7 @@ class TestCqlshCopy(CqlshPrepare):
     @pytest.mark.single_node
     # Test had history of timing out in debug, see: https://github.com/scylladb/scylla-dtest/issues/3275
     @pytest.mark.skip_mode(mode="debug", reason="test has a history of timing out in debug mode (scylladb/scylla-dtest#3275)")
-    @unmark.next_gating  # unmark cause of: https://github.com/scylladb/scylla-cqlsh/issues/37
+    @unmark.next_gating
     @pytest.mark.use_cassandra_stress
     def test_copy_to_with_child_process_crashing(self):
         """

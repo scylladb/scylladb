@@ -21,6 +21,7 @@ from itertools import chain
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from test import TOP_SRC_DIR
 from test.cluster.dtest.ccmlib.common import ArgumentError, wait_for, BIN_DIR
 from test.pylib.internal_types import ServerUpState
 from test.pylib.rest_client import HTTPError
@@ -49,6 +50,10 @@ CASSANDRA_OPTIONS_MAPPING = {
 DEFAULT_SMP = 2
 DEFAULT_MEMORY_PER_CPU = 512 * 1024 * 1024  # bytes
 DEFAULT_SCYLLA_LOG_LEVEL = "info"
+
+# The real cqlsh binary, as shipped by this repo (a thin wrapper around
+# tools/cqlsh/bin/cqlsh.py). Used by ScyllaNode.run_cqlsh() below.
+CQLSH_BIN = TOP_SRC_DIR / BIN_DIR / "cqlsh"
 
 KNOWN_LOG_LEVELS = {
     "TRACE": "trace",
@@ -565,7 +570,12 @@ class ScyllaNode:
 
         self.cluster.manager.server_start(
             server_id=self.server_id,
-            seeds=None if self.bootstrap else [self.address()],
+            # ccm made a node added with auto_bootstrap=False a seed, but its seed
+            # list still held the seeds added before it (ccm Cluster.get_seeds()),
+            # so it joined the existing cluster.  Seeding it with only itself
+            # would make it form a cluster of its own.  Let the manager pick the
+            # running nodes, as for any other node.
+            seeds=None,
             expected_server_up_state=ServerUpState.PROCESS_STARTED,
             cmdline_options_override=scylla_args,
             append_env_override=scylla_env,
@@ -709,6 +719,85 @@ class ScyllaNode:
         except KeyboardInterrupt:
             pass
 
+    def stress_object(self, stress_options: list[str], ignore_errors: bool | None = None, **kwargs) -> dict[str, float]:
+        """Run `cassandra-stress` and return its "Results:" section as a dict.
+
+        Same parsing as ccm's Node.stress_object(): keys are lower-cased, numbers
+        are floats, and a "READ: x, WRITE: y" breakdown adds "<key>:read" and
+        "<key>:write" entries.
+        """
+        del ignore_errors  # deprecated in ccm as well
+        ret = self.stress(stress_options, **kwargs)
+        res = {}
+        started = False
+        for line in (line.strip() for line in ret.stdout.splitlines()):
+            if not started:
+                started = line == "Results:"
+            elif m := re.match(r"^\s*([^:]+)\s*:\s*(\S.*)\s*$", line):
+                _set_stress_val(m.group(1).strip().lower(), m.group(2).strip(), res)
+        return res
+
+    def run_cqlsh(self,
+                  cmds: str | None = None,
+                  show_output: bool = False,
+                  cqlsh_options: list[str] | None = None,
+                  return_output: bool = False,
+                  timeout: int | float = 600,
+                  extra_env: dict | None = None) -> tuple[str, str] | None:
+        """Run the real `cqlsh` binary shipped by this repo (./bin/cqlsh) against this node.
+
+        Mirrors scylla-ccm's Node.run_cqlsh() (ccmlib/node.py): `cmds` is a
+        string of `;`-separated statements piped to cqlsh's stdin, `cqlsh_options`
+        are extra argv options inserted before the host/port positionals, and
+        with `return_output` the (stdout, stderr) pair is returned -- so ported
+        dtest bodies that call node.run_cqlsh(...) need no changes.
+
+        Unlike the ccm version, there is no interactive (`cmds=None`) mode and no
+        Windows branch: this in-tree port only needs to feed cqlsh a fixed set of
+        commands and read back its output.
+        """
+        cqlsh_options = list(cqlsh_options or [])
+
+        env = os.environ.copy()
+        if extra_env:
+            env.update(extra_env)
+
+        host, port = self.network_interfaces["binary"]
+        args = cqlsh_options if "--cloudconf" in cqlsh_options else [*cqlsh_options, host, str(port)]
+
+        self.debug(f"run_cqlsh cmd={[CQLSH_BIN, *args]}")
+        # cqlsh leaves files in its working directory (COPY FROM's import_<ks>_<table>.err),
+        # so run it from the node's directory, as ccm's cqlsh ran from the test directory.
+        p = subprocess.Popen([CQLSH_BIN, *args], env=env, cwd=self.get_path(), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+
+        try:
+            if cmds is not None:
+                for cmd in cmds.split(";"):
+                    cmd = cmd.strip()
+                    if cmd:
+                        p.stdin.write(cmd + ";\n")
+                p.stdin.write("quit;\n")
+        except BrokenPipeError:
+            # cqlsh already exited, e.g. it was only asked to print --version.
+            pass
+
+        try:
+            stdout, stderr = p.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            p.kill()
+            p.communicate()
+            raise
+
+        for line in stderr.splitlines():
+            if line.strip():
+                self.warning(f"(cqlsh stderr) {line}")
+
+        if show_output:
+            self.debug(stdout)
+
+        if return_output:
+            return stdout, stderr
+        return None
 
     def flush(self, ks: str | None = None, table: str | None = None, **kwargs) -> None:
         """Flush memtables to sstables via the REST API.
