@@ -841,7 +841,7 @@ class RepairAdditionalBase(Tester):
         # format) we need to remove them before we can restart node 1.
         # This may also end up deleting Scylla commit logs, but those should
         # not exist anyway (as we used node1.flush()).
-        commitlog_dir = node1.get_path() + "/commitlogs/"
+        commitlog_dir = node1.get_path() + "/commitlog/"
         commitlog.cleanup(commitlog_dir)
 
         # Finally bring both nodes up, repair, and confirm (by bringing up only

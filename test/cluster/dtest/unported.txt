@@ -64,7 +64,6 @@ putget_test.py
 range_ghost_test.py
 read_amplification_test.py
 read_repair_test.py
-repair_additional_test.py
 repair_based_node_operations_test.py
 repair_test.py
 replication_test.py
