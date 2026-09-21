@@ -7,12 +7,17 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import importlib
 import logging
 import os
+import pkgutil
+import sys
 from typing import TYPE_CHECKING
 
 import pytest
 
+import test.cluster.dtest.ccmlib
 from test.cluster.dtest.dtest_config import DTestConfig
 from test.cluster.dtest.dtest_setup import DTestSetup
 from test.cluster.dtest.dtest_setup_overrides import DTestSetupOverrides
@@ -28,6 +33,26 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
+
+
+def _alias_ccmlib() -> None:
+    """Make `ccmlib.X` the very same module as `test.cluster.dtest.ccmlib.X`.
+
+    The test modules import the shim as scylla-dtest did (`from
+    ccmlib.scylla_cluster import ScyllaCluster`), which pytest resolves through
+    the test/cluster/dtest entry it puts on sys.path, while the harness builds
+    the cluster and nodes from `test.cluster.dtest.ccmlib`.  Left alone, Python
+    loads each shim file twice, as two unrelated modules, so every
+    `isinstance(self.cluster, ScyllaCluster)` in the tests is False and they
+    take their Cassandra branches (e.g. repair_test.py's check_repair_logs()).
+    """
+    package = test.cluster.dtest.ccmlib
+    sys.modules["ccmlib"] = package
+    for info in pkgutil.walk_packages(package.__path__, prefix=f"{package.__name__}."):
+        sys.modules[f"ccmlib.{info.name.removeprefix(f'{package.__name__}.')}"] = importlib.import_module(info.name)
+
+
+_alias_ccmlib()
 
 
 def pytest_addoption(parser: Parser) -> None:
