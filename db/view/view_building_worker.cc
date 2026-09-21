@@ -199,8 +199,7 @@ future<> view_building_worker::register_staging_sstable_tasks(std::vector<sstabl
         try {
             auto lock = co_await get_units(local_vbw._staging_sstables_mutex, 1, local_vbw._as);
             vbw_logger.debug("Saving {} sstables for table {} to create view building tasks", staging_task_infos.size(), table_id);
-            auto& sstables_queue = local_vbw._sstables_to_register[table_id];
-            sstables_queue.insert(sstables_queue.end(), std::make_move_iterator(staging_task_infos.begin()), std::make_move_iterator(staging_task_infos.end()));
+            local_vbw._sstables_to_register.insert(staging_task_infos.begin(), staging_task_infos.end());
             local_vbw._sstables_to_register_event.broadcast();
         } catch (semaphore_aborted&) {
             vbw_logger.warn("Semaphore was aborted while waiting to register {} sstables for table {}", staging_task_infos.size(), table_id);
@@ -264,50 +263,43 @@ future<> view_building_worker::create_staging_sstable_tasks() {
     view_building_task_mutation_builder builder(guard.write_timestamp(), std::move(uuid_gen));
     auto my_host_id = _db.get_token_metadata().get_topology().my_host_id();
     auto started_tasks_lock = co_await get_units(_started_staging_tasks_mutex, 1, _as);
-    for (auto& [table_id, sst_infos]: _sstables_to_register) {
-        std::set<std::pair<shard_id, dht::token>> new_tasks;
-        auto task_exists = [&, this] (shard_id shard, dht::token last_token) {
-            if (new_tasks.contains({shard, last_token})) {
-                // We're already creating a task for this tablet replica
-                return true;
-            }
-
-            if (!_vb_state_machine.building_state.tasks_state.contains(table_id)) {
-                return false;
-            }
-            auto& tasks_for_table = _vb_state_machine.building_state.tasks_state.at(table_id);
-            for (auto& [replica, tasks]: tasks_for_table) {
-                if (replica.host != my_host_id || replica.shard != shard) {
-                    continue;
-                }
-                for (auto& staging_task: tasks.staging_tasks) {
-                    if (_started_staging_tasks[replica].contains(std::make_pair(table_id, staging_task.first))) {
-                        // This view building tasks is already started, we cannot attach this staging sstable to it
-                        continue;
-                    }
-                    if (staging_task.second.last_token == last_token && !staging_task.second.aborted) {
-                        return true;
-                    }
-                }
-            }
+    // `_sstables_to_register` holds one entry per (table, shard, last_token), so only
+    // tasks already present in the state machine need to be checked here.
+    auto task_exists = [&, this] (const staging_sstable_task_info& info) {
+        auto& tasks_state = _vb_state_machine.building_state.tasks_state;
+        auto table_it = tasks_state.find(info.table_id);
+        if (table_it == tasks_state.end()) {
             return false;
-        };
-
-
-        for (auto& sst_info: sst_infos) {
-            if (task_exists(sst_info.shard, sst_info.last_token)) {
-                vbw_logger.debug("Process staging task for replica {} already exists, skipping...", locator::tablet_replica{my_host_id, sst_info.shard});
+        }
+        locator::tablet_replica replica{my_host_id, info.shard};
+        auto replica_it = table_it->second.find(replica);
+        if (replica_it == table_it->second.end()) {
+            return false;
+        }
+        for (auto& staging_task: replica_it->second.staging_tasks) {
+            if (_started_staging_tasks[replica].contains(std::make_pair(info.table_id, staging_task.first))) {
+                // This view building tasks is already started, we cannot attach this staging sstable to it
                 continue;
             }
-
-            view_building_task task {
-                builder.new_id(), view_building_task::task_type::process_staging, false,
-                table_id, ::table_id{}, {my_host_id, sst_info.shard}, sst_info.last_token
-            };
-            builder.set_task(task);
-            vbw_logger.debug("Creating process staging task: {} with ID: {} for replica: {}", task, task.id, task.replica);
-            new_tasks.insert({sst_info.shard, sst_info.last_token});
+            if (staging_task.second.last_token == info.last_token && !staging_task.second.aborted) {
+                return true;
+            }
         }
+        return false;
+    };
+
+    for (auto& sst_info: _sstables_to_register) {
+        if (task_exists(sst_info)) {
+            vbw_logger.debug("Process staging task for replica {} already exists, skipping...", locator::tablet_replica{my_host_id, sst_info.shard});
+            continue;
+        }
+
+        view_building_task task {
+            builder.new_id(), view_building_task::task_type::process_staging, false,
+            sst_info.table_id, ::table_id{}, {my_host_id, sst_info.shard}, sst_info.last_token
+        };
+        builder.set_task(task);
+        vbw_logger.debug("Creating process staging task: {} with ID: {} for replica: {}", task, task.id, task.replica);
     }
 
     // Release `_started_staging_tasks_mutex` before `add_entry()` below: it is only needed to read
@@ -324,23 +316,16 @@ future<> view_building_worker::create_staging_sstable_tasks() {
 }
 
 future<> view_building_worker::discover_existing_staging_sstables() {
-    auto merge_maps = [] (auto& a, auto&& b) mutable {
-        for (auto& [tid, ssts]: b) {
-            auto& tid_ssts = a[tid];
-            tid_ssts.insert(tid_ssts.end(), std::make_move_iterator(ssts.begin()), std::make_move_iterator(ssts.end()));
-        }
-    };
-    
     auto lock = co_await get_units(_staging_sstables_mutex, 1, _as);
-    auto new_staging_tasks = co_await container().map_reduce0([building_tasks = _vb_state_machine.building_state.tasks_state] (auto& vbw) -> future<std::unordered_map<table_id, std::vector<staging_sstable_task_info>>> {
+    auto new_staging_tasks = co_await container().map_reduce0([building_tasks = _vb_state_machine.building_state.tasks_state] (auto& vbw) -> future<std::set<staging_sstable_task_info>> {
         auto new_tasks = vbw.discover_local_staging_sstables(std::move(building_tasks));
         co_return new_tasks;
-    }, std::unordered_map<table_id, std::vector<staging_sstable_task_info>>{}, [&] (std::unordered_map<table_id, std::vector<staging_sstable_task_info>> a, std::unordered_map<table_id, std::vector<staging_sstable_task_info>>&& b) {
-        merge_maps(a, std::move(b));
+    }, std::set<staging_sstable_task_info>{}, [] (std::set<staging_sstable_task_info> a, std::set<staging_sstable_task_info>&& b) {
+        a.merge(b);
         return a;
     });
 
-    merge_maps(_sstables_to_register, std::move(new_staging_tasks));
+    _sstables_to_register.merge(new_staging_tasks);
 }
 
 static bool staging_task_exists(const building_tasks& tasks, table_id table_id, const locator::tablet_replica& replica, dht::token last_token) {
@@ -355,8 +340,8 @@ static bool staging_task_exists(const building_tasks& tasks, table_id table_id, 
 
 // Because view building state lives only on shard0, the method needs to take copy of building tasks
 // to determine whether a task for particular staging sstable exists or not.
-std::unordered_map<table_id, std::vector<view_building_worker::staging_sstable_task_info>> view_building_worker::discover_local_staging_sstables(building_tasks building_tasks) {
-    std::unordered_map<table_id, std::vector<staging_sstable_task_info>> tasks_to_create;
+std::set<view_building_worker::staging_sstable_task_info> view_building_worker::discover_local_staging_sstables(building_tasks building_tasks) {
+    std::set<staging_sstable_task_info> tasks_to_create;
     auto my_host_id = _db.get_token_metadata().get_topology().my_host_id();
 
     _db.get_tables_metadata().for_each_table([&] (table_id table_id, lw_shared_ptr<replica::table> table) {
@@ -381,7 +366,7 @@ std::unordered_map<table_id, std::vector<view_building_worker::staging_sstable_t
             if (!staging_task_exists(building_tasks, table_id, {my_host_id, shard}, last_token)) {
                 // For the future: we can check if the sstable needs to go through view building coordinator
                 //                 or maybe it can be registered to view_update_generator directly.
-                tasks_to_create[table_id].emplace_back(table_id, shard, last_token);
+                tasks_to_create.insert({table_id, shard, last_token});
             }
         }
     });
@@ -798,17 +783,12 @@ future<> view_building_worker::cleanup_staging_sstables(locator::effective_repli
     // (SCYLLADB-2312).
     co_await container().invoke_on(0, [table_id, tablet_range] (view_building_worker& vbw0) -> future<> {
         auto lock = co_await get_units(vbw0._staging_sstables_mutex, 1, vbw0._as);
-        auto it = vbw0._sstables_to_register.find(table_id);
-        if (it == vbw0._sstables_to_register.end()) {
-            co_return;
-        }
-        auto old_size = it->second.size();
-        std::erase_if(it->second, [&] (auto& info) {
-            return tablet_range.contains(info.last_token, dht::token_comparator());
+        auto removed = std::erase_if(vbw0._sstables_to_register, [&] (auto& info) {
+            return info.table_id == table_id && tablet_range.contains(info.last_token, dht::token_comparator());
         });
-        if (old_size != it->second.size()) {
+        if (removed) {
             vbw_logger.info("cleanup_staging_sstables: removed {} entries from _sstables_to_register for table {}",
-                old_size - it->second.size(), table_id);
+                removed, table_id);
         }
     });
 }
