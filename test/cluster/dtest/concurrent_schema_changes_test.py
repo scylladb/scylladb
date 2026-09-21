@@ -366,8 +366,7 @@ class TestConcurrentSchemaChanges(Tester):
         self._do_lots_of_schema_actions(session)
         self._verify_lots_of_schema_actions(session)
 
-    # Reason to exclude from next_gating: the test has failed runs in enterprise daily jobs
-    @unmark.next_gating  # https://github.com/scylladb/scylla-enterprise/issues/3231
+    @unmark.next_gating
     def test_create_lots_of_schema_churn_with_node_down(self, fixture_dtest_setup):
         """
         create tables, indexes, alters across multiple threads concurrently with a node down
@@ -551,8 +550,8 @@ class TestConcurrentSchemaChanges(Tester):
         # restore the snapshots
         # clear the commitlogs and data
         dirs = (
-            "%s/commitlogs" % node1.get_path(),
-            "%s/commitlogs" % node2.get_path(),
+            "%s/commitlog" % node1.get_path(),
+            "%s/commitlog" % node2.get_path(),
             "%s/data/ks_ns2/cf_*/*" % node1.get_path(),
             "%s/data/ks_ns2/cf_*/*" % node2.get_path(),
         )
