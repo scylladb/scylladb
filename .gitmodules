@@ -18,3 +18,6 @@
 [submodule "fmt"]
 	path = fmt
 	url = ../fmt
+[submodule "c-ares"]
+	path = c-ares
+	url = ../c-ares

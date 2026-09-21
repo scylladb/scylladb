@@ -2288,6 +2288,11 @@ def configure_seastar(build_dir, mode, mode_config, compiler_cache=None):
         # Resolve fmt to the bundled submodule we build in configure_fmt()
         # rather than whatever version happens to be installed on the host.
         '-Dfmt_ROOT={}'.format(fmt_build_dir(build_dir, mode)),
+        # Likewise for c-ares: point Seastar's Findc-ares.cmake at the prefix
+        # that configure_c_ares() installs the bundled submodule into. A
+        # <package>_ROOT is searched by find_library()/find_path() ahead of
+        # the pkg-config HINTS, so the host's c-ares is not consulted.
+        '-Dc-ares_ROOT={}'.format(c_ares_install_dir(build_dir, mode)),
         '-DSeastar_LD_FLAGS={}'.format(semicolon_separated(mode_config['lib_ldflags'], seastar_cxx_ld_flags)),
         '-DSeastar_API_LEVEL=9',
         '-DSeastar_DEPRECATED_OSTREAM_FORMATTERS=OFF',
@@ -2423,6 +2428,140 @@ def configure_fmt(build_dir, mode, mode_config, compiler_cache=None):
         print(' \\\n  '.join(fmt_cmd))
     os.makedirs(cmake_dir, exist_ok=True)
     subprocess.check_call(fmt_cmd, shell=False, cwd=cmake_dir)
+
+
+def c_ares_build_dir(build_dir, mode):
+    # Where configure_c_ares() sets up c-ares's CMake build.
+    # Absolute, because it ends up in Seastar's c-ares_ROOT.
+    return os.path.realpath(os.path.join(build_dir, mode, 'c-ares'))
+
+
+def c_ares_install_dir(build_dir, mode):
+    # Unlike fmt, c-ares cannot be consumed straight out of its build tree:
+    # Seastar's Findc-ares.cmake looks for a libcares and an ares_dns.h, and
+    # c-ares generates ares_build.h/ares_config.h into the build tree while
+    # ares_dns.h stays in the source tree. So the sub-build installs into this
+    # prefix, which collects the headers and the library in one place.
+    return os.path.join(c_ares_build_dir(build_dir, mode), 'install')
+
+
+def c_ares_lib(build_dir, mode):
+    # The installed library, as a ninja path: the output of the c-ares
+    # sub-build, and what Seastar's link line ends up naming.
+    return f'$builddir/{mode}/c-ares/install/lib/libcares.a'
+
+
+def strip_advanced_optimization_flags(flags):
+    # Drop the whole-program-optimization flags that prepare_advanced_optimizations()
+    # adds to lib_cflags. They are meant for Scylla's own code, and a library that
+    # configure_c_ares() builds at configure time cannot have them:
+    #
+    #  - the PGO flags name a profile that has not been downloaded or trained yet
+    #    when configure.py runs, and clang treats a missing -fprofile-use file as
+    #    a hard error;
+    #  - LTO would leave bitcode instead of machine code in libcares.a, which is
+    #    handed to Seastar's CMake as a plain library, and buys nothing for a
+    #    dependency that is never inlined into Scylla anyway.
+    #
+    # (-Wno-backend-plugin goes too: it exists only to silence the stale-profile
+    # warnings that the PGO flags produce.)
+    tokens = flags.split()
+    kept = []
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+        if (token.startswith('-flto')
+                or token == '-ffat-lto-objects'
+                or token == '-Wno-backend-plugin'
+                or token.startswith('-fprofile-use=')
+                or token.startswith('-fprofile-generate=')
+                or token.startswith('-fcs-profile-generate=')):
+            i += 1
+        elif (token == '-mllvm'
+              and i + 1 < len(tokens)
+              and tokens[i + 1] in ('-pgso=false', '-enable-value-profiling=false')):
+            i += 2
+        else:
+            kept.append(token)
+            i += 1
+    return ' '.join(kept)
+
+
+def configure_c_ares(build_dir, mode, mode_config, compiler_cache=None):
+    # Set up the CMake build of the bundled c-ares submodule rather than
+    # relying on the host's c-ares, whose version we do not control. Only the
+    # configure step runs here; the library is built (and installed into
+    # c_ares_install_dir()) during the ninja build, like fmt's and abseil's.
+    # Modeled on configure_fmt().
+    # Only lib_cflags, not cxxflags: the latter is Scylla's own -D soup (and,
+    # under --coverage, the instrumentation flags we would have to strip again
+    # here), none of which means anything to a C library.
+    c_flags = strip_advanced_optimization_flags(mode_config['lib_cflags'])
+
+    # The CMAKE_C_FLAGS_<mode> we set below replaces whatever CMake would have
+    # defaulted to for the build type, and two of Scylla's build types (Dev,
+    # Sanitize) are not build types CMake knows at all. So name the mode's
+    # optimization level and debug info explicitly rather than inheriting them.
+    c_flags += ' -O{}'.format(mode_config['optimization-level'])
+    if args.debuginfo and mode_config['can_have_debug_info']:
+        c_flags += ' -g -gz'
+    if '-DSANITIZE' in mode_config['cxxflags']:
+        c_flags += ' -fsanitize=address -fsanitize=undefined'
+
+    cmake_mode = mode_config['cmake_build_type']
+    c_ares_cmake_args = [
+        '-DCMAKE_BUILD_TYPE={}'.format(cmake_mode),
+        '-DCMAKE_C_COMPILER={}'.format(args.cc),
+        '-DCMAKE_CXX_COMPILER={}'.format(args.cxx),
+        '-DCMAKE_C_FLAGS_{}={}'.format(cmake_mode.upper(), c_flags),
+        '-DCMAKE_EXPORT_COMPILE_COMMANDS=ON',
+        '-DCMAKE_INSTALL_PREFIX={}'.format(c_ares_install_dir(build_dir, mode)),
+        # c_ares_lib() names .../install/lib/libcares.a; without this,
+        # GNUInstallDirs would pick lib64 on Fedora.
+        '-DCMAKE_INSTALL_LIBDIR=lib',
+        # c-ares 1.34.6 declares cmake_minimum_required(VERSION 3.5.0...3.10.0),
+        # which CMake 4 rejects outright.
+        '-DCMAKE_POLICY_VERSION_MINIMUM=3.10',
+        # Link c-ares statically into Seastar, so that there is no libcares.so
+        # to find at runtime and nothing extra to ship. The static library is
+        # linked into a shared libseastar in some modes, so it must be
+        # position-independent.
+        '-DCARES_STATIC=ON',
+        '-DCARES_SHARED=OFF',
+        '-DCARES_STATIC_PIC=ON',
+        # We do run c-ares's install target: it is how the headers and the
+        # library reach c_ares_install_dir().
+        '-DCARES_INSTALL=ON',
+        '-DCARES_BUILD_TESTS=OFF',
+        '-DCARES_BUILD_CONTAINER_TESTS=OFF',
+        '-DCARES_BUILD_TOOLS=OFF',
+    ]
+
+    if compiler_cache:
+        c_ares_cmake_args += [f'-DCMAKE_CXX_COMPILER_LAUNCHER={compiler_cache}',
+                              f'-DCMAKE_C_COMPILER_LAUNCHER={compiler_cache}']
+
+    cmake_dir = c_ares_build_dir(build_dir, mode)
+    c_ares_cmd = ['cmake', '-G', 'Ninja', real_relpath('c-ares', cmake_dir)] + c_ares_cmake_args
+
+    if args.verbose:
+        print(' \\\n  '.join(c_ares_cmd))
+    os.makedirs(cmake_dir, exist_ok=True)
+    subprocess.check_call(c_ares_cmd, shell=False, cwd=cmake_dir)
+
+    # Unlike fmt, whose find_package() only needs a config file that the
+    # configure step above already wrote, Seastar's Findc-ares.cmake locates
+    # c-ares with find_library()/find_path() - so the library and the headers
+    # must exist by the time configure_seastar() runs, not merely by the time
+    # ninja links Seastar. Build and install c-ares here; the ninja rule for
+    # c_ares_lib() keeps it up to date from then on. c-ares is small, so this
+    # costs little, and it is a no-op on subsequent configure.py runs.
+    install_cmd = ['cmake', '--build', cmake_dir, '--target', 'install']
+    if args.verbose:
+        print(' '.join(install_cmd))
+        subprocess.check_call(install_cmd, shell=False)
+    else:
+        subprocess.check_call(install_cmd, shell=False, stdout=subprocess.DEVNULL)
 
 
 def configure_abseil(build_dir, mode, mode_config, compiler_cache=None):
@@ -3077,11 +3216,11 @@ def write_build_file(f,
 
         seastar_dep = f'$builddir/{mode}/seastar/libseastar.{seastar_lib_ext}'
         seastar_testing_dep = f'$builddir/{mode}/seastar/libseastar_testing.{seastar_lib_ext}'
-        f.write(f'build {seastar_dep}: ninja $builddir/{mode}/seastar/build.ninja | always {fmt_lib(mode, modeval)} {profile_dep}\n')
+        f.write(f'build {seastar_dep}: ninja $builddir/{mode}/seastar/build.ninja | always {fmt_lib(mode, modeval)} {c_ares_lib(outdir, mode)} {profile_dep}\n')
         f.write('  pool = submodule_pool\n')
         f.write(f'  subdir = $builddir/{mode}/seastar\n')
         f.write('  target = seastar\n')
-        f.write(f'build {seastar_testing_dep}: ninja $builddir/{mode}/seastar/build.ninja | always {fmt_lib(mode, modeval)} {profile_dep}\n')
+        f.write(f'build {seastar_testing_dep}: ninja $builddir/{mode}/seastar/build.ninja | always {fmt_lib(mode, modeval)} {c_ares_lib(outdir, mode)} {profile_dep}\n')
         f.write('  pool = submodule_pool\n')
         f.write(f'  subdir = $builddir/{mode}/seastar\n')
         f.write('  target = seastar_testing\n')
@@ -3091,6 +3230,14 @@ def write_build_file(f,
         f.write(f'  pool = submodule_pool\n')
         f.write(f'  subdir = $builddir/{mode}/fmt\n')
         f.write(f'  target = fmt\n')
+        f.write(f'  profile_dep = {profile_dep}\n')
+
+        # 'install' rather than a library target: Seastar consumes c-ares out
+        # of the install prefix (see c_ares_install_dir()).
+        f.write(f'build {c_ares_lib(outdir, mode)}: ninja $builddir/{mode}/c-ares/build.ninja | always {profile_dep}\n')
+        f.write(f'  pool = submodule_pool\n')
+        f.write(f'  subdir = $builddir/{mode}/c-ares\n')
+        f.write(f'  target = install\n')
         f.write(f'  profile_dep = {profile_dep}\n')
 
         for lib in abseil_libs:
@@ -3263,6 +3410,7 @@ def write_build_file(f,
         build_ninja_files += [f'{outdir}/{mode}/seastar/build.ninja']
         build_ninja_files += [f'{outdir}/{mode}/abseil/build.ninja']
         build_ninja_files += [f'{outdir}/{mode}/fmt/build.ninja']
+        build_ninja_files += [f'{outdir}/{mode}/c-ares/build.ninja']
 
     # Re-run configure.py (and with it, cmake) whenever the cmake
     # configuration of a submodule changes.
@@ -3346,9 +3494,11 @@ def create_build_system(args):
         # {outdir}/{mode}/seastar/build.ninja, and
         # {outdir}/{mode}/seastar/seastar.pc is queried for building flags
         for mode, mode_config in build_modes.items():
-            # fmt must be configured before Seastar is, so that Seastar's
-            # find_package(fmt) resolves fmt's build tree (via fmt_ROOT).
+            # fmt and c-ares must be configured before Seastar is, so that
+            # Seastar's find_package() resolves fmt's build tree (via
+            # fmt_ROOT) and c-ares's install prefix (via c-ares_ROOT).
             configure_fmt(outdir, mode, mode_config, compiler_cache)
+            configure_c_ares(outdir, mode, mode_config, compiler_cache)
             configure_seastar(outdir, mode, mode_config, compiler_cache)
             configure_abseil(outdir, mode, mode_config, compiler_cache)
         user_cflags += ' -isystem abseil'
