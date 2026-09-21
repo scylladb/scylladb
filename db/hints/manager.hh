@@ -254,6 +254,9 @@ public:
     future<> wait_for_sync_point(abort_source& as, const sync_point::shard_rps& rps);
 
 private:
+    /// \brief Maps the endpoints of a sync point to host IDs, skipping the IPs that cannot be mapped.
+    std::unordered_map<endpoint_id, replay_position> sync_point_host_rps(const sync_point::shard_rps& rps) const;
+
     future<> compute_hints_dir_device_id();
 
     node_to_hint_store_factory_type& store_factory() noexcept {

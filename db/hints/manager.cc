@@ -312,20 +312,7 @@ sync_point::shard_rps manager::calculate_current_sync_point(std::span<const loca
     return rps;
 }
 
-future<> manager::wait_for_sync_point(abort_source& as, const sync_point::shard_rps& rps) {
-    abort_source local_as;
-
-    auto sub = as.subscribe([&local_as] () noexcept {
-        if (!local_as.abort_requested()) {
-            local_as.request_abort();
-        }
-    });
-
-    if (as.abort_requested()) {
-        local_as.request_abort();
-    }
-
-    const auto tmptr = _proxy.get_token_metadata_ptr();
+std::unordered_map<manager::endpoint_id, replay_position> manager::sync_point_host_rps(const sync_point::shard_rps& rps) const {
     std::unordered_map<endpoint_id, replay_position> hid_rps{};
     hid_rps.reserve(rps.size());
 
@@ -341,6 +328,24 @@ future<> manager::wait_for_sync_point(abort_source& as, const sync_point::shard_
             hid_rps.emplace(std::get<locator::host_id>(addr), rp);
         }
     }
+    return hid_rps;
+}
+
+future<> manager::wait_for_sync_point(abort_source& as, const sync_point::shard_rps& rps) {
+    abort_source local_as;
+
+    auto sub = as.subscribe([&local_as] () noexcept {
+        if (!local_as.abort_requested()) {
+            local_as.request_abort();
+        }
+    });
+
+    if (as.abort_requested()) {
+        local_as.request_abort();
+    }
+
+    const auto tmptr = _proxy.get_token_metadata_ptr();
+    const auto hid_rps = sync_point_host_rps(rps);
 
     bool was_aborted = false;
     co_await coroutine::parallel_for_each(_ep_managers,
