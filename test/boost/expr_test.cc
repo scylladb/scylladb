@@ -4058,7 +4058,7 @@ BOOST_AUTO_TEST_CASE(prepare_binary_operator_eq_neq_lt_lte_gt_gte_multi_column) 
                                        column_value(table_schema->get_column_definition("c3")),
                                        column_value(table_schema->get_column_definition("c4"))},
                           .type = tuple_type_impl::get_instance(
-                              {float_type, int32_type, utf8_type, reversed_type_impl::get_instance(double_type)})};
+                              {float_type, int32_type, utf8_type, double_type})};
 
     expression unprepared_rhs =
         tuple_constructor{.elements = {make_float_untyped("123.4"), make_int_untyped("1234"),
@@ -4251,7 +4251,7 @@ BOOST_AUTO_TEST_CASE(prepare_binary_operator_multi_col_in_empty_list) {
         .type = nullptr};
 
     data_type tuple_type = tuple_type_impl::get_instance(
-        {float_type, int32_type, utf8_type, reversed_type_impl::get_instance(double_type)});
+        {float_type, int32_type, utf8_type, double_type});
 
     expression prepared_lhs =
         tuple_constructor{.elements = {column_value(table_schema->get_column_definition("float_col")),
@@ -4263,7 +4263,6 @@ BOOST_AUTO_TEST_CASE(prepare_binary_operator_multi_col_in_empty_list) {
     expression unprepared_rhs =
         collection_constructor{.style = collection_constructor::style_type::list_or_vector, .elements = {}};
 
-    // reversed is removed!
     expression prepared_rhs = constant(
         make_list_raw({}), list_type_impl::get_instance(
                                tuple_type_impl::get_instance({float_type, int32_type, utf8_type, double_type}), false));
@@ -4302,7 +4301,7 @@ BOOST_AUTO_TEST_CASE(prepare_binary_operator_multi_col_in_values) {
         .type = nullptr};
 
     data_type tuple_type = tuple_type_impl::get_instance(
-        {float_type, int32_type, utf8_type, reversed_type_impl::get_instance(double_type)});
+        {float_type, int32_type, utf8_type, double_type});
 
     expression prepared_lhs =
         tuple_constructor{.elements = {column_value(table_schema->get_column_definition("float_col")),
@@ -4331,7 +4330,6 @@ BOOST_AUTO_TEST_CASE(prepare_binary_operator_multi_col_in_values) {
         {make_tuple_raw({make_float_raw(1.2), make_int_raw(3), make_text_raw("four"), make_double_raw(8.9)}),
          make_tuple_raw({make_float_raw(5), make_int_raw(6), make_text_raw("seven"), make_double_raw(10.11)})});
 
-    // reversed is removed!
     data_type prepared_rhs_type = list_type_impl::get_instance(
         tuple_type_impl::get_instance({float_type, int32_type, utf8_type, double_type}), false);
 
