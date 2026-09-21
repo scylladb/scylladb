@@ -253,6 +253,35 @@ class ScyllaNode:
 
         return self.network_interfaces["storage"][0]
 
+    def change_ip(self) -> str:
+        """Give this node a new IP address. The node must be stopped.
+
+        scylla-ccm lets a test pick the address itself, by assigning
+        node.network_interfaces and rewriting listen_address. Here the cluster
+        manager owns the address pool, so it leases the next free address and
+        rewrites the node's scylla.yaml (listen_address, rpc_address,
+        api_address, prometheus_address, alternator_address); the caller gets
+        back the address it was given. The old address is held to the end of
+        the test so it is not recycled inside the same cluster.
+        """
+        if self.is_running():
+            raise NodeError(f"Can't change the IP of a running node {self.name}; stop it first")
+        new_ip = str(self.cluster.manager.server_change_ip(server_id=self.server_id))
+        # server_change_ip() rewrites rpc_address too, so both interfaces move.
+        self.network_interfaces = {name: (new_ip, port) for name, (_, port) in self.network_interfaces.items()}
+        logger.debug(f"Changed IP of {self.name} to {new_ip}")
+        return new_ip
+
+    def change_rpc_address(self) -> str:
+        """Give this node a new CQL (rpc_address) address. The node must be stopped."""
+        if self.is_running():
+            raise NodeError(f"Can't change the RPC address of a running node {self.name}; stop it first")
+        new_ip = str(self.cluster.manager.server_change_rpc_address(server_id=self.server_id))
+        _, port = self.network_interfaces["binary"]
+        self.network_interfaces["binary"] = (new_ip, port)
+        logger.debug(f"Changed RPC address of {self.name} to {new_ip}")
+        return new_ip
+
     def is_running(self) -> bool:
         return self.cluster.manager.server_is_alive(server_id=self.server_id)
 
@@ -656,10 +685,11 @@ class ScyllaNode:
         if wait and p.wait(timeout=timeout):
             raise NodetoolError(" ".join(nodetool_cmd), p.returncode, stdout, stderr)
 
-        stderr = "\n".join(
-            line for line in stderr.splitlines()
-            if self.debug(f"checking {line}") or not any(p.fullmatch(line) for p in NODETOOL_STDERR_IGNORED_PATTERNS)
-        )
+        if stderr is not None:
+            stderr = "\n".join(
+                line for line in stderr.splitlines()
+                if self.debug(f"checking {line}") or not any(p.fullmatch(line) for p in NODETOOL_STDERR_IGNORED_PATTERNS)
+            )
 
         return stdout, stderr
 
