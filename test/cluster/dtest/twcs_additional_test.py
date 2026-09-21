@@ -142,7 +142,7 @@ class TestTimeWindowCompactionStrategyAdditional(Tester):
 
     def expired_sstables_should_not_be_compacted_along_with_unexpired(self, from_mark):
         node = self.cluster.nodelist()[0]
-        log_file = os.path.join(node.get_path(), "logs", "system.log")
+        log_file = node.logfilename()
 
         def get_sstables(line):
             return re.search(r"[\w-]+-Data\.db", line).group(0)
