@@ -52,7 +52,7 @@ def pytest_configure(config: Config) -> None:
 
 
 def pytest_collection_modifyitems(config: Config, items: list[pytest.Item]) -> None:
-    """Honour @pytest.mark.required_features, as scylla-dtest's conftest did.
+    """Honour @pytest.mark.required_features and skip_if, as scylla-dtest's conftest did.
 
     scylla-dtest deselected a test whose required features were not enabled for
     the run.  Here the test is skipped instead of deselected, so it still shows
@@ -68,6 +68,15 @@ def pytest_collection_modifyitems(config: Config, items: list[pytest.Item]) -> N
             item.add_marker(pytest.mark.skip_env(
                 reason=f"requires scylla features {list(marker.args)}, "
                        f"but this run enables {sorted(features)}"))
+        # scylla-dtest deselected a test whose @pytest.mark.skip_if condition
+        # (a tools.marks predicate, e.g. ~with_feature("tablets")) held.
+        if (marker := item.get_closest_marker("skip_if")) and marker.args:
+            condition = marker.args[0]
+            condition.apply(enabled_features=features)
+            if condition:
+                item.add_marker(pytest.mark.skip_env(
+                    reason=marker.kwargs.get("reason")
+                           or f"skip_if condition holds for scylla features {sorted(features)}"))
 
 
 @pytest.fixture(scope="function", autouse=True)
