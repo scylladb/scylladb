@@ -5,7 +5,6 @@
 #
 
 import logging
-import time
 
 import pytest
 from cassandra.cluster import Session
@@ -17,6 +16,7 @@ from ics_compaction_test import create_table
 from rolling_upgrade_test import RollingUpgradeBase
 from tools.cluster import run_rest_api
 from tools.cluster_topology import generate_cluster_topology
+from tools.marks import with_feature
 from tools.raft_topology import TopologyCoordinatorFinder, get_raft_group_id, get_raft_snapshot_id
 from tools.scylla_defines import CompactionStrategy
 from upgrade_test import upgrade_matrix_from_last_release_version
@@ -101,6 +101,7 @@ class TopologyOperationWithMixedCLusterTest(RollingUpgradeBase):
             wait_for(lambda: prev_raft_snapshot_id != get_raft_snapshot_id(exclusive_session), timeout=30)
 
     @pytest.mark.skip_mode(mode=["dev", "debug"], reason="scylla-dtest gates on it in release mode only")
+    @pytest.mark.skip_if(~with_feature("consistent-topology-changes"))
     def test_trigger_snapshot_transfer(self, dtest_config: DTestConfig):
         cluster_topology = generate_cluster_topology(rack_num=3, nodes_per_rack=2)
         session = self.create_cluster(cluster_topology, dtest_config=dtest_config)
