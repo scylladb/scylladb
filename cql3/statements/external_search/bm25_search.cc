@@ -21,6 +21,17 @@
 
 namespace cql3::statements::bm25_search {
 
+namespace {
+
+/// The column the index is built on: the one the rows are ranked by and an excerpt is generated from.
+const column_definition& indexed_column(const schema& schema, const secondary_index::index& index) {
+    const auto* cdef = schema.get_column_definition(to_bytes(index.target_column()));
+    throwing_assert(cdef);
+    return *cdef;
+}
+
+} // anonymous namespace
+
 secondary_index::index index_for(data_dictionary::database db, const schema_ptr& schema, const column_definition& column) {
     for (const auto& index : db.find_column_family(schema).get_index_manager().list_indexes()) {
         if (index.supports_bm25_expression(column)) {
@@ -28,12 +39,6 @@ secondary_index::index index_for(data_dictionary::database db, const schema_ptr&
         }
     }
     throw exceptions::invalid_request_exception("No fulltext index found for full-text search query");
-}
-
-const column_definition& indexed_column(const schema& schema, const secondary_index::index& index) {
-    const auto* cdef = schema.get_column_definition(to_bytes(index.target_column()));
-    throwing_assert(cdef);
-    return *cdef;
 }
 
 sstring query_term(const cql3::raw_value& value) {

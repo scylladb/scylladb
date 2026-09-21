@@ -28,9 +28,6 @@ namespace cql3::statements::bm25_search {
 /// The full-text index that serves searches on `column`.
 secondary_index::index index_for(data_dictionary::database db, const schema_ptr& schema, const column_definition& column);
 
-/// The column the index is built on: the one the rows are ranked by and a fragment is generated from.
-const column_definition& indexed_column(const schema& schema, const secondary_index::index& index);
-
 /// The search term an evaluated query value holds.
 sstring query_term(const cql3::raw_value& value);
 

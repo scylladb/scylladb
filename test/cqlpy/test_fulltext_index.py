@@ -430,7 +430,7 @@ def test_bm25_without_comparison(cql, fulltext_table):
 
 def test_bm25_requires_limit(cql, fulltext_table):
     """A SELECT with BM25 but no LIMIT must be rejected."""
-    with pytest.raises(InvalidRequest, match="require a LIMIT"):
+    with pytest.raises(InvalidRequest, match="must have a limit specified"):
         cql.execute(f"SELECT * FROM {fulltext_table} WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello')")
 
 
