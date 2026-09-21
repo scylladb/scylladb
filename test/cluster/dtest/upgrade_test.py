@@ -8,7 +8,6 @@ import copy
 import logging
 import os
 import shutil
-import subprocess
 from concurrent.futures.thread import ThreadPoolExecutor
 from time import sleep
 
@@ -17,7 +16,7 @@ from cassandra import ConsistencyLevel
 from cassandra.cluster import Session
 from cassandra.concurrent import execute_concurrent_with_args
 from ccmlib import scylla_repository
-from ccmlib.common import SCYLLA_CONF, get_default_scylla_yaml, get_version_from_build
+from ccmlib.common import SCYLLA_CONF, get_default_scylla_yaml
 from ccmlib.scylla_cluster import ScyllaCluster, ScyllaNode
 from ccmlib.utils.version import ComparableScyllaVersion
 from filelock import FileLock
@@ -33,6 +32,11 @@ from tools.marks import issue_open
 from tools.session import get_enabled_features, get_supported_features, wait_reconnection
 
 logger = logging.getLogger(__name__)
+
+# The versions below are ccm version specs, resolved by the in-tree
+# ccmlib.scylla_repository shim: "release:<major>.<minor>" is a released
+# relocatable package downloaded from ScyllaDB's download server, and the build
+# under test is appended to the path by add_current_version_to_upgrade_path().
 
 upgrade_matrix_full_path = ["release:2025.1", "release:2025.3", "release:2025.4", "release:2026.1"]
 upgrade_matrix_from_last_release_version = ["release:2026.1"]
