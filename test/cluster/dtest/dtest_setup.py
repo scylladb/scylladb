@@ -676,7 +676,10 @@ class DTestSetup:
         logger.debug(f"Scylla mode is '{self.cluster.scylla_mode}'")
         logger.debug(f"Cluster *_request_timeout_in_ms={timeout}, range_request_timeout_in_ms={range_timeout}, cql request_timeout={self.cql_request_timeout}")
 
-        values: dict[str, Any] = self.cluster_options | {
+        # The test's own cluster_options go last: a @pytest.mark.cluster_options
+        # is how a test asks for something other than the defaults below, and
+        # merging it first meant sstable_format, say, could not be asked for.
+        values: dict[str, Any] = {
             "phi_convict_threshold": 5,
             "task_ttl_in_seconds": 0,
             "read_request_timeout_in_ms": timeout,
@@ -688,7 +691,10 @@ class DTestSetup:
             "request_timeout_in_ms": timeout,
             "num_tokens": None,
             "sstable_format": "mt",
-        }
+            # test.py's scylla.yaml sets strict_allow_filtering: true, which rejects queries that
+            # scylla-dtest ran against Scylla's default ("warn": run them, with a warning).
+            "strict_allow_filtering": "warn",
+        } | self.cluster_options
 
         if self.setup_overrides is not None and self.setup_overrides.cluster_options:
             values.update(self.setup_overrides.cluster_options)
