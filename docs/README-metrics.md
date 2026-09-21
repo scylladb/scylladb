@@ -63,3 +63,5 @@ The GitHub workflow `docs-validate-metrics.yml` automatically runs validation on
 - **"Parameter not found"**: Add parameter mapping to config `params` section
 - **"Could not resolve param"**: Check parameter name matches C++ code exactly
 - **"No group found"**: Add group mapping or verify `add_group()` calls
+- **"Unresolved metric group"**: Add the reported expression to the file's `params` mapping with its concrete group names
+- **"Invalid metric name"**: Check the source metric name and configured group names for whitespace or unevaluated C++ expressions
