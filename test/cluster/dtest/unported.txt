@@ -31,7 +31,6 @@ cql_tracing_addition_test.py
 cql_tracing_test.py
 cqlsh_tests/cqlsh_copy_tests.py
 cqlsh_tests/cqlsh_tests.py
-data_distribution_balance_test.py
 delete_insert_test.py
 deletion_test.py
 distributed_queries_test.py
