@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import re
+import socket
 import subprocess
 import sys
 import time
@@ -238,3 +239,16 @@ def get_jvm_spec_version(java_bin_path: Path) -> str | None:
     for version in match.groups():
         return version
     return None
+
+
+def check_socket_listening(itf, timeout: int = 60) -> bool:
+    """Wait until something accepts connections on (host, port).  Copied from scylla-ccm."""
+    def _check_socket_listening() -> bool:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as _socket:
+            try:
+                _socket.connect(itf)
+                return True
+            except OSError:
+                return False
+
+    return wait_for(func=_check_socket_listening, timeout=timeout, step=0.2)
