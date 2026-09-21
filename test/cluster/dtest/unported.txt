@@ -97,5 +97,4 @@ updateable_config_test.py
 upgrade_test.py
 user_functions_test.py
 user_types_test.py
-wide_rows_test.py
 workload_prioritization_upgrade_test.py

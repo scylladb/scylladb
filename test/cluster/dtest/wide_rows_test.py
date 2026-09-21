@@ -15,7 +15,7 @@ import pytest
 from cassandra import ConsistencyLevel
 from cassandra.query import SimpleStatement, dict_factory
 
-from dtest_class import Tester, create_ks
+from dtest_class import Tester, create_ks, read_barrier
 from tools.assertions import assert_equal_more_with_deviation, assert_less_equal_lists
 from tools.cluster_topology import generate_cluster_topology
 from tools.tables_view_manager import wait_for_view
@@ -749,6 +749,9 @@ class TestWideRows(Tester):
             self.cluster.flush()
         logger.debug(f"Start and repair {node2.name}")
         node2.start(wait_other_notice=True, wait_for_binary_proto=True)
+        # The restarted node may not have caught up with the schema changes made while it was down,
+        # in which case the repair finds no tables to repair in the keyspace.
+        read_barrier(node2)
         node2.repair()
         logger.debug("Run compaction")
         self.cluster.compact()
@@ -781,6 +784,9 @@ class TestWideRows(Tester):
 
         logger.debug(f"Start {node2.name}")
         node2.start(wait_other_notice=True, wait_for_binary_proto=True)
+        # The restarted node may not have caught up with the schema changes made while it was down,
+        # in which case the repair finds no tables to repair in the keyspace.
+        read_barrier(node2)
         node2.repair()
 
         extra_partitions += self.trigger_compaction_by_data_write_and_flush(session, entity_type, partition_num + extra_partitions)
@@ -932,6 +938,9 @@ class TestWideRows(Tester):
 
         logger.debug(f"Start {node2.name}")
         node2.start(wait_other_notice=True, wait_for_binary_proto=True)
+        # The restarted node may not have caught up with the schema changes made while it was down,
+        # in which case the repair finds no tables to repair in the keyspace.
+        read_barrier(node2)
         node2.repair()
         # self.cluster.flush()
         # extra_rows += self.trigger_compaction_by_data_write_and_flush(session, entity_type, rows_number + extra_rows)
