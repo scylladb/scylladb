@@ -182,6 +182,9 @@ void manager::register_metrics(const sstring& group_name) {
         sm::make_counter("discarded", _stats.discarded,
                         sm::description("Number of hints that were discarded during sending (too old, schema changed, etc.).")),
 
+        sm::make_counter("discarded_on_failed_replay", _stats.discarded_on_failed_replay,
+                        sm::description("Number of hints discarded instead of sent because the operation waiting for their replay gave up.")).set_skip_when_empty(),
+
         sm::make_counter("send_errors", _stats.send_errors,
             sm::description("Number of unexpected errors during sending, sending will be retried later")),
 
@@ -380,6 +383,20 @@ future<> manager::wait_for_sync_point(abort_source& as, const sync_point::shard_
 
     if (was_aborted) {
         co_await coroutine::return_exception(abort_requested_exception{});
+    }
+}
+
+void manager::discard_hints_up_to_sync_point(const sync_point::shard_rps& rps) {
+    const auto hid_rps = sync_point_host_rps(rps);
+
+    for (auto& [ep, ep_man] : _ep_managers) {
+        const auto it = hid_rps.find(ep);
+        const replay_position rp = it == hid_rps.end() ? replay_position{} : it->second;
+        if (ep_man.set_discard_bound(rp)) {
+            // No local hint is under the default bound; only segments from other shards are.
+            const auto level = rp == replay_position{} ? log_level::debug : log_level::warn;
+            manager_logger.log(level, "Discarding the hints for {} in {} up to {}", ep, _hints_dir.native(), rp);
+        }
     }
 }
 

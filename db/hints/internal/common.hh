@@ -41,6 +41,7 @@ struct hint_stats {
     uint64_t sent_total                 = 0;
     uint64_t sent_hints_bytes_total     = 0;
     uint64_t discarded                  = 0;
+    uint64_t discarded_on_failed_replay = 0;
     uint64_t send_errors                = 0;
     uint64_t corrupted_files            = 0;
 };
