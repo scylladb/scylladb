@@ -20,6 +20,14 @@ from cryptography.x509.oid import NameOID
 logger = logging.getLogger(__name__)
 
 
+# Restored verbatim from scylla-dtest's tools/sslkeygen.py; it was trimmed
+# when this module was first ported in-tree, but not-yet-adapted
+# dtest/unported test modules still import it.
+def wait_for_cert_reload(node, module, files, from_mark=None):
+    for f in files:
+        node.watch_log_for("^.*{}.*Reloaded.*{}.*".format(module, f.replace(".", "\\.")), from_mark=from_mark)
+
+
 def create_self_signed_x509_certificate(test_path, cert_file="scylla.crt", key_file="scylla.key", ip_list=None, cname=None, ca_key=None, ca_cert=None, email=None):  # noqa: PLR0913
     ip_list = ip_list or []
 
