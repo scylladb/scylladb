@@ -5,7 +5,6 @@ cassandra_batch_test.py
 cdc_batch_test.py
 cdc_snapshot_operation_test.py
 cdc_static_row_test.py
-cdc_test.py
 cdc_tracing_info_test.py
 cdc_ttl_test.py
 cdc_types_test.py

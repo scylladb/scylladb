@@ -41,7 +41,7 @@ from tools.cdc_utils import (
 )
 from tools.cluster_topology import generate_cluster_topology
 from tools.data import keyspace_has_tablets
-from tools.misc import ImmutableMapping
+from tools.misc import ImmutableMapping, num_tokens_per_node
 
 TOKENS_PER_NODE = 256
 
@@ -176,10 +176,12 @@ class CDCInitializeHelper:
 
     def wait_for_metadata_update(self, session, cluster_size):
         # Cluster metadata is updated asynchronously, so we need to wait
+        expected_ring_length = cluster_size * num_tokens_per_node(session)
+
         def check_metadata():
             ring = self.get_vnode_ring(session)
             logger.debug(f"Token ring length: {len(ring)}")
-            return len(ring) == cluster_size * 256
+            return len(ring) == expected_ring_length
 
         wait_for(check_metadata, timeout=60, text="Waiting until metadata is updated")
 
