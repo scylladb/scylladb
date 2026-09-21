@@ -1,3 +1,9 @@
+#
+# Copyright (C) 2026-present ScyllaDB
+#
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
+#
+
 """
 Basic assertion utilities with no dependencies on other tools modules.
 This module exists to break circular dependencies.

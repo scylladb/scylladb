@@ -1,3 +1,9 @@
+#
+# Copyright (C) 2026-present ScyllaDB
+#
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
+#
+
 # The idea of a randomized test is to create a random,
 # yet deterministic sequence of nodetool actions and perform
 # these actions in presence of LWT workload. Currently we don't

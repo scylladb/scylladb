@@ -1,3 +1,9 @@
+#
+# Copyright (C) 2026-present ScyllaDB
+#
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
+#
+
 from typing import NamedTuple, Optional
 
 import pytest
