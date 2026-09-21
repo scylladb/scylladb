@@ -573,7 +573,7 @@ def run_pytest(pytest_dir, additional_parameters):
 # any other part of Scylla which needs SSL.
 def setup_ssl_certificate(dir):
     # FIXME: error checking (if "openssl" isn't found, for example)
-    os.system(f'openssl genrsa 2048 > "{dir}/scylla.key"')
+    os.system(f'openssl ecparam -name prime256v1 -genkey -noout > "{dir}/scylla.key"')
     os.system(f'openssl req -new -x509 -nodes -sha256 -days 365 -subj "/C=IL/ST=None/L=None/O=None/OU=None/CN=example.com" -key "{dir}/scylla.key" -out "{dir}/scylla.crt"')
 
 # Set up mTLS (mutual TLS) certificates for testing client certificate
@@ -587,11 +587,11 @@ def setup_ssl_certificate(dir):
 def setup_mtls_certificate(dir):
     # FIXME: error checking (if "openssl" isn't found, for example)
     # Create a self-signed CA certificate
-    os.system(f'openssl genrsa 2048 > "{dir}/ca.key"')
+    os.system(f'openssl ecparam -name prime256v1 -genkey -noout > "{dir}/ca.key"')
     os.system(f'openssl req -new -x509 -nodes -sha256 -days 365 -subj "/CN=TestCA" -key "{dir}/ca.key" -out "{dir}/ca.crt"')
     # Create a client key and a certificate signing request with CN "cassandra",
     # matching the role already used in Alternator tests.
-    os.system(f'openssl genrsa 2048 > "{dir}/client.key"')
+    os.system(f'openssl ecparam -name prime256v1 -genkey -noout > "{dir}/client.key"')
     os.system(f'openssl req -new -sha256 -subj "/CN=cassandra" -key "{dir}/client.key" -out "{dir}/client.csr"')
     # Sign the client certificate with the CA
     os.system(f'openssl x509 -req -sha256 -days 365 -in "{dir}/client.csr" -CA "{dir}/ca.crt" -CAkey "{dir}/ca.key" -CAcreateserial -out "{dir}/client.crt"')
