@@ -56,6 +56,7 @@ class TestSchemaReplicationEverywhereStrategy(Tester):
         cluster.populate(nodes=2).start(wait_for_binary_proto=True)
         node1: ScyllaNode = cluster.nodelist()[0]
         node2: ScyllaNode = cluster.nodelist()[1]
+        node1_host_id = node1.hostid()  # read while node1 is up; the REST API is gone once it stops
         self.create_and_fill_user_table(node1)
         node3 = cluster.new_node(3, auto_bootstrap=True)
         node3.start(wait_for_binary_proto=True)
@@ -64,7 +65,7 @@ class TestSchemaReplicationEverywhereStrategy(Tester):
         self.verify_data_in_user_table(node3)
         node2.start()
         node4 = cluster.new_node(4, auto_bootstrap=True, initial_token=None, is_seed=False)
-        node4.start(wait_for_binary_proto=True, replace_node_host_id=node1.node_hostid)
+        node4.start(wait_for_binary_proto=True, replace_node_host_id=node1_host_id)
         node2.stop()
         node3.stop()
         self.verify_data_in_user_table(node4)
