@@ -51,7 +51,6 @@ manager_task_tests.py
 materialized_views_test.py
 migration_test.py
 mixed_version_test.py
-nodetool_additional_test.py
 nodetool_test.py
 paging_test.py
 paxos_tests.py
