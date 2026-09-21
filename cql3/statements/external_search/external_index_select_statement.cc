@@ -14,15 +14,51 @@
 #include "query/query_result_merger.hh"
 #include "service/storage_proxy.hh"
 #include "utils/result_loop.hh"
+#include "cql3/statements/external_search/ann_search.hh"
+#include "cql3/expr/evaluate.hh"
+#include "cql3/expr/expr-utils.hh"
+#include "cql3/functions/functions.hh"
+#include "cql3/functions/scoring_fcts.hh"
+#include "vector_search/hybrid_search.hh"
+#include "cql3/statements/external_search/external_function.hh"
+#include "cql3/statements/external_search/values_provider.hh"
+#include "cql3/statements/external_search/ann_search.hh"
+#include "cql3/statements/raw/select_statement.hh"
+#include "cql3/util.hh"
+#include "db/config.hh"
+#include "exceptions/exceptions.hh"
+#include "index/vector_index.hh"
+#include "schema/schema.hh"
+#include "types/types.hh"
+#include "types/vector.hh"
+#include "utils/assert.hh"
+#include "cql3/statements/external_search/bm25_search.hh"
+#include "cql3/expr/evaluate.hh"
+#include "cql3/expr/expr-utils.hh"
+#include "cql3/expr/expression.hh"
+#include "cql3/functions/scoring_fcts.hh"
+#include "vector_search/hybrid_search.hh"
+#include "cql3/restrictions/statement_restrictions.hh"
+#include "cql3/statements/external_search/external_function.hh"
+#include "cql3/statements/external_search/bm25_search.hh"
+#include "cql3/statements/external_search/values_provider.hh"
+#include "cql3/statements/raw/select_statement.hh"
+#include "data_dictionary/data_dictionary.hh"
+#include "exceptions/exceptions.hh"
+#include "index/secondary_index_manager.hh"
+#include "schema/schema.hh"
+#include "types/types.hh"
+#include "utils/assert.hh"
 
 #include <seastar/core/future.hh>
+#include <seastar/coroutine/exception.hh>
+#include <cmath>
+#include <seastar/coroutine/exception.hh>
 
 template<typename T = void>
 using coordinator_result = cql3::statements::select_statement::coordinator_result<T>;
 
-namespace cql3 {
-
-namespace statements {
+namespace cql3::statements {
 
 namespace {
 
@@ -191,6 +227,242 @@ future<::shared_ptr<cql_transport::messages::result_message>> external_index_sel
     co_return result;
 }
 
-} // namespace statements
 
-} // namespace cql3
+::shared_ptr<cql3::statements::select_statement> fulltext_indexed_table_select_statement::prepare(data_dictionary::database db,
+        schema_ptr schema, uint32_t bound_terms, lw_shared_ptr<const parameters> parameters,
+        ::shared_ptr<selection::selection> selection, ::shared_ptr<const restrictions::select_restrictions> restrictions,
+        ::shared_ptr<std::vector<size_t>> group_by_cell_indices, bool is_reversed,
+        ordering_comparator_type ordering_comparator, std::optional<expr::expression> limit,
+        std::optional<expr::expression> per_partition_limit, cql_stats& stats,
+        std::optional<bm25_ordering_info> ordering_info,
+        std::unique_ptr<attributes> attrs) {
+
+    if (!limit.has_value()) {
+        throw exceptions::invalid_request_exception("Full-text search queries require a LIMIT");
+    }
+
+    if (per_partition_limit.has_value()) {
+        throw exceptions::invalid_request_exception("Full-text search queries do not support per-partition limits");
+    }
+
+    if (selection->is_aggregate() || !group_by_cell_indices->empty()) {
+        throw exceptions::invalid_request_exception("Full-text search queries cannot be run with aggregation");
+    }
+
+    if (!ordering_info) {
+        throw exceptions::invalid_request_exception("Full-text search queries require an ORDER BY BM25() clause");
+    }
+
+    const auto& scoring_restrictions = restrictions->get_scoring_function_restrictions();
+    if (scoring_restrictions.empty()) {
+        throw exceptions::invalid_request_exception("Full-text search queries require a WHERE BM25() > 0 clause");
+    }
+    if (scoring_restrictions.size() > 1) {
+        throw exceptions::invalid_request_exception("Full-text search queries support only one WHERE BM25() restriction");
+    }
+
+    ordering_info->deferred_where_term = bm25_search::validate_restriction(
+            scoring_restrictions.front(), ordering_info->index, ordering_info->search_term);
+
+    // Reject any WHERE restrictions beyond the single BM25 clause.
+    // BM25 restrictions are excluded from `restrictions`.
+    if (!restrictions->partition_key_restrictions_is_empty()
+            || !restrictions::is_empty_restriction(restrictions->get_clustering_columns_restrictions())
+            || !restrictions::is_empty_restriction(restrictions->get_nonprimary_key_restrictions())) {
+        throw exceptions::invalid_request_exception(
+                "Full-text search queries do not support additional WHERE restrictions");
+    }
+
+    // The score and the rank are matched to a row by primary key.
+    if (ordering_info->temporaries.any()) {
+        external_search::fetch_primary_key_columns(*selection, *schema);
+    }
+
+    return ::make_shared<cql3::statements::fulltext_indexed_table_select_statement>(
+            schema,
+            bound_terms,
+            parameters,
+            std::move(selection),
+            std::move(restrictions),
+            std::move(group_by_cell_indices),
+            is_reversed,
+            std::move(ordering_comparator),
+            std::move(limit),
+            std::move(per_partition_limit),
+            stats,
+            std::move(*ordering_info),
+            std::move(attrs));
+}
+
+fulltext_indexed_table_select_statement::fulltext_indexed_table_select_statement(schema_ptr schema, uint32_t bound_terms,
+        lw_shared_ptr<const parameters> parameters, ::shared_ptr<selection::selection> selection,
+        ::shared_ptr<const restrictions::select_restrictions> restrictions,
+        ::shared_ptr<std::vector<size_t>> group_by_cell_indices, bool is_reversed,
+        ordering_comparator_type ordering_comparator, std::optional<expr::expression> limit,
+        std::optional<expr::expression> per_partition_limit, cql_stats& stats,
+        bm25_ordering_info ordering_info, std::unique_ptr<attributes> attrs)
+    : external_index_select_statement{schema, bound_terms, parameters, selection, restrictions,
+              group_by_cell_indices, is_reversed, ordering_comparator, limit, per_partition_limit,
+              stats, ordering_info.index, std::move(attrs)}
+    , _bm25_ordering_info{std::move(ordering_info)} {
+}
+
+future<shared_ptr<cql_transport::messages::result_message>> fulltext_indexed_table_select_statement::execute_search(
+        query_processor& qp, service::query_state& state, const query_options& options, uint64_t limit) const {
+
+    if (limit > max_fts_query_limit) {
+        co_await coroutine::return_exception(exceptions::invalid_request_exception(
+                fmt::format("Full-text search queries require a LIMIT that is not greater than {}. LIMIT was {}", max_fts_query_limit, limit)));
+    }
+
+    auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
+    auto aoe = abort_on_expiry(timeout);
+
+    auto search_term_val = expr::evaluate(_bm25_ordering_info.search_term, options);
+    if (search_term_val.is_null()) {
+        co_await coroutine::return_exception(exceptions::invalid_request_exception("Full-text search query term must not be null"));
+    }
+
+    if (_bm25_ordering_info.deferred_where_term
+            && expr::evaluate(*_bm25_ordering_info.deferred_where_term, options) != search_term_val) {
+        co_await coroutine::return_exception(exceptions::invalid_request_exception(
+                "Full-text search queries must use the same search term in both WHERE and ORDER BY clauses"));
+    }
+
+    for (const auto& sel_term : _bm25_ordering_info.deferred_select_terms) {
+        if (expr::evaluate(sel_term.term, options) != search_term_val) {
+            co_await coroutine::return_exception(exceptions::invalid_request_exception(seastar::format(
+                    "{}() in SELECT must use the same search term as BM25() in WHERE and ORDER BY", sel_term.function_name)));
+        }
+    }
+
+    const auto search_term_text = bm25_search::query_term(search_term_val);
+
+    auto requests = std::vector<vector_search::search_request>{};
+    requests.push_back(vector_search::bm25_request{
+            .keyspace = _schema->ks_name(), .index = _index.metadata().name(), .term = search_term_text, .limit = limit});
+    auto searched = co_await vector_search::search_all(qp.vector_store_client(), _schema, std::move(requests), aoe.abort_source());
+    if (!searched) {
+        co_await coroutine::return_exception(
+                exceptions::invalid_request_exception(std::visit(vector_search::vector_store_client::fts_error_visitor{}, searched.error())));
+    }
+    auto candidates = std::move(*searched);
+    throwing_assert(candidates.size() <= limit);
+
+    auto table_results = co_await query_base_table(qp, state, options, timeout, candidates);
+
+    auto provider = std::optional<external_search::values_provider>{};
+    if (table_results && _bm25_ordering_info.temporaries.any()) {
+        const auto& read = table_results.value();
+        auto rows = external_search::join_table_results(*read.rows, read.command->slice, *_schema, &candidates);
+        provider.emplace(external_search::search_values_of(_bm25_ordering_info.temporaries, rows, 0, candidates), rows);
+    }
+    co_return co_await emit_result_set(std::move(table_results), options, provider ? &*provider : nullptr);
+}
+
+
+::shared_ptr<cql3::statements::select_statement> vector_indexed_table_select_statement::prepare(data_dictionary::database db, schema_ptr schema,
+        uint32_t bound_terms, lw_shared_ptr<const parameters> parameters, ::shared_ptr<selection::selection> selection,
+        ::shared_ptr<const restrictions::select_restrictions> restrictions, ::shared_ptr<std::vector<size_t>> group_by_cell_indices, bool is_reversed,
+        ordering_comparator_type ordering_comparator, std::optional<expr::expression> limit,
+        std::optional<expr::expression> per_partition_limit, cql_stats& stats, ann_ordering_info ordering_info, std::unique_ptr<attributes> attrs) {
+
+    // Filtering by similarity - WHERE ANN(column, query_vector) > score - is not implemented yet.
+    // The message names no function: the user's ANN() arrives here as ANN_SCORE() (see
+    // prepare_external_search_relation_lhs()).
+    if (!restrictions->get_scoring_function_restrictions().empty()) {
+        throw exceptions::invalid_request_exception("Filtering by ANN similarity in the WHERE clause is not supported");
+    }
+
+    // The score and the rank are matched to a row by primary key.
+    if (ordering_info.temporaries.any()) {
+        external_search::fetch_primary_key_columns(*selection, *schema);
+    }
+
+    auto prepared_filter = external_search::prepare_filter(*restrictions, parameters->allow_filtering());
+
+    return ::make_shared<cql3::statements::vector_indexed_table_select_statement>(schema, bound_terms, parameters, std::move(selection), std::move(restrictions),
+            std::move(group_by_cell_indices), is_reversed, std::move(ordering_comparator), std::move(limit),
+            std::move(per_partition_limit), stats, std::move(ordering_info), std::move(prepared_filter), std::move(attrs));
+}
+
+vector_indexed_table_select_statement::vector_indexed_table_select_statement(schema_ptr schema, uint32_t bound_terms, lw_shared_ptr<const parameters> parameters,
+        ::shared_ptr<selection::selection> selection, ::shared_ptr<const restrictions::select_restrictions> restrictions,
+        ::shared_ptr<std::vector<size_t>> group_by_cell_indices, bool is_reversed, ordering_comparator_type ordering_comparator,
+        std::optional<expr::expression> limit, std::optional<expr::expression> per_partition_limit, cql_stats& stats,
+        ann_ordering_info ordering_info, external_search::prepared_filter prepared_filter, std::unique_ptr<attributes> attrs)
+    : external_index_select_statement{schema, bound_terms, parameters, selection, restrictions, group_by_cell_indices,
+              is_reversed, ordering_comparator, limit, per_partition_limit, stats, ordering_info.index, std::move(attrs)}
+    , _ann_ordering_info(std::move(ordering_info))
+    , _prepared_filter(std::move(prepared_filter)) {
+
+    if (!limit.has_value()) {
+        throw exceptions::invalid_request_exception("Vector ANN queries must have a limit specified");
+    }
+
+    if (per_partition_limit.has_value()) {
+        throw exceptions::invalid_request_exception("Vector ANN queries do not support per-partition limits");
+    }
+
+    if (selection->is_aggregate() || !group_by_cell_indices->empty()) {
+        throw exceptions::invalid_request_exception("Vector ANN queries cannot be run with aggregation");
+    }
+}
+
+future<shared_ptr<cql_transport::messages::result_message>> vector_indexed_table_select_statement::execute_search(
+        query_processor& qp, service::query_state& state, const query_options& options, uint64_t limit) const {
+
+    if (limit > max_ann_query_limit) {
+        co_await coroutine::return_exception(exceptions::invalid_request_exception(
+                fmt::format("Use of ANN OF in an ORDER BY clause requires a LIMIT that is not greater than {}. LIMIT was {}", max_ann_query_limit, limit)));
+    }
+
+    const auto& prepared_ann_ordering = _ann_ordering_info.prepared_ann_ordering;
+
+    // Evaluated once: the vector searched with is the one the SELECT occurrences are checked against.
+    const auto ordering_vector = expr::evaluate(prepared_ann_ordering.second, options);
+    if (ordering_vector.is_null()) {
+        // Before the agreement check, or a null would surface as a disagreement instead.
+        co_await coroutine::return_exception(exceptions::invalid_request_exception(
+                fmt::format("Unsupported null value for column {}", prepared_ann_ordering.first->name_as_text())));
+    }
+
+    for (const auto& selected : _ann_ordering_info.deferred_select_vectors) {
+        if (expr::evaluate(selected.vector, options) != ordering_vector) {
+            co_await coroutine::return_exception(exceptions::invalid_request_exception(seastar::format(
+                    "{}() in SELECT must use the same query vector as the ANN ordering", selected.function_name)));
+        }
+    }
+
+    auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
+    auto aoe = abort_on_expiry(timeout);
+    auto filter_json = _prepared_filter.to_json(options);
+    const auto fetch = ann_search::candidates_wanted(_index, limit);
+    auto requests = std::vector<vector_search::search_request>{};
+    requests.push_back(vector_search::ann_request{.keyspace = _schema->ks_name(),
+            .index = _index.metadata().name(),
+            .vector = ann_search::query_vector(*prepared_ann_ordering.first, ordering_vector),
+            .limit = fetch,
+            .filter = std::move(filter_json)});
+    auto searched = co_await vector_search::search_all(qp.vector_store_client(), _schema, std::move(requests), aoe.abort_source());
+    if (!searched) {
+        co_await coroutine::return_exception(
+                exceptions::invalid_request_exception(std::visit(vector_search::vector_store_client::ann_error_visitor{}, searched.error())));
+    }
+    auto candidates = std::move(*searched);
+    if (candidates.size() > limit && !_ann_ordering_info.is_rescoring_enabled) {
+        candidates.erase(candidates.begin() + limit, candidates.end());
+    }
+
+    auto table_results = co_await query_base_table(qp, state, options, timeout, candidates);
+
+    auto provider = std::optional<external_search::values_provider>{};
+    if (table_results && _ann_ordering_info.temporaries.any()) {
+        const auto& read = table_results.value();
+        auto rows = external_search::join_table_results(*read.rows, read.command->slice, *_schema, &candidates);
+        provider.emplace(external_search::search_values_of(_ann_ordering_info.temporaries, rows, 0, candidates), rows);
+    }
+    co_return co_await emit_result_set(std::move(table_results), options, provider ? &*provider : nullptr);
+}
+
+} // namespace cql3::statements
