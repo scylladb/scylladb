@@ -5,11 +5,11 @@
 #
 
 import re
-import subprocess
 import time
 from collections import Counter
 from threading import Event
 
+import psutil
 from cassandra.cluster import Session
 from ccmlib.scylla_node import ScyllaNode
 
@@ -36,14 +36,16 @@ def wait_nodetool_toppartitions_start(node: ScyllaNode, cmd: str, timeout: int =
     :raises: NodetoolToppartitionStartedTimeoutError
     """
     st = time.time()
-    nodetool_cmd_pattern = f"nodetool.*-h.*{node.address()}.*-p.*({node.jmx_port}|10000)"
+    # In-tree nodetool is `scylla nodetool -h <address> ...`, talking to the REST
+    # API; there is no JMX port to match as ccm's command line had.
+    nodetool_cmd_pattern = f"nodetool.*-h.*{node.address()}"
     toppartition_cmd_pattern = cmd.replace(" ", ".*")
+    # What `pgrep -fa` did: match each process's full command line.  psutil, as the
+    # test environment has no procps.
+    pattern = re.compile(f"{nodetool_cmd_pattern}.*{toppartition_cmd_pattern}")
     while True:
-        try:
-            subprocess.check_output(["pgrep", "-fa", f"{nodetool_cmd_pattern}.*{toppartition_cmd_pattern}"])
+        if any(pattern.search(" ".join(proc.info["cmdline"] or ())) for proc in psutil.process_iter(["cmdline"])):
             break
-        except subprocess.CalledProcessError:
-            pass
         ft = time.time()
         if ft - st > timeout:
             raise NodetoolToppartitionStartedTimeoutError("timeout error, nodetool toppartitions not started")
