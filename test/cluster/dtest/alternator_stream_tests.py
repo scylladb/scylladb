@@ -272,11 +272,19 @@ class TestAlternatorStreams(BaseAlternatorStream):
             self.put_table_items(table_name=TABLE_NAME, node=node1, num_of_items=times)
             wait_for_running_decommission(node=node1, log_marks=decommission_log_marks)
             self.put_table_items(table_name=TABLE_NAME, node=node1, num_of_items=times)
-            streams_table.update_shards()
+
+            # wait_for_running_add_node() returns as soon as the bootstrap is accepted, but the new
+            # CDC generation (hence the new shards) is committed only later in the bootstrap, and a
+            # decommission creates no generation at all, so poll for the new shards.
+            @retrying(num_attempts=60, sleep_time=1, allowed_exceptions=AssertionError, message="waiting for new stream shards")
+            def wait_for_new_start_sequence_numbers():
+                streams_table.update_shards()
+                assert streams_table.start_sequence_numbers_set - original_start_sequence_numbers_set, "Start-sequence-numbers are not changed after topology changes!"
+
+            wait_for_new_start_sequence_numbers()
 
             # Get updated shards metadata
             new_start_sequence_numbers = [seq_num for seq_num in streams_table.start_sequence_numbers_list if seq_num not in original_start_sequence_numbers]
-            assert streams_table.start_sequence_numbers_set - original_start_sequence_numbers_set, "Start-sequence-numbers are not changed after topology changes!"
 
             # Verify new CDC/Streams Generation attribute of monotonic increasing sequence numbers.
             if new_start_sequence_numbers:
