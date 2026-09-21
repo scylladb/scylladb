@@ -25,6 +25,16 @@ if TYPE_CHECKING:
 SCYLLA_VERSION_FILE = BUILD_DIR / "SCYLLA-VERSION-FILE"
 
 
+def _racks_of(dc_nodes: dict | list, topology: dict) -> dict:
+    """{rack: node count} for one datacenter of a populate() topology."""
+
+    if isinstance(dc_nodes, list):
+        return {f"RAC{i}": n for i, n in enumerate(dc_nodes, start=1)}
+    if isinstance(dc_nodes, dict):
+        return dc_nodes
+    raise RuntimeError(f"Unsupported topology specification: {topology}")
+
+
 class ScyllaCluster:
     def __init__(self, manager: ScyllaClusterManager, scylla_mode: str, force_wait_for_cluster_start: bool = False):
         self.manager = manager
@@ -71,6 +81,8 @@ class ScyllaCluster:
             case list():
                 for dc, n_nodes in enumerate(nodes, start=1):
                     dc_name = f"dc{dc}"
+                    if n_nodes == 0:
+                        continue
                     self._add_nodes(self.manager.servers_add(
                         servers_num=n_nodes,
                         config=self._config_options,
@@ -78,13 +90,28 @@ class ScyllaCluster:
                         auto_rack_dc=dc_name
                     ))
             case dict():
-                # Supported spec: {"dc1": {"rack1": 3, "rack2": 2}, "dc2": {"rack1": 2}}
+                # {"dc1": {"rack1": 3, "rack2": 2}}, {"dc1": [3, 2]} (racks RAC1, RAC2)
+                # or {"dc1": 3}.  A bare count gets one rack per node, as the int
+                # and list forms do: ccm put them in one rack, but tablets
+                # keyspaces here need as many racks as their replication factor.
                 for dc, dc_nodes in nodes.items():
-                    if not isinstance(dc_nodes, dict):
-                        raise RuntimeError(f"Unsupported topology specification: {nodes}")
+                    if isinstance(dc_nodes, int):
+                        if dc_nodes == 0:  # ccm creates no node for an empty datacenter
+                            continue
+                        self._add_nodes(self.manager.servers_add(
+                            servers_num=dc_nodes,
+                            config=self._new_node_config,
+                            version=version,
+                            start=False,
+                            auto_rack_dc=dc,
+                        ))
+                        continue
+                    dc_nodes = _racks_of(dc_nodes, nodes)
                     for rack, rack_nodes in dc_nodes.items():
                         if not isinstance(rack_nodes, int):
                             raise RuntimeError(f"Unsupported topology specification: {nodes}")
+                        if rack_nodes == 0:
+                            continue
                         self._add_nodes(self.manager.servers_add(
                             servers_num=rack_nodes,
                             config=self._config_options,
