@@ -22,7 +22,6 @@ cql_additional_tests.py
 cql_cast_test.py
 cql_session_test.py
 cql_static_columns_tests.py
-cql_system_clients_test.py
 cql_tests.py
 cql_tracing_addition_test.py
 cql_tracing_test.py
