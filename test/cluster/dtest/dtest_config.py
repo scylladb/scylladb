@@ -19,6 +19,7 @@ class DTestConfig:
         self.cassandra_dir = None
         self.cassandra_version = None
         self._scylla_version = None
+        self.manager_package = None
 
     def setup(self, request):
         self.use_vnodes = request.config.getoption("--use-vnodes")
@@ -29,6 +30,7 @@ class DTestConfig:
         if build_modes := getattr(request.config, "build_modes", None):
             # So that a debug run upgrades from a debug relocatable package.
             scylla_repository.set_build_mode(build_modes[0])
+        self.manager_package = request.config.getoption("--scylla-manager-package", default=None)
 
     @property
     def scylla_version(self):
