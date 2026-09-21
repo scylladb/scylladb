@@ -231,12 +231,12 @@ class TestManagerHealthCheck(Tester, ScyllaManagerMixin):
         topology_layout = generate_cluster_topology(dc_num=1, rack_num=1, nodes_per_rack=2)
         self.config_and_create_cluster(topology=topology_layout)  # cluster to be used as the manager's backend
 
-        generate_ssl_stores(self.test_path)
+        generate_ssl_stores(self.cluster.get_path())
         options = {
             "enabled": True,
-            "certificate": os.path.join(self.test_path, "ccm_node.pem"),
-            "keyfile": os.path.join(self.test_path, "ccm_node.key"),
-            "truststore": os.path.join(self.test_path, "ccm_node.cer"),
+            "certificate": os.path.join(self.cluster.get_path(), "ccm_node.pem"),
+            "keyfile": os.path.join(self.cluster.get_path(), "ccm_node.key"),
+            "truststore": os.path.join(self.cluster.get_path(), "ccm_node.cer"),
             "require_client_auth": True,
         }
         secondary_topology_layout = generate_cluster_topology(dc_num=1, rack_num=1, nodes_per_rack=3)
