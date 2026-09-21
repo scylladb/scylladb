@@ -4577,6 +4577,7 @@ class sstable_stream_sink_impl : public sstable_stream_sink {
     component_type _type;
     bool _last_component;
     bool _leave_unsealed;
+    bool _update_scrub_time;
     checksum _checksum;
     uint32_t _digest;
 public:
@@ -4585,10 +4586,11 @@ public:
         , _type(type)
         , _last_component(cfg.last_component)
         , _leave_unsealed(cfg.leave_unsealed)
+        , _update_scrub_time(cfg.update_scrub_time)
         , _checksum(DEFAULT_CHUNK_SIZE, {})
         , _digest(crc32_utils::init_checksum())
     {
-        sstlog.debug("Creating stream sink for SSTable gen={} sid={} type={} last={} leave_unsealed={}", _sst->generation(), _sst->sstable_identifier(), _type, _last_component, _leave_unsealed);
+        sstlog.debug("Creating stream sink for SSTable gen={} sid={} type={} last={} leave_unsealed={} update_scrub_time={}", _sst->generation(), _sst->sstable_identifier(), _type, _last_component, _leave_unsealed, _update_scrub_time);
     }
 private:
     future<> load_metadata() const {
@@ -4617,6 +4619,16 @@ private:
             write(_sst->get_version(), w, metadata);
             w.close();
         });
+    }
+
+    future<> update_scrub_time() const {
+        co_await load_metadata();
+        auto& metadata = _sst->get_shared_components().scylla_metadata;
+        if (!metadata) {
+            co_return;
+        }
+        metadata->set_scrub_time(db_clock::now());
+        co_await save_metadata();
     }
 
     // Validate digest in the sstable. Used instead of sstable::validate_component_digest, as
@@ -4682,6 +4694,9 @@ public:
     }
     future<shared_sstable> close() override {
         if (_last_component) {
+            if (_update_scrub_time) {
+                co_await update_scrub_time();
+            }
             // If we are the last component in a sequence, we can seal the table.
             if (!_leave_unsealed) {
                 co_await _sst->_storage->seal(*_sst);

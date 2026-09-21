@@ -455,7 +455,8 @@ future<> stream_blob_handler(replica::database& db, db::view::view_building_work
             // SSTable will be only sealed when added to the sstable set, so we make sure unsplit sstables aren't
             // left sealed on the table directory.
             sstables::sstable_stream_sink_cfg cfg { .last_component = meta.fops == file_ops::load_sstables,
-                                                    .leave_unsealed = true };
+                                                    .leave_unsealed = true,
+                                                    .update_scrub_time = true };
             auto desc_result = sstables::parse_path(std::filesystem::path(meta.filename), schema->ks_name(), schema->cf_name());
             if (!desc_result) {
                 throw std::runtime_error(fmt::format("Cannot stream blob in {}.{}: file={}: {}", schema->ks_name(), schema->cf_name(), meta.filename, desc_result.error()));

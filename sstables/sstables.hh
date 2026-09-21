@@ -1427,6 +1427,7 @@ public:
 struct sstable_stream_sink_cfg {
     bool last_component = false;
     bool leave_unsealed = false;
+    bool update_scrub_time = false;
 };
 
 // Creates a sink object which can receive a component file sourced from above source object data.
