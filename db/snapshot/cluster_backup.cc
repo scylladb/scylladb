@@ -44,7 +44,7 @@ struct std::hash<db::snapshot_dc_location> {
     }
 };
 
-std::string db::snapshot::sstables_location(std::string_view prefix, const replica::table& t, std::string_view snapshot_name) {
+std::string db::snapshot::sstables_location(std::string_view prefix) {
     auto pp = prefix.empty() ? "" : "/";
     return fmt::format("{}{}{}",  prefix, pp, "sstables");
 }
@@ -52,6 +52,17 @@ std::string db::snapshot::sstables_location(std::string_view prefix, const repli
 std::string db::snapshot::snapshot_meta_location(std::string_view prefix, const replica::table& t, std::string_view snapshot_name) {
     auto pp = prefix.empty() ? "" : "/";
     return fmt::format("{}{}{}/{}/{}/{}",  prefix, pp, "snapshots", t.schema()->ks_name(), t.schema()->cf_name(), snapshot_name);
+}
+
+std::string db::snapshot::snapshot_prefix_from_manifest(std::string_view manifest_path) {
+    // manifest_path = <prefix>/snapshots/<ks>/<cf>/<snapshot>/manifest.json
+    return std::filesystem::path(manifest_path)
+        .parent_path() // <prefix>/snapshots/<ks>/<cf>/<snapshot>
+        .parent_path() // <prefix>/snapshots/<ks>/<cf>
+        .parent_path() // <prefix>/snapshots/<ks>
+        .parent_path() // <prefix>/snapshots/
+        .parent_path() // <prefix>
+        .string();
 }
 
 static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string& snapshot_name, const std::unordered_multimap<sstring, sstring>& ks_tables, std::unordered_map<sstring, db::snapshot_dc_location>& dc_locations, bool remove_on_uploaded, tasks::task_manager::task::progress& total_progress, abort_source& as) {
@@ -238,7 +249,7 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
             snap_log.info("Requesting backup of {}: {}", node.node, sstable_ids);
 
             try {
-                auto prefix = db::snapshot::sstables_location(dst.prefix, t, snapshot_name);
+                auto prefix = db::snapshot::sstables_location(dst.prefix);
                 co_await ser::snapshot_backup_rpc_verbs::send_backup_snapshot_sstables(&snap_ctl.ms(), node.node, tid, snapshot_name, dst.endpoint, dst.bucket, prefix, first_token, last_token, std::move(sstable_ids), remove_on_uploaded);
                 total_progress.completed += 1;
             } catch (...) {
