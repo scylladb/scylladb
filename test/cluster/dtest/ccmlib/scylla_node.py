@@ -225,6 +225,19 @@ class ScyllaNode:
     def is_running(self) -> bool:
         return self.cluster.manager.server_is_alive(server_id=self.server_id)
 
+    def show(self, only_status: bool = False, show_cluster: bool = True) -> str:
+        """This node's configuration, which ccm printed; returned here, as tests log it."""
+        pid = self.pid
+        lines = [f"{self.name}: {'UP' if pid else 'DOWN'}"]
+        if not only_status:
+            if show_cluster:
+                lines.append(f"  cluster={self.cluster.manager.cluster.name}")
+            lines.append(f"  auto_bootstrap={self.bootstrap}")
+            lines += [f"  {name}={interface}" for name, interface in self.network_interfaces.items()]
+            if pid:
+                lines.append(f"  pid={pid}")
+        return "\n".join(lines)
+
     is_live = is_running
 
     @cached_property
