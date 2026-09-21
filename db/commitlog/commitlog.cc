@@ -3421,8 +3421,9 @@ public:
     };
 
     // mapping fragment ID -> state (i.e. data collected so far)
-    std::unordered_map<uint32_t, std::vector<entry_fragment>>
-        fragment_state;
+    // SCYLLADB-4657 - make the state per-shard
+    std::unordered_map<shard_id, std::unordered_map<uint32_t, std::vector<entry_fragment>>>
+        fragment_states;
 };
 
 db::commitlog::replay_state::replay_state()
@@ -3864,9 +3865,12 @@ db::commitlog::read_log_file(const replay_state& state, sstring filename, sstrin
                 frag.end = off + buf.size_bytes();
                 frag.rpbuf = buffer_and_replay_position{std::move(buf), rp};
 
-                clogger.debug("fragment id={} off={}, end={}, rem={} ", id, off, frag.end, rem);
+                // SCYLLADB-4657 - make the state per-shard
+                auto shard = db::replay_position(d.id, 0).shard_id();
+                clogger.debug("fragment shard={} id={} off={}, end={}, rem={} ", shard, id, off, frag.end, rem);
 
-                auto& frag_states = state.fragment_state[id];
+                auto& shard_states = state.fragment_states[shard]; 
+                auto& frag_states = shard_states[id];
 
                 auto join = [](entry_fragment& f1, entry_fragment& f2) {
                     auto size1 = f1.rpbuf.buffer.size_bytes();
@@ -3880,6 +3884,11 @@ db::commitlog::read_log_file(const replay_state& state, sstring filename, sstrin
                     f1.end = f2.end;
                     f1.rpbuf.buffer = fragmented_temporary_buffer(std::move(data1), size1+size2);
                 };
+
+                // SCYLLADB-4657 - check that we don't have any data that should not be here.
+                if (std::count_if(frag_states.begin(), frag_states.end(), [&](auto& f) { return f.offset == off; })) {
+                    throw std::runtime_error(fmt::format("Duplicate fragment {} for offset {}", id, off));
+                }
 
                 frag_states.emplace_back(std::move(frag));
 
@@ -3896,7 +3905,7 @@ db::commitlog::read_log_file(const replay_state& state, sstring filename, sstrin
                 }
                 if (frag_states.size() == 1 && frag_states.front().rem == 0 && frag_states.front().offset == 0) {
                     co_await func(std::move(frag_states.front().rpbuf));
-                    state.fragment_state.erase(id);
+                    shard_states.erase(id);
                 }
 
                 co_return;
