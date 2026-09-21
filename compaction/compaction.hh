@@ -22,6 +22,12 @@
 
 namespace compaction {
 
+// Marks a compaction as being run by an automatic, background process rather
+// than on behalf of an explicit user request.
+// Currently only relevant to scrub in validate mode, where it reduces the log
+// level of the logged messages.
+using is_automatic_compaction = bool_class<class is_automatic_compaction_tag>;
+
 bool is_eligible_for_compaction(const sstables::shared_sstable& sst) noexcept;
 
 // Return the name of the compaction type
@@ -119,7 +125,7 @@ public:
     uint64_t get_progress() const;
 
     friend class compaction;
-    friend future<compaction_result> scrub_sstables_validate_mode(compaction_descriptor, compaction_data&, compaction_group_view&, compaction_progress_monitor&);
+    friend future<compaction_result> scrub_sstables_validate_mode(compaction_descriptor, compaction_data&, compaction_group_view&, compaction_progress_monitor&, is_automatic_compaction);
 };
 
 // Compact a list of N sstables into M sstables.
@@ -127,7 +133,8 @@ public:
 //
 // compaction_descriptor is responsible for specifying the type of compaction, and influencing
 // compaction behavior through its available member fields.
-future<compaction_result> compact_sstables(compaction_descriptor descriptor, compaction_data& cdata, compaction_group_view& table_s, compaction_progress_monitor& progress_monitor);
+future<compaction_result> compact_sstables(compaction_descriptor descriptor, compaction_data& cdata, compaction_group_view& table_s, compaction_progress_monitor& progress_monitor,
+        is_automatic_compaction is_automatic = is_automatic_compaction::no);
 
 // Return list of expired sstables for column family cf.
 // A sstable is fully expired *iff* its max_local_deletion_time precedes gc_before and its

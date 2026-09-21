@@ -601,10 +601,12 @@ protected:
     future<stop_iteration> maybe_retry(std::exception_ptr err, bool throw_on_abort = false);
 
     future<compaction_result> compact_sstables_and_update_history(compaction_descriptor descriptor, compaction_data& cdata, on_replacement&,
-                                compaction_manager::can_purge_tombstones can_purge = compaction_manager::can_purge_tombstones::yes);
+                                compaction_manager::can_purge_tombstones can_purge = compaction_manager::can_purge_tombstones::yes,
+                                is_automatic_compaction is_automatic = is_automatic_compaction::no);
     future<compaction_result> compact_sstables(compaction_descriptor descriptor, compaction_data& cdata, on_replacement&,
                                 compaction_manager::can_purge_tombstones can_purge = compaction_manager::can_purge_tombstones::yes,
-                                sstables::offstrategy offstrategy = sstables::offstrategy::no);
+                                sstables::offstrategy offstrategy = sstables::offstrategy::no,
+                                is_automatic_compaction is_automatic = is_automatic_compaction::no);
     future<> update_history(::compaction::compaction_group_view& t, compaction_result&& res, const compaction_data& cdata);
     bool should_update_history(compaction_type ct) {
         return ct == compaction_type::Compaction || ct == compaction_type::Major;

@@ -375,14 +375,15 @@ future<> compaction_manager::on_compaction_completion(compaction_group_view& t, 
     return t.on_compaction_completion(std::move(desc), offstrategy);
 }
 
-future<compaction_result> compaction_task_executor::compact_sstables_and_update_history(compaction_descriptor descriptor, ::compaction::compaction_data& cdata, on_replacement& on_replace, compaction_manager::can_purge_tombstones can_purge) {
+future<compaction_result> compaction_task_executor::compact_sstables_and_update_history(compaction_descriptor descriptor, ::compaction::compaction_data& cdata, on_replacement& on_replace, compaction_manager::can_purge_tombstones can_purge,
+                                                                               is_automatic_compaction is_automatic) {
     if (!descriptor.sstables.size()) {
         // if there is nothing to compact, just return.
         co_return compaction_result{};
     }
 
     bool should_update_history = this->should_update_history(descriptor.options.type());
-    compaction_result res = co_await compact_sstables(std::move(descriptor), cdata, on_replace, std::move(can_purge));
+    compaction_result res = co_await compact_sstables(std::move(descriptor), cdata, on_replace, std::move(can_purge), sstables::offstrategy::no, is_automatic);
 
     if (should_update_history) {
         co_await update_history(*_compacting_table, compaction_result(res), cdata);
@@ -406,7 +407,7 @@ future<sstables::sstable_set> compaction_task_executor::sstable_set_for_tombston
 }
 
 future<compaction_result> compaction_task_executor::compact_sstables(compaction_descriptor descriptor, ::compaction::compaction_data& cdata, on_replacement& on_replace, compaction_manager::can_purge_tombstones can_purge,
-                                                                               sstables::offstrategy offstrategy) {
+                                                                               sstables::offstrategy offstrategy, is_automatic_compaction is_automatic) {
     compaction_group_view& t = *_compacting_table;
     if (can_purge) {
         descriptor.enable_garbage_collection(co_await sstable_set_for_tombstone_gc(t));
@@ -480,7 +481,7 @@ future<compaction_result> compaction_task_executor::compact_sstables(compaction_
         }
     }
 
-    co_return co_await ::compaction::compact_sstables(std::move(descriptor), cdata, t, _progress_monitor);
+    co_return co_await ::compaction::compact_sstables(std::move(descriptor), cdata, t, _progress_monitor, is_automatic);
 }
 future<> compaction_task_executor::update_history(compaction_group_view& t, compaction_result&& res, const ::compaction::compaction_data& cdata) {
     auto started_at = std::chrono::duration_cast<std::chrono::milliseconds>(res.stats.started_at.time_since_epoch());

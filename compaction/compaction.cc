@@ -2238,7 +2238,8 @@ static future<std::vector<sstables::shared_sstable>> maybe_rewrite_with_updated_
     co_return new_sstables;
 }
 
-static future<compaction_result> scrub_sstables_validate_mode(compaction_descriptor descriptor, compaction_data& cdata, compaction_group_view& table_s, sstables::read_monitor_generator& monitor_generator) {
+static future<compaction_result> scrub_sstables_validate_mode(compaction_descriptor descriptor, compaction_data& cdata, compaction_group_view& table_s, sstables::read_monitor_generator& monitor_generator,
+        is_automatic_compaction is_automatic) {
     auto schema = table_s.schema();
     auto permit = table_s.make_compaction_reader_permit();
 
@@ -2246,9 +2247,10 @@ static future<compaction_result> scrub_sstables_validate_mode(compaction_descrip
     cdata.compaction_size = std::ranges::fold_left(descriptor.sstables | std::views::transform([] (auto& sst) { return sst->data_size(); }), int64_t(0), std::plus{});
 
     const auto& options = descriptor.options.as<compaction_type_options::scrub>();
+    auto logger_level = is_automatic ? log_level::debug : log_level::info;
 
     for (const auto& sst : descriptor.sstables) {
-        clogger.info("Scrubbing in validate mode {}", sst->get_filename());
+        clogger.log(logger_level, "Scrubbing in validate mode {}", sst->get_filename());
 
         validation_errors += co_await sst->validate(permit, cdata.abort, [&schema] (sstring what) {
             scrub_compaction::report_validation_error(compaction_type::Scrub, *schema, what);
@@ -2259,7 +2261,7 @@ static future<compaction_result> scrub_sstables_validate_mode(compaction_descrip
             throw compaction_stopped_exception(schema->ks_name(), schema->cf_name(), cdata.stop_requested);
         }
 
-        clogger.info("Finished scrubbing in validate mode {} - sstable is {}", sst->get_filename(), validation_errors == 0 ? "valid" : "invalid");
+        clogger.log(validation_errors ? log_level::warn : logger_level, "Finished scrubbing in validate mode {} - sstable is {}", sst->get_filename(), validation_errors == 0 ? "valid" : "invalid");
     }
 
     std::vector<sstables::shared_sstable> new_sstables;
@@ -2284,10 +2286,11 @@ static future<compaction_result> scrub_sstables_validate_mode(compaction_descrip
     };
 }
 
-future<compaction_result> scrub_sstables_validate_mode(compaction_descriptor descriptor, compaction_data& cdata, compaction_group_view& table_s, compaction_progress_monitor& progress_monitor) {
+future<compaction_result> scrub_sstables_validate_mode(compaction_descriptor descriptor, compaction_data& cdata, compaction_group_view& table_s, compaction_progress_monitor& progress_monitor,
+        is_automatic_compaction is_automatic) {
     progress_monitor.set_generator(std::make_unique<compaction_read_monitor_generator>(table_s, use_backlog_tracker::no));
     auto d = defer([&] noexcept { progress_monitor.reset_generator(); });
-    auto res = co_await scrub_sstables_validate_mode(std::move(descriptor), cdata, table_s, *progress_monitor._generator);
+    auto res = co_await scrub_sstables_validate_mode(std::move(descriptor), cdata, table_s, *progress_monitor._generator, is_automatic);
     co_return res;
 }
 
@@ -2319,7 +2322,8 @@ future<compaction_result> rewrite_sstables_component(compaction_descriptor descr
 }
 
 future<compaction_result>
-compact_sstables(compaction_descriptor descriptor, compaction_data& cdata, compaction_group_view& table_s, compaction_progress_monitor& progress_monitor) {
+compact_sstables(compaction_descriptor descriptor, compaction_data& cdata, compaction_group_view& table_s, compaction_progress_monitor& progress_monitor,
+        is_automatic_compaction is_automatic) {
     if (descriptor.sstables.empty()) {
         return make_exception_future<compaction_result>(std::runtime_error(format("Called {} compaction with empty set on behalf of {}.{}",
                 compaction_name(descriptor.options.type()), table_s.schema()->ks_name(), table_s.schema()->cf_name())));
@@ -2327,7 +2331,7 @@ compact_sstables(compaction_descriptor descriptor, compaction_data& cdata, compa
     if (descriptor.options.type() == compaction_type::Scrub
             && std::get<compaction_type_options::scrub>(descriptor.options.options()).operation_mode == compaction_type_options::scrub::mode::validate) {
         // Bypass the usual compaction machinery for dry-mode scrub
-        return scrub_sstables_validate_mode(std::move(descriptor), cdata, table_s, progress_monitor);
+        return scrub_sstables_validate_mode(std::move(descriptor), cdata, table_s, progress_monitor, is_automatic);
     }
     if (descriptor.options.type() == compaction_type::RewriteComponent) {
         return rewrite_sstables_component(std::move(descriptor), table_s);
