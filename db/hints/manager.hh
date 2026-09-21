@@ -253,6 +253,13 @@ public:
     /// \brief Waits until hint replay reach replay positions described in `rps`.
     future<> wait_for_sync_point(abort_source& as, const sync_point::shard_rps& rps);
 
+    /// \brief Marks the hints up to the positions in `rps` for discarding instead of sending.
+    ///
+    /// For a caller whose wait_for_sync_point() on the same positions cannot complete. Returns at once;
+    /// the senders discard the hints in the background and release the waiters as they go. Endpoints absent
+    /// from `rps` get the default position, like in the wait. Not persisted across a restart.
+    void discard_hints_up_to_sync_point(const sync_point::shard_rps& rps);
+
 private:
     /// \brief Maps the endpoints of a sync point to host IDs, skipping the IPs that cannot be mapped.
     std::unordered_map<endpoint_id, replay_position> sync_point_host_rps(const sync_point::shard_rps& rps) const;
