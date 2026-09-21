@@ -4,6 +4,7 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 
+from collections import defaultdict
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.repair import load_tablet_sstables_repaired_at, load_tablet_repair_time, create_table_insert_data_for_repair
 from test.pylib.tablets import get_all_tablet_replicas
@@ -1803,3 +1804,161 @@ async def test_tombstone_gc_mv_safe_staging_processor_delay(manager: ScyllaClust
         f"base table — the read-before-write safety mechanism failed.")
 
     logger.info("test_tombstone_gc_mv_safe_staging_processor_delay: PASSED")
+
+
+# Parks an incremental repair after its replicas captured their sstables, compaction re-enabled.
+HOLD_AFTER_PREPARE = "wait_after_prepare_sstables_for_incremental_repair"
+
+SSTABLE_FILE_RE = re.compile(r"^(?P<version>[a-z]{2})-(?P<generation>.+)-big-(?P<component>.+)$")
+
+
+def find_toc_less_generations(workdir, ks):
+    """Returns {<dir>/<generation>: [components]} for generations with no TOC.txt nor TOC.txt.tmp."""
+    orphans = {}
+    for table_dir in glob.glob(os.path.join(workdir, "data", ks, "test-*")):
+        for dirpath, dirnames, filenames in os.walk(table_dir):
+            # Snapshots are never scanned on boot.
+            dirnames[:] = [d for d in dirnames if d != "snapshots"]
+            generations = defaultdict(set)
+            for name in filenames:
+                if m := SSTABLE_FILE_RE.match(name):
+                    generations[m["generation"]].add(m["component"])
+            for generation, components in generations.items():
+                if "TOC.txt" in components or "TOC.txt.tmp" in components:
+                    continue
+                # Temporary components are swept by the directory scan on boot, so they do not
+                # make the node refuse to boot.
+                permanent = sorted(c for c in components if not c.endswith(".tmp"))
+                if permanent:
+                    orphans[os.path.join(dirpath, generation)] = permanent
+    return orphans
+
+
+async def flush_all(manager, servers, ks):
+    await asyncio.gather(*[manager.api.flush_keyspace(s.ip_addr, ks) for s in servers])
+
+
+async def captured_sstables(logs, marks):
+    """TOC paths of the sstables incremental repair captured (and flagged being_repaired) since `marks`."""
+    captured = []
+    for log, mark in zip(logs, marks):
+        captured += [m.group(1) for _, m in await log.grep(r"Added sst=(\S+) repaired_at=", from_mark=mark)]
+    return captured
+
+
+async def wait_for_deleted(tocs, timeout):
+    """Waits until at least one of `tocs` is gone from disk; returns the ones that are gone."""
+    deadline = asyncio.get_running_loop().time() + timeout
+    while True:
+        deleted = [toc for toc in tocs if not os.path.exists(toc)]
+        if deleted or asyncio.get_running_loop().time() > deadline:
+            return deleted
+        await asyncio.sleep(0.5)
+
+
+async def release_held_repair(manager, servers, repair):
+    """Releases the held repair and returns the exception it failed with, if any.
+
+    The caller must check the disk state first and then re-raise: a repair that fails before
+    mark_sstable_as_repaired() runs leaves the disk clean without exercising the regression.
+    """
+    while not repair.done():
+        await asyncio.gather(*[manager.api.message_injection(s.ip_addr, HOLD_AFTER_PREPARE) for s in servers],
+                             return_exceptions=True)
+        await asyncio.sleep(0.5)
+    await inject_error_off(manager, HOLD_AFTER_PREPARE, servers)
+    try:
+        await repair
+    except Exception as e:
+        logger.error(f"the held repair failed: {e}")
+        return e
+    return None
+
+
+async def check_no_toc_less_sstables(manager, servers, ks, stopped_ids=()):
+    """Fails if any node has an sstable generation with no TOC, on disk or by refusing to boot."""
+    tm = TaskManagerClient(manager.api)
+    running = [s for s in servers if s.server_id not in stopped_ids]
+    for s in running:
+        await tm.drain_module_tasks(s.ip_addr, "compaction")
+    for s in running:
+        await manager.server_stop_gracefully(s.server_id)
+
+    found = {}
+    for s in servers:
+        orphans = find_toc_less_generations(await manager.server_get_workdir(s.server_id), ks)
+        if orphans:
+            logger.error(f"server {s.server_id} ({s.ip_addr}): TOC-less sstables: {orphans}")
+            found[s.server_id] = orphans
+
+    boot_failures = {}
+    for s in servers:
+        log = await manager.server_open_log(s.server_id)
+        mark = await log.mark()
+        try:
+            await manager.server_start(s.server_id)
+        except Exception as e:
+            matches = await log.grep("no TOC found for SSTable", from_mark=mark)
+            boot_failures[s.server_id] = [line for line, _ in matches] or [str(e)]
+            logger.error(f"server {s.server_id} ({s.ip_addr}) failed to boot: {boot_failures[s.server_id]}")
+
+    assert not found and not boot_failures, \
+        f"TOC-less sstables on disk: {found}; boot failures: {boot_failures}"
+
+
+# Compaction can delete an sstable an incremental repair has captured but not yet marked as
+# repaired.  Marking must not resurrect it: mark_sstable_as_repaired() re-derives its candidates
+# from the live sstable set, so a deleted one is simply not among them.  Before that it rewrote
+# Statistics.db in place, which left a lone Statistics.db in a directory whose other components
+# were gone and made the node refuse to boot with "no TOC found for SSTable ...".
+#
+# Here the deletion comes from compaction of the repaired view: incremental_mode=full also
+# captures already-repaired sstables, which stay in the repaired view because the classifier
+# tests is_repaired() before is_being_repaired(), and that view is neither compaction-disabled
+# nor covered by the repair write lock.  Every replica is affected.
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_full_incremental_repair_with_repaired_view_compaction_leaves_no_toc_less_sstables(manager: ScyllaClusterManager):
+    nr_keys = 1000
+    cmdline = ['--hinted-handoff-enabled', 'false', '--logger-log-level', 'compaction=debug']
+    servers = await manager.servers_add(3, auto_rack_dc="dc1", cmdline=cmdline,
+                                        config={'tablet_load_stats_refresh_interval_in_seconds': 1})
+    cql = manager.get_cql()
+    ks = await create_new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', "
+                                        "'replication_factor': 3} AND tablets = {'initial': 1}")
+    # A high min_threshold keeps the repaired sstables apart until the test lowers it.
+    await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH tombstone_gc = {{'mode':'repair'}} "
+                        "AND compaction = {'class': 'SizeTieredCompactionStrategy', 'min_threshold': 32}")
+
+    # Each round leaves one more similar-sized repaired sstable per replica.
+    for i in range(4):
+        await insert_keys(cql, ks, i * nr_keys, (i + 1) * nr_keys)
+        await flush_all(manager, servers, ks)
+        await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", 'all', incremental_mode='incremental')
+
+    logs = [await manager.server_open_log(s.server_id) for s in servers]
+    marks = [await log.mark() for log in logs]
+    await inject_error_on(manager, HOLD_AFTER_PREPARE, servers)
+    repair = asyncio.create_task(
+            manager.api.tablet_repair(servers[0].ip_addr, ks, "test", 'all', incremental_mode='full'))
+    await asyncio.gather(*[log.wait_for("Re-enabled compaction for range=.* for incremental repair", from_mark=mark, timeout=120)
+                           for log, mark in zip(logs, marks)])
+    captured = await captured_sstables(logs, marks)
+    logger.info(f"full repair held after capturing {len(captured)} sstables: {captured}")
+    assert captured, "the held repair captured no sstables"
+
+    # Mirrors the tombstone_gc change that triggered this in the field; the lower min_threshold
+    # makes the compaction it triggers on the repaired view deterministic.
+    await cql.run_async(f"ALTER TABLE {ks}.test WITH tombstone_gc = {{'mode':'timeout'}} "
+                        "AND compaction = {'class': 'SizeTieredCompactionStrategy', 'min_threshold': 2}")
+    deleted_while_held = await wait_for_deleted(captured, timeout=60)
+    logger.info(f"{len(deleted_while_held)} of {len(captured)} captured sstables deleted before release: {deleted_while_held}")
+
+    repair_error = await release_held_repair(manager, servers, repair)
+    await check_no_toc_less_sstables(manager, servers, ks)
+    if repair_error is not None:
+        # Checked the disk first, but a repair that failed may never have reached
+        # mark_sstable_as_repaired(), so a clean disk here proves nothing.
+        raise repair_error
+
+    assert deleted_while_held, "no captured sstable was deleted: the repaired-view compaction did not run"
