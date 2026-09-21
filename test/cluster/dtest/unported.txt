@@ -67,7 +67,6 @@ read_repair_test.py
 repair_additional_test.py
 repair_based_node_operations_test.py
 repair_test.py
-replace_address_test.py
 replication_test.py
 resharding_test.py
 rest_api_tests.py

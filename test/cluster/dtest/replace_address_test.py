@@ -36,7 +36,7 @@ from tools.cluster_topology import generate_cluster_topology
 from tools.data import insert_c1c2, rows_to_list
 from tools.marks import with_feature
 from tools.metrics import get_node_metrics
-from tools.misc import ImmutableMapping
+from tools.misc import ImmutableMapping, num_tokens_per_node
 from tools.stress import assert_cs_success, create_stress_compatible_table, format_cs_output
 
 
@@ -488,6 +488,10 @@ class TestReplaceAddress(Tester):
         logger.info("Starting node 4 to replace node 2, but stop it in the middle of the replace.")
         node4 = self.cluster.new_node(4, data_center="dc1", rack="r1", auto_bootstrap=True, is_seed=False)
         node4.start(replace_node_host_id=node2.hostid(), no_wait=True)
+        # Stop it only once the replace has begun, which is what the test means
+        # to interrupt: a no_wait start returns as soon as the process exists,
+        # and a SIGTERM that early can even beat Scylla's signal handling.
+        node4.watch_log_for("raft_topology - join: sending the join request")
 
         # this error is expected in teardown after this test in raft topology mode
         ignore_error = rf"raft_topology - raft_topology_cmd.*failed with: (?:service::wait_for_ip_timeout \(failed to obtain an IP for {node4.hostid()} in 30s\)|failed to obtain an IP for {node4.hostid()} in 30s)"
@@ -497,6 +501,9 @@ class TestReplaceAddress(Tester):
         logger.info(f"Node 4 is {node4_address}")
 
         self.ignore_log_patterns += ["Startup failed"]
+        # Stopping node4 in the middle of its join can cut off a group0 snapshot
+        # transfer to it.
+        self.ignore_log_patterns += [rf"raft - \[.*\] Transferring snapshot to {node4.hostid()} failed with: .*connection is closed"]
         node4.stop()
 
         status1, _err1 = node1.nodetool("gossipinfo")
@@ -527,8 +534,10 @@ class TestReplaceAddress(Tester):
         assert self.get_sorted_tokens(node1, node2.address()) == []
 
         logger.info("Verifying system.peers table.")
-        expected_peers = [(node3.address(), node3.hostid(), 256), (node5_address, node5_hostid, 256)]
         session = self.exclusive_cql_connection(node1)
+        tokens_per_node = num_tokens_per_node(session)
+        # ccm's node3 (127.0.0.3) sorted before node5 (127.0.0.5); leased addresses need not.
+        expected_peers = sorted([(node3.address(), node3.hostid(), tokens_per_node), (node5_address, node5_hostid, tokens_per_node)])
         res = session.execute("SELECT peer, host_id, tokens FROM system.peers")
         peers = [(peer, str(host_id), len(tokens)) for peer, host_id, tokens in sorted(rows_to_list(res))]
         assert peers == expected_peers, f"Unexpected peers result. Expected {expected_peers}, got {peers}"

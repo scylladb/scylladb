@@ -36,7 +36,9 @@ def wait_nodetool_toppartitions_start(node: ScyllaNode, cmd: str, timeout: int =
     :raises: NodetoolToppartitionStartedTimeoutError
     """
     st = time.time()
-    nodetool_cmd_pattern = f"nodetool.*-h.*{node.address()}.*-p.*({node.jmx_port}|10000)"
+    # In-tree nodetool is `scylla nodetool -h <address> ...`, talking to the REST
+    # API; there is no JMX port to match as ccm's command line had.
+    nodetool_cmd_pattern = f"nodetool.*-h.*{node.address()}"
     toppartition_cmd_pattern = cmd.replace(" ", ".*")
     while True:
         try:
