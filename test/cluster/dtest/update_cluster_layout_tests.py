@@ -22,7 +22,7 @@ from threading import Event
 
 import pytest
 import requests
-from cassandra import ConsistencyLevel, InvalidRequest, OperationTimedOut, Unavailable, WriteTimeout
+from cassandra import ConsistencyLevel, OperationTimedOut, Unavailable, WriteTimeout
 from cassandra.cluster import ExecutionProfile, NoHostAvailable
 from cassandra.policies import ConstantSpeculativeExecutionPolicy, FallthroughRetryPolicy
 from cassandra.query import SimpleStatement
@@ -43,7 +43,7 @@ from dtest_class import (
     wait_for,
 )
 from tools.assertions import assert_invalid, assert_row_count
-from tools.cluster import minimum_scylla_version, new_node, run_rest_api
+from tools.cluster import new_node, run_rest_api
 from tools.cluster_topology import generate_cluster_topology
 from tools.data import (
     create_c1c2_table,
@@ -2354,7 +2354,7 @@ class TestUpdateClusterLayout(Tester):
 
         # Replacing node3 with node4
         logger.debug("Starting node 4 to replace node 3")
-        node4 = new_node(cluster, bootstrap=True, token=None, remote_debug_port="0", data_center=node3.data_center, rack=node3.rack)
+        node4 = new_node(cluster, bootstrap=True, data_center=node3.data_center, rack=node3.rack)
         node4.start(wait_for_binary_proto=True, replace_node_host_id=node3_host_id)
         session = self.patient_cql_connection(node4)
         session.execute("use ks;")
@@ -2592,7 +2592,7 @@ class TestUpdateClusterLayout(Tester):
         cluster = self.cluster
         cluster_topology = generate_cluster_topology(dc_num=1, rack_num=rf, nodes_per_rack=1)
         cluster.set_configuration_options(values=self.default_config_options(), batch_commitlog=True)
-        cluster.populate(cluster_topology).start()
+        cluster.populate(cluster_topology).start(wait_for_binary_proto=True, wait_other_notice=True)
         node1 = cluster.nodelist()[0]
         target_node = cluster.nodelist()[-1]
         consistency_level = {2: ConsistencyLevel.TWO, 3: ConsistencyLevel.THREE}[rf]
@@ -2610,10 +2610,7 @@ class TestUpdateClusterLayout(Tester):
         target_node.stop()
 
         logger.debug(f"Change IP address for {target_node.name}")
-        ip_prefix = cluster.get_ipprefix()
-        new_ip = f"{ip_prefix}33"
-        target_node.set_configuration_options(values={"listen_address": new_ip, "rpc_address": new_ip, "api_address": new_ip})
-        target_node.network_interfaces = {k: (new_ip, v[1]) for k, v in target_node.network_interfaces.items()}
+        new_ip = target_node.change_ip()
         logger.debug(f"Start target node {target_node.name} again with ip address {new_ip}")
 
         target_node.start(wait_for_binary_proto=True, wait_other_notice=False)
@@ -2649,9 +2646,7 @@ class TestUpdateClusterLayout(Tester):
 
         logger.info("replace node3 address")
         old_ip3 = node3.address()
-        ip3 = f"{old_ip3}3"
-        node3.set_configuration_options(values={"listen_address": ip3, "rpc_address": ip3, "api_address": ip3})
-        node3.network_interfaces = {k: (ip3, v[1]) for k, v in node3.network_interfaces.items()}
+        ip3 = node3.change_ip()
 
         logger.info("decommission node3")
         node3.start(wait_for_binary_proto=False, wait_other_notice=True)
@@ -2660,7 +2655,11 @@ class TestUpdateClusterLayout(Tester):
 
         def is_shutdown(endpoint=old_ip3):
             found = False
+            # The decommissioned node shuts itself down, so only the nodes still
+            # in the cluster can be asked what gossip says about the old address.
             for node in cluster.nodelist():
+                if not node.is_running():
+                    continue
                 gs = nodetool_gossipinfo(node)
                 if endpoint in gs:
                     logger.debug(gs[endpoint])
@@ -2672,7 +2671,7 @@ class TestUpdateClusterLayout(Tester):
         wait_for(is_shutdown, step=10, timeout=timeout)
 
         logger.info("add new node4")
-        node4 = cluster.new_node(4, data_center=node3.data_center, rack=node3.rack)
+        node4 = new_node(cluster, data_center=node3.data_center, rack=node3.rack)
         node4.start(wait_for_binary_proto=True)
         logger.info("done")
 
@@ -2772,9 +2771,7 @@ class TestUpdateClusterLayout(Tester):
 
         logger.info("replace node3 address")
         old_ip3 = node3.address()
-        ip3 = f"{old_ip3}3"
-        node3.set_configuration_options(values={"listen_address": ip3, "rpc_address": ip3, "api_address": ip3})
-        node3.network_interfaces = {k: (ip3, v[1]) for k, v in node3.network_interfaces.items()}
+        ip3 = node3.change_ip()
         node3.start(wait_for_binary_proto=True, wait_other_notice=True)
 
         logger.info("stop node3")
@@ -2795,7 +2792,7 @@ class TestUpdateClusterLayout(Tester):
         wait_for(is_shutdown, step=10, timeout=timeout)
 
         logger.info("Replace node3 with node4")
-        node4 = new_node(cluster, bootstrap=True, token=None, remote_debug_port="0", data_center=node3.data_center, rack=node3.rack)
+        node4 = new_node(cluster, bootstrap=True, data_center=node3.data_center, rack=node3.rack)
         node4.start(wait_for_binary_proto=True, replace_node_host_id=node3_host_id)
 
     def test_change_node_ip_full_cluster_down(self):
@@ -2810,7 +2807,7 @@ class TestUpdateClusterLayout(Tester):
 
         cluster.set_configuration_options(values=self.default_config_options(), batch_commitlog=True)
         cluster_topology = generate_cluster_topology(dc_num=1, rack_num=3, nodes_per_rack=1)
-        cluster.populate(cluster_topology).start()
+        cluster.populate(cluster_topology).start(wait_for_binary_proto=True, wait_other_notice=True)
         node1, node2, node3 = cluster.nodelist()
 
         session = self.patient_cql_connection(node1)
@@ -2824,16 +2821,10 @@ class TestUpdateClusterLayout(Tester):
 
         cluster.stop()
 
-        ip_prefix = cluster.get_ipprefix()
         for node in cluster.nodelist():
             old_ip = node.address()
-            lower_ip = int(old_ip.split(".")[-1]) + 10
-            assert lower_ip < 255
-            last = str(lower_ip)
-            ip = f"{ip_prefix}{last}"
-            logger.debug(f"Change IP address for {node.name} from {old_ip} to {ip}")
-            node.set_configuration_options(values={"listen_address": ip, "rpc_address": ip, "api_address": ip})
-            node.network_interfaces = {k: (ip, v[1]) for k, v in node.network_interfaces.items()}
+            ip = node.change_ip()
+            logger.debug(f"Changed IP address for {node.name} from {old_ip} to {ip}")
 
         for node in cluster.nodelist():
             logger.debug(f"Start {node.name} again with ip address {node.address()}")
@@ -3443,6 +3434,12 @@ class TestUpdateClusterLayoutWithRaftTopology(Tester):
 
         logger.debug("Start removenode operation for node3 from coordinator")
         coordinator_node.nodetool(f"removenode {node3_hostid}", capture_output=False, wait=False)
+        # Kill the coordinator only once the removenode request is in group0.
+        # "making servers {node3} non-voters" is also logged by the group0 voter
+        # handler as soon as it sees node3 down -- possibly after log_marks were
+        # taken -- and matching that would kill the coordinator before the
+        # request is even sent, leaving no removenode to finish or roll back.
+        coordinator_node.watch_log_for("removenode: waiting for completion", from_mark=log_marks[coordinator_node])
         coordinator_node.watch_log_for(log_message, from_mark=log_marks[coordinator_node])
 
         logger.debug("Abort removenode operation after log message by reboot coordinator node")
@@ -3520,6 +3517,10 @@ class TestUpdateClusterLayoutWithRaftTopology(Tester):
 
         logger.debug("Start removenode operation for node3 from topology coordinator")
         coordinator_node.nodetool(f"removenode {node3_hostid}", capture_output=False, wait=False)
+        # As in the kill_coordinator variant: the voter handler may log "making
+        # servers {node3} non-voters" on its own once node3 is down, so wait for
+        # the removenode request to be in group0 first.
+        coordinator_node.watch_log_for("removenode: waiting for completion", from_mark=log_marks[coordinator_node])
         coordinator_node.watch_log_for(log_message, from_mark=log_marks[coordinator_node])
 
         logger.debug("Abort removenode operation after log message with peer node reboot")

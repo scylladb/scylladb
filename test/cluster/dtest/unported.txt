@@ -83,7 +83,6 @@ topology_test.py
 toppartitions_test.py
 ttl_test.py
 udtencoding_test.py
-update_cluster_layout_tests.py
 updateable_config_test.py
 upgrade_test.py
 user_functions_test.py
