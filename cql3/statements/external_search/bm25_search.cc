@@ -6,40 +6,44 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
-#include "cql3/statements/external_search/fulltext_indexed_table_select_statement.hh"
-#include "cql3/statements/external_search/external_function.hh"
-#include "cql3/statements/external_search/values_provider.hh"
-#include "cql3/statements/raw/select_statement.hh"
+#include "bm25_search.hh"
+
 #include "cql3/expr/evaluate.hh"
-#include "cql3/expr/expression.hh"
 #include "cql3/expr/expr-utils.hh"
+#include "cql3/expr/expression.hh"
 #include "cql3/functions/scoring_fcts.hh"
 #include "cql3/query_processor.hh"
 #include "vector_search/hybrid_search.hh"
 #include "cql3/restrictions/statement_restrictions.hh"
-#include "index/secondary_index_manager.hh"
+#include "cql3/statements/external_search/external_function.hh"
+#include "cql3/statements/external_search/bm25_search.hh"
+#include "cql3/statements/external_search/values_provider.hh"
+#include "cql3/statements/raw/select_statement.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "db/consistency_level_validations.hh"
 #include "exceptions/exceptions.hh"
+#include "index/secondary_index_manager.hh"
+#include "schema/schema.hh"
 #include "types/types.hh"
 #include "utils/assert.hh"
 
-#include <seastar/core/future.hh>
 #include <seastar/coroutine/exception.hh>
+#include <seastar/core/future.hh>
 
-namespace cql3::statements {
+namespace cql3::statements::bm25_search {
 
-namespace {
-
-/// The column the index is built on: the one the rows are ranked by and a fragment is generated from.
 const column_definition& indexed_column(const schema& schema, const secondary_index::index& index) {
     const auto* cdef = schema.get_column_definition(to_bytes(index.target_column()));
     throwing_assert(cdef);
     return *cdef;
 }
 
-std::optional<expr::expression> validate_bm25_where_restriction(const expr::binary_operator& binop,
-        const bm25_ordering_info& ordering_info) {
+sstring query_term(const cql3::raw_value& value) {
+    return value_cast<sstring>(utf8_type->deserialize(cql3::raw_value(value).to_bytes()));
+}
+
+std::optional<expr::expression> validate_restriction(const expr::binary_operator& binop, const secondary_index::index& index,
+        const expr::expression& search_term) {
     // "WHERE BM25(c, t) > 0" arrives as BM25_SCORE(c, t) > 0 (see prepare_external_search_relation_lhs()),
     // and a full-text query takes no other search function here, e.g. ANN().
     const auto& fc = expr::as<expr::function_call>(binop.lhs);
@@ -48,7 +52,7 @@ std::optional<expr::expression> validate_bm25_where_restriction(const expr::bina
         throw exceptions::invalid_request_exception(seastar::format("{}() is not supported in the WHERE clause", fun->display_name()));
     }
     auto [col, where_term] = external_search::extract_call_arguments(fc, fun->display_name());
-    if (col->name_as_text() != ordering_info.index.target_column()) {
+    if (col->name_as_text() != index.target_column()) {
         throw exceptions::invalid_request_exception("Full-text search queries must reference the same column in both WHERE and ORDER BY clauses");
     }
 
@@ -61,7 +65,7 @@ std::optional<expr::expression> validate_bm25_where_restriction(const expr::bina
         throw exceptions::invalid_request_exception("BM25 function comparison value must be the literal 0");
     }
 
-    const auto terms_equal = external_search::unevaluated_equality(where_term, ordering_info.search_term);
+    const auto terms_equal = external_search::unevaluated_equality(where_term, search_term);
     if (terms_equal != external_search::equality::always) {
         if (terms_equal == external_search::equality::never) {
             throw exceptions::invalid_request_exception(
@@ -72,17 +76,9 @@ std::optional<expr::expression> validate_bm25_where_restriction(const expr::bina
     return std::nullopt;
 }
 
-/// Asks the full-text index for a highlighted fragment of every row's text, and returns the
-/// fragments as the values of the highlight temporary: one per row in `rows`, in the same order.
-///
-/// The text of each row is `row.columns[text_column]`. The texts are sent in one request, and the
-/// reply is an array of the same length: reply[i] is the fragment of the i-th row sent. A row is not
-/// sent if it is dropped, its fragment being thrown away with the row, or if it has no text, there
-/// being nothing to find a fragment in; either gets a null value. A row the index found no fragment
-/// in gets a null value and is not dropped. If the request fails, the query fails.
-future<std::vector<cql3::raw_value>> highlights_of(vector_search::vector_store_client& client, const schema& schema,
-        const secondary_index::index& index, const sstring& search_term, std::span<const external_search::joined_row> rows, size_t text_column,
-        abort_source& as) {
+seastar::future<std::vector<cql3::raw_value>> highlights_of(vector_search::vector_store_client& client, const schema& schema,
+        const secondary_index::index& index, const sstring& search_term, std::span<const external_search::joined_row> rows, size_t column,
+        seastar::abort_source& as) {
     const auto& type = *indexed_column(schema, index).type;
     auto values = std::vector<cql3::raw_value>(rows.size(), cql3::raw_value::make_null());
     auto documents = std::vector<sstring>{};
@@ -90,7 +86,7 @@ future<std::vector<cql3::raw_value>> highlights_of(vector_search::vector_store_c
     auto sent_rows = std::vector<size_t>{};
     sent_rows.reserve(rows.size());
     for (size_t row = 0; row < rows.size(); ++row) {
-        const auto& text = rows[row].columns.at(text_column);
+        const auto& text = rows[row].columns.at(column);
         if (rows[row].dropped || !text) {
             continue;
         }
@@ -118,7 +114,9 @@ future<std::vector<cql3::raw_value>> highlights_of(vector_search::vector_store_c
     co_return values;
 }
 
-} // anonymous namespace
+} // namespace cql3::statements::bm25_search
+
+namespace cql3::statements {
 
 ::shared_ptr<cql3::statements::select_statement> fulltext_indexed_table_select_statement::prepare(data_dictionary::database db,
         schema_ptr schema, uint32_t bound_terms, lw_shared_ptr<const parameters> parameters,
@@ -153,7 +151,8 @@ future<std::vector<cql3::raw_value>> highlights_of(vector_search::vector_store_c
         throw exceptions::invalid_request_exception("Full-text search queries support only one WHERE BM25() restriction");
     }
 
-    ordering_info->deferred_where_term = validate_bm25_where_restriction(scoring_restrictions.front(), *ordering_info);
+    ordering_info->deferred_where_term = bm25_search::validate_restriction(
+            scoring_restrictions.front(), ordering_info->index, ordering_info->search_term);
 
     // Reject any WHERE restrictions beyond the single BM25 clause.
     // BM25 restrictions are excluded from `restrictions`.
@@ -171,7 +170,7 @@ future<std::vector<cql3::raw_value>> highlights_of(vector_search::vector_store_c
 
     // BM25_HIGHLIGHT() sends the index the text it does not store, so read it even if not selected.
     if (ordering_info->temporaries.fragment) {
-        selection->add_column_for_post_processing(indexed_column(*schema, ordering_info->index));
+        selection->add_column_for_post_processing(bm25_search::indexed_column(*schema, ordering_info->index));
     }
 
     return ::make_shared<cql3::statements::fulltext_indexed_table_select_statement>(
@@ -232,8 +231,7 @@ future<shared_ptr<cql_transport::messages::result_message>> fulltext_indexed_tab
         }
     }
 
-    auto search_term_bytes = std::move(search_term_val).to_bytes();
-    sstring search_term_text = value_cast<sstring>(utf8_type->deserialize(search_term_bytes));
+    const auto search_term_text = bm25_search::query_term(search_term_val);
 
     auto requests = std::vector<vector_search::search_request>{};
     requests.push_back(vector_search::bm25_request{
@@ -256,7 +254,7 @@ future<shared_ptr<cql_transport::messages::result_message>> fulltext_indexed_tab
         auto text_column = std::optional<size_t>{};
         if (_bm25_ordering_info.temporaries.fragment) {
             text_column = columns.size();
-            columns.push_back(&indexed_column(*_schema, _bm25_ordering_info.index));
+            columns.push_back(&bm25_search::indexed_column(*_schema, _bm25_ordering_info.index));
         }
         const auto& read = table_results.value();
         auto rows = external_search::join_table_results(*read.rows, read.command->slice, *_schema, &candidates, columns);
@@ -264,7 +262,7 @@ future<shared_ptr<cql_transport::messages::result_message>> fulltext_indexed_tab
         auto filled = external_search::search_values_of(_bm25_ordering_info.temporaries, rows, 0, candidates);
         if (_bm25_ordering_info.temporaries.fragment) {
             // Matched to a row by position: the fragments come back in the order the rows were sent.
-            auto fragments = co_await highlights_of(
+            auto fragments = co_await bm25_search::highlights_of(
                     qp.vector_store_client(), *_schema, _index, search_term_text, rows, *text_column, aoe.abort_source());
             filled.push_back(external_search::external_values{
                     .temporary_index = *_bm25_ordering_info.temporaries.fragment, .values = std::move(fragments)});
