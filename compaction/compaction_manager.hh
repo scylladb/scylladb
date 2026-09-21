@@ -138,6 +138,12 @@ private:
     // weight is value assigned to a compaction job that is log base N of total size of all input sstables.
     std::unordered_set<int> _weight_tracker;
 
+    // Fiber which waits for a signal and reevaluates automatic scrub.
+    std::optional<future<>> _waiting_automatic_scrub_reevaluation;
+
+    // Used to signal that automatic scrub reevaluation is needed.
+    condition_variable _automatic_scrub_reevaluation;
+
     // Compaction groups views which should be considered for automatic scrub.
     std::unordered_set<compaction::compaction_group_view*> _awaiting_automatic_scrub;
 
@@ -156,7 +162,14 @@ private:
 
     std::function<void()> compaction_submission_callback();
 
+    // Update scrub timer according to _scrub_period.
+    void update_automatic_scrub_submission_timer();
+    std::function<void(uint32_t)> scrub_period_observer_callback();
+
+    // Register all tables as candidates and initiate reevaluation.
+    std::function<void()> automatic_scrub_submission_callback();
     void schedule_table_for_automatic_scrub(compaction::compaction_group_view* t);
+    void reevaluate_automatic_scrub() noexcept;
 
     bool automatic_scrub_enabled() const noexcept {
         return bool(_scrub_period);
@@ -165,12 +178,21 @@ private:
     using for_regular_compaction = bool_class<struct for_regular_compaction_tag>;
     bool should_be_automatically_scrubbed(const sstables::shared_sstable&, for_regular_compaction = for_regular_compaction::no) const;
 
+    // Fiber waiting for signal and reevaluating automatic scrub.
+    future<> automatic_scrub_reevaluation();
+
+    future<> stop_automatic_scrub() noexcept;
+
     // all registered tables are reevaluated at a constant interval.
     // Submission is a NO-OP when there's nothing to do, so it's fine to call it regularly.
     static constexpr std::chrono::seconds periodic_compaction_submission_interval() { return std::chrono::seconds(3600); }
 
     config _cfg;
     timer<lowres_clock> _compaction_submission_timer;
+    timer<lowres_clock> _automatic_scrub_submission_timer;
+    std::optional<lowres_clock::time_point> _automatic_scrub_timer_expiration;
+
+    utils::observer<uint32_t> _scrub_period_observer;
     std::optional<std::chrono::seconds> _scrub_period;
     compaction_controller _compaction_controller;
     compaction_backlog_manager _backlog_manager;

@@ -18,6 +18,7 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/metrics.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/all.hh>
 #include <seastar/coroutine/switch_to.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/maybe_yield.hh>
@@ -773,6 +774,9 @@ compaction_reenabler::~compaction_reenabler() {
         cmlog.debug("Reenabling compaction for {}", *_table);
         try {
             _cm.submit(*_table);
+            if (_cm.automatic_scrub_enabled() && _cm._awaiting_automatic_scrub.contains(_table)) {
+                _cm.reevaluate_automatic_scrub();
+            }
         } catch (...) {
             cmlog.warn("compaction_reenabler could not reenable compaction for {}: {}",
                     *_table, std::current_exception());
@@ -1116,6 +1120,8 @@ compaction_manager::compaction_manager(config cfg, abort_source& as, tasks::task
     , _sys_ks("compaction_manager::system_keyspace")
     , _cfg(std::move(cfg))
     , _compaction_submission_timer(compaction_sg(), compaction_submission_callback())
+    , _automatic_scrub_submission_timer(maintenance_sg(), automatic_scrub_submission_callback())
+    , _scrub_period_observer(_cfg.scrub_period.observe(scrub_period_observer_callback()))
     , _compaction_controller(make_compaction_controller(compaction_sg(), static_shares(), _cfg.max_shares.get(), [this] () -> float {
         _last_backlog = backlog();
         auto b = _last_backlog / available_memory();
@@ -1149,6 +1155,8 @@ compaction_manager::compaction_manager(tasks::task_manager& tm)
     , _sys_ks("compaction_manager::system_keyspace")
     , _cfg(config{ .available_memory = 1 })
     , _compaction_submission_timer(compaction_sg(), compaction_submission_callback())
+    , _automatic_scrub_submission_timer(maintenance_sg(), automatic_scrub_submission_callback())
+    , _scrub_period_observer(_cfg.scrub_period.observe(scrub_period_observer_callback()))
     , _compaction_controller(make_compaction_controller(compaction_sg(), 1, std::nullopt, [] () -> float { return 1.0; }))
     , _backlog_manager(_compaction_controller)
     , _update_compaction_static_shares_action([] { return make_ready_future<>(); })
@@ -1194,6 +1202,31 @@ static constexpr std::chrono::milliseconds scrub_submission_interval(std::chrono
     return std::chrono::milliseconds{scrub_period} / 8;
 }
 
+// Update the automatic scrub submission timer according to the stored
+// period and existing expiration.
+void compaction_manager::update_automatic_scrub_submission_timer() {
+    auto expiration = std::exchange(_automatic_scrub_timer_expiration, std::nullopt);
+
+    if (_automatic_scrub_submission_timer.armed()) {
+        expiration = _automatic_scrub_submission_timer.get_timeout();
+    }
+
+    if (_scrub_period) {
+        auto period = scrub_submission_interval(*_scrub_period);
+        if (expiration) {
+            auto now = lowres_clock::now();
+            if (expiration < now + period) {
+                _automatic_scrub_submission_timer.rearm(*expiration, period);
+                return;
+            }
+        }
+
+        _automatic_scrub_submission_timer.rearm_periodic(period);
+    } else {
+        _automatic_scrub_submission_timer.cancel();
+    }
+}
+
 void compaction_manager::enable() {
     if (_state == state::stopped) {
         // The manager is being (or has been) stopped, e.g. shutdown started
@@ -1215,8 +1248,13 @@ void compaction_manager::enable() {
 
     _compaction_submission_timer.cancel();
     _compaction_submission_timer.arm_periodic(periodic_compaction_submission_interval());
+
+    scrub_period_observer_callback()(_cfg.scrub_period());
+    _scrub_period_observer = _cfg.scrub_period.observe(scrub_period_observer_callback());
     throwing_assert(!_waiting_reevaluation);
     _waiting_reevaluation.emplace(postponed_compactions_reevaluation());
+    throwing_assert(!_waiting_automatic_scrub_reevaluation);
+    _waiting_automatic_scrub_reevaluation.emplace(automatic_scrub_reevaluation());
     cmlog.info("Enabled");
 }
 
@@ -1230,6 +1268,49 @@ std::function<void()> compaction_manager::compaction_submission_callback() {
         }
         reevaluate_postponed_compactions();
     };
+}
+
+std::function<void()> compaction_manager::automatic_scrub_submission_callback() {
+    return [this] mutable {
+        for (auto& [table, state] : _compaction_state) {
+            schedule_table_for_automatic_scrub(table);
+        }
+        reevaluate_automatic_scrub();
+    };
+}
+
+future<> compaction_manager::automatic_scrub_reevaluation() {
+    while (true) {
+        utils::get_local_injector().enter("automatic_scrub_wait_for_signal");
+        co_await _automatic_scrub_reevaluation.when();
+
+        if (is_disabled()) {
+            _awaiting_automatic_scrub.clear();
+            co_return;
+        }
+
+        if (!_awaiting_automatic_scrub.empty()) {
+            cmlog.info("Running automatic scrub");
+        }
+
+        auto candidates = std::exchange(_awaiting_automatic_scrub, {});
+        try {
+            for (auto it = candidates.begin(); it != candidates.end();) {
+                auto t = *it;
+                if (is_disabled() || !automatic_scrub_enabled() || !_compaction_state.contains(t)) {
+                    it = candidates.erase(it);
+                    continue;
+                }
+
+                co_await submit_automatic_scrub(*t);
+                it = candidates.erase(it);
+                co_await coroutine::maybe_yield();
+            }
+        } catch (...) {
+            cmlog.warn("Automatic scrub submission failed: {}", std::current_exception());
+            _awaiting_automatic_scrub.insert(candidates.begin(), candidates.end());
+        }
+    }
 }
 
 future<> compaction_manager::postponed_compactions_reevaluation() {
@@ -1264,6 +1345,10 @@ void compaction_manager::reevaluate_postponed_compactions() noexcept {
     _postponed_reevaluation.signal();
 }
 
+void compaction_manager::reevaluate_automatic_scrub() noexcept {
+    _automatic_scrub_reevaluation.signal();
+}
+
 future<> compaction_manager::stop_postponed_compactions() noexcept {
     auto waiting_reevaluation = std::exchange(_waiting_reevaluation, std::nullopt);
     if (!waiting_reevaluation) {
@@ -1276,6 +1361,16 @@ future<> compaction_manager::stop_postponed_compactions() noexcept {
 
 void compaction_manager::postpone_compaction_for_table(compaction_group_view* t) {
     _postponed.insert(t);
+}
+
+future<> compaction_manager::stop_automatic_scrub() noexcept {
+    auto waiting_reevaluation = std::exchange(_waiting_automatic_scrub_reevaluation, std::nullopt);
+    if (!waiting_reevaluation) {
+        return make_ready_future();
+    }
+    // Trigger a signal to properly exit from automatic_scrub_reevaluation() fiber
+    reevaluate_automatic_scrub();
+    return std::move(*waiting_reevaluation);
 }
 
 void compaction_manager::schedule_table_for_automatic_scrub(compaction_group_view* t) {
@@ -1316,6 +1411,17 @@ bool compaction_manager::should_be_automatically_scrubbed(const sstables::shared
     }
 
     return *timestamp < scrub_older_than;
+}
+
+std::function<void(uint32_t)> compaction_manager::scrub_period_observer_callback() {
+    return [this] (uint32_t value) {
+        if (value > 0) {
+            _scrub_period = std::chrono::seconds(value);
+        } else {
+            _scrub_period = std::nullopt;
+        }
+        update_automatic_scrub_submission_timer();
+    };
 }
 
 void compaction_manager::stop_tasks(const std::vector<shared_ptr<compaction_task_executor>>& tasks, sstring reason) noexcept {
@@ -1395,9 +1501,19 @@ future<> compaction_manager::drain() {
     ++_disabled_state_count;
 
     _compaction_submission_timer.cancel();
+
+    _scrub_period_observer.disconnect();
+
+    if (_automatic_scrub_submission_timer.armed()) {
+        _automatic_scrub_timer_expiration = _automatic_scrub_submission_timer.get_timeout();
+    }
+    _automatic_scrub_submission_timer.cancel();
     // Stop ongoing compactions, if the request has not been sent already and wait for them to stop.
     co_await stop_ongoing_compactions("drain");
-    co_await stop_postponed_compactions();
+    co_await coroutine::all(
+        [this] { return stop_postponed_compactions(); },
+        [this] { return stop_automatic_scrub(); }
+    );
     cmlog.info("Drained");
 }
 
@@ -1441,10 +1557,15 @@ future<> compaction_manager::really_do_stop() noexcept {
     if (!_tasks.empty()) {
         on_fatal_internal_error(cmlog, format("{} tasks still exist after being stopped", _tasks.size()));
     }
-    co_await stop_postponed_compactions();
+    co_await coroutine::all(
+        [this] { return stop_postponed_compactions(); },
+        [this] { return stop_automatic_scrub(); }
+    );
     co_await _sys_ks.close();
     _weight_tracker.clear();
     _compaction_submission_timer.cancel();
+    _scrub_period_observer.disconnect();
+    _automatic_scrub_submission_timer.cancel();
     co_await _compaction_controller.shutdown();
     co_await _update_compaction_static_shares_action.join();
     cmlog.info("Stopped");
@@ -2971,11 +3092,13 @@ future<> compaction_manager::remove(compaction_group_view& t, sstring reason) no
     // a table being removed.
     // The requirement above is provided by stop_ongoing_compactions().
     _postponed.erase(&t);
+    _awaiting_automatic_scrub.erase(&t);
 
     // Wait for all compaction tasks running under gate to terminate
     // and prevent new tasks from entering the gate.
     if (!c_state.gate.is_closed()) {
         auto close_gate = c_state.gate.close();
+        utils::get_local_injector().enter("compaction_manager_remove_wait_for_tasks");
         co_await stop_ongoing_compactions(reason, &t);
         // Wait for users of incremental repair lock (can be either repair itself or maintenance compactions).
         co_await c_state.incremental_repair_lock.write_lock();
