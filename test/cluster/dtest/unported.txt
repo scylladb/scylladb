@@ -82,7 +82,6 @@ toppartitions_test.py
 ttl_test.py
 udtencoding_test.py
 updateable_config_test.py
-upgrade_test.py
 user_functions_test.py
 user_types_test.py
 workload_prioritization_upgrade_test.py
