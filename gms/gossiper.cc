@@ -2050,7 +2050,6 @@ future<> gossiper::start_gossiping(gms::generation_type generation_nbr, applicat
     logger.info("Gossip started with local state: {}", my_endpoint_state());
     _enabled = true;
     _nr_run = 0;
-    _scheduled_gossip_task.arm(INTERVAL);
     if (!_background_msg.is_closed()) {
         co_await _background_msg.close();
     }
@@ -2059,6 +2058,8 @@ future<> gossiper::start_gossiping(gms::generation_type generation_nbr, applicat
     co_await container().invoke_on_all([] (gms::gossiper& g) {
         g._enabled = true;
     });
+    // Start gossiping immediately to speed up bootstrap.
+    _scheduled_gossip_task.arm(std::chrono::milliseconds(0));
     co_await container().invoke_on(0, [] (gms::gossiper& g) {
         g._failure_detector_loop_done = g.failure_detector_loop();
     });
