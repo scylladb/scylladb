@@ -54,7 +54,6 @@ migration_test.py
 mixed_version_test.py
 nodetool_additional_test.py
 nodetool_test.py
-paging_additional_test.py
 paging_test.py
 paxos_tests.py
 per_partition_rate_limiting_test.py

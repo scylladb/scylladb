@@ -13,9 +13,10 @@ from cassandra import ConsistencyLevel
 from cassandra.query import SimpleStatement
 
 from dtest_class import create_ks, get_ip_from_node
-from paging_test import BasePagingTester, PageAssertionMixin, PageFetcher
 from tools.datahelp import create_rows
 from tools.metrics import get_node_metrics
+from tools.paging import PageAssertionMixin, PageFetcher
+from paging_test import BasePagingTester
 
 logger = logging.getLogger(__name__)
 
@@ -364,8 +365,12 @@ class TestPagingSavedQueryStateSingularRanges(TestPagingSavedQueryStateBase):
         future = self.session.execute_async(SimpleStatement("select * from test_singular where pk = 2", fetch_size=1, consistency_level=ConsistencyLevel.ONE))
         pf = PageFetcher(future)
 
+        # Scylla exports the counter split by the replica's location, as
+        # scylla_storage_proxy_coordinator_reads_local_node and ..._remote_node.
+        coordinator_reads = "storage_proxy_coordinator_reads_(?:local|remote)_node"
+
         def get_coordinator_reads_metric(node_ip):
-            return get_node_metrics(node_ip, metrics=["storage_proxy_coordinator_reads"])["storage_proxy_coordinator_reads"]
+            return get_node_metrics(node_ip, metrics=[coordinator_reads])[coordinator_reads]
 
         node_ips = [get_ip_from_node(node) for node in self.cluster.nodelist()]
         coordinator_reads_baseline = {node_ip: get_coordinator_reads_metric(node_ip) for node_ip in node_ips}
