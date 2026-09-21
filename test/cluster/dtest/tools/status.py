@@ -49,6 +49,11 @@ def nodetool_status(node, keyspace="", table=""):
 
     # replace host_id with 'host id' so user of this function doesn't need to change
     res["nodes"] = [{k.replace("_", " "): v for k, v in s.groupdict().items()} for s in m]
+    # nodetool lists nodes by address.  ccm gave node N the address 127.0.0.N,
+    # so that was node order, which the callers rely on; the cluster manager
+    # hands out addresses in any order, so sort by node order explicitly.
+    order = {n.address(): i for i, n in enumerate(node.cluster.nodelist())}
+    res["nodes"].sort(key=lambda s: order.get(s["address"], len(order)))
     return res
 
 

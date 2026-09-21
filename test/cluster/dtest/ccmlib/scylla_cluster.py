@@ -206,6 +206,21 @@ class ScyllaCluster:
     def version() -> str:
         return SCYLLA_VERSION_FILE.read_text().strip()
 
+    def cassandra_version(self) -> str:
+        """ccm's Cluster.cassandra_version(), an alias of version()."""
+        return self.version()
+
+    def show(self, verbose: bool) -> str:
+        """ccm's Cluster.show(): the cluster's nodes, one status line each unless verbose."""
+        header = f"Cluster: '{self.manager.cluster.name}'"
+        lines = [header, "-" * len(header)]
+        nodes = self.nodelist()
+        if not nodes:
+            lines.append("No node in this cluster yet")
+        for node in nodes:
+            lines.append(node.show(show_cluster=False) + "\n" if verbose else node.show(only_status=True))
+        return "\n".join(lines)
+
     def set_configuration_options(self,
                                   values: dict[str, Any] | None = None,
                                   batch_commitlog: bool | None = None,
