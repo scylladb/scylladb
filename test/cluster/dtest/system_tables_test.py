@@ -963,6 +963,7 @@ class TestConfigTable(SystemTableBase):
         config_file_path = os.path.join(node.get_path(), "conf/scylla.yaml")
         with open(file=config_file_path, encoding="utf-8") as file:
             scylla_yaml_content = yaml.safe_load(file)
+        scylla_yaml_raw = dict(scylla_yaml_content)
 
         for key, value in scylla_yaml_content.items():
             scylla_yaml_content[key] = str(value).lower() if isinstance(value, bool) else str(value)
@@ -976,13 +977,23 @@ class TestConfigTable(SystemTableBase):
 
         logger.info("Verifying values of config parameters...")
         for row in config_properties:
-            assert scylla_yaml_content.get(row.name), f"Could not find the parameter '{row.name}' in scylla.yaml!"
+            # system.config names an option with a short alias by both, e.g. 'workdir,W'.
+            # ccm wrote that full name into scylla.yaml; test.py's ScyllaServer writes
+            # 'workdir' (test/pylib/scylla_server.py), which Scylla takes as the same option.
+            yaml_name = row.name if row.name in scylla_yaml_content else row.name.split(",")[0]
+            assert scylla_yaml_content.get(yaml_name), f"Could not find the parameter '{row.name}' in scylla.yaml!"
 
-            scylla_yaml_value = scylla_yaml_content[row.name]
+            scylla_yaml_value = scylla_yaml_content[yaml_name]
             row_value = row.value
 
             if row.name == "seed_provider" and str(row_value) == '"seed_provider_type"':
                 # allow older scylla which does not provide this info
+                continue
+
+            if row.type == "string map":
+                # e.g. server_encryption_options, which test.py sets: system.config renders a map
+                # as a JSON object, in no particular key order.
+                assert scylla_yaml_raw[yaml_name] == json.loads(row_value), f"Wrong value for name='{row.name}' in the table {self.KEYSPACE_NAME}.{self.TABLE_NAME}. Expected: {scylla_yaml_raw[yaml_name]}. Got: {row_value}. Row={row}"
                 continue
 
             if row.name in json_rows:
@@ -1012,14 +1023,17 @@ class TestConfigTable(SystemTableBase):
         """
         logger.debug("Preparing the cluster...")
         cluster = self.cluster
-        started_node_data = cluster.populate(1).start()[0]
+        cluster.populate(1).start()
         logger.debug("Cluster has been prepared...")
 
         node = cluster.nodelist()[0]
         node_ip_address = node.address()
 
         logger.info("Getting startup CLI args on node %s...", node_ip_address)
-        startup_args = started_node_data[1].args
+        # ccm's start() returned each node's Popen; the in-tree cluster returns the nodes, so read the
+        # command line of the running scylla process instead.
+        with open(f"/proc/{node.pid}/cmdline", "rb") as cmdline:
+            startup_args = cmdline.read().decode().split("\0")
 
         with self.patient_cql_connection(node) as session:
             logger.info("Getting content of %s.%s table on node %s...", self.KEYSPACE_NAME, self.TABLE_NAME, node_ip_address)
@@ -1035,6 +1049,13 @@ class TestConfigTable(SystemTableBase):
             arg_name = f"--{row.name}".replace("_", "-")
             row_value = row.value.strip('"').replace('"', "'")
             assert arg_name in startup_args, f"Could not find the parameter '{arg_name}' in Scylla startup arguments!"
+
+            if row.type == "string map":
+                # A map option is given as one key=value per occurrence, e.g. test.py passes
+                # --logger-log-level several times.
+                expected = dict(startup_args[i + 1].split("=", 1) for i, arg in enumerate(startup_args) if arg == arg_name)
+                assert json.loads(row.value) == expected, f"Wrong value for name='{row.name}' in the table {self.KEYSPACE_NAME}.{self.TABLE_NAME}. Expected: {expected}. Got: {row.value}."
+                continue
 
             startup_arg_value = startup_args[startup_args.index(arg_name) + 1]
             if row_value == "true":
