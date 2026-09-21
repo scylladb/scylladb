@@ -239,6 +239,52 @@ All tests in pytest suites consist of test-cases -- top-level functions
 starting with test_ -- and thus support the `path/to/test_file.py::casename`
 selection described in the Usage section.
 
+## Running a single test
+
+`test.py` fans every test out over all configured build modes and runs them in
+`pytest-xdist` workers.  When iterating on one test, call pytest directly
+instead:
+
+    $ ./tools/toolchain/dbuild pytest --mode dev test/cluster/test_strong_consistency.py::test_basic_write_read
+
+`test/pytest.ini` provides the rootdir and `test/conftest.py` registers the
+`test.pylib.runner` plugin, so the harness behaves as it does under `test.py`:
+cluster manager, per-test logs, `--mode`, `--repeat`,
+`--extra-scylla-cmdline-options`.  C++ test cases are selected the same way.
+Pass `--mode` explicitly, or the test runs once per configured mode.
+
+### Reusing the 3rd party services
+
+Every pytest session starts LDAP (with toxiproxy), the S3 mock container, the
+mock S3 server and the S3 proxy before the first test runs.  To run several
+sessions against one set of services, start them on their own:
+
+    $ ./tools/toolchain/dbuild ./test/pylib/start_3rd_party_services.py
+
+and, in another shell, point pytest at the running ones.  With
+`tools/toolchain/dbuild` the environment has to be sourced inside the container,
+since dbuild passes none of it through and `testlog` may be a volume the host
+cannot read:
+
+    $ ./tools/toolchain/dbuild sh -c '. testlog/3rd_party/services.env && pytest --mode dev --no-3rd-party-services test/boost/s3_test.cc::test_creds'
+
+Without dbuild, `source testlog/3rd_party/services.env` in the shell that runs
+pytest does the same.
+
+The services publish their addresses and credentials through environment
+variables only.  `services.env` is an `export` script with the variables they
+set, and `--no-3rd-party-services` keeps pytest from starting services of its
+own.  Without it a test that needs a service fails on the missing variable
+rather than with a clear message.  Stop the services with Ctrl-C, or with
+`./test/pylib/start_3rd_party_services.py --stop`, which reaches the launcher
+through a fifo in the shared state directory.
+
+The services stay reachable from other dbuild invocations because dbuild shares
+the host network.  What does not cross over is anything they expose as a path
+rather than a port: `SASLAUTHD_MUX_PATH` points into the launcher container's
+own filesystem, so tests that authenticate through saslauthd need the services
+and pytest in one `./tools/toolchain/dbuild bash` session.
+
 ## Sharing servers
 
 Since there can be many pytests in a single directory (e.g. cqlpy)
