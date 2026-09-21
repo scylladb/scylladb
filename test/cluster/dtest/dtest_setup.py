@@ -6,12 +6,17 @@
 
 from __future__ import annotations
 
+import glob
 import logging
+import operator
 import os
 import pprint
 import re
+import shutil
+import subprocess
 import threading
-from functools import partial, partialmethod
+from functools import partial, partialmethod, reduce
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import requests
@@ -28,9 +33,10 @@ from test.cluster.dtest.dtest_class import (
     get_port_from_node,
     make_execution_profile,
 )
+from test.cluster.dtest.ccmlib.common import is_win
 from test.cluster.dtest.ccmlib.scylla_cluster import ScyllaCluster
 from test.cluster.dtest.tools.context import log_filter
-from test.cluster.dtest.tools.log_utils import DisableLogger, remove_control_chars
+from test.cluster.dtest.tools.log_utils import DisableLogger, get_test_log_name, remove_control_chars
 from test.cluster.dtest.tools.misc import retry_till_success
 
 if TYPE_CHECKING:
@@ -44,6 +50,10 @@ if TYPE_CHECKING:
 
 DEFAULT_PROTOCOL_VERSION = 4
 
+KEEP_CORES = os.environ.get("KEEP_CORES", "true").lower() in ("yes", "true")
+DTEST_CORE_COMPRESS_TOOL = os.environ.get("DTEST_CORE_COMPRESS_TOOL", "gzip")
+DTEST_CORE_COMPRESS_EXT = os.environ.get("DTEST_CORE_COMPRESS_EXT", "gz")
+
 logger = logging.getLogger(__name__)
 
 # Add custom TRACE level, for development print we don't want on debug level
@@ -56,6 +66,94 @@ logging.trace = partial(logging.log, logging.TRACE)
 def _should_retry_no_host(e):
     """Don't retry NoHostAvailable if it wraps AuthenticationFailed."""
     return not any(isinstance(err, AuthenticationFailed) for err in e.errors.values())
+
+
+# NOTE: restored verbatim (imports aside) from scylla-dtest's dtest_setup.py;
+# it was trimmed when this module was first ported in-tree, but
+# not-yet-adapted dtest/unported test modules still import it. It relies on
+# `dtest_config.cluster`/`dtest_config.find_cores()`, which are part of the
+# ccm-based DTestConfig from the original dtest, not the
+# test.pylib.scylla_cluster_manager-based one used in-tree; it is kept as-is
+# for import purposes only, not expected to work at runtime until the
+# consuming test modules are adapted.
+def copy_logs(request, dtest_config, directory=None, name=None, cores=None):  # noqa: PLR0912, PLR0915
+    """Copy the current cluster's log files somewhere, by default to LOG_SAVED_DIR with a name of 'last'"""
+    log_saved_dir = os.environ.get("LOG_SAVED_DIR", "logs")
+    try:
+        os.mkdir(log_saved_dir)
+    except OSError:
+        pass
+
+    if directory is None:
+        directory = log_saved_dir
+    if name is None:
+        name = os.path.join(log_saved_dir, "last")
+    else:
+        name = os.path.join(directory, name)
+    if not os.path.exists(directory):
+        os.mkdir(directory)
+
+    # Use shared helper function to ensure consistency with per-test log file naming
+    # Note: no extension chars reserved here since this is a directory name
+    basedir = get_test_log_name(request, directory=directory, reserve_extension_chars=0)
+    logdir = os.path.join(directory, basedir)
+    os.mkdir(logdir)
+
+    cluster_path = dtest_config.cluster.get_path()
+
+    for log in glob.glob(os.path.join(cluster_path, "**/logs/*"), recursive=True):
+        n = re.search(r"node\d+", log).group(0)
+        logname = os.path.basename(log)
+        # for backward compatibility, rename the logs:
+        #   nodeX/logs/system.log to nodeX.log
+        #   nodeX/logs/debug.log to nodeX_debug.log
+        if logname == "system.log":
+            dest = n + ".log"
+        else:
+            dest = f"{n}_{logname}"
+        shutil.copyfile(log, os.path.join(logdir, dest))
+
+    jmx_core_files = reduce(operator.iadd, [glob.glob(match) for match in ("core", "core.*", "hs_err_*", "replay_*")], [])
+    for jmx_core_file in jmx_core_files:
+        shutil.copyfile(jmx_core_file, Path(logdir) / Path(jmx_core_file).name)
+
+    for pcap in glob.glob(str(Path(cluster_path) / "tcpdump_*.pcap")):
+        shutil.copyfile(pcap, Path(logdir) / Path(pcap).name)
+
+    if hasattr(dtest_config.cluster, "_scylla_manager") and dtest_config.cluster._scylla_manager:
+        log = os.path.join(dtest_config.cluster._scylla_manager._get_path(), "scylla-manager.log")
+        if os.path.exists(log):
+            shutil.copyfile(log, os.path.join(logdir, "scylla-manager.log"))
+
+        logs = [(node.name, node.logfilename() + ".manager_agent") for node in dtest_config.cluster.nodes.values()]
+        if logs:
+            for node_name, agent_log in logs:
+                if os.path.exists(agent_log):
+                    shutil.copyfile(agent_log, os.path.join(logdir, node_name + ".manager_agent.log"))
+
+    if KEEP_CORES:
+        if cores is None:
+            cores, ignored_cores = dtest_config.find_cores()
+            cores += ignored_cores
+        if cores:
+            for n, src in cores:
+                dst = os.path.join(logdir, f"{n}-{os.path.basename(src)}")
+                logger.warning(f"Moving core file {src} to {dst}")
+                try:
+                    if DTEST_CORE_COMPRESS_TOOL == "":
+                        cmd = f"mv {src} {dst}"
+                        shutil.move(src, dst)
+                    else:
+                        cmd = f"{DTEST_CORE_COMPRESS_TOOL} < {src} > {dst}.{DTEST_CORE_COMPRESS_EXT} && rm {src}"
+                        subprocess.check_call(cmd, shell=True)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(f"`{cmd}` failed: {e}. Keeping directory.")
+
+    if os.path.exists(logdir):
+        if os.path.exists(name):
+            os.unlink(name)
+        if not is_win():
+            os.symlink(basedir, name)
 
 
 class _Runner:
