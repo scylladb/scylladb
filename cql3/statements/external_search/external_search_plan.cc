@@ -9,12 +9,12 @@
 #include "cql3/statements/external_search/external_search_plan.hh"
 
 #include "cql3/statements/external_search/ann_search.hh"
+#include "cql3/statements/external_search/bm25_search.hh"
 #include "index/vector_index.hh"
 
 #include "cql3/expr/expr-utils.hh"
 #include "cql3/functions/scoring_fcts.hh"
 #include "cql3/selection/selection.hh"
-#include "cql3/statements/external_search/ann_search.hh"
 #include "cql3/statements/external_search/external_function.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "exceptions/exceptions.hh"
@@ -66,13 +66,19 @@ sstring column_mismatch_message(const functions::external_search_function& fun) 
             : seastar::format("{}() in SELECT must reference the same column as BM25() in WHERE and ORDER BY", fun.display_name());
 }
 
-sstring query_value_mismatch_message(const functions::external_search_function& fun) {
-    return fun.family() == functions::search_family::ann
-            ? seastar::format("{}() in SELECT must use the same query vector as the ANN ordering", fun.display_name())
-            : seastar::format("{}() in SELECT must use the same search term as BM25() in WHERE and ORDER BY", fun.display_name());
+bool has_other_restrictions(const restrictions::select_restrictions& restrictions) {
+    return !restrictions.partition_key_restrictions_is_empty()
+            || !restrictions::is_empty_restriction(restrictions.get_clustering_columns_restrictions())
+            || !restrictions::is_empty_restriction(restrictions.get_nonprimary_key_restrictions());
 }
 
 } // anonymous namespace
+
+sstring query_value_mismatch_message(functions::search_family family, std::string_view function_name) {
+    return family == functions::search_family::ann
+            ? seastar::format("{}() in SELECT must use the same query vector as the ANN ordering", function_name)
+            : seastar::format("{}() in SELECT must use the same search term as BM25() in WHERE and ORDER BY", function_name);
+}
 
 bool search_source::rescores() const {
     return family == functions::search_family::ann && secondary_index::vector_index::is_rescoring_enabled(index.metadata().options());
@@ -85,41 +91,6 @@ const search_source* external_search_plan::find(functions::search_family family)
 
 search_source* external_search_plan::find(functions::search_family family) {
     return const_cast<search_source*>(std::as_const(*this).find(family));
-}
-
-std::optional<ann_ordering_info> external_search_plan::ann_ordering() const {
-    const auto* source = find(functions::search_family::ann);
-    if (!source) {
-        return std::nullopt;
-    }
-    return ann_ordering_info{
-            .index = source->index,
-            .prepared_ann_ordering = std::make_pair(source->column, source->query_value),
-            .is_rescoring_enabled = source->rescores(),
-            .temporaries = source->temporaries,
-            .deferred_select_vectors = source->deferred
-                    | std::views::transform([] (const deferred_query_value& deferred) {
-                          return deferred_select_vector{deferred.value, deferred.function_name};
-                      })
-                    | std::ranges::to<std::vector>(),
-    };
-}
-
-std::optional<bm25_ordering_info> external_search_plan::bm25_ordering() const {
-    const auto* source = find(functions::search_family::bm25);
-    if (!source) {
-        return std::nullopt;
-    }
-    return bm25_ordering_info{
-            .index = source->index,
-            .search_term = source->query_value,
-            .temporaries = source->temporaries,
-            .deferred_select_terms = source->deferred
-                    | std::views::transform([] (const deferred_query_value& deferred) {
-                          return deferred_select_term{deferred.value, deferred.function_name};
-                      })
-                    | std::ranges::to<std::vector>(),
-    };
 }
 
 search_source& external_search_plan::search_of(const expr::function_call& fc, const functions::external_search_function& fun,
@@ -158,7 +129,7 @@ search_source& external_search_plan::search_of(const expr::function_call& fc, co
     const auto values_equal = external_search::unevaluated_equality(query_value, source->query_value);
     if (values_equal != external_search::equality::always) {
         if (values_equal == external_search::equality::never) {
-            throw exceptions::invalid_request_exception(query_value_mismatch_message(fun));
+            throw exceptions::invalid_request_exception(query_value_mismatch_message(fun.family(), fun.display_name()));
         }
         // Taken out of the selector tree, so nothing else registers a bind marker in this value.
         expr::fill_prepare_context(query_value, _ctx);
@@ -216,11 +187,37 @@ void external_search_plan::resolve_ordering(const expr::function_call& fc) {
 void external_search_plan::check_restrictions(const restrictions::select_restrictions& restrictions) {
     // select_restrictions holds out the relations whose left-hand side is a call to an external
     // search function; nothing else would apply them, so each has to name a search.
-    for (const auto& binop : restrictions.get_scoring_function_restrictions()) {
+    const auto& scoring = restrictions.get_scoring_function_restrictions();
+    for (const auto& binop : scoring) {
         const auto& fc = expr::as<expr::function_call>(binop.lhs);
         const auto* fun = functions::as_external_search_function(fc);
         throwing_assert(fun);
         search_of(fc, *fun, search_clause::restrictions);
+    }
+    if (_sources.empty()) {
+        return;
+    }
+
+    auto& source = _sources.front();
+    if (source.family == functions::search_family::ann) {
+        // Threshold filtering, WHERE ANN(column, query_vector) > score, is not implemented. The
+        // message names no function: the user's ANN() arrives here as ANN_SCORE() (see
+        // prepare_external_search_relation_lhs()).
+        if (!scoring.empty()) {
+            throw exceptions::invalid_request_exception("Filtering by ANN similarity in the WHERE clause is not supported");
+        }
+        return;
+    }
+
+    if (scoring.empty()) {
+        throw exceptions::invalid_request_exception("Full-text search queries require a WHERE BM25() > 0 clause");
+    }
+    if (scoring.size() > 1) {
+        throw exceptions::invalid_request_exception("Full-text search queries support only one WHERE BM25() restriction");
+    }
+    source.deferred_where_term = bm25_search::validate_restriction(scoring.front(), source.query_value);
+    if (has_other_restrictions(restrictions)) {
+        throw exceptions::invalid_request_exception("Full-text search queries do not support additional WHERE restrictions");
     }
 }
 

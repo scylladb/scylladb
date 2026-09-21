@@ -136,7 +136,7 @@ def test_vector_search_paging_warning_when_page_size_smaller_than_limit(cql, tes
         warnings = result.response_future.warnings
         assert warnings
         assert len(warnings) == 1
-        assert "Paging is not supported for Vector Search queries. The entire result set has been returned." == warnings[0]
+        assert "Paging is not supported for Vector search queries. The entire result set has been returned." == warnings[0]
 
 
 # Verify no paging warning is emitted when paging is disabled (fetch_size=0).

@@ -2149,7 +2149,7 @@ future<executor::request_return_type> executor::search_vectors(client_state& cli
     }
     uint32_t topk = topk_json->GetUint();
     // The maximum TopK for vector search matches the CQL constant
-    // max_ann_query_limit in vector_indexed_table_select_statement.
+    // max_query_limit in external_index_select_statement.
     static constexpr uint32_t max_topk = 1000;
     if (topk == 0 || topk > max_topk) {
         co_return api_error::validation(

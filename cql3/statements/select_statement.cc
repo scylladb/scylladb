@@ -12,7 +12,6 @@
 #include "cql3/statements/strong_consistency/statement_helpers.hh"
 #include "cql3/statements/select_statement.hh"
 #include "cql3/statements/external_search/external_index_select_statement.hh"
-#include "cql3/statements/external_search/external_search_plan.hh"
 #include "cql3/statements/index_latency.hh"
 #include "cql3/expr/expression.hh"
 #include "cql3/expr/evaluate.hh"
@@ -2363,27 +2362,21 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
                 prepare_limit(db, ctx, _per_partition_limit),
                 stats,
                 std::move(prepared_attrs));
-    } else if (is_ann_query) {
-        stmt = vector_indexed_table_select_statement::prepare(db, schema, ctx.bound_variables_size(), _parameters, std::move(selection), std::move(restrictions),
-                std::move(group_by_cell_indices), is_reversed_, std::move(ordering_comparator),
-                prepare_limit(db, ctx, _limit), prepare_limit(db, ctx, _per_partition_limit), stats, *plan.ann_ordering(),
-                std::move(prepared_attrs));
-    } else if (has_bm25_ordering) {
-        stmt = fulltext_indexed_table_select_statement::prepare(
-            db,
-            schema,
-            ctx.bound_variables_size(),
-            _parameters,
-            std::move(selection),
-            std::move(restrictions),
-            std::move(group_by_cell_indices),
-            is_reversed_,
-            std::move(ordering_comparator),
-            prepare_limit(db, ctx, _limit),
-            prepare_limit(db, ctx, _per_partition_limit),
-            stats,
-            plan.bm25_ordering(),
-            std::move(prepared_attrs));
+    } else if (is_external_search) {
+        stmt = external_index_select_statement::prepare(plan.sources(), external_statement_args{
+                .schema = schema,
+                .bound_terms = ctx.bound_variables_size(),
+                .parameters = _parameters,
+                .selection = std::move(selection),
+                .restrictions = std::move(restrictions),
+                .group_by_cell_indices = std::move(group_by_cell_indices),
+                .is_reversed = is_reversed_,
+                .ordering_comparator = std::move(ordering_comparator),
+                .limit = prepare_limit(db, ctx, _limit),
+                .per_partition_limit = prepare_limit(db, ctx, _per_partition_limit),
+                .stats = stats,
+                .attrs = std::move(prepared_attrs),
+        });
     } else if (restrictions->uses_secondary_indexing()) {
         stmt = view_indexed_table_select_statement::prepare(
                 db,

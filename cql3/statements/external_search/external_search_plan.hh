@@ -8,14 +8,26 @@
 
 #pragma once
 
+#include "cql3/expr/expression.hh"
+#include "cql3/expr/temporary_allocator.hh"
 #include "cql3/functions/scoring_fcts.hh"
-#include "cql3/statements/external_search/external_index_select_statement.hh"
+#include "cql3/selection/selection.hh"
+#include "cql3/statements/external_search/external_function.hh"
+#include "cql3/statements/select_statement.hh"
+#include "data_dictionary/data_dictionary.hh"
+#include "index/secondary_index.hh"
+
+#include <optional>
+#include <vector>
 
 namespace cql3::restrictions {
 class select_restrictions;
 }
 
 namespace cql3::statements {
+
+/// The rejection of a SELECT call whose query value differs from the ORDER BY one.
+sstring query_value_mismatch_message(functions::search_family family, std::string_view function_name);
 
 /// The clause a search call was written in. Only ORDER BY introduces a search.
 enum class search_clause {
@@ -44,10 +56,16 @@ struct search_source {
     /// ordered by.
     external_search::search_temporaries temporaries;
     std::vector<deferred_query_value> deferred;
+    /// BM25 only: the WHERE clause's term, likewise compared by execution.
+    std::optional<expr::expression> deferred_where_term;
 
     /// True for a vector index that reports a quantized similarity: the coordinator recomputes it
     /// and reorders the rows by it.
     bool rescores() const;
+
+    bool is_selected() const {
+        return temporaries.any();
+    }
 };
 
 /// The external searches one statement runs, and the replacement of the calls that refer to them.
@@ -90,7 +108,7 @@ public:
     void replace_selectors(std::vector<selection::prepared_selector>& prepared_selectors);
 
     /// Checks the WHERE clause against the searches: each relation on a search function must
-    /// name one of them.
+    /// name one of them, and each family accepts a different set of relations.
     void check_restrictions(const restrictions::select_restrictions& restrictions);
 
     /// True when the statement names no search, i.e. this is an ordinary query.
@@ -106,11 +124,9 @@ public:
         return find(functions::search_family::bm25) != nullptr;
     }
 
-    /// The ordering_info the statement of each family takes, empty when the statement runs no search
-    /// of that family. A BM25 statement accepts an empty one: a WHERE BM25() with no ORDER BY
-    /// reaches it, for it to reject.
-    std::optional<ann_ordering_info> ann_ordering() const;
-    std::optional<bm25_ordering_info> bm25_ordering() const;
+    const std::vector<search_source>& sources() const {
+        return _sources;
+    }
 
 private:
     /// The search the call `fc` refers to, by family and column. In ORDER BY a call with no
