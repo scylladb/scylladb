@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 from typing import TYPE_CHECKING
 
 import pytest
@@ -132,3 +133,12 @@ def dtest_config(request: FixtureRequest) -> Generator[DTestConfig]:
     dtest_config.setup(request)
 
     yield dtest_config
+
+# Verbatim copies from the scylla-dtest repository, not adapted yet.  A file
+# leaves unported.txt in the commit that ports it.
+_unported_list = os.path.join(os.path.dirname(__file__), "unported.txt")
+if os.path.exists(_unported_list):
+    with open(_unported_list, encoding="utf-8") as _f:
+        collect_ignore = _f.read().split()
+else:
+    collect_ignore = []
