@@ -16,6 +16,7 @@ import pytest
 from test.cluster.dtest.dtest_config import DTestConfig
 from test.cluster.dtest.dtest_setup import DTestSetup
 from test.cluster.dtest.dtest_setup_overrides import DTestSetupOverrides
+from test.cluster.dtest.tools.marks import enable_with_features
 from test.pylib.driver_utils import safe_driver_shutdown
 
 if TYPE_CHECKING:
@@ -48,6 +49,25 @@ def pytest_configure(config: Config) -> None:
     if config.getoption("--tablets"):
         features.add("tablets")
     config.scylla_features = features
+
+
+def pytest_collection_modifyitems(config: Config, items: list[pytest.Item]) -> None:
+    """Honour @pytest.mark.required_features, as scylla-dtest's conftest did.
+
+    scylla-dtest deselected a test whose required features were not enabled for
+    the run.  Here the test is skipped instead of deselected, so it still shows
+    up in the collected total and says why it did not run.  Without this the
+    markers are inert and, for instance, the tablets-only tests run against a
+    cluster with tablets off and fail on the server's own error.
+    """
+
+    features = config.scylla_features
+    for item in items:
+        marker = item.get_closest_marker("required_features")
+        if marker and not enable_with_features(marker.args, features):
+            item.add_marker(pytest.mark.skip_env(
+                reason=f"requires scylla features {list(marker.args)}, "
+                       f"but this run enables {sorted(features)}"))
 
 
 @pytest.fixture(scope="function", autouse=True)
