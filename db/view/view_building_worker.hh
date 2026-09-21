@@ -12,6 +12,7 @@
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/condition-variable.hh>
 #include <seastar/core/shared_future.hh>
+#include <set>
 #include <unordered_map>
 #include <unordered_set>
 #include "locator/abstract_replication_strategy.hh"
@@ -115,6 +116,8 @@ class view_building_worker : public seastar::peering_sharded_service<view_buildi
         table_id table_id;
         shard_id shard;
         dht::token last_token;
+
+        auto operator<=>(const staging_sstable_task_info&) const = default;
     };
 
     class consumer;
@@ -136,7 +139,7 @@ private:
 
     condition_variable _sstables_to_register_event;
     semaphore _staging_sstables_mutex = semaphore(1);
-    std::unordered_map<table_id, std::vector<staging_sstable_task_info>> _sstables_to_register;
+    std::set<staging_sstable_task_info> _sstables_to_register;
     semaphore _started_staging_tasks_mutex = semaphore(1);
     std::unordered_map<locator::tablet_replica, std::set<std::pair<table_id, utils::UUID>>> _started_staging_tasks;
     future<> _staging_sstables_registrator = make_ready_future<>();
@@ -175,7 +178,7 @@ private:
     // Acquires `_staging_sstables_mutex` internally, so callers must not hold it when invoking it.
     future<> create_staging_sstable_tasks();
     future<> discover_existing_staging_sstables();
-    std::unordered_map<table_id, std::vector<staging_sstable_task_info>> discover_local_staging_sstables(building_tasks building_tasks);
+    std::set<staging_sstable_task_info> discover_local_staging_sstables(building_tasks building_tasks);
 
     void init_messaging_service();
     future<> uninit_messaging_service();
