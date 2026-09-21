@@ -6,33 +6,38 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
-#include "cql3/statements/external_search/fulltext_indexed_table_select_statement.hh"
-#include "cql3/statements/external_search/external_function.hh"
-#include "cql3/statements/external_search/values_provider.hh"
-#include "cql3/statements/raw/select_statement.hh"
+#include "bm25_search.hh"
+
 #include "cql3/expr/evaluate.hh"
-#include "cql3/expr/expression.hh"
 #include "cql3/expr/expr-utils.hh"
+#include "cql3/expr/expression.hh"
 #include "cql3/functions/scoring_fcts.hh"
 #include "cql3/query_processor.hh"
 #include "vector_search/hybrid_search.hh"
 #include "cql3/restrictions/statement_restrictions.hh"
-#include "index/secondary_index_manager.hh"
+#include "cql3/statements/external_search/external_function.hh"
+#include "cql3/statements/external_search/bm25_search.hh"
+#include "cql3/statements/external_search/values_provider.hh"
+#include "cql3/statements/raw/select_statement.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "db/consistency_level_validations.hh"
 #include "exceptions/exceptions.hh"
+#include "index/secondary_index_manager.hh"
+#include "schema/schema.hh"
 #include "types/types.hh"
 #include "utils/assert.hh"
 
-#include <seastar/core/future.hh>
 #include <seastar/coroutine/exception.hh>
+#include <seastar/core/future.hh>
 
-namespace cql3::statements {
+namespace cql3::statements::bm25_search {
 
-namespace {
+sstring query_term(const cql3::raw_value& value) {
+    return value_cast<sstring>(utf8_type->deserialize(cql3::raw_value(value).to_bytes()));
+}
 
-std::optional<expr::expression> validate_bm25_where_restriction(const expr::binary_operator& binop,
-        const bm25_ordering_info& ordering_info) {
+std::optional<expr::expression> validate_restriction(const expr::binary_operator& binop, const secondary_index::index& index,
+        const expr::expression& search_term) {
     // "WHERE BM25(c, t) > 0" arrives as BM25_SCORE(c, t) > 0 (see prepare_external_search_relation_lhs()),
     // and a full-text query takes no other search function here, e.g. ANN().
     const auto& fc = expr::as<expr::function_call>(binop.lhs);
@@ -41,7 +46,7 @@ std::optional<expr::expression> validate_bm25_where_restriction(const expr::bina
         throw exceptions::invalid_request_exception(seastar::format("{}() is not supported in the WHERE clause", fun->display_name()));
     }
     auto [col, where_term] = external_search::extract_call_arguments(fc, fun->display_name());
-    if (col->name_as_text() != ordering_info.index.target_column()) {
+    if (col->name_as_text() != index.target_column()) {
         throw exceptions::invalid_request_exception("Full-text search queries must reference the same column in both WHERE and ORDER BY clauses");
     }
 
@@ -54,7 +59,7 @@ std::optional<expr::expression> validate_bm25_where_restriction(const expr::bina
         throw exceptions::invalid_request_exception("BM25 function comparison value must be the literal 0");
     }
 
-    const auto terms_equal = external_search::unevaluated_equality(where_term, ordering_info.search_term);
+    const auto terms_equal = external_search::unevaluated_equality(where_term, search_term);
     if (terms_equal != external_search::equality::always) {
         if (terms_equal == external_search::equality::never) {
             throw exceptions::invalid_request_exception(
@@ -65,7 +70,9 @@ std::optional<expr::expression> validate_bm25_where_restriction(const expr::bina
     return std::nullopt;
 }
 
-} // anonymous namespace
+} // namespace cql3::statements::bm25_search
+
+namespace cql3::statements {
 
 ::shared_ptr<cql3::statements::select_statement> fulltext_indexed_table_select_statement::prepare(data_dictionary::database db,
         schema_ptr schema, uint32_t bound_terms, lw_shared_ptr<const parameters> parameters,
@@ -100,7 +107,8 @@ std::optional<expr::expression> validate_bm25_where_restriction(const expr::bina
         throw exceptions::invalid_request_exception("Full-text search queries support only one WHERE BM25() restriction");
     }
 
-    ordering_info->deferred_where_term = validate_bm25_where_restriction(scoring_restrictions.front(), *ordering_info);
+    ordering_info->deferred_where_term = bm25_search::validate_restriction(
+            scoring_restrictions.front(), ordering_info->index, ordering_info->search_term);
 
     // Reject any WHERE restrictions beyond the single BM25 clause.
     // BM25 restrictions are excluded from `restrictions`.
@@ -174,8 +182,7 @@ future<shared_ptr<cql_transport::messages::result_message>> fulltext_indexed_tab
         }
     }
 
-    auto search_term_bytes = std::move(search_term_val).to_bytes();
-    sstring search_term_text = value_cast<sstring>(utf8_type->deserialize(search_term_bytes));
+    const auto search_term_text = bm25_search::query_term(search_term_val);
 
     auto requests = std::vector<vector_search::search_request>{};
     requests.push_back(vector_search::bm25_request{

@@ -1,57 +1,59 @@
 /*
- * Copyright (C) 2025-present ScyllaDB
+ * Copyright (C) 2026-present ScyllaDB
  */
 
 /*
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
-#include "cql3/statements/external_search/vector_indexed_table_select_statement.hh"
-#include "cql3/statements/external_search/external_function.hh"
-#include "cql3/statements/external_search/values_provider.hh"
+#include "ann_search.hh"
 
 #include "cql3/expr/evaluate.hh"
 #include "cql3/expr/expr-utils.hh"
 #include "cql3/functions/functions.hh"
 #include "cql3/functions/scoring_fcts.hh"
-#include "cql3/statements/raw/select_statement.hh"
 #include "cql3/query_processor.hh"
 #include "vector_search/hybrid_search.hh"
+#include "cql3/statements/external_search/external_function.hh"
+#include "cql3/statements/external_search/values_provider.hh"
+#include "cql3/statements/external_search/ann_search.hh"
+#include "cql3/statements/raw/select_statement.hh"
 #include "cql3/util.hh"
-
+#include "db/config.hh"
 #include "db/consistency_level_validations.hh"
 #include "exceptions/exceptions.hh"
 #include "index/vector_index.hh"
+#include "schema/schema.hh"
+#include "types/types.hh"
 #include "types/vector.hh"
 #include "utils/assert.hh"
 
-#include <seastar/core/future.hh>
 #include <seastar/coroutine/exception.hh>
+#include <seastar/core/future.hh>
 
-namespace cql3 {
+#include <cmath>
 
-namespace statements {
+namespace cql3::statements::ann_search {
 
-namespace {
-
-std::vector<float> to_query_vector(const column_definition& ann_column, const cql3::raw_value& value) {
+std::vector<float> query_vector(const column_definition& column, const cql3::raw_value& value) {
     throwing_assert(!value.is_null());
 
-    auto values = value_cast<vector_type_impl::native_type>(ann_column.type->deserialize(value.to_managed_bytes_view()));
+    auto values = value_cast<vector_type_impl::native_type>(column.type->deserialize(value.to_managed_bytes_view()));
     return util::to_vector<float>(values);
 }
 
-} // anonymous namespace
+uint64_t candidates_wanted(const secondary_index::index& index, uint64_t wanted) {
+    return static_cast<uint64_t>(std::ceil(wanted * secondary_index::vector_index::get_oversampling(index.metadata().options())));
+}
 
-expr::expression make_similarity_expression(const secondary_index::index& index,
-        const select_statement::prepared_ann_ordering_type& prepared_ann_ordering,
-        data_dictionary::database db, const schema_ptr& schema) {
+expr::expression similarity_expression(const secondary_index::index& index, const column_definition* column,
+        const expr::expression& query_vector, data_dictionary::database db, const schema_ptr& schema) {
     auto similarity_function_name = secondary_index::vector_index::get_cql_similarity_function_name(index.metadata().options());
     auto func_name = functions::function_name::native_function(sstring(similarity_function_name));
 
     std::vector<expr::expression> args;
-    args.push_back(expr::column_value(prepared_ann_ordering.first));
-    args.push_back(prepared_ann_ordering.second);
+    args.push_back(expr::column_value(column));
+    args.push_back(query_vector);
 
     std::vector<shared_ptr<assignment_testable>> provided_args;
     provided_args.push_back(expr::as_assignment_testable(args[0], expr::type_of(args[0])));
@@ -64,6 +66,12 @@ expr::expression make_similarity_expression(const secondary_index::index& index,
         .args = std::move(args),
     };
 }
+
+} // namespace cql3::statements::ann_search
+
+namespace cql3 {
+
+namespace statements {
 
 ::shared_ptr<cql3::statements::select_statement> vector_indexed_table_select_statement::prepare(data_dictionary::database db, schema_ptr schema,
         uint32_t bound_terms, lw_shared_ptr<const parameters> parameters, ::shared_ptr<selection::selection> selection,
@@ -141,11 +149,11 @@ future<shared_ptr<cql_transport::messages::result_message>> vector_indexed_table
     auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
     auto aoe = abort_on_expiry(timeout);
     auto filter_json = _prepared_filter.to_json(options);
-    uint64_t fetch = static_cast<uint64_t>(std::ceil(limit * secondary_index::vector_index::get_oversampling(_index.metadata().options())));
+    const auto fetch = ann_search::candidates_wanted(_index, limit);
     auto requests = std::vector<vector_search::search_request>{};
     requests.push_back(vector_search::ann_request{.keyspace = _schema->ks_name(),
             .index = _index.metadata().name(),
-            .vector = to_query_vector(*prepared_ann_ordering.first, ordering_vector),
+            .vector = ann_search::query_vector(*prepared_ann_ordering.first, ordering_vector),
             .limit = fetch,
             .filter = std::move(filter_json)});
     auto searched = co_await vector_search::search_all(qp.vector_store_client(), _schema, std::move(requests), aoe.abort_source());

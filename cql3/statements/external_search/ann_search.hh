@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2025-present ScyllaDB
+ * Copyright (C) 2026-present ScyllaDB
  */
 
 /*
@@ -8,12 +8,41 @@
 
 #pragma once
 
-#include "cql3/statements/external_search/external_index_select_statement.hh"
-#include "cql3/statements/external_search/external_function.hh"
-#include "cql3/statements/external_search/filter.hh"
+#include "cql3/expr/expression.hh"
 #include "cql3/expr/temporary_allocator.hh"
+#include "cql3/statements/external_search/external_function.hh"
+#include "cql3/statements/external_search/external_index_select_statement.hh"
+#include "cql3/statements/external_search/filter.hh"
+#include "data_dictionary/data_dictionary.hh"
+#include "index/secondary_index.hh"
+#include "schema/schema_fwd.hh"
+#include "utils/rjson.hh"
+#include "vector_search/vector_store_client.hh"
+
+#include <seastar/core/future.hh>
 
 #include <optional>
+
+class column_definition;
+
+/// The parts of running a vector search that are specific to it: how the query value is read, how
+/// many candidates the index is asked for, and how a rescoring index's similarity is recomputed.
+/// The statement running the search decides when to ask and what to do with the rows.
+namespace cql3::statements::ann_search {
+
+/// The query vector an evaluated query value holds.
+std::vector<float> query_vector(const column_definition& column, const cql3::raw_value& value);
+
+/// How many candidates the index is asked for to return `wanted` rows: more for a quantized index, by
+/// its oversampling option, since the recomputed scores decide which are kept.
+uint64_t candidates_wanted(const secondary_index::index& index, uint64_t wanted);
+
+/// The similarity the coordinator recomputes for each row when the index rescores: the index scored
+/// a quantized vector, so the similarity is recomputed from the stored one.
+expr::expression similarity_expression(const secondary_index::index& index, const column_definition* column,
+        const expr::expression& query_vector, data_dictionary::database db, const schema_ptr& schema);
+
+} // namespace cql3::statements::ann_search
 
 namespace cql3::statements {
 
@@ -39,12 +68,6 @@ struct ann_ordering_info {
     /// standing where at least one of the two values will be.
     std::vector<deferred_select_vector> deferred_select_vectors;
 };
-
-/// The similarity the coordinator recomputes for each row when the index rescores. It reads the
-/// fetched vector column and the query vector, so it needs no temporary.
-expr::expression make_similarity_expression(const secondary_index::index& index,
-        const select_statement::prepared_ann_ordering_type& prepared_ann_ordering,
-        data_dictionary::database db, const schema_ptr& schema);
 
 class vector_indexed_table_select_statement : public external_index_select_statement {
     ann_ordering_info _ann_ordering_info;

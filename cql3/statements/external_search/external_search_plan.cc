@@ -8,6 +8,7 @@
 
 #include "cql3/statements/external_search/external_search_plan.hh"
 
+#include "cql3/statements/external_search/ann_search.hh"
 #include "index/vector_index.hh"
 
 #include "cql3/expr/expr-utils.hh"
@@ -199,7 +200,7 @@ void prepare_ann_selectors(std::vector<selection::prepared_selector>& prepared_s
                 }
 
                 // Every occurrence computes the similarity again, the hidden ordering selector included.
-                return make_similarity_expression(ordering_info->index, std::make_pair(col, std::move(sel_vector)), db, schema);
+                return ann_search::similarity_expression(ordering_info->index, col, sel_vector, db, schema);
             }
 
             return external_search::replace_search_call(fun->value(), candidate, ordering_info->temporaries, temporaries_allocator);
@@ -213,7 +214,8 @@ select_statement::ordering_comparator_type rescored_similarity_ordering(
         const ann_ordering_info& ann_ordering_info,
         data_dictionary::database db,
         schema_ptr schema) {
-    auto similarity = make_similarity_expression(ann_ordering_info.index, ann_ordering_info.prepared_ann_ordering, db, schema);
+    auto similarity = ann_search::similarity_expression(ann_ordering_info.index, ann_ordering_info.prepared_ann_ordering.first,
+            ann_ordering_info.prepared_ann_ordering.second, db, schema);
     // The comparator reads the column as a float; every similarity function returns one, but
     // nothing in the types says so.
     throwing_assert(expr::type_of(similarity) == float_type);

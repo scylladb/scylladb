@@ -8,11 +8,32 @@
 
 #pragma once
 
-#include "external_index_select_statement.hh"
-#include "cql3/statements/external_search/external_function.hh"
+#include "cql3/expr/expression.hh"
 #include "cql3/expr/temporary_allocator.hh"
+#include "cql3/statements/external_search/external_function.hh"
+#include "cql3/statements/external_search/values_provider.hh"
+#include "external_index_select_statement.hh"
+#include "index/secondary_index.hh"
+#include "schema/schema.hh"
+#include "vector_search/vector_store_client.hh"
 
 #include <optional>
+
+/// The parts of running a full-text search that are specific to it: how the query value is read and
+/// which relation on it is accepted. The statement running the search decides when to ask and what
+/// to do with the rows.
+namespace cql3::statements::bm25_search {
+
+/// The search term an evaluated query value holds.
+sstring query_term(const cql3::raw_value& value);
+
+/// Checks the one relation a full-text search takes, WHERE BM25(column, term) > 0, against the
+/// search the rows are ranked by. Returns the WHERE term when a bind marker leaves the comparison
+/// with the ORDER BY term to execution.
+std::optional<expr::expression> validate_restriction(const expr::binary_operator& binop, const secondary_index::index& index,
+        const expr::expression& search_term);
+
+} // namespace cql3::statements::bm25_search
 
 namespace cql3::statements {
 

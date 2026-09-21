@@ -8,8 +8,8 @@
 
 #pragma once
 
-#include "cql3/statements/external_search/fulltext_indexed_table_select_statement.hh"
-#include "cql3/statements/external_search/vector_indexed_table_select_statement.hh"
+#include "cql3/statements/external_search/bm25_search.hh"
+#include "cql3/statements/external_search/ann_search.hh"
 
 namespace cql3::statements {
 
