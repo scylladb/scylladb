@@ -14,11 +14,11 @@ import signal
 import subprocess
 import tempfile
 import time
-from pathlib import Path
 
 import pytest
 
 from dtest_class import Tester
+from test import TOP_SRC_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -27,17 +27,11 @@ logger = logging.getLogger(__name__)
 class TestScyllaTop(Tester):
     def get_cli(self):
         node = self.cluster.nodelist()[0]
-        candidates_clis = [
-            "tools/scyllatop/scyllatop.py",
-            "scylla/bin/scyllatop",
-            "scylla/opt/scylladb/scyllatop/scyllatop.py",
-            "scyllatop/scyllatop.py",
-        ]
-        for candidate_cli in candidates_clis:
-            cli = Path(node.get_install_dir()) / candidate_cli
-            if cli.exists():
-                break
-        else:
+        # In tree, scyllatop is always at tools/scyllatop/scyllatop.py under the
+        # repo root -- there is no packaged/install-dir layout to search, unlike
+        # upstream dtest which runs against installed tarballs.
+        cli = TOP_SRC_DIR / "tools" / "scyllatop" / "scyllatop.py"
+        if not cli.exists():
             raise OSError("Didn't found scyllatop cli ")
 
         t = tempfile.mkstemp(prefix="scyllatop.log.")
