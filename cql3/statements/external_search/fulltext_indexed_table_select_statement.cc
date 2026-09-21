@@ -15,6 +15,7 @@
 #include "cql3/expr/expr-utils.hh"
 #include "cql3/functions/scoring_fcts.hh"
 #include "cql3/query_processor.hh"
+#include "vector_search/hybrid_search.hh"
 #include "cql3/restrictions/statement_restrictions.hh"
 #include "index/secondary_index_manager.hh"
 #include "data_dictionary/data_dictionary.hh"
@@ -244,21 +245,24 @@ future<shared_ptr<cql_transport::messages::result_message>> fulltext_indexed_tab
     auto search_term_bytes = std::move(search_term_val).to_bytes();
     sstring search_term_text = value_cast<sstring>(utf8_type->deserialize(search_term_bytes));
 
-    auto pkeys = co_await qp.vector_store_client().bm25(_schema->ks_name(), _index.metadata().name(), _schema, search_term_text, limit, aoe.abort_source());
-    if (!pkeys.has_value()) {
+    auto requests = std::vector<vector_search::search_request>{};
+    requests.push_back(vector_search::bm25_request{
+            .keyspace = _schema->ks_name(), .index = _index.metadata().name(), .term = search_term_text, .limit = limit});
+    auto searched = co_await vector_search::search_all(qp.vector_store_client(), _schema, std::move(requests), aoe.abort_source());
+    if (!searched) {
         co_await coroutine::return_exception(
-                exceptions::invalid_request_exception(std::visit(vector_search::vector_store_client::fts_error_visitor{}, pkeys.error())));
+                exceptions::invalid_request_exception(std::visit(vector_search::vector_store_client::fts_error_visitor{}, searched.error())));
     }
+    auto candidates = std::move(*searched);
+    throwing_assert(candidates.size() <= limit);
 
-    throwing_assert(pkeys->size() <= limit);
-
-    auto table_results = co_await query_base_table(qp, state, options, timeout, pkeys.value());
+    auto table_results = co_await query_base_table(qp, state, options, timeout, candidates);
 
     auto provider = std::optional<external_search::values_provider>{};
     if (table_results && _bm25_ordering_info.temporaries.any()) {
         const auto& read = table_results.value();
-        auto rows = external_search::join_table_results(*read.rows, read.command->slice, *_schema, &pkeys.value());
-        provider.emplace(external_search::search_values_of(_bm25_ordering_info.temporaries, rows, pkeys.value()), rows);
+        auto rows = external_search::join_table_results(*read.rows, read.command->slice, *_schema, &candidates);
+        provider.emplace(external_search::search_values_of(_bm25_ordering_info.temporaries, rows, 0, candidates), rows);
     }
     co_return co_await emit_result_set(std::move(table_results), options, provider ? &*provider : nullptr);
 }

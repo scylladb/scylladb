@@ -16,6 +16,7 @@
 #include "cql3/functions/scoring_fcts.hh"
 #include "cql3/statements/raw/select_statement.hh"
 #include "cql3/query_processor.hh"
+#include "vector_search/hybrid_search.hh"
 #include "cql3/util.hh"
 
 #include "db/consistency_level_validations.hh"
@@ -276,24 +277,29 @@ future<shared_ptr<cql_transport::messages::result_message>> vector_indexed_table
     auto aoe = abort_on_expiry(timeout);
     auto filter_json = _prepared_filter.to_json(options);
     uint64_t fetch = static_cast<uint64_t>(std::ceil(limit * secondary_index::vector_index::get_oversampling(_index.metadata().options())));
-    auto pkeys = co_await qp.vector_store_client().ann(_schema->ks_name(), _index.metadata().name(), _schema,
-            to_query_vector(*prepared_ann_ordering.first, ordering_vector), fetch, filter_json, aoe.abort_source());
-    if (!pkeys.has_value()) {
+    auto requests = std::vector<vector_search::search_request>{};
+    requests.push_back(vector_search::ann_request{.keyspace = _schema->ks_name(),
+            .index = _index.metadata().name(),
+            .vector = to_query_vector(*prepared_ann_ordering.first, ordering_vector),
+            .limit = fetch,
+            .filter = std::move(filter_json)});
+    auto searched = co_await vector_search::search_all(qp.vector_store_client(), _schema, std::move(requests), aoe.abort_source());
+    if (!searched) {
         co_await coroutine::return_exception(
-                exceptions::invalid_request_exception(std::visit(vector_search::vector_store_client::ann_error_visitor{}, pkeys.error())));
+                exceptions::invalid_request_exception(std::visit(vector_search::vector_store_client::ann_error_visitor{}, searched.error())));
+    }
+    auto candidates = std::move(*searched);
+    if (candidates.size() > limit && !_ann_ordering_info.is_rescoring_enabled) {
+        candidates.erase(candidates.begin() + limit, candidates.end());
     }
 
-    if (pkeys->size() > limit && !_ann_ordering_info.is_rescoring_enabled) {
-        pkeys->erase(pkeys->begin() + limit, pkeys->end());
-    }
-
-    auto table_results = co_await query_base_table(qp, state, options, timeout, pkeys.value());
+    auto table_results = co_await query_base_table(qp, state, options, timeout, candidates);
 
     auto provider = std::optional<external_search::values_provider>{};
     if (table_results && _ann_ordering_info.temporaries.any()) {
         const auto& read = table_results.value();
-        auto rows = external_search::join_table_results(*read.rows, read.command->slice, *_schema, &pkeys.value());
-        provider.emplace(external_search::search_values_of(_ann_ordering_info.temporaries, rows, pkeys.value()), rows);
+        auto rows = external_search::join_table_results(*read.rows, read.command->slice, *_schema, &candidates);
+        provider.emplace(external_search::search_values_of(_ann_ordering_info.temporaries, rows, 0, candidates), rows);
     }
     co_return co_await emit_result_set(std::move(table_results), options, provider ? &*provider : nullptr);
 }
