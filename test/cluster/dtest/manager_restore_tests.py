@@ -22,7 +22,7 @@ from dtest_scylla_manager import (
     TaskStatus,
 )
 from encryption_at_rest_test import EncryptionAtRestBase, KeyProviderEnum
-from manager_backup_tests import ManagerBackupMixin, fake_gcs_docker, minio_docker
+from manager_backup_tests import ManagerBackupMixin
 from tools.cluster_topology import generate_cluster_topology, generate_cluster_topology_based_rf
 from tools.files import get_list_of_sstables
 
