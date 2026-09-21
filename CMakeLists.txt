@@ -82,6 +82,39 @@ set(FMT_FUZZ OFF CACHE BOOL "" FORCE)
 # scanning, which Scylla otherwise disables.
 set(FMT_MODULE OFF CACHE BOOL "" FORCE)
 add_subdirectory(fmt)
+
+# Same story for c-ares: build the bundled submodule rather than the host's,
+# and do it before Seastar is configured, so that cmake/Findc-ares.cmake can
+# hand Seastar's find_package(c-ares) the target defined here. Static and
+# position-independent, matching configure_c_ares(): c-ares is linked into
+# libseastar, so there is no libcares.so to find at runtime.
+set(CARES_STATIC ON CACHE BOOL "" FORCE)
+set(CARES_SHARED OFF CACHE BOOL "" FORCE)
+set(CARES_STATIC_PIC ON CACHE BOOL "" FORCE)
+set(CARES_INSTALL OFF CACHE BOOL "" FORCE)
+set(CARES_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(CARES_BUILD_CONTAINER_TESTS OFF CACHE BOOL "" FORCE)
+set(CARES_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+# c-ares 1.34.6 declares cmake_minimum_required(VERSION 3.5.0...3.10.0), which
+# CMake 4 rejects outright.
+set(CMAKE_POLICY_VERSION_MINIMUM 3.10)
+# mode.common.cmake puts -Werror in this directory's COMPILE_OPTIONS, and
+# add_subdirectory() inherits them. Scylla's warning policy is for Scylla's own
+# code, not for a vendored library we do not maintain, so turn -Werror back off
+# for c-ares. That also matches configure_c_ares(), which passes only
+# lib_cflags to its sub-build; Scylla's warning flags are not part of those.
+#
+# -Wc11-extensions on top of that, for quiet rather than for correctness:
+# c-ares compiles as gnu90, and under -Wpedantic every call to a glibc string
+# function whose header defines it in terms of _Generic (strchr(), memchr(),
+# ...) warns. That is 15 warnings with nothing behind them.
+get_directory_property(scylla_compile_options COMPILE_OPTIONS)
+add_compile_options(-Wno-error -Wno-c11-extensions)
+add_subdirectory(c-ares)
+set_directory_properties(PROPERTIES COMPILE_OPTIONS "${scylla_compile_options}")
+unset(scylla_compile_options)
+unset(CMAKE_POLICY_VERSION_MINIMUM)
+
 # SEASTAR_TESTING_MAIN is added later (after add_subdirectory(seastar) and
 # add_subdirectory(abseil)) to avoid leaking into the seastar subdirectory.
 # If SEASTAR_TESTING_MAIN is defined globally before seastar, it causes a
