@@ -126,6 +126,13 @@ public:
         // Only applies to validate-mode.
         // Can only be used if sstables have the Scylla component.
         update_scrub_time update_timestamp = update_scrub_time::no;
+
+        using is_automatic_scrub = bool_class<class is_automatic_scrub_tag>;
+        // Marks the scrub as being run by an automatic, background process
+        // rather than on behalf of an explicit user request.
+        // Currently, ignored by all modes other than validate, where it
+        // reduces the level of the logged messages.
+        is_automatic_scrub is_automatic = is_automatic_scrub::no;
     };
     struct reshard {
         // If set, resharding compaction will apply the owned_ranges to segregate sstables in vnode boundaries.
@@ -177,8 +184,8 @@ public:
         return compaction_type_options(upgrade{});
     }
 
-    static compaction_type_options make_scrub(scrub::mode mode, scrub::quarantine_invalid_sstables quarantine_sstables = scrub::quarantine_invalid_sstables::yes, scrub::drop_unfixable_sstables drop_unfixable_sstables = scrub::drop_unfixable_sstables::no, scrub::update_scrub_time update_timestamp = scrub::update_scrub_time::no) {
-        return compaction_type_options(scrub{.operation_mode = mode, .quarantine_sstables = quarantine_sstables, .drop_unfixable = drop_unfixable_sstables, .update_timestamp = update_timestamp});
+    static compaction_type_options make_scrub(scrub::mode mode, scrub::quarantine_invalid_sstables quarantine_sstables = scrub::quarantine_invalid_sstables::yes, scrub::drop_unfixable_sstables drop_unfixable_sstables = scrub::drop_unfixable_sstables::no, scrub::update_scrub_time update_timestamp = scrub::update_scrub_time::no, scrub::is_automatic_scrub is_automatic = scrub::is_automatic_scrub::no) {
+        return compaction_type_options(scrub{.operation_mode = mode, .quarantine_sstables = quarantine_sstables, .drop_unfixable = drop_unfixable_sstables, .update_timestamp = update_timestamp, .is_automatic = is_automatic});
     }
 
     static compaction_type_options make_component_rewrite(component_type component, std::function<void(sstables::sstable&)> modifier, sstables::update_sstable_id update_id = sstables::update_sstable_id::yes) {
