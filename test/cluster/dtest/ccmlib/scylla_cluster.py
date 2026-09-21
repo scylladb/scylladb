@@ -7,11 +7,11 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from cassandra.auth import PlainTextAuthProvider
 
+from test import BUILD_DIR
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.cluster.dtest.ccmlib.common import logger
 from test.cluster.dtest.ccmlib.scylla_node import ScyllaNode
@@ -20,7 +20,9 @@ if TYPE_CHECKING:
     from typing import Any
 
 
-SCYLLA_VERSION_FILE = Path(__file__).parent.parent.parent.parent / "build" / "SCYLLA-VERSION-FILE"
+# One .parent short of the source root, this used to point at test/build/, which
+# does not exist, and every ScyllaCluster.version() raised FileNotFoundError.
+SCYLLA_VERSION_FILE = BUILD_DIR / "SCYLLA-VERSION-FILE"
 
 
 class ScyllaCluster:
