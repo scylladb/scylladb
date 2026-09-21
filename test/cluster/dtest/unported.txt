@@ -54,7 +54,6 @@ manager_task_tests.py
 materialized_views_test.py
 migration_test.py
 mixed_version_test.py
-native_transport_ssl_test.py
 nodetool_additional_test.py
 nodetool_test.py
 paging_additional_test.py
