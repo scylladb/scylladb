@@ -15,20 +15,13 @@ provides that scylla_node.py has no equivalent for.
 
 from __future__ import annotations
 
-from test.cluster.dtest.ccmlib.scylla_node import NodeError, NodetoolError, ScyllaNode, ToolError
+from test.cluster.dtest.ccmlib.scylla_node import NodeError, NodetoolError, ScyllaNode, Status, ToolError
 
 # ccm's ccmlib.node.Node is the base class ScyllaNode used to extend; in the
 # in-tree port ScyllaNode is the concrete node class.
 Node = ScyllaNode
 
 __all__ = ["Node", "NodeError", "NodetoolError", "Status", "TimeoutError", "ToolError"]
-
-
-class Status:
-    UNINITIALIZED = "UNINITIALIZED"
-    UP = "UP"
-    DOWN = "DOWN"
-    DECOMMISSIONED = "DECOMMISSIONED"
 
 
 # ccm's ccmlib.node defined its own TimeoutError and raised that same class.

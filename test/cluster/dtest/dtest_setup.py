@@ -212,9 +212,13 @@ class DTestSetup:
         self.ignore_log_patterns = []
         self.ignore_cores_log_patterns = []
         self.ignore_cores = []
+        # Upgrade tests override the dtest_config fixture to name the version the
+        # cluster must *start* on (the oldest one in their upgrade path); every
+        # other test leaves it at the build under test.
         self.cluster = ScyllaCluster(
             manager=manager,
             scylla_mode=scylla_mode,
+            scylla_version=getattr(dtest_config, "scylla_version", None),
             # scylla-dtest built every cluster this way (its dtest_setup.py).
             # It makes a bare cluster.start() wait for CQL and for the other
             # nodes to notice the new one, which is what the ported tests
@@ -716,8 +720,7 @@ class DTestSetup:
         self.scylla_features |= set(values.get("experimental_features", []))
 
         logger.debug("Setting 'enable_tablets' to %s", self.dtest_config.tablets)
-        values["enable_tablets"] = self.dtest_config.tablets
-        values["tablets_mode_for_new_keyspaces"] = "enabled" if self.dtest_config.tablets else "disabled"
+        values.update(self.get_tablets_config(self.dtest_config.tablets))
         if self.dtest_config.tablets:
             self.scylla_features.add("tablets")
 
@@ -732,6 +735,18 @@ class DTestSetup:
 
         self.cluster.set_configuration_options(values)
         logger.debug("Done setting configuration options:\n" + pprint.pformat(self.cluster._config_options, indent=4))
+
+    @staticmethod
+    def get_tablets_config(enable_tablets: bool) -> dict[str, Any]:
+        """The scylla.yaml options that turn tablets on or off.
+
+        Both spellings, because the boolean was the only one older versions knew
+        and the upgrade tests set this per version.
+        """
+        return {
+            "enable_tablets": enable_tablets,
+            "tablets_mode_for_new_keyspaces": "enabled" if enable_tablets else "disabled",
+        }
 
     def cql_timeout(self, seconds=None):
         if not seconds:
