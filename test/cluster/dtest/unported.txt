@@ -84,7 +84,6 @@ reversed_queries_test.py
 rolling_upgrade_test.py
 schema_everywhere_test.py
 schema_test.py
-scylla_help_command_test.py
 scylla_sstable_test.py
 scyllatop_test.py
 secondary_indexes_test.py

@@ -8,7 +8,6 @@ import logging
 import re
 import subprocess
 from itertools import chain
-from pathlib import Path
 
 import pytest
 
@@ -37,9 +36,9 @@ class TestScyllaHelpCommand(Tester):
             container.wait(timeout=5)
             help_text = container.logs().decode()
         else:
-            cli_args = [Path(node1.get_bin_dir()) / "scylla", "--help"]
+            cli_args = [self.cluster.manager.server_get_exe(server_id=node1.server_id), "--help"]
             logger.debug(f"running command: {' '.join([str(a) for a in cli_args])}")
-            help_text = subprocess.run(cli_args, capture_output=True, text=True, env=getattr(node1, "_launch_env", {}), check=False).stdout
+            help_text = subprocess.run(cli_args, capture_output=True, text=True, check=False).stdout
         assert "Scylla options:" in help_text, f"Scylla help text is wrong: {help_text}"
         return help_text
 
