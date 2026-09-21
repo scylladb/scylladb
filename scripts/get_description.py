@@ -11,13 +11,33 @@ from encodings import undefined
 
 gr = re.compile(r'.*(\.|->)add_group\(\s*(.*)')
 desc = re.compile(r'.*..::descrs\( *("[^"]+")(.*)')
-alternative_name = re.compile(r'([^,]*),')
 metric = re.compile(r'.*..::make_(absolute|counter|current|derive|gauge|histogram|queue|summary|total|total_operations|queue_length|total_bytes|current_bytes)\((.*)')
 string_content = re.compile(r'\s*"([^"]+)"\s*,.*')
 string_match = re.compile(r'"([^"]+)"')
 sstring_match = re.compile(r'\s*sstring\(\s*("[^"]+")\s*\)\s*')
 metrics_directive = re.compile(r'.*@metrics\s*([^=]+)\s*=\s*(\[[^\]]*\]).*')
 format_match = re.compile(r'\s*(?:seastar::)?format\(\s*"([^"]+)"\s*,\s*(.*)\s*')
+metric_name = re.compile(r'[a-zA-Z_:][a-zA-Z0-9_:]*')
+
+
+def handle_validation_error(message, strict):
+    if strict:
+        raise ValueError(message)
+    print(f"[WARNING] {message}")
+
+
+def resolve_group(group, param_mapping, location, strict):
+    literal = string_content.match(group)
+    if literal:
+        return literal.group(1)
+    expression = get_end_part(group)
+    expression = expression.strip() if expression is not None else group.strip()
+    if expression in param_mapping and param_mapping[expression]:
+        return param_mapping[expression]
+    handle_validation_error(
+        f"Unresolved metric group {expression!r} at {location}; "
+        "add its concrete group names to this file's params in the metrics configuration", strict)
+    return []
 
 def handle_error(message, strict=True, verbose_mode=False):
     if strict:
@@ -197,29 +217,21 @@ def get_metrics_from_file(file_name, prefix, metrics_information, verb=None, str
                 current_group = groups[str(line_number)]
                 verbose(verb, "found group from config ", groups[str(line_number)])
             if serching_group:
-                m = string_content.match(line)
-                if not m:
+                if not line.strip() or line.lstrip().startswith('//'):
                     line_number += 1
                     continue
-                current_group = m.group(1)
+                current_group = resolve_group(line, param_mapping, f"{file_name}:{line_number + 1}", strict)
                 serching_group = False
                 verbose(verb, "group found on new line", current_group)
             m = metric.match(line)
             # Check if add_group and metric are on the same line
-            if m and not current_group:
+            if m and not current_metric:
                 gr_match = gr.match(line)
                 if gr_match:
                     # Extract group from add_group on the same line
-                    current_group = gr_match.group(2)
-                    m_str = string_content.match(current_group)
-                    if m_str:
-                        current_group = m_str.group(1)
-                    else:
-                        m_alt = alternative_name.match(current_group)
-                        if m_alt:
-                            current_group = param_mapping[m_alt.group(1)] if m_alt.group(1) in param_mapping else m_alt.group(1)
+                    current_group = resolve_group(gr_match.group(2), param_mapping, f"{file_name}:{line_number + 1}", strict)
                     verbose(verb, "group found on same line as metric", current_group)
-                else:
+                elif current_group == "":
                     handle_error(f"new name found with no group {file_name} {line_number} {line}", strict)
                     continue
             if current_metric or m:
@@ -243,7 +255,6 @@ def get_metrics_from_file(file_name, prefix, metrics_information, verb=None, str
                     m = string_content.match(m.group(2))
                     if not m:
                         multi_part_name = get_end_part(prt)
-                        #m = alternative_name.match(prt)
                         verbose(verb, "multi part name ", multi_part_name)
                         if multi_part_name:
                             names = [clear_string(s) for s in multi_part_name.split('+')]
@@ -271,6 +282,12 @@ def get_metrics_from_file(file_name, prefix, metrics_information, verb=None, str
                     for cg in current_groups:
                         for idx, base_name in enumerate(name_list):
                             name = prefix + cg + "_" + base_name
+                            # The pipe exporter normalizes hyphens to underscores.
+                            if not metric_name.fullmatch(name.replace('-', '_')):
+                                handle_validation_error(
+                                    f"Invalid metric name {name!r} at {file_name}:{line_number + 1}; "
+                                    "check the metric name and configured group names", strict)
+                                continue
                             description = description_list[0].replace('#','"') if len(description_list) == 1 else description_list[idx].replace('#','\\"')
                             if name in metrics:
                                 if description != metrics[name][1]:
@@ -282,18 +299,14 @@ def get_metrics_from_file(file_name, prefix, metrics_information, verb=None, str
             else:
                 m = gr.match(line)
                 if m:
-                    current_group = m.group(2)
-                    if not current_group:
+                    group = m.group(2)
+                    if not group.strip():
                         verbose(verb, "empty group found")
+                        current_group = ""
                         serching_group = True
-                    m = string_content.match(current_group)
-                    if m:
-                        current_group = m.group(1)
                     else:
-                        m = alternative_name.match(current_group)
-                        if m:
-                            current_group = param_mapping[m.group(1)] if m.group(1) in param_mapping else m.group(1)
-                            verbose(verb, "Alternative group", file_name, line_number, current_group)
+                        current_group = resolve_group(group, param_mapping, f"{file_name}:{line_number + 1}", strict)
+                        verbose(verb, "group found", file_name, line_number, current_group)
                 m = metrics_directive.match(line)
                 if m:
                     param_mapping[m.group(1).strip()] = json.loads(m.group(2))
