@@ -1,3 +1,2 @@
 bootstrap_test.py
 manager_health_check_tests.py
-manager_restore_tests.py
