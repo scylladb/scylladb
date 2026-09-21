@@ -572,9 +572,8 @@ def run_pytest(pytest_dir, additional_parameters):
 # These can be used for setting up an HTTPS server for Alternator, or for
 # any other part of Scylla which needs SSL.
 def setup_ssl_certificate(dir):
-    # FIXME: error checking (if "openssl" isn't found, for example)
-    os.system(f'openssl ecparam -name prime256v1 -genkey -noout > "{dir}/scylla.key"')
-    os.system(f'openssl req -new -x509 -nodes -sha256 -days 365 -subj "/C=IL/ST=None/L=None/O=None/OU=None/CN=example.com" -key "{dir}/scylla.key" -out "{dir}/scylla.crt"')
+    assert os.system(f'openssl ecparam -name prime256v1 -genkey -noout > "{dir}/scylla.key"') == 0
+    assert os.system(f'openssl req -new -x509 -nodes -sha256 -days 365 -subj "/C=IL/ST=None/L=None/O=None/OU=None/CN=example.com" -key "{dir}/scylla.key" -out "{dir}/scylla.crt"') == 0
 
 # Set up mTLS (mutual TLS) certificates for testing client certificate
 # authentication. Creates:
@@ -585,13 +584,12 @@ def setup_ssl_certificate(dir):
 # so that Scylla can verify client certificates. The client key and certificate
 # can be used by test clients to authenticate themselves.
 def setup_mtls_certificate(dir):
-    # FIXME: error checking (if "openssl" isn't found, for example)
     # Create a self-signed CA certificate
-    os.system(f'openssl ecparam -name prime256v1 -genkey -noout > "{dir}/ca.key"')
-    os.system(f'openssl req -new -x509 -nodes -sha256 -days 365 -subj "/CN=TestCA" -key "{dir}/ca.key" -out "{dir}/ca.crt"')
+    assert os.system(f'openssl ecparam -name prime256v1 -genkey -noout > "{dir}/ca.key"') == 0
+    assert os.system(f'openssl req -new -x509 -nodes -sha256 -days 365 -subj "/CN=TestCA" -key "{dir}/ca.key" -out "{dir}/ca.crt"') == 0
     # Create a client key and a certificate signing request with CN "cassandra",
     # matching the role already used in Alternator tests.
-    os.system(f'openssl ecparam -name prime256v1 -genkey -noout > "{dir}/client.key"')
-    os.system(f'openssl req -new -sha256 -subj "/CN=cassandra" -key "{dir}/client.key" -out "{dir}/client.csr"')
+    assert os.system(f'openssl ecparam -name prime256v1 -genkey -noout > "{dir}/client.key"') == 0
+    assert os.system(f'openssl req -new -sha256 -subj "/CN=cassandra" -key "{dir}/client.key" -out "{dir}/client.csr"') == 0
     # Sign the client certificate with the CA
-    os.system(f'openssl x509 -req -sha256 -days 365 -in "{dir}/client.csr" -CA "{dir}/ca.crt" -CAkey "{dir}/ca.key" -CAcreateserial -out "{dir}/client.crt"')
+    assert os.system(f'openssl x509 -req -sha256 -days 365 -in "{dir}/client.csr" -CA "{dir}/ca.crt" -CAkey "{dir}/ca.key" -CAcreateserial -out "{dir}/client.crt"') == 0
