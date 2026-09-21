@@ -41,6 +41,11 @@ dependencies = [
     "pyyaml==6.0.3",
     "requests==2.34.2",
     "packaging==26.3",
+    "docker==7.2.0",
+    "filelock==4.0.1",
+    "ldap3==2.9.1",
+    "cloud-detect==0.0.15",
+    "google-cloud-storage==3.14.1",
 ]
 
 [dependency-groups]
