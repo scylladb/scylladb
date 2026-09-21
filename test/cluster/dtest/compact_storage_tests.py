@@ -31,7 +31,7 @@ class TestCompactStorage(Tester):
         node1.stop()
 
         dst1 = get_node_cf_dir(node1, "ks", "tb")
-        src1 = os.path.join("test_data", data_dir)
+        src1 = os.path.join(os.path.dirname(__file__), "test_data", data_dir)
 
         shutil.copytree(src1, dst1, dirs_exist_ok=True)
 
