@@ -80,7 +80,6 @@ resharding_test.py
 rest_api_tests.py
 reversed_queries_test.py
 rolling_upgrade_test.py
-schema_everywhere_test.py
 schema_test.py
 scylla_sstable_test.py
 scyllatop_test.py
