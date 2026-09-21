@@ -641,6 +641,90 @@ SEASTAR_FIXTURE_TEST_CASE(test_stream_sink_write_gs, gcs_fixture, *tests::check_
     return test_stream_sink_write(sstables::test_env_config{ .storage = make_test_object_storage_options("GS") });
 }
 
+// Feed the components of a snapshotted sstable straight from create_stream_sources()
+// into create_stream_sink(), skipping the rpc layer, and check when the receiving side
+// stamps the scrub time.
+//
+// The Scylla component - which carries the field - is sent near the front of the
+// sequence, so any stamp applied while producing the stream necessarily predates the
+// components that follow it. The receiver must record its own completion time instead.
+SEASTAR_THREAD_TEST_CASE(test_stream_sink_stamps_scrub_time_on_completion) {
+    cql_test_config cfg;
+    do_with_cql_env_thread([] (cql_test_env& env) {
+        using namespace sstables;
+
+        auto& db = env.local_db();
+        env.execute_cql("CREATE KEYSPACE ks_scrub_time WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};").get();
+        env.execute_cql("CREATE TABLE ks_scrub_time.cf (pk text PRIMARY KEY, v int);").get();
+        for (int i = 0; i < 10; i++) {
+            env.execute_cql(format("INSERT INTO ks_scrub_time.cf (pk, v) VALUES ('key_{}', {});", i, i * 10)).get();
+        }
+
+        auto& table = db.find_column_family("ks_scrub_time", "cf");
+        table.flush().get();
+        auto schema = table.schema();
+
+        auto snapshots = table.take_storage_snapshot(dht::token_range::make_open_ended_both_sides()).get();
+        BOOST_REQUIRE_GT(snapshots.size(), 0);
+        auto& snapshot = snapshots.front();
+
+        auto permit = db.obtain_reader_permit(table, "test_scrub_time", db::no_timeout, {}).get();
+        auto sources = create_stream_sources(snapshot, permit).get();
+        BOOST_REQUIRE_GT(sources.size(), 0);
+
+        auto gen = table.get_sstable_generation_generator()();
+        constexpr auto foptions = file_open_options{};
+        constexpr auto soptions = file_output_stream_options{};
+        const auto fis_options = file_input_stream_options{};
+
+        // Set once the sender has handed over everything it could have stamped.
+        std::optional<db_clock::time_point> sources_drained;
+        shared_sstable received;
+
+        for (size_t i = 0; i < sources.size(); i++) {
+            auto& source = sources[i];
+            auto descriptor = snapshot.sst->get_descriptor(source->type());
+            descriptor.generation = gen;
+
+            auto sink = create_stream_sink(schema, table.get_sstables_manager(), table.get_storage_options(),
+                    sstable_state::normal, descriptor,
+                    sstable_stream_sink_cfg{.last_component = i + 1 == sources.size(), .update_scrub_time = true});
+
+            auto out = sink->output(foptions, soptions).get();
+            auto in = source->input(fis_options).get();
+            seastar::copy(in, out).get();
+            in.close().get();
+            out.close().get();
+
+            if (source->type() == component_type::Scylla) {
+                sources_drained = db_clock::now();
+                // set_scrub_time() stores milliseconds; sleep past the tick so a stamp
+                // taken on completion is ordered strictly after this point.
+                seastar::sleep(std::chrono::milliseconds(10)).get();
+            }
+
+            sink->validate_integrity().get();
+            if (auto sst = sink->close().get()) {
+                received = std::move(sst);
+            }
+        }
+
+        BOOST_REQUIRE(sources_drained);
+        BOOST_REQUIRE(received);
+
+        // Reopen from disk so the check covers what was persisted, not just what the
+        // sink left in memory. close() sealed the sstable, so the TOC is in place.
+        auto reopened = table.get_sstables_manager().make_sstable(schema, table.get_storage_options(),
+                received->generation(), *received->sstable_identifier(), sstable_state::normal,
+                received->get_version(), received->get_format());
+        reopened->load_metadata().get();
+
+        auto scrub_time = reopened->get_scrub_time();
+        BOOST_REQUIRE(scrub_time);
+        BOOST_REQUIRE_GT(*scrub_time, *sources_drained);
+    }, cfg).get();
+}
+
 // S3 variants: exercise reading SSTables from object storage.  Corruption
 // tests are omitted because the corruption helpers use local-filesystem I/O.
 SEASTAR_THREAD_TEST_CASE(test_sstable_stream_compressed_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
