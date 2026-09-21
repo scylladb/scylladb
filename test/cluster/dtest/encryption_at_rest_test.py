@@ -26,7 +26,7 @@ from kmip.services.server.server import KmipServer
 from dtest_class import Tester, create_cf, wait_for
 from tools.cluster_topology import generate_cluster_topology
 from tools.data import insert_c1c2, query_c1c2
-from tools.docker_utils import container_reload, container_remove, get_docker_client, get_ip_address_of_container, running_in_docker
+from tools.docker_utils import container_reload, container_remove, dump_container_logs, get_docker_client, get_ip_address_of_container, running_in_docker
 from tools.misc import generate_ssl_stores
 from tools.retrying import retrying
 
@@ -337,13 +337,16 @@ class KMSKeyProviderFactory(BaseKeyProviderFactory):
         def check_connectivity():
             return len(self.kms_client.list_keys().get("Keys", [])) == 2
 
-        wait_for(check_connectivity, timeout=30, text="Waiting until local-kms is ready")
-
         try:
+            wait_for(check_connectivity, timeout=30, text="Waiting until local-kms is ready")
             options = {"endpoint": self.endpoint_url, "master_key": self.master_key}
             self.cluster.set_configuration_options({"kms_hosts": {self.kms_host: options}})
-        except:
-            self.container.stop()
+        except Exception:
+            # __exit__ never runs when __enter__ raises, so tear the container
+            # down here rather than leave it behind for the rest of the run.
+            dump_container_logs(self.container)
+            container_remove(self.container, force=True)
+            self.container = None
             raise
 
     def __enter__(self):

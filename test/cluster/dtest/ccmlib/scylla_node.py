@@ -27,10 +27,24 @@ from typing import TYPE_CHECKING, Any
 
 import aiohttp
 import yaml
+from ruamel.yaml import YAML
 
 from test import TOP_SRC_DIR
 from test.cluster.dtest.ccmlib import scylla_repository
-from test.cluster.dtest.ccmlib.common import ArgumentError, wait_for, BIN_DIR
+from test.cluster.dtest.ccmlib.common import (
+    ArgumentError,
+    wait_for,
+    BIN_DIR,
+    SCYLLAMANAGER_AGENT_CONF,
+    SCYLLA_CONF_DIR,
+    check_socket_listening,
+    parse_interface,
+)
+from test.cluster.dtest.ccmlib.scylla_manager import (
+    AGENT_API_PORT,
+    AGENT_DEBUG_PORT,
+    AGENT_PROMETHEUS_PORT,
+)
 from test.pylib.internal_types import ServerUpState
 from test.pylib.rest_client import HTTPError
 
@@ -65,6 +79,10 @@ CASSANDRA_OPTIONS_MAPPING = {
 DEFAULT_SMP = 2
 DEFAULT_MEMORY_PER_CPU = 512 * 1024 * 1024  # bytes
 DEFAULT_SCYLLA_LOG_LEVEL = "info"
+
+# Scylla's REST API port; the manager agent reads the node's configuration through it.
+SCYLLA_API_PORT = 10000
+AGENT_START_TIMEOUT = 180
 
 # The real cqlsh binary, as shipped by this repo (a thin wrapper around
 # tools/cqlsh/bin/cqlsh.py). Used by ScyllaNode.run_cqlsh() below.
@@ -236,18 +254,28 @@ class ScyllaNode:
         self.cluster = cluster
         self.server_id = server.server_id
         self.name = name
-        self.pid = None
-        self.all_pids = []
         self.network_interfaces = {
             "storage": (str(server.rpc_address), 7000),
             "binary": (str(server.rpc_address), 9042),
         }
         self.data_center = server.datacenter
         self.rack = server.rack
+        # Whether the test chose this node's dc and rack; see _follow_replaced_node().
+        self.placement_explicit = False
+
+        # Every pid this node has run under, as ccm's Node.all_pids accumulated
+        # them; copy_logs() matches core files against it.
+        self._all_pids: list[int] = []
 
         self._smp_set_during_test = None
-        self._smp = None
+        # ccm's ScyllaNode started at a real smp (2); tests read the attribute
+        # directly (cleanup_test's expected_cleanups), so it must not be None.
+        self._smp = DEFAULT_SMP
         self._memory = None
+
+        # ccm's Node kept a DECOMMISSIONED status; the manager only knows
+        # whether a process is up, so the shim remembers it here.
+        self._decommissioned = False
 
         self.__global_log_level = "info"
         self.__classes_log_level = {}
@@ -267,6 +295,11 @@ class ScyllaNode:
         self._node_scylla_version = None
         self.upgraded = False
         self.upgrader = NodeUpgrader(node=self)
+
+        # The Scylla Manager agent that runs beside this node, when the cluster
+        # was given a manager. It is started and stopped together with the node.
+        self.scylla_manager = cluster._scylla_manager
+        self._process_agent = None
 
     def set_configuration_options(self,
                                   values: dict | None = None,
@@ -295,6 +328,27 @@ class ScyllaNode:
 
     def scylla_mode(self) -> str:
         return self.cluster.scylla_mode
+
+    @property
+    def pid(self) -> int | None:
+        """OS pid of this node's scylla process, or None when it is not running.
+
+        ccm kept the pid from the node's pid file and cleared it on a confirmed
+        stop; here it comes from the manager's ServerInfo.  It must not be a
+        plain attribute: tests hand it to psutil.Process(), and psutil.Process(None)
+        silently wraps the *test runner's own* process instead of the node's.
+        """
+
+        for server in self.cluster.manager.running_servers():
+            if server.server_id == self.server_id:
+                return server.pid
+        return None
+
+    @property
+    def all_pids(self) -> list[int]:
+        """Every pid this node has run under, newest last (ccm's Node.all_pids)."""
+
+        return list(self._all_pids)
 
     def set_smp(self, smp: int) -> None:
         logger.debug(f"Setting smp: {self=} {smp=}")
@@ -371,7 +425,14 @@ class ScyllaNode:
                 lines.append(f"  pid={pid}")
         return "\n".join(lines)
 
-    is_live = is_running
+    def is_live(self) -> bool:
+        """ccm's Node.is_live(): running and not decommissioned.
+
+        A decommissioned node that is still running has left the cluster, so the
+        other nodes never see a new node join; start(wait_other_notice=True) must
+        not wait for it.
+        """
+        return self.is_running() and not self._decommissioned
 
     @cached_property
     def scylla_log_file(self) -> ScyllaLogFile:
@@ -675,7 +736,8 @@ class ScyllaNode:
               wait_for_binary_proto: bool | None = None,
               profile_options: dict[str, str] | None = None,  # not used in scylla-dtest
               use_jna: bool | None = None,  # not used in scylla-dtest
-              quiet_start: bool | None = None) -> None:  # not used in scylla-dtest
+              quiet_start: bool | None = None,  # not used in scylla-dtest
+              expected_error: str | None = None) -> None:
         del join_ring  # ccm's ScyllaNode.start() ignores it as well
         assert verbose is None, "argument `verbose` is not supported"
         assert replace_token is None, "argument `replace_token` is not supported"
@@ -688,6 +750,9 @@ class ScyllaNode:
 
         if self.is_running():
             raise NodeError(f"{self.name} is already running")
+
+        if replace_address or replace_node_host_id:
+            self._follow_replaced_node(host_id=replace_node_host_id, address=replace_address)
 
         scylla_args = self._process_scylla_args(
             *(jvm_args or []),
@@ -704,6 +769,19 @@ class ScyllaNode:
 
         logger.debug(f"Starting server: server_id={self.server_id} {scylla_args=} {scylla_env=}")
 
+        # The manager caches a server's host id for good, but a node that was
+        # wiped comes back with a new one.
+        vars(self.cluster.manager.cluster.servers[self.server_id]).pop("_host_id", None)
+        self._stop_returncode = None
+
+        # A node the test expects to be rejected has to be started through the
+        # manager's expected_error path: it watches for the message, files the
+        # server as stopped, and so a later stop() is a no-op instead of
+        # raising over the non-zero exit the test asked for.  PROCESS_STARTED
+        # would return before any of that happens, and so would any lower
+        # state than SERVING: the REST API answers the host id query before
+        # the join is rejected.  connect_driver=False would cap the state at
+        # HOST_ID_QUERIED; with an expected error the manager never connects.
         self.cluster.manager.server_start(
             server_id=self.server_id,
             # ccm made a node added with auto_bootstrap=False a seed, but its seed
@@ -712,11 +790,27 @@ class ScyllaNode:
             # would make it form a cluster of its own.  Let the manager pick the
             # running nodes, as for any other node.
             seeds=None,
-            expected_server_up_state=ServerUpState.PROCESS_STARTED,
+            expected_error=expected_error,
+            expected_server_up_state=(ServerUpState.SERVING if expected_error
+                                      else ServerUpState.PROCESS_STARTED),
             cmdline_options_override=scylla_args,
             append_env_override=scylla_env,
-            connect_driver=False,
+            connect_driver=expected_error is not None,
         )
+
+        # The host id is fetched once and cached, but a node that was wiped and
+        # restarted comes back with a new one, and watch_rest_for_alive() then
+        # waits for an id that will never appear.  ccm reset it on every start.
+        self._hostid = None
+        # A started node is not decommissioned any more (ccm's start() set its
+        # status to UP): tests wipe a decommissioned node and bootstrap it again.
+        self._decommissioned = False
+
+        if (pid := self.pid) is not None and pid not in self._all_pids:
+            self._all_pids.append(pid)
+
+        if self.scylla_manager and self.scylla_manager.is_agent_available:
+            self.start_scylla_manager_agent()
 
         if wait_for_binary_proto is None:
             wait_for_binary_proto = self.cluster.force_wait_for_cluster_start and not no_wait
@@ -742,6 +836,8 @@ class ScyllaNode:
              gently: bool = True,
              wait_seconds: int = 127,
              marks: list[int] | None = None) -> bool:
+        self.stop_scylla_manager_agent(gently=gently)
+
         if not self.is_running():
             return False
 
@@ -821,6 +917,157 @@ class ScyllaNode:
         """Return the path to this node top level directory (where config/data is stored.)"""
 
         return self.cluster.manager.server_get_workdir(server_id=self.server_id)
+
+    def get_conf_dir(self) -> str:
+        """Return the path to this node's configuration directory."""
+
+        return os.path.join(self.get_path(), SCYLLA_CONF_DIR)
+
+    def logfilename(self) -> str:
+        """Return the path to this node's Scylla log."""
+
+        return str(Path(self.get_path()).with_suffix(".log"))
+
+    def get_datacenter_name(self) -> str:
+        """The datacenter the node reports, from `nodetool info`, as ccm's Node.get_datacenter_name().
+
+        Not self.data_center: that is what the test asked for, and None for a node placed in no
+        datacenter at all, which Scylla then calls datacenter1.
+        """
+        info = self.nodetool("info")[0]
+        lines = [line for line in info.splitlines() if line.startswith("Data Center")]
+        if len(lines) != 1:
+            raise RuntimeError(f"Expected output from `nodetool info` to contain exactly 1 line starting with "
+                               f"\"Data Center\". Found:\n{info}")
+        return lines[0].split(":", 1)[1].strip()
+
+    # ------------------------------------------------- Scylla Manager agent
+
+    def _create_agent_config(self) -> str:
+        """Write the agent's config file and return its path.
+
+        Every port here is bound to this node's own address, so agents of
+        clusters running in parallel never collide.
+        """
+
+        conf_file = os.path.join(self.get_conf_dir(), SCYLLAMANAGER_AGENT_CONF)
+        data = {
+            "https": f"{self.address()}:{AGENT_API_PORT}",
+            "auth_token": self.scylla_manager.auth_token,
+            "tls_cert_file": self.scylla_manager.agent_tls_cert_file,
+            "tls_key_file": self.scylla_manager.agent_tls_key_file,
+            "logger": {"level": "debug"},
+            "debug": f"{self.address()}:{AGENT_DEBUG_PORT}",
+            "scylla": {"api_address": self.address(), "api_port": SCYLLA_API_PORT},
+            "prometheus": f"{self.address()}:{AGENT_PROMETHEUS_PORT}",
+        }
+        with open(conf_file, "w") as f:
+            YAML().dump(data, f)
+        return conf_file
+
+    def update_agent_config(self, new_settings: dict, restart_agent_after_change: bool = True) -> None:
+        conf_file = os.path.join(self.get_conf_dir(), SCYLLAMANAGER_AGENT_CONF)
+        yaml = YAML()
+        with open(conf_file) as f:
+            current_config = yaml.load(f)
+
+        current_config.update(new_settings)
+
+        with open(conf_file, "w") as f:
+            yaml.dump(current_config, f)
+
+        if restart_agent_after_change:
+            self.restart_scylla_manager_agent(gently=True, recreate_config=False)
+
+    def _follow_replaced_node(self, host_id: str | None, address: str | None) -> None:
+        """Move this node into the dc and rack of the node it is about to replace.
+
+        Scylla refuses a replacement from another dc or rack.  ccm put every node
+        of a datacenter in one rack, so upstream tests never name one for the
+        replacing node; here populate() spreads nodes over racks, and a new node
+        lands wherever the harness puts it.  Unless the test placed this node
+        itself, give it the replaced node's placement before its first start.
+        """
+        if self.placement_explicit:
+            return
+        for node in self.cluster.nodelist():
+            if node is self:
+                continue
+            if (host_id and node._hostid == host_id) or (address and node.address() == address):
+                replaced = node
+                break
+        else:
+            return
+        if (replaced.data_center, replaced.rack) == (self.data_center, self.rack):
+            return
+        self.debug(f"moving to {replaced.data_center}/{replaced.rack} to replace {replaced.name}")
+        self.move_to(data_center=replaced.data_center, rack=replaced.rack)
+
+    def move_to(self, data_center: str, rack: str) -> None:
+        """Place this stopped, never started node in another dc and rack."""
+
+        assert not self.is_running(), f"{self.name} must be stopped to move"
+        server = self.cluster.manager.cluster.servers[self.server_id]
+        server.property_file = {"dc": data_center, "rack": rack}
+        # Rewrites cassandra-rackdc.properties along with scylla.yaml.
+        self.cluster.manager.server_update_config(server_id=self.server_id, config_options={})
+        self.data_center, self.rack = data_center, rack
+
+    def kill(self, sig: int = signal.SIGKILL) -> None:
+        """Send a signal to this node's scylla process, as ccm's Node.kill() did."""
+
+        os.kill(self.pid, sig)
+
+    def import_config_files(self) -> None:
+        """Write this node's native transport interface back into its scylla.yaml.
+
+        ccm regenerated a node's whole config here; the cluster manager owns
+        everything but what a test can change on the node object, and that is
+        network_interfaces["binary"].
+        """
+        host, port = self.network_interfaces["binary"]
+        self.cluster.manager.server_update_config(server_id=self.server_id,
+                                                  config_options={"rpc_address": host, "native_transport_port": port})
+
+    def start_scylla_manager_agent(self, create_config: bool = True) -> None:
+        agent_bin = self.scylla_manager._get_bin("scylla-manager-agent")
+        config_file = self._create_agent_config() if create_config else os.path.join(self.get_conf_dir(), SCYLLAMANAGER_AGENT_CONF)
+        log_file = self.logfilename() + ".manager_agent"
+
+        args = [agent_bin, "--config-file", config_file]
+        self.debug(f"Starting Scylla Manager agent: {args}")
+        with open(log_file, "a") as agent_log:
+            self._process_agent = subprocess.Popen(args, stdout=agent_log, stderr=agent_log, close_fds=True)
+
+        with open(config_file) as f:
+            listening_port = int(YAML().load(f)["https"].split(":")[1])
+
+        api_interface = parse_interface(self.address(), listening_port)
+        if not check_socket_listening(api_interface, timeout=AGENT_START_TIMEOUT):
+            raise NodeError(
+                f"scylla-manager-agent API {api_interface[0]}:{api_interface[1]} is not listening after "
+                f"{AGENT_START_TIMEOUT}s; see {log_file}"
+            )
+
+    def stop_scylla_manager_agent(self, gently: bool = True) -> None:
+        if not self._process_agent:
+            return
+        try:
+            if gently:
+                self._process_agent.terminate()
+            else:
+                self._process_agent.kill()
+            self._process_agent.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            self._process_agent.kill()
+            self._process_agent.wait(timeout=30)
+        except OSError:
+            pass
+        self._process_agent = None
+
+    def restart_scylla_manager_agent(self, gently: bool = True, recreate_config: bool = True) -> None:
+        self.stop_scylla_manager_agent(gently=gently)
+        self.start_scylla_manager_agent(create_config=recreate_config)
 
     def stress(self, stress_options: list[str], **kwargs):
         """
@@ -975,6 +1222,58 @@ class ScyllaNode:
         else:
             self.cluster.manager.api.compact(node_ip=node_ip)
 
+    def wait_for_compactions(self,
+                             keyspace: str = "",
+                             column_family: str = "",
+                             timeout: float = 300,
+                             quiesce_time: float = 0.5) -> None:
+        """Wait until this node has no compaction left to do.
+
+        ccm polled `nodetool compactionstats`; the same state comes from the
+        task manager here.  Routine compactions register as internal tasks
+        (compaction::regular_compaction_task_impl), so they are only listed
+        with internal=True.  A new compaction can start just after another
+        finishes, so the node has to look idle for `quiesce_time` before this
+        returns -- the guard ccm's wait_for_compactions had.
+        """
+
+        if column_family and not keyspace:
+            raise ArgumentError("Cannot wait on a column family without naming its keyspace")
+
+        pending_states = {"created", "running", "suspended"}
+        deadline = time.perf_counter() + timeout
+        idle_since = None
+        while True:
+            tasks = self.cluster.manager.api.get_tasks(
+                node_ip=self.address(),
+                module="compaction",
+                keyspace=keyspace,
+                table=column_family,
+                internal=True,
+            )
+            active = [t for t in tasks if t.get("state") in pending_states]
+            now = time.perf_counter()
+            if active:
+                idle_since = None
+            elif idle_since is None:
+                idle_since = now
+            elif now - idle_since >= quiesce_time:
+                return
+            if now >= deadline:
+                raise TimeoutError(
+                    f"compactions on {self.name} did not finish within {timeout}s; still active: {active}")
+            time.sleep(0.1)
+
+    def cleanup(self) -> None:
+        """Clean up this node, as ccm's Node.cleanup() did: `nodetool cleanup`.
+
+        That posts /storage_service/cleanup_all/ with global=false, a local cleanup
+        through the compaction manager.  The endpoint's default is global=true, a
+        cluster-wide vnodes cleanup driven by the topology coordinator, which is
+        what calling it without the parameter used to do here.
+        """
+        self.nodetool("cleanup")
+
     def drain(self, block_on_log: bool = False) -> None:
         """Drain the node via the REST API."""
         mark = self.mark_log()
@@ -982,19 +1281,60 @@ class ScyllaNode:
         if block_on_log:
             self.watch_log_for("DRAINED", from_mark=mark)
 
-    def repair(self, options: list[str] | None = None) -> None:
+    def repair(self,  # noqa: PLR0913
+               options: list[str] | None = None,
+               *,
+               keyspace: str = "",
+               tables: list[str] | None = None,
+               dcs: list[str] | None = None,
+               hosts: list[str] | None = None,
+               local: bool = False,
+               partitioner_range: bool = False,
+               timeout: float | None = None) -> tuple[str, str]:
         """
-        Supports: repair [keyspace] [table]
-        Flags: --source-dc/-dc mapped to dataCenters parameter.
-        """
-        keyspace, table, data_centers = self._parse_repair_options(options or [])
+        Repair via the REST API and wait for completion.
 
-        self.cluster.manager.api.repair_and_wait(
-            node_ip=self.address(),
-            keyspace=keyspace,
-            table=table,
-            data_centers=data_centers,
-        )
+        Supports two calling conventions: the CLI-style `options=[keyspace, table]`
+        (with `-dc`/`--source-dc`), used by a couple of tests, and the keyword form
+        (`keyspace=`, `tables=`, `dcs=`, `hosts=`, `local=`, `partitioner_range=`)
+        used by most.  `timeout` is not used in scylla-dtest: the REST call already
+        waits for completion.  Returns a ("", "") pair, only for source compatibility
+        with nodetool()'s (stdout, stderr).
+        """
+        if options is not None:
+            opt_keyspace, opt_table, opt_dc = self._parse_repair_options(options)
+            keyspace = keyspace or opt_keyspace
+            if opt_table:
+                tables = tables or [opt_table]
+            if opt_dc:
+                dcs = dcs or [opt_dc]
+
+        command = f"repair {keyspace}".strip()
+
+        # nodetool refuses -pr with -dc/-hosts before calling Scylla (see
+        # repair_operation() in tools/scylla-nodetool.cc).  Scylla itself lets
+        # "-pr -dc <local dc>" through, which is what `local` is sent as, so
+        # check the explicit options here, before `local` is folded into `dcs`.
+        if partitioner_range and (dcs or hosts):
+            raise NodetoolError(command, 1, stderr="primary range repair should be performed on all nodes in the cluster")
+
+        if local and not dcs:
+            dcs = [self.data_center]
+
+        # A failed or rejected repair makes nodetool exit non-zero, and the tests
+        # expect the NodetoolError ccm raises for it, not the REST client's error.
+        try:
+            self.cluster.manager.api.repair_and_wait(
+                node_ip=self.address(),
+                keyspace=keyspace,
+                table=",".join(tables) if tables else "",
+                data_centers=",".join(dcs) if dcs else "",
+                hosts=",".join(hosts) if hosts else "",
+                primary_range=partitioner_range,
+            )
+        except (RuntimeError, HTTPError) as exc:
+            raise NodetoolError(command, 1, stderr=str(exc)) from exc
+        return ("", "")
 
     @staticmethod
     def _parse_repair_options(options: list[str]) -> tuple[str, str, str]:
@@ -1012,6 +1352,7 @@ class ScyllaNode:
             self.cluster.manager.decommission_node(server_id=self.server_id)
         except (RuntimeError, HTTPError, aiohttp.ClientError) as exc:
             raise NodetoolError("decommission", 1, stdout="", stderr=str(exc)) from exc
+        self._decommissioned = True
 
     def take_snapshot(self, keyspace: str, tag: str, tables: list[str] | None = None) -> None:
         self.cluster.manager.api.take_snapshot(node_ip=self.address(), ks=keyspace, tag=tag, tables=tables)
@@ -1254,10 +1595,13 @@ class ScyllaNode:
     def status(self) -> str:
         """ccm's Node.status, as far as this shim tracks it.
 
-        The manager knows whether the process is up; it does not keep ccm's
-        DECOMMISSIONED/UNINITIALIZED distinction, so a node that is not running
-        reads as DOWN.
+        The manager only knows whether the process is up, so a node that is
+        not running reads as DOWN -- except a decommissioned one, which tests
+        single out to leave alone (its REST API is gone).  ccm's UNINITIALIZED
+        is still not distinguished.
         """
+        if self._decommissioned:
+            return Status.DECOMMISSIONED
         return Status.UP if self.is_running() else Status.DOWN
 
     def clear(self, clear_all: bool = False, only_data: bool = False, saved_caches: bool = False) -> None:

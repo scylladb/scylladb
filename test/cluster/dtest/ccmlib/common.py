@@ -28,6 +28,9 @@ logger = logging.getLogger("ccm")
 BIN_DIR = "bin"
 SCYLLA_CONF_DIR = "conf"
 SCYLLA_CONF = "scylla.yaml"
+SCYLLAMANAGER_DIR = "scylla-manager"
+SCYLLAMANAGER_CONF = "scylla-manager.yaml"
+SCYLLAMANAGER_AGENT_CONF = "scylla-manager-agent.yaml"
 
 
 class CCMError(Exception):
@@ -252,3 +255,13 @@ def check_socket_listening(itf, timeout: int = 60) -> bool:
                 return False
 
     return wait_for(func=_check_socket_listening, timeout=timeout, step=0.2)
+
+
+def parse_interface(itf: str, default_port: int) -> tuple[str, int]:
+    """Split a "host" or "host:port" string into a (host, port) pair.  Copied from scylla-ccm."""
+    i = itf.split(":")
+    if len(i) == 1:
+        return (i[0].strip(), default_port)
+    if len(i) == 2:
+        return (i[0].strip(), int(i[1].strip()))
+    raise ValueError(f"Invalid interface definition: {itf}")

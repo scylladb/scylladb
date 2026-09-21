@@ -19,13 +19,11 @@ import pytest
 import yaml
 from cassandra import ConsistencyLevel
 from ccmlib import common
+from ccmlib.scylla_cluster import ScyllaCluster
 from ccmlib.scylla_node import ScyllaNode
 from dateutil.parser import parse
 
 from dtest_class import WaitTimeoutExpiredError, create_cf, create_ks, wait_for
-from dtest_config import DTestConfig
-from dtest_setup import DTestSetup, copy_logs
-from dtest_setup_overrides import DTestSetupOverrides
 from tools.data import insert_c1c2, insert_c1c2_with_clustering
 
 logger = logging.getLogger(__name__)
@@ -33,6 +31,18 @@ logger = logging.getLogger(__name__)
 SPACE_PLACEHOLDER = r"SPACE"
 C1_PREFIX = "value%d"
 C2_PREFIX = "other_value%d"
+
+# These tests drive a real Scylla Manager server through sctool, with a
+# scylla-manager-agent beside every cluster node. That infrastructure is part of
+# the in-tree ccm shim now: ccmlib.scylla_repository.setup_scylla_manager()
+# fetches the relocatable package, ccmlib.scylla_manager.ScyllaManager runs the
+# server and sctool against it, and ScyllaNode starts and stops an agent
+# together with its node. conftest.fixture_dtest_setup wires all of that up for
+# anything marked scylla_manager.
+#
+# A handful of tests need a second, independent Scylla cluster in the same
+# test; the secondary_cluster fixture below builds one on top of the
+# secondary_cluster_manager fixture in conftest.py.
 
 
 class ComparableHealthCheckField:
@@ -1904,35 +1914,28 @@ class ScyllaManagerMixin:
             yaml.safe_dump(yaml_content, f)
 
     @pytest.fixture(scope="function", autouse=False)
-    def secondary_cluster(self, request):
-        dtest_config = DTestConfig()
-        dtest_config.setup(request)
-        dtest_setup = DTestSetup(dtest_config=dtest_config, setup_overrides=DTestSetupOverrides(), cluster_name="test", prefix="dtest-secondary-")
-        manager_install_dir = dtest_setup.prepare_scylla_manager() if request.node.get_closest_marker("scylla_manager") else None
-        dtest_setup.initialize_cluster(DTestSetup.create_ccm_cluster, skip_manager_server=True, manager_install_dir=manager_install_dir)
-        dtest_setup.cluster.set_configuration_options(values={"ring_delay_ms": 10000})
+    def secondary_cluster(self, fixture_dtest_setup, secondary_cluster_manager, build_mode):
+        """A second, independent Scylla cluster, driven by the same manager server.
 
-        yield dtest_setup.cluster
+        Its nodes get their own agents, with their own auth token, but no second
+        manager server is started: the tests add this cluster to the primary
+        cluster's manager, which is what having two managed clusters means.
+        """
 
-        rep_setup = getattr(request.node, "rep_setup", None)
-        rep_call = getattr(request.node, "rep_call", None)
-        failed = getattr(rep_setup, "failed", False) or getattr(rep_call, "failed", False)
+        cluster = ScyllaCluster(
+            manager=secondary_cluster_manager,
+            scylla_mode=build_mode,
+            manager_install_dir=self.cluster._scylla_manager.install_dir if self.cluster._scylla_manager else None,
+            skip_manager_server=True,
+        )
+        cluster.set_configuration_options(values={"ring_delay_ms": 10000, "skip_wait_for_gossip_to_settle": 0})
+
+        yield cluster
+
         try:
-            if not dtest_setup.allow_log_errors:
-                try:
-                    dtest_setup.check_errors_all_nodes()
-                except AssertionError:
-                    failed = True
-                    raise
-        finally:
-            try:
-                # save the logs for inspection
-                if (failed and dtest_config.delete_logs == "passed") or dtest_config.delete_logs == "none":
-                    copy_logs(request, dtest_setup)
-            except Exception as e:  # noqa: BLE001
-                logger.error("Error saving log: %s", str(e))
-            finally:
-                dtest_setup.cleanup_cluster()
+            cluster.stop(gently=True)
+        except Exception as e:  # noqa: BLE001
+            logger.error("Error stopping the secondary cluster: %s", e)
 
     @staticmethod
     def create_c1_c2_with_clustering_key(  # noqa: PLR0913

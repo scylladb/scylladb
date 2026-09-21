@@ -35,6 +35,7 @@ from test.cluster.dtest.dtest_class import (
 )
 from test.cluster.dtest.ccmlib.common import is_win
 from test.cluster.dtest.ccmlib.scylla_cluster import ScyllaCluster
+from test.cluster.dtest.ccmlib.scylla_repository import setup_scylla_manager
 from test.cluster.dtest.tools.context import log_filter
 from test.cluster.dtest.tools.log_utils import DisableLogger, get_test_log_name, remove_control_chars
 from test.cluster.dtest.tools.misc import retry_till_success
@@ -200,12 +201,14 @@ class _Runner:
 
 
 class DTestSetup:
-    def __init__(self,
+    def __init__(self,  # noqa: PLR0913
                  dtest_config: DTestConfig | None = None,
                  setup_overrides: DTestSetupOverrides | None = None,
                  manager: ScyllaClusterManager | None = None,
                  scylla_mode: str | None = None,
-                 cluster_name: str = "test"):
+                 cluster_name: str = "test",
+                 manager_install_dir: str | Path | None = None,
+                 skip_manager_server: bool = False):
         self.dtest_config = dtest_config
         self.setup_overrides = setup_overrides
         self.cluster_name = cluster_name
@@ -219,6 +222,8 @@ class DTestSetup:
             manager=manager,
             scylla_mode=scylla_mode,
             scylla_version=getattr(dtest_config, "scylla_version", None),
+            manager_install_dir=manager_install_dir,
+            skip_manager_server=skip_manager_server,
             # scylla-dtest built every cluster this way (its dtest_setup.py).
             # It makes a bare cluster.start() wait for CQL and for the other
             # nodes to notice the new one, which is what the ported tests
@@ -233,6 +238,19 @@ class DTestSetup:
         self.base_cql_timeout = 10  # seconds
         self.cql_request_timeout = None
         self.scylla_features: set[str] = self.dtest_config.scylla_features
+
+    @staticmethod
+    def prepare_scylla_manager(manager_package: str | None = None) -> Path:
+        """Make the Scylla Manager binaries available and return their directory.
+
+        `manager_package` is a URL or a local .tar.gz relocatable; with neither,
+        the newest published release is used.  A local directory that already
+        holds the unpacked binaries is taken as-is.
+        """
+
+        if manager_package and not manager_package.startswith(("http://", "https://")) and Path(manager_package).is_dir():
+            return Path(manager_package)
+        return setup_scylla_manager(manager_package)
 
     def find_cores(self):
         cores = []
