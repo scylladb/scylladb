@@ -221,9 +221,14 @@ class TestSystemClients(Tester):
         ssl_enabled=True,
     ):
         cluster = self.cluster
+        # scylla-dtest named the node addresses before the nodes existed: ccm
+        # handed out get_ipprefix()+1, +2, ...  Here each node leases its address
+        # from a pool shared with the other clusters of this worker, so populate
+        # first (the nodes are not started yet, and set_configuration_options()
+        # below still reaches them) and issue the certificate for what they got.
+        cluster.populate(nodes)
         if ssl_enabled:
-            ip_addresses = [f"{cluster.get_ipprefix()}{i}" for i in range(1, nodes + 1)]
-            generate_ssl_stores(self.test_path, ip_addresses=ip_addresses)
+            generate_ssl_stores(self.cluster.get_path(), ip_addresses=[node.address() for node in cluster.nodelist()])
         # C* versions before 3.0 (CASSANDRA-10559) do not know about
         # 'client_encryption_options.optional' - so we must not add that parameter
         # Note: does of course not work with scylla, we dont support "optional" (3.x feature)
@@ -234,18 +239,18 @@ class TestSystemClients(Tester):
             ssl_options["optional"] = ssl_optional
 
         if common.isScylla(cluster.get_install_dir()):
-            ssl_options.update({"certificate": os.path.join(self.test_path, "ccm_node.pem"), "keyfile": os.path.join(self.test_path, "ccm_node.key")})
+            ssl_options.update({"certificate": os.path.join(self.cluster.get_path(), "ccm_node.pem"), "keyfile": os.path.join(self.cluster.get_path(), "ccm_node.key")})
             if require_ssl_auth:
-                ssl_options.update({"truststore": os.path.join(self.test_path, "ccm_node.cer"), "require_client_auth": True})
+                ssl_options.update({"truststore": os.path.join(self.cluster.get_path(), "ccm_node.cer"), "require_client_auth": True})
         else:
             ssl_options.update(
                 {
-                    "keystore": os.path.join(self.test_path, "keystore.jks"),
+                    "keystore": os.path.join(self.cluster.get_path(), "keystore.jks"),
                     "keystore_password": "cassandra",
                 }
             )
             if require_ssl_auth:
-                ssl_options.update({"truststore": os.path.join(self.test_path, "truststore.jks"), "truststore_password": "cassandra", "require_client_auth": True})
+                ssl_options.update({"truststore": os.path.join(self.cluster.get_path(), "truststore.jks"), "truststore_password": "cassandra", "require_client_auth": True})
         cluster.set_configuration_options(
             {
                 "client_encryption_options": ssl_options,
@@ -258,7 +263,7 @@ class TestSystemClients(Tester):
                 "native_transport_port_ssl": 9142,
             }
         )
-        cluster.populate(nodes).start(wait_for_binary_proto=True, wait_other_notice=True)
+        cluster.start(wait_for_binary_proto=True, wait_other_notice=True)
         with self.patient_cql_connection(self.cluster.nodelist()[0], user="cassandra", password="cassandra", consistency_level=ConsistencyLevel.ALL) as session:
             # with consistent topology auth-v2 is enabled and it doesn't allow nor require to change RF as it replicates via raft
             if "consistent-topology-changes" not in self.scylla_features:
@@ -300,7 +305,7 @@ class TestSystemClients(Tester):
 
         # Success SSL connection test
         ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        ssl_context.load_verify_locations(cafile=os.path.join(self.test_path, "ccm_node.cer"))
+        ssl_context.load_verify_locations(cafile=os.path.join(self.cluster.get_path(), "ccm_node.cer"))
 
         with self.node_session(1, **self._test_users[0], port=9142, session_store=session_store, ssl_context=ssl_context):
             session_store.expect_system_clients(tester=self)
@@ -390,9 +395,9 @@ class TestSystemClients(Tester):
         session_store = SessionStore()
 
         ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        ssl_context.load_cert_chain(certfile=os.path.join(self.test_path, "ccm_node.pem"), keyfile=os.path.join(self.test_path, "ccm_node.key"))
+        ssl_context.load_cert_chain(certfile=os.path.join(self.cluster.get_path(), "ccm_node.pem"), keyfile=os.path.join(self.cluster.get_path(), "ccm_node.key"))
         ssl_context.verify_mode = ssl.CERT_REQUIRED
-        ssl_context.load_verify_locations(cafile=os.path.join(self.test_path, "ccm_node.cer"))
+        ssl_context.load_verify_locations(cafile=os.path.join(self.cluster.get_path(), "ccm_node.cer"))
 
         # Successful SSL authentication test
         with self.node_session(
@@ -406,7 +411,7 @@ class TestSystemClients(Tester):
         session_store.expect_system_clients(tester=self)
 
         ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        ssl_context.load_verify_locations(cafile=os.path.join(self.test_path, "ccm_node.cer"))
+        ssl_context.load_verify_locations(cafile=os.path.join(self.cluster.get_path(), "ccm_node.cer"))
 
         # Failed SSL authentication test
         with self.patient_cql_connection(self.cluster.nodelist()[0], user="cassandra", password="cassandra") as session:
@@ -431,7 +436,7 @@ class TestSystemClients(Tester):
         if ssl_optional:
             port = 9142
             ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-            ssl_context.load_verify_locations(cafile=os.path.join(self.test_path, "ccm_node.cer"))
+            ssl_context.load_verify_locations(cafile=os.path.join(self.cluster.get_path(), "ccm_node.cer"))
         else:
             port = 9042
             ssl_context = None
