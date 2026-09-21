@@ -177,6 +177,12 @@ class schema_applier {
     locator::tablet_metadata_change_hint _tablet_hint;
     service::token_metadata_change _token_metadata_change;
 
+    // This node's intended storage mode, read once on shard 0 in update(). It decides
+    // whether a table created in a keyspace under vnodes-to-tablets migration gets a
+    // tablet or a vnode effective replication map, and commit_tables_and_views() needs
+    // it on every shard, where the topology state is not available.
+    std::optional<service::intended_storage_mode> _intended_storage_mode;
+
     schema_persisted_state _before;
     schema_persisted_state _after;
 

@@ -332,6 +332,13 @@ public:
     future<> set_node_intended_storage_mode(intended_storage_mode mode);
     future<> finalize_tablets_migration(const sstring& ks_name);
 
+    // This node's intended storage mode, as recorded in system.topology, or
+    // std::nullopt when it has none (no migration, or the operator has not run
+    // "nodetool migrate-to-tablets upgrade|downgrade" on this node yet).
+    //
+    // Only shard 0 tracks the topology state, so this must be called there.
+    std::optional<intended_storage_mode> get_my_intended_storage_mode() const;
+
     struct table_pow2_convergence_info {
         sstring table_name;
         bool converging;
@@ -656,8 +663,21 @@ public:
     virtual void on_drop_aggregate(const sstring& ks_name, const sstring& aggregate_name) override {}
     virtual void on_drop_view(const sstring& ks_name, const sstring& view_name) override {}
 
+    // Tables created in a keyspace that is being migrated from vnodes to
+    // tablets need a tablet map of their own, or the migration can never be
+    // finalized. See allocate_tablets_for_new_tables_under_migration().
+    virtual void on_before_create_column_family(const data_dictionary::keyspace_metadata& ksm, const schema& s,
+            utils::chunked_vector<mutation>& muts, api::timestamp_type ts) override;
+    virtual void on_before_create_column_families(const data_dictionary::keyspace_metadata& ksm, const std::vector<schema_ptr>& cfms,
+            utils::chunked_vector<mutation>& muts, api::timestamp_type ts) override;
+
     future<> on_cleanup_for_drop_table(const table_id& id);
 private:
+    // Appends tablet map mutations for tables created while `ksm` is mid-migration
+    // from vnodes to tablets, so that they take part in the migration like any
+    // table that was already there when it started. No-op otherwise.
+    void allocate_tablets_for_new_tables_under_migration(const data_dictionary::keyspace_metadata& ksm,
+            const std::vector<schema_ptr>& cfms, utils::chunked_vector<mutation>& muts, api::timestamp_type ts);
     std::optional<db::system_keyspace::peer_info> get_peer_info_for_update(locator::host_id endpoint);
     // return an engaged value iff app_state_map has changes to the peer info
     std::optional<db::system_keyspace::peer_info> get_peer_info_for_update(locator::host_id endpoint, const gms::application_state_map& app_state_map);

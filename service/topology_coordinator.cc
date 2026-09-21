@@ -1370,14 +1370,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     const auto& tablet_metadata = tmptr->tablets();
                     auto tables = ks.metadata()->tables();
 
-                    // Verify all tables have tablet maps.
-                    for (const auto& schema : tables) {
-                        if (!tablet_metadata.has_tablet_map(schema->id())) {
-                            throw std::runtime_error(fmt::format(
-                                "Table {}.{} does not have a tablet map", ks_name, schema->cf_name()));
-                        }
-                    }
-
                     // Find the migration direction (tablets or rollback to vnodes).
                     // Nodes that haven't set their intended mode are treated as vnodes (the default).
                     std::optional<intended_storage_mode> global_intended_mode;
@@ -1399,6 +1391,29 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
 
                     rtlogger.info("Finalizing migration for keyspace '{}': direction={}",
                         ks_name, rollback ? "rollback to vnodes" : "forward to tablets");
+
+                    // There has to be a migration to finalize at all. This used to fall
+                    // out of the per-table check below, which ran on both paths; that
+                    // check is now forward-only, so state it directly.
+                    if (!std::ranges::any_of(tables, [&] (const auto& schema) {
+                        return tablet_metadata.has_tablet_map(schema->id());
+                    })) {
+                        throw std::runtime_error(fmt::format(
+                            "No table in keyspace '{}' has a tablet map; there is no migration to finalize", ks_name));
+                    }
+
+                    // Going forward, every table needs a tablet map or it would be left
+                    // behind on vnodes once the keyspace switches to tablets. Rolling
+                    // back has no such requirement: a table created after the rollback
+                    // started is born on vnodes and is already in its final shape.
+                    if (!rollback) {
+                        for (const auto& schema : tables) {
+                            if (!tablet_metadata.has_tablet_map(schema->id())) {
+                                throw std::runtime_error(fmt::format(
+                                    "Table {}.{} does not have a tablet map", ks_name, schema->cf_name()));
+                            }
+                        }
+                    }
 
                     co_await _tablet_load_stats_refresh.trigger();
 
@@ -1457,9 +1472,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                             updates.emplace_back(m);
                         }
                     } else {
-                        // Rollback: delete tablet maps for all tables in the keyspace.
+                        // Rollback: delete tablet maps for all tables in the keyspace
+                        // that have one. Tables created after the rollback started do not.
                         for (const auto& schema : tables) {
-                            updates.emplace_back(replica::make_drop_tablet_map_mutation(schema->id(), guard.write_timestamp()));
+                            if (tablet_metadata.has_tablet_map(schema->id())) {
+                                updates.emplace_back(replica::make_drop_tablet_map_mutation(schema->id(), guard.write_timestamp()));
+                            }
                         }
                     }
                 } catch (const std::exception& e) {

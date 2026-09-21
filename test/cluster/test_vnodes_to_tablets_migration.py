@@ -849,7 +849,7 @@ async def test_migration_finalize_without_migration(manager: ScyllaClusterManage
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}") as ks_vnodes:
         await cql.run_async(f"CREATE TABLE {ks_vnodes}.t (pk int PRIMARY KEY)")
-        with pytest.raises(HTTPError, match="does not have a tablet map"):
+        with pytest.raises(HTTPError, match="there is no migration to finalize"):
             await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks_vnodes)
 
 
