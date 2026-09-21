@@ -15,7 +15,8 @@ from typing import Union
 from cassandra import ConsistencyLevel
 from cassandra.cluster import SimpleStatement
 
-from dtest_class import Tester, wait_for
+from test.cluster.dtest.dtest_class import Tester, wait_for
+from test.cluster.dtest.tools.misc import num_tokens_per_node
 
 logger = logging.getLogger(__name__)
 
@@ -82,10 +83,12 @@ class CDCInitializeHelper:
 
     def wait_for_metadata_update(self: CDC_TESTER_TYPE, session, cluster_size):
         # Cluster metadata is updated asynchronously, so we need to wait
+        expected_ring_length = cluster_size * num_tokens_per_node(session)
+
         def check_metadata():
             ring = self.get_vnode_ring(session)
             logger.debug(f"Token ring length: {len(ring)}")
-            return len(ring) == cluster_size * 256
+            return len(ring) == expected_ring_length
 
         wait_for(check_metadata, timeout=60, text="Waiting until metadata is updated")
 
