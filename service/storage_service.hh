@@ -678,6 +678,15 @@ private:
     // table that was already there when it started. No-op otherwise.
     void allocate_tablets_for_new_tables_under_migration(const data_dictionary::keyspace_metadata& ksm,
             const std::vector<schema_ptr>& cfms, utils::chunked_vector<mutation>& muts, api::timestamp_type ts);
+
+    // Builds a migration tablet map for those of `cfms` that do not have one yet and
+    // feeds the resulting mutations to `add_mutation`. The keyspace must exist, still
+    // use vnodes, and be under migration. Returns how many tables got a map.
+    // Parameters are taken by value: this is a coroutine, so a reference would have to
+    // outlive every suspension point inside it.
+    future<size_t> append_tablet_maps_for_unmapped_tables(sstring ks_name,
+            std::vector<schema_ptr> cfms, api::timestamp_type ts,
+            std::function<future<>(mutation)> add_mutation);
     std::optional<db::system_keyspace::peer_info> get_peer_info_for_update(locator::host_id endpoint);
     // return an engaged value iff app_state_map has changes to the peer info
     std::optional<db::system_keyspace::peer_info> get_peer_info_for_update(locator::host_id endpoint, const gms::application_state_map& app_state_map);

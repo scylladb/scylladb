@@ -1410,7 +1410,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         for (const auto& schema : tables) {
                             if (!tablet_metadata.has_tablet_map(schema->id())) {
                                 throw std::runtime_error(fmt::format(
-                                    "Table {}.{} does not have a tablet map", ks_name, schema->cf_name()));
+                                    "Table {}.{} does not have a tablet map. Run 'nodetool migrate-to-tablets "
+                                    "upgrade' on any node to build one for it, then restart every node that is in tablets mode",
+                                    ks_name, schema->cf_name()));
                             }
                         }
                     }

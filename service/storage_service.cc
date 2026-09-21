@@ -4519,11 +4519,22 @@ void storage_service::allocate_tablets_for_new_tables_under_migration(const data
         return;
     }
 
-    auto new_tables = cfms | std::views::filter([&] (const schema_ptr& cfm) {
+    append_tablet_maps_for_unmapped_tables(ksm.name(), cfms, ts, [&] (mutation m) -> future<> {
+        muts.emplace_back(std::move(m));
+        return make_ready_future<>();
+    }).get();
+}
+
+future<size_t> storage_service::append_tablet_maps_for_unmapped_tables(sstring ks_name,
+        std::vector<schema_ptr> cfms, api::timestamp_type ts,
+        std::function<future<>(mutation)> add_mutation) {
+    const auto& tablet_metadata = get_token_metadata().tablets();
+
+    auto unmapped = cfms | std::views::filter([&] (const schema_ptr& cfm) {
         return !tablet_metadata.has_tablet_map(cfm->id());
     }) | std::ranges::to<std::vector<schema_ptr>>();
-    if (new_tables.empty()) {
-        return;
+    if (unmapped.empty()) {
+        co_return 0;
     }
 
     // Build the map the same way prepare_for_tablets_migration() would have, had the
@@ -4536,26 +4547,26 @@ void storage_service::allocate_tablets_for_new_tables_under_migration(const data
     // No pow2 pre-split target is set: the tables are empty, so there is no data whose
     // layout needs to converge, and the tablet balancer sizes them from real load once
     // the migration is finalized. The map depends on nothing but the ERM and that
-    // target, so one map serves every new table, as it does in
+    // target, so one map serves every table here, as it does in
     // prepare_for_tablets_migration().
     //
-    // Views and CDC log tables reach us through the same notifier and are treated the
-    // same way - a standalone map rather than one co-located with the base table. That
-    // matches prepare_for_tablets_migration(), which walks cf_meta_data() and so gives
-    // the views already in the keyspace standalone maps too; making views co-located
-    // during a migration belongs to SCYLLADB-731/SCYLLADB-732, not here.
-    auto erm = _db.local().find_keyspace(ksm.name()).get_static_effective_replication_map();
-    auto tmap = build_tablet_map_for_migration(erm, 0).get();
+    // Views and CDC log tables are treated the same way - a standalone map rather than
+    // one co-located with the base table. That matches prepare_for_tablets_migration(),
+    // which walks cf_meta_data() and so gives the views already in the keyspace
+    // standalone maps too; making views co-located during a migration belongs to
+    // SCYLLADB-731/SCYLLADB-732, not here.
+    auto erm = _db.local().find_keyspace(ks_name).get_static_effective_replication_map();
+    auto tmap = co_await build_tablet_map_for_migration(erm, 0);
 
-    for (const auto& cfm : new_tables) {
-        slogger.info("Built tablet map for table {}.{} with {} tablet(s) created during vnodes-to-tablets migration",
-                     cfm->ks_name(), cfm->cf_name(), tmap.tablet_count());
-        replica::tablet_map_to_mutations(tmap, cfm->id(), cfm->ks_name(), cfm->cf_name(), ts, _feature_service,
-                [&] (mutation m) -> future<> {
-            muts.emplace_back(std::move(m));
-            return make_ready_future<>();
-        }).get();
+    for (const auto& cfm : unmapped) {
+        slogger.info("Built tablet map for table {}.{} with {} tablet(s), which has no tablet map "
+                     "but takes part in the vnodes-to-tablets migration of keyspace '{}'",
+                     cfm->ks_name(), cfm->cf_name(), tmap.tablet_count(), ks_name);
+        co_await replica::tablet_map_to_mutations(tmap, cfm->id(), cfm->ks_name(), cfm->cf_name(), ts,
+                _feature_service, add_mutation);
     }
+
+    co_return unmapped.size();
 }
 
 future<> storage_service::set_node_intended_storage_mode(intended_storage_mode mode) {
@@ -4614,7 +4625,39 @@ future<> storage_service::set_node_intended_storage_mode(intended_storage_mode m
         builder.with_node(raft_server.id())
                .set("intended_storage_mode", mode);
 
-        topology_change change{{builder.build()}};
+        group0_update_collector updates;
+        updates.emplace_back(canonical_mutation(builder.build()));
+
+        if (mode == intended_storage_mode::tablets) {
+            // Going forward is the point at which every migrating table must have a
+            // tablet map: the nodes reshard onto it when they restart, and finalization
+            // refuses to run without it. A table can be missing one - it was created
+            // while a rollback was under way, so it was deliberately born on vnodes
+            // (see allocate_tablets_for_new_tables_under_migration), and the operator
+            // has since changed their mind. Give it one now rather than leaving the
+            // keyspace impossible to finalize in either direction.
+            for (const auto& ks_name : _db.local().get_non_system_keyspaces()) {
+                auto& ks = _db.local().find_keyspace(ks_name);
+                if (ks.uses_tablets()) {
+                    continue;
+                }
+                // Base tables only, as everywhere else that decides whether a keyspace is
+                // migrating: a map left behind on a view must not start a migration.
+                bool ks_migrating = std::ranges::any_of(ks.metadata()->tables(), [&] (const schema_ptr& s) {
+                    return tablet_metadata.has_tablet_map(s->id());
+                });
+                if (!ks_migrating) {
+                    continue;
+                }
+                auto cfms = ks.metadata()->cf_meta_data() | std::views::values | std::ranges::to<std::vector<schema_ptr>>();
+                co_await append_tablet_maps_for_unmapped_tables(ks_name, cfms, guard.write_timestamp(),
+                        [&] (mutation m) -> future<> {
+                    updates.emplace_back(co_await make_canonical_mutation_gently(m));
+                });
+            }
+        }
+
+        topology_change change{co_await updates.collect()};
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard,
             ::format("set intended storage mode for node {} to {}", raft_server.id(), mode));
 
@@ -4636,8 +4679,12 @@ std::optional<intended_storage_mode> storage_service::get_my_intended_storage_mo
         on_internal_error(rtlogger, "cannot access the intended storage mode on non zero shard");
     }
 
-    auto it = _topology_state_machine._topology.find(raft::server_id{get_token_metadata().get_my_id().uuid()});
-    if (!it) {
+    // normal_nodes only, to match distributed_loader::init_non_system_keyspaces(), which
+    // decides the same thing at boot. A node that has moved on to transition_nodes is
+    // leaving, and must not pick a different ERM flavour here than it would on restart.
+    const auto& normal_nodes = _topology_state_machine._topology.normal_nodes;
+    auto it = normal_nodes.find(raft::server_id{get_token_metadata().get_my_id().uuid()});
+    if (it == normal_nodes.end()) {
         return std::nullopt;
     }
     return it->second.storage_mode;
@@ -4843,7 +4890,9 @@ future<> storage_service::finalize_tablets_migration(const sstring& ks_name) {
             for (const auto& schema : tables) {
                 if (!tablet_metadata.has_tablet_map(schema->id())) {
                     throw std::runtime_error(fmt::format("Table {}.{} does not have a tablet map; "
-                        "all tables in keyspace '{}' must be prepared for migration before finalizing",
+                        "all tables in keyspace '{}' must be prepared for migration before finalizing. "
+                        "Run 'nodetool migrate-to-tablets upgrade' on any node to build one for it, "
+                        "then restart every node that is in tablets mode",
                         ks_name, schema->cf_name(), ks_name));
                 }
             }

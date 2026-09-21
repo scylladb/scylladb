@@ -388,7 +388,10 @@ intended_storage_mode intended_storage_mode_from_string(const sstring& s);
 //
 // Note this is deliberately more permissive than the check finalization makes:
 // finalization additionally requires all nodes to agree on the mode, and must
-// keep doing so. Once that check passes, the two agree.
+// keep doing so. The two therefore agree whenever any node has been set at all;
+// they differ only when none has, which finalization reads as a rollback (there
+// is nothing to roll forward) and this reads as a forward migration that has not
+// started moving (there is still something to create tablet maps for).
 vnodes_to_tablets_direction get_vnodes_to_tablets_direction(const topology&);
 }
 

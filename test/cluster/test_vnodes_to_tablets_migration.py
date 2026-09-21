@@ -1722,3 +1722,74 @@ async def test_create_table_during_rollback(manager: ScyllaClusterManager):
 
         for table in ("test", "before_rollback", "after_rollback"):
             await verify_data_integrity(cql, ks, table, num_keys)
+
+
+async def test_create_table_during_abandoned_rollback(manager: ScyllaClusterManager):
+    """SCYLLADB-1169: a table born on vnodes during a rollback the operator then abandons.
+
+    The direction is read once, when the table is created, and nothing revisits it. So a
+    table created while a rollback was under way has no tablet map, and if the operator
+    then changes their mind and upgrades the node again, the keyspace would be stuck:
+    forward finalization demands a map for every table, and there is no second chance to
+    build one - prepare_for_tablets_migration() refuses to re-run while any node has an
+    intended storage mode, and that is only cleared by a finalization that cannot happen.
+
+    Upgrading a node back to tablets is therefore the point at which any table still
+    missing a map gets one.
+
+    Steps:
+    1. Start a single node, create a vnode keyspace with one table and populate it.
+    2. Start the migration, upgrade the node and restart it.
+    3. Downgrade the node, then create a table - it must get no tablet map.
+    4. Upgrade the node again, abandoning the rollback - the table must now have one.
+    5. Restart and finalize forward; the keyspace must switch to tablets with its data.
+    """
+    num_keys = 100
+
+    servers = await manager.servers_add(1, cmdline=['--smp', '2'], config=MIGRATION_TEST_CONFIG)
+    server = servers[0]
+    cql, _ = await manager.get_ready_cql(servers)
+
+    vnode_boundaries = await get_all_vnode_tokens(cql)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+
+        logger.info("Starting vnodes-to-tablets migration and upgrading the node")
+        await manager.api.create_vnode_tablet_migration(server.ip_addr, ks)
+        await manager.api.upgrade_node_to_tablets(server.ip_addr)
+        await manager.server_restart(server.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        logger.info("Downgrading the node, then creating a table while it rolls back")
+        await manager.api.downgrade_node_to_vnodes(server.ip_addr)
+        await cql.run_async(f"CREATE TABLE {ks}.late (pk int PRIMARY KEY, c int)")
+        stmt = cql.prepare(f"INSERT INTO {ks}.late (pk, c) VALUES (?, ?)")
+        await asyncio.gather(*(cql.run_async(stmt, [k, k]) for k in range(num_keys)))
+        await read_barrier(manager.api, server.ip_addr)
+
+        assert await get_tablet_count(manager, server, ks, 'late') == 0, \
+            "Expected no tablet map for a table created during rollback"
+
+        logger.info("Abandoning the rollback by upgrading the node again")
+        await manager.api.upgrade_node_to_tablets(server.ip_addr)
+        await read_barrier(manager.api, server.ip_addr)
+
+        logger.info("Verifying the table missing a map was given one")
+        await verify_new_table_tablet_map(manager, server, ks, 'late', vnode_boundaries)
+
+        logger.info("Restarting the node so it reshards onto the new map")
+        await manager.server_restart(server.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        logger.info("Finalizing the migration forward")
+        await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks)
+        await read_barrier(manager.api, server.ip_addr)
+
+        res = await cql.run_async(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{ks}'")
+        assert len(res) == 1 and res[0].initial_tablets is not None, \
+            "Keyspace is still using vnodes after migration finalization"
+
+        await verify_data_integrity(cql, ks, "late", num_keys)
