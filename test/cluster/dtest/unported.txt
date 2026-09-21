@@ -1,5 +1,4 @@
 backup_restore_object_storage_tests.py
 bootstrap_test.py
-manager_backup_tests.py
 manager_health_check_tests.py
 manager_restore_tests.py
