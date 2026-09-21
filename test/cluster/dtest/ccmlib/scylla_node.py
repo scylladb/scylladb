@@ -293,7 +293,37 @@ class ScyllaNode:
         if isinstance(exprs, str):
             exprs = [exprs]
 
-        _, matches = self.scylla_log_file.wait_for(*exprs, from_mark=from_mark, timeout=timeout)
+        # ccm reads the log up to its current end before it looks at the deadline, so lines which are already
+        # logged match even with `timeout=0` (tests use that to assert that something has been logged).
+        # ScyllaLogFile.wait_for() arms its timeout before the first read, so scan the existing lines here and
+        # wait only for the patterns still missing.
+        patterns = [re.compile(expr) for expr in exprs]
+        matches = []
+        with open(self.scylla_log_file.file, "rb") as log_file:
+            if from_mark is not None:
+                log_file.seek(from_mark)
+            while patterns and (raw_line := log_file.readline()).endswith(b"\n"):
+                line = raw_line.decode("utf-8", errors="replace")
+                # As in ccm, a line satisfies one copy of a repeated pattern
+                # (callers pass e.g. [pattern] * smp to want one line per shard).
+                matched_here = set()
+                for pattern in patterns.copy():
+                    if pattern.pattern in matched_here:
+                        continue
+                    if match := pattern.search(line):
+                        matches.append((line, match))
+                        patterns.remove(pattern)
+                        matched_here.add(pattern.pattern)
+                from_mark = log_file.tell()
+        if patterns:
+            try:
+                _, more_matches = self.scylla_log_file.wait_for(*patterns, from_mark=from_mark, timeout=timeout)
+            except TimeoutError:
+                # ccm's message: tests check which patterns it reports missing.
+                missing = [p.pattern for p in patterns]
+                raise TimeoutError(f"{time.strftime('%d %b %Y %H:%M:%S', time.gmtime())} [{self.name}] Missing: {missing} "
+                                   f"not found in {self.logfilename()}") from None
+            matches.extend(more_matches)
 
         return matches[0] if len(matches) == 1 else matches
 
@@ -612,20 +642,40 @@ class ScyllaNode:
         :return: Named tuple with `stdout`, `stderr`, and `rc` (return code).
         """
 
-        cmd_args = ["cassandra-stress"] + stress_options
+        # Tests build the options by splitting a string on single spaces, which
+        # leaves empty arguments wherever it had runs of them.
+        cmd_args = ["cassandra-stress"] + [opt for opt in stress_options if opt]
 
         if not any(opt in cmd_args for opt in ("-d", "-node", "-cloudconf")):
             cmd_args.extend(["-node", self.address()])
 
+        # cassandra-stress logs to $CASSANDRA_STRESS_STORAGE_DIR/logs, by default
+        # under its install dir, which is not writable here.  logback then dumps
+        # a FileNotFoundException stack trace into stdout, which tests that grep
+        # the output for "Exception" take for a stress failure.
+        env = kwargs.pop("env", None) or os.environ.copy()
+        if "CASSANDRA_STRESS_STORAGE_DIR" not in env:
+            storage_dir = os.path.join(self.get_path(), "cassandra-stress")
+            os.makedirs(os.path.join(storage_dir, "logs"), exist_ok=True)
+            env["CASSANDRA_STRESS_STORAGE_DIR"] = storage_dir
+
+        # Popen() has no `timeout`; it bounds the wait for cassandra-stress.
+        timeout = kwargs.pop("timeout", None)
         p = subprocess.Popen(
             cmd_args,
             stdout=kwargs.pop("stdout", subprocess.PIPE),
             stderr=kwargs.pop("stderr", subprocess.PIPE),
             universal_newlines=True,
+            env=env,
             **kwargs,
         )
         try:
-            stdout, stderr = p.communicate()
+            try:
+                stdout, stderr = p.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                p.kill()
+                p.communicate()
+                raise
             if rc := p.returncode:
                 raise ToolError(cmd_args, rc, stdout, stderr)
             ret = namedtuple("Subprocess_Return", "stdout stderr rc")
