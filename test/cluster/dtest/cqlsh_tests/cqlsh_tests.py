@@ -11,7 +11,6 @@ import logging
 import os
 import re
 import ssl
-import subprocess
 from decimal import Decimal
 from functools import cached_property
 from pathlib import Path
@@ -374,7 +373,7 @@ UPDATE varcharmaptable SET varcharvarintmap['Vitrum edere possum, mihi non nocet
     def test_source_glass(self):
         (node1,) = self.cluster.nodelist()
 
-        node1.run_cqlsh(cqlsh_options=self.cqlsh_options(), cmds="SOURCE 'cqlsh_tests/glass.cql'")
+        node1.run_cqlsh(cqlsh_options=self.cqlsh_options(), cmds=f"SOURCE '{os.path.join(os.path.dirname(__file__), 'glass.cql')}'")
 
         self.verify_glass(node1)
 
@@ -2013,36 +2012,42 @@ class TestCqlshWithSSL(TestCqlsh):
     def create_session(self, username: str | None = None, password: str | None = None):
         ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         if self.require_client_auth:
-            ssl_context.load_cert_chain(certfile=os.path.join(self.test_path, "ccm_node.pem"), keyfile=os.path.join(self.test_path, "ccm_node.key"))
+            ssl_context.load_cert_chain(certfile=self.ssl_dir / "ccm_node.pem", keyfile=self.ssl_dir / "ccm_node.key")
         ssl_context.verify_mode = ssl.CERT_REQUIRED
-        ssl_context.load_verify_locations(cafile=os.path.join(self.test_path, "ccm_node.cer"))
+        ssl_context.load_verify_locations(cafile=self.ssl_dir / "ccm_node.cer")
 
         return self.patient_cql_connection(self.node1, ssl_context=ssl_context, user=username, password=password)
 
     @pytest.fixture(scope="function", autouse=True, params=[True, False], ids=["require_client_auth=true", "require_client_auth=false"])
     def setup(self, tmp_path: Path, request: pytest.FixtureRequest):
         self.require_client_auth = request.param
-        generate_ssl_stores(self.test_path, ip_addresses=[f"{self.cluster.get_ipprefix()}1"])
-        options = {"enabled": True}
-        options.update({"certificate": os.path.join(self.test_path, "ccm_node.pem"), "keyfile": os.path.join(self.test_path, "ccm_node.key")})
-        options.update({"truststore": os.path.join(self.test_path, "ccm_node.cer"), "require_client_auth": self.require_client_auth})
-        self.cluster.set_configuration_options({"client_encryption_options": options, "auto_snapshot": False})
-        self.cluster.populate(1).start(wait_for_binary_proto=True)
+        # scylla-dtest issued the certificate for get_ipprefix()+1 before the node existed.  Here the
+        # node leases its address from a per-worker pool, so populate first (the node is not started
+        # yet) and issue the certificate for the address the node actually got.
+        self.cluster.populate(1)
         self.node1, *_ = self.cluster.nodelist()
+        self.ssl_dir = tmp_path / "ssl"
+        self.ssl_dir.mkdir()
+        generate_ssl_stores(self.ssl_dir, ip_addresses=[self.node1.address()])
+        options = {"enabled": True}
+        options.update({"certificate": str(self.ssl_dir / "ccm_node.pem"), "keyfile": str(self.ssl_dir / "ccm_node.key")})
+        options.update({"truststore": str(self.ssl_dir / "ccm_node.cer"), "require_client_auth": self.require_client_auth})
+        self.cluster.set_configuration_options({"client_encryption_options": options, "auto_snapshot": False})
+        self.cluster.start(wait_for_binary_proto=True)
 
         self.cqlshrc_file = tmp_path / "cqlshrc"
         cqlshrc_content = dedent(
             f"""
             [ssl]
-            certfile = {Path(self.test_path) / "ccm_node.cer"}
+            certfile = {self.ssl_dir / "ccm_node.cer"}
             validate = true
             """
         )
         if self.require_client_auth:
             cqlshrc_content += dedent(
                 f"""
-                userkey = {Path(self.test_path) / "ccm_node.key"}
-                usercert = {Path(self.test_path) / "ccm_node.pem"}
+                userkey = {self.ssl_dir / "ccm_node.key"}
+                usercert = {self.ssl_dir / "ccm_node.pem"}
             """
             )
         self.cqlshrc_file.write_text(cqlshrc_content)

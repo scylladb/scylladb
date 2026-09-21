@@ -82,11 +82,11 @@ class TestInternodeSSL(Tester):
         ]
 
         logger.debug("***using internode ssl***")
-        generate_ssl_stores(self.test_path)
+        generate_ssl_stores(self.cluster.get_path())
         cluster.set_configuration_options({"internode_compression": internode_compression})
         # Use the faster RBNO bootstrap to avodid problems with timeouts
         cluster.set_configuration_options({"enable_repair_based_node_ops": True, "allowed_repair_based_node_ops": "replace,removenode,rebuild,bootstrap,decommission"})
-        cluster.enable_internode_ssl(self.test_path, internode_encryption=internode_encryption)
+        cluster.enable_internode_ssl(self.cluster.get_path(), internode_encryption=internode_encryption)
 
         assert dcs >= 1
 
@@ -100,16 +100,16 @@ class TestInternodeSSL(Tester):
 
             node_marks = {node: node.mark_log() for node in cluster.nodelist()}
 
-            os.remove(os.path.join(self.test_path, "keystore.jks"))
-            os.remove(os.path.join(self.test_path, "truststore.jks"))
-            mtime = os.path.getmtime(os.path.join(self.test_path, "ccm_node.key"))
+            os.remove(os.path.join(self.cluster.get_path(), "keystore.jks"))
+            os.remove(os.path.join(self.cluster.get_path(), "truststore.jks"))
+            mtime = os.path.getmtime(os.path.join(self.cluster.get_path(), "ccm_node.key"))
             # overwrite old certs
-            generate_ssl_stores(self.test_path)
+            generate_ssl_stores(self.cluster.get_path())
 
-            mtime2 = os.path.getmtime(os.path.join(self.test_path, "ccm_node.key"))
+            mtime2 = os.path.getmtime(os.path.join(self.cluster.get_path(), "ccm_node.key"))
             assert mtime2 > mtime, "Cert regen failed?"
 
-            cluster.enable_internode_ssl(self.test_path, internode_encryption=internode_encryption)
+            cluster.enable_internode_ssl(self.cluster.get_path(), internode_encryption=internode_encryption)
 
             for node, mark in node_marks.items():
                 logger.debug(f"waiting for {node.get_path()} to reload certs")
@@ -171,12 +171,15 @@ class TestInternodeSSL(Tester):
             else:
                 return to_ports(storage_port, [DEFAULT_PORT]) + to_ports(ssl_storage_port, [DEFAULT_SSL_PORT])
 
-        generate_ssl_stores(self.test_path)
+        generate_ssl_stores(self.cluster.get_path())
         cluster = self.cluster
         cluster.populate(1)
-        cluster.enable_internode_ssl(self.test_path, internode_encryption)
         # Test default configuration, ccm only sets storage_port: 7000
         self.restart_and_verify_listen_ports(expected_ports=[DEFAULT_PORT])
+        # ccm's enable_internode_ssl() only reached the populated node with the
+        # next set_configuration_options() below, so the first start above ran
+        # without it; the shim applies it at once, hence it comes after.
+        cluster.enable_internode_ssl(self.cluster.get_path(), internode_encryption)
 
         # None removes the specified option from the configuration file
         # change the non-zero port numbers so they are different from the

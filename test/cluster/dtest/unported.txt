@@ -20,9 +20,6 @@ cql_session_test.py
 cql_static_columns_tests.py
 cql_tests.py
 cql_tracing_addition_test.py
-cql_tracing_test.py
-cqlsh_tests/cqlsh_copy_tests.py
-cqlsh_tests/cqlsh_tests.py
 delete_insert_test.py
 deletion_test.py
 distributed_queries_test.py
@@ -30,7 +27,6 @@ encryption_at_rest_test.py
 everywhere_strategy_test.py
 heat_weighted_load_balancing_test.py
 ics_compaction_test.py
-internode_ssl_test.py
 largecolumn_test.py
 ldap_test.py
 like_operator_test.py

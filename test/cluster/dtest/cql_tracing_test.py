@@ -156,6 +156,12 @@ class TestCqlTracing(PrepareClusterHelper):
         insert_c1c2_no_prepared(session, keys=range(num_keys), consistency=ConsistencyLevel.ONE)
         node1.nodetool("flush")
 
+        # Tracing writes its pending sessions every 2 seconds (tracing::write_period) and once more when it is
+        # shut down, but Scylla shuts tracing down after messaging_service, so that last batch reaches only
+        # node1's own replica and a read from node2 misses it.  Let the periodic write push every session to
+        # both replicas first: with ccm the JVM nodetool flush above took longer than that, the REST call does not.
+        time.sleep(3)
+
         logger.debug("Stopping node1...")
         node1.stop(wait_other_notice=True)
 

@@ -282,6 +282,15 @@ class TestCqlshCopy(CqlshPrepare):
         yield
         unmonkeypatch_driver(cached_driver_methods)
 
+    @pytest.fixture(scope="function", autouse=True)
+    def reset_copy_test_failures(self):
+        # The failure injection tests set CQLSH_COPY_TEST_FAILURES in os.environ, which every cqlsh started
+        # later by the same worker process inherits: an `exit_range` left behind makes the next test's
+        # COPY TO children exit, so it exports only part of the table.
+        os.environ.pop("CQLSH_COPY_TEST_FAILURES", None)
+        yield
+        os.environ.pop("CQLSH_COPY_TEST_FAILURES", None)
+
     @pytest.fixture(scope="function")
     def clean_temp(self):
         yield
@@ -1468,7 +1477,6 @@ class TestCqlshCopy(CqlshPrepare):
             lines_num = len(file.readlines())
         assert lines_num < num_records, f"Expected that lined in the file after copy is less then {num_records}, but got {lines_num}"
 
-    # scylla-dtest took it out of gating: unmark cause of: https://github.com/scylladb/scylla-cqlsh/issues/37
     @pytest.mark.tier3
     @pytest.mark.skip_mode(mode="dev", reason="scylla-dtest runs it nightly in release and debug modes only")
     @pytest.mark.single_node
