@@ -58,4 +58,32 @@ total_tombstone_purge_failure_due_to_overlapping_with_uncompacting_sstable  purg
 ==========================================================================  ======================================================================================================
 
 
+Output formats
+--------------
+
+Use ``--format`` (``-F``) to select the output format, one of ``text`` (the default),
+``json``, ``yaml`` or ``log``.
+
+The ``log`` format reproduces the lines the compaction logger would have emitted at
+``debug`` level when each compaction started and finished. Since the compaction log is
+not enabled by default, this allows the compaction activity to be put back into the
+node's log, by sorting the two together by timestamp:
+
+.. code-block:: console
+
+   nodetool compactionhistory -F log > history.log
+   sort -k2 scylla.log history.log > merged.log
+
+Example output:
+
+.. code-block:: console
+
+   DEBUG 2024-12-17 16:19:55,914 [shard 0:comp] compaction - [Compact ks.test 17536e70-5358-11e6-9d5f-000000000000] Compacting [{generation: 2a5db691-bc8d-11ef-a5f9-bbbda77f5688, origin: memtable, size: 5468},{generation: 28c58a60-bc8d-11ef-a5f9-bbbda77f5688, origin: memtable, size: 5532}]
+   DEBUG 2024-12-17 16:39:55,914 [shard 0:comp] compaction - [Compact ks.test 17536e70-5358-11e6-9d5f-000000000000] Compacted 2 sstables to [{generation: 2a5fb260-bc8d-11ef-a5f9-bbbda77f5688, origin: compaction, size: 5583}]. 11kB to 5583 bytes (~50% of original) in 1200000ms = 9 bytes/s.
+
+The compaction history doesn't record everything the original log line carries, so the
+SSTables are identified by generation rather than by file name, and the partition counts
+are left out.
+
+
 .. include:: nodetool-index.rst
