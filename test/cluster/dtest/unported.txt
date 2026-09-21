@@ -82,7 +82,6 @@ sla_per_user_test.py
 snapshot_test.py
 sstable_generation_loading_test.py
 stress_tool_test.py
-system_tables_test.py
 tablets_test.py
 test_cdc_large_values.py
 test_distributed_aggregates.py
