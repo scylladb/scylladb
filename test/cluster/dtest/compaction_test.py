@@ -375,6 +375,7 @@ class TestCompaction(Tester):
         node4.stop(wait_other_notice=True, gently=False)
 
         self._delete_keys(verify_deleted=False, num=partition_num // 2)
+        deletion_time = time.time()
         node1.flush()
         node2.flush()
         node3.flush()
@@ -397,6 +398,12 @@ class TestCompaction(Tester):
 
         logger.debug("Starting node4")
         node4.start(wait_other_notice=True, wait_for_binary_proto=True)
+
+        # With tombstone_gc mode=repair a tombstone is purgeable only if it is older than
+        # the repair time (the hints/batchlog flush time at repair start, whole seconds)
+        # minus propagation_delay_in_seconds.  ccm took long enough to restart node4 for
+        # that to hold implicitly; here node4 is back ~3s after the deletes, so wait for it.
+        time.sleep(max(0, deletion_time + self.PROPAGATION_DELAY_IN_SECONDS + 1 - time.time()))
 
         with self.patient_cql_connection(node4, consistency_level=ConsistencyLevel.QUORUM) as session:
             logger.debug("Running a repair on all nodes")
