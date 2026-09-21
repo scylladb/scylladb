@@ -68,6 +68,12 @@ CGROUP_INITIAL = get_cgroup()
 CGROUP_TESTS = CGROUP_INITIAL.parent / 'tests'
 
 
+@lru_cache(maxsize=None)
+def get_sqlite_writer(db_path: Path) -> SQLiteWriter:
+    """Return the process-wide telemetry writer, creating it on first use."""
+    return SQLiteWriter(db_path)
+
+
 class ResourceGather(ABC):
 
     def setup_test_tracking(self) -> None:
@@ -102,7 +108,7 @@ class ResourceGatherRecord(ResourceGather):
         self.test = test
         self.worker_id = worker_id or "master"
         self.db_path = temp_dir / DEFAULT_DB_NAME
-        self.sqlite_writer = SQLiteWriter(self.db_path)
+        self.sqlite_writer = get_sqlite_writer(self.db_path)
         self.logger = logging.getLogger(__name__)
 
         directory_path = str(test.suite.suite_path.relative_to(TOP_SRC_DIR))
@@ -132,7 +138,9 @@ class ResourceGatherRecord(ResourceGather):
         self.sqlite_writer.write_row(metrics, METRICS_TABLE)
 
     def teardown_test_tracking(self) -> None:
-        self.sqlite_writer.close()
+        # The SQLite connection is shared for the process lifetime (see
+        # get_sqlite_writer), so nothing is closed per test.
+        pass
 
 
 class ResourceGatherOn(ResourceGatherRecord):
