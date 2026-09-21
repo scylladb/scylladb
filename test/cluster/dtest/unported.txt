@@ -1,5 +1,4 @@
 backup_restore_object_storage_tests.py
-backup_restore_tests.py
 bootstrap_test.py
 cassandra_batch_test.py
 cdc_batch_test.py

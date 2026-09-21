@@ -93,11 +93,11 @@ class TestBackupRestore(Tester):
         logger.info("Draining the cluster...")
         node1.nodetool("drain")
 
-        snapshot_dir = self.get_snapshot_dir(self.SNAPSHOT_NAME)
+        snapshot_dir = self.get_snapshot_dir(self.SNAPSHOT_NAME, node=node1)
         assert snapshot_dir is not None, f"Can't find a snapshot directory for {self.SNAPSHOT_NAME}"
         logger.info(f"Snapshot dir is {snapshot_dir}")
 
-        ks_dir = os.path.join(self.test_path, "test", "node1", "data", "ks")
+        ks_dir = os.path.join(node1.get_path(), "data", "ks")
 
         #
         # As a result of 'DROP KEYSPACE' and the following 'CF CREATE' there
@@ -122,7 +122,7 @@ class TestBackupRestore(Tester):
         self.start_nodetool_and_kill_node(node1, "refresh -- ks cf", message)
 
         logger.info("Delete commitlogs...")
-        commitlog_dir = os.path.join(self.test_path, "test", "node1", "commitlogs")
+        commitlog_dir = os.path.join(node1.get_path(), "commitlog")
         commitlog.cleanup(commitlog_dir)
 
         logger.info("Restart the node...")
@@ -155,7 +155,7 @@ class TestBackupRestore(Tester):
         logger.debug("Creating a snapshot...")
         node1.nodetool(f"snapshot -t {self.SNAPSHOT_NAME} -cf cf -- ks")
 
-        snapshot_dir = self.get_snapshot_dir(self.SNAPSHOT_NAME)
+        snapshot_dir = self.get_snapshot_dir(self.SNAPSHOT_NAME, node=node1)
         assert snapshot_dir is not None, f"Can't find a snapshot directory for {self.SNAPSHOT_NAME}"
         logger.debug(f"Snapshot dir is {snapshot_dir}")
 
@@ -169,7 +169,7 @@ class TestBackupRestore(Tester):
         logger.debug("Flushing a keyspace...")
         node1.nodetool("flush -- ks")
 
-        ks_dir = os.path.join(self.test_path, "test", "node1", "data", "ks")
+        ks_dir = os.path.join(node1.get_path(), "data", "ks")
         cf_dir = self.get_non_snapshot_cf_dir(ks_dir, self.SNAPSHOT_NAME)
         logger.debug(f"Column family directory is {cf_dir}")
 
@@ -212,7 +212,7 @@ class TestBackupRestore(Tester):
         logger.debug("Creating a snapshot...")
         node1.nodetool(f"snapshot -t {self.SNAPSHOT_NAME} -cf cf -- ks")
 
-        snapshot_dir = self.get_snapshot_dir(self.SNAPSHOT_NAME)
+        snapshot_dir = self.get_snapshot_dir(self.SNAPSHOT_NAME, node=node1)
         assert snapshot_dir is not None, f"Can't find a snapshot directory for {self.SNAPSHOT_NAME}"
         logger.debug(f"Snapshot dir is {snapshot_dir}")
 
@@ -235,7 +235,7 @@ class TestBackupRestore(Tester):
         logger.debug("Flushing a keyspace...")
         node1.nodetool("flush -- ks")
 
-        ks_dir = os.path.join(self.test_path, "test", "node1", "data", "ks")
+        ks_dir = os.path.join(node1.get_path(), "data", "ks")
         cf_dir = self.get_non_snapshot_cf_dir(ks_dir, self.SNAPSHOT_NAME)
         logger.debug(f"Column family directory is {cf_dir}")
 
@@ -273,7 +273,7 @@ class TestBackupRestore(Tester):
         logger.debug("Creating a snapshot...")
         node1.nodetool(f"snapshot -t {self.SNAPSHOT_NAME} -cf cf -- ks")
 
-        snapshot_dir = self.get_snapshot_dir(self.SNAPSHOT_NAME)
+        snapshot_dir = self.get_snapshot_dir(self.SNAPSHOT_NAME, node=node1)
         assert snapshot_dir is not None, f"Can't find a snapshot directory for {self.SNAPSHOT_NAME}"
         logger.debug(f"Snapshot dir is {snapshot_dir}")
 
@@ -291,7 +291,7 @@ class TestBackupRestore(Tester):
         logger.debug("Flushing a keyspace...")
         node1.nodetool("flush -- ks")
 
-        ks_dir = os.path.join(self.test_path, "test", "node1", "data", "ks")
+        ks_dir = os.path.join(node1.get_path(), "data", "ks")
         cf_dir = self.get_non_snapshot_cf_dir(ks_dir, self.SNAPSHOT_NAME)
         logger.debug(f"Column family directory is {cf_dir}")
 
@@ -448,7 +448,7 @@ class TestBackupRestore(Tester):
 
         ks_dir = [None, None]
         for i in range(2):
-            ks_dir[i] = os.path.join(self.test_path, "test", "node1", "data", f"ks{i}")
+            ks_dir[i] = os.path.join(node1.get_path(), "data", f"ks{i}")
 
         ks_snapshot_dir = [[None, None, None], [None, None, None]]
 
@@ -509,7 +509,7 @@ class TestBackupRestore(Tester):
         node1.nodetool("clearsnapshot")
         for i in range(3):
             logger.debug(f"Check that snapshot{i} doesn't exist any more...")
-            test_dir = self.get_snapshot_dir(f"snapshot{i}")
+            test_dir = self.get_snapshot_dir(f"snapshot{i}", node=node1)
             assert test_dir is None, f"'snapshot{i}' has not been deleted!"
 
     @pytest.mark.skip_bug(link="https://github.com/scylladb/scylladb/issues/7022", reason="nodetool won't fail in refreshing in main SSTable directory, no db error raised")
@@ -530,7 +530,7 @@ class TestBackupRestore(Tester):
 
         logger.debug("Creating a snapshot for test table")
         node1.nodetool(f"snapshot -t {self.SNAPSHOT_NAME} -cf standard1 -- keyspace1")
-        snapshot_dir = self.get_snapshot_dir(self.SNAPSHOT_NAME)
+        snapshot_dir = self.get_snapshot_dir(self.SNAPSHOT_NAME, node=node1)
         cf_dir = get_node_cf_dir(node1, "keyspace1", "standard1")
 
         # Adding more data to test table
@@ -719,7 +719,7 @@ class TestBackupRestore(Tester):
 
         if delete_commitlogs:
             logger.debug("Delete commitlogs ...")
-            commitlog_dir = os.path.join(self.test_path, "test", "node1", "commitlogs")
+            commitlog_dir = os.path.join(node.get_path(), "commitlog")
             commitlog.cleanup(commitlog_dir)
         if restart_node:
             logger.debug("Restart the node ...")
@@ -749,10 +749,10 @@ class TestBackupRestore(Tester):
             if os.path.isfile(full_name):
                 os.remove(full_name)
 
-    def get_snapshot_dir(self, snapshotname, ks_dir=None):
+    def get_snapshot_dir(self, snapshotname, ks_dir=None, node=None):
         search_base_dir = None
         if ks_dir is None:
-            search_base_dir = self.test_path
+            search_base_dir = node.get_path()
         else:
             search_base_dir = ks_dir
 
