@@ -72,6 +72,17 @@ class ScyllaCluster:
     def get_node_ip(self, nodeid: int) -> str:
         return self.nodelist()[nodeid-1].address()
 
+    def get_ipprefix(self) -> str:
+        """Return the common IPv4 prefix of the cluster's node addresses, including the trailing dot.
+
+        scylla-ccm stores the prefix it builds node addresses from; here the
+        cluster manager leases addresses, so it is read back off node1. Used by
+        tests that want to name an address in the cluster's own subnet.
+        """
+        if not self._nodes:
+            raise RuntimeError("Cluster has no nodes yet; populate() it first")
+        return self._nodes[0].address().rsplit(".", maxsplit=1)[0] + "."
+
     def populate(self, nodes: int | list[int]) -> ScyllaCluster:
         if self._config_options.get("alternator_enforce_authorization"):
             self.manager.auth_provider = PlainTextAuthProvider(username="cassandra", password="cassandra")
