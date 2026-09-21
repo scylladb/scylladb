@@ -11,18 +11,14 @@ from typing import TYPE_CHECKING
 
 from cassandra.auth import PlainTextAuthProvider
 
-from test import BUILD_DIR
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
+from test.pylib.scylla_server import ScyllaVersionDescription, get_current_version_description
+from test.cluster.dtest.ccmlib import scylla_repository
 from test.cluster.dtest.ccmlib.common import logger
 from test.cluster.dtest.ccmlib.scylla_node import ScyllaNode
 
 if TYPE_CHECKING:
     from typing import Any
-
-
-# One .parent short of the source root, this used to point at test/build/, which
-# does not exist, and every ScyllaCluster.version() raised FileNotFoundError.
-SCYLLA_VERSION_FILE = BUILD_DIR / "SCYLLA-VERSION-FILE"
 
 
 def _racks_of(dc_nodes: dict | list, topology: dict) -> dict:
@@ -36,14 +32,30 @@ def _racks_of(dc_nodes: dict | list, topology: dict) -> dict:
 
 
 class ScyllaCluster:
-    def __init__(self, manager: ScyllaClusterManager, scylla_mode: str, force_wait_for_cluster_start: bool = False):
+    def __init__(self,
+                 manager: ScyllaClusterManager,
+                 scylla_mode: str,
+                 force_wait_for_cluster_start: bool = False,
+                 scylla_version: str | None = None):
         self.manager = manager
         self.scylla_mode = scylla_mode
         self._config_options = {}
-        # Cached ScyllaNode instances. Nodes are appended by _add_nodes()
-        # in the order they are created by servers_add().
-        self._nodes: list[ScyllaNode] = []
+        # Cached ScyllaNode instances, keyed by name and in the order
+        # _add_nodes() creates them from servers_add().
+        self._nodes: dict[str, ScyllaNode] = {}
         self._next_node_num: int = 1
+
+        # How many vnode tokens a node starts with (ScyllaNode._num_tokens()).
+        # scylla-dtest ran with dtest_config.num_tokens (256); 9280a039ee
+        # lowered it to 16 for the whole suite.  With 16 random tokens a node
+        # can own twice what another does, so a test that asserts on how evenly
+        # vnodes spread data sets this back to what upstream ran with.
+        self.num_tokens: int = 16
+
+        # Which Scylla new nodes are started on.  Upgrade tests move this around
+        # with set_install_dir(); everything else stays on the build under test.
+        scylla_repository.set_build_mode(scylla_mode)
+        self._install = scylla_repository.install(scylla_version or scylla_repository.current_version())
 
         if self.scylla_mode == "debug":
             self.default_wait_other_notice_timeout = 600
@@ -54,41 +66,86 @@ class ScyllaCluster:
 
         self.force_wait_for_cluster_start = force_wait_for_cluster_start
 
+    @property
+    def current_scylla_exe(self) -> str:
+        """The executable of the build under test, as the test runner resolved it.
+
+        The path depends on --exe-path and the build mode, so the cluster manager
+        is the only place that knows it; scylla_repository leaves it unset.
+        """
+        return str(self.manager.cluster.scylla_exe)
+
+    def exe_for(self, install: scylla_repository.ScyllaInstall) -> str:
+        return self.current_scylla_exe if install.is_current else str(install.exe)
+
+    def version_description(self,
+                            install: scylla_repository.ScyllaInstall | None = None) -> ScyllaVersionDescription:
+        """How the cluster manager should start a node on this version.
+
+        A released package gets the plain command line: SCYLLA_CMDLINE_OPTIONS is
+        the 2025.1 baseline (see test/pylib/scylla_server.py), so it is what every
+        version taking part in an upgrade understands.  Only the build under test
+        adds options of its own, which older binaries would refuse to boot with.
+        """
+        install = self._install if install is None else install
+        if install.is_current:
+            return get_current_version_description(self.current_scylla_exe)
+        return ScyllaVersionDescription(path=str(install.exe), config={}, argv=[])
+
+    def get_install_dir(self) -> str:
+        """The install dir of the Scylla this cluster's nodes run on.
+
+        ccm's Cluster.get_install_dir().  Ported tests hand it to
+        ccmlib.common.isScylla() and tools.misc.is_coverage(); for the build
+        under test it is the source tree root, which is the layout both of
+        those probe.
+        """
+        return str(self._install.install_dir)
+
+    def set_install_dir(self, install_dir: str) -> ScyllaCluster:
+        """Run nodes added from now on on the Scylla in this install dir.
+
+        ccm's Cluster.set_install_dir(); upgrade tests call it (through
+        UpgradeTester._change_cluster_version) to add a node on an older version
+        than the rest of the cluster, or the other way round.
+        """
+        self._install = scylla_repository.install_for_dir(install_dir)
+        self.debug(f"Cluster install dir is now {install_dir} (Scylla {self._install.version})")
+        return self
+
+    def upgrade_cluster(self, upgrade_version: str) -> None:
+        """Upgrade every node to `upgrade_version`, one at a time."""
+        for node in self.nodelist():
+            node.upgrade(upgrade_to_version=upgrade_version)
+        self._install = scylla_repository.install(upgrade_version)
+
     def _add_nodes(self, servers: list) -> None:
         """Create ScyllaNode instances for the given servers and cache them."""
         for server in servers:
             name = f"node{self._next_node_num}"
             self._next_node_num += 1
-            self._nodes.append(ScyllaNode(
-                cluster=self, server=server, name=name))
+            self._nodes[name] = ScyllaNode(cluster=self, server=server, name=name)
 
     @property
     def nodes(self) -> dict[str, ScyllaNode]:
-        return {node.name: node for node in self.nodelist()}
+        """The nodes by name.  Live, as ccm's is: a test that removes a node from
+        the cluster drops it from here (see e.g. the topology-during-upgrade
+        tests, which removenode() an old-version node and then forget it)."""
+        return self._nodes
 
     def nodelist(self) -> list[ScyllaNode]:
-        return list(self._nodes)
+        return list(self._nodes.values())
 
     def get_node_ip(self, nodeid: int) -> str:
         return self.nodelist()[nodeid-1].address()
 
-    def get_ipprefix(self) -> str:
-        """Return the common IPv4 prefix of the cluster's node addresses, including the trailing dot.
-
-        scylla-ccm stores the prefix it builds node addresses from; here the
-        cluster manager leases addresses, so it is read back off node1. Used by
-        tests that want to name an address in the cluster's own subnet.
-        """
-        if not self._nodes:
-            raise RuntimeError("Cluster has no nodes yet; populate() it first")
-        return self._nodes[0].address().rsplit(".", maxsplit=1)[0] + "."
-
     def populate(self, nodes: int | list[int]) -> ScyllaCluster:
         if self._config_options.get("alternator_enforce_authorization"):
             self.manager.auth_provider = PlainTextAuthProvider(username="cassandra", password="cassandra")
+        version = self.version_description()
         match nodes:
             case int():
-                self._add_nodes(self.manager.servers_add(servers_num=nodes, config=self._config_options, start=False, auto_rack_dc="dc1"))
+                self._add_nodes(self.manager.servers_add(servers_num=nodes, config=self._new_node_config, version=version, start=False, auto_rack_dc="dc1"))
             case list():
                 for dc, n_nodes in enumerate(nodes, start=1):
                     dc_name = f"dc{dc}"
@@ -97,6 +154,7 @@ class ScyllaCluster:
                     self._add_nodes(self.manager.servers_add(
                         servers_num=n_nodes,
                         config=self._config_options,
+                        version=version,
                         start=False,
                         auto_rack_dc=dc_name
                     ))
@@ -126,6 +184,7 @@ class ScyllaCluster:
                         self._add_nodes(self.manager.servers_add(
                             servers_num=rack_nodes,
                             config=self._config_options,
+                            version=version,
                             property_file={
                                 "dc": dc,
                                 "rack": rack,
@@ -240,9 +299,9 @@ class ScyllaCluster:
                 node.nodetool(nodetool_cmd)
         return self
 
-    @staticmethod
-    def version() -> str:
-        return SCYLLA_VERSION_FILE.read_text().strip()
+    def version(self) -> str:
+        """The Scylla version nodes added right now would run."""
+        return self._install.version
 
     def cassandra_version(self) -> str:
         """ccm's Cluster.cassandra_version(), an alias of version()."""
