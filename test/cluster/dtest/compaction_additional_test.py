@@ -395,6 +395,14 @@ class TestCompactionAdditional(CompactionAdditionalTester):
             self.write_n_data_files(node=node1, session=session, key_space=key_space_name, num_of_files=7, num_of_keys=10)
             self.wait_for_new_minute()
 
+        # TWCS closes a window only when an sstable of a newer window arrives ("now" is the newest window
+        # seen, not the wall clock), and then major-compacts it if it holds more than one sstable. With a
+        # fast flush, the last window written above still holds several sstables, so close it with
+        # one more flush and let its compaction finish: the files listed below then all belong to windows
+        # that are closed and compacted, which is what the second phase must not touch.
+        self.write_n_data_files(node=node1, session=session, key_space=key_space_name, num_of_files=1, num_of_keys=10)
+        node1.wait_for_compactions(key_space_name, "cf")
+
         # Get list of sstables names
         cf_dir = get_node_cf_dir(node1, key_space_name, "cf")
         sstables_files1 = get_sstables_files(cf_dir, f_type="Data")
@@ -941,8 +949,15 @@ class TestCompactionAdditional(CompactionAdditionalTester):
         assert sorted_by_time == sorted_by_size, "The list of rows sorted by size is not identical to the list of rows sorted by compaction time"
 
     def wait_for_new_minute(self):
-        while dt.now().second > 5:
-            time.sleep(1)
+        """Sleep until the next minute starts.
+
+        Always cross a minute boundary: returning at once while the clock is still in the first seconds of
+        a minute let a writer that is quicker than that put its "next minute" of data into the same time
+        window.
+        """
+        next_minute = dt.now().replace(second=0, microsecond=0) + datetime.timedelta(minutes=1)
+        while (remaining := (next_minute - dt.now()).total_seconds()) > 0:
+            time.sleep(min(remaining, 1))
 
     def get_sstables_compactions_flow(self, node, exprs, from_mark):
         compact_sstables = []
@@ -1257,7 +1272,7 @@ class TestCompactionAdditionalStrategy(CompactionAdditionalTester):
         node1.flush()
         node1.compact()
         node1.stop()
-        files = glob.glob(os.path.join(node1.get_path(), "commitlogs", "*"))
+        files = glob.glob(os.path.join(node1.get_path(), "commitlog", "*"))
         for f in files:
             try:
                 os.remove(f)
@@ -2439,7 +2454,7 @@ class TestValidationCompaction(CompactionAdditionalTester):
     CF_2 = "cf2"
     RF = 1
     CORRUPT_DATA_FILE_NAME = "mc-1-big-Data.db"
-    CORRUPT_DATA_FILE_DIR = Path("test-sstables/sstable_with_invalid_fragment/ks/cf-test")
+    CORRUPT_DATA_FILE_DIR = Path(__file__).parent / "test-sstables/sstable_with_invalid_fragment/ks/cf-test"
     CORRUPT_DATA_FILE_PATH = CORRUPT_DATA_FILE_DIR / CORRUPT_DATA_FILE_NAME
     DATA_FILE_NAME = "md-1-big-Data.db"
     PK19_PATTERN = r"\x19\x00\x00\x00 \(\{key:\s*pk\{000419000000\},\s*token:\s*-5674409923619649499\}\)"

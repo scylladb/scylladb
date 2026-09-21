@@ -10,7 +10,6 @@ cdc_types_test.py
 cleanup_test.py
 cluster_replacement_test.py
 clustering_key_filter_test.py
-compaction_additional_test.py
 compression_test.py
 consistency_test.py
 consistent_bootstrap_test.py
