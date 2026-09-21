@@ -246,6 +246,9 @@ future<> cluster_backup_task::do_backup() {
             // not repaired, or if they are, if we are the first node
             // to process the tablet.
             sstables = sstables | std::views::filter([&](auto& e) {
+                if (e.node != node.node) {
+                    return false; // cannot claim sstable not on my node.
+                }
                 auto& ti = tablets.at(e.tablet_id);
 
                 if (e.repaired_at < ti.repaired_at || e.repaired_at == 0) {
