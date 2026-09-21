@@ -1,4 +1,10 @@
 #
+# Copyright (C) 2026-present ScyllaDB
+#
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
+#
+
+#
 # This test is based on a Cassandra's test with the same name.
 #
 import functools

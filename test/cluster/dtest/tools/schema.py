@@ -1,3 +1,9 @@
+#
+# Copyright (C) 2026-present ScyllaDB
+#
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
+#
+
 def change_schema_safely(session, nodes, query, timeout=30):
     """
     Run a schema-altering query (e.g. ALTER KEYSPACE)
