@@ -1190,6 +1190,10 @@ void compaction_manager::register_metrics() {
     });
 }
 
+static constexpr std::chrono::milliseconds scrub_submission_interval(std::chrono::seconds scrub_period) {
+    return std::chrono::milliseconds{scrub_period} / 8;
+}
+
 void compaction_manager::enable() {
     if (_state == state::stopped) {
         // The manager is being (or has been) stopped, e.g. shutdown started
@@ -1272,6 +1276,46 @@ future<> compaction_manager::stop_postponed_compactions() noexcept {
 
 void compaction_manager::postpone_compaction_for_table(compaction_group_view* t) {
     _postponed.insert(t);
+}
+
+void compaction_manager::schedule_table_for_automatic_scrub(compaction_group_view* t) {
+    _awaiting_automatic_scrub.insert(t);
+}
+
+bool compaction_manager::should_be_automatically_scrubbed(const sstables::shared_sstable& sst, for_regular_compaction regular) const {
+    if (!automatic_scrub_enabled()) {
+        return false;
+    }
+
+    if (sst->get_storage().is_object_storage()) {
+        return false;
+    }
+
+    auto period = std::chrono::milliseconds{*_scrub_period};
+    auto not_validated_for = regular ? period / 2 : period - scrub_submission_interval(*_scrub_period);
+
+    auto now = db_clock::now();
+    auto scrub_older_than = now - not_validated_for;
+
+    if (!sst->has_scylla_component()) {
+        // We don't know when it was last validated.
+        // Automatic scrub will add a Scylla component.
+        return true;
+    }
+
+    auto timestamp = sst->get_scrub_time();
+
+    if (!timestamp) {
+        return true;
+    }
+
+    if (*timestamp > now) {
+        // db_clock follows the system wall clock. In the case of a backwards
+        // jump, treat the sstables validated in the future as requiring validation.
+        return true;
+    }
+
+    return *timestamp < scrub_older_than;
 }
 
 void compaction_manager::stop_tasks(const std::vector<shared_ptr<compaction_task_executor>>& tasks, sstring reason) noexcept {
@@ -1907,6 +1951,296 @@ protected:
                 co_return compaction_result{};
             }
         }
+    }
+};
+
+class automatic_scrub_task_executor final : public compaction_task_executor, public compaction_task_impl {
+    std::unordered_set<sstables::generation_type> _excluded_sstables;
+public:
+    automatic_scrub_task_executor(compaction_manager& mgr, throw_if_stopping do_throw_if_stopping, compaction_group_view& t)
+        : compaction_task_executor(mgr, do_throw_if_stopping, &t, compaction_type::Scrub, "Automatic scrub")
+        , compaction_task_impl(mgr._task_manager_module, tasks::task_id::create_random_id(), mgr._task_manager_module->new_sequence_number(), "compaction group", t.schema()->ks_name(), t.schema()->cf_name(), "", tasks::task_id::create_null_id())
+        , _excluded_sstables()
+    {}
+
+    virtual std::string type() const override {
+        return "automatic scrub";
+    }
+
+    virtual tasks::is_internal is_internal() const noexcept override {
+        return tasks::is_internal::yes;
+    }
+
+    virtual void abort() noexcept override {
+        return compaction_task_executor::abort(_as);
+    }
+
+protected:
+    virtual future<> run() override {
+        return perform();
+    }
+private:
+    // Return an sstable eligible for compaction, if there is one.
+    future<std::optional<sstables::shared_sstable>> select_sstable(compaction_group_view& t) {
+        auto main_set = co_await t.main_sstable_set();
+
+        auto filter = [this, &t] (const sstables::shared_sstable& sst) {
+            return _cm.eligible_for_compaction(sst) && !_cm.get_compaction_state(&t).requires_cleanup(sst)
+                    && _cm.should_be_automatically_scrubbed(sst) && !_excluded_sstables.contains(sst->generation());
+        };
+
+        std::optional<sstables::shared_sstable> res;
+        auto do_select = [&res, &filter] (const sstables::shared_sstable& sst) -> future<stop_iteration> {
+            if (filter(sst)) {
+                res = sst;
+                co_return stop_iteration::yes;
+            }
+            co_return stop_iteration::no;
+        };
+
+        co_await main_set->for_each_sstable_gently_until(do_select);
+        co_return res;
+    }
+
+    static bool is_missing_component_digest(sstables::shared_sstable sst) {
+        auto metadata = sst->get_scylla_metadata();
+        if (!sst->has_scylla_component() || !metadata) {
+            return true;
+        }
+
+        auto digests = metadata->get_components_digests();
+
+        if (!digests) [[unlikely]] {
+            return true;
+        }
+
+        for (const auto& [type, _] : sst->all_components()) {
+            switch (type) {
+            case sstables::component_type::Unknown:
+            case sstables::component_type::CRC:
+            case sstables::component_type::Digest:
+                break;
+            case sstables::component_type::Scylla:
+                if (!metadata->digest) [[unlikely]] {
+                    return true;
+                }
+                break;
+            default:
+                if (!digests->map.contains(type)) [[unlikely]] {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    static compaction_type_options make_validate_options() {
+        return compaction_type_options::make_scrub(
+            compaction_type_options::scrub::mode::validate,
+            compaction_type_options::scrub::quarantine_invalid_sstables::yes,
+            compaction_type_options::scrub::drop_unfixable_sstables::no,
+            compaction_type_options::scrub::update_scrub_time::yes
+        );
+    }
+
+    static compaction_type_options make_abort_options() {
+        return compaction_type_options::make_scrub(
+            compaction_type_options::scrub::mode::abort,
+            compaction_type_options::scrub::quarantine_invalid_sstables::yes,
+            compaction_type_options::scrub::drop_unfixable_sstables::no,
+            compaction_type_options::scrub::update_scrub_time::yes
+        );
+    }
+
+    compaction_descriptor make_descriptor(sstables::shared_sstable sst) {
+        auto options = is_missing_component_digest(sst) ? make_abort_options() : make_validate_options();
+        return compaction_descriptor(
+            {sst},
+            sst->get_sstable_level(),
+            compaction_descriptor::default_max_sstable_bytes,
+            sst->run_identifier(),
+            std::move(options),
+            owned_ranges_ptr{}
+        );
+    }
+
+    future<compaction_result> do_scrub_validate(compaction_descriptor desc, compacting_sstable_registration registration) {
+        co_await coroutine::switch_to(_cm.maintenance_sg());
+
+        switch_state(state::active);
+        auto sst = desc.sstables.front();
+        try {
+            auto on_replace = registration.update_on_sstable_replacement();
+            co_return co_await compact_sstables_and_update_history(std::move(desc), _compaction_data, on_replace, compaction_manager::can_purge_tombstones::no, is_automatic_compaction::yes);
+        } catch (compaction_stopped_exception&) {
+            throw;
+        } catch (storage_io_error& e) {
+            cmlog.error("{}: failed due to storage io error: {}: stopping", *this, e.what());
+            _cm._stats.errors++;
+            _cm.do_stop();
+            throw;
+        } catch (...) {
+            _cm._stats.errors++;
+            cmlog.error("Scrubbing in validate mode {} failed due to {:t}, continuing.", sst->get_filename(), std::current_exception());
+            throw;
+        }
+
+        co_return compaction_result{};
+    }
+
+    future<compaction_result> do_scrub_abort(compaction_descriptor desc, compacting_sstable_registration registration) {
+        co_await coroutine::switch_to(_cm.maintenance_sg());
+
+        auto sst = desc.sstables.front();
+        auto on_replace = registration.update_on_sstable_replacement();
+
+        std::exception_ptr ex;
+
+        try {
+            compaction_result res = co_await compact_sstables_and_update_history(std::move(desc), _compaction_data, on_replace, compaction_manager::can_purge_tombstones::no, is_automatic_compaction::yes);
+            _cm.reevaluate_postponed_compactions();
+            co_return res;
+        } catch (scrub_compaction_aborted_exception& e) {
+            cmlog.warn("Automatic scrub in abort mode found sstable {} invalid due to: {}", sst, e);
+        } catch (...) {
+            ex = std::current_exception();
+        }
+
+        compaction_result res;
+
+        if (!ex) {
+            // Scrub found an error and aborted due to that, or non-Data
+            // component digests did not match.
+            res.stats.validation_errors++;
+
+            try {
+                co_await sst->change_state(sstables::sstable_state::quarantine);
+                co_return res;
+            } catch (...) {
+                cmlog.error("Failed to quarantine {} due to: {}", sst, std::current_exception());
+                auto s = _compacting_table->schema();
+                ex = std::make_exception_ptr(compaction_aborted_exception(s->ks_name(), s->cf_name(),
+                        fmt::format("failed to quarantine invalid sstable {}", sst)));
+            }
+        }
+
+        std::rethrow_exception(std::move(ex));
+    }
+
+    future<compaction_result> validate_sstable(compaction_descriptor desc, compacting_sstable_registration registration) {
+        auto options = desc.options.as<compaction_type_options::scrub>();
+        switch (options.operation_mode) {
+        case compaction_type_options::scrub::mode::validate:
+            return do_scrub_validate(std::move(desc), std::move(registration));
+        case compaction_type_options::scrub::mode::abort:
+            return do_scrub_abort(std::move(desc), std::move(registration));
+        default:
+            on_internal_error(cmlog, fmt::format("Unsupported scrub mode for automatic scrub: {}", options.operation_mode));
+        }
+    }
+public:
+    virtual future<compaction_manager::compaction_stats_opt> do_run() override {
+        co_await coroutine::switch_to(_cm.maintenance_sg());
+        compaction_group_view& t = *_compacting_table;
+
+        for (;;) {
+            if (!can_proceed()) {
+                co_return std::nullopt;
+            }
+            switch_state(state::pending);
+
+            auto& compaction_state = _cm.get_compaction_state(&t);
+            if (compaction_state.compaction_disabled()) {
+                _cm.schedule_table_for_automatic_scrub(&t);
+
+                co_return std::nullopt;
+            }
+
+            auto lock_holder = co_await _compaction_state.lock.hold_read_lock();
+            if (!can_proceed()) {
+                co_return std::nullopt;
+            }
+
+            auto sstable_set_units = co_await get_units(_compaction_state.sstable_set_lock, 1);
+            if (!can_proceed()) {
+                co_return std::nullopt;
+            }
+
+            auto selected = co_await select_sstable(t);
+
+            if (!selected) {
+                co_return std::nullopt;
+            }
+            auto sstables = selected | std::ranges::to<std::vector>();
+
+            cmlog.debug("Started automatic scrub compaction sstables={} compaction_uuid={}", sstables, _compaction_data.compaction_uuid);
+
+            if (sstables.empty() || !can_proceed() || t.is_auto_compaction_disabled_by_user()) {
+                cmlog.debug("{}: sstables={} can_proceed={} auto_compaction={}", *this, sstables.size(), can_proceed(), t.is_auto_compaction_disabled_by_user());
+                co_return std::nullopt;
+            }
+
+            auto sst = sstables.front();
+
+            // The sstable will not be picked again this automatic scrub cycle.
+            // This ensures, that even if scrub compactions fail, this task finishes.
+            _excluded_sstables.emplace(sst->generation());
+
+            auto descriptor = make_descriptor(sst);
+            int weight = calculate_weight(descriptor);
+            if (!_cm.can_register_compaction(t, weight, descriptor.fan_in())) {
+                cmlog.debug("Refused compaction job ({} sstable(s)) of weight {} for {}, postponing it...",
+                    descriptor.sstables.size(), weight, t);
+                switch_state(state::postponed);
+                _cm.schedule_table_for_automatic_scrub(&t);
+                co_return std::nullopt;
+            }
+
+            auto registration = compacting_sstable_registration(_cm, compaction_state, descriptor.sstables);
+            auto weight_r = compaction_weight_registration(&_cm, weight);
+            cmlog.debug("Accepted automatic scrub job: task={} ({} sstable(s)) of weight {} for {}",
+                fmt::ptr(this), descriptor.sstables.size(), weight, t);
+
+            sstable_set_units.return_all();
+
+            setup_new_compaction(descriptor.run_identifier);
+            std::exception_ptr ex;
+
+            try {
+                auto maintenance_permit = co_await acquire_semaphore(_cm._maintenance_ops_sem);
+
+                co_await utils::get_local_injector().inject("automatic_scrub_compaction", [] (auto& handler) -> future<> {
+                    const auto& what = handler.get("what");
+                    if (what == "throw") {
+                        throw std::runtime_error{"automatic_scrub_compaction error injection"};
+                    } else if (what == "pause") {
+                        co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{5});
+                    }
+                }, false);
+
+                compaction_result res = co_await validate_sstable(std::move(descriptor), std::move(registration));
+                _cm._validation_errors += res.stats.validation_errors;
+                cmlog.debug("Finished automatic scrub compaction old_sstable={} new_sstable={} compaction_uuid={}",
+                    sst, res.new_sstables, _compaction_data.compaction_uuid);
+                finish_compaction();
+            } catch (...) {
+                ex = std::current_exception();
+            }
+
+            utils::get_local_injector().enter("automatic_scrub_compaction_done");
+
+            if (!ex) {
+                continue;
+            }
+
+            finish_compaction(state::failed);
+            if ((co_await maybe_retry(std::move(ex))) == stop_iteration::yes) {
+                co_return std::nullopt;
+            }
+        }
+
+        co_return std::nullopt;
     }
 };
 
@@ -2866,6 +3200,19 @@ compaction_backlog_manager::~compaction_backlog_manager() {
 
 compaction_backlog_tracker& compaction_manager::get_backlog_tracker(compaction_group_view& t) {
     return t.get_backlog_tracker();
+}
+
+future<> compaction_manager::submit_automatic_scrub(compaction_group_view& t) {
+    auto gh = start_compaction(t);
+    if (!gh) {
+        co_return;
+    }
+
+    co_await perform_compaction<automatic_scrub_task_executor>(
+        throw_if_stopping::no,
+        tasks::make_empty_task_info(),
+        t
+    );
 }
 
 }

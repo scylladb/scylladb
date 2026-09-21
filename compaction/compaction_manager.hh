@@ -55,6 +55,7 @@ class custom_compaction_task_executor;
 class regular_compaction_task_executor;
 class offstrategy_compaction_task_executor;
 class rewrite_sstables_compaction_task_executor;
+class automatic_scrub_task_executor;
 class rewrite_sstables_component_compaction_task_executor;
 class split_compaction_task_executor;
 class cleanup_sstables_compaction_task_executor;
@@ -137,6 +138,9 @@ private:
     // weight is value assigned to a compaction job that is log base N of total size of all input sstables.
     std::unordered_set<int> _weight_tracker;
 
+    // Compaction groups views which should be considered for automatic scrub.
+    std::unordered_set<compaction::compaction_group_view*> _awaiting_automatic_scrub;
+
     std::unordered_map<compaction::compaction_group_view*, compaction_state> _compaction_state;
 
     // Purpose is to serialize all maintenance (non regular) compaction activity to reduce aggressiveness and space requirement.
@@ -151,12 +155,23 @@ private:
     utils::pluggable<db::system_keyspace> _sys_ks;
 
     std::function<void()> compaction_submission_callback();
+
+    void schedule_table_for_automatic_scrub(compaction::compaction_group_view* t);
+
+    bool automatic_scrub_enabled() const noexcept {
+        return bool(_scrub_period);
+    }
+
+    using for_regular_compaction = bool_class<struct for_regular_compaction_tag>;
+    bool should_be_automatically_scrubbed(const sstables::shared_sstable&, for_regular_compaction = for_regular_compaction::no) const;
+
     // all registered tables are reevaluated at a constant interval.
     // Submission is a NO-OP when there's nothing to do, so it's fine to call it regularly.
     static constexpr std::chrono::seconds periodic_compaction_submission_interval() { return std::chrono::seconds(3600); }
 
     config _cfg;
     timer<lowres_clock> _compaction_submission_timer;
+    std::optional<std::chrono::seconds> _scrub_period;
     compaction_controller _compaction_controller;
     compaction_backlog_manager _backlog_manager;
     optimized_optional<abort_source::subscription> _early_abort_subscription;
@@ -364,6 +379,8 @@ private:
     bool update_sstable_cleanup_state(compaction_group_view& t, const sstables::shared_sstable& sst, const dht::token_range_vector& sorted_owned_ranges);
 
     future<> on_compaction_completion(compaction_group_view& t, compaction_completion_desc desc, sstables::offstrategy offstrategy);
+
+    future<> submit_automatic_scrub(compaction_group_view& t);
 public:
     // Submit a table to be upgraded and wait for its termination.
     future<> perform_sstable_upgrade(owned_ranges_ptr sorted_owned_ranges, compaction::compaction_group_view& t, bool exclude_current_version, tasks::task_info info);
@@ -519,6 +536,7 @@ public:
     friend class compaction::regular_compaction_task_executor;
     friend class compaction::offstrategy_compaction_task_executor;
     friend class compaction::rewrite_sstables_compaction_task_executor;
+    friend class compaction::automatic_scrub_task_executor;
     friend class compaction::rewrite_sstables_component_compaction_task_executor;
     friend class compaction::cleanup_sstables_compaction_task_executor;
     friend class compaction::validate_sstables_compaction_task_executor;
