@@ -119,7 +119,9 @@ public:
 
     void evict(const primary_index_entry&);
 
-    std::optional<mutation> lookup(const primary_index_entry&, schema_ptr);
+    // The schema is taken by reference rather than as a schema_ptr: a hit needs one reference of
+    // its own for the mutation it returns, and a miss needs none at all.
+    std::optional<mutation> lookup(const primary_index_entry&, const schema& target_schema);
 
     // Like lookup(), but for introspection: returns a snapshot of the cached mutation
     // without touching the LRU, without counting a hit or a miss and without upgrading
