@@ -15,7 +15,10 @@ import collections
 import logging
 import os
 import re
+import socket
+import ssl
 import subprocess
+import time
 
 import pytest
 from cassandra import (
@@ -33,6 +36,7 @@ from tools.assertions import assert_invalid
 from tools.cluster import new_node
 from tools.cluster_topology import generate_cluster_topology
 from tools.log_utils import wait_for_any_log
+from tools.sslkeygen import create_ca, create_self_signed_x509_certificate
 
 
 logger = logging.getLogger(__file__)
@@ -1150,6 +1154,603 @@ class TestAuth(Tester):
             session.execute("LIST USERS")
         assert isinstance(next(iter(exc.value.errors.values())), AuthenticationFailed)
         logger.info("can't get session of node2 with normal user/password")
+
+    # with consistent topology auth-v2 is enabled and it doesn't need nor allow changing RF
+    @pytest.mark.required_features("!consistent-topology-changes")
+    def test_system_auth_ks_is_alterable(self):
+        """
+        Originally from dtest.
+        **Description:**
+
+        **Expected Result:**
+        """
+        self.prepare(nodes=3)
+        logger.info("nodes started")
+
+        session = self.get_session(user="cassandra", password="cassandra")
+        assert 1 == session.cluster.metadata.keyspaces["system_auth"].replication_strategy.replication_factor
+
+        session.execute(
+            """
+            ALTER KEYSPACE system_auth
+                WITH replication = {'class':'SimpleStrategy', 'replication_factor':3};
+        """
+        )
+
+        assert 3 == session.cluster.metadata.keyspaces["system_auth"].replication_strategy.replication_factor
+
+        # Run repair to workaround read repair issues caused by CASSANDRA-10655
+        logger.info("Repairing before altering RF")
+        self.cluster.repair()
+
+        # make sure schema change is persistent
+        logger.info("Stopping cluster..")
+        self.cluster.stop()
+        logger.info("Restarting cluster..")
+        self.cluster.start(wait_other_notice=True)
+
+        # check each node directly
+        for i in range(3):
+            logger.info(f"Checking node: {i}")
+            node = self.cluster.nodelist()[i]
+            session = self.patient_exclusive_cql_connection(node, user="cassandra", password="cassandra")
+            assert 3 == session.cluster.metadata.keyspaces["system_auth"].replication_strategy.replication_factor
+
+    # with consistent topology auth-v2 all nodes have auth info, it's now tested differently with in-source tests
+    @pytest.mark.required_features("!consistent-topology-changes")
+    def test_kill_the_node_with_the_auth_info(self):
+        """
+        **Description:** Killing the node (`killall scylla`) that has authentication info (when RF=1).
+        **Expected Result:** Cluster is unavailable - connection failed.
+        """
+        self.prepare(nodes=2)
+        logger.info("Cluster with 2 nodes started")
+
+        [node1, node2] = self.cluster.nodelist()
+        session = self.get_session(node_idx=0, user="cassandra", password="cassandra")
+        logger.info("Successfully get the session from node1")
+        # make sure session works
+        self._check_session_available(session)
+
+        # verify the replication_factor of system_auth keyspace is 1
+        rf = session.cluster.metadata.keyspaces["system_auth"].replication_strategy.replication_factor
+        logger.info("system_auth rf: %s" % rf)
+        assert 1 == rf, "RF of system_auth isn't 1"
+
+        # check the replicas endpoint of system_auth.user:cassandra
+        out, _err = node1.nodetool("getendpoints system_auth roles cassandra")
+        logger.info("Endpoints of system_auth.users:cassandra : %s" % out.strip().split("\n"))
+        rf_address = out.strip().split("\n")[0]
+
+        src_node = node1
+        rf_node = node2
+        if node1.address() == rf_address:
+            src_node = node2
+            rf_node = node1
+
+        assert rf_node.name.startswith("node")
+        rf_node_idx = int(rf_node.name[4:]) - 1
+
+        # re-get session from rf node before killing node
+        session = self.get_session(node_idx=rf_node_idx, user="cassandra", password="cassandra")
+
+        logger.info(f"Kill src node({src_node.name}: {src_node.address()}) to break Auth info")
+        src_node.stop(gently=False, wait_other_notice=True)
+
+        logger.info(f"Try to re-get session from first rf endpoint({rf_node.name}: {rf_address})")
+        try:
+            new_session = self.get_session(node_idx=rf_node_idx, user="cassandra", password="cassandra")
+        except NoHostAvailable as e:
+            logger.info(e.errors)
+            assert isinstance(next(iter(e.errors.values())), AuthenticationFailed)
+        else:
+            logger.info("Check if the new session works")
+            self._check_session_available(new_session, expect_rf_err=True)
+
+        logger.info("Check if the first session still works")
+        self._check_session_available(session, expect_rf_err=True)
+
+    # with consistent topology auth-v2 all nodes have auth info, it's now tested differently with in-source tests
+    @pytest.mark.required_features("!consistent-topology-changes")
+    def test_kill_one_of_the_nodes_with_the_auth_info(self):
+        """
+        **Description:** Killing the node that has authentication info (when RF>=2).
+        **Expected Result:** Cluster is available - successful connection.
+        """
+        self.prepare(nodes=4)
+        logger.info("Cluster with 4 nodes started")
+
+        [node1, _node2, _node3, _node4] = self.cluster.nodelist()
+        session = self.get_session(node_idx=0, user="cassandra", password="cassandra")
+        logger.info("Successfully get the session from node1")
+        # make sure session works
+        self._check_session_available(session)
+
+        # change rf RF of system_auth to 3
+        session.execute("alter keyspace system_auth with replication = {'class': 'org.apache.cassandra.locator.SimpleStrategy', 'replication_factor':3};")
+        self.cluster.repair()
+        rf = session.cluster.metadata.keyspaces["system_auth"].replication_strategy.replication_factor
+        logger.info("Current RF of system_auth is %s" % rf)
+        assert 3 == rf
+
+        # check the replicas endpoint of system_auth.user:cassandra
+        out, _err = node1.nodetool("getendpoints system_auth roles cassandra")
+        logger.info("Endpoints of system_auth.users:cassandra : %s" % out.strip().split("\n"))
+        rf_addresses = out.strip().split("\n")
+
+        for i in self.cluster.nodelist():
+            if i.address() not in rf_addresses:
+                src_node = i
+            if i.address() == rf_addresses[0]:
+                rf_node = i
+            if i.address() == rf_addresses[1]:
+                rf_node2 = i
+
+        assert rf_node.name.startswith("node")
+        rf_node_idx = int(rf_node.name[4:]) - 1
+
+        # re-get session from rf node before killing node
+        session = self.get_session(node_idx=rf_node_idx, user="cassandra", password="cassandra")
+
+        logger.info(f"Kill rf node2({rf_node2.name}: {rf_node2.address()}) to break Auth info")
+        rf_node2.stop(gently=False)
+
+        logger.info(f"Try to re-get session from first rf endpoint({rf_node.name}: {rf_addresses[0]})")
+        new_session = None
+        try:
+            new_session = self.get_session(node_idx=rf_node_idx, user="cassandra", password="cassandra")
+        except NoHostAvailable as e:
+            logger.info(e.errors)
+            assert isinstance(next(iter(e.errors.values())), AuthenticationFailed)
+        if new_session:
+            logger.info("Check if the new session works")
+            self._check_session_available(new_session)
+
+        logger.info("Check if the first session still works")
+        self._check_session_available(session)
+
+    @pytest.mark.next_gating
+    # with consistent topology auth-v2 schema is protected from user modifications
+    @pytest.mark.required_features("!consistent-topology-changes")
+    def test_dropping_keyspace_system_auth_2_nodes(self):
+        """
+        **Description:** Dropping keyspace system_auth with 2 nodes (when RF=1).
+        **Expected Result:** we should not be able to drop system_auth
+        """
+        self.prepare(nodes=2)
+        logger.info("Cluster with 2 nodes started")
+
+        [node1, node2] = self.cluster.nodelist()
+        session = self.get_session(node_idx=0, user="cassandra", password="cassandra")
+        logger.info("Successfully get the session from node1")
+        # make sure session works
+        self._check_session_available(session)
+
+        # verify the replication_factor of system_auth keyspace is 1
+        rf = session.cluster.metadata.keyspaces["system_auth"].replication_strategy.replication_factor
+        logger.info("system_auth rf: %s" % rf)
+        assert 1 == rf, "RF of system_auth isn't 1"
+
+        # check the replicas endpoint of system_auth.user:cassandra
+        out, _err = node1.nodetool("getendpoints system_auth roles cassandra")
+        logger.info("Endpoints of system_auth.users:cassandra : %s" % out.strip().split("\n"))
+        assert 1 == len(out.strip().split("\n")), "1 node expected"
+        rf_address = out.strip().split("\n")[0]
+
+        rf_node = node2
+        if node1.address() == rf_address:
+            rf_node = node1
+
+        assert rf_node.name.startswith("node")
+        rf_node_idx = int(rf_node.name[4:]) - 1
+
+        # re-get session from rf node before dropping keyspace system_auth
+        session = self.get_session(node_idx=rf_node_idx, user="cassandra", password="cassandra")
+
+        logger.info("drop keyspace system_auth")
+        try:
+            session.execute("DROP KEYSPACE system_auth")
+        except Unauthorized as e:
+            assert str(e) == 'Error from server: code=2100 [Unauthorized] message="Cannot DROP <keyspace system_auth>"'
+
+        logger.info(f"Try to re-get session from first rf endpoint({rf_node.name}: {rf_address})")
+        new_session = self.get_session(node_idx=rf_node_idx, user="cassandra", password="cassandra")
+        self._check_session_available(new_session)
+
+        logger.info("Check if the first session still works")
+        self._check_session_available(session)
+
+    # with consistent topology auth-v2 RF can't be changed, this is tested now
+    # differently with in-source tests
+    @pytest.mark.required_features("!consistent-topology-changes")
+    def test_kill_all_nodes_with_the_auth_info_except_one(self):
+        """
+        **Description:** Set RF of system_auth to 3, kill two nodes.
+        **Expected Result:** Cluster is unavailable - connection failed.
+        **Re-start 1 node. Connection to 2 successful.
+        **Re-start 2 node. Connection to 3 nodes successful.
+        """
+
+        self.prepare(nodes=3)
+        logger.info("Cluster with 3 nodes started")
+
+        nodes = self.cluster.nodelist()
+        session = self.get_session(node_idx=0, user="cassandra", password="cassandra")
+        logger.info("Successfully get the session from node1")
+        # make sure session works
+        self._check_session_available(session)
+
+        # change rf RF of system_auth to 3
+        session.execute("alter keyspace system_auth with replication = {'class': 'org.apache.cassandra.locator.SimpleStrategy', 'replication_factor':3};")
+        self.cluster.repair()
+        assert 3 == self.get_session(node_idx=0, user="cassandra", password="cassandra").cluster.metadata.keyspaces["system_auth"].replication_strategy.replication_factor
+
+        # check the replicas endpoint of system_auth.user:cassandra
+        out, _err = nodes[0].nodetool("getendpoints system_auth roles cassandra")
+        logger.info("Endpoints of system_auth.users:cassandra : %s" % out.strip().split("\n"))
+        assert 3 == len(out.strip().split("\n")), "3 nodes expected"
+
+        # re-get session from rf node before killing node
+        sessions = []
+        for i in range(3):
+            sessions.append(self.get_session(node_idx=i, user="cassandra", password="cassandra"))
+
+        nodes[1].stop(wait_other_notice=True, gently=True)
+        nodes[2].stop(wait_other_notice=True, gently=True)
+        self._check_session_available(session, expect_auth_err=True, expect_invalid_req=True, expect_rf_err=True)
+
+        for i in range(3):
+            logger.info(f"Try to re-get session from {nodes[i].name}: {nodes[i].address()})")
+            try:
+                self.get_session(node_idx=i, user="cassandra", password="cassandra")
+            except NoHostAvailable as e:
+                logger.info(e.errors)
+                if i in [0, 3]:
+                    assert isinstance(next(iter(e.errors.values())), AuthenticationFailed)
+                else:
+                    assert isinstance(next(iter(e.errors.values())), socket.error)
+            else:
+                if i == 1:
+                    pytest.fail("Connection should not be created")
+        nodes[1].start(wait_other_notice=True)
+        # connection to 2 nodes should be ok
+        for i in range(2):
+            logger.info(f"Try to re-get session from {nodes[i].name}: {nodes[i].address()})")
+            self._check_session_available(self.get_session(node_idx=i, user="cassandra", password="cassandra"))
+
+        try:
+            self.get_session(node_idx=i, user="cassandra", password="cassandra")
+        except NoHostAvailable as e:
+            logger.info(e.errors)
+
+        nodes[2].start(wait_other_notice=True)
+        # connection to all nodes should be ok
+        for i in range(3):
+            logger.info(f"Try to re-get session from {nodes[i].name}: {nodes[i].address()})")
+            self._check_session_available(self.get_session(node_idx=i, user="cassandra", password="cassandra"))
+
+        logger.info("Check if the first session still works")
+        self._check_session_available(session, expect_auth_err=True, expect_invalid_req=True)
+
+    # with consistent topology auth-v2 we don't change RF with remove node
+    @pytest.mark.required_features("!consistent-topology-changes")
+    def test_remove_dead_node(self):
+        """
+        **Description:** Run "nodetool removenode"' on the dead node (when RF=2).
+        **Expected Result:** Cluster is available - successful connection.
+        """
+        self.prepare(nodes=3)
+        logger.info("Cluster with 3 nodes started")
+
+        [node1, node2, _node3] = self.cluster.nodelist()
+        session = self.get_session(node_idx=0, user="cassandra", password="cassandra")
+        logger.info("Successfully get the session from node1")
+        # make sure session works
+        self._check_session_available(session)
+
+        # change rf RF of system_auth to 2
+        session.execute("alter keyspace system_auth with replication = {'class': 'org.apache.cassandra.locator.SimpleStrategy', 'replication_factor':2};")
+        self.cluster.repair()
+
+        node2_hostid = node2.hostid()
+        node2.stop(wait_other_notice=True, gently=False)
+        node1.nodetool("removenode %s" % node2_hostid)
+        session = self.get_session(node_idx=0, user="cassandra", password="cassandra")
+        self._check_session_available(session)
+
+    @pytest.mark.next_gating
+    # with consistent topology auth-v2 we can't nor need to change RF
+    @pytest.mark.required_features("!consistent-topology-changes")
+    def test_adding_new_node_not_overwrite_global_schema(self):
+        """
+        **Description:** Add new node(RF=1) to cluster with keyspace RF=2
+        **Expected Result:** the keyspace RF was not changed
+        """
+        self.prepare(nodes=2)
+
+        session = self.get_session(user="cassandra", password="cassandra")
+        assert 1 == session.cluster.metadata.keyspaces["system_auth"].replication_strategy.replication_factor
+
+        session.execute("ALTER KEYSPACE system_auth WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 2};")
+        self.cluster.repair()
+
+        session = self.get_session(user="cassandra", password="cassandra")
+        assert 2 == session.cluster.metadata.keyspaces["system_auth"].replication_strategy.replication_factor
+
+        node3 = new_node(self.cluster, bootstrap=False)
+        node3.start(wait_for_binary_proto=True)
+
+        session = self.get_session(user="cassandra", password="cassandra")
+        assert 2 == session.cluster.metadata.keyspaces["system_auth"].replication_strategy.replication_factor
+
+        session = self.get_session(node_idx=2, user="cassandra", password="cassandra")
+        assert 2 == session.cluster.metadata.keyspaces["system_auth"].replication_strategy.replication_factor
+
+        # wait for schema sync and verify rf
+        time.sleep(5)
+        node1 = self.cluster.nodelist()[0]
+        resp = node1.nodetool("describecluster")
+        lines = resp[0].split("\n")
+        schemas = [lines[i + 1] for i, line in enumerate(lines) if line.find("Schema versions:") != -1]
+        assert 1 == len(schemas)
+        session = self.get_session(user="cassandra", password="cassandra")
+        assert 2 == session.cluster.metadata.keyspaces["system_auth"].replication_strategy.replication_factor
+
+    def test_transitional_auth_from_default(self):
+        """
+        Start cluster with default Auth, rolling upgrade cluster to enable Transitional Auth,
+        create a normal user and verify its permission, rolling upgrade cluster to strict Auth.
+        """
+        logger.info("STEP: start cluster with default AllowAllAuthenticator/AllowAllAuthorizer")
+        self.prepare(nodes=3, enable_auth=False, wait_for_superuser=True)
+
+        logger.info("STEP: update conf and restart cluster to use TransitionalAuthenticator/TransitionalAuthorizer")
+        config = {"authenticator": "com.scylladb.auth.TransitionalAuthenticator", "authorizer": "com.scylladb.auth.TransitionalAuthorizer"}
+        self.cluster.set_configuration_options(values=config)
+        for node in self.cluster.nodelist():
+            node.stop()
+            node.start(wait_for_binary_proto=True)
+
+        cassandra = self.get_session(user="cassandra", password="cassandra")
+        logger.info("STEP: create normal user by super cassandra")
+        cassandra.execute("CREATE USER normal WITH PASSWORD '123456' NOSUPERUSER")
+
+        logger.info("STEP: verify user will login as anonymous if authentication fails")
+        session = self.get_session(user="normal", password="wrongpwd")
+        self.assert_unauthorized("You have to be logged in and not anonymous to perform this request", session, "LIST USERS")
+
+        logger.info("STEP: check default permissions (CREATE/ALTER/DROP/SELECT/MODIFY) of all users")
+        session.execute("CREATE KEYSPACE ks WITH replication = {'class':'NetworkTopologyStrategy', 'replication_factor':1}")
+        session.execute("CREATE TABLE ks.cf (id int primary key)")
+        session.execute("SELECT * FROM ks.cf")
+        self.assert_unauthorized("You have to be logged in and not anonymous to perform this request", session, "GRANT SELECT ON ks.cf TO normal")
+        self.assert_unauthorized("You have to be logged in and not anonymous to perform this request", session, "REVOKE SELECT ON ks.cf from normal")
+
+        logger.info("STEP: verify user without credentials can not login")
+        with pytest.raises(NoHostAvailable) as exc:
+            session = self.get_session()
+            self._check_session_available(session, expect_auth_err=True)
+        logger.info(exc.value)
+        assert isinstance(next(iter(exc.value.errors.values())), AuthenticationFailed)
+
+        logger.info("STEP: update conf and restart cluster to use strict PasswordAuthenticator/CassandraAuthorizer")
+        config = {"authenticator": "org.apache.cassandra.auth.PasswordAuthenticator", "authorizer": "org.apache.cassandra.auth.CassandraAuthorizer"}
+        self.cluster.set_configuration_options(values=config)
+        for node in self.cluster.nodelist():
+            node.stop()
+            node.start(wait_for_binary_proto=True)
+
+        logger.info("STEP: verify user without credentials or with wrong credentials can not login")
+        with pytest.raises(NoHostAvailable) as exc:
+            session = self.get_session()
+            self._check_session_available(session, expect_auth_err=True)
+        assert isinstance(next(iter(exc.value.errors.values())), AuthenticationFailed)
+
+        with pytest.raises(NoHostAvailable) as exc:
+            session = self.get_session(user="normal", password="wrongpwd")
+            self._check_session_available(session, expect_auth_err=True)
+        logger.info(exc.value)
+        assert isinstance(next(iter(exc.value.errors.values())), AuthenticationFailed)
+
+        session = self.get_session(user="normal", password="123456")
+        self.assert_unauthorized("User normal has no SELECT permission on <table ks.cf> or any of its parents", session, "SELECT * FROM ks.cf")
+        self.assert_unauthorized("User normal has no AUTHORIZE permission on <table ks.cf> or any of its parents", session, "REVOKE SELECT ON ks.cf from normal")
+
+    def test_transitional_auth_from_pwdauth(self):
+        """
+        Start cluster with PasswordAuthenticator/CassandraAuthorizer, rolling upgrade cluster
+        to enable Transitional Auth, create a normal user and verify its permission, then
+        switch to AllowAll Auth. It's a wrong transitional order but we want to cover it.
+        """
+        logger.info("STEP: start cluster with PasswordAuthenticator/CassandraAuthorizer")
+        self.prepare(nodes=3, enable_auth=True)
+        wait_for_any_log(self.cluster.nodelist(), "Created default superuser", 30)
+
+        session = self.get_session(user="cassandra", password="cassandra")
+        logger.info("STEP: create normal user by super cassandra")
+        session.execute("CREATE USER normal WITH PASSWORD '123456' NOSUPERUSER")
+
+        session = self.get_session(user="normal", password="123456")
+        rows = list(session.execute("LIST USERS"))
+        assert len(rows) == 1, "Expect to see `normal`, actual: %s" % (rows)
+        logger.info("Verified normal user was created and available")
+
+        logger.info("STEP: verify user without credentials can not login")
+
+        with pytest.raises(NoHostAvailable) as exc:
+            session = self.get_session(user="normal", password="wrongpwd")
+            self._check_session_available(session, expect_auth_err=True)
+        logger.info(exc.value)
+        assert isinstance(next(iter(exc.value.errors.values())), AuthenticationFailed)
+
+        logger.info("STEP: update conf and restart cluster to use TransitionalAuthenticator/TransitionalAuthorizer")
+        config = {"authenticator": "com.scylladb.auth.TransitionalAuthenticator", "authorizer": "com.scylladb.auth.TransitionalAuthorizer"}
+        self.cluster.set_configuration_options(values=config)
+        for node in self.cluster.nodelist():
+            node.stop()
+            node.start(wait_for_binary_proto=True)
+
+        logger.info("STEP: check permissions (LIST/CREATE/GRANT/REVOKE) of normal user")
+        session = self.get_session(user="normal", password="123456")
+        session.execute("LIST USERS")
+        session.execute("CREATE KEYSPACE ks WITH replication = {'class':'NetworkTopologyStrategy', 'replication_factor':1}")
+        session.execute("CREATE TABLE ks.cf (id int primary key)")
+        self.assert_unauthorized("User normal has no AUTHORIZE permission on <table ks.cf> or any of its parents", session, "GRANT ALTER ON ks.cf TO normal")
+        self.assert_unauthorized("User normal has no AUTHORIZE permission on <table ks.cf> or any of its parents", session, "REVOKE SELECT ON ks.cf from normal")
+
+        logger.info("STEP: verify user will login as anonymous if authentication fails")
+        session = self.get_session(user="normal", password="wrongpwd")
+        self.assert_unauthorized("You have to be logged in and not anonymous to perform this request", session, "LIST USERS")
+
+        logger.info("STEP: verify user without credentials can not login")
+        with pytest.raises(NoHostAvailable) as exc:
+            session = self.get_session()
+            self._check_session_available(session, expect_auth_err=True)
+        logger.info(exc.value)
+        assert isinstance(next(iter(exc.value.errors.values())), AuthenticationFailed)
+
+        logger.info("STEP: update conf and restart cluster to use AllowAllAuthenticator/AllowAllAuthorizer")
+        config = {"authenticator": "AllowAllAuthenticator", "authorizer": "AllowAllAuthorizer"}
+        self.cluster.set_configuration_options(values=config)
+        for node in self.cluster.nodelist():
+            node.stop()
+            node.start(wait_for_binary_proto=True)
+
+        logger.info("STEP: verify all users will login as anonymous")
+        session = self.get_session(user="cassandra", password="cassandra")
+        self.assert_unauthorized("You have to be logged in and not anonymous to perform this request", session, "LIST USERS")
+        session = self.get_session(user="normal", password="123456")
+        self.assert_unauthorized("You have to be logged in and not anonymous to perform this request", session, "LIST USERS")
+
+    def test_auth_username_password_parameters(self):
+        """
+        Start cluster with password Auth, setting superuser name/passwd via config
+        and verify noone but us can log in
+        """
+
+        logger.info("STEP: update conf and start cluster to use PasswordAuthenticator/CassandraAuthorizer + configured user")
+        config = {
+            "authenticator": "org.apache.cassandra.auth.PasswordAuthenticator",
+            "authorizer": "org.apache.cassandra.auth.CassandraAuthorizer",
+            "auth_superuser_name": "gris",  # not 'cassandra'
+            # 'gris' hashed using sha512
+            "auth_superuser_salted_password": "$6$IcPWfCigHWVhHTf.$h3.30m5R2CnYqIeniCumbXCBxBxvtYPP3MbZVsjKcu268ESOcrUtSJwf1iO1s83KUT3waITRtTiexBdSWEI0Q/",
+        }
+        self.cluster.set_configuration_options(values=config)
+
+        logger.info("STEP: start cluster with PasswordAuthenticator/CassandraAuthorizer")
+        self.prepare(nodes=3, enable_auth=True, wait_for_superuser=True)
+
+        logger.info("STEP: verify user without credentials or with wrong credentials can not login")
+        with pytest.raises(NoHostAvailable) as exc:
+            session = self.get_session()
+            self._check_session_available(session, expect_auth_err=True)
+        assert isinstance(next(iter(exc.value.errors.values())), AuthenticationFailed)
+
+        with pytest.raises(NoHostAvailable) as exc:
+            session = self.get_session(user="normal", password="wrongpwd")
+            self._check_session_available(session, expect_auth_err=True)
+        logger.info(exc.value)
+        assert isinstance(next(iter(exc.value.errors.values())), AuthenticationFailed)
+
+        with pytest.raises(NoHostAvailable) as exc:
+            session = self.get_session(user="gris", password="tuta")  # right user, wrong pwd
+            self._check_session_available(session, expect_auth_err=True)
+        logger.info(exc.value)
+        assert isinstance(next(iter(exc.value.errors.values())), AuthenticationFailed)
+
+        gris = self.get_session(user="gris", password="gris")
+        logger.info("STEP: create normal user by super 'gris'")  # super user operation
+        gris.execute("CREATE USER normal WITH PASSWORD '123456' NOSUPERUSER")
+        gris.execute("CREATE KEYSPACE ks WITH replication = {'class':'NetworkTopologyStrategy', 'replication_factor':1}")
+        gris.execute("CREATE TABLE ks.cf (id int primary key)")
+
+        session = self.get_session(user="normal", password="123456")
+        self.assert_unauthorized("User normal has no SELECT permission on <table ks.cf> or any of its parents", session, "SELECT * FROM ks.cf")
+        self.assert_unauthorized("User normal has no AUTHORIZE permission on <table ks.cf> or any of its parents", session, "REVOKE SELECT ON ks.cf from normal")
+
+    def test_certificate_auth(self):
+        """
+        Start cluster with certificate Authenticaor + CQL TLS + cert authentication
+        and verify noone but designated roles can log in
+        """
+
+        logger.info("STEP: create CQL transport certificates")
+
+        num_nodes = 1
+        server_cert, server_key = create_self_signed_x509_certificate(test_path=self.cluster.get_path())
+
+        logger.info("STEP: create AUTH CA + certificates for admin and users")
+
+        ca_cert, ca_key = create_ca(test_path=self.cluster.get_path())
+        admin_cert, admin_key = create_self_signed_x509_certificate(test_path=self.cluster.get_path(), cert_file="admin.crt", key_file="admin.key", cname="admin", ca_cert=ca_cert, ca_key=ca_key)
+        client1_cert, client1_key = create_self_signed_x509_certificate(test_path=self.cluster.get_path(), cert_file="client1.crt", key_file="client1.key", cname="client1", ca_cert=ca_cert, ca_key=ca_key)
+        client2_cert, client2_key = create_self_signed_x509_certificate(test_path=self.cluster.get_path(), cert_file="client2.crt", key_file="client2.key", cname="client2", ca_cert=ca_cert, ca_key=ca_key)
+        # One _not_ using cname, but instead email in ALT NAMES
+        client3_cert, client3_key = create_self_signed_x509_certificate(test_path=self.cluster.get_path(), cert_file="client3.crt", key_file="client3.key", ca_cert=ca_cert, ca_key=ca_key, email="client3@scylladb.com")
+
+        logger.info("STEP: update conf and start cluster to use PasswordAuthenticator/CassandraAuthorizer + configured user")
+        config = {
+            "authenticator": "com.scylladb.auth.CertificateAuthenticator",
+            "authorizer": "org.apache.cassandra.auth.CassandraAuthorizer",
+            "auth_superuser_name": "admin",  # see above
+            "auth_certificate_role_queries": [
+                # check first, only one of our certs use it.
+                {"source": "ALTNAME", "query": "EMAIL=(\\w+)@scylladb.com"},
+                {"source": "SUBJECT", "query": "CN=([^,]+)"},  # role = CNAME
+            ],
+            "client_encryption_options": {"enabled": True, "certificate": server_cert, "keyfile": server_key, "truststore": ca_cert, "require_client_auth": True},
+        }
+        self.cluster.set_configuration_options(values=config)
+
+        logger.info("STEP: start cluster with CertificateAuthenticator/CassandraAuthorizer")
+        self.prepare(nodes=num_nodes, enable_auth=False, wait_for_superuser=True)
+
+        node = self.cluster.nodelist()[0]
+
+        def create_ssl_context(keyfile: str | None = None, certfile: str | None = None):
+            ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
+            if keyfile and certfile:
+                ssl_context.load_cert_chain(keyfile=keyfile, certfile=certfile)
+            return ssl_context
+
+        logger.info("STEP: verify user without credentials or with wrong credentials can not login")
+        # no auth cert
+        with pytest.raises(NoHostAvailable):
+            self.cql_connection(node, ssl_context=create_ssl_context())
+
+        # cert with cname/email not currently active as role
+        for key, cert in [(client1_key, client1_cert), (client2_key, client2_cert), (client3_key, client3_cert)]:
+            with pytest.raises(NoHostAvailable):
+                self.cql_connection(node, ssl_context=create_ssl_context(keyfile=key, certfile=cert))
+
+        logger.info("STEP: verify we can log in our super user with his cert")
+        admin = self.patient_cql_connection(node, ssl_context=create_ssl_context(keyfile=admin_key, certfile=admin_cert))
+        logger.info("STEP: create normal user 'client2' and some tables")  # super user operation
+        admin.execute("CREATE USER client2 NOSUPERUSER")
+        admin.execute("CREATE KEYSPACE ks WITH replication = {'class':'NetworkTopologyStrategy', 'replication_factor':1}")
+        admin.execute("CREATE TABLE ks.cf (id int primary key)")
+
+        logger.info("STEP: verify we can log in our created user (role) with his cert")
+        client2 = self.patient_cql_connection(node, ssl_context=create_ssl_context(keyfile=client2_key, certfile=client2_cert))
+
+        logger.info("STEP: verify other users (client1/client3) still cannot log in")
+        for key, cert in [(client1_key, client1_cert), (client3_key, client3_cert)]:
+            with pytest.raises(NoHostAvailable):
+                session = self.cql_connection(node, ssl_context=create_ssl_context(keyfile=key, certfile=cert))
+                self._check_session_available(session, expect_auth_err=True)
+
+        logger.info("STEP: verify client2 can just log in, no additional privs")
+        self.assert_unauthorized("User client2 has no SELECT permission on <table ks.cf> or any of its parents", client2, "SELECT * FROM ks.cf")
+        self.assert_unauthorized("User client2 has no AUTHORIZE permission on <table ks.cf> or any of its parents", client2, "REVOKE SELECT ON ks.cf from client2")
+
+        logger.info("STEP: create normal user 'client3' and some tables")  # super user operation
+        admin.execute("CREATE USER client3 NOSUPERUSER")
+        logger.info("STEP: verify we can log in our created user (client3) with his cert")
+        client3 = self.patient_cql_connection(node, ssl_context=create_ssl_context(keyfile=client3_key, certfile=client3_cert))
+        self._check_session_available(client3, expect_auth_err=False)
 
     def prepare(self, nodes=1, permissions_validity=0, enable_auth=True, wait_for_superuser=False, smp=None):
         config = {"permissions_validity_in_ms": permissions_validity, "permissions_update_interval_in_ms": int(permissions_validity / 2)}
