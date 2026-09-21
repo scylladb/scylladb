@@ -2576,6 +2576,99 @@ SEASTAR_TEST_CASE(test_commitlog_large_mutation_timeout) {
     });
 }
 
+SEASTAR_TEST_CASE(test_commitlog_broken_large_mutation_on_multiple_shards) {
+    tmpdir tmp;
+    commitlog::config cfg;
+
+    constexpr uint64_t max_size_mb = 2;
+
+    auto shard_count = this_smp().shard_count();
+    BOOST_REQUIRE_GT(shard_count, 1);
+
+    cfg.commit_log_location = tmp.path().string();
+    cfg.commitlog_segment_size_in_mb = max_size_mb;
+    cfg.commitlog_total_space_in_mb = 4 * max_size_mb * this_smp_shard_count();
+    cfg.allow_going_over_size_limit = false;
+    cfg.allow_fragmented_entries = true;
+    cfg.use_o_dsync = false; 
+
+    auto uuid = make_table_id();
+    auto size = 2 * max_size_mb * 1024 * 1024;
+
+    std::vector<std::unique_ptr<db::commitlog>> logs(shard_count);
+    std::vector<rp_handle> handles(shard_count);
+
+    co_await smp::invoke_on_all([&]() -> future<> {
+        auto log = co_await commitlog::create_commitlog(cfg);
+        auto h = co_await log.add_mutation(uuid, size, db::commitlog::force_sync::no, [&](db::commitlog::output& dst) {
+            char c = '0' + this_shard_id();
+            for (size_t i = 0; i < size; ++i) {
+                dst.write(&c, 1);
+            }
+        });
+        co_await log.force_new_active_segment();
+        co_await log.sync_all_segments();
+        // don't shut down. leave it unclean
+        logs[this_shard_id()] = std::make_unique<db::commitlog>(std::move(log));
+        handles[this_shard_id()] = std::move(h);
+    });
+
+    auto log = co_await commitlog::create_commitlog(cfg);
+    auto files = co_await log.get_segments_to_replay();
+
+    auto cmp = [](auto& d1, auto& d2) { return d1.id < d2.id; };
+    std::set<commitlog::descriptor, decltype(cmp)> segments(files.begin(), files.end());
+
+    BOOST_REQUIRE_GE(segments.size(), shard_count * 2);
+
+    auto shard_to_wreck = shard_count - 1;
+
+    // remove a segment holding the data for all but shard 0. this is equivalent to
+    // actually corrupting the file, and much quicker. 
+    do {
+        auto rp = handles[shard_to_wreck].rp();
+        auto i = std::find_if(segments.begin(), segments.end(), [&](auto& d) {
+            return db::replay_position(d.id, 0).shard_id() == shard_to_wreck
+                && rp.base_id() != d.id
+                ;
+        });
+        if (i == segments.end()) {
+            throw std::runtime_error(fmt::format("Could not find segments for shard {}", shard_to_wreck));
+        }
+        segments.erase(i);
+    } while (--shard_to_wreck > 0);
+
+    db::commitlog::replay_state rstate;
+    size_t n_replays = 0;
+
+    for (auto& d : segments) {
+        db::replay_position rp(d.id, 0);
+        co_await db::commitlog::read_log_file(rstate, d.filename(), d.filename_prefix, [&](db::commitlog::buffer_and_replay_position buf_rp) {
+            auto&& [buf, rp] = buf_rp;
+            BOOST_CHECK_EQUAL(rp.shard_id(), 0);
+            BOOST_CHECK_EQUAL(buf.size_bytes(), size);
+            auto in = buf.get_istream();
+            for (size_t i = 0; i < size; ++i) {
+                auto c = in.read<char>();
+                BOOST_REQUIRE(c);
+                BOOST_CHECK_EQUAL(c.value(), '0');
+                if (c.value() != '0') {
+                    break;
+                }
+            }
+            ++n_replays;
+            return make_ready_future<>();
+        });
+    }
+    BOOST_CHECK_EQUAL(n_replays, 1);
+
+    co_await log.shutdown();
+    co_await smp::invoke_on_all([&]() -> future<> {
+        handles[this_shard_id()] = {};
+        co_await std::exchange(logs[this_shard_id()], {})->shutdown();
+    });
+}
+
 // Test for #24346. Writing last entry, of last chunk at exactly segment EOF boundary
 SEASTAR_TEST_CASE(test_segment_end_on_entry_end) {
     static auto replay_segment = [] (sstring path) -> future<> {
