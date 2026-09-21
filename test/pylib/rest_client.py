@@ -893,9 +893,9 @@ async def read_barrier(api: ScyllaRESTAPIClient, node_ip: IPAddress, group_id: O
         :param timeout: the optional timeout in seconds (for the Raft operation on the node)
     """
     params = {}
-    if group_id:
+    if group_id is not None:
         params["group_id"] = group_id
-    if timeout:
+    if timeout is not None:
         params["timeout"] = str(timeout)
 
     await api.client.post("/raft/read_barrier", host=node_ip, params=params)

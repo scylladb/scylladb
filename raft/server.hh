@@ -124,6 +124,11 @@ public:
     // will be placed in the log before B (assuming that both are successfully
     // appended).
     //
+    // Moreover, when forwarding is disabled, `add_entry` guarantees that entries
+    // will be appended only in the term that was current at the moment when
+    // `add_entry` was called. If the term changes before the function manages
+    // to append the entry, a `raft::not_a_leader` exception will be thrown.
+    //
     // Exceptions:
     // raft::commit_status_unknown
     //     Thrown if the leader has changed and the log entry has either

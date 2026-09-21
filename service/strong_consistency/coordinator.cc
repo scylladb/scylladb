@@ -476,6 +476,9 @@ future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
         logger.debug("mutate(): add_entry({}), {}",
             command.mutation.pretty_printer(schema), state_fmt);
 
+        // CAUTION: If a preemption point gets added between `begin_mutate`
+        // and `add_entry`, add an explicit check that the term has not
+        // changed since `begin_mutate`.
         future<> add_entry_result = co_await coroutine::as_future(
             op->raft_server.server().add_entry(std::move(raft_cmd),
                 raft::wait_type::committed,
