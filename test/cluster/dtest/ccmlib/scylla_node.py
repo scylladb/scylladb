@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any
 
 from test.cluster.dtest.ccmlib.common import ArgumentError, wait_for, BIN_DIR
 from test.pylib.internal_types import ServerUpState
+from test.pylib.rest_client import HTTPError
 
 if TYPE_CHECKING:
     from test.pylib.internal_types import ServerInfo
@@ -141,6 +142,31 @@ class ScyllaType:
         return args
 
 
+# The name ccm gave a Scylla node's log; the in-tree node has that one log only,
+# so tests that ask for it by name get it.
+SCYLLA_LOG_FILENAME = "system.log"
+
+
+def _set_stress_val(key: str, val: str, res: dict[str, float]) -> None:
+    """Parse one "key : value" line of cassandra-stress's summary (ccm's Node._set_stress_val())."""
+
+    def parse_num(s: str) -> float:
+        return float(s.replace(",", ""))
+
+    if "[" in val:
+        if m := re.match(r"^\s*([\d\.\,]+\d?)\s*\[.*", val):
+            res[key] = parse_num(m.group(1))
+        if m := re.match(r"^.*READ:\s*([\d\.\,]+\d?)[^\d].*", val):
+            res[key + ":read"] = parse_num(m.group(1))
+        if m := re.match(r".*WRITE:\s*([\d\.\,]+\d?)[^\d].*", val):
+            res[key + ":write"] = parse_num(m.group(1))
+    else:
+        try:
+            res[key] = parse_num(val)
+        except ValueError:
+            res[key] = val
+
+
 class ScyllaNode:
     def __init__(self, cluster: ScyllaCluster, server: ServerInfo, name: str):
         self.cluster = cluster
@@ -249,7 +275,7 @@ class ScyllaNode:
                  filter_expr: str | None = None,
                  filename: str | None = None,  # not used in scylla-dtest
                  from_mark: int | None = None) -> list[tuple[str, re.Match[str]]]:
-        assert filename is None, "only ScyllaDB's log is supported"
+        assert filename in (None, SCYLLA_LOG_FILENAME), "only ScyllaDB's log is supported"
 
         return self.scylla_log_file.grep(expr=expr, filter_expr=filter_expr, from_mark=from_mark)
 
@@ -259,7 +285,7 @@ class ScyllaNode:
                             search_str: str | None = None,  # not used in scylla-dtest
                             case_sensitive: bool = True,  # not used in scylla-dtest
                             from_mark: int | None = None) -> list[str] | list[list[str]]:
-        assert filename is None, "only ScyllaDB's log is supported"
+        assert filename in (None, SCYLLA_LOG_FILENAME), "only ScyllaDB's log is supported"
         assert search_str is None, "argument `search_str` is not supported"
         assert case_sensitive, "only case sensitive search is supported"
 
@@ -268,12 +294,12 @@ class ScyllaNode:
         return self.scylla_log_file.grep_for_errors(distinct_errors=distinct_errors, from_mark=from_mark)
 
     def mark_log_for_errors(self, filename: str | None = None) -> None:
-        assert filename is None, "only ScyllaDB's log is supported"
+        assert filename in (None, SCYLLA_LOG_FILENAME), "only ScyllaDB's log is supported"
 
         self.error_mark = self.mark_log()
 
     def mark_log(self, filename: str | None = None) -> int:
-        assert filename is None, "only ScyllaDB's log is supported"
+        assert filename in (None, SCYLLA_LOG_FILENAME), "only ScyllaDB's log is supported"
 
         return self.scylla_log_file.mark()
 
@@ -287,7 +313,7 @@ class ScyllaNode:
                       polling_interval: float | None = None) -> tuple[str, re.Match[str]] | list[tuple[str, re.Match[str]]]:  # not used in scylla-dtest
         assert process is None, "argument `process` is not supported"
         assert verbose is None, "argument `verbose` is not supported"
-        assert filename is None, "only ScyllaDB's log is supported"
+        assert filename in (None, SCYLLA_LOG_FILENAME), "only ScyllaDB's log is supported"
         assert polling_interval is None, "argument `polling_interval` is not supported"
 
         if isinstance(exprs, str):
@@ -340,7 +366,7 @@ class ScyllaNode:
         A mark as returned by mark_log() can be used as the `from_mark` parameter to start watching the log
         from a given position. Otherwise, the log is watched from the beginning.
         """
-        assert filename is None, "only ScyllaDB's log is supported"
+        assert filename in (None, SCYLLA_LOG_FILENAME), "only ScyllaDB's log is supported"
 
         if not isinstance(nodes, list):
             nodes = [nodes]
@@ -360,7 +386,7 @@ class ScyllaNode:
 
         This method works similarly to watch_log_for_death().
         """
-        assert filename is None, "only ScyllaDB's log is supported"
+        assert filename in (None, SCYLLA_LOG_FILENAME), "only ScyllaDB's log is supported"
 
         if not isinstance(nodes, list):
             nodes = [nodes]
