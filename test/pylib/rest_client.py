@@ -647,12 +647,15 @@ class ScyllaRESTAPIClient:
             }
             await self.client.post_json(f"/storage_service/tablets/repair", host=node_ip, params=params)
 
-    async def repair_and_wait(self, node_ip: str, keyspace: str = "", table: str = "", data_centers: str = "") -> None:
+    async def repair_and_wait(self, node_ip: str, keyspace: str = "", table: str = "", data_centers: str = "",
+                               hosts: str = "", primary_range: bool = False) -> None:
         """Issue repair_async and poll repair_status until completion.
 
         If keyspace is empty, repairs all non-system keyspaces.
         """
-        params = {k: v for k, v in (("columnFamilies", table), ("dataCenters", data_centers)) if v}
+        params = {k: v for k, v in (("columnFamilies", table), ("dataCenters", data_centers), ("hosts", hosts)) if v}
+        if primary_range:
+            params["primaryRange"] = "true"
         if not keyspace:
             keyspaces = await self.client.get_json("/storage_service/keyspaces", host=node_ip, params={"type": "non_local_strategy"})
             for ks in keyspaces:
@@ -707,8 +710,19 @@ class ScyllaRESTAPIClient:
     async def get_task_status(self, node_ip: str, task_id: str, timeout: Optional[float] = None):
         return await self.client.get_json(f'/task_manager/task_status/{task_id}', host=node_ip, timeout=timeout)
 
-    async def get_tasks(self, node_ip: str, module: str, timeout: Optional[float] = None):
-        return await self.client.get_json(f'/task_manager/list_module_tasks/{module}', host=node_ip, timeout=timeout)
+    async def get_tasks(self, node_ip: str, module: str, timeout: Optional[float] = None,
+                        keyspace: str = "", table: str = "", internal: bool = False):
+        """List a module's tasks.
+
+        Routine work registers as an internal task (e.g. compaction's
+        regular_compaction_task_impl), and list_module_tasks hides those unless
+        internal=true is asked for.
+        """
+        params = {k: v for k, v in (("keyspace", keyspace), ("table", table)) if v}
+        if internal:
+            params["internal"] = "true"
+        return await self.client.get_json(f'/task_manager/list_module_tasks/{module}', host=node_ip,
+                                          timeout=timeout, params=params)
 
     async def wait_task(self, node_ip: str, task_id: str):
         return await self.client.get_json(f'/task_manager/wait_task/{task_id}', host=node_ip)

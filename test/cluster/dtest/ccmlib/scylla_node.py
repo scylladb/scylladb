@@ -15,6 +15,7 @@ import re
 import subprocess
 import time
 from collections import namedtuple
+from enum import Enum
 from functools import cached_property
 from itertools import chain
 from pathlib import Path
@@ -87,6 +88,57 @@ class ToolError(Exception):
 
 
 NodetoolError = ToolError
+
+
+# Restored verbatim (imports aside) from ccm's ccmlib/scylla_node.py, since
+# not-yet-adapted dtest/unported test modules (via tools.data) import it.
+class ScyllaType:
+    """
+    Helper class for defining Scylla type definitions using type strings.
+
+    Refer to the Cassandra class names found at
+    https://github.com/scylladb/scylladb/blob/master/docs/dev/cql3-type-mapping.md for valid type strings.
+
+    Examples :
+        type1 = ScyllaType.make_partition_key("Int32Type")
+        type2 = ScyllaType.make_clustering_key("Int32Type", "FloatType")
+    """
+    class TypeKind(Enum):
+        REGULAR = 1
+        CLUSTERING_KEY = 2
+        PARTITION_KEY = 3
+
+    kind: TypeKind
+    types: Iterable[str]
+
+    def __init__(self, kind: TypeKind, types: Iterable[str]):
+        if not types:
+            raise ArgumentError("Please pass at least one type to create ScyllaType")
+        self.kind = kind
+        self.types = types
+
+    @classmethod
+    def make_regular(cls, keytype: str):
+        return cls(ScyllaType.TypeKind.REGULAR, (keytype,))
+
+    @classmethod
+    def make_clustering_key(cls, *keytypes):
+        return cls(ScyllaType.TypeKind.CLUSTERING_KEY, keytypes)
+
+    @classmethod
+    def make_partition_key(cls, *keytypes):
+        return cls(ScyllaType.TypeKind.PARTITION_KEY, keytypes)
+
+    def as_types_args(self) -> list[str]:
+        """Return the type definition as arguments to scylla types command"""
+        args = []
+        if self.kind == ScyllaType.TypeKind.CLUSTERING_KEY:
+            args.append("--prefix-compound")
+        elif self.kind == ScyllaType.TypeKind.PARTITION_KEY:
+            args.append("--full-compound")
+        for keytype in self.types:
+            args.extend(["-t", keytype])
+        return args
 
 
 class ScyllaNode:
