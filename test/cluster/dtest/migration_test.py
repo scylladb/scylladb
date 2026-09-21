@@ -13,14 +13,12 @@ import re
 import shutil
 import string
 import subprocess
-import tempfile
 import time
 import uuid
 
 import pytest
 from cassandra import ConsistencyLevel
 from cassandra.query import SimpleStatement
-from ccmlib.common import BIN_DIR, join_bin
 from ccmlib.node import NodetoolError, ToolError
 from ccmlib.scylla_node import ScyllaNode
 
@@ -28,7 +26,8 @@ from dtest_class import Tester, create_cf, create_ks
 from dtest_setup_overrides import DTestSetupOverrides
 from test.pylib.skip_types import skip_env
 from tools.assertions import assert_one
-from tools.cassandra_helpers import CassandraCluster, java_version_exist
+from tools.cassandra_docker import cassandra_docker_available
+from tools.cassandra_helpers import CassandraCluster
 from tools.cluster_topology import generate_cluster_topology
 from tools.data import (
     check_c1c2_result_one,
@@ -38,12 +37,7 @@ from tools.data import (
     query_c1c2,
     rows_to_list,
 )
-from tools.files import (
-    copy_files_to,
-    get_node_cf_dir,
-    get_sstables_files,
-    safe_mkdtemp,
-)
+from tools.files import copy_files_to, get_node_cf_dir
 from tools.marks import with_feature
 from tools.misc import ImmutableMapping
 from tools.retrying import retrying
@@ -51,6 +45,17 @@ from tools.stress import create_stress_compatible_table
 from tools.tables_view_manager import wait_for_view
 
 logger = logging.getLogger(__name__)
+
+_SCYLLA_TO_CASSANDRA_SSTABLE_NAMES_REASON = (
+    "Scylla can no longer write sstable filenames Apache Cassandra 3.11 will load. Its generation is always a "
+    "UUID now -- uuid_sstable_identifiers_enabled is value_status::Unused in db/config.cc, so it cannot be turned "
+    "off -- and Cassandra's Descriptor grammar only accepts an integer, so its nodetool refresh skips every file "
+    "and reports 'No new SSTables were found'. The Cassandra container harness itself works: it starts the "
+    "cluster, takes Scylla's schema over, copies the sstables in and runs the refresh; see "
+    "tools/cassandra_docker.py. Un-skip when Scylla can emit an integer generation again, or when the migration "
+    "renames the files on the way over."
+)
+
 
 
 class BaseHelpers(Tester):
@@ -808,9 +813,19 @@ class TestTTLWithMigrate(Tester):
     # @pytest.mark.next_gating      # Removing from gating for now, till it passes consistently
     # timeuuid based identifier was introduced in Cassandra 4.1. so we cannot test it with
     # Cassandra 3.x. see @jira_ticket CASSANDRA-17048
-    @pytest.mark.skipif(condition=not java_version_exist(8), reason="test depends on cassandra 3.x, and needs java 8 to run")
+    @pytest.mark.skipif(condition=not cassandra_docker_available(), reason="test depends on cassandra 3.x, which runs here from its docker image")
     @pytest.mark.skip_if(with_feature("tablets"))
-    @pytest.mark.cluster_options(uuid_sstable_identifiers_enabled=False)
+    @pytest.mark.skip_env(reason=_SCYLLA_TO_CASSANDRA_SSTABLE_NAMES_REASON)
+    # Cassandra has to be able to read what Scylla wrote, and three of Scylla's
+    # defaults are its own: the mt sstable format is the trie index Cassandra
+    # has never heard of (me is the Cassandra-compatible one), UUID sstable
+    # identifiers are not in its filename grammar, and it has no
+    # LZ4WithDictsCompressor.
+    @pytest.mark.cluster_options(
+        sstable_format="me",
+        uuid_sstable_identifiers_enabled=False,
+        sstable_compression_user_table_options={"sstable_compression": "LZ4Compressor"},
+    )
     def test_big_table_with_ttls(self, request):  # noqa: PLR0915
         """
         Test validates migration from Scylla to Cassandra of large partition table with TTLs.
@@ -970,8 +985,8 @@ class TestTTLWithMigrate(Tester):
 
     def migrate_to_cassandra(self, keyspace_name, table_name, scylla_node, take_dump=True, scylla_big_partition_count=None, count_query="", request=None):  # noqa: PLR0913
         cassandra_data_json = ""
-        cc = CassandraCluster(cassandra_version="3.11.16", request=request, test_instance=self)
-        cassandra_node1 = cc.run_migration(scylla_cluster=self.cluster, scylla_test_path=self.test_path, keyspace_names_list=[keyspace_name], table_names=[table_name])
+        cc = CassandraCluster(cassandra_version="3.11", request=request, test_instance=self)
+        cassandra_node1 = cc.run_migration(scylla_cluster=self.cluster, keyspace_names_list=[keyspace_name], table_names=[table_name])
         if take_dump:
             cassandra_data_json = self._dump_data(cluster=cc.cluster, node=cassandra_node1, scylla_node=scylla_node, node_owner="Cassandra")
 
@@ -986,19 +1001,21 @@ class TestTTLWithMigrate(Tester):
         return cassandra_data_json
 
     def _dump_data(self, cluster, node, node_owner, scylla_node=None, keyspace_name="ks", table_name="cf", compaction=True):  # noqa: PLR0913
-        if compaction:
-            if node.is_scylla() or node.get_cassandra_version() < "2.2":
-                log_file = "system.log"
-            else:
-                log_file = "debug.log"
         logger.info("Flush data to the disk before dump")
         cluster.flush()
         if compaction:
-            mark = node.mark_log(filename=log_file)
-            logger.info("Compacting sstables")
-            node.nodetool(f"compact {keyspace_name} {table_name}")
-            node.watch_log_for("Compacted", from_mark=mark, filename=log_file)
-            if node_owner == "Cassandra":
+            if node.is_scylla():
+                # Scylla's nodetool compact returns once the major compaction is
+                # over, and it reports it at debug level, so there is nothing to
+                # wait for and nothing to watch for.
+                logger.info("Compacting sstables")
+                node.nodetool(f"compact {keyspace_name} {table_name}")
+            else:
+                log_file = "system.log" if node.get_cassandra_version() < "2.2" else "debug.log"
+                mark = node.mark_log(filename=log_file)
+                logger.info("Compacting sstables")
+                node.nodetool(f"compact {keyspace_name} {table_name}")
+                node.watch_log_for("Compacted", from_mark=mark, filename=log_file)
                 # Cassandra deletes the input sstable after compaction is over.
                 # Based on the logs, there can be as much as 100ms between the
                 # two, enough that we attempt to dump the deleted sstable below
@@ -1008,16 +1025,17 @@ class TestTTLWithMigrate(Tester):
                 node.watch_log_for("Deleting", from_mark=mark, filename=log_file)
         logger.info("Run sstabledump")
 
-        if node_owner == "Scylla":
-            return node.dump_sstables(keyspace_name, table_name)
-
-        if scylla_node is None or type(scylla_node) is not ScyllaNode:
+        # Both sides are dumped with the same tool, `scylla sstable`, or the two
+        # dumps would not be comparable. Cassandra's data directory is a bind
+        # mount, so the tool reads it from the host like any other directory.
+        tool_node = node if node.is_scylla() else scylla_node
+        if not isinstance(tool_node, ScyllaNode):
             raise RuntimeError(f"scylla_node has unexpected type {type(scylla_node)!s}, expected ScyllaNode")
 
         sstables = node.get_sstablespath(keyspace=keyspace_name, tables=[table_name])
-        scylla_path = join_bin(scylla_node.get_path(), BIN_DIR, "scylla")
-        args = [scylla_path, "sstable", "dump-data", "--merge", *sstables]
-        res = subprocess.run(args, capture_output=True, text=True, check=False, env=scylla_node._get_environ())
+        assert sstables, f"No sstables found for {keyspace_name}.{table_name} on {node.name}"
+        args = [tool_node.scylla_exe(), "sstable", "dump-data", "--merge", *sstables]
+        res = subprocess.run(args, capture_output=True, text=True, check=False)
         if res.returncode:
             raise ToolError(command=" ".join(args), exit_status=res.returncode, stdout=res.stdout, stderr=res.stderr)
         return json.loads(res.stdout)["sstables"]["anonymous"]
