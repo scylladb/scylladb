@@ -73,6 +73,14 @@ ninja build/<mode>/scylla
 ./test.py --mode=dev test/cluster/test_raft_no_quorum.py -v --repeat 5
 ```
 
+**Iterating on a single test:** call pytest directly, it skips test.py's per-mode
+fan-out and xdist workers:
+```bash
+./tools/toolchain/dbuild pytest --mode dev test/cluster/test_strong_consistency.py::test_basic_write_read
+```
+To reuse the LDAP/S3 mocks across runs instead of starting them per session, see
+"Reusing the 3rd party services" in docs/dev/testing.md.
+
 **Important:**
 - Use full path with `.py` extension
 - To run a single test case, append `::<test_function_name>` to the file path
