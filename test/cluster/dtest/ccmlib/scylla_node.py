@@ -535,7 +535,7 @@ class ScyllaNode:
               profile_options: dict[str, str] | None = None,  # not used in scylla-dtest
               use_jna: bool | None = None,  # not used in scylla-dtest
               quiet_start: bool | None = None) -> None:  # not used in scylla-dtest
-        assert join_ring is None, "argument `join_ring` is not supported"
+        del join_ring  # ccm's ScyllaNode.start() ignores it as well
         assert verbose is None, "argument `verbose` is not supported"
         assert replace_token is None, "argument `replace_token` is not supported"
         assert profile_options is None, "argument `profile_options` is not supported"
