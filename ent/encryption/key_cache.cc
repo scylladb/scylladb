@@ -63,8 +63,8 @@ void encryption::register_key_cache_metrics(sm::metric_groups& metrics) {
             sm::make_counter("misses", stats.key_cache_misses, sm::description("Number of key cache misses")),
             sm::make_counter("blocked", stats.key_cache_blocks, sm::description("Number of key cache blocking load resolves")),
             sm::make_counter("evictions", stats.key_cache_evictions, sm::description("Number of key cache evictions")),
-            sm::make_counter("priviledged_evictions", stats.key_cache_privileged_entries_evictions_on_size, sm::description("Number of priviledged key cache evictions")),
-            sm::make_counter("unpriviledged_evictions", stats.key_cache_unprivileged_entries_evictions_on_size, sm::description("Number of unpriviledged key cache evictions")),
+            sm::make_counter("privileged_evictions", stats.key_cache_privileged_entries_evictions_on_size, sm::description("Number of privileged key cache evictions")),
+            sm::make_counter("unprivileged_evictions", stats.key_cache_unprivileged_entries_evictions_on_size, sm::description("Number of unprivileged key cache evictions")),
         });
     }
 }
