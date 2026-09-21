@@ -13,7 +13,6 @@ clustering_key_filter_test.py
 compaction_additional_test.py
 compaction_test.py
 compression_test.py
-concurrent_schema_changes_test.py
 consistency_test.py
 consistent_bootstrap_test.py
 counter_tests.py
