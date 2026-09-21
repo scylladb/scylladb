@@ -76,7 +76,6 @@ tablets_test.py
 test_cdc_large_values.py
 test_distributed_aggregates.py
 throughput_limits_test.py
-topology_operation_during_upgrade_test.py
 topology_test.py
 toppartitions_test.py
 ttl_test.py
