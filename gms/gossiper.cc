@@ -2027,6 +2027,13 @@ future<> gossiper::start_gossiping(gms::generation_type generation_nbr, applicat
     if (_gcfg.force_gossip_generation() > 0) {
         generation_nbr = gms::generation_type(_gcfg.force_gossip_generation());
         logger.warn("Use the generation number provided by user: generation = {}", generation_nbr);
+    } else if (_generation_seen_for_my_address >= generation_nbr) {
+        // The generation is seconds since epoch, which is not guaranteed to be greater
+        // than the one a previous node at this address used.
+        const auto bumped = gms::generation_type(_generation_seen_for_my_address.value() + 1);
+        logger.info("A previous node at {} is known to the cluster with generation {}, using {} instead of {}",
+                get_broadcast_address(), _generation_seen_for_my_address, bumped, generation_nbr);
+        generation_nbr = bumped;
     }
 
     // Create a new local state.
@@ -2043,7 +2050,6 @@ future<> gossiper::start_gossiping(gms::generation_type generation_nbr, applicat
     logger.info("Gossip started with local state: {}", my_endpoint_state());
     _enabled = true;
     _nr_run = 0;
-    _scheduled_gossip_task.arm(INTERVAL);
     if (!_background_msg.is_closed()) {
         co_await _background_msg.close();
     }
@@ -2052,6 +2058,8 @@ future<> gossiper::start_gossiping(gms::generation_type generation_nbr, applicat
     co_await container().invoke_on_all([] (gms::gossiper& g) {
         g._enabled = true;
     });
+    // Start gossiping immediately to speed up bootstrap.
+    _scheduled_gossip_task.arm(std::chrono::milliseconds(0));
     co_await container().invoke_on(0, [] (gms::gossiper& g) {
         g._failure_detector_loop_done = g.failure_detector_loop();
     });
@@ -2137,6 +2145,15 @@ future<> gossiper::do_shadow_round(std::unordered_set<gms::inet_address> nodes, 
         sleep_abortable(std::chrono::seconds(1), _abort_source).get();
         logger.info("Connect nodes={} again ... ({} seconds passed)",
                 nodes, std::chrono::duration_cast<std::chrono::seconds>(clk::now() - start_time).count());
+    }
+    // Remember what the peers think has been running at this address.
+    const auto my_addr = get_broadcast_address();
+    const auto my_id = my_host_id();
+    for (const auto& [id, eps] : _endpoint_state_map) {
+        if (id != my_id && eps->get_ip() == my_addr) {
+            _generation_seen_for_my_address = std::max(_generation_seen_for_my_address,
+                    eps->get_heart_beat_state().get_generation());
+        }
     }
     logger.info("Gossip shadow round finished with nodes_talked={}", nodes_talked);
 }
