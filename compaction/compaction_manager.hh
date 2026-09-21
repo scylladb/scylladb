@@ -237,7 +237,9 @@ private:
     void postpone_compaction_for_table(compaction::compaction_group_view* t);
 
     using quarantine_invalid_sstables = compaction_type_options::scrub::quarantine_invalid_sstables;
-    future<compaction_stats_opt> perform_sstable_scrub_validate_mode(compaction::compaction_group_view& t, tasks::task_info info, quarantine_invalid_sstables quarantine_sstables);
+    using update_scrub_time = compaction_type_options::scrub::update_scrub_time;
+    future<compaction_stats_opt> perform_sstable_scrub_validate_mode(compaction::compaction_group_view& t, tasks::task_info info, quarantine_invalid_sstables quarantine_sstables,
+        update_scrub_time update_timestamp = update_scrub_time::no);
     future<> update_static_shares(float shares);
 
     using get_candidates_func = std::function<future<std::vector<sstables::shared_sstable>>()>;
