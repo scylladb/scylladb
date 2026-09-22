@@ -241,6 +241,11 @@ Procedure
       Finalization **cannot be undone**. Once the migration is finalized, the
       keyspace cannot be switched back to vnodes.
 
+   .. note::
+
+      All nodes must be UP. Otherwise, finalization fails with
+      ``Cannot verify every node's storage mode: a node is down``.
+
    #. Issue the finalization request:
 
       .. code-block:: console
@@ -406,6 +411,11 @@ following:
          downgraded.
 
 #. Once all nodes have been downgraded, finalize the rollback:
+
+   .. note::
+
+      All nodes must be UP. Otherwise, finalization fails with
+      ``Cannot verify every node's storage mode: a node is down``.
 
    .. code-block:: console
 
