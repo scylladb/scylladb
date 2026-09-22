@@ -119,8 +119,7 @@ class ThreadsCalculator:
                  system_memory_reserve_fraction = 16,
                  max_test_memory: float = 5e9,
                  test_memory_fraction: float = 8.0,
-                 debug_test_memory_multiplier: float = 1.5,
-                 debug_cpus_per_test_job=1.5,
+                 debug_cpus_per_test_job=1.7,
                  sanitize_test_memory_multiplier: float = 1.4,
                  sanitize_cpus_per_test_job: float = 1.0,
                  non_debug_cpus_per_test_job: float =1.0,
@@ -142,7 +141,6 @@ class ThreadsCalculator:
         # debug mode, the more demanding debug settings win.
         is_sanitize = SANITIZE_MODE in modes
         if is_debug:
-            test_mem *= debug_test_memory_multiplier
             self.cpus_per_test_job = debug_cpus_per_test_job
         elif is_sanitize:
             test_mem *= sanitize_test_memory_multiplier
