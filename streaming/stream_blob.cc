@@ -50,6 +50,10 @@ static future<> load_sstable_for_tablet(const file_stream_id& ops_id, replica::d
     auto& sharded_vbw = vbw.container();
     co_await db.container().invoke_on(shard, [&sharded_vbw, id, desc, state, ops_id] (replica::database& db) -> future<> {
         replica::table& t = db.find_column_family(id);
+        // The guard has to be taken in the same continuation as the lookup: `t` is a bare
+        // reference that nothing pins, and a concurrent DROP destroys the table across the
+        // co_await below. A suspension inserted between these two lines reopens the race.
+        auto table_stream_op = t.stream_in_progress();
         auto erm = t.get_effective_replication_map();
         auto& sstm = t.get_sstables_manager();
         auto sst = sstm.make_sstable(t.schema(), t.get_storage_options(), desc.generation, state, desc.version, desc.format);
@@ -203,6 +207,7 @@ public:
 future<logstor_sink> make_logstor_sink(sharded<replica::database>& db, table_id tid, shard_id target_shard) {
     auto sink = co_await db.invoke_on(target_shard, [tid] (replica::database& db) -> future<foreign_segment_sink> {
         auto& table = db.find_column_family(tid);
+        auto table_stream_op = table.stream_in_progress();
         auto segment_sink = co_await table.create_logstor_segment_sink(db);
         co_return make_foreign(std::move(segment_sink));
     });
@@ -432,6 +437,13 @@ future<> stream_blob_handler(replica::database& db, db::view::view_building_work
         stream_options.write_behind = file_stream_write_behind;
 
         auto& table = db.find_column_family(meta.table);
+<<<<<<< HEAD
+||||||| parent of 8cf0722987 (streaming: stream_blob: hold the table at the remaining lookups)
+        auto schema = table.schema();
+=======
+        auto table_stream_op = table.stream_in_progress();
+        auto schema = table.schema();
+>>>>>>> 8cf0722987 (streaming: stream_blob: hold the table at the remaining lookups)
         if (meta.fops == file_ops::stream_sstables || meta.fops == file_ops::load_sstables) {
             auto& sstm = table.get_sstables_manager();
             // SSTable will be only sealed when added to the sstable set, so we make sure unsplit sstables aren't
@@ -827,6 +839,119 @@ future<stream_files_response> tablet_stream_files_handler(replica::database& db,
     blogger.info("stream_{}[{}] Finished sending files_nr={} range={} stream_bytes={} stream_time={} stream_bw={}",
             is_logstor_table ? "logstor_segments" : "sstables",
             req.ops_id, files_nr, req.range, stream_bytes, duration, get_bw(stream_bytes, ops_start_time));
+<<<<<<< HEAD
+||||||| parent of 8cf0722987 (streaming: stream_blob: hold the table at the remaining lookups)
+
+    co_return resp;
+}
+
+future<stream_files_response> clone_sstable_handler(replica::database& db, db::view::view_building_worker& vbw, const gms::feature_service& features, streaming::clone_sstable_request req) {
+    stream_files_response resp;
+
+    // Reuse the "stream_mutation_fragments" injection point so all existing
+    // tablet-migration tests work for object-storage tables without
+    // modification.  The "(clone)" suffix (vs "(tablets)" in the byte-streaming
+    // path) distinguishes the two paths in logs while keeping the common
+    // "stream_mutation_fragments: waiting" prefix that tests wait_for().
+    lw_shared_ptr<std::any> log_done;
+    if (utils::get_local_injector().is_enabled("stream_mutation_fragments")) {
+        log_done = make_lw_shared<std::any>(seastar::make_shared(seastar::defer([] noexcept {
+            blogger.info("stream_mutation_fragments: done (clone)");
+        })));
+    }
+
+    auto guard = service::topology_guard(req.topo_guard);
+    co_await utils::get_local_injector().inject("stream_mutation_fragments", [&guard] (auto& handler) -> future<> {
+        blogger.info("stream_mutation_fragments: waiting (clone)");
+        while (!handler.poll_for_message()) {
+            guard.check();
+            co_await sleep(std::chrono::milliseconds(5));
+        }
+        blogger.info("stream_mutation_fragments: released (clone)");
+    });
+
+    auto& meta = req.sstable_meta;
+    auto state = meta.state;
+    auto generation = sstables::generation_type(meta.generation);
+    auto version = static_cast<sstables::sstable_version_types>(meta.version);
+    auto format = static_cast<sstables::sstable_format_types>(meta.format);
+    replica::table& t = db.find_column_family(req.table);
+    auto& sstm = t.get_sstables_manager();
+    auto orig_sst = sstm.make_sstable(t.schema(), t.get_storage_options(), generation, meta.id, state, version, format);
+    bool use_reference_sharing = features.sstable_reference_sharing;
+    if (!use_reference_sharing) {
+        // The copy path only needs the component list (from the TOC) so that
+        // clone() knows which objects to copy.  load_metadata() is lighter than
+        // load(), which also validates metadata, computes shards, and opens data files.
+        co_await orig_sst->load_metadata();
+    }
+    auto new_gen = t.get_sstable_generation_generator()();
+    // With reference sharing, clone() creates a registry entry and a reference
+    // to the source sstable_id instead of copying component objects.
+    // clone() creates the registry entry in "creating" state (leave_unsealed=true).
+    // The entry is transitioned to "sealed" later by load_sstable_for_tablet()
+    // → add_new_sstable_and_update_cache() → on_add callback → seal_sstable().
+    auto desc = co_await orig_sst->clone(new_gen, /*leave_unsealed=*/true, /*may_use_reference_sharing=*/use_reference_sharing);
+    blogger.debug("stream_sstables[{}] Cloned {} -> {} on destination using {}", req.ops_id, generation, new_gen,
+        use_reference_sharing ? "reference sharing" : "server-side copy");
+    co_await load_sstable_for_tablet(req.ops_id, db, vbw, req.table, state, std::move(desc), req.dst_shard_id);
+=======
+
+    co_return resp;
+}
+
+future<stream_files_response> clone_sstable_handler(replica::database& db, db::view::view_building_worker& vbw, const gms::feature_service& features, streaming::clone_sstable_request req) {
+    stream_files_response resp;
+
+    // Reuse the "stream_mutation_fragments" injection point so all existing
+    // tablet-migration tests work for object-storage tables without
+    // modification.  The "(clone)" suffix (vs "(tablets)" in the byte-streaming
+    // path) distinguishes the two paths in logs while keeping the common
+    // "stream_mutation_fragments: waiting" prefix that tests wait_for().
+    lw_shared_ptr<std::any> log_done;
+    if (utils::get_local_injector().is_enabled("stream_mutation_fragments")) {
+        log_done = make_lw_shared<std::any>(seastar::make_shared(seastar::defer([] noexcept {
+            blogger.info("stream_mutation_fragments: done (clone)");
+        })));
+    }
+
+    auto guard = service::topology_guard(req.topo_guard);
+    co_await utils::get_local_injector().inject("stream_mutation_fragments", [&guard] (auto& handler) -> future<> {
+        blogger.info("stream_mutation_fragments: waiting (clone)");
+        while (!handler.poll_for_message()) {
+            guard.check();
+            co_await sleep(std::chrono::milliseconds(5));
+        }
+        blogger.info("stream_mutation_fragments: released (clone)");
+    });
+
+    auto& meta = req.sstable_meta;
+    auto state = meta.state;
+    auto generation = sstables::generation_type(meta.generation);
+    auto version = static_cast<sstables::sstable_version_types>(meta.version);
+    auto format = static_cast<sstables::sstable_format_types>(meta.format);
+    replica::table& t = db.find_column_family(req.table);
+    auto table_stream_op = t.stream_in_progress();
+    auto& sstm = t.get_sstables_manager();
+    auto orig_sst = sstm.make_sstable(t.schema(), t.get_storage_options(), generation, meta.id, state, version, format);
+    bool use_reference_sharing = features.sstable_reference_sharing;
+    if (!use_reference_sharing) {
+        // The copy path only needs the component list (from the TOC) so that
+        // clone() knows which objects to copy.  load_metadata() is lighter than
+        // load(), which also validates metadata, computes shards, and opens data files.
+        co_await orig_sst->load_metadata();
+    }
+    auto new_gen = t.get_sstable_generation_generator()();
+    // With reference sharing, clone() creates a registry entry and a reference
+    // to the source sstable_id instead of copying component objects.
+    // clone() creates the registry entry in "creating" state (leave_unsealed=true).
+    // The entry is transitioned to "sealed" later by load_sstable_for_tablet()
+    // → add_new_sstable_and_update_cache() → on_add callback → seal_sstable().
+    auto desc = co_await orig_sst->clone(new_gen, /*leave_unsealed=*/true, /*may_use_reference_sharing=*/use_reference_sharing);
+    blogger.debug("stream_sstables[{}] Cloned {} -> {} on destination using {}", req.ops_id, generation, new_gen,
+        use_reference_sharing ? "reference sharing" : "server-side copy");
+    co_await load_sstable_for_tablet(req.ops_id, db, vbw, req.table, state, std::move(desc), req.dst_shard_id);
+>>>>>>> 8cf0722987 (streaming: stream_blob: hold the table at the remaining lookups)
     co_return resp;
 }
 
