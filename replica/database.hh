@@ -366,7 +366,7 @@ class distributed_loader;
 class table_populator;
 
 // The CF has a "stats" structure. But we don't want all fields here,
-// since some of them are fairly complex for exporting to collectd. Also,
+// since some of them are fairly complex for exporting as metrics. Also,
 // that structure matches what we export via the API, so better leave it
 // untouched. And we need more fields. We will summarize it in here what
 // we need.

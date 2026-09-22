@@ -161,7 +161,6 @@ To display the log classes (output changes with each version so your display may
    schema_loader
    schema_registry
    schema_tables
-   scollectd
    scylla-nodetool
    scylla-sstable
    seastar
