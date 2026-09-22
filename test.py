@@ -56,8 +56,7 @@ class ThreadsCalculator:
                  system_memory_reserve_fraction = 16,
                  max_test_memory: float = 5e9,
                  test_memory_fraction: float = 8.0,
-                 debug_test_memory_multiplier: float = 1.5,
-                 debug_cpus_per_test_job=1.5,
+                 debug_cpus_per_test_job=1.7,
                  non_debug_cpus_per_test_job: float =1.0,
                  non_debug_max_test_memory: float = 4e9
                  ):
@@ -72,8 +71,6 @@ class ThreadsCalculator:
             sys_mem / test_memory_fraction,
             max_test_memory if is_debug else non_debug_max_test_memory,
         )
-        if is_debug:
-            test_mem *= debug_test_memory_multiplier
         self.cpus_per_test_job = (
             debug_cpus_per_test_job if is_debug else non_debug_cpus_per_test_job
         )
