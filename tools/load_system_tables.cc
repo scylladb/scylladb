@@ -92,9 +92,6 @@ future<tablets_t> load_system_tablets(const db::config& dbcfg,
                 tablets.emplace(last_token, replica::tablet_replica_set_from_cell(*replica_set));
             },
             std::move(tablets_directory));
-    if (tablets.empty()) {
-        throw std::runtime_error(fmt::format("failed to find tablets for table {}", table));
-    }
     co_return tablets;
 }
 

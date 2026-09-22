@@ -54,7 +54,8 @@ struct local_node_info {
 /// @param tablets_directory the directory holding the sstables of
 ///        "system.tablets", when disengaged it is looked up under
 ///        \p scylla_data_path
-/// @returns a map from last token to the replica set
+/// @returns a map from last token to the replica set, empty if \p table has
+///          no tablets
 future<tablets_t> load_system_tablets(const db::config& dbcfg,
                                       std::filesystem::path scylla_data_path,
                                       table_id table,
