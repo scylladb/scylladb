@@ -29,6 +29,18 @@ namespace service::strong_consistency {
 
 static logging::logger logger("sc_state_machine");
 
+mutation make_resize_marker_mutation(raft::group_id gid, shard_id shard, const resize_marker& marker) {
+    auto s = db::system_keyspace::raft_groups();
+    auto pk = partition_key::from_exploded(*s, {
+        short_type->decompose(int16_t(shard)),
+        timeuuid_type->decompose(gid.id),
+    });
+    mutation m(s, std::move(pk));
+    m.set_clustered_cell(clustering_key::make_empty(), to_bytes(fmt::to_string(marker.kind)), data_value(true),
+            marker.timestamp);
+    return m;
+}
+
 class state_machine : public raft_state_machine {
     locator::global_tablet_id _tablet;
     raft::group_id _group_id;
@@ -82,7 +94,18 @@ public:
             // E.g., for writes A-B-C-D, a reader must observe
             // them in that order and never see A-C or A-D skipping intermediate values.
             for (size_t i = 0; i < command.size(); ++i) {
-                auto mut = detail::deserialize_to_frozen_mutation(command[i]);
+                auto cmd = detail::deserialize_raft_command(command[i]);
+                if (const auto* marker = std::get_if<resize_marker>(&cmd.change)) {
+                    logger.log(log_level::trace, rate_limit, "apply(): applying the {} marker of group {}",
+                        marker->kind, _group_id);
+                    auto m = make_resize_marker_mutation(_group_id, this_shard_id(), *marker);
+                    // We pin the segment under system.raft_groups, which the marker's row goes to.
+                    co_await _db.apply_in_memory(m, m.schema()->table(),
+                            _persistence.pin_raft_groups_for_apply(command[i]->idx), db::no_timeout);
+                    _persistence.note_applied(command[i]->idx);
+                    continue;
+                }
+                auto& mut = std::get<write_mutation>(cmd.change).mutation;
                 auto schema = co_await schemas.resolve_and_upgrade(mut);
                 // Taken after the schema resolution, which may yield on the
                 // group0 barrier.
@@ -175,6 +198,7 @@ public:
         return make_ready_future<>();
     }
 
+    // FIXME: once implemented, the transfer has to carry the group's metadata (resize markers) stored in system.raft_groups
     future<> transfer_snapshot(raft::server_id from_id, raft::snapshot_descriptor snp) override {
         throw std::runtime_error("transfer_snapshot() not implemented");
     }
@@ -265,12 +289,22 @@ std::unique_ptr<raft_state_machine> make_state_machine(locator::global_tablet_id
 
 namespace detail {
 
-frozen_mutation deserialize_to_frozen_mutation(const raft::log_entry_ptr& entry) {
+raft_command deserialize_raft_command(const raft::log_entry_ptr& entry) {
     const auto& cmd = std::get<raft::command>(entry->data);
     auto is = ser::as_input_stream(cmd);
-    auto command = ser::deserialize(is, std::type_identity<raft_command>());
-    return std::move(command.mutation);
+    return ser::deserialize(is, std::type_identity<raft_command>());
 }
 
 } // namespace detail
 }; // namespace service::strong_consistency
+
+auto fmt::formatter<service::strong_consistency::resize_marker_kind>::format(service::strong_consistency::resize_marker_kind kind,
+        fmt::format_context& ctx) const -> decltype(ctx.out()) {
+    using enum service::strong_consistency::resize_marker_kind;
+    std::string_view name;
+    switch (kind) {
+    case start_resize: name = "start_resize"; break;
+    case end_resize: name = "end_resize"; break;
+    }
+    return fmt::formatter<string_view>::format(name, ctx);
+}

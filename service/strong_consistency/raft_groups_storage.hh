@@ -110,6 +110,9 @@ public:
     // Take a reference for the command at `idx`, for the mutation apply() puts
     // in the target table's memtable: the segment lives until that flush.
     db::rp_handle pin_target_table_for_apply(raft::index_t idx);
+    // The same for a resize marker, whose row apply() puts in the system.raft_groups
+    // memtable.
+    db::rp_handle pin_raft_groups_for_apply(raft::index_t idx);
 
     // Tell the storage that the command at `idx` has been handed to a memtable.
     // May release records, so call it after the apply.

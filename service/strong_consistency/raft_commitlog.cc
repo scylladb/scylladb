@@ -297,6 +297,10 @@ db::rp_handle raft_commitlog::pin_target_table_for_apply(raft::index_t idx) {
     return pin_table(idx).clone(_table_id);
 }
 
+db::rp_handle raft_commitlog::pin_raft_groups_for_apply(raft::index_t idx) {
+    return pin_table(idx).clone(_raft_groups_table_id);
+}
+
 void raft_commitlog::mark_segment_closed(db::replay_position pos) {
     _reported_up_to = std::max(_reported_up_to, pos);
 }

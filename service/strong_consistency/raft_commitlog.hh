@@ -34,6 +34,8 @@ struct truncation_record {
 struct segment_record {
     // Reference at the position this record's first batch was written to,
     // accounted to the group's own table. Source of the per-command references.
+    // A resize marker's reference is cloned from it too, under system.raft_groups,
+    // which holds the marker's row.
     db::rp_handle pin_table;
     // A clone of pin_table, accounted to system.raft_groups and
     // taken when the record is created. A segment holding only raft entries is
@@ -227,6 +229,9 @@ public:
     // the segment start; retention counts per segment, so the count is exact.
     // Aborts if no record holds `idx`.
     db::rp_handle pin_target_table_for_apply(raft::index_t idx);
+    // Like pin_target_table_for_apply(), but accounted to system.raft_groups, for a resize
+    // marker whose row goes there.
+    db::rp_handle pin_raft_groups_for_apply(raft::index_t idx);
 
     // Report a flush round's position: everything at or below it is in a closed
     // segment. One of the two inputs of closed_up_to().

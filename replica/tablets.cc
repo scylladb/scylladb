@@ -153,6 +153,10 @@ schema_ptr make_group0_raft_schema(sstring name) {
 //                   leader change discarded from which segment, so replay can drop
 //                   superseded entry copies without consulting terms. Frozen, so
 //                   one release sets the whole history as one cell
+//   start_resize,   the resize markers this group has applied, if a split or merge
+//   end_resize      is replacing it. Written by apply(), not by a release: a marker's
+//                   write time is the timestamp the leader stamped it with. The kind
+//                   of the resize in progress comes from the tablet metadata
 schema_ptr make_tablet_raft_groups_schema(sstring name) {
     if (!strongly_consistent_tables_enabled) {
         on_internal_error(tablet_logger, "Can't create raft table for strongly consistent tablets when the feature is disabled");
@@ -177,6 +181,9 @@ schema_ptr make_tablet_raft_groups_schema(sstring name) {
                         // raft_groups_storage.cc, which serializes the cell; drift
                         // between them surfaces on the first row read.
                         tuple_type_impl::get_instance({long_type, long_type, long_type}), false))
+        // the resize markers
+        .with_column("start_resize", boolean_type)
+        .with_column("end_resize", boolean_type)
         .with_hash_version()
         .set_caching_options(caching_options::get_disabled_caching_options())
         .set_comment("Persisted RAFT votes and snapshot info for strongly consistent tablets")

@@ -255,6 +255,12 @@ db::rp_handle raft_groups_storage::pin_target_table_for_apply(raft::index_t idx)
     return _raft_commitlog.pin_target_table_for_apply(idx);
 }
 
+db::rp_handle raft_groups_storage::pin_raft_groups_for_apply(raft::index_t idx) {
+    // Retried for the same reason as in pin_target_table_for_apply().
+    maybe_release();
+    return _raft_commitlog.pin_raft_groups_for_apply(idx);
+}
+
 void raft_groups_storage::note_applied(raft::index_t idx) {
     _apply_index = std::max(_apply_index, idx);
     maybe_release();

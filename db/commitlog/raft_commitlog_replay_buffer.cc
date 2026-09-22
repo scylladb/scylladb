@@ -35,6 +35,8 @@
 
 namespace db {
 
+namespace sc = service::strong_consistency;
+
 static seastar::logger logger("raft_commitlog_replay");
 
 namespace {
@@ -201,26 +203,33 @@ void raft_commitlog_replay_buffer::note_committed(group_state& group, const raft
 }
 
 future<> raft_commitlog_replay_buffer::apply_committed(replica::database& db, db::system_keyspace& sys_ks,
-        const raft::log_entry_ptr& entry) {
+        raft::group_id group_id, const raft::log_entry_ptr& entry) {
     if (!std::holds_alternative<raft::command>(entry->data)) {
+        co_return;
+    }
+    auto cmd = sc::detail::deserialize_raft_command(entry);
+    if (auto* marker = std::get_if<sc::resize_marker>(&cmd.change)) {
+        logger.debug("group {}: replaying the {} marker", group_id, marker->kind);
+        auto m = sc::make_resize_marker_mutation(group_id, this_shard_id(), *marker);
+        co_await db.apply_in_memory(m, m.schema()->table(), db::rp_handle(), db::no_timeout);
         co_return;
     }
     if (!_schemas) {
         _schemas.emplace(db, sys_ks);
     }
-    auto mut = service::strong_consistency::detail::deserialize_to_frozen_mutation(entry);
+    auto& mut = std::get<sc::write_mutation>(cmd.change).mutation;
     auto schema = co_await _schemas->resolve_and_upgrade(mut);
     co_await db.apply_in_memory(mut, std::move(schema), db::rp_handle(), db::no_timeout,
             db::noop_large_data_guardrail::instance());
 }
 
 future<> raft_commitlog_replay_buffer::drain_committed(replica::database& db, db::system_keyspace& sys_ks,
-        group_state& group) {
+        raft::group_id group_id, group_state& group) {
     while (!group.buf.empty() && group.buf.front().entry->idx <= group.commit_idx) {
         auto entry = std::move(group.buf.front().entry);
         group.buf.pop_front();
         note_committed(group, entry);
-        co_await apply_committed(db, sys_ks, entry);
+        co_await apply_committed(db, sys_ks, group_id, entry);
         ++group.applied;
         co_await seastar::coroutine::maybe_yield();
     }
@@ -241,7 +250,7 @@ future<> raft_commitlog_replay_buffer::add_batch(replica::database& db, cql3::qu
     // Raft never replaces a committed entry, so every index at or below this
     // header's commit_idx had its current copy written before the batch and
     // already read by replay. The entries the buffer holds there are final.
-    co_await drain_committed(db, sys_ks, group);
+    co_await drain_committed(db, sys_ks, group_id, group);
 
     // Drop the copies a truncation superseded.
     std::vector<raft::log_entry_ptr> remaining_entries = entries;
@@ -326,7 +335,7 @@ future<> raft_commitlog_replay_buffer::add_batch(replica::database& db, cql3::qu
         if (entry->idx <= group.commit_idx) {
             // A copy of a committed entry is identical, so re-applying it is a no-op by timestamp.
             note_committed(group, entry);
-            co_await apply_committed(db, sys_ks, entry);
+            co_await apply_committed(db, sys_ks, group_id, entry);
             ++group.applied;
         } else {
             group.buf.push_back(raft_buffer_detail::buffered_entry{.entry = entry, .segment = segment});
