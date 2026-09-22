@@ -1337,6 +1337,23 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             auto compaction_throughput_update = io_throughput_updater("compaction", dbcfg.compaction_scheduling_group, cfg->compaction_throughput_mb_per_sec);
 
+            static sharded<auth::service> auth_service;
+            static sharded<auth::service> maintenance_auth_service;
+            static sharded<qos::service_level_controller> sl_controller;
+            debug::the_sl_controller = &sl_controller;
+
+            // sl_controller.stop() destroys the service level scheduling groups, so anything that holds on
+            // to them without depending on sl_controller (e.g. storage_manager) must be started after it.
+            //starting service level controller
+            checkpoint(stop_signal, "starting service level controller");
+            qos::service_level_options default_service_level_configuration;
+            default_service_level_configuration.shares = 1000;
+            sl_controller.start(std::ref(auth_service), std::ref(token_metadata), std::ref(stop_signal.as_sharded_abort_source()), default_service_level_configuration, user_ssg, dbcfg.statement_scheduling_group).get();
+            sl_controller.invoke_on_all(&qos::service_level_controller::start).get();
+            auto stop_sl_controller = defer_verbose_shutdown("service level controller", [] {
+                sl_controller.stop().get();
+            });
+
             checkpoint(stop_signal, "starting storage manager");
             sstables::storage_manager::config stm_cfg;
             stm_cfg.object_storage_clients_memory = std::max<size_t>(10 << 20, memory::stats().total_memory() * cfg->object_storage_clients_memory_fraction());
@@ -1346,6 +1363,28 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             sstm.start(std::ref(*cfg), stm_cfg).get();
             auto stop_sstm = defer_verbose_shutdown("sstables storage manager", [&sstm] {
                 sstm.stop().get();
+            });
+
+<<<<<<< HEAD
+            static sharded<auth::service> auth_service;
+            static sharded<auth::service> maintenance_auth_service;
+            static sharded<qos::service_level_controller> sl_controller;
+            debug::the_sl_controller = &sl_controller;
+
+            //starting service level controller
+            checkpoint(stop_signal, "starting service level controller");
+            qos::service_level_options default_service_level_configuration;
+            default_service_level_configuration.shares = 1000;
+            sl_controller.start(std::ref(auth_service), std::ref(token_metadata), std::ref(stop_signal.as_sharded_abort_source()), default_service_level_configuration, user_ssg, dbcfg.statement_scheduling_group).get();
+            sl_controller.invoke_on_all(&qos::service_level_controller::start).get();
+            auto stop_sl_controller = defer_verbose_shutdown("service level controller", [] {
+                sl_controller.stop().get();
+            });
+
+||||||| parent of 801ffdafe4 (main: stop the storage manager before the service level controller)
+            api::set_server_storage_manager(ctx, sstm).get();
+            auto stop_storage_manager_api = defer_verbose_shutdown("storage manager API", [&ctx] {
+                api::unset_server_storage_manager(ctx).get();
             });
 
             static sharded<auth::service> auth_service;
@@ -1363,6 +1402,13 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 sl_controller.stop().get();
             });
 
+=======
+            api::set_server_storage_manager(ctx, sstm).get();
+            auto stop_storage_manager_api = defer_verbose_shutdown("storage manager API", [&ctx] {
+                api::unset_server_storage_manager(ctx).get();
+            });
+
+>>>>>>> 801ffdafe4 (main: stop the storage manager before the service level controller)
             lang::manager::config lang_config;
             lang_config.lua.max_bytes = cfg->user_defined_function_allocation_limit_bytes();
             lang_config.lua.max_contiguous = cfg->user_defined_function_contiguous_allocation_limit_bytes();
