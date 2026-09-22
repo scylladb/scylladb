@@ -2896,7 +2896,7 @@ SEASTAR_THREAD_TEST_CASE(test_rack_list_conversion_shard_distribution) {
         topology.paused_rf_change_requests.insert(id);
         migration_plan plan = talloc.balance_tablets(stm.get(), &topology, &sys_ks).get();
 
-        BOOST_REQUIRE_EQUAL(plan.migrations().size(), 2);
+        BOOST_REQUIRE_EQUAL(plan.tablet_migration_count(), 2);
         // A and B both move host2 -> host1. They must land on different shards
         // so that host1's shards are loaded evenly. Count migrations per shard.
         std::unordered_map<shard_id, unsigned> shard_migrations;
@@ -5309,7 +5309,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancer_ignores_hosts_with_incomplete_stats)
         {
             auto plan = e.get_tablet_allocator().local().balance_tablets(stm.get(), nullptr, nullptr, topo.get_load_stats()).get();
             BOOST_REQUIRE(!plan.empty());
-            BOOST_REQUIRE(!plan.migrations().empty());
+            BOOST_REQUIRE_NE(plan.tablet_migration_count(), 0);
             for (auto&& mig : plan.migrations()) {
                 BOOST_REQUIRE(mig.src);
                 BOOST_REQUIRE_EQUAL(mig.src->host, host2);

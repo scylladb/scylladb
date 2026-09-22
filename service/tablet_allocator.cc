@@ -493,8 +493,8 @@ struct fmt::formatter<service::plan_summary> : fmt::formatter<std::string_view> 
         auto& plan = p.plan;
         std::string_view delim = "";
         auto get_delim = [&] { return std::exchange(delim, ", "); };
-        if (plan.migrations().size()) {
-            fmt::format_to(ctx.out(), "{}migrations: {}", get_delim(), plan.migrations().size());
+        if (plan.tablet_migration_count()) {
+            fmt::format_to(ctx.out(), "{}migrations: {}", get_delim(), plan.tablet_migration_count());
         }
         if (plan.repair_plan().repairs().size()) {
             fmt::format_to(ctx.out(), "{}repairs: {}", get_delim(), plan.repair_plan().repairs().size());
@@ -1043,10 +1043,9 @@ private:
         on_internal_error(lblogger, format("Invalid transition stage: {}", static_cast<int>(trinfo->stage)));
     }
 
-    using migration_vector = migration_plan::migrations_vector;
-    static migration_vector
+    static migration_plan::migration_group
     get_migration_info(const migration_tablet_set& tablet_set, tablet_transition_kind kind, tablet_replica src, tablet_replica dst) {
-        migration_vector infos;
+        migration_plan::migration_group infos;
         for (auto tablet : tablet_set.tablets()) {
             infos.push_back(tablet_migration_info{kind, tablet, src, dst});
         }
@@ -1055,7 +1054,7 @@ private:
 
     using migration_streaming_info_vector = utils::small_vector<tablet_migration_streaming_info, 2>;
     static migration_streaming_info_vector
-    get_migration_streaming_infos(const locator::topology& topology, const tablet_map& tmap, const migration_vector& infos) {
+    get_migration_streaming_infos(const locator::topology& topology, const tablet_map& tmap, const migration_plan::migration_group& infos) {
         migration_streaming_info_vector streaming_infos;
         for (auto& info : infos) {
             auto& ti = tmap.get_tablet_info(info.tablet.tablet);
@@ -1524,9 +1523,7 @@ public:
                     apply_load(mig_streaming_info);
                     lblogger.debug("Adding migration: {}", mig);
                     mark_as_scheduled(mig);
-                    for (auto& m : mig) {
-                        plan.add(std::move(m));
-                    }
+                    plan.add(std::move(mig));
                 }
                 update_node_load_on_migration(nodes, src, dst, source_tablets);
             }
@@ -3371,7 +3368,7 @@ public:
         _scheduled_tablets.insert(mig.tablet);
     }
 
-    void mark_as_scheduled(const migration_plan::migrations_vector& migs) {
+    void mark_as_scheduled(const migration_plan::migration_group& migs) {
         for (auto&& mig : migs) {
             mark_as_scheduled(mig);
         }
@@ -5011,7 +5008,7 @@ public:
 
 future<std::unordered_set<locator::global_tablet_id>> migration_plan::get_migration_tablet_ids() const {
     std::unordered_set<locator::global_tablet_id> tablets;
-    for (auto& m : _migrations) {
+    for (auto& m : migrations()) {
         co_await coroutine::maybe_yield();
         tablets.insert(m.tablet);
     }
