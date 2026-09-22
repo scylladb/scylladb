@@ -61,15 +61,18 @@ locator::tablet_replica_set get_leader_capable_tablet_replicas(
             // The precondition of cleanup_target is that the pending replica is no
             // longer a member of the raft group.
         case tablet_transition_stage::revert_migration:
+            return tinfo.replicas;
+
         case tablet_transition_stage::write_both_read_old_fallback_cleanup:
         case tablet_transition_stage::rebuild_repair:
         case tablet_transition_stage::repair:
         case tablet_transition_stage::end_repair:
         case tablet_transition_stage::restore:
-            return tinfo.replicas;
+            // Stages a strongly consistent tablet doesn't go through.
+            break;
     }
-    on_internal_error(logger, format("get_leader_capable_tablet_replicas: unknown tablet transition stage {}",
-            static_cast<int>(trinfo->stage)));
+    on_internal_error(logger, format("get_leader_capable_tablet_replicas: unexpected transition stage {} "
+            "of a strongly consistent tablet", trinfo->stage));
 }
 
 locator::tablet_replica_set get_readable_tablet_replicas(
@@ -108,10 +111,11 @@ locator::tablet_replica_set get_readable_tablet_replicas(
         case tablet_transition_stage::repair:
         case tablet_transition_stage::end_repair:
         case tablet_transition_stage::restore:
-            return tinfo.replicas;
+            // Stages a strongly consistent tablet doesn't go through.
+            break;
     }
-    on_internal_error(logger, format("get_readable_tablet_replicas: unknown tablet transition stage {}",
-            static_cast<int>(trinfo->stage)));
+    on_internal_error(logger, format("get_readable_tablet_replicas: unexpected transition stage {} "
+            "of a strongly consistent tablet", trinfo->stage));
 }
 
 }
