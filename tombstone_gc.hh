@@ -68,6 +68,30 @@ class shared_tombstone_gc_state {
     gc_time_min_source _gc_min_source;
     lw_shared_ptr<const per_table_history_maps> _reconcile_history_maps;
 
+<<<<<<< HEAD
+||||||| parent of 94de16aa89 (tombstone_gc: let a view being built suspend its tombstone GC)
+    // Separating the group0 GC time - it is not kept per table, but for the whole group0:
+    // - the state_id of the last mutation applies to all group0 tables wrt. the tombstone GC
+    // - we also always use the full token range for the group0 tables (so we don't need to store the token ranges)
+    gc_clock::time_point _group0_gc_time = gc_clock::time_point::min();
+
+    // Tables which have a single replica and thus cannot be repaired (repair will not update the repair time for them).
+    std::unordered_set<table_id> _rf_one_tables;
+
+=======
+    // Separating the group0 GC time - it is not kept per table, but for the whole group0:
+    // - the state_id of the last mutation applies to all group0 tables wrt. the tombstone GC
+    // - we also always use the full token range for the group0 tables (so we don't need to store the token ranges)
+    gc_clock::time_point _group0_gc_time = gc_clock::time_point::min();
+
+    // Tables which have a single replica and thus cannot be repaired (repair will not update the repair time for them).
+    std::unordered_set<table_id> _rf_one_tables;
+
+    // Views whose build has finished on every node. Any other view counts as
+    // being built, also one this node has just created or has no state loaded for.
+    lw_shared_ptr<const std::unordered_set<table_id>> _built_views;
+
+>>>>>>> 94de16aa89 (tombstone_gc: let a view being built suspend its tombstone GC)
     std::unordered_map<table_id, utils::chunked_vector<range_repair_time>> _pending_updates;
 
 private:
@@ -75,7 +99,15 @@ private:
 
 public:
     shared_tombstone_gc_state();
+<<<<<<< HEAD
     shared_tombstone_gc_state(gc_time_min_source gc_min_source, lw_shared_ptr<const per_table_history_maps> reconcile_history_maps);
+||||||| parent of 94de16aa89 (tombstone_gc: let a view being built suspend its tombstone GC)
+    shared_tombstone_gc_state(gc_time_min_source gc_min_source, lw_shared_ptr<const per_table_history_maps> reconcile_history_maps,
+            gc_clock::time_point group0_gc_time, std::unordered_set<table_id> rf_one_tables);
+=======
+    shared_tombstone_gc_state(gc_time_min_source gc_min_source, lw_shared_ptr<const per_table_history_maps> reconcile_history_maps,
+            gc_clock::time_point group0_gc_time, std::unordered_set<table_id> rf_one_tables, lw_shared_ptr<const std::unordered_set<table_id>> built_views);
+>>>>>>> 94de16aa89 (tombstone_gc: let a view being built suspend its tombstone GC)
     shared_tombstone_gc_state(shared_tombstone_gc_state&&);
     ~shared_tombstone_gc_state();
 
@@ -91,6 +123,43 @@ public:
         return _gc_min_source ? _gc_min_source(tid) : gc_clock::time_point::max();
     }
 
+<<<<<<< HEAD
+||||||| parent of 94de16aa89 (tombstone_gc: let a view being built suspend its tombstone GC)
+    void set_table_rf_one(table_id id) {
+        _rf_one_tables.insert(id);
+    }
+    void set_table_rf_n(table_id id) {
+        _rf_one_tables.erase(id);
+    }
+    void remove_table_from_rf_registry(table_id id) noexcept {
+        _rf_one_tables.erase(id);
+    }
+    bool is_table_rf_one(table_id id) const noexcept {
+        return _rf_one_tables.contains(id);
+    }
+
+=======
+    void set_table_rf_one(table_id id) {
+        _rf_one_tables.insert(id);
+    }
+    void set_table_rf_n(table_id id) {
+        _rf_one_tables.erase(id);
+    }
+    void remove_table_from_rf_registry(table_id id) noexcept {
+        _rf_one_tables.erase(id);
+    }
+    bool is_table_rf_one(table_id id) const noexcept {
+        return _rf_one_tables.contains(id);
+    }
+
+    void set_built_views(std::unordered_set<table_id> views) {
+        _built_views = make_lw_shared<const std::unordered_set<table_id>>(std::move(views));
+    }
+    bool is_view_being_built(table_id id) const noexcept {
+        return !_built_views->contains(id);
+    }
+
+>>>>>>> 94de16aa89 (tombstone_gc: let a view being built suspend its tombstone GC)
     void update_repair_time(table_id id, const dht::token_range& range, gc_clock::time_point repair_time);
     void update_group0_refresh_time(gc_clock::time_point refresh_time);
 
