@@ -1141,6 +1141,21 @@ public:
         }
     }
 
+    // Plan made by one make_plan(dc[, rack]) call, kept apart from the other
+    // sub-plans of the round until merge_sub_plans() combines them.
+    struct sub_plan {
+        dc_name dc;
+        std::optional<sstring> rack;
+        migration_plan plan;
+    };
+
+    future<> merge_sub_plans(migration_plan& plan, std::vector<sub_plan> sub_plans) {
+        for (auto& sp : sub_plans) {
+            co_await coroutine::maybe_yield();
+            plan.merge(std::move(sp.plan));
+        }
+    }
+
     future<migration_plan> make_plan() {
         const locator::topology& topo = _tm->get_topology();
         migration_plan plan;
@@ -1151,6 +1166,8 @@ public:
         auto rack_list_colocation = ongoing_rack_list_colocation();
         auto rf_change_prep = co_await prepare_per_rack_rf_change_plan(plan);
 
+        std::vector<sub_plan> sub_plans;
+
         // Prepare plans for each DC separately and combine them to be executed in parallel.
         for (auto&& dc : topo.get_datacenters()) {
             if (_db.get_config().rf_rack_valid_keyspaces() || _db.get_config().enforce_rack_list() || rack_list_colocation || !rf_change_prep.actions.empty()) {
@@ -1158,15 +1175,17 @@ public:
                     auto rack_plan = co_await make_plan(dc, rack, rf_change_prep.actions[{dc, rack}]);
                     auto level = rack_plan.empty() ? seastar::log_level::debug : seastar::log_level::info;
                     lblogger.log(level, "Plan for {}/{}: {}", dc, rack, plan_summary(rack_plan));
-                    plan.merge(std::move(rack_plan));
+                    sub_plans.push_back(sub_plan{dc, rack, std::move(rack_plan)});
                 }
             } else {
                 auto dc_plan = co_await make_plan(dc);
                 auto level = dc_plan.empty() ? seastar::log_level::debug : seastar::log_level::info;
                 lblogger.log(level, "Plan for {}: {}", dc, plan_summary(dc_plan));
-                plan.merge(std::move(dc_plan));
+                sub_plans.push_back(sub_plan{dc, std::nullopt, std::move(dc_plan)});
             }
         }
+
+        co_await merge_sub_plans(plan, std::move(sub_plans));
 
         if (rack_list_colocation) {
             plan.merge(co_await make_rack_list_colocation_plan());
