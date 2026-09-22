@@ -50,6 +50,10 @@ static future<> load_sstable_for_tablet(const file_stream_id& ops_id, replica::d
     auto& sharded_vbw = vbw.container();
     co_await db.container().invoke_on(shard, [&sharded_vbw, id, desc, state, ops_id] (replica::database& db) -> future<> {
         replica::table& t = db.find_column_family(id);
+        // The guard has to be taken in the same continuation as the lookup: `t` is a bare
+        // reference that nothing pins, and a concurrent DROP destroys the table across the
+        // co_await below. A suspension inserted between these two lines reopens the race.
+        auto table_stream_op = t.stream_in_progress();
         auto erm = t.get_effective_replication_map();
         auto& sstm = t.get_sstables_manager();
         auto sst = sstm.make_sstable(t.schema(), t.get_storage_options(), desc.generation, state, desc.version, desc.format);
@@ -203,6 +207,7 @@ public:
 future<logstor_sink> make_logstor_sink(sharded<replica::database>& db, table_id tid, shard_id target_shard) {
     auto sink = co_await db.invoke_on(target_shard, [tid] (replica::database& db) -> future<foreign_segment_sink> {
         auto& table = db.find_column_family(tid);
+        auto table_stream_op = table.stream_in_progress();
         auto segment_sink = co_await table.create_logstor_segment_sink(db);
         co_return make_foreign(std::move(segment_sink));
     });
@@ -432,6 +437,7 @@ future<> stream_blob_handler(replica::database& db, db::view::view_building_work
         stream_options.write_behind = file_stream_write_behind;
 
         auto& table = db.find_column_family(meta.table);
+        auto table_stream_op = table.stream_in_progress();
         if (meta.fops == file_ops::stream_sstables || meta.fops == file_ops::load_sstables) {
             auto& sstm = table.get_sstables_manager();
             // SSTable will be only sealed when added to the sstable set, so we make sure unsplit sstables aren't
