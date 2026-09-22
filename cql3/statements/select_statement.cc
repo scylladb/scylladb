@@ -494,8 +494,9 @@ select_statement::do_execute(query_processor& qp,
     std::optional<locator::tablet_routing_info_v2> tablet_info_v2 = {};
 
     auto&& table = _schema->table();
-    if (_may_use_token_aware_routing && table.uses_tablets()
-            && key_ranges.size() == 1 && query::is_single_partition(key_ranges.front())) {
+    if (_may_use_token_aware_routing && key_ranges.size() == 1
+            && query::is_single_partition(key_ranges.front())
+            && replica::may_publish_tablet_routing_info(table, qp.db())) {
         token = key_ranges[0].start()->value().as_decorated_key().token();
         auto erm = table.get_effective_replication_map();
 
