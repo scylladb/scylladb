@@ -222,39 +222,39 @@ static max_purgeable get_max_purgeable_timestamp(const compaction_group_view& ta
     // The queries below are not free -- min_memtable_live_*_timestamp() and
     // memtable_has_key() are evaluated for every purge attempt -- so bail out before
     // making them rather than discarding their result.
-  if (gc_scope == tombstone_gc_scope::skip_memtable) {
-    clogger.trace("get_max_purgeable_timestamp {}.{}: gc_scope=skip_memtable, not checking the memtable",
-            table_s.schema()->ks_name(), table_s.schema()->cf_name());
-  } else {
-    api::timestamp_type memtable_min_timestamp;
-    if (is_shadowable) {
-        // For shadowable tombstones, check the minimum live row_marker timestamp
-        // as rows with timestamp larger than the tombstone's would shadow the tombstone,
-        // exposing all live cells in the row with timestamps potentially lower than
-        // the shadowable tombstone (and those are tracked in the min_memtable_live_timestamp).
-        // In contrast, a shadowable tombstone applies to rows with row_marker whose timestamp
-        // is less than or equal to the tombstone's timestamp, the same way as a regular tombstone would.
-        // See https://github.com/scylladb/scylladb/issues/20424
-        memtable_min_timestamp = table_s.min_memtable_live_row_marker_timestamp();
+    if (gc_scope == tombstone_gc_scope::skip_memtable) {
+        clogger.trace("get_max_purgeable_timestamp {}.{}: gc_scope=skip_memtable, not checking the memtable",
+                table_s.schema()->ks_name(), table_s.schema()->cf_name());
     } else {
-        // For regular tombstones, check the minimum live data timestamp.
-        // Even if purgeable tombstones shadow dead data in the memtable, it's ok to purge them;
-        // since "resurrecting" the already-dead data will no have effect, as they are already dead.
-        // See https://github.com/scylladb/scylladb/issues/20423
-        memtable_min_timestamp = table_s.min_memtable_live_timestamp();
+        api::timestamp_type memtable_min_timestamp;
+        if (is_shadowable) {
+            // For shadowable tombstones, check the minimum live row_marker timestamp
+            // as rows with timestamp larger than the tombstone's would shadow the tombstone,
+            // exposing all live cells in the row with timestamps potentially lower than
+            // the shadowable tombstone (and those are tracked in the min_memtable_live_timestamp).
+            // In contrast, a shadowable tombstone applies to rows with row_marker whose timestamp
+            // is less than or equal to the tombstone's timestamp, the same way as a regular tombstone would.
+            // See https://github.com/scylladb/scylladb/issues/20424
+            memtable_min_timestamp = table_s.min_memtable_live_row_marker_timestamp();
+        } else {
+            // For regular tombstones, check the minimum live data timestamp.
+            // Even if purgeable tombstones shadow dead data in the memtable, it's ok to purge them;
+            // since "resurrecting" the already-dead data will no have effect, as they are already dead.
+            // See https://github.com/scylladb/scylladb/issues/20423
+            memtable_min_timestamp = table_s.min_memtable_live_timestamp();
+        }
+        clogger.trace("get_max_purgeable_timestamp {}.{}: memtable_min_timestamp={} compacting_max_timestamp={} memtable_has_key={} is_shadowable={} min_memtable_live_timestamp={} min_memtable_live_row_marker_timestamp={}",
+                table_s.schema()->ks_name(), table_s.schema()->cf_name(),
+                memtable_min_timestamp, compacting_max_timestamp, table_s.memtable_has_key(dk), is_shadowable, table_s.min_memtable_live_timestamp(), table_s.min_memtable_live_row_marker_timestamp());
+        // Use memtable timestamp if it contains live data older than the sstables being compacted,
+        // and if the memtable also contains the key we're calculating max purgeable timestamp for.
+        // First condition helps to not penalize the common scenario where memtable only contains
+        // newer data.
+        if (memtable_min_timestamp <= compacting_max_timestamp && table_s.memtable_has_key(dk)) {
+            timestamp = memtable_min_timestamp;
+            source = max_purgeable::timestamp_source::memtable_possibly_shadowing_data;
+        }
     }
-    clogger.trace("get_max_purgeable_timestamp {}.{}: memtable_min_timestamp={} compacting_max_timestamp={} memtable_has_key={} is_shadowable={} min_memtable_live_timestamp={} min_memtable_live_row_marker_timestamp={}",
-            table_s.schema()->ks_name(), table_s.schema()->cf_name(),
-            memtable_min_timestamp, compacting_max_timestamp, table_s.memtable_has_key(dk), is_shadowable, table_s.min_memtable_live_timestamp(), table_s.min_memtable_live_row_marker_timestamp());
-    // Use memtable timestamp if it contains live data older than the sstables being compacted,
-    // and if the memtable also contains the key we're calculating max purgeable timestamp for.
-    // First condition helps to not penalize the common scenario where memtable only contains
-    // newer data.
-    if (memtable_min_timestamp <= compacting_max_timestamp && table_s.memtable_has_key(dk)) {
-        timestamp = memtable_min_timestamp;
-        source = max_purgeable::timestamp_source::memtable_possibly_shadowing_data;
-    }
-  }
     std::optional<utils::hashed_key> hk;
     for (auto&& sst : boost::range::join(selector.select(dk).sstables, table_s.compacted_undeleted_sstables())) {
         if (compacting_set.contains(sst)) {
