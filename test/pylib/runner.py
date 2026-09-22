@@ -38,7 +38,7 @@ from test.pylib.coverage_utils import coverage_dir
 from test.pylib.ldap_server import start_ldap
 from test.pylib.s3mock_server import S3MockServer
 from test.pylib.resource_gather import setup_cgroup, setup_worker_cgroup, get_resource_gather, SystemResourceMonitor, \
-    SCYLLA_TEST_CGROUP_BASE_ENV, gather_host_info, gather_oom_kill_evidence
+    SCYLLA_TEST_CGROUP_BASE_ENV, gather_host_info, gather_oom_kill_evidence, gather_controller_snapshot
 from test.pylib.db.writer import SQLiteWriter, DEFAULT_DB_NAME, HOST_INFO_TABLE
 from test.pylib.host_registry import HostRegistry
 from test.pylib.s3_proxy import S3ProxyServer
@@ -136,6 +136,17 @@ PHASE_REPORT_KEY = pytest.StashKey[dict[str, pytest.CollectReport]]()
 CLUSTER_KEY = pytest.StashKey[ScyllaCluster | None]()
 
 FAILED_TEST_DIR = "failed_test"
+
+# Subdirectory of PYTEST_LOG_FOLDER holding per-worker oom_kill baseline
+# files (see resource_gather._snapshot_oom_kill_baseline()). Deliberately
+# outside the cgroup hierarchy: cgroupfs only exposes the kernel's fixed set
+# of control files per cgroup and does not support creating arbitrary new
+# files there.
+OOM_KILL_BASELINE_DIRNAME = "oom_kill_baseline"
+
+
+def _oom_kill_baseline_dir(config: pytest.Config) -> pathlib.Path:
+    return pathlib.Path(config.getoption("--tmpdir")).absolute() / PYTEST_LOG_FOLDER / OOM_KILL_BASELINE_DIRNAME
 
 
 def make_failed_test_dir(config: pytest.Config, build_mode: str, test_name: str) -> pathlib.Path:
@@ -434,7 +445,7 @@ def pytest_sessionstart(session: pytest.Session) -> None:
         # Workers inherit SCYLLA_TEST_CGROUP_BASE_ENV from the master via environment inheritance.
         if not is_xdist_worker and SCYLLA_TEST_CGROUP_BASE_ENV not in os.environ:
             setup_cgroup(is_required=True)
-        setup_worker_cgroup()
+        setup_worker_cgroup(_oom_kill_baseline_dir(session.config))
         # System-wide resource metrics (CPU%, memory) are identical from any process.
         # Only the master needs to record them.
         if not is_xdist_worker:
@@ -447,7 +458,7 @@ def pytest_sessionstart(session: pytest.Session) -> None:
 
 @pytest.hookimpl(optionalhook=True)
 def pytest_testnodedown(node, error) -> None:
-    """Log dmesg + cgroup memory.events when an xdist worker dies unexpectedly.
+    """Log cgroup memory.events/memory.current when an xdist worker dies unexpectedly.
 
     optionalhook=True: this module is also loaded as a plugin in sessions
     run with -p no:xdist, where the xdist hookspec that owns this hook isn't
@@ -457,19 +468,91 @@ def pytest_testnodedown(node, error) -> None:
     OOM-killer or a cgroup memory limit rather than crashing on its own; this
     dump lets a future recurrence confirm or refute that hypothesis from the
     controller's log, next to the "worker crashed" failure it already reports.
+
+    This covers the worker dying; see _maybe_snapshot_controller_cgroup() for
+    the complementary case of the controller process itself being killed,
+    which no hook here can catch after the fact.
     """
     if error is None:
         return
     try:
         worker_id = node.gateway.id
         worker_pid = (getattr(node, "workerinfo", None) or {}).get("pid")
-        evidence = gather_oom_kill_evidence(worker_id)
+        baseline_dir = _oom_kill_baseline_dir(_pytest_config) if _pytest_config is not None else None
+        evidence = gather_oom_kill_evidence(worker_id, baseline_dir)
         logger.warning(
             "xdist worker %s (pid %s) died unexpectedly: %s\n%s",
             worker_id, worker_pid, error, evidence,
         )
     except Exception:
         logger.warning("Failed to gather diagnostics for a dead xdist worker", exc_info=True)
+
+
+# Name of the file _maybe_snapshot_controller_cgroup() refreshes under
+# PYTEST_LOG_FOLDER; see that function's docstring.
+CONTROLLER_SNAPSHOT_FILENAME = "controller_cgroup_snapshot.txt"
+
+# Minimum time between refreshes of that file: frequent enough that the
+# snapshot is still useful evidence if the controller is killed shortly
+# after, infrequent enough that piggybacking on every test report (see
+# pytest_runtest_logreport() below) is negligible added I/O.
+CONTROLLER_SNAPSHOT_INTERVAL_SECONDS = 45
+
+_last_controller_snapshot_time = 0.0
+
+
+def _now() -> float:
+    """Indirection over time.time() so tests can monkeypatch it scoped to
+    this module, rather than patching the shared global time module."""
+    return time.time()
+
+
+def _maybe_snapshot_controller_cgroup() -> None:
+    """Best-effort periodic on-disk snapshot of the controller's own cgroup state.
+
+    pytest_testnodedown() can log evidence for a dead *worker* because the
+    controller is still alive to run the hook. If the controller process
+    itself is killed there is no process left alive to run any hook at all
+    -- and SIGKILL cannot be caught in the first place -- so there is nothing
+    to intercept after the fact.
+
+    Instead, this piggybacks on pytest_runtest_logreport(), which already
+    fires on every test phase in every run, to opportunistically refresh a
+    small snapshot file at most once every CONTROLLER_SNAPSHOT_INTERVAL_SECONDS.
+    logging.FileHandler.emit() flushes on every call, so anything logged
+    through the root logger is durable on disk essentially immediately,
+    independent of whether the process is later killed -- writing this
+    snapshot file directly relies on the same property (a plain flushed
+    write, no buffering left in-process).
+
+    This is a best-effort periodic snapshot, not a guaranteed-fresh one: it
+    can be up to CONTROLLER_SNAPSHOT_INTERVAL_SECONDS stale by the time the
+    controller dies. A background thread/timer could keep it fresher, but is
+    deliberately not used here: it would add shutdown/lifecycle complexity
+    (a thread to join, races with pytest_sessionfinish) for a diagnostic that
+    only needs to be roughly current, not exact.
+
+    Only runs in the controller process -- xdist workers have their own
+    death handled separately by pytest_testnodedown() on the controller.
+    """
+    global _last_controller_snapshot_time
+    if os.environ.get("PYTEST_XDIST_WORKER") is not None:
+        return
+    config = _pytest_config
+    if config is None:
+        return
+    now = _now()
+    if now - _last_controller_snapshot_time < CONTROLLER_SNAPSHOT_INTERVAL_SECONDS:
+        return
+    _last_controller_snapshot_time = now
+    try:
+        snapshot_path = (
+            pathlib.Path(config.getoption("--tmpdir")).absolute() / PYTEST_LOG_FOLDER / CONTROLLER_SNAPSHOT_FILENAME
+        )
+        snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+        snapshot_path.write_text(gather_controller_snapshot())
+    except Exception:
+        logger.debug("Failed to refresh controller cgroup snapshot", exc_info=True)
 
 
 @pytest.hookimpl(tryfirst=True)
@@ -485,7 +568,12 @@ def pytest_runtest_logreport(report):
     - function_path: The function path of the test case (excluding parameters).
 
     Uses tryfirst=True to run before LogXML's hook has created the node_reporter to avoid double recording.
+
+    Also opportunistically refreshes the controller cgroup snapshot on disk;
+    see _maybe_snapshot_controller_cgroup().
     """
+    _maybe_snapshot_controller_cgroup()
+
     # Get the XML reporter
     config = _pytest_config
     if config is None:
