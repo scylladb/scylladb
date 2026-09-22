@@ -67,6 +67,7 @@ static void register_metrics_with_optional_table(seastar::metrics::metric_groups
             OPERATION(list_tags_of_resource, "ListTagsOfResource")
             OPERATION(put_item, "PutItem")
             OPERATION(query, "Query")
+            OPERATION(search_vectors, "SearchVectors")
             OPERATION(restore_table_from_backup, "RestoreTableFromBackup")
             OPERATION(restore_table_to_point_in_time, "RestoreTableToPointInTime")
             OPERATION(scan, "Scan")
@@ -94,6 +95,7 @@ static void register_metrics_with_optional_table(seastar::metrics::metric_groups
     OPERATION_LATENCY(batch_get_item_latency, "BatchGetItem")
     OPERATION_LATENCY(get_records_latency, "GetRecords")
     OPERATION_LATENCY(query_latency, "Query")
+    OPERATION_LATENCY(search_vectors_latency, "SearchVectors")
     OPERATION_LATENCY(scan_latency, "Scan")
     if (!has_table) {
         // Create and delete operations are not applicable to a per-table metrics
@@ -122,7 +124,7 @@ static void register_metrics_with_optional_table(seastar::metrics::metric_groups
             seastar::metrics::make_total_operations("conditional_check_failed", stats.conditional_check_failed,
                     seastar::metrics::description("number of conditional requests whose condition was false (ConditionalCheckFailedException)"), labels).aggregate(aggregate_labels).set_skip_when_empty(),
             seastar::metrics::make_total_operations("returned_items", stats.returned_items,
-                    seastar::metrics::description("number of items returned by Query and Scan operations (not other operations)"), labels).aggregate(aggregate_labels).set_skip_when_empty(),
+                    seastar::metrics::description("number of items returned by Query, Scan and SearchVectors operations (not other operations)"), labels).aggregate(aggregate_labels).set_skip_when_empty(),
             seastar::metrics::make_total_operations("returned_records", stats.returned_records,
                     seastar::metrics::description("number of stream records returned by GetRecords operations"), labels).aggregate(aggregate_labels).set_skip_when_empty(),
             seastar::metrics::make_total_operations("filtered_rows_read_total", stats.cql_stats.filtered_rows_read_total,
@@ -149,7 +151,7 @@ static void register_metrics_with_optional_table(seastar::metrics::metric_groups
                     [&stats]{ return to_metrics_histogram(stats.api_operations.batch_get_item_histogram);})(op("BatchGetItem")).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
             seastar::metrics::make_histogram("batch_item_count_histogram", seastar::metrics::description("Histogram of the number of items in a batch request"), labels,
                     [&stats]{ return to_metrics_histogram(stats.api_operations.batch_write_item_histogram);})(op("BatchWriteItem")).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
-            seastar::metrics::make_histogram("returned_items_histogram", seastar::metrics::description("Histogram of the number of items returned per Query or Scan operation"), labels,
+            seastar::metrics::make_histogram("returned_items_histogram", seastar::metrics::description("Histogram of the number of items returned per Query, Scan and SearchVectors operation"), labels,
                     [&stats]{ return to_metrics_histogram(stats.returned_items_histogram);}).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
             seastar::metrics::make_histogram("operation_size_kb", seastar::metrics::description("Histogram of item sizes involved in a request"), labels,
                     [&stats]{ return to_metrics_histogram(stats.operation_sizes.get_item_op_size_kb);})(op("GetItem")).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
@@ -190,14 +192,12 @@ static void register_metrics_with_optional_table(seastar::metrics::metric_groups
 
     // Vector search metrics
     metrics.add_group(group_name, {
-            seastar::metrics::make_total_operations("vector_search_query", stats.vector_search.query,
-                    seastar::metrics::description("number of Query operations with VectorSearch"), labels).aggregate(aggregate_labels).set_skip_when_empty(),
-            seastar::metrics::make_total_operations("vector_search_query_returned_items", stats.vector_search.query_returned_items,
-                    seastar::metrics::description("total number of items returned by Query operations with VectorSearch"), labels).aggregate(aggregate_labels).set_skip_when_empty(),
-            seastar::metrics::make_total_operations("vector_search_query_items_from_vs", stats.vector_search.query_items_from_vs,
+            seastar::metrics::make_total_operations("vector_search_returned_items", stats.vector_search.returned_items,
+                    seastar::metrics::description("total number of items returned by vector search operations"), labels).aggregate(aggregate_labels).set_skip_when_empty(),
+            seastar::metrics::make_total_operations("vector_search_items_from_vs", stats.vector_search.items_from_vs,
                     seastar::metrics::description("total number of nearest neighbors found by the vector store (some may be post-filtered and not returned)"), labels).aggregate(aggregate_labels).set_skip_when_empty(),
-            seastar::metrics::make_total_operations("vector_search_query_items_from_base_table", stats.vector_search.query_items_from_base_table,
-                    seastar::metrics::description("total number of items read from the base table by vector search queries"), labels).aggregate(aggregate_labels).set_skip_when_empty(),
+            seastar::metrics::make_total_operations("vector_search_items_from_base_table", stats.vector_search.items_from_base_table,
+                    seastar::metrics::description("total number of items read from the base table by vector search operations"), labels).aggregate(aggregate_labels).set_skip_when_empty(),
     });
 
     // Only register the following metrics for the global metrics, not per-table

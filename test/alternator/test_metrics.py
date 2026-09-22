@@ -14,6 +14,9 @@
 # "skipped" when not running against Scylla, or when unable to retrieve
 # metrics through out-of-band HTTP requests to Scylla's Prometheus port (9180).
 #
+# test_vector.py includes additional tests for metrics related specifically
+# to vector indexes and vector searches.
+#
 # IMPORTANT: we do not want these tests to assume that are not running in
 # parallel with any other tests or workload - because such an assumption
 # would limit our test deployment options in the future. NOT making this
@@ -23,7 +26,6 @@
 # counter increases.
 ##############################################################################
 
-import re
 import time
 from bisect import bisect_left
 from contextlib import contextmanager
@@ -34,117 +36,9 @@ import requests
 from botocore.exceptions import ClientError
 
 from test.alternator.test_cql_rbac import new_dynamodb, new_dynamodb_streams, new_role
-from test.alternator.util import random_string, new_test_table, is_aws, scylla_config_read, scylla_config_temporary, get_signed_request, unique_table_name
+from test.alternator.util import random_string, new_test_table, is_aws, scylla_config_read, scylla_config_temporary, get_signed_request, unique_table_name, metrics, get_metrics, get_metric, check_increases_metric, check_increases_metric_exact, check_increases_operation, check_table_increases_operation
 from test.pylib.skip_types import skip_env
 from test.alternator.test_streams import wait_for_active_stream
-from test.alternator.test_vector import vs, needs_vector_store, wait_for_vector_index_active, table_vs
-
-# Fixture for checking if we are able to test Scylla metrics. Scylla metrics
-# are not available on AWS (of course), but may also not be available for
-# Scylla if for some reason we have only access to the Alternator protocol
-# port but no access to the metrics port (9180).
-# If metrics are *not* available, tests using this fixture will be skipped.
-# Tests using this fixture may call get_metrics(metrics).
-@pytest.fixture(scope="module")
-def metrics(dynamodb):
-    if is_aws(dynamodb):
-        skip_env('Scylla-only feature not supported by AWS')
-    url = dynamodb.meta.client._endpoint.host
-    # The Prometheus API is on port 9180, and always http, not https.
-    url = re.sub(r':[0-9]+(/|$)', ':9180', url)
-    url = re.sub(r'^https:', 'http:', url)
-    url = url + '/metrics'
-    resp = requests.get(url)
-    if resp.status_code != 200:
-        skip_env('Metrics port 9180 is not available')
-    yield url
-
-# Utility function for fetching all metrics from Scylla, using an HTTP request
-# to port 9180. The response format is defined by the Prometheus protocol.
-# get_metrics() needs the test to use the "metrics" fixture.
-def get_metrics(metrics):
-    response = requests.get(metrics)
-    assert response.status_code == 200
-    return response.text
-
-# Utility function for fetching a metric with a given name and optionally a
-# given sub-metric label (which should be a name-value map). If multiple
-# matches are found, they are summed - this is useful for summing up the
-# counts from multiple shards.
-def get_metric(metrics, name, requested_labels=None, the_metrics=None):
-    if not the_metrics:
-        the_metrics = get_metrics(metrics)
-    total = 0.0
-    lines = re.compile('^'+name+'{.*$', re.MULTILINE)
-    for match in re.findall(lines, the_metrics):
-        a = match.split()
-        metric = a[0]
-        val = float(a[1])
-        # Check if match also matches the requested labels
-        if requested_labels:
-            # we know metric begins with name{ and ends with } - the labels
-            # are what we have between those
-            got_labels = metric[len(name)+1:-1].split(',')
-            # Check that every one of the requested labels is in got_labels:
-            for k, v in requested_labels.items():
-                if not f'{k}="{v}"' in got_labels:
-                    # No match for requested label, skip this metric (python
-                    # doesn't have "continue 2" so let's just set val to 0...
-                    val = 0
-                    break
-        total += float(val)
-    return total
-
-# context manager for checking that a certain piece of code increases each
-# of the specified metrics. Helps reduce the amount of code duplication
-# below.
-@contextmanager
-def check_increases_metric(metrics, metric_names, requested_labels=None):
-    the_metrics = get_metrics(metrics)
-    saved_metrics = { x: get_metric(metrics, x, requested_labels, the_metrics) for x in metric_names }
-    yield
-    the_metrics = get_metrics(metrics)
-    for n in metric_names:
-        assert saved_metrics[n] < get_metric(metrics, n, requested_labels, the_metrics), f"Metric '{n}' with labels {requested_labels} did not increase"
-
-@contextmanager
-def check_increases_metric_exact(metrics, metric_name, value_and_labels):
-    the_metrics = get_metrics(metrics)
-    saved_metric = [get_metric(metrics, metric_name, vl[1], the_metrics) for vl in value_and_labels]
-    yield
-    the_metrics = get_metrics(metrics)
-    for (expected_increase, labels), base_value in zip(value_and_labels, saved_metric):
-        actual_increase = get_metric(metrics, metric_name, labels, the_metrics) - base_value
-        assert actual_increase == expected_increase, (
-            f"Metric '{metric_name}' with labels {labels} did not increase by an exact value. "
-            f"Initial value: {base_value}. "
-            f"Expected increase: {expected_increase}. "
-            f"Actual increase: {actual_increase}."
-        )
-
-@contextmanager
-def check_increases_operation(metrics, operation_names, metric_name = 'scylla_alternator_operation', expected_value=None):
-    the_metrics = get_metrics(metrics)
-    saved_metrics = { x: get_metric(metrics, metric_name, {'op': x}, the_metrics) for x in operation_names }
-    yield
-    the_metrics = get_metrics(metrics)
-    for op in operation_names:
-        if expected_value:
-            assert expected_value == get_metric(metrics, metric_name, {'op': op}, the_metrics) - saved_metrics[op]
-        else:
-            assert saved_metrics[op] < get_metric(metrics, metric_name, {'op': op}, the_metrics)
-
-@contextmanager
-def check_table_increases_operation(metrics, operation_names, table, metric_name = 'scylla_alternator_table_operation', expected_value=None):
-    the_metrics = get_metrics(metrics)
-    saved_metrics = { x: get_metric(metrics, metric_name, {'op': x, 'cf': table}, the_metrics) for x in operation_names }
-    yield
-    the_metrics = get_metrics(metrics)
-    for op in operation_names:
-        if expected_value:
-            assert expected_value == get_metric(metrics, metric_name, {'op': op, 'cf': table}, the_metrics) - saved_metrics[op]
-        else:
-            assert saved_metrics[op] < get_metric(metrics, metric_name, {'op': op, 'cf': table}, the_metrics)
 
 @lru_cache
 def histogram_bucket_offsets(size, ratio=1.2):
@@ -434,103 +328,6 @@ def test_export_table_operations(test_table_s, metrics):
     with check_increases_operation(metrics, ['ExportTableToPointInTime']):
         with check_table_increases_operation(metrics, ['ExportTableToPointInTime'], test_table_s.name):
             test_table_s.meta.client.export_table_to_point_in_time(TableArn=table_arn, S3Bucket='my-bucket')
-
-# Test counter for Query with VectorSearch: both global and per-table.
-def test_query_vector_operations(vs, metrics):
-    with new_test_table(vs,
-            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
-            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}],
-            VectorIndexes=[{'IndexName': 'vind',
-                'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3}}]) as table:
-        with check_increases_operation(metrics, ['Query']):
-            with check_table_increases_operation(metrics, ['Query'], table.name):
-                # The vector store may or may not be configured; either way
-                # the Query counter must be incremented.
-                try:
-                    table.query(IndexName='vind',
-                        VectorSearch={'QueryVector': [1, 2, 3]}, Limit=1)
-                except ClientError:
-                    pass
-
-# Test that the three vector search item-count metrics -
-#  * scylla_alternator_vector_search_query_returned_items,
-#  * scylla_alternator_vector_search_query_items_from_vs,
-#  * scylla_alternator_vector_search_query_items_from_base_table
-# are incremented as needed for a vector search query.
-# Test both global and per-table versions of these metrics.
-# This test requires a configured vector store and will be skipped otherwise.
-def test_query_vector_item_metrics(vs, metrics, needs_vector_store):
-    with new_test_table(vs,
-            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
-            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
-        # Insert items before enabling the vector index, so the prefill scan
-        # will index them and if we wait for the index to become ACTIVE
-        # we can be sure these items are indexed.
-        for i in range(3):
-            table.put_item(Item={'p': random_string(), 'v': [i, 0, 0]})
-        table.update(VectorIndexUpdates=[{'Create':
-            {'IndexName': 'vind',
-             'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3}}}])
-        wait_for_vector_index_active(table, 'vind')
-
-        # A SELECT=ALL_ATTRIBUTES query fetches 2 items from the base table,
-        # so all three metrics must increase by exactly 2.
-        vs_metric = 'scylla_alternator_vector_search_query_items_from_vs'
-        returned_metric = 'scylla_alternator_vector_search_query_returned_items'
-        base_metric = 'scylla_alternator_vector_search_query_items_from_base_table'
-        # The same metrics also exist per-table:
-        table_vs_metric = 'scylla_alternator_table_vector_search_query_items_from_vs'
-        table_returned_metric = 'scylla_alternator_table_vector_search_query_returned_items'
-        table_base_metric = 'scylla_alternator_table_vector_search_query_items_from_base_table'
-        table_labels = {'cf': table.name}
-        the_metrics = get_metrics(metrics)
-        before = {m: get_metric(metrics, m, None, the_metrics) for m in [vs_metric, returned_metric, base_metric]}
-        before_table = {m: get_metric(metrics, m, table_labels, the_metrics) for m in [table_vs_metric, table_returned_metric, table_base_metric]}
-        result = table.query(IndexName='vind', VectorSearch={'QueryVector': [1, 0, 0]}, Limit=2, Select='ALL_ATTRIBUTES')
-        assert result['Count'] == 2
-        the_metrics = get_metrics(metrics)
-        after = {m: get_metric(metrics, m, None, the_metrics) for m in [vs_metric, returned_metric, base_metric]}
-        after_table = {m: get_metric(metrics, m, table_labels, the_metrics) for m in [table_vs_metric, table_returned_metric, table_base_metric]}
-        assert after[vs_metric] - before[vs_metric] == 2
-        assert after[returned_metric] - before[returned_metric] == 2
-        assert after[base_metric] - before[base_metric] == 2
-        assert after_table[table_vs_metric] - before_table[table_vs_metric] == 2
-        assert after_table[table_returned_metric] - before_table[table_returned_metric] == 2
-        assert after_table[table_base_metric] - before_table[table_base_metric] == 2
-
-        # A SELECT=COUNT query doesn't return any items, so increments only
-        # items_from_vs, not the other two:
-        the_metrics = get_metrics(metrics)
-        before = {m: get_metric(metrics, m, None, the_metrics) for m in [vs_metric, returned_metric, base_metric]}
-        before_table = {m: get_metric(metrics, m, table_labels, the_metrics) for m in [table_vs_metric, table_returned_metric, table_base_metric]}
-        result = table.query(IndexName='vind', VectorSearch={'QueryVector': [1, 0, 0]}, Limit=2, Select='COUNT')
-        assert result['Count'] == 2
-        the_metrics = get_metrics(metrics)
-        after = {m: get_metric(metrics, m, None, the_metrics) for m in [vs_metric, returned_metric, base_metric]}
-        after_table = {m: get_metric(metrics, m, table_labels, the_metrics) for m in [table_vs_metric, table_returned_metric, table_base_metric]}
-        assert after[vs_metric] - before[vs_metric] == 2
-        assert after[returned_metric] - before[returned_metric] == 0
-        assert after[base_metric] - before[base_metric] == 0
-        assert after_table[table_vs_metric] - before_table[table_vs_metric] == 2
-        assert after_table[table_returned_metric] - before_table[table_returned_metric] == 0
-        assert after_table[table_base_metric] - before_table[table_base_metric] == 0
-
-        # A SELECT=ALL_PROJECTED_ATTRIBUTES query increments items_from_vs
-        # and returned_items, but not items_from_base_table.
-        the_metrics = get_metrics(metrics)
-        before = {m: get_metric(metrics, m, None, the_metrics) for m in [vs_metric, returned_metric, base_metric]}
-        before_table = {m: get_metric(metrics, m, table_labels, the_metrics) for m in [table_vs_metric, table_returned_metric, table_base_metric]}
-        result = table.query(IndexName='vind', VectorSearch={'QueryVector': [1, 0, 0]}, Limit=2, Select='ALL_PROJECTED_ATTRIBUTES')
-        assert result['Count'] == 2
-        the_metrics = get_metrics(metrics)
-        after = {m: get_metric(metrics, m, None, the_metrics) for m in [vs_metric, returned_metric, base_metric]}
-        after_table = {m: get_metric(metrics, m, table_labels, the_metrics) for m in [table_vs_metric, table_returned_metric, table_base_metric]}
-        assert after[vs_metric] - before[vs_metric] == 2
-        assert after[returned_metric] - before[returned_metric] == 2
-        assert after[base_metric] - before[base_metric] == 0
-        assert after_table[table_vs_metric] - before_table[table_vs_metric] == 2
-        assert after_table[table_returned_metric] - before_table[table_returned_metric] == 2
-        assert after_table[table_base_metric] - before_table[table_base_metric] == 0
 
 # Test counters for DescribeEndpoints:
 def test_describe_endpoints_operations(dynamodb, metrics):
@@ -1521,58 +1318,6 @@ def test_returned_item_count_not_incremented_for_select_count(test_table_ss, met
     assert result['Count'] == 2
     assert 'Items' not in result
     assert get_metric(metrics, 'scylla_alternator_table_returned_items', {'cf': test_table_ss.name}) == before
-
-# Test that a vector search Query also increments scylla_alternator_returned_items
-# and scylla_alternator_returned_items_histogram_bucket, and that SELECT=COUNT
-# does not. These are the same general Query/Scan counters tested above for
-# plain queries, but here we verify they work for the vector code path too.
-# This test requires a configured vector store and will be skipped otherwise.
-def test_returned_item_count_vector(vs, metrics, needs_vector_store):
-    with new_test_table(vs,
-            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
-            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
-        for i in range(3):
-            table.put_item(Item={'p': random_string(), 'v': [i, 0, 0]})
-        table.update(VectorIndexUpdates=[{'Create':
-            {'IndexName': 'vind',
-             'VectorAttribute': {'AttributeName': 'v', 'Dimensions': 3}}}])
-        wait_for_vector_index_active(table, 'vind')
-
-        # A normal vector query returning 2 items should increment
-        # returned_items by 2 and the histogram bucket for le=2 by 1.
-        # For per-table metrics, we can use exact equality since no other
-        # workload touches this table.
-        cf = table.name
-        with check_increases_metric_exact(metrics, 'scylla_alternator_returned_items_histogram_bucket',
-                [[0, {'le': '1.000000'}], [1, {'le': '2.000000'}]]):
-            with check_increases_metric_exact(metrics, 'scylla_alternator_table_returned_items_histogram_bucket',
-                    [[0, {'le': '1.000000', 'cf': cf}], [1, {'le': '2.000000', 'cf': cf}]]):
-                before = get_metric(metrics, 'scylla_alternator_returned_items')
-                before_table = get_metric(metrics, 'scylla_alternator_table_returned_items', {'cf': cf})
-                result = table.query(IndexName='vind', VectorSearch={'QueryVector': [1, 0, 0]},
-                    Limit=2, Select='ALL_ATTRIBUTES')
-                assert result['Count'] == 2
-                after = get_metric(metrics, 'scylla_alternator_returned_items')
-                after_table = get_metric(metrics, 'scylla_alternator_table_returned_items', {'cf': cf})
-                assert after >= before + 2
-                assert after_table == before_table + 2
-
-        # SELECT=COUNT should not increment returned_items or the histogram.
-        before = get_metric(metrics, 'scylla_alternator_returned_items')
-        before_table = get_metric(metrics, 'scylla_alternator_table_returned_items', {'cf': cf})
-        before_hist = get_metric(metrics, 'scylla_alternator_returned_items_histogram_bucket',
-            {'le': '2.000000'})
-        before_hist_table = get_metric(metrics, 'scylla_alternator_table_returned_items_histogram_bucket',
-            {'le': '2.000000', 'cf': cf})
-        result = table.query(IndexName='vind', VectorSearch={'QueryVector': [1, 0, 0]},
-            Limit=2, Select='COUNT')
-        assert result['Count'] == 2
-        assert get_metric(metrics, 'scylla_alternator_returned_items') == before
-        assert get_metric(metrics, 'scylla_alternator_table_returned_items', {'cf': cf}) == before_table
-        assert get_metric(metrics, 'scylla_alternator_returned_items_histogram_bucket',
-            {'le': '2.000000'}) == before_hist
-        assert get_metric(metrics, 'scylla_alternator_table_returned_items_histogram_bucket',
-            {'le': '2.000000', 'cf': cf}) == before_hist_table
 
 # Test that HTTP 400 errors increment scylla_alternator_user_errors, but
 # that ConditionalCheckFailedException (which DynamoDB excludes from its

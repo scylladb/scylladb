@@ -3,12 +3,10 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
 import pytest
-from test.alternator.test_metrics import metrics, get_metrics, check_increases_metric
 from contextlib import contextmanager
 import time
 
-from .util import random_string, unique_table_name
-from .test_cql_rbac import new_role, new_dynamodb
+from .util import random_string, unique_table_name, metrics, get_metrics, check_increases_metric, new_role, new_dynamodb
 
 # new_service_level() is a context manager for temporarily creating a new
 # service level with a unique name and attaching it to the given role.
