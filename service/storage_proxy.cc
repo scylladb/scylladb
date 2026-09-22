@@ -518,14 +518,25 @@ public:
     }
 
 private:
+    // The verb handlers resolve the table synchronously, before the request reaches the paths which
+    // wait for a pending schema change commit, so wait here, where every remote request resolves its
+    // schema. See replica::database::table_for_request().
+    future<> wait_for_schema_change_commit(const schema& s, clock_type::time_point timeout) {
+        return _sp.local_db().wait_for_schema_change_commit(s.id(), timeout);
+    }
+
     future<schema_ptr> get_schema_for_read(table_schema_version v, locator::host_id from, uint32_t from_shard, clock_type::time_point timeout) {
         abort_on_expiry aoe(timeout);
-        co_return co_await _mm.get_schema_for_read(std::move(v), from, from_shard, _ms, aoe.abort_source());
+        auto s = co_await _mm.get_schema_for_read(std::move(v), from, from_shard, _ms, aoe.abort_source());
+        co_await wait_for_schema_change_commit(*s, timeout);
+        co_return s;
     }
 
     future<schema_ptr> get_schema_for_write(table_schema_version v, locator::host_id from, uint32_t from_shard, clock_type::time_point timeout) {
         abort_on_expiry aoe(timeout);
-        co_return co_await _mm.get_schema_for_write(std::move(v), from, from_shard, _ms, aoe.abort_source());
+        auto s = co_await _mm.get_schema_for_write(std::move(v), from, from_shard, _ms, aoe.abort_source());
+        co_await wait_for_schema_change_commit(*s, timeout);
+        co_return s;
     }
 
     future<replica::exception_variant> handle_counter_mutation(
