@@ -11,14 +11,18 @@
 #include "alternator/error.hh"
 #include "alternator/executor.hh"
 #include "alternator/executor_util.hh"
+#include "auth/permission.hh"
+#include "db/system_distributed_keyspace.hh"
 #include "service/storage_proxy.hh"
 #include "utils/rjson.hh"
 #include <algorithm>
 #include <array>
-#include <chrono>
 #include <cmath>
+#include <limits>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace alternator {
 
@@ -281,7 +285,7 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
 
     // ExportTime - only "now" (or close to now) is supported
     // If not specified, use current time. If specified, must be within 5 minutes of now.
-    auto now = (double)std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+    auto now = (double)db_clock::to_time_t(db_clock::now());
     auto export_time = now;
     const rjson::value* export_time_v = rjson::find(request, "ExportTime");
     if (export_time_v) {
@@ -334,6 +338,180 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
 
     rjson::value response = rjson::empty_object();
     rjson::add(response, "ExportDescription", std::move(export_desc));
+    co_return rjson::print(std::move(response));
+}
+
+future<executor::request_return_type> executor::describe_export(client_state& client_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+    _stats.api_operations.describe_export++;
+
+    // An export ARN is the ARN of the exported table with `/export/<id>` appended, so parsing it
+    // also tells us which table the export belongs to.
+    auto export_arn = get_non_empty_string_attribute(request, "ExportArn");
+    auto parts = parse_arn(export_arn, "ExportArn", "Export", "/export/");
+
+    maybe_audit(audit_info, audit::statement_category::QUERY, parts.keyspace_name, parts.table_name, "DescribeExport", request);
+    if (auto table = _proxy.data_dictionary().try_find_table(parts.keyspace_name, parts.table_name)) {
+        // Per-table metrics live on the table object, so they only exist for as long as it does.
+        get_stats_from_schema(_proxy, *table->schema())->api_operations.describe_export++;
+    }
+    // The exported table may have been dropped after the export was accepted. Yet, DynamoDB keeps describing such exports.
+    // Permissions are attached to the table's name, so they can be checked whether or not the table is still there.
+    co_await verify_permission(_enforce_authorization, _warn_authorization, client_state, parts.keyspace_name, parts.table_name, auth::permission::SELECT, _stats);
+
+    auto normal_token_owners = _proxy.get_token_metadata_ptr()->count_normal_token_owners();
+    auto exp = co_await _sdks.get_alternator_export(export_arn, { normal_token_owners });
+    // metadata_expires_at is set to completed_at + 90 days once an export reaches COMPLETED or
+    // FAILED, matching DynamoDB's 90-day retention of export metadata, and it stays unset while the
+    // export is still running, so a live export never expires. Removing the export row is left entirely
+    // to the per-row TTL, which deletes it on its next sweep.
+    if (!exp) {
+        co_return api_error::export_not_found(fmt::format("ExportArn: Export `{}` not found", export_arn));
+    }
+
+    rjson::value export_desc = rjson::empty_object();
+    rjson::add(export_desc, "ExportArn", rjson::from_string(export_arn));
+    rjson::add(export_desc, "ExportStatus", rjson::from_string(exp->status));
+    // DynamoDB reports the timestamps in ExportDescription as seconds since the epoch.
+    rjson::add(export_desc, "StartTime", rjson::value(int64_t(db_clock::to_time_t(exp->accepted_at))));
+
+    // The rest of the request is echoed back from the request that started the export,
+    // with the same defaults which ExportTableToPointInTime applies to a request that omits them.
+    auto exported_request = rjson::parse(exp->request);
+    rjson::add(export_desc, "TableArn", rjson::from_string(get_non_empty_string_attribute(exported_request, "TableArn")));
+    rjson::add(export_desc, "S3Bucket", rjson::from_string(get_non_empty_string_attribute(exported_request, "S3Bucket")));
+    rjson::add(export_desc, "S3Prefix", rjson::from_string(get_non_empty_string_attribute(exported_request, "S3Prefix", "")));
+    rjson::add(export_desc, "ExportFormat", rjson::from_string(get_non_empty_string_attribute(exported_request, "ExportFormat", "DYNAMODB_JSON")));
+    // ExportType is reported by DynamoDB only if ExportTableToPointInTime request had it
+    if (rjson::find(exported_request, "ExportType")) {
+        rjson::add(export_desc, "ExportType", rjson::from_string(get_non_empty_string_attribute(exported_request, "ExportType")));
+    }
+
+    // TableId identifies the table the export was taken from, not whatever table now answers to its name
+    rjson::add(export_desc, "TableId", rjson::from_string(exp->table_id.to_sstring()));
+    rjson::add(export_desc, "ExportTime", rjson::value(int64_t(db_clock::to_time_t(exp->export_time))));
+    rjson::add(export_desc, "ClientToken", rjson::from_string(exp->client_token));
+
+    // Everything below describes a finished export, so it is only present once one has run.
+    if (exp->manifest && !exp->manifest->empty()) {
+        rjson::add(export_desc, "ExportManifest", rjson::from_string(*exp->manifest));
+    }
+    if (exp->failure_code && !exp->failure_code->empty()) {
+        rjson::add(export_desc, "FailureCode", rjson::from_string(*exp->failure_code));
+    }
+    if (exp->failure_message && !exp->failure_message->empty()) {
+        rjson::add(export_desc, "FailureMessage", rjson::from_string(*exp->failure_message));
+    }
+    if (exp->item_count) {
+        rjson::add(export_desc, "ItemCount", rjson::value(*exp->item_count));
+    }
+    if (exp->billed_size_bytes) {
+        rjson::add(export_desc, "BilledSizeBytes", rjson::value(*exp->billed_size_bytes));
+    }
+    if (exp->completed_at) {
+        rjson::add(export_desc, "EndTime", rjson::value(int64_t(db_clock::to_time_t(*exp->completed_at))));
+    }
+
+    rjson::value response = rjson::empty_object();
+    rjson::add(response, "ExportDescription", std::move(export_desc));
+    co_return rjson::print(std::move(response));
+}
+
+static rjson::value make_export_summary(const db::system_distributed_keyspace::alternator_export_summary& exp) {
+    rjson::value summary = rjson::empty_object();
+    rjson::add(summary, "ExportArn", rjson::from_string(exp.export_arn));
+    rjson::add(summary, "ExportStatus", rjson::from_string(exp.status));
+    // Unlike DescribeExport, which reports ExportType only when the request carried it, DynamoDB
+    // always reports it here, so an omitted one is reported as the default the request was accepted with.
+    auto exported_request = rjson::parse(exp.request);
+    rjson::add(summary, "ExportType", rjson::from_string(get_non_empty_string_attribute(exported_request, "ExportType", "FULL_EXPORT")));
+    return summary;
+}
+
+future<executor::request_return_type> executor::list_exports(client_state& client_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+    _stats.api_operations.list_exports++;
+
+    // DynamoDB fits at most 25 summaries in a page and rejects a MaxResults outside that range.
+    static constexpr int default_max_results = 25;
+    static constexpr int min_max_results = 1;
+    static constexpr int max_max_results = 25;
+
+    int max_results = default_max_results;
+    if (const rjson::value* max_results_v = rjson::find(request, "MaxResults")) {
+        if (!max_results_v->IsInt()) {
+            co_return api_error::validation("MaxResults must be an integer");
+        }
+        max_results = max_results_v->GetInt();
+        if (max_results < min_max_results || max_results > max_max_results) {
+            co_return api_error::validation("MaxResults must be greater than 0 and no greater than 25");
+        }
+    }
+
+    // TableArn is optional - without it every table's exports are listed.
+    std::optional<arn_parts> table_parts;
+    if (const rjson::value* table_arn_v = rjson::find(request, "TableArn")) {
+        if (!table_arn_v->IsString()) {
+            co_return api_error::validation("tableArn parameter: failed to parse - must be a string");
+        }
+        auto table_arn = rjson::to_string_view(*table_arn_v);
+        if (table_arn.empty() || table_arn.size() > 1024) {
+            co_return api_error::validation("tableArn parameter: failed to parse - must be between 1 and 1024 characters");
+        }
+        table_parts = parse_arn(table_arn, "TableArn", "table", "");
+    }
+
+    std::string_view next_token;
+    if (const rjson::value* next_token_v = rjson::find(request, "NextToken")) {
+        if (!next_token_v->IsString()) {
+            co_return api_error::validation("NextToken must be a string");
+        }
+        next_token = rjson::to_string_view(*next_token_v);
+    }
+
+    maybe_audit(audit_info, audit::statement_category::QUERY, "", "", "ListExports", request);
+
+    auto normal_token_owners = _proxy.get_token_metadata_ptr()->count_normal_token_owners();
+    auto exports = co_await _sdks.list_alternator_exports({ normal_token_owners });
+
+    // The exports table is partitioned by the export's ARN, so one table's exports cannot be asked
+    // for directly. An export ARN is the exported table's ARN with `/export/<id>` appended, which
+    // is what the TableArn filter matches on.
+    if (table_parts) {
+        std::erase_if(exports, [&] (const auto& exp) {
+            auto parts = parse_arn(exp.export_arn, "ExportArn", "Export", "/export/");
+            return parts.keyspace_name != table_parts->keyspace_name || parts.table_name != table_parts->table_name;
+        });
+    }
+
+    // DynamoDB reports a table's exports newest first, and an export's ARN grows over time.
+    std::ranges::sort(exports, [] (const auto& lhs, const auto& rhs) {
+        return lhs.export_arn > rhs.export_arn;
+    });
+
+    rjson::value response = rjson::empty_object();
+    rjson::add(response, "ExportSummaries", rjson::empty_array());
+    auto& export_summaries = response["ExportSummaries"];
+
+    int emitted = 0;
+    bool has_more = false;
+    std::optional<sstring> last_export_arn;
+    for (const auto& exp : exports) {
+        // NextToken is the ARN the previous page ended on, and the ARNs descend.
+        if (!next_token.empty() && exp.export_arn >= next_token) {
+            continue;
+        }
+        if (emitted == max_results) {
+            has_more = true;
+            break;
+        }
+        rjson::push_back(export_summaries, make_export_summary(exp));
+        last_export_arn = exp.export_arn;
+        ++emitted;
+    }
+
+    if (has_more && last_export_arn) {
+        rjson::add(response, "NextToken", rjson::from_string(*last_export_arn));
+    }
+
     co_return rjson::print(std::move(response));
 }
 } // namespace alternator

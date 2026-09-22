@@ -1065,6 +1065,12 @@ server::server(executor& exec, service::storage_proxy& proxy, gms::gossiper& gos
             ++e._stats.api_operations.update_continuous_backups;
             return make_ready_future<executor::request_return_type>(api_error::unknown_operation("Unsupported operation UpdateContinuousBackups - scylla doesn't support continuous backups and the call is not required for ExportTableToPointInTime to work."));
         }},
+        {"DescribeExport", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+            return e.describe_export(client_state, std::move(permit), std::move(json_request), audit_info);
+        }},
+        {"ListExports", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+            return e.list_exports(client_state, std::move(permit), std::move(json_request), audit_info);
+        }},
     } {
 }
 
