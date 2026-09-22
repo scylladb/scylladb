@@ -377,8 +377,14 @@ private:
     // Prepares token metadata change without making it visible. Combined with commit function
     // and appropriate lock it does exactly the same as mutate_token_metadata.
     // Note: prepare_token_metadata_change must be called on shard 0.
+    //
+    // `node_storage_mode` is this node's intended storage mode. It is only needed when the
+    // change creates a table in a keyspace under vnodes-to-tablets migration, which has no
+    // effective replication map yet to take the flavour from; callers that cannot create
+    // tables leave it unset.
     future<token_metadata_change> prepare_token_metadata_change(mutable_token_metadata_ptr tmptr,
-            const schema_getter& loader);
+            const schema_getter& loader,
+            std::optional<intended_storage_mode> node_storage_mode = std::nullopt);
 
     // Commits prepared token metadata changes. Must be called under token_metadata_lock
     // and on all shards.
