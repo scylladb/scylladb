@@ -76,6 +76,7 @@ private:
     gms::gossiper& _gossiper;
     stats _stats;
 
+    class replica_selector;
     struct operation_ctx;
     // `needs_leader` says whether the request has to be executed by the raft group's
     // leader, which is true for writes and linearizable reads and false for a read that
