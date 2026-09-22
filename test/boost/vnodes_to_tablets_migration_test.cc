@@ -602,6 +602,29 @@ BOOST_AUTO_TEST_CASE(test_migration_direction_first_downgrade_is_rollback) {
             == service::vnodes_to_tablets_direction::rollback);
 }
 
+// Abandoning a rollback: the operator upgrades the one node that was holding it open.
+// The decision that goes into that same group0 command has to see the state it creates,
+// so the node being changed is left out of the answer.
+BOOST_AUTO_TEST_CASE(test_migration_direction_ignores_the_node_being_changed) {
+    service::topology topo;
+    auto rolled_back = raft::server_id{utils::UUID_gen::get_time_UUID()};
+    auto upgraded = raft::server_id{utils::UUID_gen::get_time_UUID()};
+    topo.normal_nodes.emplace(rolled_back,
+            service::replica_state{.storage_mode = service::intended_storage_mode::vnodes});
+    topo.normal_nodes.emplace(upgraded,
+            service::replica_state{.storage_mode = service::intended_storage_mode::tablets});
+
+    // Asked about the cluster as it stands, the rollback is still on.
+    BOOST_REQUIRE(service::get_vnodes_to_tablets_direction(topo)
+            == service::vnodes_to_tablets_direction::rollback);
+    // Asked as of the node being re-upgraded, it is over.
+    BOOST_REQUIRE(service::get_vnodes_to_tablets_direction(topo, rolled_back)
+            == service::vnodes_to_tablets_direction::forward);
+    // Ignoring some other node does not end a rollback someone else is still holding.
+    BOOST_REQUIRE(service::get_vnodes_to_tablets_direction(topo, upgraded)
+            == service::vnodes_to_tablets_direction::rollback);
+}
+
 // No nodes at all is not a rollback; there is nothing being rolled back.
 BOOST_AUTO_TEST_CASE(test_migration_direction_no_nodes_is_forward) {
     BOOST_REQUIRE(service::get_vnodes_to_tablets_direction(make_topology({}))

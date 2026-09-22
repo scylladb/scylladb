@@ -259,12 +259,16 @@ intended_storage_mode intended_storage_mode_from_string(const sstring& s) {
     throw std::runtime_error(fmt::format("cannot map name {} to intended_storage_mode", s));
 }
 
-vnodes_to_tablets_direction get_vnodes_to_tablets_direction(const topology& topo) {
+vnodes_to_tablets_direction get_vnodes_to_tablets_direction(const topology& topo,
+        std::optional<raft::server_id> ignore) {
     // See the comment on the declaration: only "nodetool migrate-to-tablets
     // downgrade" writes an explicit vnodes, so one is enough to tell us a
     // rollback is under way. Nodes the operator has not reached yet are unset,
     // which on its own still means forward.
     for (const auto& [server_id, rs] : topo.normal_nodes) {
+        if (ignore == server_id) {
+            continue;
+        }
         if (rs.storage_mode == intended_storage_mode::vnodes) {
             return vnodes_to_tablets_direction::rollback;
         }

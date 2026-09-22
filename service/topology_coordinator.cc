@@ -1474,9 +1474,16 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                             updates.emplace_back(m);
                         }
                     } else {
-                        // Rollback: delete tablet maps for all tables in the keyspace
-                        // that have one. Tables created after the rollback started do not.
-                        for (const auto& schema : tables) {
+                        // Rollback: delete tablet maps for everything in the keyspace
+                        // that has one. Tables created after the rollback started do not.
+                        //
+                        // cf_meta_data() rather than tables(), which filters views out:
+                        // prepare_for_tablets_migration() walks cf_meta_data() and so gives
+                        // views tablet maps too, and a map left behind here would outlive
+                        // the migration that created it. A later CREATE TABLE would then
+                        // find it, conclude the keyspace is still migrating and hand the
+                        // new table a tablet map of its own.
+                        for (const auto& schema : ks.metadata()->cf_meta_data() | std::views::values) {
                             if (tablet_metadata.has_tablet_map(schema->id())) {
                                 updates.emplace_back(replica::make_drop_tablet_map_mutation(schema->id(), guard.write_timestamp()));
                             }

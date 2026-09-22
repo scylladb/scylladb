@@ -4513,7 +4513,12 @@ void storage_service::allocate_tablets_for_new_tables_under_migration(const data
     // This also settles the keyspace's existence: a keyspace created by this very
     // statement has no table with a tablet map, so find_keyspace() below is reached
     // only for one that is already in the database.
-    bool migrating = std::ranges::any_of(ksm.cf_meta_data() | std::views::values, [&] (const schema_ptr& existing) {
+    //
+    // Base tables only, matching get_tablets_migration_status(). A keyspace that was
+    // rolled back before the drop loop in the topology coordinator learned to clear
+    // view maps can still carry an orphaned one, and that must not be read as a
+    // migration nobody started.
+    bool migrating = std::ranges::any_of(ksm.tables(), [&] (const schema_ptr& existing) {
         return tablet_metadata.has_tablet_map(existing->id());
     });
     if (!migrating) {
@@ -4535,6 +4540,17 @@ void storage_service::allocate_tablets_for_new_tables_under_migration(const data
         // and is already in its final shape. Giving it a tablet map here would only
         // make every node reshard it forward and then straight back again.
         slogger.debug("Keyspace {} is rolling back to vnodes; new table(s) will use vnodes", ksm.name());
+        return;
+    }
+
+    // Lets a test reach a state this code cannot otherwise produce: a table with no
+    // tablet map in a keyspace that is migrating *forward*. In the field that comes from
+    // a CREATE TABLE coordinated by a node without this code, or from decommissioning
+    // the node that was holding a rollback open. set_node_intended_storage_mode() is
+    // what repairs it, and this is the only way to test that it does.
+    if (utils::get_local_injector().enter("skip_tablet_map_for_new_table")) {
+        slogger.warn("skip_tablet_map_for_new_table injection: leaving new table(s) in {} without a tablet map",
+                     ksm.name());
         return;
     }
 
@@ -4578,9 +4594,9 @@ future<size_t> storage_service::append_tablet_maps_for_unmapped_tables(sstring k
     auto tmap = co_await build_tablet_map_for_migration(erm, 0);
 
     for (const auto& cfm : unmapped) {
-        slogger.info("Built tablet map for table {}.{} with {} tablet(s), which has no tablet map "
-                     "but takes part in the vnodes-to-tablets migration of keyspace '{}'",
-                     cfm->ks_name(), cfm->cf_name(), tmap.tablet_count(), ks_name);
+        slogger.info("Built a {}-tablet map for {}.{}, which had none but takes part in the "
+                     "vnodes-to-tablets migration of keyspace '{}'",
+                     tmap.tablet_count(), cfm->ks_name(), cfm->cf_name(), ks_name);
         co_await replica::tablet_map_to_mutations(tmap, cfm->id(), cfm->ks_name(), cfm->cf_name(), ts,
                 _feature_service, add_mutation);
     }
@@ -4604,7 +4620,12 @@ future<> storage_service::set_node_intended_storage_mode(intended_storage_mode m
         // prepare_for_tablets_migration() has been called for at least one
         // keyspace. prepare_for_tablets_migration() will fail if
         // intended_storage_mode is already set for any node.
-        const auto& tablet_metadata = get_token_metadata().tablets();
+        //
+        // Hold the token metadata rather than borrowing it: the backfill below reads it
+        // after suspending, and on a retry it reads it again after the previous
+        // iteration suspended.
+        auto tmptr = get_token_metadata_ptr();
+        const auto& tablet_metadata = tmptr->tablets();
         bool has_any_migrating_table = false;
         for (const auto& ks : _db.local().get_non_system_keyspaces()) {
             auto& keyspace = _db.local().find_keyspace(ks);
@@ -4635,26 +4656,29 @@ future<> storage_service::set_node_intended_storage_mode(intended_storage_mode m
             throw std::runtime_error(::format("Node {} is not in the normal state (current state: {})", raft_server.id(), rs.state));
         }
 
-        if (rs.storage_mode == mode) {
-            slogger.info("Node {} already has intended storage mode set to {}, skipping", raft_server.id(), mode);
-            co_return;
-        }
-
-        topology_mutation_builder builder(guard.write_timestamp());
-        builder.with_node(raft_server.id())
-               .set("intended_storage_mode", mode);
-
         group0_update_collector updates;
-        updates.emplace_back(canonical_mutation(builder.build()));
 
-        if (mode == intended_storage_mode::tablets) {
-            // Going forward is the point at which every migrating table must have a
-            // tablet map: the nodes reshard onto it when they restart, and finalization
-            // refuses to run without it. A table can be missing one - it was created
-            // while a rollback was under way, so it was deliberately born on vnodes
-            // (see allocate_tablets_for_new_tables_under_migration), and the operator
-            // has since changed their mind. Give it one now rather than leaving the
-            // keyspace impossible to finalize in either direction.
+        // Going forward is the point at which every migrating table must have a tablet
+        // map: the nodes reshard onto it when they restart, and finalization refuses to
+        // run without it. A table can be missing one - it was created while a rollback
+        // was under way, so it was deliberately born on vnodes (see
+        // allocate_tablets_for_new_tables_under_migration), and the operator has since
+        // changed their mind. Give it one now rather than leaving the keyspace
+        // impossible to finalize in either direction.
+        //
+        // This runs before the "already in that mode" check below, because the node that
+        // needs to be upgraded to trigger the repair may already be upgraded: the table
+        // can just as well have been created through a node that predates this code, and
+        // then there is no mode left to change anywhere.
+        //
+        // The direction is asked for as it will be once this node's own change lands, or
+        // re-upgrading the one node that was holding the rollback open would read as a
+        // rollback and skip the very repair it is there to do.
+        bool going_forward = mode == intended_storage_mode::tablets
+                && get_vnodes_to_tablets_direction(_topology_state_machine._topology, raft_server.id())
+                        == vnodes_to_tablets_direction::forward;
+        size_t backfilled = 0;
+        if (going_forward) {
             for (const auto& ks_name : _db.local().get_non_system_keyspaces()) {
                 auto& ks = _db.local().find_keyspace(ks_name);
                 if (ks.uses_tablets()) {
@@ -4669,11 +4693,24 @@ future<> storage_service::set_node_intended_storage_mode(intended_storage_mode m
                     continue;
                 }
                 auto cfms = ks.metadata()->cf_meta_data() | std::views::values | std::ranges::to<std::vector<schema_ptr>>();
-                co_await append_tablet_maps_for_unmapped_tables(ks_name, cfms, guard.write_timestamp(),
+                backfilled += co_await append_tablet_maps_for_unmapped_tables(ks_name, cfms, guard.write_timestamp(),
                         [&] (mutation m) -> future<> {
                     updates.emplace_back(co_await make_canonical_mutation_gently(m));
                 });
             }
+        }
+
+        if (rs.storage_mode == mode && !backfilled) {
+            slogger.info("Node {} already has intended storage mode set to {} and every migrating table has a tablet map, skipping",
+                         raft_server.id(), mode);
+            co_return;
+        }
+
+        if (rs.storage_mode != mode) {
+            topology_mutation_builder builder(guard.write_timestamp());
+            builder.with_node(raft_server.id())
+                   .set("intended_storage_mode", mode);
+            updates.emplace_back(canonical_mutation(builder.build()));
         }
 
         topology_change change{co_await updates.collect()};
@@ -4695,7 +4732,7 @@ future<> storage_service::set_node_intended_storage_mode(intended_storage_mode m
 std::optional<intended_storage_mode> storage_service::get_my_intended_storage_mode() const {
     // Only shard 0 loads the topology state (see topology_state_load()).
     if (this_shard_id() != 0) {
-        on_internal_error(rtlogger, "cannot access the intended storage mode on non zero shard");
+        on_internal_error(slogger, "cannot access the intended storage mode on non zero shard");
     }
 
     // normal_nodes only, to match distributed_loader::init_non_system_keyspaces(), which

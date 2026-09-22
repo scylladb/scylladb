@@ -1798,3 +1798,81 @@ async def test_create_table_during_abandoned_rollback(manager: ScyllaClusterMana
             "Keyspace is still using vnodes after migration finalization"
 
         await verify_data_integrity(cql, ks, "late", num_keys)
+
+
+async def test_upgrade_repairs_a_table_left_without_a_tablet_map(manager: ScyllaClusterManager):
+    """SCYLLADB-1169: `migrate-to-tablets upgrade` repairs a table that has no tablet map.
+
+    A table in a migrating keyspace can end up without a map even though the migration is
+    heading forward - the CREATE TABLE was coordinated by a node that predates this code,
+    or the node that was holding a rollback open got decommissioned rather than upgraded
+    again. Forward finalization then refuses to run for good: nothing revisits the
+    decision, and prepare_for_tablets_migration() will not re-run while any node has an
+    intended storage mode, which only a finalization can clear.
+
+    Upgrading a node repairs it. The case that matters is the one where that node is
+    *already* on tablets, so there is no mode left to change anywhere - the repair has to
+    run before the "already in that mode" shortcut, not after it.
+
+    The state is unreachable from this code, so an error injection produces it.
+
+    Steps:
+    1. Start a single node, create a vnode keyspace with one table.
+    2. Start the migration, upgrade the node and restart it; the node is now on tablets
+       and the migration is heading forward.
+    3. With the injection armed, create a table - it gets no tablet map.
+    4. Run upgrade again on that same node, whose mode is already tablets.
+       - The table must now have a map.
+    5. Restart and finalize forward.
+    """
+    num_keys = 100
+
+    servers = await manager.servers_add(1, cmdline=['--smp', '2'], config=MIGRATION_TEST_CONFIG)
+    server = servers[0]
+    cql, _ = await manager.get_ready_cql(servers)
+
+    vnode_boundaries = await get_all_vnode_tokens(cql)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+
+        logger.info("Starting the migration and upgrading the node")
+        await manager.api.create_vnode_tablet_migration(server.ip_addr, ks)
+        await manager.api.upgrade_node_to_tablets(server.ip_addr)
+        await manager.server_restart(server.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        logger.info("Creating a table with the tablet map allocation suppressed")
+        await manager.api.enable_injection(server.ip_addr, "skip_tablet_map_for_new_table", one_shot=True)
+        await cql.run_async(f"CREATE TABLE {ks}.orphan (pk int PRIMARY KEY, c int)")
+        await read_barrier(manager.api, server.ip_addr)
+
+        assert await get_tablet_count(manager, server, ks, 'orphan') == 0, \
+            "Injection did not suppress the tablet map; the rest of this test proves nothing"
+
+        # The node is already on tablets, so this changes no mode at all. Without the
+        # repair running first it returns early and the keyspace stays unfinalizable.
+        logger.info("Running upgrade again on the node, which is already on tablets")
+        await manager.api.upgrade_node_to_tablets(server.ip_addr)
+        await read_barrier(manager.api, server.ip_addr)
+
+        logger.info("Verifying the orphaned table was given a tablet map")
+        await verify_new_table_tablet_map(manager, server, ks, 'orphan', vnode_boundaries)
+
+        logger.info("Restarting so the node reshards onto the new map, then finalizing")
+        await manager.server_restart(server.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        stmt = cql.prepare(f"INSERT INTO {ks}.orphan (pk, c) VALUES (?, ?)")
+        await asyncio.gather(*(cql.run_async(stmt, [k, k]) for k in range(num_keys)))
+
+        await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks)
+        await read_barrier(manager.api, server.ip_addr)
+
+        res = await cql.run_async(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{ks}'")
+        assert len(res) == 1 and res[0].initial_tablets is not None, \
+            "Keyspace is still using vnodes after migration finalization"
+
+        await verify_data_integrity(cql, ks, "orphan", num_keys)

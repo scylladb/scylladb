@@ -392,7 +392,14 @@ intended_storage_mode intended_storage_mode_from_string(const sstring& s);
 // they differ only when none has, which finalization reads as a rollback (there
 // is nothing to roll forward) and this reads as a forward migration that has not
 // started moving (there is still something to create tablet maps for).
-vnodes_to_tablets_direction get_vnodes_to_tablets_direction(const topology&);
+//
+// `ignore` leaves one node's recorded mode out of the answer. Use it to ask what the
+// direction will be once a pending change to that node's own mode is applied - an
+// operator abandoning a rollback sets the last explicit vnodes back to tablets, and
+// the decision that goes into that same group0 command has to see the state it is
+// creating, not the one it is leaving.
+vnodes_to_tablets_direction get_vnodes_to_tablets_direction(const topology&,
+        std::optional<raft::server_id> ignore = std::nullopt);
 }
 
 template <> struct fmt::formatter<service::cleanup_status> {
