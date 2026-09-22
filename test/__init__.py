@@ -71,6 +71,9 @@ def asan_options(inherit: bool = False) -> str:
         "disable_coredump=0",
         "abort_on_error=1",
         "detect_stack_use_after_return=1",
+        # 16 MB instead of ASAN's 256 MB default: still catches a recent use after
+        # free, at a fraction of the memory when many debug nodes run at once.
+        "quarantine_size_mb=16",
     ]
     if inherit:
         opts.append(os.getenv("ASAN_OPTIONS"))
