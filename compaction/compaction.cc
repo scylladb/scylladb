@@ -194,9 +194,17 @@ std::string_view to_string(compaction_type_options::scrub::quarantine_mode quara
     return "(invalid)";
 }
 
+// Combines the scope the compaction was created with and the table's own
+// skip_memtable_for_tombstone_gc() property, which answers the same question for the
+// repaired sstable view. Evaluated once per compaction rather than per purge attempt.
+static tombstone_gc_scope effective_gc_scope(const compaction_group_view& table_s, tombstone_gc_scope descriptor_scope) {
+    auto table_scope = table_s.skip_memtable_for_tombstone_gc() ? tombstone_gc_scope::skip_memtable : tombstone_gc_scope::all;
+    return std::max(descriptor_scope, table_scope);
+}
+
 static max_purgeable get_max_purgeable_timestamp(const compaction_group_view& table_s, sstables::sstable_set::incremental_selector& selector,
         const std::unordered_set<sstables::shared_sstable>& compacting_set, const dht::decorated_key& dk, uint64_t& bloom_filter_checks,
-        const api::timestamp_type compacting_max_timestamp, const bool gc_check_only_compacting_sstables, const is_shadowable is_shadowable) {
+        const api::timestamp_type compacting_max_timestamp, const tombstone_gc_scope gc_scope, const is_shadowable is_shadowable) {
     if (!table_s.tombstone_gc_enabled()) [[unlikely]] {
         clogger.trace("get_max_purgeable_timestamp {}.{}: tombstone_gc_enabled=false, returning min_timestamp",
                 table_s.schema()->ks_name(), table_s.schema()->cf_name());
@@ -204,15 +212,20 @@ static max_purgeable get_max_purgeable_timestamp(const compaction_group_view& ta
     }
 
     auto timestamp = api::max_timestamp;
-    if (gc_check_only_compacting_sstables) {
-        // If gc_check_only_compacting_sstables is enabled, do not
-        // check memtables and other sstables not being compacted.
-        clogger.trace("get_max_purgeable_timestamp {}.{}: gc_check_only_compacting_sstables=true, returning max_timestamp",
+    if (gc_scope == tombstone_gc_scope::compacting_sstables_only) {
+        clogger.trace("get_max_purgeable_timestamp {}.{}: gc_scope=compacting_sstables_only, returning max_timestamp",
                 table_s.schema()->ks_name(), table_s.schema()->cf_name());
         return max_purgeable(timestamp);
     }
 
     auto source = max_purgeable::timestamp_source::none;
+    // The queries below are not free -- min_memtable_live_*_timestamp() and
+    // memtable_has_key() are evaluated for every purge attempt -- so bail out before
+    // making them rather than discarding their result.
+  if (gc_scope == tombstone_gc_scope::skip_memtable) {
+    clogger.trace("get_max_purgeable_timestamp {}.{}: gc_scope=skip_memtable, not checking the memtable",
+            table_s.schema()->ks_name(), table_s.schema()->cf_name());
+  } else {
     api::timestamp_type memtable_min_timestamp;
     if (is_shadowable) {
         // For shadowable tombstones, check the minimum live row_marker timestamp
@@ -237,10 +250,11 @@ static max_purgeable get_max_purgeable_timestamp(const compaction_group_view& ta
     // and if the memtable also contains the key we're calculating max purgeable timestamp for.
     // First condition helps to not penalize the common scenario where memtable only contains
     // newer data.
-    if (!table_s.skip_memtable_for_tombstone_gc() && memtable_min_timestamp <= compacting_max_timestamp && table_s.memtable_has_key(dk)) {
+    if (memtable_min_timestamp <= compacting_max_timestamp && table_s.memtable_has_key(dk)) {
         timestamp = memtable_min_timestamp;
         source = max_purgeable::timestamp_source::memtable_possibly_shadowing_data;
     }
+  }
     std::optional<utils::hashed_key> hk;
     for (auto&& sst : boost::range::join(selector.select(dk).sstables, table_s.compacted_undeleted_sstables())) {
         if (compacting_set.contains(sst)) {
@@ -599,6 +613,9 @@ protected:
     std::vector<sstables::shared_sstable> _used_garbage_collected_sstables;
     utils::observable<> _stop_request_observable;
     tombstone_gc_state _tombstone_gc_state;
+    // The descriptor's scope, further narrowed by the table's own property. See
+    // effective_gc_scope().
+    const tombstone_gc_scope _gc_scope = tombstone_gc_scope::all;
     int64_t _output_repaired_at = 0;
 private:
     // Keeps track of monitors for input sstable.
@@ -649,9 +666,10 @@ protected:
         , _sharder(descriptor.sharder)
         , _owned_ranges_checker(_owned_ranges ? std::optional<dht::incremental_owned_ranges_checker>(*_owned_ranges) : std::nullopt)
         , _tombstone_gc_state(_table_s.get_tombstone_gc_state())
+        , _gc_scope(effective_gc_scope(table_s, descriptor.gc_scope))
         , _progress_monitor(progress_monitor)
     {
-        if (descriptor.gc_check_only_compacting_sstables) {
+        if (_gc_scope == tombstone_gc_scope::compacting_sstables_only) {
             _tombstone_gc_state = _tombstone_gc_state.with_commitlog_check_disabled();
         }
         std::unordered_set<sstables::run_id> ssts_run_ids;
@@ -1053,7 +1071,8 @@ private:
             return can_never_purge;
         }
         return [this] (const dht::decorated_key& dk, is_shadowable is_shadowable) {
-            return get_max_purgeable_timestamp(_table_s, *_selector, _compacting_for_max_purgeable_func, dk, _bloom_filter_checks, _compacting_max_timestamp, !_tombstone_gc_state.is_commitlog_check_enabled(), is_shadowable);
+            return get_max_purgeable_timestamp(_table_s, *_selector, _compacting_for_max_purgeable_func, dk, _bloom_filter_checks, _compacting_max_timestamp,
+                    _gc_scope, is_shadowable);
         };
     }
 

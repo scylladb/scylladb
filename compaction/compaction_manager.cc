@@ -611,7 +611,9 @@ protected:
         compaction_group_view* t = _compacting_table;
         compaction_strategy cs = t->get_compaction_strategy();
         compaction_descriptor descriptor = cs.get_major_compaction_job(*t, co_await _cm.get_candidates(*t));
-        descriptor.gc_check_only_compacting_sstables = _consider_only_existing_data;
+        if (_consider_only_existing_data) {
+            descriptor.gc_scope = tombstone_gc_scope::compacting_sstables_only;
+        }
         auto compacting = compacting_sstable_registration(_cm, _cm.get_compaction_state(t), descriptor.sstables);
         auto on_replace = compacting.update_on_sstable_replacement();
         setup_new_compaction(descriptor.run_identifier);
