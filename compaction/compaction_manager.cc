@@ -455,6 +455,18 @@ future<sstables::sstable_set> compaction_task_executor::sstable_set_for_tombston
     co_return std::move(new_set);
 }
 
+tombstone_gc_state compaction_task_executor::make_gc_state(const compaction_descriptor& descriptor) const {
+    compaction_group_view& t = *_compacting_table;
+    // A narrowed gc scope ignores data that is not in the compaction's sstable snapshot, on the
+    // grounds that no GC-eligible tombstone can shadow it. That holds only for tombstones which
+    // are eligible when the snapshot is taken, so freeze the gc state before it: a repair
+    // completing mid-compaction must not make more tombstones eligible. See tombstone_gc_scope.
+    if (descriptor.gc_scope != tombstone_gc_scope::all) {
+        return t.get_tombstone_gc_state().snapshot();
+    }
+    return t.get_tombstone_gc_state();
+}
+
 future<compaction_result> compaction_task_executor::compact_sstables(compaction_descriptor descriptor, ::compaction::compaction_data& cdata, on_replacement& on_replace, compaction_manager::can_purge_tombstones can_purge,
                                                                                sstables::offstrategy offstrategy) {
     compaction_group_view& t = *_compacting_table;
@@ -467,12 +479,8 @@ future<compaction_result> compaction_task_executor::compact_sstables(compaction_
         descriptor.schema = t.schema();
     }
     descriptor.gc_scope = effective_gc_scope(t, *descriptor.schema, descriptor.gc_scope);
-    // A narrowed gc scope ignores data that is not in the sstable snapshot taken below, on the
-    // grounds that no GC-eligible tombstone can shadow it. That holds only for tombstones which
-    // are eligible when the snapshot is taken, so freeze the gc state before it: a repair
-    // completing mid-compaction must not make more tombstones eligible. See tombstone_gc_scope.
-    const bool narrowed_scope = descriptor.gc_scope != tombstone_gc_scope::all;
-    descriptor.gc_state = narrowed_scope ? t.get_tombstone_gc_state().snapshot() : t.get_tombstone_gc_state();
+    // Before the sstable set snapshot below, see make_gc_state().
+    descriptor.gc_state = make_gc_state(descriptor);
     if (can_purge) {
         descriptor.enable_garbage_collection(co_await sstable_set_for_tombstone_gc(t, descriptor.schema));
         if (descriptor.gc_scope >= tombstone_gc_scope::skip_memtable) {
@@ -623,10 +631,26 @@ public:
     major_compaction_task_executor(compaction_manager& mgr,
             throw_if_stopping do_throw_if_stopping,
             compaction_group_view* t,
-            bool consider_only_existing_data)
+            bool consider_only_existing_data,
+            std::optional<tombstone_gc_state> pre_flush_gc_state)
         : compaction_task_executor(mgr, do_throw_if_stopping, t, compaction_type::Major, "Major compaction")
         , _consider_only_existing_data(consider_only_existing_data)
+        , _pre_flush_gc_state(std::move(pre_flush_gc_state))
     {}
+private:
+    // Engaged if the caller flushed the table's memtables before submitting this compaction: a
+    // snapshot of the gc state taken before that flush.
+    const std::optional<tombstone_gc_state> _pre_flush_gc_state;
+protected:
+    virtual tombstone_gc_state make_gc_state(const compaction_descriptor& descriptor) const override {
+        // The pre-flush snapshot is what allows skipping the memtables, see do_run(). It is
+        // older than the one the base class would take, so it is the more conservative one
+        // for any other reason to narrow the scope too, such as consider_only_existing_data.
+        if (_pre_flush_gc_state && descriptor.gc_scope != tombstone_gc_scope::all) {
+            return *_pre_flush_gc_state;
+        }
+        return compaction_task_executor::make_gc_state(descriptor);
+    }
 protected:
     // first take major compaction semaphore, then exclusely take compaction lock for table.
     // it cannot be the other way around, or minor compaction for this table would be
@@ -651,8 +675,21 @@ protected:
         compaction_group_view* t = _compacting_table;
         compaction_strategy cs = t->get_compaction_strategy();
         compaction_descriptor descriptor = cs.get_major_compaction_job(*t, co_await _cm.get_candidates(*t));
+        // The schema the compaction runs with, and everything below is decided by, see
+        // compaction_descriptor::schema.
+        descriptor.schema = t->schema();
         if (_consider_only_existing_data) {
             descriptor.gc_scope = tombstone_gc_scope::compacting_sstables_only;
+        } else if (_pre_flush_gc_state && _pre_flush_gc_state->is_gc_before_repair_based(*descriptor.schema)) {
+            // The caller flushed the memtables, this compaction takes every sstable of the group
+            // as input, and the gc state is the one from before the flush: see tombstone_gc_scope
+            // for why the memtables can then be skipped, and why all three are needed.
+            //
+            // The sstable set consulted by the purge check is snapshotted later, in
+            // compact_sstables(), once the locks are released, so an sstable flushed in between
+            // is in that set without being an input: it is still consulted, which can only keep
+            // more tombstones, never purge more.
+            descriptor.gc_scope = tombstone_gc_scope::skip_memtable;
         }
         auto compacting = compacting_sstable_registration(_cm, _cm.get_compaction_state(t), descriptor.sstables);
         auto on_replace = compacting.update_on_sstable_replacement();
@@ -734,13 +771,13 @@ future<> compaction_manager::close_compaction_state_gate(compaction_state& cs) {
     return cs.gate_closed->get_future();
 }
 
-future<> compaction_manager::perform_major_compaction(compaction_group_view& t, tasks::task_info info, bool consider_only_existing_data) {
+future<> compaction_manager::perform_major_compaction(compaction_group_view& t, tasks::task_info info, bool consider_only_existing_data, std::optional<tombstone_gc_state> pre_flush_gc_state) {
     auto gh = start_compaction(t);
     if (!gh) {
         co_return;
     }
 
-    co_await perform_compaction<major_compaction_task_executor>({.type = major_compaction_task_type}, throw_if_stopping::no, info, &t, consider_only_existing_data).discard_result();
+    co_await perform_compaction<major_compaction_task_executor>({.type = major_compaction_task_type}, throw_if_stopping::no, info, &t, consider_only_existing_data, std::move(pre_flush_gc_state)).discard_result();
 }
 
 class custom_compaction_task_executor : public compaction_task_executor {
