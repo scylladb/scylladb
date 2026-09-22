@@ -482,6 +482,229 @@ async def test_migration_rollback(manager: ScyllaClusterManager):
         await verify_data_integrity(cql, ks, "test", num_keys)
 
 
+async def test_migration_rollback_via_config_override(manager: ScyllaClusterManager):
+    """Verify that force_vnodes_storage_mode rolls a node back to vnodes without touching group0.
+
+    Regression test for https://scylladb.atlassian.net/browse/SCYLLADB-2351.
+
+    `nodetool migrate-to-tablets downgrade` is node-local: it writes the intended
+    storage mode of the node it is sent to. A node that cannot start because its
+    storage upgrade fails therefore cannot be downgraded at all, which is what makes
+    the config override necessary. This test covers the override itself.
+
+    Steps:
+    1. Start a single node, create a vnode table and inject data.
+    2. Start the migration and upgrade the node to tablets for real, so that its
+       SSTables end up segregated within vnode boundaries.
+    3. Restart the node with force_vnodes_storage_mode, leaving
+       system.topology alone.
+       - Verify the node boots and reshards back off the vnode boundaries.
+       - Verify system.topology still records the node as intended for tablets, i.e.
+         the override is node-local.
+       - Verify data integrity.
+    4. Verify the migration refuses to finalize while the node and group0 disagree.
+    5. Complete the documented recovery: downgrade through group0, then finalize.
+    6. Remove the option and restart, and verify the override is no longer applied.
+    """
+    num_shards = 3
+    tokens_per_node = 16
+    num_keys = 5000
+
+    logger.info(f"Starting a node with {num_shards} shards and {tokens_per_node} random tokens")
+    cfg = {'num_tokens': tokens_per_node}
+    servers = await manager.servers_add(1, cmdline=['--smp', str(num_shards)], config=cfg)
+    server = servers[0]
+    host_id = await manager.get_host_id(server.server_id)
+
+    cql, _ = await manager.get_ready_cql(servers)
+
+    vnode_boundaries = await get_all_vnode_tokens(cql)
+    logger.info(f"Vnode boundaries ({len(vnode_boundaries)} tokens): {vnode_boundaries}")
+
+    logger.info("Creating keyspace and table with vnodes")
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}") as ks:
+        # Minor compaction is disabled so that SSTables are not rewritten behind our back
+        # while we inspect their token ranges.
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH compaction = {{'class': 'IncrementalCompactionStrategy', 'enabled': false}}")
+
+        logger.info("Populating table in batches, flushing after each batch to produce multiple SSTables")
+        stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, c) VALUES (?, ?)")
+        num_flushes = 5
+        keys_per_sstable = num_keys // num_flushes
+        for batch_start in range(0, num_keys, keys_per_sstable):
+            batch_end = min(batch_start + keys_per_sstable, num_keys)
+            await asyncio.gather(*(cql.run_async(stmt, [k, k]) for k in range(batch_start, batch_end)))
+            await manager.api.keyspace_flush(server.ip_addr, ks, "test")
+
+        node_workdir = await manager.server_get_workdir(server.server_id)
+        scylla_path = await manager.server_get_exe(server.server_id)
+        scylla_yaml = os.path.join(node_workdir, "conf", "scylla.yaml")
+        table_data_dir = glob.glob(os.path.join(node_workdir, "data", ks, "test-*"))[0]
+
+        logger.info("Starting vnodes-to-tablets migration (creating a tablet map)")
+        await manager.api.create_vnode_tablet_migration(server.ip_addr, ks)
+        tablet_replicas = await verify_tablet_map_boundaries(manager, server, ks, 'test', vnode_boundaries)
+        tablet_boundaries = sorted([tr.last_token for tr in tablet_replicas])
+
+        logger.info("Upgrading the node to tablets for real")
+        await manager.api.upgrade_node_to_tablets(server.ip_addr)
+        await manager.server_restart(server.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        logger.info("Verifying that the forward resharding happened")
+        upgraded_ranges = get_sstable_token_ranges(scylla_path, scylla_yaml,
+                                                   glob.glob(os.path.join(table_data_dir, "*-Data.db")))
+        for i, (first, last) in enumerate(upgraded_ranges):
+            assert sstable_within_single_range(first, last, tablet_boundaries), \
+                f"SSTable {i} with token range [{first}, {last}] spans multiple tablet ranges " \
+                f"after the upgrade (boundaries: {tablet_boundaries})"
+
+        logger.info("Restarting with force_vnodes_storage_mode, leaving system.topology alone")
+        log = await manager.server_open_log(server.server_id)
+        await manager.server_stop_gracefully(server.server_id)
+        await manager.server_update_config(server.server_id, "force_vnodes_storage_mode", True)
+        mark = await log.mark()
+        await manager.server_start(server.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        logger.info("Verifying that the override was honored and the rollback direction was taken")
+        assert await log.grep(r"force_vnodes_storage_mode is set", from_mark=mark), \
+            "The node did not report that the storage mode override was applied"
+        assert await log.grep(rf"Keyspace {ks}: CF test is in vnodes-to-tablets migration mode \(direction: rollback\)",
+                              from_mark=mark), \
+            "The node did not take the rollback resharding direction"
+        assert not await log.grep(rf"Keyspace {ks}: CF test is in vnodes-to-tablets migration mode \(direction: forward\)",
+                                  from_mark=mark), \
+            "The node took the forward resharding direction despite the override"
+
+        logger.info("Verifying that the override did not change system.topology")
+        rows = await cql.run_async("SELECT host_id, intended_storage_mode FROM system.topology WHERE key = 'topology'")
+        modes = {str(row.host_id): row.intended_storage_mode for row in rows}
+        assert modes == {host_id: 'tablets'}, \
+            f"Expected system.topology to still record {host_id} as intended for tablets, got {modes}"
+
+        logger.info("Verifying that the SSTables were resharded back off the vnode boundaries")
+        rolled_back_ranges = get_sstable_token_ranges(scylla_path, scylla_yaml,
+                                                      glob.glob(os.path.join(table_data_dir, "*-Data.db")))
+        cross_tablet_count = sum(1 for first, last in rolled_back_ranges
+                                 if not sstable_within_single_range(first, last, tablet_boundaries))
+        assert cross_tablet_count > 0, \
+            f"Expected the rollback to produce SSTables spanning multiple tablet ranges, " \
+            f"but all {len(rolled_back_ranges)} are still segregated within single tablet ranges"
+
+        logger.info("Verifying data integrity after the override-driven rollback")
+        await verify_data_integrity(cql, ks, "test", num_keys)
+
+        logger.info("Verifying that the migration cannot be finalized while the node diverges from group0")
+        with pytest.raises(HTTPError, match=fr"Migration finalization failed for keyspace '{ks}': Node .* has not yet migrated table {ks}.test to tablets"):
+            await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks)
+
+        logger.info("Completing the documented recovery: downgrade through group0, then finalize")
+        await manager.api.downgrade_node_to_vnodes(server.ip_addr)
+        await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks)
+
+        logger.info("Verifying that the keyspace still uses vnodes and the migration state is cleared")
+        res = await cql.run_async(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{ks}'")
+        assert len(res) == 0, "Expected the keyspace to still use vnodes after the rollback was finalized"
+        tablet_count = await get_tablet_count(manager, server, ks, 'test')
+        assert tablet_count == 0, f"Expected 0 tablets after the rollback was finalized, got {tablet_count}"
+        rows = await cql.run_async("SELECT host_id, intended_storage_mode FROM system.topology WHERE key = 'topology'")
+        for row in rows:
+            assert row.intended_storage_mode is None, \
+                f"Expected intended_storage_mode=None for node {row.host_id} after rollback finalization, " \
+                f"got '{row.intended_storage_mode}'"
+
+        logger.info("Verifying that the node starts cleanly once the override is removed, as the procedure instructs")
+        await manager.server_stop_gracefully(server.server_id)
+        await manager.server_remove_config_option(server.server_id, "force_vnodes_storage_mode")
+        mark = await log.mark()
+        await manager.server_start(server.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+        assert not await log.grep(r"force_vnodes_storage_mode is set", from_mark=mark), \
+            "The node still applied a storage mode override after the option was removed"
+
+        logger.info("Final data integrity check")
+        await verify_data_integrity(cql, ks, "test", num_keys)
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_boot_recovery_after_failed_resharding(manager: ScyllaClusterManager):
+    """Verify that a node that cannot start because its storage upgrade fails can be recovered.
+
+    Regression test for https://scylladb.atlassian.net/browse/SCYLLADB-2351.
+
+    Since scylladb/scylladb#30041, resharding that cannot run - in production, because
+    out-of-space prevention disabled the compaction manager - fails the startup instead
+    of silently loading incomplete data. The node then cannot be downgraded through
+    group0, because the downgrade request is node-local and the node never gets far
+    enough to serve it. force_vnodes_storage_mode is the way out of that loop.
+
+    The error injection fires only on the forward resharding path, so the recovery
+    start below keeps it enabled: the only thing that changes between the failed start
+    and the successful one is the override.
+
+    Steps:
+    1. Start a single node, create a vnode table and inject data.
+    2. Start the migration and mark the node for upgrade.
+    3. Restart with forward resharding rigged to fail - the node must fail to start.
+    4. Start again with force_vnodes_storage_mode and the injection still
+       enabled - the node must come up, with its data intact.
+    """
+    num_keys = 200
+
+    logger.info("Starting a single node with random tokens")
+    server, cql = await setup_single_node(manager)
+    host_id = await manager.get_host_id(server.server_id)
+
+    logger.info("Creating keyspace and table with vnodes")
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+
+        stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, c) VALUES (?, ?)")
+        await asyncio.gather(*(cql.run_async(stmt, [k, k]) for k in range(num_keys)))
+        await manager.api.keyspace_flush(server.ip_addr, ks, "test")
+
+        logger.info("Starting vnodes-to-tablets migration and marking the node for upgrade")
+        await manager.api.create_vnode_tablet_migration(server.ip_addr, ks)
+        await manager.api.upgrade_node_to_tablets(server.ip_addr)
+
+        logger.info("Restarting with forward resharding rigged to fail; the node must not come up")
+        log = await manager.server_open_log(server.server_id)
+        await manager.server_stop_gracefully(server.server_id)
+        await manager.server_update_config(server.server_id, "error_injections_at_startup", ["fail_vnodes_resharding"])
+        await manager.server_start(server.server_id,
+                                   expected_error="injected failure: vnodes resharding failed")
+
+        logger.info("Recovering with force_vnodes_storage_mode, injection still enabled")
+        mark = await log.mark()
+        await manager.server_update_config(server.server_id, "force_vnodes_storage_mode", True)
+        await manager.server_start(server.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql([server])
+
+        logger.info("Verifying that the node took the rollback direction and left system.topology alone")
+        assert await log.grep(rf"Keyspace {ks}: CF test is in vnodes-to-tablets migration mode \(direction: rollback\)",
+                              from_mark=mark), \
+            "The node did not take the rollback resharding direction"
+        rows = await cql.run_async("SELECT host_id, intended_storage_mode FROM system.topology WHERE key = 'topology'")
+        modes = {str(row.host_id): row.intended_storage_mode for row in rows}
+        assert modes == {host_id: 'tablets'}, \
+            f"Expected system.topology to still record {host_id} as intended for tablets, got {modes}"
+
+        logger.info("Verifying data integrity after recovery")
+        await verify_data_integrity(cql, ks, "test", num_keys)
+
+        logger.info("Completing the documented recovery: downgrade through group0, then finalize")
+        await manager.api.downgrade_node_to_vnodes(server.ip_addr)
+        await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks)
+
+        logger.info("Final data integrity check")
+        await verify_data_integrity(cql, ks, "test", num_keys)
+
+
 async def test_migration_multinode(manager: ScyllaClusterManager):
     """Verify vnodes-to-tablets migration for a single table on a multi-node cluster with rolling restarts.
 
