@@ -1585,7 +1585,7 @@ scylla_raft_dependencies = scylla_raft_core + ['utils/uuid.cc', 'utils/error_inj
 scylla_tools = ['tools/scylla-local-file-key-generator.cc',
                 'tools/read_mutation.cc',
                 'tools/scylla-types.cc',
-                'tools/scylla-sstable.cc',
+                'tools/scylla-sstable/scylla-sstable.cc',
                 'tools/scylla-nodetool.cc',
                 'tools/json_mutation_stream_parser.cc',
                 'tools/schema_loader.cc',

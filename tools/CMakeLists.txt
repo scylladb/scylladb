@@ -5,7 +5,7 @@ target_sources(tools
     load_system_tables.cc
     read_mutation.cc
     scylla-types.cc
-    scylla-sstable.cc
+    scylla-sstable/scylla-sstable.cc
     scylla-nodetool.cc
     schema_loader.cc
     utils.cc
