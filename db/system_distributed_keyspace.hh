@@ -131,6 +131,18 @@ public:
     // NOTE: currently used only by alternator
     future<db_clock::time_point> cdc_current_generation_timestamp(context);
 
+    /* An export reduced to what ListExports reports about it. */
+    struct alternator_export_summary {
+        sstring export_arn;
+        /* The columns below are unset in a row which lacks them. */
+        std::optional<sstring> status;
+        /* The original ExportTableToPointInTime request, as JSON. ExportType is read back from it. */
+        std::optional<sstring> request;
+    };
+
+    // Returns every export there is, in no particular order.
+    future<std::vector<alternator_export_summary>> list_alternator_exports(context);
+
 private:
     future<> create_tables(std::vector<schema_ptr> tables);
 };
