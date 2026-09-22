@@ -859,7 +859,7 @@ class TestCountersOnMultipleNodes(Tester):
 
         logger.debug("Remove sstables and commit log for node3")
         # We should keep the system tables and delete user tables
-        for dir_name in ("commitlogs", "data/test"):
+        for dir_name in ("commitlog", "data/test"):
             data_dir = os.path.join(self.node3.get_path(), dir_name)
             logger.debug(f"Removing {data_dir}")
             files = glob.glob(os.path.join(self.node3.get_path(), dir_name, "*"))
