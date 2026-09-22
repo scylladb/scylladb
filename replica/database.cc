@@ -1898,7 +1898,8 @@ static db::rate_limiter::can_proceed account_singular_ranges_to_rate_limit(
 future<std::tuple<lw_shared_ptr<query::result>, cache_temperature>>
 database::query(schema_ptr query_schema, const query::read_command& cmd, query::result_options opts, const dht::partition_range_vector& ranges,
                 tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout, db::per_partition_rate_limit::info rate_limit_info) {
-    column_family& cf = find_column_family(cmd.cf_id);
+    auto cf_ptr = co_await table_for_request(*query_schema, cmd.cf_id, timeout);
+    column_family& cf = *cf_ptr;
 
     if (account_singular_ranges_to_rate_limit(_rate_limiter, cf, ranges, _dbcfg, rate_limit_info) == db::rate_limiter::can_proceed::no) {
         ++_stats->total_reads_rate_limited;
@@ -1969,8 +1970,9 @@ database::query_mutations(schema_ptr query_schema, const query::read_command& cm
     const auto short_read_allwoed = query::short_read(cmd.slice.options.contains<query::partition_slice::option::allow_short_read>());
     auto& semaphore = get_reader_concurrency_semaphore();
     auto max_result_size = cmd.max_result_size ? *cmd.max_result_size : get_query_max_result_size();
+    auto cf_ptr = co_await table_for_request(*query_schema, cmd.cf_id, timeout);
+    column_family& cf = *cf_ptr;
     auto accounter = co_await get_result_memory_limiter().new_mutation_read(max_result_size, short_read_allwoed);
-    column_family& cf = find_column_family(cmd.cf_id);
 
     std::optional<querier> querier_opt;
     reconcilable_result result;

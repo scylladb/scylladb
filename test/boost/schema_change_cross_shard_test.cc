@@ -21,8 +21,8 @@
 #include "utils/error_injection.hh"
 
 // A schema change is committed shard by shard, shard 0 first (see schema_applier::commit()).
-// The tests below pause the applier in between and write from shard 0 to shard 1 in that
-// window, reproducing scylladb/scylladb#23831 and scylladb/scylladb#14146.
+// The tests below pause the applier in between and write to, or read from, shard 1 in that
+// window, reproducing scylladb/scylladb#23831, scylladb/scylladb#14146 and SCYLLADB-3847.
 
 BOOST_AUTO_TEST_SUITE(schema_change_cross_shard_test)
 
@@ -60,6 +60,13 @@ uint64_t writes_on_shard(cql_test_env& e, shard_id shard) {
     return e.db().invoke_on(shard, [] (replica::database& db) {
         return db.get_stats().total_writes;
     }).get();
+}
+
+// Requests which have waited for a schema change commit, summed over all shards.
+uint64_t schema_change_commit_waits(cql_test_env& e) {
+    return e.db().map_reduce0([] (replica::database& db) {
+        return db.get_stats().schema_change_commit_waits;
+    }, uint64_t(0), std::plus<uint64_t>()).get();
 }
 
 // A schema change paused between its commit on shard 0 and on the other shards, see
@@ -123,7 +130,63 @@ future<::shared_ptr<cql_transport::messages::result_message>> write_to_shard_1(c
     return f;
 }
 
+// Issues `read` from shard 0 and returns once some shard has started waiting for the paused commit.
+future<::shared_ptr<cql_transport::messages::result_message>> read_waiting_for_commit(cql_test_env& e, const sstring& read) {
+    auto waits_before = schema_change_commit_waits(e);
+    auto f = e.execute_cql(read);
+    BOOST_REQUIRE(eventually_true([&] { return schema_change_commit_waits(e) > waits_before; }));
+    return f;
+}
+
+// A full scan of a newly created table reads from every shard, including ones which haven't
+// committed the CREATE yet. The coordinating shard waits for the commit before fanning out.
+void test_create_table_scan_during_shard_commit(cql_test_env& e) {
+    auto create = start_paused_schema_change(e, "CREATE TABLE ks.t (pk int PRIMARY KEY, v int)", [] (replica::database& db) {
+        return db.has_schema("ks", "t");
+    });
+    auto scan = read_waiting_for_commit(e, "SELECT * FROM ks.t");
+
+    create.get();
+
+    assert_that(scan.get()).is_rows().is_empty();
+}
+
 } // anonymous namespace
+
+// A single-partition read of a newly created table is forwarded to a shard which hasn't
+// committed the CREATE yet. Without waiting for the commit, it fails with no_such_column_family.
+SEASTAR_TEST_CASE(test_create_table_read_during_shard_commit) {
+    if (!can_run()) {
+        return make_ready_future<>();
+    }
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto create = start_paused_schema_change(e, "CREATE TABLE ks.t (pk int PRIMARY KEY, v int)", [] (replica::database& db) {
+            return db.has_schema("ks", "t");
+        });
+        auto pk = key_on_shard(e, e.local_db().find_schema("ks", "t"), 1);
+        auto read = read_waiting_for_commit(e, format("SELECT * FROM ks.t WHERE pk = {}", pk));
+
+        create.get();
+
+        assert_that(read.get()).is_rows().is_empty();
+    });
+}
+
+SEASTAR_TEST_CASE(test_create_table_scan_during_shard_commit_vnodes) {
+    if (!can_run()) {
+        return make_ready_future<>();
+    }
+    return do_with_cql_env_thread(test_create_table_scan_during_shard_commit);
+}
+
+SEASTAR_TEST_CASE(test_create_table_scan_during_shard_commit_tablets) {
+    if (!can_run()) {
+        return make_ready_future<>();
+    }
+    cql_test_config cfg;
+    cfg.initial_tablets = 8;
+    return do_with_cql_env_thread(test_create_table_scan_during_shard_commit, std::move(cfg));
+}
 
 // A write with a column added by ALTER reaches a shard which hasn't committed the ALTER yet.
 // Without the wait the mutation is downgraded to the old schema and the new value is lost.
