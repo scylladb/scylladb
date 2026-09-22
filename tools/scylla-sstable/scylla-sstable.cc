@@ -21,6 +21,7 @@
 #include "compaction/compaction_strategy.hh"
 #include "compaction/compaction_strategy_state.hh"
 #include "compaction/time_window_compaction_strategy.hh"
+#include "tombstone_gc.hh"
 #include "cql3/statements/raw/parsed_statement.hh"
 #include "cql3/cql_config.hh"
 #include "cql3/statements/modification_statement.hh"
@@ -474,6 +475,54 @@ std::vector<sstables::shared_sstable> load_sstables_of_directory(schema_ptr sche
     return load_sstables_of_storage(schema, sst_man, make_lw_shared<const data_dictionary::storage_options>(
             data_dictionary::make_local_options(directory)));
 }
+
+} // anonymous namespace
+
+namespace tools {
+
+std::vector<sstables::shared_sstable> load_sstables_of_table(schema_ptr schema, sstables::sstables_manager& sst_man,
+        const db::config& dbcfg, const bpo::variables_map& app_config, reader_permit permit) {
+    const auto keyspace = schema->ks_name();
+    const auto table = schema->cf_name();
+    const auto data_dir_path = find_data_dir(app_config, dbcfg);
+    if (data_dir_path.empty()) {
+        throw std::invalid_argument(fmt::format("cannot resolve the sstables of {}.{}: the scylla data dir is not"
+                " known, provide it with --scylla-data-dir or --scylla-yaml-file", keyspace, table));
+    }
+    auto storage_options = tools::load_keyspace_storage_options(dbcfg, data_dir_path, keyspace, permit).get();
+    if (!storage_options) {
+        // a keyspace with no row in system_schema.scylla_keyspaces keeps its
+        // sstables in the data dir
+        storage_options = data_dictionary::make_local_options(
+                get_table_directory(data_dir_path, keyspace, table).get());
+    }
+    sst_log.debug("resolving the sstables of {}.{} through its {} storage", keyspace, table,
+            storage_options->type_string());
+
+    if (auto* os = std::get_if<data_dictionary::storage_options::object_storage>(&storage_options->value);
+            os && !os->location) {
+        // The sstables of such a table are recorded in the registry under the
+        // node owning them, so an unknown identity does not find fewer sstables,
+        // it finds none. Say that, instead of reporting an empty table.
+        if (!tools::load_local_node_info(dbcfg, data_dir_path, permit).get()) {
+            throw std::invalid_argument(fmt::format("cannot resolve the sstables of {}.{}: they are recorded in the"
+                    " sstables registry under the node owning {}, whose identity could not be read from system.local",
+                    keyspace, table, data_dir_path));
+        }
+    }
+
+    // the sstables of a table on object storage are enumerated from the
+    // registry of the node, which is down, so serve it from its data dir
+    sst_man.plug_sstables_registry(tools::make_offline_sstables_registry(dbcfg, data_dir_path, permit));
+    auto unplug_registry = defer([&sst_man] noexcept { sst_man.unplug_sstables_registry(); });
+
+    return load_sstables_of_storage(schema, sst_man,
+            make_lw_shared<const data_dictionary::storage_options>(std::move(*storage_options)));
+}
+
+} // namespace tools
+
+namespace {
 
 // The identity of the node whose data directory is being examined. A data dir
 // which doesn't identify its node falls back to a made up identity, as every
