@@ -408,6 +408,12 @@ future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
         // it must not survive into the next one.
         ts_with_term = nullptr;
 
+        // A retry may come straight back here without suspending on anything that
+        // observes the deadline, so observe it before retrying.
+        if (aoe.abort_source().abort_requested()) {
+            co_await coroutine::return_exception_ptr(filter_error(aoe.abort_source().abort_requested_exception_ptr()));
+        }
+
         if (build_ctx) {
             build_ctx = false;
             auto op_result_future = co_await coroutine::as_future(
@@ -558,6 +564,11 @@ auto coordinator::query(schema_ptr schema,
     if (rtype == read_type::linearizable) {
         // For linearizable reads we may need to forward to the raft leader.
         while (true) {
+            // See mutate() for why the deadline is checked here.
+            if (aoe.abort_source().abort_requested()) {
+                co_await coroutine::return_exception_ptr(filter_error(aoe.abort_source().abort_requested_exception_ptr()));
+            }
+
             if (build_ctx) {
                 build_ctx = false;
                 auto f = co_await coroutine::as_future(create_operation_ctx(
