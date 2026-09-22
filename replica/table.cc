@@ -2783,15 +2783,18 @@ compaction_group::update_sstable_sets_on_compaction_completion(compaction::compa
 
 future<>
 table::compact_all_sstables(tasks::task_info info, do_flush do_flush, bool consider_only_existing_data) {
+    // Taken before the flush, see compaction_manager::perform_major_compaction().
+    std::optional<tombstone_gc_state> pre_flush_gc_state;
     if (do_flush) {
+        pre_flush_gc_state = get_tombstone_gc_state().snapshot();
         co_await flush();
     }
     // Forces off-strategy before major, so sstables previously sitting on maintenance set will be included
     // in the compaction's input set, to provide same semantics as before maintenance set came into existence.
     co_await perform_offstrategy_compaction(info);
-    co_await parallel_foreach_compaction_group_view([this, info, consider_only_existing_data] (compaction::compaction_group_view& view) -> future<> {
+    co_await parallel_foreach_compaction_group_view([this, info, consider_only_existing_data, &pre_flush_gc_state] (compaction::compaction_group_view& view) -> future<> {
         auto lock_holder = co_await _compaction_manager.get_incremental_repair_read_lock(view, "compact_all_sstables");
-        co_await _compaction_manager.perform_major_compaction(view, info, consider_only_existing_data);
+        co_await _compaction_manager.perform_major_compaction(view, info, consider_only_existing_data, pre_flush_gc_state);
     });
 }
 

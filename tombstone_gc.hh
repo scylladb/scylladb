@@ -191,6 +191,10 @@ public:
     // Returns true if it's cheap to retrieve gc_before, e.g. the mode will not require accessing a system table.
     [[nodiscard]] bool cheap_to_get_gc_before(const schema& s) const noexcept;
 
+    // Returns true if gc_before for the table is derived from its repair history, i.e. a tombstone
+    // of the table becomes GC-eligible only once a repair covering it completed.
+    [[nodiscard]] bool is_gc_before_repair_based(const schema& s) const noexcept;
+
     struct get_gc_before_for_range_result {
         gc_clock::time_point min_gc_before;
         gc_clock::time_point max_gc_before;
