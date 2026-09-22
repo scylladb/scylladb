@@ -2146,6 +2146,15 @@ def prepare_advanced_optimizations(*, modes, build_modes, args):
         # It's valuable in general, but our training suite is not realistic and exhaustive
         # enough to be confident about value profiling. Let's also keep it disabled by
         # default, conservatively. (Currently it is enabled in Clang by default.)
+        #
+        # Note that `-mllvm` is a compile-only option: the driver doesn't forward it to
+        # the LTO backend, so passing it to a link command achieves nothing except a
+        # -Wunused-command-line-argument warning (there are hundreds of them in a full
+        # build). Hence these flags belong to the compile flags only.
+        # (Disabling pgso in the LTO backend of the `scylla` link would require
+        # `-Wl,-plugin-opt=-pgso=false`; `-enable-value-profiling` has no such
+        # counterpart, and doesn't need one, since instrumentation only happens at
+        # compile time.)
         conservative_opts = "" if args.experimental_pgo else "-mllvm -pgso=false -mllvm -enable-value-profiling=false"
 
         llvm_instr_types = []
@@ -2162,7 +2171,7 @@ def prepare_advanced_optimizations(*, modes, build_modes, args):
                 submode['cxx_ld_flags'] += f" -fprofile-use={profile_path}"
                 submode['profile_target'] = profile_target
             submode['lib_cflags'] += f" -f{it}profile-generate={os.path.realpath(outdir)}/{submode_name} {conservative_opts}"
-            submode['cxx_ld_flags'] += f" -f{it}profile-generate={os.path.realpath(outdir)}/{submode_name} {conservative_opts}"
+            submode['cxx_ld_flags'] += f" -f{it}profile-generate={os.path.realpath(outdir)}/{submode_name}"
             submode['profile_recipe'] = textwrap.dedent(f"""\
                 build $builddir/{submode_name}/profiles/prof.profdata: train $builddir/{submode_name}/scylla
                 build $builddir/{submode_name}/profiles/merged.profdata: merge_profdata $builddir/{submode_name}/profiles/prof.profdata {profile_target or str()}
@@ -2175,7 +2184,7 @@ def prepare_advanced_optimizations(*, modes, build_modes, args):
 
         if profile_path is not None:
             modes[mode]['lib_cflags'] += f" -fprofile-use={profile_path} {conservative_opts}"
-            modes[mode]['cxx_ld_flags'] += f" -fprofile-use={profile_path} {conservative_opts}"
+            modes[mode]['cxx_ld_flags'] += f" -fprofile-use={profile_path}"
             modes[mode]['profile_target'] = profile_target
             modes[mode].setdefault('profile_recipe', "")
             modes[mode]['profile_recipe'] += textwrap.dedent(f"""\
