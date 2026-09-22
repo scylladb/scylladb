@@ -898,7 +898,7 @@ future<> shard_reshaping_compaction_task_impl::reshape_compaction_group(compacti
             dblog.info("Table {}.{} with compaction strategy {} had reshape successfully aborted.", table.schema()->ks_name(), table.schema()->cf_name(), table.get_compaction_strategy().name());
             throw;
         } catch (...) {
-            dblog.info("Reshape failed for Table {}.{} with compaction strategy {} due to {:t}", table.schema()->ks_name(), table.schema()->cf_name(), table.get_compaction_strategy().name(), std::current_exception());
+            dblog.error("Reshape failed for Table {}.{} with compaction strategy {} due to {:t}", table.schema()->ks_name(), table.schema()->cf_name(), table.get_compaction_strategy().name(), std::current_exception());
             break;
         }
 
