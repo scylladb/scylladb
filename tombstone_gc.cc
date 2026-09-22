@@ -207,6 +207,13 @@ gc_clock::time_point tombstone_gc_state::get_gc_before_for_key(schema_ptr s, con
     std::abort();
 }
 
+bool tombstone_gc_state::is_gc_before_repair_based(const schema& s) const noexcept {
+    return _mode == mode::gc_expired
+            && !s.static_props().is_group0_table
+            && s.tombstone_gc_options().mode() == tombstone_gc_mode::repair
+            && !(_shared_state && _shared_state->is_table_rf_one(s.id()));
+}
+
 void shared_tombstone_gc_state::mutate_repair_history(std::function<void(per_table_history_maps&)> mutator) {
     auto new_maps = make_lw_shared<per_table_history_maps>(*_reconcile_history_maps);
     mutator(*new_maps);

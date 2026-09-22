@@ -230,13 +230,30 @@ enum class tombstone_gc_scope : uint8_t {
     // Skip the memtables; still consult the uncompacting sstables and the commitlog.
     //
     // Used when the tombstone's GC eligibility is already ordered after the delivery of
-    // anything it could shadow. That holds for a repaired sstable view, i.e. incremental
-    // repair on tablets with tombstone_gc = {'mode': 'repair'}, where unrepaired data is
-    // always newer than any GC-eligible tombstone. That one is a property of the table
-    // rather than of the compaction, see
-    // compaction_group_view::skip_memtable_for_tombstone_gc().
+    // anything it could shadow, which holds in two cases, both requiring
+    // tombstone_gc = {'mode': 'repair'} so that gc_before is derived from a repair time:
     //
-    // This argument assumes that nothing arrives out of order by more than tombstone_gc's
+    //  - a major compaction *that flushed the memtables first*, and so takes every
+    //    sstable of the compaction group as input. Everything resident at flush time is
+    //    merged with the tombstones covering it rather than decided by a purge check, so
+    //    the memtables can only hold writes that arrived after the flush. The repair time
+    //    is the time at which repair flushed hints -- including view hints, see
+    //    repair_service::flush_hints() and storage_proxy::create_hint_sync_point() -- so
+    //    anything a GC-eligible tombstone covers was delivered and reconciled before
+    //    gc_before could advance past it. The flush is a precondition, not a detail: a
+    //    major run with flush_memtables=false can leave data delivered *before*
+    //    repair_time sitting in a memtable, never merged with the tombstone that shadows
+    //    it, and purging that tombstone would resurrect the row. For the same reason the
+    //    gc state is snapshotted before the flush, not when the compaction starts. RF=1
+    //    tables are excluded: they are never repaired, and repair mode collects their
+    //    tombstones immediately;
+    //
+    //  - a repaired sstable view, i.e. incremental repair on tablets, where unrepaired
+    //    data is always newer than any GC-eligible tombstone. That one is a property of
+    //    the table rather than of the compaction, see
+    //    compaction_group_view::skip_memtable_for_tombstone_gc().
+    //
+    // Both arguments assume that nothing arrives out of order by more than tombstone_gc's
     // propagation_delay_in_seconds. This assumption is a core part of the repair-mode
     // tombstone-gc contract.
     skip_memtable = 1,

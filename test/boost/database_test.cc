@@ -2006,6 +2006,12 @@ SEASTAR_THREAD_TEST_CASE(test_tombstone_gc_state_snapshot_rf_one_tables) {
 
     BOOST_REQUIRE_EQUAL(snapshot.get_gc_before_for_key(table_gc_mode_repair1, dk, now), snapshot_time);
     BOOST_REQUIRE_EQUAL(snapshot.get_gc_before_for_key(table_gc_mode_repair2, dk, now), gc_clock::time_point::min());
+
+    // is_gc_before_repair_based() follows the snapshot too.
+    BOOST_REQUIRE(gc_state.is_gc_before_repair_based(*table_gc_mode_repair1));
+    BOOST_REQUIRE(!gc_state.is_gc_before_repair_based(*table_gc_mode_repair2));
+    BOOST_REQUIRE(!snapshot.is_gc_before_repair_based(*table_gc_mode_repair1));
+    BOOST_REQUIRE(snapshot.is_gc_before_repair_based(*table_gc_mode_repair2));
 }
 
 SEASTAR_TEST_CASE(test_max_purgeable_combine) {
