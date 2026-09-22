@@ -1149,10 +1149,36 @@ public:
         migration_plan plan;
     };
 
+    // Accounts for a migration group which made it into the final plan.
+    // Groups are planned and admitted as a unit, so they are counted as one migration.
+    static void count_produced(load_balancer_dc_stats& stats, const migration_plan::migration_group& group) {
+        stats.migrations_produced++;
+        switch (group.front().kind) {
+        case tablet_transition_kind::rebuild:
+        case tablet_transition_kind::rebuild_v2:
+            stats.rebuilds_produced++;
+            break;
+        case tablet_transition_kind::intranode_migration:
+            stats.intranode_migrations_produced++;
+            break;
+        default:
+            break;
+        }
+    }
+
     future<> merge_sub_plans(migration_plan& plan, std::vector<sub_plan> sub_plans) {
         for (auto& sp : sub_plans) {
-            co_await coroutine::maybe_yield();
+            auto stats = _stats.for_dc(sp.dc);
+            // Migrations are taken out to be added individually below. The rest of the
+            // sub-plan (drain failures, RF change schema actions, resize decisions) carries
+            // no streaming load and is merged as is.
+            auto migration_groups = sp.plan.take_migration_groups();
             plan.merge(std::move(sp.plan));
+            for (auto& group : migration_groups) {
+                co_await coroutine::maybe_yield();
+                count_produced(*stats, group);
+                plan.add(std::move(group));
+            }
         }
     }
 
@@ -3500,8 +3526,6 @@ public:
 
             apply_load(mig_streaming_info);
             lblogger.debug("Adding migration: {} size: {}", mig, tablets.tablet_set_disk_size);
-            _current_stats->migrations_produced++;
-            _current_stats->intranode_migrations_produced++;
             mark_as_scheduled(mig);
             plan.add(std::move(mig));
 
@@ -4207,13 +4231,8 @@ public:
             if (can_accept_load(mig_streaming_info)) {
                 apply_load(mig_streaming_info);
                 lblogger.debug("Adding migration: {} size: {}", mig, source_tablets.tablet_set_disk_size);
-                _current_stats->migrations_produced++;
                 mark_as_scheduled(mig);
                 plan.add(std::move(mig));
-
-                if (kind == tablet_transition_kind::rebuild || kind == tablet_transition_kind::rebuild_v2) {
-                    ++_current_stats->rebuilds_produced;
-                }
             } else {
                 // Shards are overloaded with streaming. Do not include the migration in the plan, but
                 // continue as if it was in the hope that we will find a migration which can be executed without

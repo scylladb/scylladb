@@ -296,6 +296,13 @@ public:
         _migration_groups.emplace_back(std::move(group));
     }
 
+    /// Removes all tablet migrations from the plan and returns them grouped as they were added.
+    /// Other parts of the plan are left intact.
+    migration_groups take_migration_groups() {
+        _migration_count = 0;
+        return std::exchange(_migration_groups, {});
+    }
+
     void add(drain_failure failure) {
         _drain_failures.emplace_back(std::move(failure));
     }
