@@ -65,6 +65,7 @@ class tombstone_gc_state {
     per_table_history_maps* _reconcile_history_maps;
     [[nodiscard]] gc_clock::time_point check_min(schema_ptr, gc_clock::time_point) const;
 
+<<<<<<< HEAD
     [[nodiscard]] repair_history_map_ptr get_repair_history_for_table(const table_id& id) const;
     [[nodiscard]] repair_history_map_ptr get_or_create_repair_history_for_table(const table_id& id);
 
@@ -72,13 +73,35 @@ class tombstone_gc_state {
     [[nodiscard]] seastar::lw_shared_ptr<gc_clock::time_point> get_or_create_group0_gc_time();
 
     [[nodiscard]] gc_clock::time_point get_gc_before_for_group0(schema_ptr s) const;
+||||||| parent of 45e56aaadc (tombstone_gc: let a view being built suspend its tombstone GC)
+    std::unordered_map<table_id, utils::chunked_vector<range_repair_time>> _pending_updates;
+=======
+    // Views whose build has finished on every node. Any other view counts as
+    // being built, also one this node has just created or has no state loaded for.
+    lw_shared_ptr<const std::unordered_set<table_id>> _built_views;
+
+    std::unordered_map<table_id, utils::chunked_vector<range_repair_time>> _pending_updates;
+>>>>>>> 45e56aaadc (tombstone_gc: let a view being built suspend its tombstone GC)
 
 private:
     std::unordered_map<table_id, utils::chunked_vector<range_repair_time>> _pending_updates;
 
 public:
+<<<<<<< HEAD
     tombstone_gc_state() = delete;
     explicit tombstone_gc_state(per_table_history_maps* maps) noexcept : _reconcile_history_maps(maps) {}
+||||||| parent of 45e56aaadc (tombstone_gc: let a view being built suspend its tombstone GC)
+    shared_tombstone_gc_state();
+    shared_tombstone_gc_state(gc_time_min_source gc_min_source, lw_shared_ptr<const per_table_history_maps> reconcile_history_maps);
+    shared_tombstone_gc_state(shared_tombstone_gc_state&&);
+    ~shared_tombstone_gc_state();
+=======
+    shared_tombstone_gc_state();
+    shared_tombstone_gc_state(gc_time_min_source gc_min_source, lw_shared_ptr<const per_table_history_maps> reconcile_history_maps,
+            lw_shared_ptr<const std::unordered_set<table_id>> built_views);
+    shared_tombstone_gc_state(shared_tombstone_gc_state&&);
+    ~shared_tombstone_gc_state();
+>>>>>>> 45e56aaadc (tombstone_gc: let a view being built suspend its tombstone GC)
 
     explicit operator bool() const noexcept {
         return _reconcile_history_maps != nullptr;
@@ -88,6 +111,151 @@ public:
         _gc_min_source = std::move(src);
     }
 
+<<<<<<< HEAD
+||||||| parent of 45e56aaadc (tombstone_gc: let a view being built suspend its tombstone GC)
+    gc_clock::time_point get_gc_min_time(const table_id& tid) const noexcept {
+        return _gc_min_source ? _gc_min_source(tid) : gc_clock::time_point::max();
+    }
+
+    void update_repair_time(table_id id, const dht::token_range& range, gc_clock::time_point repair_time);
+    void update_group0_refresh_time(gc_clock::time_point refresh_time);
+
+    void drop_repair_history_for_table(const table_id& id);
+
+    void insert_pending_repair_time_update(table_id id, const dht::token_range& range, gc_clock::time_point repair_time, shard_id shard);
+    future<> flush_pending_repair_time_update(replica::database& db);
+
+    tombstone_gc_state_snapshot snapshot() const noexcept;
+};
+
+class tombstone_gc_state_snapshot {
+    shared_tombstone_gc_state _shared_state;
+    gc_clock::time_point _query_time;
+
+public:
+    explicit tombstone_gc_state_snapshot(shared_tombstone_gc_state&&);
+
+    gc_clock::time_point query_time() const noexcept { return _query_time; }
+
+    [[nodiscard]] gc_clock::time_point get_gc_before_for_key(schema_ptr s, const dht::decorated_key& dk, bool check_commitlog) const;
+};
+
+class tombstone_gc_state {
+    enum class mode { no_gc, gc_all, gc_expired };
+
+private:
+    mode _mode{mode::gc_expired};
+    const shared_tombstone_gc_state* _shared_state{nullptr};
+    bool _check_commitlog{true};
+
+private:
+    [[nodiscard]] gc_clock::time_point check_min(schema_ptr, gc_clock::time_point) const;
+
+    [[nodiscard]] repair_history_map_ptr get_repair_history_for_table(const table_id& id) const;
+
+    [[nodiscard]] gc_clock::time_point get_gc_before_for_group0(schema_ptr s) const;
+
+    explicit tombstone_gc_state(mode m, const shared_tombstone_gc_state* shared_state, bool check_commitlog) noexcept
+        : _mode(m)
+        , _shared_state(shared_state)
+        , _check_commitlog(check_commitlog)
+    { }
+
+public:
+    tombstone_gc_state() = delete;
+    explicit tombstone_gc_state(const shared_tombstone_gc_state& shared_state, bool check_commitlog = true) noexcept
+        : tombstone_gc_state(mode::gc_expired, &shared_state, check_commitlog) {}
+    explicit tombstone_gc_state(std::nullptr_t) noexcept
+        : tombstone_gc_state(mode::gc_expired, nullptr, true) {}
+
+    static tombstone_gc_state no_gc() { return tombstone_gc_state(mode::no_gc, nullptr, false); }
+
+    static tombstone_gc_state gc_all() { return tombstone_gc_state(mode::gc_all, nullptr, false); }
+
+    bool is_gc_enabled() const noexcept {
+        return _mode != mode::no_gc;
+    }
+
+    explicit operator bool() const noexcept {
+        return _shared_state != nullptr;
+    }
+
+=======
+    gc_clock::time_point get_gc_min_time(const table_id& tid) const noexcept {
+        return _gc_min_source ? _gc_min_source(tid) : gc_clock::time_point::max();
+    }
+
+    void set_built_views(std::unordered_set<table_id> views) {
+        _built_views = make_lw_shared<const std::unordered_set<table_id>>(std::move(views));
+    }
+    bool is_view_being_built(table_id id) const noexcept {
+        return !_built_views->contains(id);
+    }
+
+    void update_repair_time(table_id id, const dht::token_range& range, gc_clock::time_point repair_time);
+    void update_group0_refresh_time(gc_clock::time_point refresh_time);
+
+    void drop_repair_history_for_table(const table_id& id);
+
+    void insert_pending_repair_time_update(table_id id, const dht::token_range& range, gc_clock::time_point repair_time, shard_id shard);
+    future<> flush_pending_repair_time_update(replica::database& db);
+
+    tombstone_gc_state_snapshot snapshot() const noexcept;
+};
+
+class tombstone_gc_state_snapshot {
+    shared_tombstone_gc_state _shared_state;
+    gc_clock::time_point _query_time;
+
+public:
+    explicit tombstone_gc_state_snapshot(shared_tombstone_gc_state&&);
+
+    gc_clock::time_point query_time() const noexcept { return _query_time; }
+
+    [[nodiscard]] gc_clock::time_point get_gc_before_for_key(schema_ptr s, const dht::decorated_key& dk, bool check_commitlog) const;
+};
+
+class tombstone_gc_state {
+    enum class mode { no_gc, gc_all, gc_expired };
+
+private:
+    mode _mode{mode::gc_expired};
+    const shared_tombstone_gc_state* _shared_state{nullptr};
+    bool _check_commitlog{true};
+
+private:
+    [[nodiscard]] gc_clock::time_point check_min(schema_ptr, gc_clock::time_point) const;
+
+    [[nodiscard]] repair_history_map_ptr get_repair_history_for_table(const table_id& id) const;
+
+    [[nodiscard]] gc_clock::time_point get_gc_before_for_group0(schema_ptr s) const;
+
+    explicit tombstone_gc_state(mode m, const shared_tombstone_gc_state* shared_state, bool check_commitlog) noexcept
+        : _mode(m)
+        , _shared_state(shared_state)
+        , _check_commitlog(check_commitlog)
+    { }
+
+public:
+    tombstone_gc_state() = delete;
+    explicit tombstone_gc_state(const shared_tombstone_gc_state& shared_state, bool check_commitlog = true) noexcept
+        : tombstone_gc_state(mode::gc_expired, &shared_state, check_commitlog) {}
+    explicit tombstone_gc_state(std::nullptr_t) noexcept
+        : tombstone_gc_state(mode::gc_expired, nullptr, true) {}
+
+    static tombstone_gc_state no_gc() { return tombstone_gc_state(mode::no_gc, nullptr, false); }
+
+    static tombstone_gc_state gc_all() { return tombstone_gc_state(mode::gc_all, nullptr, false); }
+
+    bool is_gc_enabled() const noexcept {
+        return _mode != mode::no_gc;
+    }
+
+    explicit operator bool() const noexcept {
+        return _shared_state != nullptr;
+    }
+
+>>>>>>> 45e56aaadc (tombstone_gc: let a view being built suspend its tombstone GC)
     // Returns true if it's cheap to retrieve gc_before, e.g. the mode will not require accessing a system table.
     [[nodiscard]] bool cheap_to_get_gc_before(const schema& s) const noexcept;
 

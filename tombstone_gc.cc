@@ -99,6 +99,11 @@ tombstone_gc_state::get_gc_before_for_range_result tombstone_gc_state::get_gc_be
         return {gc_before, gc_before, knows_entire_range};
     }
 
+    if (s->is_view() && _shared_state && _shared_state->is_view_being_built(s->id())) {
+        dblog.trace("Get gc_before for ks={}, table={}, range={}: view is being built, no gc", s->ks_name(), s->cf_name(), range);
+        return {gc_clock::time_point::min(), gc_clock::time_point::min(), knows_entire_range};
+    }
+
     const auto& options = s->tombstone_gc_options();
     switch (options.mode()) {
     case tombstone_gc_mode::timeout: {
@@ -174,6 +179,11 @@ gc_clock::time_point tombstone_gc_state::get_gc_before_for_key(schema_ptr s, con
         return gc_before;
     }
 
+    if (s->is_view() && _shared_state && _shared_state->is_view_being_built(s->id())) {
+        dblog.trace("Get gc_before for ks={}, table={}, dk={}: view is being built, no gc", s->ks_name(), s->cf_name(), dk);
+        return gc_clock::time_point::min();
+    }
+
     // if mode = timeout    // default option, if user does not specify tombstone_gc options
     // if mode = disabled   // never gc tombstone
     // if mode = immediate  // can gc tombstone immediately
@@ -211,10 +221,69 @@ gc_clock::time_point tombstone_gc_state::get_gc_before_for_key(schema_ptr s, con
     std::abort();
 }
 
+<<<<<<< HEAD
 void tombstone_gc_state::update_repair_time(table_id id, const dht::token_range& range, gc_clock::time_point repair_time) {
     auto m = get_or_create_repair_history_for_table(id);
     if (!m) {
         on_fatal_internal_error(dblog, "repair_history_map not found/created");
+||||||| parent of 45e56aaadc (tombstone_gc: let a view being built suspend its tombstone GC)
+void shared_tombstone_gc_state::mutate_repair_history(std::function<void(per_table_history_maps&)> mutator) {
+    auto new_maps = make_lw_shared<per_table_history_maps>(*_reconcile_history_maps);
+    mutator(*new_maps);
+    _reconcile_history_maps = std::move(new_maps);
+}
+
+shared_tombstone_gc_state::shared_tombstone_gc_state()
+    : _reconcile_history_maps(make_lw_shared<const per_table_history_maps>())
+ { }
+
+shared_tombstone_gc_state::shared_tombstone_gc_state(gc_time_min_source gc_min_source, lw_shared_ptr<const per_table_history_maps> reconcile_history_maps)
+    : _gc_min_source(std::move(gc_min_source))
+    , _reconcile_history_maps(std::move(reconcile_history_maps))
+{ }
+
+shared_tombstone_gc_state::shared_tombstone_gc_state(shared_tombstone_gc_state&&) = default;
+
+shared_tombstone_gc_state::~shared_tombstone_gc_state() { }
+
+static void do_update_repair_time(per_table_history_maps& maps, table_id id, const dht::token_range& range, gc_clock::time_point repair_time) {
+    auto& reconcile_history_maps = maps._repair_maps;
+    auto [it, inserted] = reconcile_history_maps.try_emplace(id, lw_shared_ptr<repair_history_map>(nullptr));
+    if (inserted || !it->second) { // check for failed past update, leaving behind nullptr
+        it->second = seastar::make_lw_shared<repair_history_map>();
+    } else {
+        it->second = seastar::make_lw_shared<repair_history_map>(*it->second);
+=======
+void shared_tombstone_gc_state::mutate_repair_history(std::function<void(per_table_history_maps&)> mutator) {
+    auto new_maps = make_lw_shared<per_table_history_maps>(*_reconcile_history_maps);
+    mutator(*new_maps);
+    _reconcile_history_maps = std::move(new_maps);
+}
+
+shared_tombstone_gc_state::shared_tombstone_gc_state()
+    : _reconcile_history_maps(make_lw_shared<const per_table_history_maps>())
+    , _built_views(make_lw_shared<const std::unordered_set<table_id>>())
+ { }
+
+shared_tombstone_gc_state::shared_tombstone_gc_state(gc_time_min_source gc_min_source, lw_shared_ptr<const per_table_history_maps> reconcile_history_maps,
+        lw_shared_ptr<const std::unordered_set<table_id>> built_views)
+    : _gc_min_source(std::move(gc_min_source))
+    , _reconcile_history_maps(std::move(reconcile_history_maps))
+    , _built_views(std::move(built_views))
+{ }
+
+shared_tombstone_gc_state::shared_tombstone_gc_state(shared_tombstone_gc_state&&) = default;
+
+shared_tombstone_gc_state::~shared_tombstone_gc_state() { }
+
+static void do_update_repair_time(per_table_history_maps& maps, table_id id, const dht::token_range& range, gc_clock::time_point repair_time) {
+    auto& reconcile_history_maps = maps._repair_maps;
+    auto [it, inserted] = reconcile_history_maps.try_emplace(id, lw_shared_ptr<repair_history_map>(nullptr));
+    if (inserted || !it->second) { // check for failed past update, leaving behind nullptr
+        it->second = seastar::make_lw_shared<repair_history_map>();
+    } else {
+        it->second = seastar::make_lw_shared<repair_history_map>(*it->second);
+>>>>>>> 45e56aaadc (tombstone_gc: let a view being built suspend its tombstone GC)
     }
     *m += std::make_pair(locator::token_metadata::range_to_interval(range), repair_time);
 }
@@ -251,7 +320,37 @@ void tombstone_gc_state::update_group0_refresh_time(gc_clock::time_point refresh
     *m = refresh_time;
 }
 
+<<<<<<< HEAD
 static bool needs_repair_before_gc(const replica::database& db, sstring ks_name) {
+||||||| parent of 45e56aaadc (tombstone_gc: let a view being built suspend its tombstone GC)
+tombstone_gc_state_snapshot shared_tombstone_gc_state::snapshot() const noexcept {
+    return tombstone_gc_state_snapshot(shared_tombstone_gc_state(_gc_min_source, _reconcile_history_maps));
+}
+
+tombstone_gc_state_snapshot::tombstone_gc_state_snapshot(shared_tombstone_gc_state&& shared_state)
+    : _shared_state(std::move(shared_state)), _query_time(gc_clock::now())
+{ }
+
+gc_clock::time_point tombstone_gc_state_snapshot::get_gc_before_for_key(schema_ptr s, const dht::decorated_key& dk, bool check_commitlog) const {
+    return tombstone_gc_state(_shared_state, check_commitlog).get_gc_before_for_key(s, dk, _query_time);
+}
+
+static bool needs_repair_before_gc(const locator::abstract_replication_strategy& rs, const locator::token_metadata& tm) {
+=======
+tombstone_gc_state_snapshot shared_tombstone_gc_state::snapshot() const noexcept {
+    return tombstone_gc_state_snapshot(shared_tombstone_gc_state(_gc_min_source, _reconcile_history_maps, _built_views));
+}
+
+tombstone_gc_state_snapshot::tombstone_gc_state_snapshot(shared_tombstone_gc_state&& shared_state)
+    : _shared_state(std::move(shared_state)), _query_time(gc_clock::now())
+{ }
+
+gc_clock::time_point tombstone_gc_state_snapshot::get_gc_before_for_key(schema_ptr s, const dht::decorated_key& dk, bool check_commitlog) const {
+    return tombstone_gc_state(_shared_state, check_commitlog).get_gc_before_for_key(s, dk, _query_time);
+}
+
+static bool needs_repair_before_gc(const locator::abstract_replication_strategy& rs, const locator::token_metadata& tm) {
+>>>>>>> 45e56aaadc (tombstone_gc: let a view being built suspend its tombstone GC)
     // If a table uses local replication strategy or rf one, there is no
     // need to run repair even if tombstone_gc mode = repair.
     auto& ks = db.find_keyspace(ks_name);
