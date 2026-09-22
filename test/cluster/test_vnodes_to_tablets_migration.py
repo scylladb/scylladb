@@ -1624,9 +1624,14 @@ async def test_create_table_during_migration_multinode(manager: ScyllaClusterMan
 
         logger.info("Finalizing the migration")
         await manager.api.finalize_vnode_tablet_migration(servers[0].ip_addr, ks)
-        await read_barrier(manager.api, servers[0].ip_addr)
 
-        res = await cql.run_async(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{ks}'")
+        # finalize_vnode_tablet_migration returns once the group0 command is applied on the
+        # topology coordinator; the other node applies it asynchronously. Barrier one node
+        # and read the schema from that same node, or the driver may ask the one that has
+        # not caught up yet.
+        await read_barrier(manager.api, servers[0].ip_addr)
+        host1 = cql.cluster.metadata.get_host(servers[0].ip_addr)
+        res = await cql.run_async(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{ks}'", host=host1)
         assert len(res) == 1 and res[0].initial_tablets is not None, \
             "Keyspace is still using vnodes after migration finalization"
 
