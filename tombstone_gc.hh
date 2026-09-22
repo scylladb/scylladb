@@ -68,6 +68,10 @@ class shared_tombstone_gc_state {
     gc_time_min_source _gc_min_source;
     lw_shared_ptr<const per_table_history_maps> _reconcile_history_maps;
 
+    // Views whose build has finished on every node. Any other view counts as
+    // being built, also one this node has just created or has no state loaded for.
+    lw_shared_ptr<const std::unordered_set<table_id>> _built_views;
+
     std::unordered_map<table_id, utils::chunked_vector<range_repair_time>> _pending_updates;
 
 private:
@@ -75,7 +79,8 @@ private:
 
 public:
     shared_tombstone_gc_state();
-    shared_tombstone_gc_state(gc_time_min_source gc_min_source, lw_shared_ptr<const per_table_history_maps> reconcile_history_maps);
+    shared_tombstone_gc_state(gc_time_min_source gc_min_source, lw_shared_ptr<const per_table_history_maps> reconcile_history_maps,
+            lw_shared_ptr<const std::unordered_set<table_id>> built_views);
     shared_tombstone_gc_state(shared_tombstone_gc_state&&);
     ~shared_tombstone_gc_state();
 
@@ -89,6 +94,13 @@ public:
 
     gc_clock::time_point get_gc_min_time(const table_id& tid) const noexcept {
         return _gc_min_source ? _gc_min_source(tid) : gc_clock::time_point::max();
+    }
+
+    void set_built_views(std::unordered_set<table_id> views) {
+        _built_views = make_lw_shared<const std::unordered_set<table_id>>(std::move(views));
+    }
+    bool is_view_being_built(table_id id) const noexcept {
+        return !_built_views->contains(id);
     }
 
     void update_repair_time(table_id id, const dht::token_range& range, gc_clock::time_point repair_time);
