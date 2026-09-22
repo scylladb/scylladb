@@ -7526,6 +7526,18 @@ future<> storage_proxy::wait_for_hint_sync_point(const db::hints::sync_point spo
     co_return;
 }
 
+future<> storage_proxy::discard_hints_up_to_sync_point(const db::hints::sync_point spoint) {
+    const auto my_host_id = get_token_metadata_ptr()->get_my_id();
+    if (spoint.host_id != my_host_id) {
+        throw std::runtime_error(format("The hint sync point was created on another node, with host ID {}. This node's host ID is {}",
+                spoint.host_id, my_host_id));
+    }
+
+    co_await container().invoke_on_all([&spoint] (storage_proxy& sp) {
+        sp._hints_manager.discard_hints_up_to_sync_point(spoint.regular_per_shard_rps[this_shard_id()]);
+    });
+}
+
 void storage_proxy::on_released(const locator::host_id& hid) {
     // Discarding these futures is safe. They're awaited by db::hints::manager::stop().
     //
