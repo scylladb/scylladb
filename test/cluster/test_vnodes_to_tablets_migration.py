@@ -235,6 +235,37 @@ async def verify_migration_status(manager: ScyllaClusterManager, server: ServerI
                 raise
 
 
+# Custom payload key carrying tablet routing info to the client.
+TABLETS_ROUTING_V1 = 'tablets-routing-v1'
+
+
+async def tablet_routing_published(cql, server: ServerInfo, ks: str, table: str,
+                                   key: int) -> dict[str, bool]:
+    """Send a prepared read and write for `key` through `server`; report per statement whether
+    the coordinator attached tablet routing info.
+
+    Read off the response payload, not the driver's tablet cache: the cache is dropped whenever
+    the driver rebuilds its schema, so a negative there is ambiguous. Per statement, so that an
+    "it does publish" assertion cannot be satisfied by one site alone.
+    """
+    host = cql.cluster.metadata.get_host(server.ip_addr)
+    assert cql.cluster.control_connection._tablets_routing_v1, \
+        "Driver did not negotiate the TABLETS_ROUTING_V1 protocol extension"
+
+    # The partition key must be a bind variable; see _may_use_token_aware_routing.
+    statements = {
+        'SELECT': (cql.prepare(f"SELECT c FROM {ks}.{table} WHERE pk = ?"), [key]),
+        'INSERT': (cql.prepare(f"INSERT INTO {ks}.{table} (pk, c) VALUES (?, ?)"), [key, key]),
+    }
+
+    published = {}
+    for label, (statement, parameters) in statements.items():
+        response_future = cql.execute_async(statement, parameters, host=host, timeout=200.0)
+        await asyncio.get_running_loop().run_in_executor(None, response_future.result)
+        published[label] = TABLETS_ROUTING_V1 in (response_future.custom_payload or {})
+    return published
+
+
 async def test_migration(manager: ScyllaClusterManager):
     """Verify vnodes-to-tablets migration for a single table on a single-node cluster.
 
@@ -1441,4 +1472,101 @@ async def test_migration_with_zero_token_node(manager: ScyllaClusterManager):
             "Keyspace is still using vnodes after migration finalization"
 
         logger.info("Verifying data integrity after finalization")
+        await verify_data_integrity(cql, ks, "test", num_keys)
+
+
+async def test_no_tablet_routing_before_finalization(manager: ScyllaClusterManager):
+    """Tablet routing info must not reach CQL clients before the migration is finalized.
+
+    Regression test for SCYLLADB-2396. An upgraded node stores the migrating table in tablets,
+    so table::uses_tablets() is true there while the keyspace still replicates by vnodes - which
+    used to be enough to hand the client a tablet map the migration may still discard.
+
+    Deterministic by construction: RF=1 gives every tablet one replica and requests go to the
+    node that is not it, where check_locality() returns routing info whatever shard they landed
+    on. Tablet balancing is off so nothing moves the key's tablet or resizes it afterwards.
+
+    The SELECT and plain-write sites are checked separately. The LWT site is not covered - the
+    first LWT creates a <table>$paxos table, which has no tablet map and makes finalization
+    refuse (SCYLLADB-1158) - nor is TABLETS_ROUTING_V2, which the server only offers under the
+    strongly-consistent-tables feature and the Python driver does not implement.
+    """
+    num_nodes = 2
+    num_shards = 2
+    tokens_per_node = 16
+    num_keys = 64
+
+    logger.info(f"Starting {num_nodes} nodes with {num_shards} shards each")
+    cfg = {'tablet_load_stats_refresh_interval_in_seconds': 1, 'num_tokens': tokens_per_node}
+    servers = [await manager.server_add(cmdline=['--smp', str(num_shards)],
+                                        property_file={"dc": "dc1", "rack": f"rack{i}"},
+                                        config=cfg)
+               for i in range(1, num_nodes + 1)]
+    cql, _ = await manager.get_ready_cql(servers)
+
+    logger.info("Disabling tablet balancing to keep the tablet map fixed for the whole test")
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+
+    host_ids = {s.server_id: await manager.get_host_id(s.server_id) for s in servers}
+    # Requests go to `coordinator`, for a key whose only replica is `owner`.
+    coordinator, owner = servers[0], servers[1]
+
+    logger.info("Creating keyspace and table with vnodes (RF=1)")
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+        insert_stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, c) VALUES (?, ?)")
+        await asyncio.gather(*(cql.run_async(insert_stmt, [k, k]) for k in range(num_keys)))
+
+        logger.info("Starting vnodes-to-tablets migration (creating tablet map)")
+        await manager.api.create_vnode_tablet_migration(coordinator.ip_addr, ks)
+
+        tablets = sorted(await get_all_tablet_replicas(manager, coordinator, ks, 'test'),
+                         key=lambda t: t.last_token)
+        assert tablets, f"{ks}.test has no tablet map"
+
+        # Tablets are sorted by last_token and their ranges are contiguous, so the
+        # first tablet whose last_token is not below the token is the owning one.
+        def owning_replicas(token: int) -> list:
+            return next(t.replicas for t in tablets if token <= t.last_token)
+
+        rows = await cql.run_async(f"SELECT pk, token(pk) AS t FROM {ks}.test")
+        owner_host_id = host_ids[owner.server_id]
+        keys_on_owner = [r.pk for r in rows if [h for h, _ in owning_replicas(r.t)] == [owner_host_id]]
+        assert keys_on_owner, f"No key of {ks}.test is replicated only on {owner.server_id}"
+        key = min(keys_on_owner)
+        logger.info(f"Key {key} is replicated only on {owner.server_id}; "
+                    f"it will be queried through {coordinator.server_id}")
+
+        logger.info("Rolling upgrade: both nodes store the table in tablets, keyspace still vnodes")
+        for s in servers:
+            await manager.api.upgrade_node_to_tablets(s.ip_addr)
+            await manager.server_restart(s.server_id)
+            await reconnect_driver(manager)
+            cql, _ = await manager.get_ready_cql(servers)
+
+        # The status comes from load stats refreshed every second; allow one retry.
+        await verify_migration_status(manager, coordinator, ks,
+            expected_status='migrating_to_tablets',
+            expected_node_statuses={h: ('tablets', 'tablets') for h in host_ids.values()},
+            retries=1, retry_interval=1)
+
+        logger.info("Querying the key while the migration is not finalized")
+        published = await tablet_routing_published(cql, coordinator, ks, 'test', key)
+        assert not any(published.values()), \
+            f"Server published tablet routing info while the keyspace migration was not finalized: {published}"
+
+        logger.info("Finalizing tablets migration")
+        await manager.api.finalize_vnode_tablet_migration(coordinator.ip_addr, ks)
+        await read_barrier(manager.api, coordinator.ip_addr)
+        await verify_migration_status(manager, coordinator, ks,
+            expected_status='tablets', expected_node_statuses={})
+
+        # Control: the same requests against the same tablet map must now carry the routing
+        # info. Without it the assertion above would also hold if nothing reached that path.
+        logger.info("Repeating the same requests after finalization")
+        published = await tablet_routing_published(cql, coordinator, ks, 'test', key)
+        assert all(published.values()), \
+            f"Server withheld tablet routing info after the keyspace migration was finalized: {published}"
+
+        logger.info("Verifying data integrity")
         await verify_data_integrity(cql, ks, "test", num_keys)
