@@ -125,12 +125,10 @@ std::string_view format_as(row_level_diff_detect_algorithm algo) {
 
 // Whether the node operation is one for which the small table optimization is
 // supported. It only makes sense for operations that sync the whole ring
-// (bootstrap, rebuild, replace, decommission). User tables are only size-probed
-// for these.
+// (bootstrap, rebuild, decommission). User tables are only size-probed for these.
 static bool small_table_optimization_reason_supported(streaming::stream_reason reason) {
     return reason == streaming::stream_reason::bootstrap ||
            reason == streaming::stream_reason::rebuild ||
-           reason == streaming::stream_reason::replace ||
            reason == streaming::stream_reason::decommission;
 }
 
