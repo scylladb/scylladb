@@ -29,4 +29,11 @@ bool is_strongly_consistent(data_dictionary::database db, std::string_view ks_na
 
 void validate_write_consistency_level(const db::consistency_level& cl);
 
+// The tablet version block a request carried, if its response may answer it with
+// routing information: only over a connection that negotiated TABLETS_ROUTING_V2, and
+// only for EXECUTE requests, which are the ones that carry a block. A QUERY request
+// targeting a single partition is served all the same, just without routing information.
+std::optional<locator::tablet_version_block> tablet_version_block_for(const service::query_state& qs,
+        const query_options& options);
+
 }

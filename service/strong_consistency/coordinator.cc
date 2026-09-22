@@ -25,6 +25,8 @@
 #include "utils/histogram_metrics_helper.hh"
 #include "utils/abstract_formatter.hh"
 
+#include <algorithm>
+
 namespace service::strong_consistency {
 
 static logging::logger logger("sc_coordinator");
@@ -133,6 +135,41 @@ static const locator::tablet_replica* find_replica(const locator::tablet_replica
             return r.host == id;
         });
     return it == replicas.end() ? nullptr : &*it;
+}
+
+// The routing information to hand back to a driver that sent `block` with a request, or
+// nullopt if the block matches the tablet's current version. The version is a hash of
+// the replicas that hold the data, rotated to start with `leader`: the same set a read is
+// willing to be served from locally, so that where a driver is told to go and where it
+// will actually be answered agree. Nullopt as well when `leader` doesn't hold the data,
+// or isn't known.
+static std::optional<locator::tablet_routing_info_v2> routing_info_for(const locator::effective_replication_map& erm,
+        table_id table, locator::tablet_id tablet_id, raft::server_id leader, locator::tablet_version_block block) {
+    const auto& tablet_map = erm.get_token_metadata().tablets().get_tablet_map(table);
+    auto replicas = get_readable_tablet_replicas(tablet_map.get_tablet_info(tablet_id),
+            tablet_map.get_tablet_transition_info(tablet_id));
+    std::ranges::sort(replicas);
+    const auto leader_it = std::ranges::find(replicas, locator::host_id{leader.uuid()}, &locator::tablet_replica::host);
+    if (leader_it == replicas.end()) [[unlikely]] {
+        return std::nullopt;
+    }
+    std::ranges::rotate(replicas, leader_it);
+
+    const auto hash = locator::internal::hash_replica_list(replicas);
+    if (locator::compare_tablet_version_block(hash, block)) [[likely]] {
+        return std::nullopt;
+    }
+
+    const dht::token first_token = (tablet_id == tablet_map.first_tablet())
+            ? dht::minimum_token()
+            : tablet_map.get_last_token(locator::tablet_id(size_t(tablet_id) - 1));
+    const dht::token last_token = tablet_map.get_last_token(tablet_id);
+
+    return locator::tablet_routing_info_v2{
+        .tablet_replicas = std::move(replicas),
+        .token_range = std::make_pair(first_token, last_token),
+        .hash = hash,
+    };
 }
 
 struct coordinator::operation_ctx {
@@ -276,11 +313,13 @@ coordinator::coordinator(groups_manager& groups_manager, replica::database& db, 
     _stats.register_stats();
 }
 
-future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
+auto coordinator::mutate(schema_ptr schema,
         const dht::token& token,
         mutation_gen&& mutation_gen,
         timeout_clock::time_point timeout,
-        abort_source& as)
+        abort_source& as,
+        std::optional<locator::tablet_version_block> tablet_version_block)
+    -> future<value_or_redirect<mutate_result>>
 {
     auto aoe = abort_on_expiry<timeout_clock>(timeout);
     [[maybe_unused]] const auto sub = utils::chain_abort_source(aoe.abort_source(), as);
@@ -454,7 +493,12 @@ future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
                 &aoe.abort_source()));
 
         if (!add_entry_result.failed()) {
-            co_return std::monostate{};
+            co_return mutate_result{
+                .routing_info = tablet_version_block
+                        ? routing_info_for(*op->erm, schema->id(), op->tablet_id,
+                                op->raft_server.server().current_leader(), *tablet_version_block)
+                        : std::nullopt,
+            };
         }
 
         auto ex = std::move(add_entry_result).get_exception();
@@ -475,7 +519,8 @@ auto coordinator::query(schema_ptr schema,
         read_type rtype,
         tracing::trace_state_ptr trace_state,
         timeout_clock::time_point timeout,
-        abort_source& as
+        abort_source& as,
+        std::optional<locator::tablet_version_block> tablet_version_block
     ) -> future<query_result_type>
 {
     auto aoe = abort_on_expiry<timeout_clock>(timeout);
@@ -596,7 +641,13 @@ auto coordinator::query(schema_ptr schema,
     }
 
     auto [result, cache_temp] = std::move(query_future).get();
-    co_return std::move(result);
+    co_return query_result{
+        .result = std::move(result),
+        .routing_info = tablet_version_block
+                ? routing_info_for(*op.erm, schema->id(), op.tablet_id,
+                        op.raft_server.server().current_leader(), *tablet_version_block)
+                : std::nullopt,
+    };
 }
 
 future<> coordinator::wait_for_table_raft_groups_on_all_hosts(table_id table, lowres_clock::time_point timeout) {

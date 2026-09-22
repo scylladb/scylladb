@@ -13,7 +13,6 @@
 #include "service/migration_manager.hh"
 #include "service/strong_consistency/state_machine.hh"
 #include "service/strong_consistency/raft_groups_storage.hh"
-#include "service/strong_consistency/tablet_replica_sets.hh"
 #include "gms/feature_service.hh"
 #include "gms/gossiper.hh"
 #include "service/raft/raft_rpc.hh"
@@ -75,19 +74,6 @@ static raft_ticker_type::duration get_tick_interval() {
             .transform([](int64_t ms) { return raft_ticker_type::duration{std::chrono::milliseconds{ms}}; })
             .value_or(raft_tick_interval);
 }
-
-// Precondition: The passed group_leader must be a non-trivial raft::server_id.
-static std::optional<locator::tablet_replica_set> prepare_replicas_for_sc_tablet_version(locator::tablet_replica_set replicas, raft::server_id group_leader) {
-    std::ranges::sort(replicas);
-    const auto leader_host_id = locator::host_id{group_leader.uuid()};
-    auto leader_it = std::ranges::find(replicas, leader_host_id, &tablet_replica::host);
-    if (leader_it == replicas.end()) [[unlikely]] {
-        return std::nullopt;
-    }
-    std::ranges::rotate(replicas, leader_it);
-    return std::make_optional(std::move(replicas));
-}
-
 
 class groups_manager::rpc_impl: public service::raft_rpc {
 public:
@@ -1349,64 +1335,6 @@ future<> groups_manager::stop() {
     }
 
     logger.info("stop() completed");
-}
-
-std::optional<locator::tablet_routing_info_v2> groups_manager::check_tablet_version(
-        const replica::table& table,
-        const dht::token& token,
-        const locator::tablet_version_block block)
-{
-    const auto& erm = table.get_effective_replication_map();
-    const auto& tablet_map = erm->get_token_metadata().tablets().get_tablet_map(table.schema()->id());
-    const auto tablet_id = tablet_map.get_tablet_id(token);
-    const auto& raft_info = tablet_map.get_tablet_raft_info(tablet_id);
-    const auto group_id = raft_info.group_id;
-
-    const auto group_it = _raft_groups.find(group_id);
-    if (group_it == _raft_groups.end()) [[unlikely]] {
-        return std::nullopt;
-    }
-
-    const auto srv = try_acquire_server(group_it->second);
-    if (!srv) [[unlikely]] {
-        // Being deleted or (re)started: no server to ask for the leader.
-        return std::nullopt;
-    }
-
-    const raft::server_id group_leader = srv->server().current_leader();
-    if (group_leader == raft::server_id{}) [[unlikely]] {
-        // The leader hasn't been elected yet. We cannot compute the tablet version.
-        return std::nullopt;
-    }
-
-    const auto& tablet_info = tablet_map.get_tablet_info(tablet_id);
-    const auto* trinfo = tablet_map.get_tablet_transition_info(tablet_id);
-    // The same set a request is willing to be served from locally, so that where a
-    // driver is told to go and where it will actually be answered agree.
-    auto maybe_replicas = prepare_replicas_for_sc_tablet_version(
-            get_readable_tablet_replicas(tablet_info, trinfo), group_leader);
-
-    if (!maybe_replicas) [[unlikely]] {
-        // The leader is not present in the replica set.
-        return std::nullopt;
-    }
-
-    const auto hash = locator::internal::hash_replica_list(*maybe_replicas);
-
-    if (locator::compare_tablet_version_block(hash, block)) [[likely]] {
-        return std::nullopt;
-    }
-
-    const dht::token first_token = (tablet_id == tablet_map.first_tablet())
-            ? dht::minimum_token()
-            : tablet_map.get_last_token(locator::tablet_id(size_t(tablet_id) - 1));
-    const dht::token last_token = tablet_map.get_last_token(tablet_id);
-
-    return locator::tablet_routing_info_v2 {
-        .tablet_replicas = std::move(*maybe_replicas),
-        .token_range = std::make_pair(first_token, last_token),
-        .hash = hash
-    };
 }
 
 }

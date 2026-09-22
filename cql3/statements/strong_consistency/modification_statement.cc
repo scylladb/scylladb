@@ -10,7 +10,6 @@
 
 #include "db/consistency_level_type.hh"
 #include "db/timeout_clock.hh"
-#include "service/strong_consistency/groups_manager.hh"
 #include "transport/messages/result_message.hh"
 #include "cql3/query_processor.hh"
 #include "service/strong_consistency/coordinator.hh"
@@ -71,7 +70,7 @@ future<shared_ptr<result_message>> modification_statement::execute_without_check
         token,
         [&](api::timestamp_type ts) {
             return get_mutation(options, ts, json_cache, keys);
-        }, timeout, qs.get_client_state().get_abort_source());
+        }, timeout, qs.get_client_state().get_abort_source(), tablet_version_block_for(qs, options));
 
     using namespace service::strong_consistency;
     if (auto* redirect = get_if<need_redirect>(&mutate_result)) {
@@ -83,23 +82,9 @@ future<shared_ptr<result_message>> modification_statement::execute_without_check
     });
 
     auto result = seastar::make_shared<result_message::void_message>();
-
-    if (qs.get_client_state().is_protocol_extension_set(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V2_EXPERIMENTAL)) {
-        // Only EXECUTE requests carry a tablet version block. However,
-        // QUERY requests may still target a single partition and will
-        // not be rejected. We don't send any routing information for
-        // them, though.
-        if (options.get_tablet_version_block().has_value()) {
-            auto& groups_manager = coordinator.get().get_groups_manager();
-            const auto& table = _statement->s->table();
-
-            auto maybe_routing_info_v2 = groups_manager.check_tablet_version(table, token, *options.get_tablet_version_block());
-            if (maybe_routing_info_v2) {
-                result->add_tablet_info_v2(std::move(*maybe_routing_info_v2));
-            }
-        }
+    if (auto& routing_info = get<coordinator::mutate_result>(mutate_result).routing_info) {
+        result->add_tablet_info_v2(std::move(*routing_info));
     }
-
     co_return std::move(result);
 }
 

@@ -108,7 +108,10 @@ future<shared_ptr<result_message>> batch_statement::execute_without_checking_exc
                 on_internal_error(logger, "batch produced no mutations");
             }
             return std::move(*merged);
-        }, timeout, qs.get_client_state().get_abort_source());
+        }, timeout, qs.get_client_state().get_abort_source(),
+        // Only EXECUTE requests carry a tablet version block; a BATCH doesn't, so there
+        // is no routing information to hand back.
+        std::nullopt);
 
     using namespace service::strong_consistency;
     if (auto* redirect = get_if<need_redirect>(&mutate_result)) {
