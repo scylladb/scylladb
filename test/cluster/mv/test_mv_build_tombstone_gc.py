@@ -184,7 +184,6 @@ async def key_owned_by(manager: ScyllaClusterManager, ks, node):
     raise AssertionError(f"no key owned by {node.ip_addr}")
 
 
-@pytest.mark.xfail(reason="SCYLLADB-4337", strict=True)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_view_build_suspends_tombstone_gc_across_restart(manager: ScyllaClusterManager):
     """A view replica restarted mid-build keeps the tombstones of the view.
@@ -235,7 +234,6 @@ async def test_view_build_suspends_tombstone_gc_across_restart(manager: ScyllaCl
         assert await cql.run_async(f"SELECT pk, c FROM {view} WHERE v = {old_v}") == []
 
 
-@pytest.mark.xfail(reason="SCYLLADB-4337", strict=True)
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_view_build_suspends_tombstone_gc_before_state_reload(manager: ScyllaClusterManager):
     """A view replica keeps the tombstones of a view it has just learned of.
