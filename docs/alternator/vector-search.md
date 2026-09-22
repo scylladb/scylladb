@@ -28,6 +28,33 @@ and
 [Vector Search Glossary](https://cloud.docs.scylladb.com/stable/vector-search/vector-search-glossary.html)
 sections of the ScyllaDB Cloud documentation.
 
+### Client library
+
+The Python examples on this page use
+[alternator-client](https://github.com/scylladb/alternator-client-python), the
+Python [Alternator client library](sdks.md). It injects the Alternator
+vector-search request shapes into botocore's DynamoDB model at run time, so
+the requests documented below can be sent as written.
+
+Plain boto3 **cannot** send these requests. Amazon DynamoDB has since grown a
+native vector-index API of its own with a different request shape, and recent
+boto3 releases validate against that model on the client side — so plain boto3
+rejects the shapes documented here with a `ParamValidationError`, before any
+network call is made. This is purely a client-side limitation: the Alternator
+server accepts the shapes documented on this page.
+
+Vector search support currently lives only on the `main` branch of
+alternator-client; the `1.0.0` PyPI release does not include it yet:
+
+```
+pip install 'alternator-client @ git+https://github.com/scylladb/alternator-client-python.git@main'
+```
+
+Runnable end-to-end examples are available in the
+[vector-store repository](https://github.com/scylladb/vector-store/tree/master/docs/examples/alternator):
+`list_of_numbers.py` stores vectors as a standard DynamoDB list of numbers,
+and `native_vector.py` uses the optimized ScyllaDB vector type.
+
 ## Overview
 
 The workflow has three steps:
@@ -88,7 +115,7 @@ returned when `Select=ALL_PROJECTED_ATTRIBUTES` is used in a vector search query
 > Since `KEYS_ONLY` is also the default, omitting `Projection` entirely is
 > equivalent to specifying `{'ProjectionType': 'KEYS_ONLY'}`.
 
-Example (using boto3):
+Example (using `alternator-client`, see [Client library](#client-library)):
 ```python
 table = dynamodb.create_table(
     TableName='my-table',
