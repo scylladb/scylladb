@@ -1203,27 +1203,50 @@ public:
     //
     // A dropped group is unmarked in _scheduled_tablets so that the stages which run after
     // the merge do not treat its tablets as migrating. It may be planned again next round.
+    //
+    // Sub-plans compete for the caps, so their groups are admitted round-robin, one group
+    // per sub-plan per turn, starting from a random sub-plan. Otherwise the sub-plans made
+    // first would take the whole share of the caps and the rest would not progress.
     future<> merge_sub_plans(migration_plan& plan, std::vector<sub_plan> sub_plans) {
+        struct pending {
+            dc_name dc;
+            std::optional<sstring> rack;
+            // planned and admitted count tablet migrations, not groups.
+            size_t planned;
+            migration_plan::migration_groups groups;
+            size_t next = 0;
+            size_t admitted = 0;
+            bool has_more() const { return next < groups.size(); }
+        };
+        if (sub_plans.empty()) {
+            co_return;
+        }
+        std::vector<pending> pendings;
         for (auto& sp : sub_plans) {
-            auto stats = _stats.for_dc(sp.dc);
-            // Migrations are taken out to be added individually below. The rest of the
+            // Migrations are taken out to be admitted individually below. The rest of the
             // sub-plan (drain failures, RF change schema actions, resize decisions) carries
             // no streaming load and is merged as is.
-            // planned and admitted count tablet migrations, not groups.
-            size_t planned = sp.plan.tablet_migration_count();
-            auto migration_groups = sp.plan.take_migration_groups();
+            pendings.push_back({sp.dc, sp.rack, sp.plan.tablet_migration_count(), sp.plan.take_migration_groups()});
             plan.merge(std::move(sp.plan));
-            size_t admitted = 0;
-            for (auto& group : migration_groups) {
-                co_await coroutine::maybe_yield();
-                auto group_size = group.size();
-                if (admit(plan, *stats, std::move(group))) {
-                    admitted += group_size;
+        }
+        std::ranges::rotate(pendings, pendings.begin() + rand_int() % pendings.size());
+        while (std::ranges::any_of(pendings, &pending::has_more)) {
+            for (auto& p : pendings) {
+                // Admit one group from this sub-plan; dropped groups do not use up the turn.
+                while (p.has_more()) {
+                    co_await coroutine::maybe_yield();
+                    auto group_size = p.groups[p.next].size();
+                    if (admit(plan, *_stats.for_dc(p.dc), std::move(p.groups[p.next++]))) {
+                        p.admitted += group_size;
+                        break;
+                    }
                 }
             }
-            auto level = planned == 0 ? seastar::log_level::debug : seastar::log_level::info;
-            lblogger.log(level, "Plan for {}{}: migrations: {}, dropped: {}", sp.dc, sp.rack ? fmt::format("/{}", *sp.rack) : "",
-                    admitted, planned - admitted);
+        }
+        for (auto& p : pendings) {
+            auto level = p.planned == 0 ? seastar::log_level::debug : seastar::log_level::info;
+            lblogger.log(level, "Plan for {}{}: migrations: {}, dropped: {}", p.dc, p.rack ? fmt::format("/{}", *p.rack) : "",
+                    p.admitted, p.planned - p.admitted);
         }
     }
 
