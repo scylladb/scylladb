@@ -2246,10 +2246,13 @@ public:
     // Precondition: all migration streaming info have same source and destination.
     //  FIXME: remove precondition but it's not easy without copying noad_load_map.
     bool can_accept_load(node_load_map& nodes, const migration_streaming_info_vector& infos) {
-        // Since all migration info have the same source and destination, the load check can be easily done
-        // by informing the number of migrations.
+        // Since all migration info have the same source and destination, the load check can be done
+        // once with the combined stream weight.
         auto info = infos[0];
-        info.stream_weight = infos.size();
+        info.stream_weight = 0;
+        for (auto& i : infos) {
+            info.stream_weight += i.stream_weight;
+        }
         return can_accept_load(nodes, info);
     }
 
