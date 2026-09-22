@@ -136,8 +136,8 @@ static const locator::tablet_replica* find_replica(const locator::tablet_replica
     return it == replicas.end() ? nullptr : &*it;
 }
 
-// How long to wait for the locally reported leader to change before giving up on it
-// being the stale side and rebuilding the request's view of the replica set instead.
+// How long to wait for the locally reported leader to change before letting the caller
+// retry with the leader as it is reported then.
 static constexpr auto stale_leader_grace = std::chrono::seconds(1);
 
 // Waits out a leader reported by the local raft server that is not among the replicas
@@ -154,10 +154,13 @@ static constexpr auto stale_leader_grace = std::chrono::seconds(1);
 // wait_for_state_change() only fires when the local server changes role, and a follower
 // that learns of a new leader stays a follower - raft updates current_leader() in place.
 //
-// The wait is also bounded by a short grace period, because the stale side may just as
-// well be the caller's own replica set, which is a snapshot taken when its operation
-// context was created. The caller rebuilds that context afterwards, which is what
-// resolves the case where the reported leader is the one telling the truth.
+// The caller's replica set cannot be the stale side. Its operation context holds the
+// effective replication map, which blocks the global barrier of every later transition
+// stage, and with it the configuration change that could make a replica outside the set
+// the leader. So the change that removed the reported leader has already committed, and
+// retrying with the same context makes progress once this server hears of the new one.
+// The wait is bounded by a short grace period all the same, so that the caller re-checks
+// what is reported at the backoff's pace rather than hanging on one report.
 //
 // Always sleeps at least once, so that a caller which keeps being handed a leader it
 // cannot use retries at the backoff's pace and reaches its deadline, rather than
@@ -398,10 +401,19 @@ future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
         }
     };
 
-    // The operation context snapshots the replica set when it is created, so it is
-    // rebuilt whenever the request has to retry against a fresh view of the topology.
-    std::optional<operation_ctx> op_storage;
-    bool build_ctx = true;
+    auto op_result_future = co_await coroutine::as_future(
+            create_operation_ctx(*schema, token, aoe.abort_source(), true));
+
+    if (op_result_future.failed()) {
+        co_await coroutine::return_exception_ptr(filter_error(std::move(op_result_future).get_exception()));
+    }
+
+    auto op_result = std::move(op_result_future).get();
+
+    if (auto* redirect = get_if<need_redirect>(&op_result)) {
+        co_return std::move(*redirect);
+    }
+    op = &get<operation_ctx>(op_result);
 
     while (true) {
         // `disposition` below is local to one iteration, so the pointer into
@@ -412,24 +424,6 @@ future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
         // observes the deadline, so observe it before retrying.
         if (aoe.abort_source().abort_requested()) {
             co_await coroutine::return_exception_ptr(filter_error(aoe.abort_source().abort_requested_exception_ptr()));
-        }
-
-        if (build_ctx) {
-            build_ctx = false;
-            auto op_result_future = co_await coroutine::as_future(
-                    create_operation_ctx(*schema, token, aoe.abort_source(), true));
-
-            if (op_result_future.failed()) {
-                co_await coroutine::return_exception_ptr(filter_error(std::move(op_result_future).get_exception()));
-            }
-
-            auto op_result = std::move(op_result_future).get();
-
-            if (auto* redirect = get_if<need_redirect>(&op_result)) {
-                co_return std::move(*redirect);
-            }
-            op_storage.emplace(std::move(get<operation_ctx>(op_result)));
-            op = &*op_storage;
         }
 
         co_await utils::get_local_injector().inject("sc_coordinator_wait_before_begin_mutate",
@@ -445,9 +439,6 @@ future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
                 if (f.failed()) {
                     co_await coroutine::return_exception_ptr(filter_error(std::move(f).get_exception()));
                 }
-                // Either the leader was stale and has changed by now, or our own
-                // replica set is what went stale - rebuilding decides which.
-                build_ctx = true;
                 continue;
             }
             co_return redirect_to_leader(*target, _groups_manager, op->raft_info.group_id);
@@ -556,10 +547,22 @@ auto coordinator::query(schema_ptr schema,
         }
     };
 
-    // The operation context snapshots the replica set when it is created, so it is
-    // rebuilt whenever the request has to retry against a fresh view of the topology.
-    std::optional<operation_ctx> op_storage;
-    bool build_ctx = true;
+    auto op_result_future = co_await coroutine::as_future(create_operation_ctx(
+        *schema,
+        ranges[0].start()->value().token(),
+        aoe.abort_source(),
+        rtype == read_type::linearizable));
+
+    if (op_result_future.failed()) {
+        co_await coroutine::return_exception_ptr(filter_error(std::move(op_result_future).get_exception()));
+    }
+
+    auto op_result = std::move(op_result_future).get();
+
+    if (auto* redirect = get_if<need_redirect>(&op_result)) {
+        co_return std::move(*redirect);
+    }
+    auto& op = get<operation_ctx>(op_result);
 
     if (rtype == read_type::linearizable) {
         // For linearizable reads we may need to forward to the raft leader.
@@ -568,21 +571,6 @@ auto coordinator::query(schema_ptr schema,
             if (aoe.abort_source().abort_requested()) {
                 co_await coroutine::return_exception_ptr(filter_error(aoe.abort_source().abort_requested_exception_ptr()));
             }
-
-            if (build_ctx) {
-                build_ctx = false;
-                auto f = co_await coroutine::as_future(create_operation_ctx(
-                    *schema, ranges[0].start()->value().token(), aoe.abort_source(), true));
-                if (f.failed()) {
-                    co_await coroutine::return_exception_ptr(filter_error(std::move(f).get_exception()));
-                }
-                auto result = std::move(f).get();
-                if (auto* redirect = get_if<need_redirect>(&result)) {
-                    co_return std::move(*redirect);
-                }
-                op_storage.emplace(std::move(get<operation_ctx>(result)));
-            }
-            auto& op = *op_storage;
 
             auto disposition = op.raft_server.begin_read(aoe.abort_source());
             if (const auto* not_a_leader = get_if<raft::not_a_leader>(&disposition)) {
@@ -594,9 +582,6 @@ auto coordinator::query(schema_ptr schema,
                     if (f.failed()) {
                         co_await coroutine::return_exception_ptr(filter_error(std::move(f).get_exception()));
                     }
-                    // Either the leader was stale and has changed by now, or our own
-                    // replica set is what went stale - rebuilding decides which.
-                    build_ctx = true;
                     continue;
                 }
                 co_return redirect_to_leader(*target, _groups_manager, op.raft_info.group_id);
@@ -610,21 +595,7 @@ auto coordinator::query(schema_ptr schema,
             }
             break;
         }
-    } else {
-        auto f = co_await coroutine::as_future(create_operation_ctx(
-            *schema, ranges[0].start()->value().token(), aoe.abort_source(), false));
-        if (f.failed()) {
-            co_await coroutine::return_exception_ptr(filter_error(std::move(f).get_exception()));
-        }
-        auto result = std::move(f).get();
-        if (auto* redirect = get_if<need_redirect>(&result)) {
-            co_return std::move(*redirect);
-        }
-        op_storage.emplace(std::move(get<operation_ctx>(result)));
-    }
-    auto& op = *op_storage;
 
-    if (rtype == read_type::linearizable) {
         co_await utils::get_local_injector().inject("sc_coordinator_wait_before_query_read_barrier",
             utils::wait_for_message(5min));
 
