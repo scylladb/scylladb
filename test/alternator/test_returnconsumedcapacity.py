@@ -736,3 +736,20 @@ def test_return_consumed_capacity_indexes_with_indexes(dynamodb):
         # either, so no need to update the index, so uses_indexes=False
         response = table.put_item(Item={'p': p, 'c': c, 'animal': 'dog'}, ReturnConsumedCapacity='INDEXES')
         check_consumed_capacity(response['ConsumedCapacity'], uses_indexes=False)
+
+# Size accounting subtracts a type byte that a zero-length value doesn't have,
+# so an item is under-counted by one byte per such attribute. Only CQL can write
+# one, as serialize_item() always emits a type byte.
+def test_get_item_empty_attribute_value(test_table_ss, cql, scylla_only):
+    p = random_string()
+    c = random_string()
+    combined_keys = "pcatt" # Takes all the keys and make one single string out of them
+    val = 'a' * (4 * KB - (len(p) + len(c) + len(combined_keys)))  # item is exactly 4KB
+    test_table_ss.put_item(Item={'p': p, 'c': c, 'att': val})
+    ks = 'alternator_' + test_table_ss.name
+    # The one-character name pushes the item to 4KB+1, i.e. 2 RCU.
+    cql.execute(f'UPDATE "{ks}"."{test_table_ss.name}" SET ":attrs"[\'e\'] = 0x WHERE p = %s AND c = %s', [p, c])
+    # The projection excludes "e", taking the unguarded accounting branch.
+    response = test_table_ss.get_item(Key={'p': p, 'c': c}, ProjectionExpression='p, c, att',
+                                      ConsistentRead=True, ReturnConsumedCapacity='TOTAL')
+    assert 2 == response['ConsumedCapacity']["CapacityUnits"]

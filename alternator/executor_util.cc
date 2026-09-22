@@ -460,12 +460,12 @@ void describe_single_item(const cql3::selection::selection& selection,
                 if (item_length_in_bytes) {
                     (*item_length_in_bytes) += attr_name.length();
                 }
+                const bytes& value = value_cast<bytes>(entry.second);
+                if (item_length_in_bytes && value.length()) {
+                    // ScyllaDB uses one extra byte compared to DynamoDB for the bytes length
+                    (*item_length_in_bytes) += value.length() - 1;
+                }
                 if (include_all_embedded_attributes || !attrs_to_get || attrs_to_get->contains(attr_name)) {
-                    bytes value = value_cast<bytes>(entry.second);
-                    if (item_length_in_bytes && value.length()) {
-                        // ScyllaDB uses one extra byte compared to DynamoDB for the bytes length
-                        (*item_length_in_bytes) += value.length() - 1;
-                    }
                     rjson::value v = deserialize_item(value);
                     if (attrs_to_get) {
                         auto it = attrs_to_get->find(attr_name);
@@ -481,8 +481,6 @@ void describe_single_item(const cql3::selection::selection& selection,
                     // item is expected to start empty, and attribute
                     // names are unique so add() makes sense
                     rjson::add_with_string_name(item, attr_name, std::move(v));
-                } else if (item_length_in_bytes) {
-                    (*item_length_in_bytes) += value_cast<bytes>(entry.second).length() - 1;
                 }
             }
         }
