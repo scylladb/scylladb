@@ -4,7 +4,7 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
-"""S3 server for testing, backed by the Adobe S3Mock container.
+"""S3 server for testing, backed by the Versity S3 Gateway container.
 
    Provides helpers to setup and manage the S3 endpoint the tests run against.
 
@@ -47,39 +47,13 @@ class S3MockServer:
     ENV_SECRET_KEY = 'AWS_SECRET_ACCESS_KEY'
     DEFAULT_REGION = 'local'
 
-    IMAGE = 'docker.io/adobe/s3mock:5.2.0'
-    # The port S3Mock serves plain HTTP on inside the container. The host port is
-    # picked by the container runtime, see DockerizedServer.
-    IMAGE_PORT = 9090
-    # S3Mock is a Spring Boot application packaged with a buildpack whose memory
-    # calculator derives the heap size from the container's memory limit, which on
-    # an unconstrained test machine yields an absurd -Xmx. Objects live on disk, so
-    # cap the heap rather than let it derive one. How tight that cap can be is
-    # decided by the collector, and the buildpack forces -XX:+UseSerialGC, which
-    # stops the application for the whole of every collection and collects more
-    # often the closer the heap runs to full. At 512m the heap ran full under the
-    # load of the whole test suite and the server went on accepting connections
-    # while serving nothing for tens of seconds (SCYLLADB-4576), so give it room
-    # the suite cannot fill.
-    #
-    # Naming a concurrent collector instead is not an option: the buildpack appends
-    # its own -XX:+UseSerialGC after whatever JAVA_TOOL_OPTIONS carries, and a JVM
-    # told to use two collectors refuses to start at all.
-    #
-    # -Xlog:gc goes to stdout, which DockerizedServer captures into the archived
-    # container log, so that a future stall can be told apart from a collection
-    # pause without having to reproduce it.
-    JAVA_TOOL_OPTIONS = '-Xmx2g -Xlog:gc'
-
-    # Spring Boot properties, in the relaxed-binding form Spring reads out of the
-    # environment. A few dozen tests run against this one server at once and each
-    # of them keeps its connections alive, so the defaults - 200 worker threads and
-    # an accept queue of 100 - leave connections waiting for a worker or dropped by
-    # the queue, which a client sees as a connection reset. See SCYLLADB-4576.
-    SPRING_PROPERTIES = {'SERVER_TOMCAT_THREADS_MAX': '400',
-                         'SERVER_TOMCAT_ACCEPT_COUNT': '1000',
-                         'SERVER_TOMCAT_MAX_CONNECTIONS': '20000'}
-    STARTED_MESSAGE = 'Started S3MockApplication'
+    # A Go S3 gateway over a directory: buckets are subdirectories, objects are
+    # files, metadata lives in xattrs.  Serves 0.15s after the container starts.
+    IMAGE = 'docker.io/versity/versitygw:v1.8.0'
+    # The port the gateway serves plain HTTP on inside the container. The host port
+    # is picked by the container runtime, see DockerizedServer.
+    IMAGE_PORT = 7070
+    STARTED_MESSAGE = 'Admin/S3 service listening on'
 
     def __init__(self, log_dir, logger):
         """
@@ -92,9 +66,9 @@ class S3MockServer:
         self.address = None
         self.port = None
         self.bucket_name = 'testbucket'
-        # S3Mock does not authenticate anything, but scylla still needs credentials
-        # to sign its requests with, so hand it a random pair unless the environment
-        # already carries one (which the KMS tests rely on, see aws_kms_fixture.hh).
+        # The key pair the tests sign with and the gateway's root account is set
+        # to: a random one unless the environment already carries one (which the
+        # KMS tests rely on, see aws_kms_fixture.hh).
         self.access_key = os.environ.get(self.ENV_ACCESS_KEY, ''.join(random.choice(string.hexdigits) for i in range(16)))
         self.secret_key = os.environ.get(self.ENV_SECRET_KEY, ''.join(random.choice(string.hexdigits) for i in range(32)))
         self.old_env = dict()
@@ -105,13 +79,6 @@ class S3MockServer:
     @property
     def uri(self):
         return f'http://{self.address}:{self.port}'
-
-    def _docker_args(self, host, port):
-        # pylint: disable=unused-argument
-        args = ['-e', f'JAVA_TOOL_OPTIONS={self.JAVA_TOOL_OPTIONS}']
-        for name, value in self.SPRING_PROPERTIES.items():
-            args += ['-e', f'{name}={value}']
-        return args
 
     def _create_bucket(self):
         resource = boto3.resource('s3',
@@ -161,7 +128,18 @@ class S3MockServer:
         server = DockerizedServer(self.IMAGE,
                                   self.log_dir,
                                   logfilenamebase='s3mock',
-                                  docker_args=self._docker_args,
+                                  # The gateway verifies SigV4 signatures: the root account must
+                                  # be the pair the tests sign with, and the region the one they
+                                  # sign for.  /tmp is the image's writable scratch space.  The
+                                  # gateway closes every connection after one reply unless told
+                                  # otherwise, while dozens of tests share it at once and keep
+                                  # theirs alive (see SCYLLADB-4576).
+                                  # Key-only -e: podman takes the values from its own environment,
+                                  # so a real key pair inherited from CI is never on a command line.
+                                  docker_args=['-e', 'ROOT_ACCESS_KEY', '-e', 'ROOT_SECRET_KEY'],
+                                  env={**os.environ, 'ROOT_ACCESS_KEY': self.access_key,
+                                       'ROOT_SECRET_KEY': self.secret_key},
+                                  image_args=['--region', self.DEFAULT_REGION, '--keep-alive', 'posix', '/tmp'],
                                   success_string=self.STARTED_MESSAGE,
                                   failure_string='address already in use',
                                   port=self.IMAGE_PORT)
@@ -195,7 +173,7 @@ class S3MockServer:
 
 
 async def main():
-    parser = argparse.ArgumentParser(description="Start an S3Mock server")
+    parser = argparse.ArgumentParser(description="Start the S3 gateway the tests run against")
     parser.add_argument('--logdir', default='.')
     args = parser.parse_args()
     server = S3MockServer(args.logdir, logging.getLogger('s3mock'))

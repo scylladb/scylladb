@@ -441,6 +441,13 @@ async def test_create_keyspace_after_config_update(manager: ScyllaClusterManager
     await manager.server_update_config(server.server_id, 'object_storage_endpoints', updated_objconf)
     await wait_for_config(manager, server, 'object_storage_endpoints', {updated_ep['name']: updated_expected_conf})
 
+    # versitygw signs the region into every request, so a flush through the S3
+    # configuration above would fail and abort the node; put the original one
+    # back first.  (Runs for GCS too, where the restore is merely harmless.)
+    print('Restore the configuration, which reconfigures the live client once more')
+    await manager.server_update_config(server.server_id, 'object_storage_endpoints', objconf)
+    await wait_for_config(manager, server, 'object_storage_endpoints', {ep['name']: expected_conf})
+
     print('Verify the reconfigured client still works: insert more data and flush')
     await cql.run_async(f"INSERT INTO random_ks.test (name, value) VALUES ('after_reconfig', 456);")
     await manager.api.flush_keyspace(server.ip_addr, 'random_ks')
