@@ -14,19 +14,29 @@
 #include <fmt/std.h>
 
 #include <seastar/core/future.hh>
+#include <seastar/core/map_reduce.hh>
+#include <seastar/core/metrics_api.hh>
 #include <seastar/util/closeable.hh>
 #include "seastarx.hh"
 
 #include "service/qos/qos_common.hh"
 #include "test/lib/scylla_test_case.hh"
 #include "test/lib/test_utils.hh"
+#include <seastar/testing/test_fixture.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/core/future-util.hh>
 #include "service/qos/service_level_controller.hh"
 #include "service/qos/qos_configuration_change_subscriber.hh"
 #include "locator/token_metadata.hh"
 #include "auth/service.hh"
+#include "db/config.hh"
+#include "replica/database.hh"
+#include "types/types.hh"
 #include "utils/overloaded_functor.hh"
+#include "test/lib/cql_assertions.hh"
+#include "test/lib/cql_test_env.hh"
+#include "test/lib/s3_fixture.hh"
+#include "test/lib/sstable_test_env.hh"
 
 using namespace qos;
 struct add_op {
@@ -311,4 +321,60 @@ SEASTAR_THREAD_TEST_CASE(verify_unset_shares_in_cache_when_service_level_created
 
     as.invoke_on_all([] (auto& as) { as.request_abort(); }).get();
     sl_controller.stop().get();
+}
+
+// Object storage read requests issued so far from the scheduling group named
+// class_name, summed over all shards; the client labels its counters by group.
+static future<double> object_storage_read_requests(sstring class_name) {
+    return map_reduce(this_smp_all_shards(), [class_name] (unsigned shard) {
+        return smp::submit_to(shard, [class_name] {
+            const auto& value_map = seastar::metrics::impl::get_value_map();
+            auto family_it = value_map.find("object_storage_total_read_requests");
+            if (family_it == value_map.end()) {
+                return 0.0;
+            }
+            double total = 0;
+            for (const auto& [labels_ref, metric] : family_it->second) {
+                if (!metric || !metric->is_enabled()) {
+                    continue;
+                }
+                const auto& labels = metric->get_id().labels();
+                auto class_it = labels.find("class");
+                if (class_it != labels.end() && class_it->second.value() == class_name) {
+                    total += (*metric)().d();
+                }
+            }
+            return total;
+        });
+    }, 0.0, std::plus<double>());
+}
+
+// Object storage reads leave the client holding a connection bound to the
+// scheduling group they ran in, which must outlive it. Reproduces SCYLLADB-4669.
+SEASTAR_THREAD_TEST_CASE(shutdown_after_object_storage_reads_under_service_level, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
+    auto storage = sstables::make_test_object_storage_options("S3");
+    cql_test_config cfg;
+    cfg.db_config->object_storage_endpoints(sstables::make_storage_options_config(storage));
+    do_with_cql_env_thread([&storage] (cql_test_env& env) {
+        auto storage_map = storage.to_map();
+        cquery_nofail(env, fmt::format("CREATE KEYSPACE ks_s3 WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}}"
+                " AND STORAGE = {{'type': '{}', 'endpoint': '{}', 'bucket': '{}'}}",
+                storage.type_string(), storage_map.at("endpoint"), storage_map.at("bucket")));
+        cquery_nofail(env, "CREATE TABLE ks_s3.t (pk int PRIMARY KEY, v int)");
+        cquery_nofail(env, "INSERT INTO ks_s3.t (pk, v) VALUES (1, 1)");
+        replica::database::flush_table_on_all_shards(env.db(), "ks_s3", "t").get();
+
+        auto& sl_controller = env.service_level_controller_service().local();
+        service_level_options slo;
+        slo.shares.emplace<int32_t>(500);
+        sl_controller.add_service_level("sl_bulk", slo).get();
+
+        auto reads_before = object_storage_read_requests("sl:sl_bulk").get();
+        auto msg = sl_controller.with_service_level("sl_bulk", [&env] {
+            return env.execute_cql("SELECT * FROM ks_s3.t WHERE pk = 1 BYPASS CACHE");
+        }).get();
+        assert_that(msg).is_rows().with_rows({{int32_type->decompose(1), int32_type->decompose(1)}});
+        BOOST_REQUIRE_GT(object_storage_read_requests("sl:sl_bulk").get(), reads_before);
+    }, cfg).get();
 }
