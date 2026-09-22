@@ -1400,7 +1400,14 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     rtlogger.info("Finalizing migration for keyspace '{}': direction={}",
                         ks_name, rollback ? "rollback to vnodes" : "forward to tablets");
 
-                    co_await _tablet_load_stats_refresh.trigger();
+                    // Not _tablet_load_stats_refresh: it collects with require_live_nodes::no,
+                    // which re-serves a down node's last known entry. Finalization is
+                    // irreversible and must not be decided on a stale snapshot.
+                    auto [load_stats, load_stats_complete] = co_await collect_tablet_load_stats(require_live_nodes::yes);
+                    if (!load_stats_complete) {
+                        throw std::runtime_error("Cannot verify every node's storage mode: a node is down");
+                    }
+                    _tablet_allocator.set_load_stats(std::move(load_stats));
 
                     // Verify that the actual storage mode matches the intended mode for all normal nodes.
                     // A node that has migrated a table's storage to tablets will report it in its load_stats.

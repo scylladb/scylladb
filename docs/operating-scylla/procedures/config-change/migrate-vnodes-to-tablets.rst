@@ -241,6 +241,14 @@ Procedure
       Finalization **cannot be undone**. Once the migration is finalized, the
       keyspace cannot be switched back to vnodes.
 
+   .. note::
+
+      All nodes must be UP. Finalization verifies the storage mode of every node and
+      fails with ``Cannot verify every node's storage mode: a node is down`` otherwise.
+      A node can go down after it last reported its mode, so check with
+      :doc:`nodetool status </operating-scylla/nodetool-commands/status/>` immediately
+      before running the command.
+
    #. Issue the finalization request:
 
       .. code-block:: console
@@ -406,6 +414,14 @@ following:
          downgraded.
 
 #. Once all nodes have been downgraded, finalize the rollback:
+
+   .. note::
+
+      All nodes must be UP. Finalization verifies the storage mode of every node and
+      fails with ``Cannot verify every node's storage mode: a node is down`` otherwise.
+      A node can go down after it last reported its mode, so check with
+      :doc:`nodetool status </operating-scylla/nodetool-commands/status/>` immediately
+      before running the command.
 
    .. code-block:: console
 
