@@ -956,9 +956,17 @@ class load_balancer {
         size_t read_load = 0;
         size_t write_load = 0;
     };
+    using streaming_load_map = std::unordered_map<global_shard_id, streaming_shard_load>;
     // Per-shard streaming load, covering the whole cluster and kept for the whole planning
     // round, so that the streaming concurrency caps hold across all plan makers and DCs.
-    std::unordered_map<global_shard_id, streaming_shard_load> _streaming_load;
+    // Holds transitions which are already in progress and migrations committed to the plan.
+    streaming_load_map _streaming_load;
+    // Load of migrations planned by the sub-plan being made, on top of _streaming_load.
+    // It bounds the size of a sub-plan without charging _streaming_load, so that sub-plans
+    // do not consume each other's share of the caps and the sub-plans of different DCs and
+    // racks can be made independently of each other. Discarded when the sub-plan is done;
+    // merge_sub_plans() re-checks its migrations against _streaming_load.
+    streaming_load_map _planned_load;
     // Holds tablet replica count per table in the balanced node set (within a single DC).
     absl::flat_hash_map<table_id, size_t> _tablet_count_per_table;
     // Holds total used storage per table in the DC
@@ -1166,19 +1174,56 @@ public:
         }
     }
 
+    void unmark_as_scheduled(const migration_plan::migration_group& migs) {
+        for (auto& mig : migs) {
+            _scheduled_tablets.erase(mig.tablet);
+        }
+    }
+
+    // Admits a planned migration group to the final plan if the streaming caps still allow it,
+    // otherwise drops it. Returns true if the group was admitted.
+    bool admit(migration_plan& plan, load_balancer_dc_stats& stats, migration_plan::migration_group group) {
+        auto& tmap = _tm->tablets().get_tablet_map(group.front().tablet.table);
+        auto streaming_info = get_migration_streaming_infos(_tm->get_topology(), tmap, group);
+        if (!can_accept_load(streaming_info)) {
+            lblogger.debug("Dropping migration {}: load limit reached", group);
+            unmark_as_scheduled(group);
+            stats.migrations_skipped++;
+            return false;
+        }
+        commit_load(streaming_info);
+        count_produced(stats, group);
+        plan.add(std::move(group));
+        return true;
+    }
+
+    // Sub-plans were made against _streaming_load plus their own _planned_load only, so
+    // together they may exceed the streaming caps. Re-check every group against
+    // _streaming_load, which accumulates the admitted ones.
+    //
+    // A dropped group is unmarked in _scheduled_tablets so that the stages which run after
+    // the merge do not treat its tablets as migrating. It may be planned again next round.
     future<> merge_sub_plans(migration_plan& plan, std::vector<sub_plan> sub_plans) {
         for (auto& sp : sub_plans) {
             auto stats = _stats.for_dc(sp.dc);
             // Migrations are taken out to be added individually below. The rest of the
             // sub-plan (drain failures, RF change schema actions, resize decisions) carries
             // no streaming load and is merged as is.
+            // planned and admitted count tablet migrations, not groups.
+            size_t planned = sp.plan.tablet_migration_count();
             auto migration_groups = sp.plan.take_migration_groups();
             plan.merge(std::move(sp.plan));
+            size_t admitted = 0;
             for (auto& group : migration_groups) {
                 co_await coroutine::maybe_yield();
-                count_produced(*stats, group);
-                plan.add(std::move(group));
+                auto group_size = group.size();
+                if (admit(plan, *stats, std::move(group))) {
+                    admitted += group_size;
+                }
             }
+            auto level = planned == 0 ? seastar::log_level::debug : seastar::log_level::info;
+            lblogger.log(level, "Plan for {}{}: migrations: {}, dropped: {}", sp.dc, sp.rack ? fmt::format("/{}", *sp.rack) : "",
+                    admitted, planned - admitted);
         }
     }
 
@@ -1199,14 +1244,10 @@ public:
             if (_db.get_config().rf_rack_valid_keyspaces() || _db.get_config().enforce_rack_list() || rack_list_colocation || !rf_change_prep.actions.empty()) {
                 for (auto rack : topo.get_datacenter_racks().at(dc) | std::views::keys) {
                     auto rack_plan = co_await make_plan(dc, rack, rf_change_prep.actions[{dc, rack}]);
-                    auto level = rack_plan.empty() ? seastar::log_level::debug : seastar::log_level::info;
-                    lblogger.log(level, "Plan for {}/{}: {}", dc, rack, plan_summary(rack_plan));
                     sub_plans.push_back(sub_plan{dc, rack, std::move(rack_plan)});
                 }
             } else {
                 auto dc_plan = co_await make_plan(dc);
-                auto level = dc_plan.empty() ? seastar::log_level::debug : seastar::log_level::info;
-                lblogger.log(level, "Plan for {}: {}", dc, plan_summary(dc_plan));
                 sub_plans.push_back(sub_plan{dc, std::nullopt, std::move(dc_plan)});
             }
         }
@@ -1336,7 +1377,7 @@ public:
                 co_await coroutine::maybe_yield();
                 if (is_streaming(&trinfo)) {
                     auto& tinfo = tmap.get_tablet_info(tid);
-                    apply_load(get_migration_streaming_info(topo, tinfo, trinfo));
+                    commit_load(get_migration_streaming_info(topo, tinfo, trinfo));
                 }
             }
         }
@@ -1447,7 +1488,7 @@ public:
             tablet_migration_streaming_info tmsi;
             tmsi = get_migration_streaming_info(topo, plan.tinfo, trinfo);
             if (can_accept_load(tmsi)) {
-                apply_load(tmsi);
+                commit_load(tmsi);
                 ret.add(plan.gid);
             }
         }
@@ -1565,7 +1606,7 @@ public:
                 auto mig_streaming_info = get_migration_streaming_infos(topo, tmap, mig);
                 pick(*_load_sketch, dst.host, dst.shard, source_tablets);
                 if (can_accept_load(mig_streaming_info)) {
-                    apply_load(mig_streaming_info);
+                    commit_load(mig_streaming_info);
                     lblogger.debug("Adding migration: {}", mig);
                     mark_as_scheduled(mig);
                     plan.add(std::move(mig));
@@ -1942,7 +1983,7 @@ public:
                         pick(*_load_sketch, dst.host, dst.shard, source_tablets);
                         if (can_accept_load(mig_streaming_info)) {
                             lblogger.debug("Starting rebuild_v2 transition to {}.{} of tablet {}; new_replica = {}", dc, rack, gid, pending_replica);
-                            apply_load(mig_streaming_info);
+                            plan_load(mig_streaming_info);
                             mark_as_scheduled(mig);
                             mplan.add(std::move(mig));
                         }
@@ -1966,7 +2007,7 @@ public:
                             unload(*_load_sketch, replica->host, replica->shard, source_tablets);
                         }
                         if (can_accept_load(mig_streaming_info)) {
-                            apply_load(mig_streaming_info);
+                            plan_load(mig_streaming_info);
                             mark_as_scheduled(mig);
                             mplan.add(std::move(mig));
                         }
@@ -2217,7 +2258,7 @@ public:
                         t2_id, src, t1_id, dst);
                     return make_ready_future<>();
                 }
-                apply_load(mig_streaming_info);
+                plan_load(mig_streaming_info);
 
                 lblogger.info("Created migration for replica ({}, {}) to co-habit same shard as ({}, {})", t2_id, src, t1_id, dst);
                 mark_as_scheduled(mig);
@@ -3003,33 +3044,60 @@ public:
         co_return std::move(resize_plan);
     }
 
-    void apply_load(const tablet_migration_streaming_info& info) {
+    static void apply_load(streaming_load_map& load_map, const tablet_migration_streaming_info& info) {
         for (auto&& replica : info.read_from) {
-            _streaming_load[replica].read_load += info.stream_weight;
+            load_map[replica].read_load += info.stream_weight;
         }
         for (auto&& replica : info.written_to) {
-            _streaming_load[replica].write_load += info.stream_weight;
+            load_map[replica].write_load += info.stream_weight;
         }
     }
 
-    void apply_load(const migration_streaming_info_vector& infos) {
+    // Charges the load to the sub-plan being made.
+    void plan_load(const tablet_migration_streaming_info& info) {
+        apply_load(_planned_load, info);
+    }
+
+    void plan_load(const migration_streaming_info_vector& infos) {
         for (auto& info : infos) {
-            apply_load(info);
+            plan_load(info);
         }
+    }
+
+    // Charges the load for the rest of the planning round.
+    void commit_load(const tablet_migration_streaming_info& info) {
+        apply_load(_streaming_load, info);
+    }
+
+    void commit_load(const migration_streaming_info_vector& infos) {
+        for (auto& info : infos) {
+            commit_load(info);
+        }
+    }
+
+    // Committed load plus the load planned by the sub-plan being made.
+    streaming_shard_load total_load(const global_shard_id& replica) const {
+        streaming_shard_load load;
+        if (auto it = _streaming_load.find(replica); it != _streaming_load.end()) {
+            load = it->second;
+        }
+        if (auto it = _planned_load.find(replica); it != _planned_load.end()) {
+            load.read_load += it->second.read_load;
+            load.write_load += it->second.write_load;
+        }
+        return load;
     }
 
     bool can_accept_load(const tablet_migration_streaming_info& info) {
         for (auto r : info.read_from) {
-            auto it = _streaming_load.find(r);
-            auto load = it != _streaming_load.end() ? it->second.read_load : 0;
+            auto load = total_load(r).read_load;
             if (load > 0 && load + info.stream_weight > max_read_streaming_load) {
                 lblogger.debug("Migration skipped because of read load limit on {} ({})", r, load);
                 return false;
             }
         }
         for (auto r : info.written_to) {
-            auto it = _streaming_load.find(r);
-            auto load = it != _streaming_load.end() ? it->second.write_load : 0;
+            auto load = total_load(r).write_load;
             if (load > 0 && load + info.stream_weight > max_write_streaming_load) {
                 lblogger.debug("Migration skipped because of write load limit on {} ({})", r, load);
                 return false;
@@ -3524,7 +3592,7 @@ public:
                 break;
             }
 
-            apply_load(mig_streaming_info);
+            plan_load(mig_streaming_info);
             lblogger.debug("Adding migration: {} size: {}", mig, tablets.tablet_set_disk_size);
             mark_as_scheduled(mig);
             plan.add(std::move(mig));
@@ -4229,7 +4297,7 @@ public:
             pick(*_load_sketch, dst.host, dst.shard, source_tablets);
 
             if (can_accept_load(mig_streaming_info)) {
-                apply_load(mig_streaming_info);
+                plan_load(mig_streaming_info);
                 lblogger.debug("Adding migration: {} size: {}", mig, source_tablets.tablet_set_disk_size);
                 mark_as_scheduled(mig);
                 plan.add(std::move(mig));
@@ -4366,6 +4434,7 @@ public:
 
     future<migration_plan> make_plan(dc_name dc, std::optional<sstring> rack = std::nullopt, std::vector<rf_change_action> rf_change_actions = {}) {
         migration_plan plan;
+        auto discard_planned_load = seastar::defer([this] noexcept { _planned_load.clear(); });
 
         if (utils::get_local_injector().enter("tablet_migration_bypass")) {
             co_return std::move(plan);
