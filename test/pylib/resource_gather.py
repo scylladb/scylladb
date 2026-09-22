@@ -281,6 +281,13 @@ def _read_memory_events_counters(cgroup_dir: Path) -> dict[str, int] | None:
     return counters
 
 
+def _mkdir_parents(path: Path) -> None:
+    """Indirection over Path.mkdir() so tests can monkeypatch it scoped to
+    this module, rather than patching the shared pathlib.Path class
+    process-wide."""
+    path.mkdir(parents=True, exist_ok=True)
+
+
 def _snapshot_oom_kill_baseline(cgroup_dir: Path, baseline_dir: Path) -> None:
     """Record the current oom_kill counter under baseline_dir, once, at
     worker-cgroup-creation time (called from setup_worker_cgroup()).
@@ -301,7 +308,7 @@ def _snapshot_oom_kill_baseline(cgroup_dir: Path, baseline_dir: Path) -> None:
     baseline = counters.get("oom_kill", 0) if counters is not None else 0
     baseline_path = baseline_dir / cgroup_dir.name / _OOM_KILL_BASELINE_FILENAME
     try:
-        baseline_path.parent.mkdir(parents=True, exist_ok=True)
+        _mkdir_parents(baseline_path.parent)
         baseline_path.write_text(str(baseline))
     except OSError as exc:
         logger.warning(f"Could not snapshot oom_kill baseline for {cgroup_dir} at {baseline_path}: {exc}")

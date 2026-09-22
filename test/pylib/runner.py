@@ -507,7 +507,12 @@ def _now() -> float:
     return time.time()
 
 
-def _maybe_snapshot_controller_cgroup() -> None:
+def _maybe_snapshot_controller_cgroup(
+    config: pytest.Config | None,
+    *,
+    last_snapshot_time: float | None = None,
+    snapshot_fn: Callable[[], str] = gather_controller_snapshot,
+) -> None:
     """Best-effort periodic on-disk snapshot of the controller's own cgroup state.
 
     pytest_testnodedown() can log evidence for a dead *worker* because the
@@ -534,15 +539,30 @@ def _maybe_snapshot_controller_cgroup() -> None:
 
     Only runs in the controller process -- xdist workers have their own
     death handled separately by pytest_testnodedown() on the controller.
+
+    `last_snapshot_time` and `snapshot_fn` are injectable so tests can
+    exercise this function directly without monkeypatching the module
+    globals it otherwise reads: this function is also the real,
+    currently-registered pytest_runtest_logreport() hook, which pytest can
+    (and does) invoke mid-test -- including for the calling test's own
+    "call"-phase report, before any monkeypatch teardown runs -- so a
+    monkeypatched module global would leak into that live invocation too.
+    The real hook call site below passes neither, so it always reads the
+    real persisted timestamp and calls the real snapshot function. When a
+    snapshot is actually taken, the module-level timestamp is updated
+    regardless of whether `last_snapshot_time` was overridden: that
+    timestamp is genuine persistent state across real hook invocations, not
+    test-only input.
     """
     global _last_controller_snapshot_time
     if os.environ.get("PYTEST_XDIST_WORKER") is not None:
         return
-    config = _pytest_config
     if config is None:
         return
+    if last_snapshot_time is None:
+        last_snapshot_time = _last_controller_snapshot_time
     now = _now()
-    if now - _last_controller_snapshot_time < CONTROLLER_SNAPSHOT_INTERVAL_SECONDS:
+    if now - last_snapshot_time < CONTROLLER_SNAPSHOT_INTERVAL_SECONDS:
         return
     _last_controller_snapshot_time = now
     try:
@@ -550,7 +570,7 @@ def _maybe_snapshot_controller_cgroup() -> None:
             pathlib.Path(config.getoption("--tmpdir")).absolute() / PYTEST_LOG_FOLDER / CONTROLLER_SNAPSHOT_FILENAME
         )
         snapshot_path.parent.mkdir(parents=True, exist_ok=True)
-        snapshot_path.write_text(gather_controller_snapshot())
+        snapshot_path.write_text(snapshot_fn())
     except Exception:
         logger.debug("Failed to refresh controller cgroup snapshot", exc_info=True)
 
@@ -572,7 +592,7 @@ def pytest_runtest_logreport(report):
     Also opportunistically refreshes the controller cgroup snapshot on disk;
     see _maybe_snapshot_controller_cgroup().
     """
-    _maybe_snapshot_controller_cgroup()
+    _maybe_snapshot_controller_cgroup(_pytest_config)
 
     # Get the XML reporter
     config = _pytest_config

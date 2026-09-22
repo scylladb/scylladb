@@ -20,8 +20,6 @@ import logging
 import types
 from unittest.mock import Mock
 
-import pytest
-
 from test.pylib import resource_gather
 from test.pylib import runner
 
@@ -106,7 +104,7 @@ def test_snapshot_oom_kill_baseline_survives_unwritable_baseline_dir(monkeypatch
     def _raise_mkdir(*args, **kwargs):
         raise OSError("Read-only file system")
 
-    monkeypatch.setattr(resource_gather.Path, "mkdir", _raise_mkdir)
+    monkeypatch.setattr(resource_gather, "_mkdir_parents", _raise_mkdir)
 
     with caplog.at_level(logging.WARNING):
         resource_gather._snapshot_oom_kill_baseline(worker_cgroup, baseline_dir)
@@ -177,49 +175,62 @@ def _snapshot_path(tmp_path):
 
 
 def test_maybe_snapshot_controller_cgroup_writes_and_throttles(monkeypatch, tmp_path):
+    # last_snapshot_time and the snapshot function are passed explicitly
+    # rather than monkeypatched onto the module: this function is also the
+    # real, currently-registered pytest_runtest_logreport() hook, and pytest
+    # can invoke it mid-test (e.g. for this very test's own "call"-phase
+    # report) before monkeypatch's teardown runs. A monkeypatched module
+    # global would leak into that stray real invocation; an explicit
+    # argument to our own direct call here cannot.
     monkeypatch.delenv("PYTEST_XDIST_WORKER", raising=False)
-    monkeypatch.setattr(runner, "_pytest_config", _FakeConfig(tmp_path))
-    monkeypatch.setattr(runner, "_last_controller_snapshot_time", 0.0)
 
     contents = iter(["snapshot-1", "snapshot-2", "snapshot-3"])
-    monkeypatch.setattr(runner, "gather_controller_snapshot", lambda: next(contents))
 
     fake_now = [1000.0]
     monkeypatch.setattr(runner, "_now", lambda: fake_now[0])
 
-    # First call: interval has "elapsed" relative to the 0.0 initial state, so it writes.
-    runner._maybe_snapshot_controller_cgroup()
+    config = _FakeConfig(tmp_path)
     path = _snapshot_path(tmp_path)
+
+    # First call: interval has "elapsed" relative to the 0.0 initial state, so it writes.
+    runner._maybe_snapshot_controller_cgroup(
+        config, last_snapshot_time=0.0, snapshot_fn=lambda: next(contents))
     assert path.read_text() == "snapshot-1"
+    last_snapshot_time = fake_now[0]
 
     # Second call within the throttle window: must not rewrite the file.
     fake_now[0] += 1
-    runner._maybe_snapshot_controller_cgroup()
+    runner._maybe_snapshot_controller_cgroup(
+        config, last_snapshot_time=last_snapshot_time, snapshot_fn=lambda: next(contents))
     assert path.read_text() == "snapshot-1"
 
     # Third call after the throttle window has elapsed: refreshes the file.
     fake_now[0] += runner.CONTROLLER_SNAPSHOT_INTERVAL_SECONDS
-    runner._maybe_snapshot_controller_cgroup()
+    runner._maybe_snapshot_controller_cgroup(
+        config, last_snapshot_time=last_snapshot_time, snapshot_fn=lambda: next(contents))
     assert path.read_text() == "snapshot-2"
 
 
 def test_maybe_snapshot_controller_cgroup_skips_in_xdist_worker(monkeypatch, tmp_path):
+    # PYTEST_XDIST_WORKER is a real OS environment variable set by
+    # pytest-xdist itself in each worker subprocess (never in the
+    # controller); a stray real-hook invocation mid-test observes the same
+    # os.environ, so this test is safe by construction regardless of
+    # monkeypatch timing. snapshot_fn is still a non-raising Mock() (rather
+    # than a lambda raising pytest.fail(), which is a BaseException subclass
+    # that the function's `except Exception` guard would not catch) as
+    # defense in depth, and passed explicitly rather than monkeypatched onto
+    # the module, consistent with the other tests in this file.
     monkeypatch.setenv("PYTEST_XDIST_WORKER", "gw3")
-    monkeypatch.setattr(runner, "_pytest_config", _FakeConfig(tmp_path))
-    monkeypatch.setattr(runner, "_last_controller_snapshot_time", 0.0)
-    monkeypatch.setattr(runner, "gather_controller_snapshot", lambda: pytest.fail("should not be called in a worker"))
 
-    runner._maybe_snapshot_controller_cgroup()
+    runner._maybe_snapshot_controller_cgroup(_FakeConfig(tmp_path), snapshot_fn=Mock())
 
     assert not _snapshot_path(tmp_path).exists()
 
 
 def test_maybe_snapshot_controller_cgroup_noop_before_configure(monkeypatch, tmp_path):
     monkeypatch.delenv("PYTEST_XDIST_WORKER", raising=False)
-    monkeypatch.setattr(runner, "_pytest_config", None)
-    monkeypatch.setattr(runner, "_last_controller_snapshot_time", 0.0)
-    monkeypatch.setattr(runner, "gather_controller_snapshot", lambda: pytest.fail("should not be called without config"))
 
-    runner._maybe_snapshot_controller_cgroup()
+    runner._maybe_snapshot_controller_cgroup(None, snapshot_fn=Mock())
 
     assert not _snapshot_path(tmp_path).exists()
