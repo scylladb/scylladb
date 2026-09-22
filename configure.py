@@ -231,20 +231,17 @@ class Json2Code(Source):
         return [os.path.join(gen_dir, self.source + '.hh'), os.path.join(gen_dir, self.source + '.cc')]
 
 def find_headers(repodir, excluded_dirs):
-    walker = os.walk(repodir)
-
-    _, dirs, files = next(walker)
-    for excl_dir in excluded_dirs:
-        try:
-            dirs.remove(excl_dir)
-        except ValueError:
-            # Ignore complaints about excl_dir not being in dirs
-            pass
-
     is_hh = lambda f: f.endswith('.hh')
-    headers = list(filter(is_hh, files))
+    headers = []
 
-    for dirpath, _, files in walker:
+    for dirpath, dirs, files in os.walk(repodir):
+        # prune in-place at every level, not just the top, so excluded dirs
+        # (and any worktrees under them) are never descended into
+        dirs[:] = [d for d in dirs if d not in excluded_dirs]
+
+        if dirpath == repodir:
+            headers += list(filter(is_hh, files))
+            continue
         if dirpath.startswith('./'):
             dirpath = dirpath[2:]
         headers += [os.path.join(dirpath, hh) for hh in filter(is_hh, files)]
@@ -2803,7 +2800,7 @@ def write_build_file(f,
             )
         )
 
-        headers = find_headers('.', excluded_dirs=['idl', 'build', 'seastar', '.git'])
+        headers = find_headers('.', excluded_dirs=['idl', 'build', 'seastar', '.git', '.claude', '.worktrees'])
         f.write(
             'build {mode}-headers: phony {header_objs}\n'.format(
                 mode=mode,
