@@ -346,6 +346,11 @@ def test_describe_export_operations(test_table_s, cql, metrics):
             with pytest.raises(ClientError, match='ExportNotFoundException'):
                 client.describe_export(ExportArn=f'{table_arn}/export/01790264607542-abcdef12')
 
+# ListExports has no table of its own, so like ListTables it only counts against the cluster.
+def test_list_exports_operations(dynamodb, metrics):
+    with check_increases_operation(metrics, ['ListExports']):
+        dynamodb.meta.client.list_exports(MaxResults=1)
+
 # Test counters for DescribeEndpoints:
 def test_describe_endpoints_operations(dynamodb, metrics):
     with check_increases_operation(metrics, ['DescribeEndpoints']):

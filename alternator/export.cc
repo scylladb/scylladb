@@ -21,6 +21,7 @@
 #include "db/timeout_clock.hh"
 #include "exceptions/exceptions.hh"
 #include "gms/feature_service.hh"
+#include "partition_slice_builder.hh"
 #include "query/query-request.hh"
 #include "query/query-result-set.hh"
 #include "replica/database.hh"
@@ -57,6 +58,7 @@
 #include <string_view>
 #include <string>
 #include <utility>
+#include <vector>
 #include <zlib.h>
 
 namespace alternator {
@@ -1042,6 +1044,22 @@ struct export_row {
     std::optional<db_clock::time_point> completed_at;
 };
 
+// Reads at most `row_limit` rows of the given partitions of the exports table, whose schema is `schema`.
+static future<foreign_ptr<lw_shared_ptr<query::result>>> read_exports(service::storage_proxy& proxy, schema_ptr schema, dht::partition_range_vector partition_ranges,
+        const query::partition_slice& partition_slice, query::row_limit row_limit, service::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit) {
+    auto command = ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice,
+            proxy.get_max_result_size(partition_slice), query::tombstone_limit(proxy.get_tombstone_limit()), row_limit);
+    // system_distributed has RF=3, and QUORUM of that cannot be reached with a single token owner.
+    auto cl = proxy.get_token_metadata_ptr()->count_normal_token_owners() > 1 ? db::consistency_level::QUORUM : db::consistency_level::ONE;
+    service::storage_proxy::result<service::storage_proxy::coordinator_query_result> rqr =
+            co_await proxy.query_result(schema, std::move(command), std::move(partition_ranges), cl,
+                    service::storage_proxy::coordinator_query_options(executor::default_timeout(), std::move(permit), client_state, std::move(trace_state)));
+    if (!rqr) {
+        co_await coroutine::return_exception(create_api_error_from_coordinators_exception(std::move(rqr).assume_error()));
+    }
+    co_return std::move(rqr.assume_value().query_result);
+}
+
 // Returns the export with the given ARN, or nullopt if there is no such export.
 static future<std::optional<export_row>> get_export(service::storage_proxy& proxy, service::client_state& client_state, service_permit permit, sstring export_arn) {
     using sdks = db::system_distributed_keyspace;
@@ -1049,17 +1067,8 @@ static future<std::optional<export_row>> get_export(service::storage_proxy& prox
     partition_key pk = partition_key::from_single_value(*schema, utf8_type->decompose(export_arn));
     dht::partition_range_vector partition_ranges{dht::partition_range(dht::decorate_key(*schema, pk))};
     const query::partition_slice& partition_slice = schema->full_slice();
-    auto command = ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice,
-            proxy.get_max_result_size(partition_slice), query::tombstone_limit(proxy.get_tombstone_limit()));
-    // system_distributed has RF=3, and QUORUM of that cannot be reached with a single token owner.
-    auto cl = proxy.get_token_metadata_ptr()->count_normal_token_owners() > 1 ? db::consistency_level::QUORUM : db::consistency_level::ONE;
-    service::storage_proxy::result<service::storage_proxy::coordinator_query_result> rqr =
-            co_await proxy.query_result(schema, std::move(command), std::move(partition_ranges), cl,
-                    service::storage_proxy::coordinator_query_options(executor::default_timeout(), std::move(permit), client_state));
-    if (!rqr) {
-        co_await coroutine::return_exception(create_api_error_from_coordinators_exception(std::move(rqr).assume_error()));
-    }
-    query::result_set rs = query::result_set::from_raw_result(schema, partition_slice, *rqr.assume_value().query_result);
+    auto result = co_await read_exports(proxy, schema, std::move(partition_ranges), partition_slice, query::row_limit::max, client_state, nullptr, std::move(permit));
+    query::result_set rs = query::result_set::from_raw_result(schema, partition_slice, *result);
     if (rs.empty()) {
         co_return std::nullopt;
     }
@@ -1434,4 +1443,194 @@ seastar::future<> export_scan_table(
     }
 }
 
+// An export reduced to what ListExports reports about it. The optional members are unset in a row
+// which lacks the column.
+struct export_summary_row {
+    sstring export_arn;
+    // The export's status, as stored. ListExports reports it as ExportStatus.
+    std::optional<sstring> status;
+    // The original ExportTableToPointInTime request, as JSON. ExportType is read back from it.
+    std::optional<sstring> request;
+};
+
+// Returns every export there is, in no particular order. The table is read a page at a time, as an
+// unpaged read fails once its result outgrows max_memory_for_unlimited_query_hard_limit.
+static future<std::vector<export_summary_row>> get_all_exports(service::storage_proxy& proxy, service::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit) {
+    using sdks = db::system_distributed_keyspace;
+    static constexpr uint64_t page_size = 1000;
+    schema_ptr schema = proxy.data_dictionary().find_schema(sdks::NAME, sdks::ALTERNATOR_EXPORT_TO_S3_EXPORTS);
+    auto partition_slice = partition_slice_builder(*schema)
+            .with_regular_column(to_bytes("export_status"))
+            .with_regular_column(to_bytes("request"))
+            .with_option<query::partition_slice::option::allow_short_read>()
+            .build();
+    dht::partition_range_vector partition_ranges{dht::partition_range::make_open_ended_both_sides()};
+    std::vector<export_summary_row> exports;
+    while (true) {
+        auto result = co_await read_exports(proxy, schema, std::move(partition_ranges), partition_slice, query::row_limit(page_size), client_state, trace_state, permit);
+        query::result_set rs = query::result_set::from_raw_result(schema, partition_slice, *result);
+        for (const query::result_set_row& row : rs.rows()) {
+            exports.push_back(export_summary_row {
+                .export_arn = row.get_nonnull<sstring>("export_arn"),
+                .status = row.get<sstring>("export_status"),
+                .request = row.get<sstring>("request"),
+            });
+        }
+        // As in query_pager, a short read can end a page early, even before any row.
+        if (rs.rows().size() < page_size && !result->is_short_read()) {
+            co_return exports;
+        }
+        // Each partition holds a single row, so the next page starts after the last partition read.
+        auto last_key = dht::decorate_key(*schema, result->get_or_calculate_last_position().partition);
+        partition_ranges = {dht::partition_range::make_starting_with(dht::partition_range::bound(std::move(last_key), false))};
+        co_await coroutine::maybe_yield();
+    }
+}
+
+// Throws std::runtime_error for an incomplete row, or for a row whose request is not valid JSON.
+static rjson::value make_export_summary(const export_summary_row& exp) {
+    if (!exp.status || !exp.request) {
+        throw std::runtime_error(fmt::format("Export '{}' has no {}", exp.export_arn, exp.status ? "request" : "export_status"));
+    }
+    rjson::value summary = rjson::empty_object();
+    rjson::add(summary, "ExportArn", rjson::from_string(exp.export_arn));
+    // DynamoDB's ExportStatus is IN_PROGRESS, COMPLETED or FAILED; report any other value as IN_PROGRESS.
+    rjson::add(summary, "ExportStatus", rjson::from_string(*exp.status == "COMPLETED" || *exp.status == "FAILED" ? *exp.status : "IN_PROGRESS"));
+    // ListExports always reports ExportType, also when the ExportTableToPointInTime request did not
+    // specify ExportType. Then report the default value, FULL_EXPORT.
+    try {
+        auto exported_request = rjson::parse(*exp.request);
+        const rjson::value* export_type = rjson::find(exported_request, "ExportType");
+        rjson::add(summary, "ExportType", export_type ? rjson::copy(*export_type) : rjson::from_string("FULL_EXPORT"));
+    } catch (const rjson::error& e) {
+        throw std::runtime_error(fmt::format("Export '{}' has a malformed request: {}", exp.export_arn, e.what()));
+    }
+    return summary;
+}
+
+future<executor::request_return_type> executor::list_exports(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+    _stats.api_operations.list_exports++;
+
+    // DynamoDB returns at most 25 summaries per page, and 10 when the request has no MaxResults.
+    static constexpr int max_results_limit = 25;
+    static constexpr int default_max_results = 10;
+
+    // DynamoDB ignores a null parameter and reports a parameter of the wrong JSON type as
+    // SerializationException.
+    int max_results = default_max_results;
+    if (const rjson::value* max_results_v = rjson::find(request, "MaxResults"); max_results_v && !max_results_v->IsNull()) {
+        if (!max_results_v->IsNumber()) {
+            co_return api_error::serialization("MaxResults must be an integer");
+        }
+        // DynamoDB truncates a fractional MaxResults.
+        auto requested = std::trunc(max_results_v->GetDouble());
+        if (requested < 1 || requested > max_results_limit) {
+            co_return api_error::validation(fmt::format("MaxResults must be between 1 and {} inclusive", max_results_limit));
+        }
+        max_results = static_cast<int>(requested);
+    }
+
+    // TableArn is optional - without it every table's exports are listed.
+    std::optional<arn_parts> table_parts;
+    if (const rjson::value* table_arn_v = rjson::find(request, "TableArn"); table_arn_v && !table_arn_v->IsNull()) {
+        if (!table_arn_v->IsString()) {
+            co_return api_error::serialization("tableArn parameter: failed to parse - must be a string");
+        }
+        auto table_arn = rjson::to_string_view(*table_arn_v);
+        if (table_arn.empty() || table_arn.size() > 1024) {
+            co_return api_error::validation("tableArn parameter: failed to parse - must be between 1 and 1024 characters");
+        }
+        table_parts = parse_arn_reporting_validation(table_arn, "TableArn", "table", "");
+    }
+
+    // NextToken is the ARN of the last export in the previous page, which is where the ExportArn order
+    // resumes. DynamoDB documents its NextToken only as a string copied from the previous response.
+    std::string_view next_token;
+    if (const rjson::value* next_token_v = rjson::find(request, "NextToken"); next_token_v && !next_token_v->IsNull()) {
+        if (!next_token_v->IsString()) {
+            co_return api_error::serialization("NextToken must be a string");
+        }
+        next_token = rjson::to_string_view(*next_token_v);
+        auto next_token_parts = parse_export_arn(next_token, "NextToken"); // throw when non-conformant
+        // DynamoDB rejects a NextToken that a listing of another table handed out.
+        if (table_parts && (next_token_parts.keyspace_name != table_parts->keyspace_name || next_token_parts.table_name != table_parts->table_name)) {
+            co_return api_error::validation(fmt::format("NextToken: Provided nextToken is invalid: `{}` comes from a listing of another table", next_token));
+        }
+    }
+
+    maybe_audit(audit_info, audit::statement_category::QUERY,
+                table_parts ? table_parts->keyspace_name : "", table_parts ? table_parts->table_name : "",
+                "ListExports", request);
+
+    // For a TableArn of a table that does not exist, DynamoDB returns an empty body without
+    // ExportSummaries, also when the table was deleted after an export, but ValidationException
+    // when no table can have the name the ARN gives. As in ExportTableToPointInTime, a table outside
+    // Alternator counts as one that does not exist.
+    if (table_parts && (!is_alternator_keyspace(table_parts->keyspace_name) || !_proxy.data_dictionary().try_find_table(table_parts->keyspace_name, table_parts->table_name))) {
+        if (table_parts->keyspace_name.empty()) {
+            co_return api_error::validation("TableArn: Invalid Table ARN - empty keyspace name");
+        }
+        validate_table_name(table_parts->table_name, "TableArn: Invalid Table ARN - table name");
+        co_return rjson::print(rjson::empty_object());
+    }
+
+    auto exports = co_await get_all_exports(_proxy, client_state, std::move(trace_state), std::move(permit));
+
+    // The exports table is partitioned by export ARN, so the TableArn filter is applied here, to the
+    // table part of each export ARN. A row with a malformed ARN is skipped with a warning.
+    std::vector<const export_summary_row*> listed;
+    for (const auto& exp : exports) {
+        try {
+            auto parts = parse_export_arn(exp.export_arn, "ExportArn");
+            if (!table_parts || (parts.keyspace_name == table_parts->keyspace_name && parts.table_name == table_parts->table_name)) {
+                listed.push_back(&exp);
+            }
+        } catch (const api_error& e) {
+            xlogger.warn("ListExports: leaving out export '{}' with a malformed ARN: {}", exp.export_arn, e.what());
+        }
+        co_await coroutine::maybe_yield();
+    }
+
+    // DynamoDB documents this order, ExportArn descending. Within one table it is also newest first,
+    // because an export id starts with its zero-padded start time.
+    // FIXME: not until SCYLLADB-1893 mints export ids - ExportTableToPointInTime's is a placeholder.
+    std::ranges::sort(listed, [] (const export_summary_row* lhs, const export_summary_row* rhs) {
+        return lhs->export_arn > rhs->export_arn;
+    });
+
+    rjson::value response = rjson::empty_object();
+    rjson::add(response, "ExportSummaries", rjson::empty_array());
+    auto& export_summaries = response["ExportSummaries"];
+
+    int emitted = 0;
+    bool has_more = false;
+    std::optional<sstring> last_export_arn;
+    // Fill the page from the first export after NextToken. Only the exports on the page are turned
+    // into summaries; an incomplete or malformed row is skipped with a warning.
+    auto after_next_token = std::ranges::partition_point(listed, [&] (const export_summary_row* exp) {
+        return !next_token.empty() && exp->export_arn >= next_token;
+    });
+    for (const export_summary_row* exp : std::ranges::subrange(after_next_token, listed.end())) {
+        rjson::value summary;
+        try {
+            summary = make_export_summary(*exp);
+        } catch (const std::runtime_error& e) {
+            xlogger.warn("ListExports: leaving out export '{}': {}", exp->export_arn, e.what());
+            continue;
+        }
+        if (emitted == max_results) {
+            has_more = true;
+            break;
+        }
+        rjson::push_back(export_summaries, std::move(summary));
+        last_export_arn = exp->export_arn;
+        ++emitted;
+    }
+
+    if (has_more && last_export_arn) {
+        rjson::add(response, "NextToken", rjson::from_string(*last_export_arn));
+    }
+
+    co_return rjson::print(std::move(response));
+}
 } // namespace alternator
