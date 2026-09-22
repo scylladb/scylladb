@@ -2364,3 +2364,65 @@ async def test_cluster_snapshot_repair_set_unique(manager: ScyllaClusterManager,
     Tests a cluster snapshot reduces the snapshot sstable set by the current repair set for each tablet
     """
     await do_test_snapshot_on_all_nodes(manager, partial(run_cluster_backup_and_check_redundancy, object_storage), object_storage, True, True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_queued_backup_task_is_abortable(manager: ScyllaClusterManager, object_storage):
+    """A backup task waiting for the snapshot lock must honour abort_task.
+
+    backup_task_impl::run() takes snapshot_ctl's write lock around the whole
+    upload, and only subscribes to the task's abort_source afterwards, inside
+    do_backup(). A task still waiting for that lock therefore ignores
+    abort_task: the call answers 200 and the task stays running.
+    """
+    objconf = object_storage.create_endpoint_conf()
+    cfg = {'enable_user_defined_functions': False,
+           'object_storage_endpoints': objconf,
+           'task_ttl_in_seconds': 300
+           }
+    cmd = ['--logger-log-level', 'snapshots=trace:task_manager=trace:api=info']
+    server = await manager.server_add(config=cfg, cmdline=cmd)
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}") as ks:
+        for cf in ['cf1', 'cf2']:
+            await cql.run_async(f"CREATE TABLE {ks}.{cf} ( name text primary key, value text );")
+            await asyncio.gather(*(cql.run_async(f"INSERT INTO {ks}.{cf} ( name, value ) VALUES ('{name}', '{value}');")
+                                   for name, value in [('0', 'zero'), ('1', 'one'), ('2', 'two')]))
+        snap_name, _ = await take_snapshot_on_one_server(ks, server, manager, logger)
+
+        await manager.api.enable_injection(server.ip_addr, "backup_task_pre_upload", one_shot=True)
+
+        # cf1's task takes the write lock and parks before uploading anything
+        holder = await manager.api.backup(server.ip_addr, ks, 'cf1', snap_name, object_storage.address,
+                                          object_storage.bucket_name, unique_name('backup_'))
+        await manager.api.wait_for_injection_enter(server.ip_addr, "backup_task_pre_upload")
+
+        # cf2's task cannot get the lock, exactly as the tasks Scylla Manager
+        # fires for every table of a keyspace at once
+        queued = await manager.api.backup(server.ip_addr, ks, 'cf2', snap_name, object_storage.address,
+                                          object_storage.bucket_name, unique_name('backup_'))
+
+        status = await manager.api.get_task_status(server.ip_addr, queued)
+        logger.info(f'queued task {queued}: {status}')
+        assert status['state'] == 'running'
+        assert status['progress_total'] == 0 and status['progress_completed'] == 0
+        assert status['is_abortable']
+
+        await manager.api.abort_task(server.ip_addr, queued)
+
+        async def task_stopped_running():
+            s = await manager.api.get_task_status(server.ip_addr, queued)
+            return s if s['state'] != 'running' else None
+
+        status = await wait_for(task_stopped_running, time.time() + 60,
+                                label=f'backup task {queued} to honour abort')
+        logger.info(f'aborted task {queued}: {status}')
+        assert status['state'] == 'failed'
+        # seastar::semaphore_aborted derives from abort_requested_exception, so
+        # the lock wait and the upload path word the same abort differently
+        assert 'abort' in status['error'].lower(), status['error']
+
+        # release the lock holder so the keyspace can be dropped
+        await manager.api.message_injection(server.ip_addr, "backup_task_pre_upload")
+        await manager.api.wait_task(server.ip_addr, holder)
