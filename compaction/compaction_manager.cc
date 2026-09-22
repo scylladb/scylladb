@@ -569,12 +569,19 @@ public:
             throw_if_stopping do_throw_if_stopping,
             compaction_group_view* t,
             tasks::task_id parent_id,
-            bool consider_only_existing_data)
+            bool consider_only_existing_data,
+            bool memtables_flushed)
         : compaction_task_executor(mgr, do_throw_if_stopping, t, compaction_type::Major, "Major compaction")
         , major_compaction_task_impl(mgr._task_manager_module, tasks::task_id::create_random_id(), 0, "compaction group", t->schema()->ks_name(), t->schema()->cf_name(), "", parent_id, flush_mode::compacted_tables, consider_only_existing_data)
+        , _memtables_flushed(memtables_flushed)
     {
         _status.progress_units = "bytes";
     }
+
+private:
+    // Whether the caller flushed the table's memtables before submitting this compaction.
+    const bool _memtables_flushed;
+public:
 
     virtual future<tasks::task_manager::task::progress> get_progress() const override {
         return compaction_task_impl::get_progress(_compaction_data, _progress_monitor);
@@ -613,6 +620,23 @@ protected:
         compaction_descriptor descriptor = cs.get_major_compaction_job(*t, co_await _cm.get_candidates(*t));
         if (_consider_only_existing_data) {
             descriptor.gc_scope = tombstone_gc_scope::compacting_sstables_only;
+        } else if (_memtables_flushed && t->schema()->tombstone_gc_options().mode() == tombstone_gc_mode::repair) {
+            // The caller flushed the memtables and this compaction takes every sstable of the
+            // group as input, so everything that was resident at flush time is merged with the
+            // tombstones covering it rather than decided by a purge check. The memtables can
+            // therefore only hold writes that arrived after the flush, and under
+            // tombstone_gc=repair those cannot be shadowed by a GC-eligible tombstone: gc_before
+            // is repair_time - propagation_delay, and repair_time is the time at which repair
+            // flushed hints, so anything such a tombstone covers was delivered and reconciled
+            // before gc_before could reach it.
+            //
+            // Both conditions are load-bearing:
+            //  - without the flush (flush_memtables=false, flush_mode::skip) a memtable can still
+            //    hold data delivered *before* repair_time that an on-disk tombstone shadows. That
+            //    data is never merged with the tombstone, so purging it resurrects the row;
+            //  - under the other tombstone_gc modes gc_before is now - gc_grace_seconds, with no
+            //    relation to any delivery point.
+            descriptor.gc_scope = tombstone_gc_scope::skip_memtable;
         }
         auto compacting = compacting_sstable_registration(_cm, _cm.get_compaction_state(t), descriptor.sstables);
         auto on_replace = compacting.update_on_sstable_replacement();
@@ -674,13 +698,13 @@ std::optional<gate::holder> compaction_manager::start_compaction(compaction_grou
     return it->second.gate.hold();
 }
 
-future<> compaction_manager::perform_major_compaction(compaction_group_view& t, tasks::task_info info, bool consider_only_existing_data) {
+future<> compaction_manager::perform_major_compaction(compaction_group_view& t, tasks::task_info info, bool consider_only_existing_data, bool memtables_flushed) {
     auto gh = start_compaction(t);
     if (!gh) {
         co_return;
     }
 
-    co_await perform_compaction<major_compaction_task_executor>(throw_if_stopping::no, info, &t, info.get_id(), consider_only_existing_data).discard_result();
+    co_await perform_compaction<major_compaction_task_executor>(throw_if_stopping::no, info, &t, info.get_id(), consider_only_existing_data, memtables_flushed).discard_result();
 }
 
 class custom_compaction_task_executor : public compaction_task_executor, public compaction_task_impl {

@@ -57,6 +57,7 @@ using current_task_type = shared_ptr<compaction_task_impl>;
 
 enum class flush_mode {
     skip,               // Skip flushing.  Useful when application explicitly flushes all tables prior to compaction
+    already_flushed,    // An enclosing task just flushed all tables; flush this one, but not the database again
     compacted_tables,   // Flush only the compacted keyspace/tables
     all_tables          // Flush all tables in the database prior to compaction
 };

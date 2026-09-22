@@ -415,7 +415,7 @@ future<> global_major_compaction_task_impl::run() {
     current_task_type current_task;
     auto parent_info = info();
     std::vector<keyspace_tasks_info> keyspace_tasks;
-    flush_mode fm = flushed_all_tables ? flush_mode::skip : _flush_mode;
+    flush_mode fm = flushed_all_tables ? flush_mode::already_flushed : _flush_mode;
     for (auto& [ks, table_infos] : tables_by_keyspace) {
         auto task = co_await _module->make_and_start_task<major_keyspace_compaction_task_impl>(parent_info, ks, parent_info.get_id(), _db, table_infos, fm,
                 _consider_only_existing_data, &cv, &current_task);
@@ -456,7 +456,7 @@ future<> major_keyspace_compaction_task_impl::run() {
         flushed_all_tables = co_await maybe_flush_commitlog(_db, _consider_only_existing_data);
     }
 
-    flush_mode fm = flushed_all_tables ? flush_mode::skip : _flush_mode;
+    flush_mode fm = flushed_all_tables ? flush_mode::already_flushed : _flush_mode;
     auto parent_info = info();
     co_await _db.invoke_on_all([&] (replica::database& db) -> future<> {
         auto& module = db.get_compaction_manager().get_task_manager_module();
@@ -496,6 +496,9 @@ future<std::optional<double>> shard_major_keyspace_compaction_task_impl::expecte
 future<> table_major_keyspace_compaction_task_impl::run() {
     co_await wait_for_your_turn(_cv, _current_task, _status.id);
     auto info = this->info();
+    // already_flushed only says that the database-wide flush is done; this table is still
+    // flushed here, right before its compaction, so that the compaction's input set is as
+    // complete as it is on any other path.
     replica::table::do_flush do_flush(_flush_mode != flush_mode::skip);
     co_await run_on_table("force_keyspace_compaction", _db, _status.keyspace, _ti, [info, do_flush, consider_only_existing_data = _consider_only_existing_data] (replica::table& t) {
         return t.compact_all_sstables(info, do_flush, consider_only_existing_data);
@@ -983,6 +986,9 @@ auto fmt::formatter<compaction::flush_mode>::format(compaction::flush_mode fm, f
     using enum compaction::flush_mode;
     case skip:
         name = "skip";
+        break;
+    case already_flushed:
+        name = "already_flushed";
         break;
     case compacted_tables:
         name = "compacted_tables";
