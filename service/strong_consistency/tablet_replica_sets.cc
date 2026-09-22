@@ -25,9 +25,10 @@ locator::tablet_replica_set get_leader_capable_tablet_replicas(
 
     // The pending replica joins the raft group as a non-voter at sc_add_nonvoter and is
     // promoted at sc_become_voter, so it can win an election only from that stage on.
-    // It is named one stage earlier all the same, because a node still seeing
-    // sc_snapshot_transfer may be looking at a coordinator that has already published
-    // sc_become_voter.
+    // A node that still sees an earlier stage can't be looking at a group where the
+    // promotion has already happened: the topology coordinator runs it only after the
+    // global barrier of sc_become_voter, which waits until no node holds a view of an
+    // earlier stage.
     auto with_pending = [&] {
         auto replicas = tinfo.replicas;
         if (trinfo->pending_replica) {
@@ -39,9 +40,9 @@ locator::tablet_replica_set get_leader_capable_tablet_replicas(
     switch (trinfo->stage) {
         case tablet_transition_stage::start_migration:
         case tablet_transition_stage::sc_add_nonvoter:
+        case tablet_transition_stage::sc_snapshot_transfer:
             return tinfo.replicas;
 
-        case tablet_transition_stage::sc_snapshot_transfer:
         case tablet_transition_stage::sc_become_voter:
             return with_pending();
 
