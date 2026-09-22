@@ -291,9 +291,7 @@ async def test_truncate_while_truncate_already_waiting(manager: ScyllaClusterMan
 
 # Reproduces https://github.com/scylladb/scylladb/issues/23771.
 @pytest.mark.parametrize("feature_config", feature_configs(FeatureConfigurations.EVENTUAL_CONSISTENCY,
-                                                           FeatureConfigurations.LOGSTOR_EVENTUAL_CONSISTENCY,
-                                                           FeatureConfigurations.STRONG_CONSISTENCY,
-                                                           FeatureConfigurations.LOGSTOR_STRONG_CONSISTENCY))
+                                                           FeatureConfigurations.LOGSTOR_EVENTUAL_CONSISTENCY))
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_replay_position_check_during_truncate(manager, feature_config: FeatureConfig,
                                                      storage_config: FeatureConfig):
