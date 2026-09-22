@@ -530,9 +530,16 @@ public:
 } // anonymous namespace
 
 void layout_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
-        sstables::sstables_manager&, const db::config& dbcfg, const bpo::variables_map& vm) {
-    if (sstables.empty()) {
-        throw std::invalid_argument("no sstables specified on the command line");
+        sstables::sstables_manager& sst_man, const db::config& dbcfg, const bpo::variables_map& vm) {
+    // The layout of a table is what this is for, so the sstables of the table
+    // the schema describes are the ones to describe when none were named on the
+    // command line -- wherever the storage options of its keyspace put them.
+    const auto of_table = sstables.empty()
+            ? load_sstables_of_table(schema, sst_man, dbcfg, vm, permit)
+            : std::vector<sstables::shared_sstable>();
+    const auto& sstables_to_describe = sstables.empty() ? of_table : sstables;
+    if (sstables_to_describe.empty()) {
+        throw std::invalid_argument(fmt::format("{}.{} has no sstables to describe", schema->ks_name(), schema->cf_name()));
     }
 
     const auto strategy = vm.count("strategy")
@@ -643,7 +650,7 @@ void layout_operation(schema_ptr schema, reader_permit permit, const std::vector
     // Collect the sstables into their compaction group and, within it, into
     // their run, level or time window.
     std::map<std::pair<int64_t, int64_t>, std::map<sstring, layout_bucket>> layout;
-    for (const auto& sst : sstables) {
+    for (const auto& sst : sstables_to_describe) {
         const auto& stats = sst->get_stats_metadata();
         layout_sstable desc{
             .name = sst->component_basename(component_type::Data),
