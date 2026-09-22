@@ -22,6 +22,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace alternator {
 
@@ -412,6 +413,105 @@ future<executor::request_return_type> executor::describe_export(client_state& cl
 
     rjson::value response = rjson::empty_object();
     rjson::add(response, "ExportDescription", std::move(export_desc));
+    co_return rjson::print(std::move(response));
+}
+
+static rjson::value make_export_summary(const db::system_distributed_keyspace::alternator_export_summary& exp) {
+    rjson::value summary = rjson::empty_object();
+    rjson::add(summary, "ExportArn", rjson::from_string(exp.export_arn));
+    rjson::add(summary, "ExportStatus", rjson::from_string(exp.status));
+    // Unlike DescribeExport, which reports ExportType only when the request carried it, DynamoDB
+    // always reports it here, so an omitted one is reported as the default the request was accepted with.
+    auto exported_request = rjson::parse(exp.request);
+    rjson::add(summary, "ExportType", rjson::from_string(get_non_empty_string_attribute(exported_request, "ExportType", "FULL_EXPORT")));
+    return summary;
+}
+
+future<executor::request_return_type> executor::list_exports(client_state& client_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+    _stats.api_operations.list_exports++;
+
+    // DynamoDB fits at most 25 summaries in a page and rejects a MaxResults outside that range.
+    static constexpr int default_max_results = 25;
+    static constexpr int min_max_results = 1;
+    static constexpr int max_max_results = 25;
+
+    int max_results = default_max_results;
+    if (const rjson::value* max_results_v = rjson::find(request, "MaxResults")) {
+        if (!max_results_v->IsInt()) {
+            co_return api_error::validation("MaxResults must be an integer");
+        }
+        max_results = max_results_v->GetInt();
+        if (max_results < min_max_results || max_results > max_max_results) {
+            co_return api_error::validation("MaxResults must be greater than 0 and no greater than 25");
+        }
+    }
+
+    // TableArn is optional - without it every table's exports are listed.
+    std::optional<arn_parts> table_parts;
+    if (const rjson::value* table_arn_v = rjson::find(request, "TableArn")) {
+        if (!table_arn_v->IsString()) {
+            co_return api_error::validation("tableArn parameter: failed to parse - must be a string");
+        }
+        auto table_arn = rjson::to_string_view(*table_arn_v);
+        if (table_arn.empty() || table_arn.size() > 1024) {
+            co_return api_error::validation("tableArn parameter: failed to parse - must be between 1 and 1024 characters");
+        }
+        table_parts = parse_arn(table_arn, "TableArn", "table", "");
+    }
+
+    std::string_view next_token;
+    if (const rjson::value* next_token_v = rjson::find(request, "NextToken")) {
+        if (!next_token_v->IsString()) {
+            co_return api_error::validation("NextToken must be a string");
+        }
+        next_token = rjson::to_string_view(*next_token_v);
+    }
+
+    maybe_audit(audit_info, audit::statement_category::QUERY, "", "", "ListExports", request);
+
+    auto normal_token_owners = _proxy.get_token_metadata_ptr()->count_normal_token_owners();
+    auto exports = co_await _sdks.list_alternator_exports({ normal_token_owners });
+
+    // The exports table is partitioned by the export's ARN, so one table's exports cannot be asked
+    // for directly. An export ARN is the exported table's ARN with `/export/<id>` appended, which
+    // is what the TableArn filter matches on.
+    if (table_parts) {
+        std::erase_if(exports, [&] (const auto& exp) {
+            auto parts = parse_arn(exp.export_arn, "ExportArn", "Export", "/export/");
+            return parts.keyspace_name != table_parts->keyspace_name || parts.table_name != table_parts->table_name;
+        });
+    }
+
+    // DynamoDB reports a table's exports newest first, and an export's ARN grows over time.
+    std::ranges::sort(exports, [] (const auto& lhs, const auto& rhs) {
+        return lhs.export_arn > rhs.export_arn;
+    });
+
+    rjson::value response = rjson::empty_object();
+    rjson::add(response, "ExportSummaries", rjson::empty_array());
+    auto& export_summaries = response["ExportSummaries"];
+
+    int emitted = 0;
+    bool has_more = false;
+    std::optional<sstring> last_export_arn;
+    for (const auto& exp : exports) {
+        // NextToken is the ARN the previous page ended on, and the ARNs descend.
+        if (!next_token.empty() && exp.export_arn >= next_token) {
+            continue;
+        }
+        if (emitted == max_results) {
+            has_more = true;
+            break;
+        }
+        rjson::push_back(export_summaries, make_export_summary(exp));
+        last_export_arn = exp.export_arn;
+        ++emitted;
+    }
+
+    if (has_more && last_export_arn) {
+        rjson::add(response, "NextToken", rjson::from_string(*last_export_arn));
+    }
+
     co_return rjson::print(std::move(response));
 }
 } // namespace alternator

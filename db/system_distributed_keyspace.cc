@@ -674,6 +674,26 @@ system_distributed_keyspace::get_alternator_export(std::string_view export_arn, 
     };
 }
 
+future<std::vector<system_distributed_keyspace::alternator_export_summary>>
+system_distributed_keyspace::list_alternator_exports(context ctx) {
+    auto rs = co_await _qp.execute_internal(
+            format("SELECT export_arn, export_status, request FROM {}.{}", NAME, ALTERNATOR_EXPORT_TO_S3_EXPORTS),
+            quorum_if_many(ctx.num_token_owners),
+            internal_distributed_query_state(),
+            cql3::query_processor::cache_internal::yes);
+
+    std::vector<alternator_export_summary> exports;
+    exports.reserve(rs->size());
+    for (const auto& row : *rs) {
+        exports.push_back(alternator_export_summary {
+            .export_arn = row.get_as<sstring>("export_arn"),
+            .status = row.get_as<sstring>("export_status"),
+            .request = row.get_as<sstring>("request"),
+        });
+    }
+    co_return exports;
+}
+
 // TODO: this is very hardcoded.
 static constexpr uint64_t snapshot_table_ttl_seconds = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::days(3)).count();
 

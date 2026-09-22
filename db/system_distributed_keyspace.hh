@@ -154,6 +154,17 @@ public:
     // Returns the export with the given ARN, or nullopt if there is no such export.
     future<std::optional<alternator_export>> get_alternator_export(std::string_view export_arn, context);
 
+    /* An export reduced to what ListExports reports about it. */
+    struct alternator_export_summary {
+        sstring export_arn;
+        sstring status;
+        /* The original ExportTableToPointInTime request, as JSON. ExportType is read back from it. */
+        sstring request;
+    };
+
+    // Returns every export there is, in no particular order.
+    future<std::vector<alternator_export_summary>> list_alternator_exports(context);
+
 private:
     future<> create_tables(std::vector<schema_ptr> tables);
 };
