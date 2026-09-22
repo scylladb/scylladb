@@ -22,7 +22,6 @@
 #include "idl/strong_consistency/state_machine.dist.impl.hh"
 #include "gms/gossiper.hh"
 #include "utils/chain_abort_source.hh"
-#include "utils/exponential_backoff_retry.hh"
 #include "utils/histogram_metrics_helper.hh"
 #include "utils/abstract_formatter.hh"
 
@@ -134,53 +133,6 @@ static const locator::tablet_replica* find_replica(const locator::tablet_replica
             return r.host == id;
         });
     return it == replicas.end() ? nullptr : &*it;
-}
-
-// How long to wait for the locally reported leader to change before letting the caller
-// retry with the leader as it is reported then.
-static constexpr auto stale_leader_grace = std::chrono::seconds(1);
-
-// Waits out a leader reported by the local raft server that is not among the replicas
-// the tablet's current transition stage allows to be the leader.
-//
-// The condition is transient rather than impossible: current_leader() on a follower is
-// the last leader it heard from, so a replica that a migration has just removed from the
-// raft group keeps being reported until this replica's election timeout fires and it
-// starts an election of its own. Redirecting the request to such a replica would send it
-// to a node that doesn't host the tablet anymore, so wait for the reported leader to
-// change and let the caller retry. The wait is bounded by the request's abort source.
-//
-// The leader is polled rather than waited on, because there is no event to wait for:
-// wait_for_state_change() only fires when the local server changes role, and a follower
-// that learns of a new leader stays a follower - raft updates current_leader() in place.
-//
-// The caller's replica set cannot be the stale side. Its operation context holds the
-// effective replication map, which blocks the global barrier of every later transition
-// stage, and with it the configuration change that could make a replica outside the set
-// the leader. So the change that removed the reported leader has already committed, and
-// retrying with the same context makes progress once this server hears of the new one.
-// The wait is bounded by a short grace period all the same, so that the caller re-checks
-// what is reported at the backoff's pace rather than hanging on one report.
-//
-// Always sleeps at least once, so that a caller which keeps being handed a leader it
-// cannot use retries at the backoff's pace and reaches its deadline, rather than
-// spinning. Nothing guarantees that the leader the caller was given is the one this
-// server reports now - an error injection reports one that never matches - so the poll
-// below decides only how long to wait, never whether to wait at all.
-static future<> wait_out_stale_leader(raft::server& server, const schema& s,
-        locator::tablet_id tablet_id, locator::host_id leader,
-        const locator::tablet_replica_set& replicas, abort_source& as) {
-    logger.debug("table {}.{}, tablet {}: reported leader {} cannot be the leader in the current "
-        "transition stage, replicas {}, waiting for a new leader",
-        s.ks_name(), s.cf_name(), tablet_id, leader, replicas);
-
-    const auto stale = raft::server_id{leader.uuid()};
-    const auto grace_deadline = lowres_clock::now() + stale_leader_grace;
-    auto retry = exponential_backoff_retry(10ms, 100ms);
-
-    do {
-        co_await retry.retry(as);
-    } while (server.current_leader() == stale && lowres_clock::now() < grace_deadline);
 }
 
 struct coordinator::operation_ctx {
@@ -434,8 +386,28 @@ future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
             const auto leader_host_id = locator::host_id{not_a_leader->leader.uuid()};
             const auto* target = find_replica(op->replicas, leader_host_id);
             if (!target) {
-                auto f = co_await coroutine::as_future(wait_out_stale_leader(op->raft_server.server(),
-                        *schema, op->tablet_id, leader_host_id, op->replicas, aoe.abort_source()));
+                // The leader the local raft server reports is not among the replicas the
+                // tablet's current transition stage allows to be the leader, which is a
+                // stale report rather than an error: current_leader() on a follower is
+                // the last leader it heard from, so a replica that a migration has just
+                // removed from the raft group keeps being named until the new leader
+                // contacts this one. There is nowhere to redirect to, so tell the local
+                // server to forget that leader and wait for the next one.
+                //
+                // The wait may well resolve with the same leader again: a message it sent
+                // before it stepped down can still arrive and re-set current_leader(). We
+                // retry with the same operation context, and the retries make progress
+                // rather than spin. The context holds the effective replication map,
+                // which blocks the global barrier of every later transition stage, and
+                // with it the configuration change that could make a replica outside the
+                // set the leader. So the change that removed the reported leader has
+                // already committed, and all that is left is for it to reach this node.
+                logger.debug("mutate(): table {}.{}, tablet {}, reported leader {} cannot be the leader "
+                    "in the current transition stage, replicas {}, waiting for a new leader",
+                    schema->ks_name(), schema->cf_name(), op->tablet_id, leader_host_id, op->replicas);
+
+                auto f = co_await coroutine::as_future(
+                        op->raft_server.server().wait_for_leader(&aoe.abort_source(), true));
                 if (f.failed()) {
                     co_await coroutine::return_exception_ptr(filter_error(std::move(f).get_exception()));
                 }
@@ -577,8 +549,18 @@ auto coordinator::query(schema_ptr schema,
                 const auto leader_host_id = locator::host_id{not_a_leader->leader.uuid()};
                 const auto* target = find_replica(op.replicas, leader_host_id);
                 if (!target) {
-                    future<> f = co_await coroutine::as_future(wait_out_stale_leader(op.raft_server.server(),
-                            *schema, op.tablet_id, leader_host_id, op.replicas, aoe.abort_source()));
+                    // A leader outside the replica set the current transition stage allows
+                    // is a stale report rather than an error: the local raft server keeps
+                    // naming the leader a migration has just removed from the group until
+                    // the new one contacts it. Forget it and wait for the next one. See
+                    // mutate() for why retrying with the same operation context makes
+                    // progress even when the wait resolves with the same leader again.
+                    logger.debug("query(): table {}.{}, tablet {}, reported leader {} cannot be the leader "
+                        "in the current transition stage, replicas {}, waiting for a new leader",
+                        schema->ks_name(), schema->cf_name(), op.tablet_id, leader_host_id, op.replicas);
+
+                    future<> f = co_await coroutine::as_future(
+                            op.raft_server.server().wait_for_leader(&aoe.abort_source(), true));
                     if (f.failed()) {
                         co_await coroutine::return_exception_ptr(filter_error(std::move(f).get_exception()));
                     }
