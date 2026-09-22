@@ -526,22 +526,19 @@ void describe_single_item(const cql3::selection::selection& selection,
                 if (item_length_in_bytes) {
                     (*item_length_in_bytes) += attr_name.length();
                 }
+                const bytes& value = value_cast<bytes>(entry.second);
+                if (item_length_in_bytes && value.length()) {
+                    // ScyllaDB uses one extra byte compared to DynamoDB for the bytes length
+                    (*item_length_in_bytes) += value.length() - 1;
+                }
                 const attrs_to_get_node* node = nullptr;
                 if (attrs_to_get) {
                     auto it = attrs_to_get->find(attr_name);
                     if (it != attrs_to_get->end()) {
                         node = &it->second;
                     } else if (!include_all_embedded_attributes) {
-                        if (item_length_in_bytes) {
-                            (*item_length_in_bytes) += value_cast<bytes>(entry.second).length() - 1;
-                        }
                         continue;
                     }
-                }
-                const bytes& value = value_cast<bytes>(entry.second);
-                if (item_length_in_bytes && value.length()) {
-                    // ScyllaDB uses one extra byte compared to DynamoDB for the bytes length
-                    (*item_length_in_bytes) += value.length() - 1;
                 }
                 rjson::value v = deserialize_item(value);
                 // A nested projection keeps only part of v; false means nothing is left.
