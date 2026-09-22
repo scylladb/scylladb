@@ -34,6 +34,7 @@
 #include "db/view/view_consumer.hh"
 #include "mutation/canonical_mutation.hh"
 #include "replica/database.hh"
+#include "utils/exceptions.hh"
 #include "keys/clustering_bounds_comparator.hh"
 #include "cql3/cql_config.hh"
 #include "cql3/util.hh"
@@ -2013,6 +2014,26 @@ static future<> apply_to_remote_endpoints(service::storage_proxy& proxy, locator
     }
 }
 
+// A view is dropped shard by shard, so a base write on a shard which still has the view may send
+// an update to one which has already dropped it. Such an update is moot: it must neither fail the
+// write nor be reported as an error.
+static bool view_is_gone(const replica::database& db, const schema& view) {
+    return db.is_table_being_dropped(view.id()) || !db.column_family_exists(view.id());
+}
+
+// Whether a failed local view update is moot because the view is gone. The drop surfaces as
+// no_such_column_family, so match on it and report every other failure as the failure it is.
+static bool local_view_update_lost_to_drop(const replica::database& db, const schema& view, std::exception_ptr& ep) {
+    return view_is_gone(db, view) && try_catch<replica::no_such_column_family>(ep);
+}
+
+// The same for an update to a remote endpoint, where a peer which has applied the DROP fails it.
+// no_such_column_family is not part of replica::exception_variant and so does not survive the RPC,
+// leaving no type to match on; exclude timeouts at least.
+static bool remote_view_update_lost_to_drop(const replica::database& db, const schema& view, std::exception_ptr& ep) {
+    return view_is_gone(db, view) && !is_timeout_exception(ep);
+}
+
 static bool should_update_synchronously(const schema& s) {
     auto tag_opt = db::find_tag(s, db::SYNCHRONOUS_VIEW_UPDATES_TAG_KEY);
     if (!tag_opt.has_value()) {
@@ -2142,9 +2163,15 @@ future<> view_update_generator::mutate_MV(
                 memory_units = nullptr;
                 _proxy.local().update_view_update_backlog();
                 if (f.failed()) {
+                    auto ep = f.get_exception();
+                    if (local_view_update_lost_to_drop(_db, *s, ep)) {
+                        tracing::trace(tr_state, "Ignoring failed local view update for {}: the view is gone", my_address);
+                        vlogger.debug("Ignoring view update to {} (view: {}.{}, base token: {}, view token: {}) which failed because the view is gone: {:t}",
+                                my_address, s->ks_name(), s->cf_name(), base_token, view_token, ep);
+                        return make_ready_future<>();
+                    }
                     ++stats.view_updates_failed_local;
                     ++cf_stats.total_view_updates_failed_local;
-                    auto ep = f.get_exception();
                     tracing::trace(tr_state, "Failed to apply local view update for {}", my_address);
                     vlogger.error("Error applying view update to {} (view: {}.{}, base token: {}, view token: {}): {:t}",
                             my_address, s->ks_name(), s->cf_name(), base_token, view_token, ep);
@@ -2180,9 +2207,16 @@ future<> view_update_generator::mutate_MV(
                 memory_units = nullptr;
                 _proxy.local().update_view_update_backlog();
                 if (f.failed()) {
+                    auto ep = f.get_exception();
+                    if (remote_view_update_lost_to_drop(_db, *s, ep)) {
+                        tracing::trace(tr_state, "Ignoring failed view update for {} and {} remote endpoints: the view is gone",
+                            *target_endpoint, updates_pushed_remote);
+                        vlogger.debug("Ignoring view update to {} (view: {}.{}, base token: {}, view token: {}) which failed because the view is gone: {:t}",
+                            *target_endpoint, s->ks_name(), s->cf_name(), base_token, view_token, ep);
+                        return make_ready_future<>();
+                    }
                     stats.view_updates_failed_remote += updates_pushed_remote;
                     cf_stats.total_view_updates_failed_remote += updates_pushed_remote;
-                    auto ep = f.get_exception();
                     tracing::trace(tr_state, "Failed to apply view update for {} and {} remote endpoints",
                         *target_endpoint, updates_pushed_remote);
 

@@ -62,6 +62,12 @@ uint64_t writes_on_shard(cql_test_env& e, shard_id shard) {
     }).get();
 }
 
+uint64_t view_updates_failed_local_on_shard(cql_test_env& e, shard_id shard) {
+    return e.db().invoke_on(shard, [] (replica::database& db) {
+        return db.cf_stats()->total_view_updates_failed_local;
+    }).get();
+}
+
 // Requests which have waited for a schema change commit, summed over all shards.
 uint64_t schema_change_commit_waits(cql_test_env& e) {
     return e.db().map_reduce0([] (replica::database& db) {
@@ -258,23 +264,51 @@ SEASTAR_TEST_CASE(test_create_view_update_during_shard_commit) {
     });
 }
 
+// The mirror image of the above: a base write on shard 1 generates an update for shard 0, which
+// has already dropped the view. The update is moot: it must not fail the write or count as failed.
+SEASTAR_TEST_CASE(test_drop_view_update_during_shard_commit) {
+    if (!can_run()) {
+        return make_ready_future<>();
+    }
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE ks.t (pk int PRIMARY KEY, v int)").get();
+        e.execute_cql("CREATE MATERIALIZED VIEW ks.tv AS SELECT * FROM ks.t WHERE v IS NOT NULL PRIMARY KEY (v, pk) WITH synchronous_updates = true").get();
+        auto pk = key_on_shard(e, e.local_db().find_schema("ks", "t"), 1);
+        auto v = key_on_shard(e, e.local_db().find_schema("ks", "tv"), 0);
+        auto failed_before = view_updates_failed_local_on_shard(e, 1);
+
+        auto drop = start_paused_schema_change(e, "DROP MATERIALIZED VIEW ks.tv", [] (replica::database& db) {
+            return !db.has_schema("ks", "tv");
+        });
+        // The update to shard 0 fails right away, so the write completes without releasing the drop.
+        write_to_shard_1(e, format("INSERT INTO ks.t (pk, v) VALUES ({}, {})", pk, v)).get();
+        BOOST_REQUIRE_EQUAL(view_updates_failed_local_on_shard(e, 1), failed_before);
+
+        drop.get();
+    });
+}
+
 // Destroying the commit guard, which the applier does on every exit path, releases the waiting
-// requests.
+// requests and clears the dropped-table set.
 SEASTAR_TEST_CASE(test_schema_change_commit_guard_releases_waiters) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         auto& db = e.local_db();
         auto created = table_id::create_random_id();
+        auto dropped = table_id::create_random_id();
         auto timeout = db::timeout_clock::now() + std::chrono::seconds(30);
 
         BOOST_REQUIRE(db.wait_for_schema_change_commit(created, timeout).available());
 
-        auto guard = db.begin_schema_change_commit({created});
+        auto guard = db.begin_schema_change_commit({created}, {dropped});
         auto waiter = db.wait_for_schema_change_commit(created, timeout);
         BOOST_REQUIRE(!waiter.available());
+        BOOST_REQUIRE(db.wait_for_schema_change_commit(dropped, timeout).available());
+        BOOST_REQUIRE(db.is_table_being_dropped(dropped));
 
         guard.reset();
         waiter.get();
         BOOST_REQUIRE(db.wait_for_schema_change_commit(created, timeout).available());
+        BOOST_REQUIRE(!db.is_table_being_dropped(dropped));
     });
 }
 

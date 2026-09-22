@@ -1802,6 +1802,7 @@ private:
     // Engaged while a schema change is being committed on all shards; see begin_schema_change_commit().
     struct schema_change_commit {
         std::unordered_set<table_id> tables;
+        std::unordered_set<table_id> dropped_tables;
         shared_promise<> committed;
     };
     std::optional<schema_change_commit> _schema_change_commit;
@@ -2126,10 +2127,15 @@ public:
         }
     };
 
-    // Announces a schema change commit on this shard. Until the returned guard is destroyed,
-    // requests to `tables` which this shard's schema cannot serve wait for the commit, see
-    // table_for_request().
-    std::unique_ptr<schema_change_commit_guard> begin_schema_change_commit(std::unordered_set<table_id> tables);
+    // Announces a schema change commit on this shard, see schema_applier::commit(). Until the
+    // returned guard is destroyed, requests to `tables` which this shard's schema cannot serve wait
+    // for the commit, see table_for_request(); `dropped_tables` are only remembered, not held back.
+    std::unique_ptr<schema_change_commit_guard> begin_schema_change_commit(std::unordered_set<table_id> tables, std::unordered_set<table_id> dropped_tables);
+
+    // Whether a schema change dropping table `id` is being committed on all shards.
+    bool is_table_being_dropped(table_id id) const {
+        return _schema_change_commit && _schema_change_commit->dropped_tables.contains(id);
+    }
 
     // Waits for a pending schema change commit affecting table `id`, if any. For paths which
     // resolve the table on other shards synchronously and so cannot use table_for_request() there.
