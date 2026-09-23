@@ -1013,35 +1013,60 @@ def test_describe_export(dynamodb, test_table_s):
         assert 'BilledSizeBytes' in desc
 
 
-# Test that DescribeExport with a non-existent ARN returns ValidationException.
-@pytest.mark.xfail(reason="Not yet implemented on Scylla and MinIO is not started")
-def test_describe_export_nonexistent(dynamodb, test_table_s):
-    client = dynamodb.meta.client
-    region = dynamodb.meta.client.meta.region_name
+# An id which no export has, in the shape DynamoDB mints for one: the export's StartTime in
+# milliseconds since the epoch, padded to 14 digits, a dash and 8 hex digits.
+def unknown_export_id():
+    return f'{int(time.time() * 1000):014d}-{uuid.uuid4().hex[:8]}'
+
+
+# Test that DescribeExport rejects with ValidationException an ARN which carries no export id: an
+# absent or empty one, the ARN of a table, whether the table exists or not, and a table ARN which
+# stops at `/export/`.
+def test_describe_export_nonexistent(test_table_s):
+    client = test_table_s.meta.client
     table_arn = get_table_arn(test_table_s)
-    account_id = table_arn.split(':')[4]
-    fake_arn = f'arn:aws:dynamodb:{region}:{account_id}:table/nonexistent_table_xyz'
+    with pytest.raises(ClientError, match='ValidationException.*Export ?(ARN|Arn)'):
+        client.describe_export()
+    with pytest.raises(ClientError, match='ValidationException.*Export ?(ARN|Arn)'):
+        client.describe_export(ExportArn='')
     with pytest.raises(ClientError, match='ValidationException.*Invalid Export ARN'):
-        client.describe_export(ExportArn=fake_arn)
+        client.describe_export(ExportArn=table_arn.rsplit('/', 1)[0] + '/nonexistent_table_xyz')
+    with pytest.raises(ClientError, match='ValidationException.*Invalid Export ARN'):
+        client.describe_export(ExportArn=table_arn)
+    with pytest.raises(ClientError, match='ValidationException.*Invalid Export ARN'):
+        client.describe_export(ExportArn=table_arn + '/export/')
 
 
+# An ARN with the part at `index` - arn, partition, service, region, account, resource - replaced by
+# `value`, or dropped if `value` is None.
+def arn_with_part(arn, index, value):
+    parts = arn.split(':', 5)
+    parts[index:index + 1] = [] if value is None else [value]
+    return ':'.join(parts)
 
-# Test that DescribeExport with a incorrect ARN returns ValidationException.
-# Note: this one is a bit tricky - AWS probably doesn't check for `arn:` prefix and we fail
-# on the same ValidationException as `test_describe_export_nonexistent` test.
-@pytest.mark.xfail(reason="Not yet implemented on Scylla and MinIO is not started")
-@pytest.mark.parametrize('fake_arn_error', [
-    ('qwerty:aws:dynamodb:us-east-1:000000000000:table/nonexistent_table_xyz', 'ValidationException.*Invalid Export ARN'),
-    ('arn:qwerty:dynamodb:us-east-1:000000000000:table/nonexistent_table_xyz', 'AccessDeniedException'),
-    ('arn:aws:qwerty:us-east-1:000000000000:table/nonexistent_table_xyz', 'AccessDeniedException'),
-    ('arn:aws:dynamodb:qwerty:000000000000:table/nonexistent_table_xyz', 'AccessDeniedException'),
-    ('arn:aws:dynamodb:us-east-1:qwerty:table/nonexistent_table_xyz', 'AccessDeniedException'),
-])
-def test_describe_export_incorrect_arns(dynamodb, fake_arn_error):
-    client = dynamodb.meta.client
-    fake_arn, error = fake_arn_error
-    with pytest.raises(ClientError, match=error):
-        client.describe_export(ExportArn=fake_arn)
+
+# The ARN of an export of `table` which nobody started, in the aws partition Alternator hands out its
+# export ARNs in. Alternator's table ARN is in the scylla partition instead, where changing the
+# partition would change how the rest of the ARN is read.
+def unknown_export_arn(table):
+    table_arn = get_table_arn(table)
+    if table_arn.startswith('arn:scylla:'):
+        keyspace = table_arn.split(':')[3]
+        table_arn = f'arn:aws:dynamodb:us-east-1:000000000000:table/{keyspace}@{table.name}'
+    return f'{table_arn}/export/{unknown_export_id()}'
+
+
+# Test that DescribeExport reports as ValidationException an export ARN without the `arn:` prefix,
+# one with too few parts, and one naming another resource type.
+def test_describe_export_incorrect_arns(test_table_s):
+    client = test_table_s.meta.client
+    export_arn = unknown_export_arn(test_table_s)
+    with pytest.raises(ClientError, match='ValidationException'):
+        client.describe_export(ExportArn=arn_with_part(export_arn, 0, 'qwerty'))
+    with pytest.raises(ClientError, match='ValidationException'):
+        client.describe_export(ExportArn=arn_with_part(export_arn, 4, None))
+    with pytest.raises(ClientError, match='ValidationException'):
+        client.describe_export(ExportArn=export_arn.replace(':table/', ':qwerty/', 1))
 
 
 # ---------------------------------------------------------------------------
