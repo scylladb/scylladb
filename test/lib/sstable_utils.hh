@@ -131,6 +131,10 @@ public:
     }
 
     future<sstable_ptr> store(sstring dir, sstables::generation_type generation) {
+        if (_sst->has_component(component_type::Statistics)) {
+            // The cardinality sketch is not kept in memory; reload it before re-serializing Statistics.
+            _sst->_components->statistics.contents[metadata_type::Compaction] = std::make_unique<compaction_metadata>(co_await _sst->read_compaction_metadata());
+        }
         _sst->_generation = generation;
         co_await _sst->_storage->change_dir_for_test(dir);
         _sst->_recognized_components.erase(component_type::Index);

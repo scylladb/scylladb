@@ -1633,7 +1633,8 @@ void write_statistics_component(const sstables::shared_sstable& sst, json_writer
                 dump_validation_metadata(writer, version, *dynamic_cast<const sstables::validation_metadata*>(metadata_ptr.get()));
                 break;
             case sstables::metadata_type::Compaction:
-                dump_compaction_metadata(writer, version, *dynamic_cast<const sstables::compaction_metadata*>(metadata_ptr.get()));
+                // The cardinality sketch is not kept in memory.
+                dump_compaction_metadata(writer, version, sst->read_compaction_metadata().get());
                 break;
             case sstables::metadata_type::Stats:
                 dump_stats_metadata(writer, version, *dynamic_cast<const sstables::stats_metadata*>(metadata_ptr.get()));

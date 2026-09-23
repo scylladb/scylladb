@@ -1245,6 +1245,29 @@ SEASTAR_TEST_CASE(test_digest_validation_statistics) {
     return test_component_digest_validation(component_type::Statistics, sstable::version_types::me, "Statistics digest mismatch");
 }
 
+// A Statistics rewrite re-reads the cardinality sketch from disk; it must not launder a corrupt file.
+SEASTAR_TEST_CASE(test_statistics_rewrite_validates_digest) {
+    return test_env::do_with_async([] (test_env& env) {
+        sstables::scoped_no_abort_on_malformed_sstable_error no_abort;
+        auto random_spec = tests::make_random_schema_specification(
+            "ks",
+            std::uniform_int_distribution<size_t>(1, 4),
+            std::uniform_int_distribution<size_t>(2, 4),
+            std::uniform_int_distribution<size_t>(2, 8),
+            std::uniform_int_distribution<size_t>(2, 8));
+        auto random_schema = tests::random_schema{tests::random::get_int<uint32_t>(), *random_spec};
+        auto schema = random_schema.schema();
+        const auto muts = tests::generate_random_mutations(random_schema, 2).get();
+        auto sst = make_sstable_containing(env.make_sstable(schema, sstable::version_types::me), muts).get();
+        auto dir_path = std::filesystem::path(fmt::to_string(sst->toc_filename())).parent_path().string();
+
+        slightly_corrupt_sstable(sst, component_type::Statistics);
+
+        BOOST_REQUIRE_EXCEPTION(mutate_sstable_level(env, sst, dir_path, 10).get(), malformed_sstable_exception,
+            exception_predicate::message_contains("Statistics digest mismatch"));
+    });
+}
+
 SEASTAR_TEST_CASE(test_digest_validation_filter) {
     return test_component_digest_validation(component_type::Filter, sstable::version_types::me, "Filter digest mismatch");
 }
