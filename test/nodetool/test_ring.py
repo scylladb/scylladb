@@ -11,11 +11,6 @@ from socket import getnameinfo
 import pytest
 from test.nodetool.rest_api_mock import expected_request
 from test.nodetool.utils import format_size, check_nodetool_fails_with
-from test.pylib.skip_types import skip_env
-
-
-null_ownership_error = ("Non-system keyspaces don't have the same replication settings, "
-                        "effective ownership information is meaningless")
 
 
 class Host(NamedTuple):
@@ -65,16 +60,11 @@ def format_stat(width, address, rack, status, state, load, owns, token):
                              ('', '-r', 'live', 'normal'),
                              ('', '--resolve-ip', 'live', 'normal'),
                          ])
-def test_ring(request, nodetool, keyspace_table, resolve_ip, host_status, host_state):
-    uses_cassandra_nodetool = request.config.getoption("nodetool") == "cassandra"
-
+def test_ring(nodetool, keyspace_table, resolve_ip, host_status, host_state):
     if "." in keyspace_table:
         keyspace, table = keyspace_table.split(".")
     else:
         keyspace, table = keyspace_table, None
-
-    if uses_cassandra_nodetool and table is not None:
-        skip_env("skipping tablets-related test with Cassandra nodetool")
 
     host = Host('dc0', 'rack0', '127.0.0.1', host_status, host_state,
                 6414780.0, 1.0,
@@ -103,7 +93,7 @@ def test_ring(request, nodetool, keyspace_table, resolve_ip, host_status, host_s
 
     expected_requests = []
 
-    if keyspace != '' and table is None and not uses_cassandra_nodetool:
+    if keyspace != '' and table is None:
         expected_requests.append(expected_request("GET", "/storage_service/keyspaces",
                                                   params={"replication": "tablets"},
                                                   multiple=expected_request.ONE, response=[]))
@@ -117,21 +107,10 @@ def test_ring(request, nodetool, keyspace_table, resolve_ip, host_status, host_s
                          response=map_to_json(token_to_endpoint))
     ]
 
-    is_scylla = request.config.getoption("nodetool") == "scylla"
     print_all_keyspaces = keyspace == ''
 
-    if is_scylla and print_all_keyspaces:
-        # scylla nodetool does not bother getting ownership if keyspace is not
-        # specified
-        pass
-    else:
-        expected_requests.append(
-            expected_request(
-                    "GET",
-                    "/storage_service/ownership/null",
-                    response_status=500,
-                    multiple=expected_request.ANY,
-                    response={"message": f"std::runtime_error({null_ownership_error})", "code": 500}))
+    # nodetool does not bother getting ownership if keyspace is not specified
+    if not print_all_keyspaces:
         params = {}
         if table is not None:
             params["cf"] = table
@@ -210,7 +189,7 @@ Datacenter: {host.dc}
         if print_all_keyspaces:
             ownership = '?'
         else:
-            # scylla nodetool always prints out the ownership percentage,
+            # nodetool always prints out the ownership percentage,
             # since it prints out the warning, so user is aware if the
             # ownership is meaningless or not
             ownership_percent = host.ownership * 100
@@ -237,7 +216,7 @@ Datacenter: {host.dc}
     assert actual_output == expected_output
 
 
-def test_ring_tablet_keyspace_no_table(nodetool, scylla_only):
+def test_ring_tablet_keyspace_no_table(nodetool):
     keyspace = "ks"
 
     check_nodetool_fails_with(

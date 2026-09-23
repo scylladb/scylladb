@@ -60,7 +60,7 @@ TokenRange:
 \tTokenRange(start_token:9213626581013704850, end_token:-9153143965931359657, endpoints:[127.0.0.1], rpc_endpoints:[127.0.0.1], endpoint_details:[EndpointDetails(host:127.0.0.1, datacenter:datacenter1, rack:rack1)])
 """
 
-def test_describering_table(nodetool, scylla_only):
+def test_describering_table(nodetool):
     schema_version = "83541f12-c1bc-11ee-b55e-4d563ca8da4b"
     ring = [
             {

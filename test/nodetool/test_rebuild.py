@@ -30,7 +30,7 @@ def test_rebuild_source_dc(nodetool):
     ])
 
 
-def test_rebuild_force_source_dc(nodetool, scylla_only):
+def test_rebuild_force_source_dc(nodetool):
     source_dc = "UNKNOWN_DC"
     nodetool("rebuild", "--force", source_dc, expected_requests=[
         expected_request(
