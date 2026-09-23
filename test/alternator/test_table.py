@@ -764,3 +764,169 @@ def test_list_tables_no_paxos(dynamodb, test_table_s):
     for listed_name in tables:
         if test_table_s.name != listed_name:
             assert test_table_s.name not in listed_name
+
+# DynamoDB's "TableName" documentation specifies that besides the obvious
+# possibility of giving the table's name, "You can also provide the Amazon
+# Resource Name (ARN) of the table in this parameter.". Staying true to the
+# stated purpose of this file, the following tests will check that
+# DescribeTable, UpdateTable, DeleteTable and even CreateTable (!) can take an
+# ARN as TableName. We'll check other operations with ARN as TableName in
+# other test files.
+
+# DescribeTable can accept an ARN as TableName, instead of a table name
+# Reproduces SCYLLADB-4683.
+def test_table_name_arn_describe_table(test_table_s):
+    client = test_table_s.meta.client
+    # Describe the test table by its normal table name, and get its ARN from
+    # that description:
+    desc_by_name = client.describe_table(TableName=test_table_s.name)['Table']
+    arn = desc_by_name['TableArn']
+    # Now try DescribeTable again, using the ARN as TableName:
+    desc = client.describe_table(TableName=arn)['Table']
+    assert desc['TableName'] == test_table_s.name
+    assert desc['TableArn'] == arn
+    # The two descriptions should be identical, except maybe ItemCount
+    # and TableSizeBytes, which in theory may change if we run tests in
+    # parallel, or if these sizes are updated asynchronously.
+    for d in [desc, desc_by_name]:
+        d.pop('ItemCount', None)
+        d.pop('TableSizeBytes', None)
+    assert desc == desc_by_name
+
+# UpdateTable can accept an ARN as TableName as well.
+# We ask for the simplest update DynamoDB allows - setting the billing mode
+# which the table already has - because what this test is about is which table
+# the request reached, not what it did to it.
+# This test needs a table of its own: an UpdateTable on one of the shared
+# tables would disturb other tests - e.g., test_describe_table_billing()
+# checks that its table's billing mode was never updated after its creation.
+# Reproduces SCYLLADB-4683.
+def test_table_name_arn_update_table(dynamodb):
+    with new_test_table(dynamodb,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
+        client = table.meta.client
+        arn = client.describe_table(TableName=table.name)['Table']['TableArn']
+        desc = client.update_table(TableName=arn,
+            BillingMode='PAY_PER_REQUEST')['TableDescription']
+        # As in any table description, the table is named by its name - not by
+        # the ARN which this request used to address it.
+        assert desc['TableName'] == table.name
+
+# DeleteTable can accept an ARN as TableName, instead of a table name
+# Reproduces SCYLLADB-4683.
+def test_table_name_arn_delete_table(dynamodb):
+    table = create_test_table(dynamodb,
+        KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+        AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}])
+    client = table.meta.client
+    deleted = False
+    try:
+        arn = client.describe_table(TableName=table.name)['Table']['TableArn']
+        # DeleteTable's response says which table it deleted, so we can check
+        # that the ARN named the table we meant.
+        desc = client.delete_table(TableName=arn)['TableDescription']
+        deleted = True
+        assert desc['TableName'] == table.name
+    finally:
+        # If the delete-by-ARN above didn't happen or didn't succeed, the
+        # table is still there, and we want to delete it by name so this
+        # test doesn't leave it behind.
+        if not deleted:
+            table.delete()
+
+# CreateTable accepts an ARN too - which is surprising, because unlike every
+# other operation, CreateTable has to *name* a table which doesn't exist yet,
+# so there is no existing table whose ARN this could be. Nevertheless the
+# documented sentence quoted above appears for CreateTable as well, and
+# DynamoDB really does accept it: the table created is the one named inside
+# the ARN.
+# The value of this CreateTable-by-ARN feature is dubious, and even more
+# so in Alternator where we never documented the structure of ARNs, and the
+# assumption has always been that an ARN is an opaque string returned by
+# DescribeTable and then passed back to other operations (like TagResource).
+# So at the moment, we check the two "easy" cases of this feature:
+# 1. Trying to CreateTable given the ARN of an existing table should fail
+#    with an error that the table already exists.
+# 2. Taking the ARN of an existing table and modifying it to replace the
+#    table's name with a new name, successfully creates a table with that
+#    new name. Among other things, this means that if an ARN includes things
+#    like a keyspace name, this part will be ignored by CreateTable when
+#    creating a new table.
+# Reproduces SCYLLADB-4683.
+def test_table_name_arn_create_table(dynamodb, test_table_s):
+    client = test_table_s.meta.client
+    arn = client.describe_table(TableName=test_table_s.name)['Table']['TableArn']
+    # 1. This ARN refers to an existing table, so CreateTable refuses it for
+    # the same reason it would refuse that table's name. Note this already
+    # shows the ARN isn't taken as a literal table name - such a name doesn't
+    # exist, and would have been rejected as malformed rather than existing.
+    with pytest.raises(ClientError, match='ResourceInUseException'):
+        client.create_table(TableName=arn, BillingMode='PAY_PER_REQUEST',
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}])
+    # 2. Build the ARN of a table which doesn't exist, by replacing the table
+    # name in an existing table's ARN by a new unused name. Only the table
+    # name is replaced: in Alternator, whose ARN also includes the table's
+    # keyspace name, the new ARN still has the old table's keyspace name,
+    # which CreateTable must ignore.
+    new_name = unique_table_name()
+    new_arn = arn.rsplit('/', 1)[0] + '/' + new_name
+    desc = client.create_table(TableName=new_arn, BillingMode='PAY_PER_REQUEST',
+        KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+        AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}])['TableDescription']
+    # Delete whatever table was actually created - not what we expected to be
+    # created - so that this test cleans up after itself even if the
+    # assertions below turn out to be wrong.
+    created_name = desc['TableName']
+    try:
+        assert created_name == new_name
+        # The new table really exists, under its plain name:
+        assert client.describe_table(TableName=new_name)['Table']['TableName'] == new_name
+    finally:
+        # A table still being created can't be deleted, so wait for it first.
+        client.get_waiter('table_exists').wait(TableName=created_name)
+        client.delete_table(TableName=created_name)
+
+# A TableName beginning with "arn:" can only be meant as an ARN - a table name
+# may not contain a colon - so it is never mistaken for the name of some table
+# which happens to be spelled that way.
+# A string which can't be parsed as an ARN is simply a malformed TableName,
+# and is rejected with a ValidationException.
+def test_table_name_arn_malformed(test_table_s):
+    client = test_table_s.meta.client
+    for bad_arn in ['arn:', 'arn:garbage']:
+        with pytest.raises(ClientError, match='ValidationException'):
+            client.describe_table(TableName=bad_arn)
+
+# A well-formed ARN which merely names a table that doesn't exist gets the
+# same ResourceNotFoundException a nonexistent table name would have produced
+# (and not a ValidationException as a malformed ARN would).
+# Reproduces SCYLLADB-4683.
+def test_table_name_arn_nonexistent(test_table_s):
+    client = test_table_s.meta.client
+    # We build the ARN by replacing the table name in a real table's ARN, so
+    # that everything else about it - whatever an ARN's other parts may be -
+    # remains valid.
+    arn = client.describe_table(TableName=test_table_s.name)['Table']['TableArn']
+    nonexistent = arn.rsplit('/', 1)[0] + '/' + unique_table_name()
+    with pytest.raises(ClientError, match='ResourceNotFoundException'):
+        client.describe_table(TableName=nonexistent)
+
+# Once a TableName is well-formed enough to be recognized as an ARN, DynamoDB
+# stops complaining that it is malformed and starts refusing to discuss it at
+# all: an ARN which doesn't name a resource of ours - here, one of another
+# account - is answered with AccessDeniedException, and not with a
+# ValidationException or a ResourceNotFoundException which would have revealed
+# whether such a resource exists.
+# To show that the foreign account alone is enough for this, we take our own
+# table's ARN and replace only its account id - the ARN's fifth
+# colon-separated field.
+@pytest.mark.xfail(reason="Alternator doesn't check the ARN's account id, so it doesn't refuse another account's ARN with AccessDeniedException")
+def test_table_name_arn_not_ours(test_table_s):
+    client = test_table_s.meta.client
+    arn = client.describe_table(TableName=test_table_s.name)['Table']['TableArn']
+    parts = arn.split(':')
+    parts[4] = '123456789012'
+    with pytest.raises(ClientError, match='AccessDeniedException'):
+        client.describe_table(TableName=':'.join(parts))
