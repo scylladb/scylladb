@@ -417,23 +417,21 @@ void query_pager::handle_result(
 
     // The partition of the previous cursor, if the page continued it.
     const auto page_start_pkey = continues_cursor_partition() ? _last_pkey : std::nullopt;
+    const auto previous_cursor_pkey = _last_pkey;
     _last_pos = position_in_partition::for_partition_start();
     uint64_t replica_row_count, row_count;
+    // The last partition of the page, and the number of its rows which the
+    // page kept.
+    std::optional<partition_key> last_page_pkey;
+    uint64_t last_page_partition_row_count = 0;
     if constexpr(!std::is_same_v<std::decay_t<Visitor>, noop_visitor>) {
         query_result_visitor<Visitor> v(std::forward<Visitor>(visitor));
         view.consume(_cmd->slice, v);
 
         row_count = v.total_rows - v.dropped_rows;
         replica_row_count = v.total_rows;
-
-        // If per partition limit is defined, we need to accumulate rows fetched for last partition key if the key matches
-        if (_cmd->slice.partition_row_limit() < query::max_rows_if_set) {
-            if (_last_pkey && v.last_pkey && _last_pkey->equal(*_query_schema, *v.last_pkey)) {
-                _rows_fetched_for_last_partition += v.last_partition_row_count;
-            } else {
-                _rows_fetched_for_last_partition = v.last_partition_row_count;
-            }
-        }
+        last_page_pkey = std::move(v.last_pkey);
+        last_page_partition_row_count = v.last_partition_row_count;
     } else {
         row_count = results->row_count() ? *results->row_count() : std::get<1>(view.count_partitions_and_rows());
         replica_row_count = row_count;
@@ -470,6 +468,24 @@ void query_pager::handle_result(
             pending = !returned_now && !returned_before;
         }
         _partition_row_pending = pending;
+
+        // If per partition limit is defined, count the rows which all pages
+        // kept of the cursor's partition. A page may end without a row of
+        // that partition, when it stops short inside it.
+        if constexpr(!std::is_same_v<std::decay_t<Visitor>, noop_visitor>) {
+            if (_cmd->slice.partition_row_limit() < query::max_rows_if_set) {
+                uint64_t fetched = 0;
+                if (_last_pkey) {
+                    if (previous_cursor_pkey && previous_cursor_pkey->equal(*_query_schema, *_last_pkey)) {
+                        fetched = _rows_fetched_for_last_partition;
+                    }
+                    if (last_page_pkey && last_page_pkey->equal(*_query_schema, *_last_pkey)) {
+                        fetched += last_page_partition_row_count;
+                    }
+                }
+                _rows_fetched_for_last_partition = fetched;
+            }
+        }
     }
 
     qlogger.debug("Fetched {} rows (kept {}), max_remain={} {}", replica_row_count, row_count, _max, _exhausted ? "(exh)" : "");
