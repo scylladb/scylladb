@@ -787,3 +787,11 @@ def test_list_append_limit(cql, test_keyspace, scylla_only):
         value_list = ",".join(["0"] * (SUBMICRO_LIMIT + 1))
         with pytest.raises(InvalidRequest):
             cql.execute(f"UPDATE {t} SET l = l + [{value_list}] WHERE pk = 0")
+
+
+def test_insert_statement(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p1 varchar, c1 int, r1 int, PRIMARY KEY (p1, c1)") as cf:
+        cql.execute(f"insert into {cf} (p1, c1, r1) values ('key1', 1, 100)")
+        assert list(cql.execute(f"select r1 from {cf} where p1 = 'key1' and c1 = 1")) == [(100,)]
+        cql.execute(f"update {cf} set r1 = 66 where p1 = 'key1' and c1 = 1")
+        assert list(cql.execute(f"select r1 from {cf} where p1 = 'key1' and c1 = 1")) == [(66,)]

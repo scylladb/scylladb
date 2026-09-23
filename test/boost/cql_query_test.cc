@@ -254,20 +254,6 @@ SEASTAR_TEST_CASE(test_alter_node_oriented_scopes_reject_unknown_targets) {
     });
 }
 
-SEASTAR_TEST_CASE(test_insert_statement) {
-    return do_with_cql_env([] (cql_test_env& e) {
-        return e.execute_cql("create table cf (p1 varchar, c1 int, r1 int, PRIMARY KEY (p1, c1));").discard_result().then([&e] {
-            return e.execute_cql("insert into cf (p1, c1, r1) values ('key1', 1, 100);").discard_result();
-        }).then([&e] {
-            return require_column_has_value(e, "cf", {sstring("key1")}, {1}, "r1", 100);
-        }).then([&e] {
-            return e.execute_cql("update cf set r1 = 66 where p1 = 'key1' and c1 = 1;").discard_result();
-        }).then([&e] {
-            return require_column_has_value(e, "cf", {sstring("key1")}, {1}, "r1", 66);
-        });
-    });
-}
-
 SEASTAR_TEST_CASE(test_select_statement) {
    return do_with_cql_env([] (cql_test_env& e) {
         return e.create_table([](std::string_view ks_name) {
