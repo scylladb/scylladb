@@ -10,6 +10,7 @@
 #include "alternator/error.hh"
 #include "alternator/executor.hh"
 #include "alternator/executor_util.hh"
+#include "alternator/system_distributed_helper.hh"
 #include "db_clock.hh"
 #include "service/storage_proxy.hh"
 #include <seastar/core/coroutine.hh>
@@ -30,6 +31,7 @@
 #include <array>
 #include <cmath>
 #include <exception>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -537,6 +539,20 @@ static double to_epoch_seconds(db_clock::time_point tp) {
     return std::chrono::duration<double>(tp.time_since_epoch()).count();
 }
 
+// For the export operations, DynamoDB reports a malformed ARN as ValidationException. parse_arn,
+// which other operations also use, reports some malformed ARNs as AccessDeniedException, so this
+// function changes that error to ValidationException.
+static arn_parts parse_arn_reporting_validation(std::string_view arn, std::string_view arn_field_name, std::string_view type_name, std::string_view expected_postfix) {
+    try {
+        return parse_arn(arn, arn_field_name, type_name, expected_postfix);
+    } catch (const api_error& e) {
+        if (e._type == "AccessDeniedException") {
+            throw api_error::validation(e._msg);
+        }
+        throw;
+    }
+}
+
 future<executor::request_return_type> executor::export_table_to_point_in_time(client_state& client_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
     _stats.api_operations.export_table_to_point_in_time++;
 
@@ -660,6 +676,100 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
         rjson::add(export_desc, "S3Prefix", rjson::from_string(s3_prefix));
     }
     rjson::add(export_desc, "TableArn", rjson::from_string(table_arn));
+
+    rjson::value response = rjson::empty_object();
+    rjson::add(response, "ExportDescription", std::move(export_desc));
+    co_return rjson::print(std::move(response));
+}
+
+// An export ARN is a table ARN followed by `/export/<id>`.
+static arn_parts parse_export_arn(std::string_view export_arn, std::string_view arn_field_name) {
+    static constexpr std::string_view export_infix = "/export/";
+    auto parts = parse_arn_reporting_validation(export_arn, arn_field_name, "Export", export_infix);
+    // parse_arn accepts an empty export id.
+    if (parts.postfix.size() == export_infix.size()) {
+        throw api_error::validation(fmt::format("{}: Invalid Export ARN `{}` - no export id after `{}`",
+                arn_field_name, export_arn, export_infix));
+    }
+    return parts;
+}
+
+future<executor::request_return_type> executor::describe_export(client_state& client_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+    _stats.api_operations.describe_export++;
+
+    // Parsing the export ARN also tells us which table the export belongs to.
+    auto export_arn = get_non_empty_string_attribute(request, "ExportArn");
+    auto parts = parse_export_arn(export_arn, "ExportArn");
+
+    maybe_audit(audit_info, audit::statement_category::QUERY, parts.keyspace_name, parts.table_name, "DescribeExport", request);
+
+    // The exported table may have been dropped after the export was accepted, and DynamoDB keeps
+    // describing such exports. Per-table metrics live on the table object, so they only exist for
+    // as long as it does, and only Alternator's own tables get them.
+    if (parts.keyspace_name.starts_with(executor::KEYSPACE_NAME_PREFIX)) {
+        if (auto table = _proxy.data_dictionary().try_find_table(parts.keyspace_name, parts.table_name)) {
+            get_stats_from_schema(_proxy, *table->schema())->api_operations.describe_export++;
+        }
+    }
+
+    auto exp = co_await get_export(_qp, sstring(export_arn));
+    // DynamoDB answers ExportNotFoundException also when the ARN names a table it does not have.
+    if (!exp) {
+        co_return api_error::export_not_found(fmt::format("ExportArn: Export `{}` not found", export_arn));
+    }
+
+    rjson::value export_desc = rjson::empty_object();
+    rjson::add(export_desc, "ExportArn", rjson::from_string(export_arn));
+    // DynamoDB reports no ExportStatus but these three, so any other stored status is reported as
+    // IN_PROGRESS.
+    rjson::add(export_desc, "ExportStatus", rjson::from_string(exp->export_status == "COMPLETED" || exp->export_status == "FAILED" ? exp->export_status : "IN_PROGRESS"));
+    rjson::add(export_desc, "StartTime", rjson::value(to_epoch_seconds(exp->accepted_at)));
+
+    // The fields describing the request are echoed back from the request that started the export,
+    // with the ExportFormat ExportTableToPointInTime defaults to. That request was validated when it
+    // was accepted, so one that cannot be read back is a corrupt row, like a row missing a column,
+    // and not the caller's error.
+    try {
+        auto exported_request = rjson::parse(exp->request);
+        rjson::add(export_desc, "TableArn", rjson::copy(rjson::get(exported_request, "TableArn")));
+        rjson::add(export_desc, "S3Bucket", rjson::copy(rjson::get(exported_request, "S3Bucket")));
+        if (const rjson::value* s3_prefix = rjson::find(exported_request, "S3Prefix")) {
+            rjson::add(export_desc, "S3Prefix", rjson::copy(*s3_prefix));
+        }
+        const rjson::value* export_format = rjson::find(exported_request, "ExportFormat");
+        rjson::add(export_desc, "ExportFormat", export_format ? rjson::copy(*export_format) : rjson::from_string("DYNAMODB_JSON"));
+        if (const rjson::value* export_type = rjson::find(exported_request, "ExportType")) {
+            rjson::add(export_desc, "ExportType", rjson::copy(*export_type));
+        }
+    } catch (const rjson::error& e) {
+        throw std::runtime_error(fmt::format("Export '{}' has a malformed request: {}", export_arn, e.what()));
+    }
+
+    // TableId identifies the table the export was taken from, not whatever table now answers to
+    // the export's name - names can be reused, ids cannot.
+    rjson::add(export_desc, "TableId", rjson::from_string(exp->table_id.to_sstring()));
+    rjson::add(export_desc, "ExportTime", rjson::value(to_epoch_seconds(exp->export_time)));
+    rjson::add(export_desc, "ClientToken", rjson::from_string(exp->client_token));
+
+    // Everything below describes a finished export, so it is only there once one has run.
+    if (exp->export_manifest) {
+        rjson::add(export_desc, "ExportManifest", rjson::from_string(*exp->export_manifest));
+    }
+    if (exp->failure_code) {
+        rjson::add(export_desc, "FailureCode", rjson::from_string(*exp->failure_code));
+    }
+    if (exp->failure_message) {
+        rjson::add(export_desc, "FailureMessage", rjson::from_string(*exp->failure_message));
+    }
+    if (exp->item_count) {
+        rjson::add(export_desc, "ItemCount", rjson::value(*exp->item_count));
+    }
+    if (exp->billed_size_bytes) {
+        rjson::add(export_desc, "BilledSizeBytes", rjson::value(*exp->billed_size_bytes));
+    }
+    if (exp->completed_at) {
+        rjson::add(export_desc, "EndTime", rjson::value(to_epoch_seconds(*exp->completed_at)));
+    }
 
     rjson::value response = rjson::empty_object();
     rjson::add(response, "ExportDescription", std::move(export_desc));
