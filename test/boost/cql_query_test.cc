@@ -260,38 +260,6 @@ using std::source_location;
 
 } // anonymous namespace
 
-SEASTAR_TEST_CASE(test_validate_table) {
-    return do_with_cql_env([] (cql_test_env& e) {
-        return make_ready_future<>().then([&e] {
-            sstring table_name(schema::NAME_LENGTH + 1, 't');
-            return e.execute_cql(format("create table {} (foo text PRIMARY KEY, bar text);", table_name));
-        }).then_wrapped([&e] (future<shared_ptr<cql_transport::messages::result_message>> f) {
-            assert_that_failed(f);
-            return e.execute_cql("create table tb (foo text PRIMARY KEY, foo text);");
-        }).then_wrapped([&e] (future<shared_ptr<cql_transport::messages::result_message>> f) {
-            assert_that_failed(f);
-            return e.execute_cql("create table tb-1 (foo text PRIMARY KEY, bar text);");
-        }).then_wrapped([&e] (future<shared_ptr<cql_transport::messages::result_message>> f) {
-            assert_that_failed(f);
-            return e.execute_cql("create table tb (foo text, bar text);");
-        }).then_wrapped([&e] (future<shared_ptr<cql_transport::messages::result_message>> f) {
-            assert_that_failed(f);
-            return e.execute_cql("create table tb (foo text PRIMARY KEY, bar text PRIMARY KEY);");
-        }).then_wrapped([&e] (future<shared_ptr<cql_transport::messages::result_message>> f) {
-            assert_that_failed(f);
-            return e.execute_cql("create table tb (foo text PRIMARY KEY, bar text) with commment = 'aaaa';");
-        }).then_wrapped([&e] (future<shared_ptr<cql_transport::messages::result_message>> f) {
-            assert_that_failed(f);
-            return e.execute_cql("create table tb (foo text PRIMARY KEY, bar text) with min_index_interval = -1;");
-        }).then_wrapped([&e] (future<shared_ptr<cql_transport::messages::result_message>> f) {
-            assert_that_failed(f);
-            return e.execute_cql("create table tb (foo text PRIMARY KEY, bar text) with min_index_interval = 1024 and max_index_interval = 128;");
-        }).then_wrapped([] (future<shared_ptr<cql_transport::messages::result_message>> f) {
-            assert_that_failed(f);
-        });
-    });
-}
-
 SEASTAR_TEST_CASE(test_table_compression) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("create table tb1 (foo text PRIMARY KEY, bar text) with compression = { };").get();

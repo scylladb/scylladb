@@ -1249,3 +1249,25 @@ def test_validate_keyspace(cql):
             cql.execute(f"create keyspace {ks3} with rreplication = {{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }}")
     with pytest.raises(InvalidRequest, match="not user-modifiable"):
         cql.execute("create keyspace SyStEm with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }")
+
+
+def test_validate_table(cql, test_keyspace):
+    # Table name too long (schema::NAME_LENGTH is 192)
+    table_name = 't' * 193
+    with pytest.raises(InvalidRequest):
+        cql.execute(f"create table {test_keyspace}.{table_name} (foo text PRIMARY KEY, bar text)")
+    tb = f"{test_keyspace}.{unique_name()}"
+    with pytest.raises(InvalidRequest):
+        cql.execute(f"create table {tb} (foo text PRIMARY KEY, foo text)")
+    with pytest.raises(SyntaxException):
+        cql.execute(f"create table {test_keyspace}.tb-1 (foo text PRIMARY KEY, bar text)")
+    with pytest.raises(InvalidRequest):
+        cql.execute(f"create table {tb} (foo text, bar text)")
+    with pytest.raises(InvalidRequest):
+        cql.execute(f"create table {tb} (foo text PRIMARY KEY, bar text PRIMARY KEY)")
+    with pytest.raises(SyntaxException):
+        cql.execute(f"create table {tb} (foo text PRIMARY KEY, bar text) with commment = 'aaaa'")
+    with pytest.raises(ConfigurationException):
+        cql.execute(f"create table {tb} (foo text PRIMARY KEY, bar text) with min_index_interval = -1")
+    with pytest.raises(ConfigurationException):
+        cql.execute(f"create table {tb} (foo text PRIMARY KEY, bar text) with min_index_interval = 1024 and max_index_interval = 128")
