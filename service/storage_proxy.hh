@@ -43,6 +43,7 @@
 #include "service/maintenance_mode.hh"
 #include "timeout_config.hh"
 #include "service/storage_proxy_fwd.hh"
+#include "service/read_page_resolution.hh"
 
 class reconcilable_result;
 class frozen_mutation_and_schema;
@@ -103,8 +104,6 @@ struct batchlog_replay_mutation;
 struct read_repair_mutation;
 
 using replicas_per_token_range = std::unordered_map<dht::token_range, std::vector<locator::host_id>>;
-using mutations_per_partition_key_map =
-        std::unordered_map<partition_key, std::unordered_map<locator::host_id, std::optional<mutation>>, partition_key::hashing, partition_key::equality>;
 
 struct query_partition_key_range_concurrent_result {
     std::vector<foreign_ptr<lw_shared_ptr<query::result>>> result;
