@@ -174,8 +174,10 @@ The per-table directory may contain several sub-directories, as listed below:
   A sub-directory holding SSTables that have been quarantined, typically due to
   validation failures or corruption detected during scrub operations.
   
-  Quarantined SSTables are isolated to prevent them from being read or used by the
-  database. They can be inspected manually for debugging purposes or removed using
+  Quarantined SSTables are isolated to prevent them from being compacted.
+  They participate in reads, streaming, data migration, repairs
+  and overlap checks for the tombstone-gc.
+  They can be inspected manually for debugging purposes or removed using
   the `drop_quarantined_sstables` API operation.
   
   The scrub operation can be configured to handle quarantined SSTables using the
