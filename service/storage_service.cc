@@ -176,6 +176,21 @@ void check_raft_rpc_scheduling_group(const replica::database& db, const gms::fea
     }
 }
 
+// Subscribe dependent_as to base_as and return the corresponding subscription.
+//
+// If the passed base_as has already been triggered, it will immediately
+// trigger dependent_as.
+[[nodiscard]]
+optimized_optional<abort_source::subscription> chain_abort_source(abort_source& dependent_as, abort_source& base_as) {
+    if (base_as.abort_requested()) {
+        dependent_as.request_abort_ex(base_as.abort_requested_exception_ptr());
+    }
+
+    return base_as.subscribe([&dependent_as] (const std::optional<std::exception_ptr>& eptr) noexcept {
+        dependent_as.request_abort_ex(eptr.value_or(dependent_as.get_default_exception()));
+    });
+}
+
 } // namespace
 
 static constexpr std::chrono::seconds wait_for_live_nodes_timeout{30};
@@ -3812,19 +3827,11 @@ future<> storage_service::removenode_with_stream(locator::host_id leaving_node,
     return seastar::async([this, leaving_node, as_ptr, topo_guard] {
         auto tmptr = get_token_metadata_ptr();
         abort_source as;
-        auto sub = _abort_source.subscribe([&as] () noexcept {
-            if (!as.abort_requested()) {
-                as.request_abort();
-            }
-        });
+        auto sub = chain_abort_source(as, _abort_source);
         if (!as_ptr) {
             throw std::runtime_error("removenode_with_stream: abort_source is nullptr");
         }
-        auto as_ptr_sub = as_ptr->subscribe([&as] () noexcept {
-            if (!as.abort_requested()) {
-                as.request_abort();
-            }
-        });
+        auto as_ptr_sub = chain_abort_source(as, *as_ptr);
         auto streamer = make_lw_shared<dht::range_streamer>(_db, _stream_manager, tmptr, as, tmptr->get_my_id(), _snitch.local()->get_location(), "Removenode", streaming::stream_reason::removenode, topo_guard);
         removenode_add_ranges(streamer, leaving_node).get();
         try {
@@ -5122,21 +5129,17 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                         rtlogger.debug("streaming to remove node {}", id);
                         tasks::task_info parent_info{tasks::task_id{it->second.request_id}, 0};
                         auto task = co_await get_node_ops_module().make_and_start_task<node_ops::streaming_task_impl>(parent_info,
-                                parent_info.id, streaming::stream_reason::removenode, _remove_result[id], [this, id = locator::host_id{id.uuid()}, session] (this auto) {
+                                parent_info.id, streaming::stream_reason::removenode, _remove_result[id], [this, id = locator::host_id{id.uuid()}, session] (this auto) -> future<> {
                             auto as = make_shared<abort_source>();
-                            auto sub = _abort_source.subscribe([as] () noexcept {
-                                if (!as->abort_requested()) {
-                                    as->request_abort();
-                                }
-                            });
+                            auto sub = chain_abort_source(*as, _abort_source);
                             if (is_repair_based_node_ops_enabled(streaming::stream_reason::removenode)) {
                                 std::list<locator::host_id> ignored_ips = _topology_state_machine._topology.ignored_nodes | std::views::transform([] (const auto& id) {
                                     return locator::host_id(id.uuid());
                                 }) | std::ranges::to<std::list<locator::host_id>>();
                                 auto ops = seastar::make_shared<node_ops_info>(node_ops_id::create_random_id(), as, std::move(ignored_ips));
-                                return _repair.local().removenode_with_repair(get_token_metadata_ptr(), id, ops, session);
+                                co_await _repair.local().removenode_with_repair(get_token_metadata_ptr(), id, ops, session);
                             } else {
-                                return removenode_with_stream(id, session, as);
+                                co_await removenode_with_stream(id, session, as);
                             }
                         });
                         co_await task->done();
