@@ -31,6 +31,11 @@ enum class compact_for_sstables {
     yes,
 };
 
+// A consumer of the fragments which the compactor emits.
+//
+// The key which consume_new_partition() receives stays alive and unchanged
+// until consume_end_of_partition() of the same partition returns. The
+// consumer may keep a reference to it until then.
 template<typename T>
 concept CompactedFragmentsConsumer = requires(T obj, tombstone t, const dht::decorated_key& dk, static_row sr,
         clustering_row cr, range_tombstone_change rtc, tombstone current_tombstone, row_tombstone current_row_tombstone, bool is_alive) {
@@ -172,7 +177,8 @@ class compact_mutation_state {
     max_purgeable _max_purgeable_regular;
     max_purgeable _max_purgeable_shadowable;
     std::optional<gc_clock::time_point> _gc_before;
-    const query::partition_slice& _slice;
+    // The slice of the current page request. See start_new_page().
+    const query::partition_slice* _slice;
     uint64_t _row_limit{};
     uint32_t _partition_limit{};
     uint64_t _partition_row_limit{};
@@ -186,6 +192,9 @@ class compact_mutation_state {
     bool _empty_partition{};
     bool _empty_partition_in_gc_consumer{};
     bool _partition_is_live{};
+    // The key of the current partition. The consumers' consume_new_partition()
+    // receives a reference to it, so it must not change until their
+    // consume_end_of_partition() returns. See CompactedFragmentsConsumer.
     std::optional<dht::decorated_key> _dk;
     bool _return_static_content_on_partition_with_no_rows{};
 
@@ -195,6 +204,11 @@ class compact_mutation_state {
     // the regular consumer (_current_emitted_tombstone) because even purged
     // tombstone that are not emitted are still applied to data when compacting.
     tombstone _effective_tombstone;
+    // The range tombstone which the input stream has open, as the stream
+    // emitted it: before the partition tombstone covers it and before any
+    // purging. A new reader emits this tombstone at the start of a range
+    // inside it, so detach_state() emits it too.
+    tombstone _input_tombstone;
     // Track last emitted tombstone to regular and gc consumers respectively.
     // Used to determine whether any active tombstones need closing at EOS.
     tombstone _current_emitted_tombstone;
@@ -372,10 +386,10 @@ public:
             mutation_fragment_stream_validation_level validation_level = mutation_fragment_stream_validation_level::token)
         : _schema(s)
         , _query_time(query_time)
-        , _slice(slice)
+        , _slice(&slice)
         , _row_limit(limit)
         , _partition_limit(partition_limit)
-        , _partition_row_limit(_slice.options.contains(query::partition_slice::option::distinct) ? 1 : slice.partition_row_limit())
+        , _partition_row_limit(slice.options.contains(query::partition_slice::option::distinct) ? 1 : slice.partition_row_limit())
         , _tombstone_gc_state(gc_state)
         , _last_pos(position_in_partition::for_partition_end())
         , _validator("mutation_compactor for read", _schema, validation_level)
@@ -390,7 +404,7 @@ public:
         : _schema(s)
         , _query_time(compaction_time)
         , _get_max_purgeable(std::move(get_max_purgeable))
-        , _slice(s.full_slice())
+        , _slice(&s.full_slice())
         , _tombstone_gc_state(gc_state)
         , _last_pos(position_in_partition::for_partition_end())
         , _collector(std::make_unique<mutation_compactor_garbage_collector>(_schema))
@@ -408,8 +422,8 @@ public:
         auto& pk = _dk->key();
         _validator(*_dk);
         _return_static_content_on_partition_with_no_rows =
-            _slice.options.contains(query::partition_slice::option::always_return_static_content) ||
-            !has_ck_selector(_slice.row_ranges(_schema, pk));
+            _slice->options.contains(query::partition_slice::option::always_return_static_content) ||
+            !has_ck_selector(_slice->row_ranges(_schema, pk));
         _empty_partition = true;
         _empty_partition_in_gc_consumer = true;
         _partition_is_live = false;
@@ -423,6 +437,7 @@ public:
         _last_static_row.reset();
         _last_pos = position_in_partition::for_partition_start();
         _effective_tombstone = {};
+        _input_tombstone = {};
         _current_emitted_tombstone = {};
         _current_emitted_gc_tombstone = {};
 
@@ -550,6 +565,7 @@ public:
         if (!sstable_compaction()) {
             _last_pos = rtc.position();
         }
+        _input_tombstone = rtc.tombstone();
         ++_stats.range_tombstones;
         _stop = do_consume(std::move(rtc), consumer, gc_consumer);
         return _stop;
@@ -637,52 +653,47 @@ public:
         return full_position(_dk->key(), _last_pos);
     }
 
-    /// Reset limits and query-time to the new page's ones and re-emit the
-    /// partition-header and static row if there are clustering rows or range
-    /// tombstones left in the partition.
-    template <typename Consumer>
-    requires CompactedFragmentsConsumer<Consumer>
-    void start_new_page(uint64_t row_limit,
+    /// Reset the limits, the query time, the slice and the stats to the new
+    /// page's ones. `slice` must stay alive until the page ends. It must ask
+    /// for the same columns and the same per-partition limit as the slice
+    /// which the compactor was created with.
+    ///
+    /// If the previous page stopped inside a partition, returns the state of
+    /// that partition, like detach_state(). The caller must feed its
+    /// fragments to the compactor before the rest of the partition, for
+    /// example by pushing them back into the reader. They are the fragments
+    /// which a new reader of the rest of the partition emits first, so the
+    /// page behaves exactly like a page which a new reader serves. Otherwise
+    /// returns a disengaged optional, and the next fragment starts a
+    /// partition. Either way, current_partition() is null until the page
+    /// consumes a fragment.
+    std::optional<detached_compaction_state> start_new_page(uint64_t row_limit,
             uint32_t partition_limit,
             gc_clock::time_point query_time,
-            partition_region next_fragment_region,
-            Consumer& consumer) {
-        _empty_partition = true;
-        _partition_is_live = false;
-        _static_row_live = false;
+            const query::partition_slice& slice) {
+        auto state = do_detach_state();
+        // Like a page which a new reader serves, the page has no position
+        // until it consumes a fragment.
+        _dk.reset();
+        _slice = &slice;
         _row_limit = row_limit;
         _partition_limit = partition_limit;
-        _rows_in_current_partition = 0;
-        _current_partition_limit = std::min(_row_limit, _partition_row_limit);
         _query_time = query_time;
         _stats = {};
-        // A page which continues a partition started on a previous page will
-        // not see the partition-start fragment of said partition, so
-        // consume_new_partition() -- which accounts for the partition in the
-        // page's stats -- will not be called for it. Account for it here
-        // instead, otherwise live_partitions can exceed total_partitions and
-        // dead_partitions() underflows.
-        // A page starting at the partition-end will not emit anything from the
-        // partition, so it is not counted, to avoid misreporting it as a dead
-        // partition.
-        if (next_fragment_region == partition_region::static_row || next_fragment_region == partition_region::clustered) {
-            ++_stats.total_partitions;
-        }
         _stop = stop_iteration::no;
+        return state;
+    }
 
-        noop_compacted_fragments_consumer nc;
+    /// Whether the last page stopped inside the current partition, so that
+    /// the next page continues it. See start_new_page().
+    bool stopped_inside_partition() const {
+        return _dk && _stop;
+    }
 
-        if (next_fragment_region != partition_region::partition_start) {
-            _validator.reset(mutation_fragment_v2::kind::partition_start, position_in_partition_view::for_partition_start(), {});
-        }
-        if (next_fragment_region == partition_region::clustered && _last_static_row) {
-            // Stopping here would cause an infinite loop so ignore return value.
-            consume(*std::exchange(_last_static_row, {}), consumer, nc);
-        }
-        if (_effective_tombstone) {
-            auto rtc = range_tombstone_change(position_in_partition::after_key(_schema, _last_pos), _effective_tombstone);
-            do_consume(std::move(rtc), consumer, nc);
-        }
+    /// The range tombstone which the input stream has open at the current
+    /// position. See detach_state().
+    tombstone input_tombstone() const {
+        return _input_tombstone;
     }
 
     /// Signal to the compactor that the current partition will not be finished.
@@ -703,7 +714,17 @@ public:
     /// allows the compaction state to be stored in the compacted reader.
     /// If the currently compacted partition is exhausted a disengaged optional
     /// is returned -- in this case there is no state to detach.
+    /// The range tombstone is the one the input stream has open, positioned
+    /// right after the last consumed fragment, which is where a new reader of
+    /// the rest of the partition would emit it.
     std::optional<detached_compaction_state> detach_state() && {
+        return do_detach_state();
+    }
+
+    const ::compaction_stats& stats() const { return _stats; }
+
+private:
+    std::optional<detached_compaction_state> do_detach_state() {
         // If we exhausted the partition, there is no need to detach-restore the
         // compaction state.
         // We exhausted the partition if `consume_partition_end()` was called
@@ -718,15 +739,13 @@ public:
             return {};
         }
         partition_start ps(*std::exchange(_dk, std::nullopt), _partition_tombstone);
-        if (_effective_tombstone) {
-            return detached_compaction_state{std::move(ps), std::move(_last_static_row),
-                    range_tombstone_change(position_in_partition::after_key(_schema, _last_pos), _effective_tombstone)};
+        if (_input_tombstone) {
+            return detached_compaction_state{std::move(ps), std::exchange(_last_static_row, std::nullopt),
+                    range_tombstone_change(position_in_partition::after_key(_schema, _last_pos), _input_tombstone)};
         } else {
-            return detached_compaction_state{std::move(ps), std::move(_last_static_row), std::optional<range_tombstone_change>{}};
+            return detached_compaction_state{std::move(ps), std::exchange(_last_static_row, std::nullopt), std::optional<range_tombstone_change>{}};
         }
     }
-
-    const ::compaction_stats& stats() const { return _stats; }
 };
 
 template<compact_for_sstables SSTableCompaction, typename Consumer, typename GCConsumer>

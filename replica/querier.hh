@@ -26,10 +26,16 @@ extern logging::logger qrlogger;
 /// Consume a page worth of data from the reader.
 ///
 /// Uses `compaction_state` for compacting the fragments and `consumer` for
-/// building the results.
-/// Returns a future containing a tuple with the last consumed clustering key,
-/// or std::nullopt if the last row wasn't a clustering row, and whatever the
-/// consumer's `consume_end_of_stream()` method returns.
+/// building the results. `slice` is the page's slice. See
+/// compact_mutation_state::start_new_page().
+///
+/// If the previous page stopped inside a partition, pushes the state of that
+/// partition back into the reader first: the partition start, the static row
+/// and the open range tombstone. The page then reads the same fragments as a
+/// page which a new reader serves from the position after the previous page's
+/// last fragment. See compact_mutation_state::start_new_page().
+///
+/// Returns whatever the consumer's `consume_end_of_stream()` method returns.
 template <typename Consumer>
 requires CompactedFragmentsConsumer<Consumer>
 auto consume_page(mutation_reader& reader,
@@ -39,14 +45,42 @@ auto consume_page(mutation_reader& reader,
         uint64_t row_limit,
         uint32_t partition_limit,
         gc_clock::time_point query_time) {
-    return reader.peek().then([=, &reader, consumer = std::move(consumer)] (
-                mutation_fragment_v2* next_fragment) mutable {
-        const auto next_fragment_region = next_fragment ? next_fragment->position().region() : partition_region::partition_start;
-        compaction_state->start_new_page(row_limit, partition_limit, query_time, next_fragment_region, consumer);
-
-        auto reader_consumer = compact_for_query<Consumer>(compaction_state, std::move(consumer));
-
-        return reader.consume(std::move(reader_consumer));
+    auto state = compaction_state->start_new_page(row_limit, partition_limit, query_time, slice);
+    // Pushes the partition start and the static row back, in front of the
+    // range tombstone, if any.
+    const auto unpop_partition = [&reader] (detached_compaction_state& state) {
+        const auto& s = *reader.schema();
+        if (state.static_row) {
+            reader.unpop_mutation_fragment(mutation_fragment_v2(s, reader.permit(), std::move(*state.static_row)));
+        }
+        reader.unpop_mutation_fragment(mutation_fragment_v2(s, reader.permit(), std::move(state.partition_start)));
+    };
+    if (!state || !state->current_tombstone) {
+        if (state) {
+            unpop_partition(*state);
+        }
+        return reader.consume(compact_for_query<Consumer>(std::move(compaction_state), std::move(consumer)));
+    }
+    // Only the tombstone needs the next fragment.
+    return reader.peek().then([&reader, unpop_partition, compaction_state = std::move(compaction_state), state = std::move(*state),
+            consumer = std::move(consumer)] (mutation_fragment_v2* next_fragment) mutable {
+        const auto& s = *reader.schema();
+        auto& rtc = state.current_tombstone;
+        if (next_fragment && next_fragment->is_range_tombstone_change()
+                && position_in_partition::equal_compare(s)(next_fragment->position(), rtc->position())) {
+            // The tombstone changes right where the page resumes. A new
+            // reader emits only the tombstone after the change there, and
+            // nothing if the change closes the tombstone.
+            if (!next_fragment->as_range_tombstone_change().tombstone()) {
+                reader.pop_mutation_fragment();
+            }
+            rtc.reset();
+        }
+        if (rtc) {
+            reader.unpop_mutation_fragment(mutation_fragment_v2(s, reader.permit(), std::move(*rtc)));
+        }
+        unpop_partition(state);
+        return reader.consume(compact_for_query<Consumer>(std::move(compaction_state), std::move(consumer)));
     });
 }
 
@@ -171,7 +205,9 @@ public:
     }
 
     /// Reads a page. `slice` is the page's slice, which must stay alive until
-    /// the page ends.
+    /// the page ends. It can differ from the querier's own slice only in the
+    /// clustering ranges of the partition which the page continues, and it
+    /// must ask for what remains of them. The cache lookup checks that.
     template <typename Consumer>
     requires CompactedFragmentsConsumer<Consumer>
     auto consume_page(Consumer&& consumer,
@@ -213,6 +249,25 @@ public:
             return {};
         }
         return full_position_view(dk->key(), _compaction_state->current_position());
+    }
+
+    /// Whether the last page stopped inside the partition of
+    /// current_position(). Otherwise the reader is at the next partition.
+    bool stopped_inside_partition() const {
+        return _compaction_state->stopped_inside_partition();
+    }
+
+    /// The range tombstone which the reader has open at current_position().
+    tombstone input_tombstone() const {
+        return _compaction_state->input_tombstone();
+    }
+
+    /// The range and the slice which the reader was created with.
+    const dht::partition_range& range() const {
+        return *_range;
+    }
+    const query::partition_slice& slice() const {
+        return *_slice;
     }
 };
 

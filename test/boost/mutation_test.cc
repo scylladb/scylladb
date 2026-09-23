@@ -3759,11 +3759,10 @@ SEASTAR_THREAD_TEST_CASE(test_compactor_range_tombstone_spanning_many_pages) {
     }
 }
 
-// Reproduces the underflow of compaction_stats::dead_partitions() on pages
-// which continue a partition started on a previous page: such pages don't see
-// a partition-start fragment, so total_partitions is not incremented, while
-// live_partitions is (from the first emitted row), resulting in
-// dead_partitions() == total_partitions - live_partitions underflowing.
+// Checks compaction_stats::dead_partitions() on pages which continue a
+// partition started on a previous page. Such a page must count the partition
+// in total_partitions, as it does in live_partitions once it emits a row, or
+// dead_partitions() (== total_partitions - live_partitions) underflows.
 SEASTAR_THREAD_TEST_CASE(test_compactor_partition_stats_of_partition_spanning_many_pages) {
     simple_schema ss;
     auto pk = ss.make_pkey();
@@ -3817,17 +3816,19 @@ SEASTAR_THREAD_TEST_CASE(test_compactor_partition_stats_of_partition_spanning_ma
                 stats.total_partitions, stats.live_partitions, stats.dead_partitions(),
                 stats.clustering_rows.total(), stats.clustering_rows.live, stats.clustering_rows.dead);
 
+        // A partition can never be live without being counted in the total.
+        BOOST_REQUIRE_LE(stats.live_partitions, stats.total_partitions);
+
         // The partition is live on every page it has rows on, be it the page
         // it was started on or a page continuing it.
         if (stats.clustering_rows.total()) {
             BOOST_REQUIRE_EQUAL(stats.live_partitions, 1);
             BOOST_REQUIRE_EQUAL(stats.total_partitions, 1);
+            BOOST_REQUIRE_EQUAL(stats.dead_partitions(), 0);
             ++pages_with_rows;
+        } else {
+            BOOST_REQUIRE_EQUAL(stats.dead_partitions(), 1);
         }
-        // A partition can never be live without being counted in the total.
-        BOOST_REQUIRE_LE(stats.live_partitions, stats.total_partitions);
-        BOOST_REQUIRE_EQUAL(stats.dead_partitions(), 0);
-
         ++pages;
     }
 
