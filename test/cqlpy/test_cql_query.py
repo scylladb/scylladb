@@ -1906,3 +1906,14 @@ def test_allow_filtering_contains(cql, test_keyspace):
             ({'x': 'xyz', 'y1': 'abc'},), ({'d': 'def', 'y1': 'abc'},)]
         assert list(cql.execute(f"SELECT c2, v FROM {table} WHERE v CONTAINS KEY 'y1' AND c2 CONTAINS 5 ALLOW FILTERING")) == [
             ({1, 5}, {'x': 'xyz', 'y1': 'abc'})]
+
+
+def test_in_restriction_on_not_last_partition_key(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "a int,b int,c int,d int,PRIMARY KEY ((a, b), c)") as table:
+        for a, b, c, d in [(1, 1, 1, 100), (1, 1, 2, 200), (1, 1, 3, 300), (1, 2, 1, 300), (1, 3, 1, 1300), (1, 3, 2, 1400),
+                           (2, 3, 2, 1400), (2, 1, 2, 1400), (2, 1, 3, 1300), (2, 2, 3, 1300), (3, 1, 3, 1300)]:
+            cql.execute(f"INSERT INTO {table} (a,b,c,d) VALUES ({a},{b},{c},{d})")
+        assert sorted(cql.execute(f"SELECT * FROM {table} WHERE a IN (1,2) AND b IN (2,3) AND c>=2 AND c<=3")) == sorted([
+            (1, 3, 2, 1400), (2, 2, 3, 1300), (2, 3, 2, 1400)])
+        assert sorted(cql.execute(f"SELECT * FROM {table} WHERE a IN (1,3) AND b=1 AND c>=2 AND c<=3")) == sorted([
+            (1, 1, 2, 200), (1, 1, 3, 300), (3, 1, 3, 1300)])
