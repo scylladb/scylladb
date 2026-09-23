@@ -1444,3 +1444,23 @@ def test_order_by_validate(cql, test_keyspace):
             cql.execute(f"select c2, r1 from {table} where p1 = 0 order by c1 desc, c2 asc")
         with pytest.raises(InvalidRequest):
             cql.execute(f"select c2, r1 from {table} order by c1 asc")
+
+
+def test_multi_column_restrictions(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p1 int, c1 int, c2 int, c3 int, r1 int, PRIMARY KEY (p1, c1, c2, c3)") as table:
+        r1 = 0
+        for c1 in range(2):
+            for c2 in range(2):
+                for c3 in range(2):
+                    cql.execute(f"insert into {table} (p1, c1, c2, c3, r1) values (0, {c1}, {c2}, {c3}, {r1})")
+                    r1 += 1
+        def check(where, expected):
+            assert list(cql.execute(f"select r1 from {table} where p1 = 0 and {where}")) == [(x,) for x in expected]
+        check("(c1, c2, c3) = (0, 1, 1)", [3])
+        check("(c1, c2) = (0, 1)", [2, 3])
+        check("(c1, c2, c3) in ((0, 1, 0), (1, 0, 1), (0, 1, 0))", [2, 5])
+        check("(c1, c2) in ((0, 1), (1, 0), (0, 1))", [2, 3, 4, 5])
+        check("(c1, c2, c3) >= (1, 0, 1)", [5, 6, 7])
+        check("(c1, c2, c3) >= (0, 1, 1) and (c1, c2, c3) < (1, 1, 0)", [3, 4, 5])
+        check("(c1, c2) >= (0, 1) and (c1, c2, c3) < (1, 0, 1)", [2, 3, 4])
+        check("(c1, c2, c3) > (0, 1, 0) and (c1, c2) <= (0, 1)", [3])
