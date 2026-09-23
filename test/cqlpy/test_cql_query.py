@@ -2868,3 +2868,9 @@ def test_clustering_filtering_3(cql, test_keyspace, compaction_strategy):
             flush(cql, table)
             assert list(cql.execute(f"SELECT v FROM {table} WHERE pk='a' AND ck=0 ALLOW FILTERING BYPASS CACHE")) == []
             assert list(cql.execute(f"SELECT v FROM {table} BYPASS CACHE")) == [('a1',), ('b0',)]
+
+
+def test_counter_column_added_into_non_counter_table(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "pk int, ck int, PRIMARY KEY(pk, ck)") as table:
+        with pytest.raises(ConfigurationException):
+            cql.execute(f'ALTER TABLE {table} ADD "c" counter')

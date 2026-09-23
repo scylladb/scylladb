@@ -510,15 +510,6 @@ SEASTAR_TEST_CASE(test_internal_schema_changes_on_a_distributed_table) {
     });
 }
 
-SEASTAR_TEST_CASE(test_counter_column_added_into_non_counter_table) {
-    return do_with_cql_env_thread([] (cql_test_env& e) {
-        cquery_nofail(e, "CREATE TABLE t (pk int, ck int, PRIMARY KEY(pk, ck))");
-
-        BOOST_REQUIRE_THROW(e.execute_cql("ALTER TABLE t ADD \"c\" counter;").get(),
-                exceptions::configuration_exception);
-    });
-}
-
 SEASTAR_THREAD_TEST_CASE(test_invalid_using_timestamps) {
     do_with_cql_env_thread([] (cql_test_env& e) {
         auto now_nano = std::chrono::duration_cast<std::chrono::nanoseconds>(db_clock::now().time_since_epoch()).count();
