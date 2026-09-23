@@ -1103,3 +1103,20 @@ def test_writetime_and_ttl(cql, test_keyspace):
         # writetime() of a non-frozen collection is not allowed
         with pytest.raises(InvalidRequest):
             cql.execute(f"SELECT writetime(c) FROM {table}")
+
+
+# max_ttl in Scylla is 20 years (gc_clock.hh)
+max_ttl = 20 * 365 * 24 * 60 * 60
+
+
+def test_time_overflow_with_default_ttl(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "p1 varchar primary key, i int", f"with default_time_to_live = {max_ttl}") as table:
+        def verify(value, bypass_cache):
+            bypass = "bypass cache" if bypass_cache else ""
+            assert list(cql.execute(f"select i from {table} where p1 = 'key1' {bypass}")) == [(value,)]
+        cql.execute(f"insert into {table} (p1, i) values ('key1', 1)")
+        verify(1, False)
+        verify(1, True)
+        cql.execute(f"update {table} set i = 2 where p1 = 'key1'")
+        verify(2, True)
+        verify(2, False)

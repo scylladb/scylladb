@@ -254,32 +254,6 @@ SEASTAR_TEST_CASE(test_alter_node_oriented_scopes_reject_unknown_targets) {
     });
 }
 
-SEASTAR_TEST_CASE(test_time_overflow_with_default_ttl) {
-    return do_with_cql_env_thread([] (cql_test_env& e) {
-        auto verify = [&e] (int value, bool bypass_cache) -> future<> {
-            auto sq = format("select i from cf where p1 = 'key1' {};", bypass_cache ? "bypass cache" : "");
-            return e.execute_cql(sq).then([value] (shared_ptr<cql_transport::messages::result_message> msg) {
-                assert_that(msg).is_rows()
-                    .with_size(1)
-                    .with_row({
-                         {int32_type->decompose(value)},
-                     });
-            });
-        };
-
-        auto cr = format("create table cf (p1 varchar primary key, i int) with default_time_to_live = {:d};", max_ttl.count());
-        e.execute_cql(cr).get();
-        auto q = format("insert into cf (p1, i) values ('key1', 1);");
-        e.execute_cql(q).get();
-        require_column_has_value(e, "cf", {sstring("key1")}, {}, "i", 1).get();
-        verify(1, false).get();
-        verify(1, true).get();
-        e.execute_cql("update cf set i = 2 where p1 = 'key1';").get();
-        verify(2, true).get();
-        verify(2, false).get();
-    });
-}
-
 SEASTAR_TEST_CASE(test_time_overflow_using_ttl) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         auto verify = [&e] (int value, bool bypass_cache) -> future<> {
