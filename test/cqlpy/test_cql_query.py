@@ -3418,3 +3418,29 @@ def test_in_bind_variable_name_lowercase_operator(cql, test_keyspace, scylla_onl
         with new_test_table(cql, test_keyspace, "p int, c int, v int, PRIMARY KEY (p, c)") as table:
             assert prepared_variable_names(cql, f"SELECT * FROM {table} WHERE p = ? AND c IN ?") == "p, in(c)"
             assert prepared_variable_names(cql, f"UPDATE {table} SET v = 1 WHERE p = 0 AND c = 0 IF v IN ?") == "in(v)"
+
+
+def test_setting_synchronous_updates_property(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "k int, v int, primary key (k)") as base:
+        # Check if setting synchronous_updates property works with CREATE
+        # MATERIALIZED VIEW and ALTER MATERIALIZED VIEW statements.
+        mv = f"{test_keyspace}.{unique_name()}"
+        cql.execute(f"create materialized view {mv} as select * from {base} "
+                    "where k is not null and v is not null primary key (v, k) "
+                    "with synchronous_updates = true")
+        try:
+            cql.execute(f"alter materialized view {mv} with synchronous_updates = true")
+            cql.execute(f"alter materialized view {mv} with synchronous_updates = false")
+        finally:
+            cql.execute(f"drop materialized view {mv}")
+
+        # Check if index can be altered
+        cql.execute(f"create index on {base} (v)")
+        cql.execute(f"alter materialized view {base}_v_idx_index with synchronous_updates = true")
+
+        # Setting synchronous_updates in CREATE TABLE or ALTER TABLE is
+        # invalid
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"create table {test_keyspace}.{unique_name()} (k int, v int, primary key (k)) with synchronous_updates = true")
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"alter table {base} with synchronous_updates = true")
