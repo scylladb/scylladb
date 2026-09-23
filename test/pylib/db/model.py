@@ -41,6 +41,22 @@ class Metric:
 
 
 @define
+class SchedulerRun:
+    """Which scheduler ran a session, and what it decided.
+
+    ``config`` holds that as JSON: the xdist parameters the run ended up with,
+    plus whatever the scheduler reported about its own setup. It is one column
+    so that a scheduler with settings of its own needs no schema change.
+    """
+    host_id: str
+    name: str
+    version: str
+    plugin: str | None
+    config: str
+    timestamp: datetime
+
+
+@define
 class SystemResourceMetric:
     host_id: str
     cpu: float
