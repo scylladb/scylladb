@@ -589,6 +589,28 @@ SEASTAR_THREAD_TEST_CASE(test_witnesses_of_frontier_reconciliation) {
     });
 }
 
+// Without read_frontiers, the pre-READ_FRONTIERS resolver can return a short
+// page without a partition and without a cursor. Replica 0 holds the deletion
+// of partition 1, and replica 1 holds a row which it shadows. Both mutation
+// pages stop short on the byte limit. The resolver takes replica 0's page,
+// which has no clustering row, to stop before the partition's rows, and trims
+// the partition away. The pager then fails the page with an internal error,
+// which the harness allows without the feature.
+SEASTAR_THREAD_TEST_CASE(test_page_without_partition_or_cursor_fails) {
+    with_harness([] (harness& hs) {
+        auto o = run_and_check(hs, read_case{
+            placed_history{
+                {regular_cell_write{1, 1, regular_column::v1, std::nullopt, 12, lifetime::permanent}, 0b10},
+                {range_deletion{3, std::nullopt, std::nullopt, 13}, 0b1},
+                {partition_deletion{1, 21}, 0b1},
+            },
+            select_query{.select_s = false, .select_v1 = false, .select_v2 = false},
+            read_options{.replica_count = 2, .page_size = 2, .page_size_in_bytes = 3, .read_frontiers = false},
+        });
+        BOOST_REQUIRE(o.allowed_error);
+    });
+}
+
 namespace {
 
 // 1 to 4 replicas, of which all but one may be extra replicas.
