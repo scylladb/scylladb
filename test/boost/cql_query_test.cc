@@ -112,29 +112,6 @@ SEASTAR_TEST_CASE(test_alter_cluster_without_auth_enabled_is_allowed) {
     });
 }
 
-// CREATE TABLE ... WITH <config_key> = ... must persist the override, not accept it and
-// silently drop it. cf_prop_defs::validate() allow-lists registry keys for every statement
-// that uses cf_prop_defs, but only ALTER TABLE used to write them, so DESCRIBE output
-// (which folds the effective value into CREATE TABLE) could not be replayed without losing
-// every table-scope override.
-SEASTAR_TEST_CASE(test_create_table_persists_cluster_config_property) {
-    return do_with_cql_env_thread([](cql_test_env& e) {
-        e.execute_cql("CREATE KEYSPACE ks_cfg_create WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}").get();
-        e.execute_cql("CREATE TABLE ks_cfg_create.tbl (pk int PRIMARY KEY) WITH auto_repair_enabled = TRUE").get();
-
-        // Stored in the out-of-band configs column, canonicalized to lowercase.
-        auto rows = e.execute_cql("SELECT configs['auto_repair_enabled'] FROM system_schema.scylla_tables "
-                                  "WHERE keyspace_name = 'ks_cfg_create' AND table_name = 'tbl'").get();
-        assert_that(rows).is_rows().with_rows({{utf8_type->decompose(sstring("true"))}});
-
-        // A table created without the property stores nothing.
-        e.execute_cql("CREATE TABLE ks_cfg_create.plain (pk int PRIMARY KEY)").get();
-        auto plain_rows = e.execute_cql("SELECT configs['auto_repair_enabled'] FROM system_schema.scylla_tables "
-                                        "WHERE keyspace_name = 'ks_cfg_create' AND table_name = 'plain'").get();
-        assert_that(plain_rows).is_rows().with_rows({{std::nullopt}});
-    });
-}
-
 // Regression test for the superuser check on node-oriented ALTER statements: it must be
 // awaited, not resolved with a blocking future::get(). With authentication enabled and the
 // permissions cache disabled, has_superuser() returns a non-ready future, so a blocking get()

@@ -195,3 +195,22 @@ def test_cluster_config_quoted_null_is_a_value_not_the_removal_keyword(cql, scyl
         cql.execute(f"ALTER TABLE {ks}.tbl WITH auto_repair_enabled = null")
         assert fetch_configs(cql, table_configs) == [None]
         assert fetch_configs(cql, keyspace_configs) == [{'auto_repair_enabled': 'true'}]
+
+
+# CREATE TABLE ... WITH <config_key> = ... must persist the override, not accept it and
+# silently drop it. cf_prop_defs::validate() allow-lists registry keys for every statement
+# that uses cf_prop_defs, but only ALTER TABLE used to write them, so DESCRIBE output
+# (which folds the effective value into CREATE TABLE) could not be replayed without losing
+# every table-scope override.
+def test_create_table_persists_cluster_config_property(cql, scylla_only):
+    with new_config_test_keyspace(cql) as ks:
+        cql.execute(f"CREATE TABLE {ks}.tbl (pk int PRIMARY KEY) WITH auto_repair_enabled = TRUE")
+
+        # Stored in the out-of-band configs column, canonicalized to lowercase.
+        assert list(cql.execute(f"SELECT configs['auto_repair_enabled'] FROM system_schema.scylla_tables "
+                                f"WHERE keyspace_name = '{ks}' AND table_name = 'tbl'")) == [('true',)]
+
+        # A table created without the property stores nothing.
+        cql.execute(f"CREATE TABLE {ks}.plain (pk int PRIMARY KEY)")
+        assert list(cql.execute(f"SELECT configs['auto_repair_enabled'] FROM system_schema.scylla_tables "
+                                f"WHERE keyspace_name = '{ks}' AND table_name = 'plain'")) == [(None,)]
