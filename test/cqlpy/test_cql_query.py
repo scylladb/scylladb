@@ -1791,3 +1791,14 @@ def test_reversed_slice_with_many_clustering_ranges(cql, test_keyspace, scylla_o
         # determining the disk read-range upper bound.
         rows = list(cql.execute(f"SELECT * FROM {table} WHERE pk = {pk} and ck >= {selected_cks[0]} and ck <= {selected_cks[1]} ORDER BY ck DESC BYPASS CACHE"))
         assert rows == [(pk, ck, value) for ck in reversed(range(selected_cks[0], selected_cks[1] + 1))]
+
+
+def test_query_with_range_tombstones(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "pk int, ck int, v int, PRIMARY KEY (pk, ck)") as table:
+        for i in [0, 2, 4, 5, 6]:
+            cql.execute(f"INSERT INTO {table} (pk, ck, v) VALUES (0, {i}, {i})")
+        cql.execute(f"DELETE FROM {table} WHERE pk = 0 AND ck >= 1 AND ck <= 3")
+        cql.execute(f"DELETE FROM {table} WHERE pk = 0 AND ck > 4 AND ck <= 8")
+        cql.execute(f"DELETE FROM {table} WHERE pk = 0 AND ck > 0 AND ck <= 1")
+        assert list(cql.execute(f"SELECT v FROM {table} WHERE pk = 0 ORDER BY ck DESC")) == [(4,), (0,)]
+        assert list(cql.execute(f"SELECT v FROM {table} WHERE pk = 0")) == [(0,), (4,)]
