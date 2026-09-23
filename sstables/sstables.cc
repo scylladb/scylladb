@@ -2017,6 +2017,13 @@ void sstable::write_filter() {
     _components_digests.map[component_type::Filter] = digest;
 }
 
+std::optional<hll::HyperLogLog> sstable::get_cardinality_estimator() const {
+    if (!_components->statistics.contents.contains(metadata_type::Compaction)) {
+        return std::nullopt;
+    }
+    return hll::HyperLogLog::from_bytes(get_compaction_metadata().cardinality.elements);
+}
+
 void sstable::maybe_rebuild_filter_from_index(uint64_t num_partitions) {
     if (!has_component(component_type::Filter)) {
         return;
