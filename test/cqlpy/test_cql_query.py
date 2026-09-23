@@ -1681,3 +1681,21 @@ def test_collections_of_collections(cql, test_keyspace):
         check({frozenset({1, 2}): 7, frozenset({5, 6}): 9})
         cql.execute(f"update {table} set v = v - {{{{1, 2}}, {{5}}}} where p1 = 1")
         check({frozenset({5, 6}): 9})
+
+
+def test_result_order(cql, test_keyspace, compact_storage):
+    with new_test_table(cql, test_keyspace, "p1 int, c1 text, r1 int, PRIMARY KEY (p1, c1)", "with compact storage") as table:
+        cql.execute(f"insert into {table} (p1, c1, r1) values (1, 'z', 1)")
+        cql.execute(f"insert into {table} (p1, c1, r1) values (1, 'bbbb', 2)")
+        cql.execute(f"insert into {table} (p1, c1, r1) values (1, 'a', 3)")
+        cql.execute(f"insert into {table} (p1, c1, r1) values (1, 'aaa', 4)")
+        cql.execute(f"insert into {table} (p1, c1, r1) values (1, 'bb', 5)")
+        cql.execute(f"insert into {table} (p1, c1, r1) values (1, 'cccc', 6)")
+        assert list(cql.execute(f"select * from {table} where p1 = 1")) == [
+            (1, 'a', 3),
+            (1, 'aaa', 4),
+            (1, 'bb', 5),
+            (1, 'bbbb', 2),
+            (1, 'cccc', 6),
+            (1, 'z', 1),
+        ]
