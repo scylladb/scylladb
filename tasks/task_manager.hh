@@ -288,8 +288,11 @@ public:
         tasks::is_user_task _is_user_task;
 
         action_fn _action;
-        progress_fn _progress_fn;
-        workload_fn _workload_fn;
+        // The callbacks that report the task's progress are shared because a status
+        // query can still be inside one when the task releases its resources.
+        // A callback that was not given holds no pointer at all.
+        lw_shared_ptr<progress_fn> _progress_fn;
+        lw_shared_ptr<workload_fn> _workload_fn;
         abort_fn _abort_fn;
         finalize_fn _finalizer;
 
@@ -314,8 +317,8 @@ public:
             tasks::is_internal is_internal,
             tasks::is_user_task is_user_task,
             action_fn action,
-            progress_fn progress_fn,
-            workload_fn workload_fn,
+            lw_shared_ptr<progress_fn> progress_fn,
+            lw_shared_ptr<workload_fn> workload_fn,
             abort_fn abort_fn,
             finalize_fn finalizer) noexcept;
 
