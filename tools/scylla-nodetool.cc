@@ -2609,12 +2609,19 @@ void migrate_to_tablets_status_operation(scylla_rest_client& client, const bpo::
     if (!nodes.Empty()) {
         fmt::print(std::cout, "\nNodes:\n");
         Tabulate table;
-        table.add("Host ID", "Status");
+        table.add("Host ID", "Address", "Status");
         for (const auto& node : nodes) {
             auto current = rjson::to_string_view(node["current_mode"]);
             auto intended = rjson::to_string_view(node["intended_mode"]);
+            // The server reports an empty address when the address map
+            // doesn't know the node.
+            std::string address(rjson::to_string_view(node["endpoint"]));
+            if (address.empty()) {
+                address = "?";
+            }
             table.add(
                 std::string(rjson::to_string_view(node["host_id"])),
+                std::move(address),
                 std::string(node_status(current, intended)));
         }
         table.print();
