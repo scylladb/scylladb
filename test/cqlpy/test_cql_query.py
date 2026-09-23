@@ -3149,3 +3149,44 @@ def test_parallelized_select_counter_type(cql, test_keyspace, scylla_only):
         assert list(cql.execute(f"SELECT MAX(c) FROM {table}")) == [(4,)]
         assert list(cql.execute(f"SELECT AVG(c) FROM {table}")) == [(3,)]
         assert parallelized_count() == 4
+
+
+# It's pointless from performance pov to parallelize
+# aggregation queries which reads only single partition.
+def test_single_partition_aggregation_is_not_parallelized(cql, test_keyspace, scylla_only):
+    value_count = 10
+    with parallelized_aggregation_enabled(cql) as parallelized_count:
+        with new_test_table(cql, test_keyspace, "pk int, ck int, col int, PRIMARY KEY (pk, ck)") as table:
+            for pk in range(2):
+                for c in range(value_count):
+                    cql.execute(f"INSERT INTO {table} (pk, ck, col) VALUES ({pk}, {c}, {c})")
+
+            assert list(cql.execute(f"SELECT COUNT(*) FROM {table} WHERE pk = 1")) == [(value_count,)]
+            assert parallelized_count() == 0
+
+            assert list(cql.execute(f"SELECT COUNT(*) FROM {table} WHERE pk = 1 AND ck = 1")) == [(1,)]
+            assert parallelized_count() == 0
+
+            # We don't check value of count(*) here but only if it wasn't parallelized
+            cql.execute(f"SELECT COUNT(*) FROM {table} WHERE token(pk) = 1")
+            assert parallelized_count() == 0
+
+            assert list(cql.execute(f"SELECT COUNT(*) FROM {table} WHERE pk = 1 AND pk = 2")) == [(0,)]
+            assert parallelized_count() == 0
+
+        with new_test_table(cql, test_keyspace, "pk1 int, pk2 int, ck int, col int, PRIMARY KEY((pk1, pk2), ck)") as table2:
+            for pk1 in range(2):
+                for pk2 in range(2):
+                    for c in range(value_count):
+                        cql.execute(f"INSERT INTO {table2} (pk1, pk2, ck, col) VALUES ({pk1}, {pk2}, {c}, {c})")
+
+            assert list(cql.execute(f"SELECT COUNT(*) FROM {table2} WHERE pk1 = 1 AND pk2 = 0")) == [(value_count,)]
+            assert parallelized_count() == 0
+
+            # Query with only partly restricted partition key requires `ALLOW FILTERING` clause
+            # and we don't parallelize queries which need filtering.
+            # See issue #19369.
+            # (The C++ test saw an extra pk1 column in the internal result set, which
+            # is used for filtering but isn't sent to the client.)
+            assert list(cql.execute(f"SELECT COUNT(*) FROM {table2} WHERE pk1 = 1 ALLOW FILTERING")) == [(value_count * 2,)]
+            assert parallelized_count() == 0
