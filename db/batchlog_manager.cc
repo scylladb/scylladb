@@ -13,6 +13,7 @@
 #include <seastar/core/future-util.hh>
 #include <seastar/core/do_with.hh>
 #include <seastar/core/semaphore.hh>
+#include <seastar/core/timed_out_error.hh>
 #include <seastar/core/metrics.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/sleep.hh>
@@ -35,6 +36,7 @@
 #include "cql3/untyped_result_set.hh"
 #include "service_permit.hh"
 #include "cql3/query_processor.hh"
+#include "exceptions/exceptions.hh"
 #include "replica/database.hh"
 
 static logging::logger blogger("batchlog_manager");
@@ -60,21 +62,22 @@ db::batchlog_manager::batchlog_manager(cql3::query_processor& qp, db::system_key
     });
 }
 
-future<db::all_batches_replayed> db::batchlog_manager::do_batch_log_replay(post_replay_cleanup cleanup) {
-    return container().invoke_on(0, [cleanup] (auto& bm) -> future<db::all_batches_replayed> {
+future<db::all_batches_replayed> db::batchlog_manager::do_batch_log_replay(post_replay_cleanup cleanup,
+        db::timeout_clock::time_point deadline) {
+    return container().invoke_on(0, [cleanup, deadline] (auto& bm) -> future<db::all_batches_replayed> {
         auto gate_holder = bm._gate.hold();
-        auto sem_units = co_await get_units(bm._sem, 1);
+        auto sem_units = co_await get_units(bm._sem, 1, deadline);
 
         auto dest = bm._cpu++ % smp::count;
         blogger.debug("Batchlog replay on shard {}: starts", dest);
         auto last_replay = gc_clock::now();
         all_batches_replayed all_replayed = all_batches_replayed::yes;
         if (dest == 0) {
-            all_replayed = co_await bm.replay_all_failed_batches(cleanup);
+            all_replayed = co_await bm.replay_all_failed_batches(cleanup, deadline);
         } else {
-            all_replayed = co_await bm.container().invoke_on(dest, [cleanup] (auto& bm) {
-                return with_gate(bm._gate, [&bm, cleanup] {
-                    return bm.replay_all_failed_batches(cleanup);
+            all_replayed = co_await bm.container().invoke_on(dest, [cleanup, deadline] (auto& bm) {
+                return with_gate(bm._gate, [&bm, cleanup, deadline] {
+                    return bm.replay_all_failed_batches(cleanup, deadline);
                 });
             });
         }
@@ -164,7 +167,22 @@ db_clock::duration db::batchlog_manager::get_batch_log_timeout() const {
     return _write_request_timeout * 2;
 }
 
-future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cleanup) {
+// True for the exceptions a step bounded by the replay deadline fails with:
+// a batchlog read, a local batchlog write or the rate limiter wait
+// (semaphore_timed_out derives from timed_out_error).
+static bool is_deadline_timeout(std::exception_ptr ep) {
+    try {
+        std::rethrow_exception(std::move(ep));
+    } catch (const exceptions::read_timeout_exception&) {
+        return true;
+    } catch (const timed_out_error&) {
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cleanup, db::timeout_clock::time_point deadline) {
     typedef db_clock::rep clock_type;
 
     db::all_batches_replayed all_replayed = all_batches_replayed::yes;
@@ -174,15 +192,26 @@ future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches
     auto limiter = make_lw_shared<utils::rate_limiter>(throttle);
 
     auto schema = _qp.db().find_schema(system_keyspace::NAME, system_keyspace::BATCHLOG);
-    auto delete_batch = [this, schema = std::move(schema)] (utils::UUID id) {
+    auto delete_batch = [this, schema = std::move(schema), &all_replayed, deadline] (utils::UUID id) -> future<> {
         auto key = partition_key::from_singular(*schema, id);
         mutation m(schema, key);
         auto now = service::client_state(service::client_state::internal_tag()).get_timestamp();
         m.partition().apply_delete(*schema, clustering_key_prefix::make_empty(), tombstone(now, gc_clock::now()));
-        return _qp.proxy().mutate_locally(m, tracing::trace_state_ptr(), db::commitlog::force_sync::no);
+        try {
+            co_await _qp.proxy().mutate_locally(m, tracing::trace_state_ptr(), db::commitlog::force_sync::no, deadline);
+        } catch (const timed_out_error&) {
+            // The entry stays as it was, so the batch is replayed again next time.
+            blogger.debug("Stopping replay of {}: deadline expired while deleting its batchlog entry", id);
+            all_replayed = all_batches_replayed::no;
+        }
     };
 
-    auto batch = [this, limiter, delete_batch = std::move(delete_batch), &all_replayed](const cql3::untyped_result_set::row& row) -> future<stop_iteration> {
+    auto batch = [this, limiter, delete_batch = std::move(delete_batch), &all_replayed, deadline](const cql3::untyped_result_set::row& row) -> future<stop_iteration> {
+        if (db::timeout_clock::now() >= deadline) {
+            blogger.debug("Stopping batchlog replay: deadline expired, remaining batches are left for the next replay");
+            all_replayed = all_batches_replayed::no;
+            co_return stop_iteration::yes;
+        }
         auto written_at = row.get_as<db_clock::time_point>("written_at");
         auto id = row.get_as<utils::UUID>("id");
         // enough time for the actual write + batchlog entry mutation delivery (two separate requests).
@@ -263,9 +292,11 @@ future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches
                     // Our normal write path does not add much redundancy to the dispatch, and rate is handled after send
                     // in both cases.
                     // FIXME: verify that the above is reasonably true.
-                    co_await limiter->reserve(size);
+                    // Neither the rate limiter nor the write may wait past the
+                    // deadline: the caller has given us until then to finish.
+                    co_await limiter->reserve(size, deadline);
                         _stats.write_attempts += mutations.size();
-                        auto timeout = db::timeout_clock::now() + write_timeout;
+                        auto timeout = std::min(db::timeout_clock::now() + write_timeout, deadline);
                         co_await _qp.proxy().send_batchlog_replay_to_all_replicas(std::move(mutations), timeout);
                 }
             }
@@ -273,6 +304,12 @@ future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches
             // should probably ignore and drop the batch
         } catch (const data_dictionary::no_such_column_family&) {
             // As above -- we should drop the batch if the table doesn't exist anymore.
+        } catch (const semaphore_timed_out&) {
+            // The deadline passed while waiting for the rate limiter. The batch
+            // was not attempted, so keep it for the next replay as is.
+            blogger.debug("Stopping replay of {}: deadline expired while waiting for the replay rate limiter", id);
+            all_replayed = all_batches_replayed::no;
+            co_return stop_iteration::no;
         } catch (...) {
             blogger.warn("Replay failed (will retry): {}", std::current_exception());
             all_replayed = all_batches_replayed::no;
@@ -287,24 +324,30 @@ future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches
         co_return stop_iteration::no;
     };
 
-    co_await seastar::with_gate(_gate, [this, cleanup, batch = std::move(batch)] () mutable -> future<> {
+    co_await seastar::with_gate(_gate, [this, cleanup, batch = std::move(batch), &all_replayed, deadline] () mutable -> future<> {
         blogger.debug("Started replayAllFailedBatches (cpu {})", this_shard_id());
         co_await utils::get_local_injector().inject("add_delay_to_batch_replay", std::chrono::milliseconds(1000));
-        co_await _qp.query_internal(
-                format("SELECT id, data, written_at, version FROM {}.{} BYPASS CACHE", system_keyspace::NAME, system_keyspace::BATCHLOG),
-                db::consistency_level::ONE,
-                {},
-                page_size,
-                std::move(batch)).then([this, cleanup] {
-            if (cleanup == post_replay_cleanup::no) {
-                return make_ready_future<>();
+        try {
+            co_await _qp.query_internal(
+                    format("SELECT id, data, written_at, version FROM {}.{} BYPASS CACHE", system_keyspace::NAME, system_keyspace::BATCHLOG),
+                    db::consistency_level::ONE,
+                    {},
+                    page_size,
+                    deadline,
+                    std::move(batch));
+        } catch (...) {
+            if (!is_deadline_timeout(std::current_exception())) {
+                throw;
             }
+            blogger.debug("Stopping batchlog replay: deadline expired while reading the batchlog");
+            all_replayed = all_batches_replayed::no;
+        }
+        if (cleanup == post_replay_cleanup::yes) {
             // Replaying batches could have generated tombstones, flush to disk,
             // where they can be compacted away.
-            return replica::database::flush_table_on_all_shards(_qp.proxy().get_db(), system_keyspace::NAME, system_keyspace::BATCHLOG);
-        }).then([] {
-            blogger.debug("Finished replayAllFailedBatches");
-        });
+            co_await replica::database::flush_table_on_all_shards(_qp.proxy().get_db(), system_keyspace::NAME, system_keyspace::BATCHLOG);
+        }
+        blogger.debug("Finished replayAllFailedBatches with all_replayed: {}", all_replayed);
     });
 
     co_return all_replayed;
