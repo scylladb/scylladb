@@ -1063,3 +1063,30 @@ def test_set_insert_update(cql, test_keyspace):
         cql.execute(f"insert into {table} (p1, set1) values ('key1', {{}})")
         # Empty non-frozen set is indistinguishable from NULL
         check(None)
+
+
+def test_list_insert_update(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p1 varchar primary key, list1 list<int>") as table:
+        def check(expected):
+            assert list(cql.execute(f"select list1 from {table} where p1 = 'key1'")) == [(expected,)]
+        cql.execute(f"insert into {table} (p1, list1) values ('key1', [ 1001 ])")
+        check([1001])
+        cql.execute(f"update {table} set list1 = [ 1002, 1003 ] where p1 = 'key1'")
+        check([1002, 1003])
+        cql.execute(f"update {table} set list1[1] = 2003 where p1 = 'key1'")
+        check([1002, 2003])
+        cql.execute(f"update {table} set list1 = list1 - [1002, 2004] where p1 = 'key1'")
+        check([2003])
+        assert list(cql.execute(f"select * from {table} where p1 = 'key1'")) == [('key1', [2003])]
+        cql.execute(f"update {table} set list1 = [2008, 2009, 2010] where p1 = 'key1'")
+        cql.execute(f"delete list1[1] from {table} where p1 = 'key1'")
+        check([2008, 2010])
+        cql.execute(f"update {table} set list1 = list1 + [2012, 2019] where p1 = 'key1'")
+        check([2008, 2010, 2012, 2019])
+        cql.execute(f"update {table} set list1 = [2001, 2002] + list1 where p1 = 'key1'")
+        check([2001, 2002, 2008, 2010, 2012, 2019])
+        cql.execute(f"insert into {table} (p1, list1) values ('key1', null)")
+        check(None)
+        cql.execute(f"insert into {table} (p1, list1) values ('key1', [])")
+        # Empty non-frozen list is indistinguishable from NULL
+        check(None)
