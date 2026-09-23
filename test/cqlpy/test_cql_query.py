@@ -2278,3 +2278,10 @@ def test_int_avg(cql, test_keyspace):
         cql.execute(f"insert into {table} (pk, val) values ('a', 2147483647)")
         cql.execute(f"insert into {table} (pk, val) values ('b', 2147483647)")
         assert list(cql.execute(f"select avg(val) from {table}")) == [(2147483647,)]
+
+
+def test_bigint_avg(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "pk text, val bigint, primary key(pk)") as table:
+        cql.execute(f"insert into {table} (pk, val) values ('x', 9223372036854775807)")
+        cql.execute(f"insert into {table} (pk, val) values ('y', 9223372036854775807)")
+        assert list(cql.execute(f"select avg(val) from {table}")) == [(9223372036854775807,)]
