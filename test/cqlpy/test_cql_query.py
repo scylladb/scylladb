@@ -3387,3 +3387,16 @@ def test_bind_variable_type_checking(cql, test_keyspace, scylla_only):
         # Test :var with a compatible type
         cql.prepare(f"INSERT INTO {table} (p, a, c) VALUES (0, :var, :var)")
         cql.prepare(f"SELECT * FROM {table} WHERE a = :var AND c = :var ALLOW FILTERING")
+
+
+def test_bind_variable_type_checking_disabled(cql, test_keyspace, scylla_only):
+    with config_value_context(cql, "cql_duplicate_bind_variable_names_refer_to_same_variable", "false"), \
+            new_test_table(cql, test_keyspace, "p int primary key, a int, b text, c int") as table:
+        # Test :var needing to have two conflicting types; will fail without
+        # cql_duplicate_bind_variable_names_refer_to_same_variable = false
+        prepared = cql.prepare(f"INSERT INTO {table} (p, a, b) VALUES (0, :var, :var)")
+
+        # Verify that the parameters passed positionally work (non-positional won't make sense)
+        cql.execute(prepared, [1, "abc"])
+
+        assert list(cql.execute(f"SELECT a, b FROM {table} WHERE p = 0")) == [(1, "abc")]
