@@ -1225,3 +1225,12 @@ def test_duration_restrictions(cql, test_keyspace):
             "Duration type is unordered for span")
         validate_request_failure(f"update {my_table0} set name = 'joe' where key = 0 if span >= 5m",
             "Duration type is unordered for span")
+
+
+def test_select_multiple_ranges(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p1 varchar, r1 int, PRIMARY KEY (p1)") as table:
+        cql.execute(f"""begin unlogged batch
+              insert into {table} (p1, r1) values ('key1', 100);
+              insert into {table} (p1, r1) values ('key2', 200);
+            apply batch;""")
+        assert sorted(cql.execute(f"select r1 from {table} where p1 in ('key1', 'key2')")) == [(100,), (200,)]

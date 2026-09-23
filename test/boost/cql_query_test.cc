@@ -260,28 +260,6 @@ using std::source_location;
 
 } // anonymous namespace
 
-SEASTAR_TEST_CASE(test_select_multiple_ranges) {
-    return do_with_cql_env([] (cql_test_env& e) {
-        return e.execute_cql("create table cf (p1 varchar, r1 int, PRIMARY KEY (p1));").discard_result().then([&e] {
-            return e.execute_cql(
-                    "begin unlogged batch \n"
-                    "  insert into cf (p1, r1) values ('key1', 100); \n"
-                    "  insert into cf (p1, r1) values ('key2', 200); \n"
-                    "apply batch;"
-            ).discard_result();
-        }).then([&e] {
-            return e.execute_cql("select r1 from cf where p1 in ('key1', 'key2');");
-        }).then([] (shared_ptr<cql_transport::messages::result_message> msg) {
-            assert_that(msg).is_rows().with_size(2).with_row({
-                {int32_type->decompose(100)}
-            }).with_row({
-                {int32_type->decompose(200)}
-            });
-
-        });
-    });
-}
-
 SEASTAR_TEST_CASE(test_validate_keyspace) {
     return do_with_cql_env([] (cql_test_env& e) {
         return make_ready_future<>().then([&e] {
