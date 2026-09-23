@@ -2740,3 +2740,19 @@ def test_list_parameter_marker(cql, test_keyspace):
         query = f"UPDATE {table} SET v=:upd_v WHERE k=1 IF v[:i] in :v"
         execute_prepared_serial(cql, query, [[100, 200, 300], 1, [21, 22, 23]], [(False, [10, 20, 30])])
         execute_prepared_serial(cql, query, [[100, 200, 300], 1, [20, 21, 22]], [(True, [10, 20, 30])])
+
+
+def test_select_serial_consistency(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "a int, b int, primary key (a,b)") as table:
+        cql.execute(f"INSERT INTO {table} (a, b) VALUES (1, 1)")
+        cql.execute(f"INSERT INTO {table} (a, b) VALUES (1, 2)")
+        cql.execute(f"INSERT INTO {table} (a, b) VALUES (2, 1)")
+        cql.execute(f"INSERT INTO {table} (a, b) VALUES (2, 2)")
+
+        def check_fails(query):
+            with pytest.raises(InvalidRequest):
+                execute_prepared_serial(cql, query, [], [], ConsistencyLevel.SERIAL)
+        check_fails(f"select * from {table} allow filtering")
+        check_fails(f"select * from {table} where  b > 0 allow filtering")
+        check_fails(f"select * from {table} where  a in (1, 3)")
+        execute_prepared_serial(cql, f"select * from {table} where a = 1", [], [(1, 1), (1, 2)], ConsistencyLevel.SERIAL)

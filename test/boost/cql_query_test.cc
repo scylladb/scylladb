@@ -254,12 +254,6 @@ SEASTAR_TEST_CASE(test_alter_node_oriented_scopes_reject_unknown_targets) {
     });
 }
 
-namespace {
-
-using std::source_location;
-
-} // anonymous namespace
-
 SEASTAR_TEST_CASE(test_ttl) {
     return do_with_cql_env([] (cql_test_env& e) {
         auto make_my_list_type = [] { return list_type_impl::get_instance(utf8_type, true); };
@@ -409,8 +403,6 @@ SEASTAR_TEST_CASE(test_cache_bypass) {
 
 namespace {
 
-auto I(int32_t x) { return int32_type->decompose(x); }
-
 auto T(const char* t) { return utf8_type->decompose(t); }
 
 } // anonymous namespace
@@ -511,85 +503,6 @@ SEASTAR_TEST_CASE(test_view_with_two_regular_base_columns_in_key) {
         assert_that(msg).is_rows().with_size(0);
     });
 }
-
-static std::unique_ptr<cql3::query_options> q_serial_opts(
-        std::vector<cql3::raw_value> values,
-        db::consistency_level cl) {
-
-    const auto& so = cql3::query_options::specific_options::DEFAULT;
-    auto qo = std::make_unique<cql3::query_options>(
-            cl,
-            values,
-            // Ensure (optional) serial consistency is always specified.
-            cql3::query_options::specific_options{
-                so.page_size,
-                so.state,
-                db::consistency_level::SERIAL,
-                so.timestamp,
-            }
-    );
-    return qo;
-}
-
-// Run parametrized query on the appropriate shard
-static void prepared_on_shard(cql_test_env& e, const sstring& query,
-            std::vector<bytes> params,
-            std::vector<std::vector<bytes_opt>> expected_rows,
-            db::consistency_level cl = db::consistency_level::ONE) {
-    auto execute = [&] () mutable {
-        return seastar::async([&] () mutable {
-            auto id = e.prepare(query).get();
-
-            std::vector<cql3::raw_value> raw_values;
-            for (auto& param : params) {
-                raw_values.emplace_back(cql3::raw_value::make_value(param));
-            }
-
-            auto qo = q_serial_opts(std::move(raw_values), cl);
-            auto msg = e.execute_prepared_with_qo(id, std::move(qo)).get();
-            if (!msg->as_bounce()) {
-                assert_that(msg).is_rows().with_rows_ignore_order(expected_rows);
-            }
-            return make_foreign(msg);
-        });
-    };
-
-    auto msg = execute().get();
-    if (auto bounce = msg->as_bounce()) {
-        unsigned shard = bounce->target_shard();
-        smp::submit_to(shard, std::move(execute)).get();
-    }
-}
-
-SEASTAR_TEST_CASE(test_select_serial_consistency) {
-    cql_test_config cfg;
-    cfg.need_remote_proxy = true;
-    return do_with_cql_env_thread([] (cql_test_env& e) {
-        cquery_nofail(e, "CREATE TABLE t (a int, b int, primary key (a,b))");
-        cquery_nofail(e, "INSERT INTO t (a, b) VALUES (1, 1)");
-        cquery_nofail(e, "INSERT INTO t (a, b) VALUES (1, 2)");
-        cquery_nofail(e, "INSERT INTO t (a, b) VALUES (2, 1)");
-        cquery_nofail(e, "INSERT INTO t (a, b) VALUES (2, 2)");
-
-        auto check_fails = [&e] (const sstring& query, const source_location& loc = source_location::current()) {
-            try {
-                prepared_on_shard(e, query, {}, {}, db::consistency_level::SERIAL);
-                SCYLLA_ASSERT(false);
-            } catch (const exceptions::invalid_request_exception& e) {
-                testlog.info("Query '{}' failed as expected with error: {}", query, e);
-            } catch (...) {
-                BOOST_ERROR(format("query '{}' failed with unexpected error: {}\n{}:{}: originally from here",
-                    query, std::current_exception(),
-                    loc.file_name(), loc.line()));
-            }
-        };
-        check_fails("select * from t allow filtering");
-        check_fails("select * from t where  b > 0 allow filtering");
-        check_fails("select * from t where  a in (1, 3)");
-        prepared_on_shard(e, "select * from t where a = 1", {}, {{I(1), I(1)}, {I(1), I(2)}}, db::consistency_level::SERIAL);
-    }, std::move(cfg));
-}
-
 
 SEASTAR_TEST_CASE(test_range_deletions_for_specific_column) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
