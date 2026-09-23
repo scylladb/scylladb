@@ -19,13 +19,14 @@ import hashlib
 import datetime
 import gzip
 import decimal
+import requests
 
 from botocore.exceptions import ClientError
 from cassandra import ConsistencyLevel
 from cassandra.query import SimpleStatement
 from contextlib import contextmanager, ExitStack
 
-from test.alternator.util import get_table_arn, is_aws, new_test_table, create_test_table, random_string
+from test.alternator.util import get_table_arn, is_aws, new_test_table, create_test_table, random_string, get_signed_request
 
 # NOTE: tests here use `pytest.mark.xfail(reason="Not yet implemented on Scylla and MinIO is not started")` as xfail marker as the implementation is ongoing.
 # The tests will pass against AWS.
@@ -1326,19 +1327,25 @@ def test_export_table_unsupported_s3_options(test_table_s_for_export_only, scyll
         )
 
 
-# Test that ExportTime close to now is accepted.
-# This is a separate test for scylla only, as DynamoDB itself will reject ExportTime close to now.
-# For performance reasons in test we don't want to follow the suit with it.
-def test_export_table_export_time_now(test_table_s_for_export_only, scylla_only):
+# Test that ExportTime close to now is accepted, and reported rounded to the nearest millisecond, as
+# DynamoDB does. boto3 sends an ExportTime in whole seconds, so the request is written out here. The
+# bucket does not exist, so on DynamoDB the export fails by itself without writing anything.
+def test_export_table_export_time_now(dynamodb, test_table_s_for_export_only):
     client = test_table_s_for_export_only.meta.client
     table_arn = get_table_arn(test_table_s_for_export_only)
-
-    response = client.export_table_to_point_in_time(
-        TableArn=table_arn,
-        S3Bucket='my-bucket',
-        ExportTime=int(time.time()),
-    )
-    assert response['ExportDescription']['ExportStatus'] == 'FAILED'
+    # DynamoDB exports only from its point-in-time recovery window, which can start after the
+    # fixture sees recovery enabled. Alternator reports no such window.
+    pitr = client.describe_continuous_backups(TableName=test_table_s_for_export_only.name)['ContinuousBackupsDescription']
+    earliest = pitr['PointInTimeRecoveryDescription'].get('EarliestRestorableDateTime')
+    second = max(int(time.time()) - 1, int(earliest.timestamp()) + 1 if earliest else 0)
+    while time.time() < second + 1:
+        time.sleep(0.1)
+    payload = json.dumps({'TableArn': table_arn, 'S3Bucket': unique_bucket_name(), 'ExportTime': second + 0.1236,
+                          'ClientToken': str(uuid.uuid4())})
+    req = get_signed_request(dynamodb, 'ExportTableToPointInTime', payload)
+    response = requests.post(req.url, headers=req.headers, data=req.body, verify=False, cert=req.cert)
+    assert response.status_code == 200, response.text
+    assert json.loads(response.text)['ExportDescription']['ExportTime'] == pytest.approx(second + 0.124, abs=1e-5)
 
 
 # Test that ExportTime in the past (more than 5 minutes) is rejected.

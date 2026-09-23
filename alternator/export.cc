@@ -11,11 +11,11 @@
 #include "alternator/error.hh"
 #include "alternator/executor.hh"
 #include "alternator/executor_util.hh"
+#include "db_clock.hh"
 #include "service/storage_proxy.hh"
 #include "utils/rjson.hh"
 #include <algorithm>
 #include <array>
-#include <chrono>
 #include <cmath>
 #include <string>
 #include <string_view>
@@ -215,6 +215,12 @@ std::unique_ptr<import_pipeline_interface> create_in_memory_source_pipeline(in_m
     return std::make_unique<in_memory_source>(storage, std::move(decompressor));
 }
 
+// DynamoDB reports the timestamps of an export as seconds since the epoch, keeping the sub-second
+// part.
+static double to_epoch_seconds(db_clock::time_point tp) {
+    return std::chrono::duration<double>(tp.time_since_epoch()).count();
+}
+
 future<executor::request_return_type> executor::export_table_to_point_in_time(client_state& client_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
     _stats.api_operations.export_table_to_point_in_time++;
 
@@ -281,7 +287,7 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
 
     // ExportTime - only "now" (or close to now) is supported
     // If not specified, use current time. If specified, must be within 5 minutes of now.
-    auto now = (double)std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+    auto now = to_epoch_seconds(db_clock::now());
     auto export_time = now;
     const rjson::value* export_time_v = rjson::find(request, "ExportTime");
     if (export_time_v) {
@@ -297,6 +303,9 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
             co_return api_error::invalid_export_time(fmt::format("ExportTime must be within 5 minutes of current time. "
                                 "ExportTime: {} s , current time: {} s", export_time, now));
         }
+        // DynamoDB rounds a requested ExportTime to the nearest millisecond.
+        export_time = std::chrono::duration<double>(std::chrono::round<std::chrono::milliseconds>(
+                std::chrono::duration<double>(export_time))).count();
     }
 
     auto client_token = get_non_empty_string_attribute(request, "ClientToken", "");
