@@ -27,6 +27,7 @@ from cassandra.util import Date, Duration, Time
 import pytest
 
 from . import nodetool
+from .nodetool import flush
 from .util import config_value_context, is_scylla, new_session, new_test_keyspace, new_test_table, new_type, new_user, unique_name
 
 
@@ -2828,3 +2829,18 @@ def test_query_limit(cql, test_keyspace, scylla_only):
                             list(cql.execute(select))
                     else:
                         assert list(cql.execute(select)) == expected_rows
+
+
+# Reproduces https://github.com/scylladb/scylla/issues/3552
+# when clustering-key filtering is enabled in filter_sstable_for_reader.
+# The C++ test flushed the memtables and cleared the row cache before reading;
+# here we flush and read with BYPASS CACHE, so the reads go to the sstables.
+# (The C++ test also forced sstable_format "me", which is the default.)
+@pytest.mark.parametrize("compaction_strategy", ["SizeTieredCompactionStrategy", "TimeWindowCompactionStrategy"])
+def test_clustering_filtering(cql, test_keyspace, compaction_strategy):
+    with new_test_table(cql, test_keyspace, "pk text, ck int, v text, PRIMARY KEY(pk, ck)",
+                        f"WITH COMPACTION = {{'class': '{compaction_strategy}'}}") as table:
+        cql.execute(f"INSERT INTO {table} (pk, ck, v) VALUES ('a', 1, 'a1')")
+        flush(cql, table)
+        assert list(cql.execute(f"SELECT v FROM {table} WHERE pk='a' AND ck=0 ALLOW FILTERING BYPASS CACHE")) == []
+        assert list(cql.execute(f"SELECT v FROM {table} BYPASS CACHE")) == [('a1',)]
