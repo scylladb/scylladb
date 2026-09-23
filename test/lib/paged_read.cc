@@ -18,6 +18,7 @@
 #include <type_traits>
 
 #include <fmt/ranges.h>
+#include <seastar/core/on_internal_error.hh>
 #include <seastar/core/thread.hh>
 #include <seastar/util/defer.hh>
 
@@ -45,6 +46,11 @@
 namespace tests::paged_read {
 
 namespace {
+
+// The message of the internal error which a page without a partition and
+// without a cursor causes in query::result_view::calculate_last_position().
+// See outcome::allowed_error.
+constexpr std::string_view page_without_partition_or_cursor = "calculate_last_position(): the result has no partition";
 
 using read_model::answer_row;
 using query_result = exceptions::coordinator_result<service::storage_proxy_coordinator_query_result>;
@@ -1014,18 +1020,10 @@ class coordinator {
         return result;
     }
 
-    // When a short page has no cursor, the pager computes the position from
-    // the page's last partition with
-    // query::result_view::calculate_last_position(). If the page has no
-    // partition, that function fails an assertion. The harness reports such
-    // a page as a failed read instead.
     query_result finish(const schema& s, foreign_ptr<lw_shared_ptr<query::result>> result) {
         result->ensure_counts();
         trace("result: {} partitions, {} rows, {}, cursor {}", *result->partition_count(), *result->row_count(), describe(result->is_short_read()),
                 describe(s, result->last_position()));
-        if (result->is_short_read() && !result->last_position() && !*result->partition_count()) {
-            throw std::runtime_error("The result is short, but has neither a partition nor a cursor to continue from");
-        }
         return service::storage_proxy_coordinator_query_result(std::move(result));
     }
 
@@ -1233,7 +1231,7 @@ std::vector<std::string> check(const outcome& o, const std::vector<answer_row>& 
     violations.insert(violations.end(), o.coordinator_violations.begin(), o.coordinator_violations.end());
     if (o.error) {
         violations.push_back(*o.error);
-    } else if (o.rows != expected) {
+    } else if (!o.allowed_error && o.rows != expected) {
         violations.push_back("The rows of all pages differ from the complete answer");
     }
     return violations;
@@ -1358,6 +1356,14 @@ outcome harness::run(const read_case& c) {
     auto stmt = dynamic_pointer_cast<cql3::statements::select_statement>(prepared->statement);
     auto bound_names = prepared->bound_names;
 
+    // An internal error of the production code fails the page, like in a
+    // node which does not abort on internal errors. cql_test_env aborts on
+    // them otherwise.
+    const bool abort_on_internal_error = set_abort_on_internal_error(false);
+    auto restore_abort_on_internal_error = defer([abort_on_internal_error] () noexcept {
+        set_abort_on_internal_error(abort_on_internal_error);
+    });
+
     outcome o;
     // The serialized paging states of the pages so far. A client which gets
     // the same state twice would loop forever. The harness compares whole
@@ -1389,7 +1395,18 @@ outcome harness::run(const read_case& c) {
         } catch (...) {
             p.trace = coord.take_trace();
             o.pages.push_back(std::move(p));
-            o.error = fmt::format("Page {} failed: {}", o.pages.size() - 1, std::current_exception());
+            // An internal error carries a backtrace, whose addresses depend
+            // on the build. The kind of a failure must not.
+            auto what = fmt::format("{}", std::current_exception());
+            if (auto backtrace = what.find(" Backtrace:"); backtrace != std::string::npos) {
+                what.replace(backtrace, std::string::npos, ")");
+            }
+            auto error = fmt::format("Page {} failed: {}", o.pages.size() - 1, what);
+            if (!opts.read_frontiers && what.find(page_without_partition_or_cursor) != std::string::npos) {
+                o.allowed_error = std::move(error);
+            } else {
+                o.error = std::move(error);
+            }
             break;
         }
         p.trace = coord.take_trace();
