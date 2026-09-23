@@ -56,6 +56,20 @@ def test_create_table_missing_units(dynamodb):
                 ProvisionedThroughput=ProvisionedThroughput):
                     table.meta.client.describe_table(TableName=table.name)
 
+# DynamoDB's minimum for either of the table's capacities is 1, and it rejects
+# anything lower with a protocol-level message Alternator does not reproduce.
+@pytest.mark.parametrize('throughput', [
+        {'ReadCapacityUnits': 0, 'WriteCapacityUnits': 5},
+        {'ReadCapacityUnits': 5, 'WriteCapacityUnits': -1}])
+def test_create_table_nonpositive_units(dynamodb, throughput):
+    with pytest.raises(ClientError, match='ValidationException'):
+        with new_test_table(dynamodb,
+                KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+                AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}],
+                BillingMode='PROVISIONED',
+                ProvisionedThroughput=throughput) as table:
+            pass
+
 # When creating a table with PAY_PER_REQUEST billing mode, RCU and WCU should be zero
 def test_create_pay_per_request_units(test_table):
     got = test_table.meta.client.describe_table(TableName=test_table.name)['Table']
