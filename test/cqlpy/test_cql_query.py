@@ -1234,3 +1234,18 @@ def test_select_multiple_ranges(cql, test_keyspace):
               insert into {table} (p1, r1) values ('key2', 200);
             apply batch;""")
         assert sorted(cql.execute(f"select r1 from {table} where p1 in ('key1', 'key2')")) == [(100,), (200,)]
+
+
+def test_validate_keyspace(cql):
+    # Keyspace name too long (schema::NAME_LENGTH is 192)
+    keyspace_name = 'k' * 193
+    with pytest.raises(InvalidRequest):
+        cql.execute(f"create keyspace {keyspace_name} with replication = {{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }}")
+    with pytest.raises(SyntaxException):
+        cql.execute("create keyspace ks3-1 with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }")
+    # A replication strategy class is not mandatory
+    with new_test_keyspace(cql, "with replication = { 'replication_factor' : 1 }") as ks3:
+        with pytest.raises(SyntaxException):
+            cql.execute(f"create keyspace {ks3} with rreplication = {{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }}")
+    with pytest.raises(InvalidRequest, match="not user-modifiable"):
+        cql.execute("create keyspace SyStEm with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }")

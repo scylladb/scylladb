@@ -260,29 +260,6 @@ using std::source_location;
 
 } // anonymous namespace
 
-SEASTAR_TEST_CASE(test_validate_keyspace) {
-    return do_with_cql_env([] (cql_test_env& e) {
-        return make_ready_future<>().then([&e] {
-            sstring keyspace_name(schema::NAME_LENGTH + 1, 'k');
-            return e.execute_cql(format("create keyspace {} with replication = {{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }};", keyspace_name));
-        }).then_wrapped([&e] (future<shared_ptr<cql_transport::messages::result_message>> f) {
-            assert_that_failed(f);
-            return e.execute_cql("create keyspace ks3-1 with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 };");
-        }).then_wrapped([&e] (future<shared_ptr<cql_transport::messages::result_message>> f) {
-            assert_that_failed(f);
-            return e.execute_cql("create keyspace ks3 with replication = { 'replication_factor' : 1 };");
-        }).then_wrapped([&e] (future<shared_ptr<cql_transport::messages::result_message>> f) {
-            BOOST_ASSERT(!f.failed());
-            return e.execute_cql("create keyspace ks3 with rreplication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 };");
-        }).then_wrapped([&e] (future<shared_ptr<cql_transport::messages::result_message>> f) {
-            assert_that_failed(f);
-            return e.execute_cql("create keyspace SyStEm with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 };");
-        }).then_wrapped([] (future<shared_ptr<cql_transport::messages::result_message>> f) {
-            assert_that_failed(f);
-        });
-    });
-}
-
 SEASTAR_TEST_CASE(test_validate_table) {
     return do_with_cql_env([] (cql_test_env& e) {
         return make_ready_future<>().then([&e] {
