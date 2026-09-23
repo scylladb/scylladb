@@ -3515,3 +3515,61 @@ def test_schema_change_events(cql, test_keyspace, scylla_only):
             assert returns_schema_change(f"create type if not exists {my_type} (first text);")
         finally:
             cql.execute(f"drop type {my_type}")
+
+
+# The column types of a result, as CQL type names. Note that the native
+# protocol has a single code for text/varchar, which the driver calls "varchar".
+def column_types(rs):
+    return [t.cql_parameterized_type() for t in rs.column_types]
+
+# Untyped literals as selectors are a Scylla extension (Cassandra requires a
+# cast to infer the type of a literal in the selection clause).
+def test_select_constant_type_inference(cql, scylla_only):
+    # Integer constant — small value fits int32
+    rs = cql.execute("SELECT 1 FROM system.local")
+    assert column_types(rs) == ['int']
+    assert list(rs) == [(1,)]
+
+    # Integer constant — large value requires bigint
+    rs = cql.execute("SELECT 10000000000 FROM system.local")
+    assert column_types(rs) == ['bigint']
+    assert list(rs) == [(10000000000,)]
+
+    # String constant
+    rs = cql.execute("SELECT 'hello' FROM system.local")
+    assert column_types(rs) == ['varchar']
+    assert list(rs) == [('hello',)]
+
+    # Boolean constant
+    rs = cql.execute("SELECT true FROM system.local")
+    assert column_types(rs) == ['boolean']
+    assert list(rs) == [(True,)]
+
+    # Floating-point constant
+    rs = cql.execute("SELECT 3.14 FROM system.local")
+    assert column_types(rs) == ['double']
+    assert len(list(rs)) == 1
+
+    # Negative integer constant
+    rs = cql.execute("SELECT -1 FROM system.local")
+    assert column_types(rs) == ['int']
+    assert len(list(rs)) == 1
+
+    # Scientific notation is inferred as double
+    rs = cql.execute("SELECT 1e6 FROM system.local")
+    assert column_types(rs) == ['double']
+    assert len(list(rs)) == 1
+
+    # Multiple constants
+    rs = cql.execute("SELECT 1, 'hello', true FROM system.local")
+    assert column_types(rs) == ['int', 'varchar', 'boolean']
+    assert len(list(rs)) == 1
+
+    # Function call as a top-level selector — type inferred from return type
+    rs = cql.execute("SELECT now() FROM system.local")
+    assert column_types(rs) == ['timeuuid']
+    assert len(list(rs)) == 1
+
+    # count(1) works
+    rs = cql.execute("SELECT count(1) FROM system.local")
+    assert len(list(rs)) == 1
