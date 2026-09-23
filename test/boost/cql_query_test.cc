@@ -268,43 +268,6 @@ SEASTAR_TEST_CASE(test_alter_node_oriented_scopes_reject_unknown_targets) {
     });
 }
 
-SEASTAR_TEST_CASE(test_alter_schema_with_persists_scope_configs) {
-    return do_with_cql_env_thread([](cql_test_env& e) {
-        auto configs_type = map_type_impl::get_instance(utf8_type, utf8_type, false);
-        e.execute_cql("CREATE KEYSPACE ks_cfg WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}").get();
-        e.execute_cql("CREATE TABLE ks_cfg.tbl (pk int PRIMARY KEY, v int)").get();
-
-        e.execute_cql("ALTER KEYSPACE ks_cfg WITH auto_repair_enabled = true").get();
-        e.execute_cql("ALTER TABLE ks_cfg.tbl WITH auto_repair_enabled = false").get();
-
-        assert_that(e.execute_cql("SELECT configs FROM system_schema.scylla_keyspaces WHERE keyspace_name = 'ks_cfg'").get())
-            .is_rows().with_rows({{
-                {configs_type->decompose(make_map_value(configs_type, map_type_impl::native_type({
-                    {sstring("auto_repair_enabled"), sstring("true")},
-                })))}
-            }});
-
-        assert_that(e.execute_cql("SELECT configs FROM system_schema.scylla_tables WHERE keyspace_name = 'ks_cfg' AND table_name = 'tbl'").get())
-            .is_rows().with_rows({{
-                {configs_type->decompose(make_map_value(configs_type, map_type_impl::native_type({
-                    {sstring("auto_repair_enabled"), sstring("false")},
-                })))}
-            }});
-
-        e.execute_cql("ALTER TABLE ks_cfg.tbl WITH auto_repair_enabled = null").get();
-
-        assert_that(e.execute_cql("SELECT configs FROM system_schema.scylla_keyspaces WHERE keyspace_name = 'ks_cfg'").get())
-            .is_rows().with_rows({{
-                {configs_type->decompose(make_map_value(configs_type, map_type_impl::native_type({
-                    {sstring("auto_repair_enabled"), sstring("true")},
-                })))}
-            }});
-
-        assert_that(e.execute_cql("SELECT configs FROM system_schema.scylla_tables WHERE keyspace_name = 'ks_cfg' AND table_name = 'tbl'").get())
-            .is_rows().with_rows({{{}}});
-    });
-}
-
 SEASTAR_TEST_CASE(test_describe_schema_with_inherited_auto_repair_scope_config) {
     return do_with_cql_env_thread([](cql_test_env& e) {
         e.execute_cql("CREATE KEYSPACE ks_desc_auto WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}").get();

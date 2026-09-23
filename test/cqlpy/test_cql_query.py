@@ -234,3 +234,19 @@ def test_alter_cluster_superuser_check_is_async_with_auth_enabled(cql, scylla_on
             with new_session(cql, username) as user_session:
                 with pytest.raises(Unauthorized):
                     user_session.execute("ALTER CLUSTER WITH auto_repair_enabled = false")
+
+
+def test_alter_schema_with_persists_scope_configs(cql, scylla_only):
+    with new_config_test_keyspace(cql) as ks:
+        cql.execute(f"CREATE TABLE {ks}.tbl (pk int PRIMARY KEY, v int)")
+
+        cql.execute(f"ALTER KEYSPACE {ks} WITH auto_repair_enabled = true")
+        cql.execute(f"ALTER TABLE {ks}.tbl WITH auto_repair_enabled = false")
+
+        assert fetch_configs(cql, keyspace_configs_query(ks)) == [{'auto_repair_enabled': 'true'}]
+        assert fetch_configs(cql, table_configs_query(ks, 'tbl')) == [{'auto_repair_enabled': 'false'}]
+
+        cql.execute(f"ALTER TABLE {ks}.tbl WITH auto_repair_enabled = null")
+
+        assert fetch_configs(cql, keyspace_configs_query(ks)) == [{'auto_repair_enabled': 'true'}]
+        assert fetch_configs(cql, table_configs_query(ks, 'tbl')) == [None]
