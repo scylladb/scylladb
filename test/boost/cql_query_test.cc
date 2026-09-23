@@ -254,65 +254,6 @@ SEASTAR_TEST_CASE(test_alter_node_oriented_scopes_reject_unknown_targets) {
     });
 }
 
-SEASTAR_TEST_CASE(test_vectors_variable_length_elements) {
-    return do_with_cql_env_thread([] (cql_test_env& e) {
-        e.execute_cql("CREATE TABLE t1 (id int PRIMARY KEY, v vector<text, 2>);").get();
-        e.execute_cql("INSERT INTO t1 (id, v) VALUES (1, ['abc', '']);").get();
-
-        auto msg = e.execute_cql("SELECT * FROM t1;").get();
-        auto vt = vector_type_impl::get_instance(utf8_type, 2);
-
-        assert_that(msg).is_rows().with_rows({
-            { int32_type->decompose(1), vt->decompose(
-                make_vector_value(
-                    vt,
-                    vector_type_impl::native_type({
-                        sstring("abc"),
-                        sstring("")
-                    })
-                )
-            )}
-        });
-
-        e.execute_cql("CREATE TABLE t2 (id int PRIMARY KEY, v vector<list<int>, 2>);").get();
-        e.execute_cql("INSERT INTO t2 (id, v) VALUES (1, [[1, 2], [3, 4, 5]]);").get();
-
-        msg = e.execute_cql("SELECT * FROM t2;").get();
-        vt = vector_type_impl::get_instance(list_type_impl::get_instance(int32_type, true), 2);
-
-        assert_that(msg).is_rows().with_rows({
-            { int32_type->decompose(1), vt->decompose(
-                make_vector_value(
-                    vt,
-                    vector_type_impl::native_type({
-                        make_list_value(list_type_impl::get_instance(int32_type, true), list_type_impl::native_type({1, 2})),
-                        make_list_value(list_type_impl::get_instance(int32_type, true), list_type_impl::native_type({3, 4, 5}))
-                    })
-                )
-            )}
-        });
-
-        e.execute_cql("CREATE TABLE t3 (id int PRIMARY KEY, v vector<tuple<int, text>, 2>);").get();
-        e.execute_cql("INSERT INTO t3 (id, v) VALUES (1, [(123, 'abc'), (456, '')]);").get();
-
-        msg = e.execute_cql("SELECT * FROM t3;").get();
-        vt = vector_type_impl::get_instance(tuple_type_impl::get_instance({int32_type, utf8_type}), 2);
-
-        assert_that(msg).is_rows().with_rows({
-            { int32_type->decompose(1), vt->decompose(
-                make_vector_value(
-                    vt,
-                    vector_type_impl::native_type({
-                        make_tuple_value(tuple_type_impl::get_instance({int32_type, utf8_type}), tuple_type_impl::native_type({123, sstring("abc")})),
-                        make_tuple_value(tuple_type_impl::get_instance({int32_type, utf8_type}), tuple_type_impl::native_type({456, sstring("")}))
-                    })
-                )
-            )}
-        });
-
-    });
-}
-
 namespace {
 
 using std::source_location;

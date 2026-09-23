@@ -1163,3 +1163,15 @@ def test_vectors(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, "p1 int PRIMARY KEY, r1 vector<int, 3>") as table:
         cql.execute(f"insert into {table} (p1, r1) values (1, [1, 2, 3])")
         assert list(cql.execute(f"select * from {table} where p1 = 1")) == [(1, [1, 2, 3])]
+
+
+def test_vectors_variable_length_elements(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "id int PRIMARY KEY, v vector<text, 2>") as table:
+        cql.execute(f"INSERT INTO {table} (id, v) VALUES (1, ['abc', ''])")
+        assert list(cql.execute(f"SELECT * FROM {table}")) == [(1, ['abc', ''])]
+    with new_test_table(cql, test_keyspace, "id int PRIMARY KEY, v vector<list<int>, 2>") as table:
+        cql.execute(f"INSERT INTO {table} (id, v) VALUES (1, [[1, 2], [3, 4, 5]])")
+        assert list(cql.execute(f"SELECT * FROM {table}")) == [(1, [[1, 2], [3, 4, 5]])]
+    with new_test_table(cql, test_keyspace, "id int PRIMARY KEY, v vector<tuple<int, text>, 2>") as table:
+        cql.execute(f"INSERT INTO {table} (id, v) VALUES (1, [(123, 'abc'), (456, '')])")
+        assert list(cql.execute(f"SELECT * FROM {table}")) == [(1, [(123, 'abc'), (456, '')])]
