@@ -1180,7 +1180,7 @@ shared_ptr<cql3::functions::user_aggregate> create_aggregate(replica::database& 
         }
     }
 
-    bytes_opt initcond = std::nullopt;
+    managed_bytes_opt initcond = std::nullopt;
     if (initcond_str) {
         // In general using the default dialect is wrong, but here the database is communicating with itself,
         // not the user, so any dialect should work.
@@ -1188,7 +1188,7 @@ shared_ptr<cql3::functions::user_aggregate> create_aggregate(replica::database& 
         auto dummy_ident = ::make_shared<cql3::column_identifier>("", true);
         auto column_spec = make_lw_shared<cql3::column_specification>("", "", dummy_ident, state_type);
         auto raw = cql3::expr::evaluate(prepare_expression(expr, db.as_data_dictionary(), "", nullptr, {column_spec}), cql3::query_options::DEFAULT);
-        initcond = std::move(raw).to_bytes_opt();
+        initcond = std::move(raw).to_managed_bytes_opt();
     }
     return ::make_shared<cql3::functions::user_aggregate>(name, initcond, std::move(state_func), std::move(reduce_func), std::move(final_func));
 }
@@ -1659,7 +1659,7 @@ utils::chunked_vector<mutation> make_create_aggregate_mutations(schema_features 
         m.set_clustered_cell(ckey, "final_func", aggregate->finalfunc()->name().name, timestamp);
     }
     if (aggregate->initcond()) {
-        m.set_clustered_cell(ckey, "initcond", state_type->deserialize(*aggregate->initcond()).to_parsable_string(), timestamp);
+        m.set_clustered_cell(ckey, "initcond", state_type->deserialize(managed_bytes_view(*aggregate->initcond())).to_parsable_string(), timestamp);
     }
     m.set_clustered_cell(ckey, "return_type", aggregate->return_type()->as_cql3_type().to_string(), timestamp);
     m.set_clustered_cell(ckey, "state_func", aggregate->sfunc()->name().name, timestamp);

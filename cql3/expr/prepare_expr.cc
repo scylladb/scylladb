@@ -2315,13 +2315,14 @@ public:
         return "LIKE";
     }
 
-    virtual bytes_opt execute(std::span<const bytes_opt> parameters) override {
+    virtual managed_bytes_opt execute(std::span<const managed_bytes_opt> parameters) override {
         auto& str_opt = parameters[0];
         if (!str_opt) {
             return std::nullopt;
         }
-        bool match_result = _matcher(*str_opt);
-        return data_value(match_result).serialize();
+        // like_matcher only works on a linear buffer.
+        bool match_result = str_opt->with_linearized([this] (bytes_view str) { return _matcher(str); });
+        return managed_bytes(data_value(match_result).serialize_nonnull());
     }
 };
 

@@ -28,7 +28,7 @@ shared_ptr<function>
 make_to_blob_function(data_type from_type) {
     auto name = from_type->as_cql3_type().to_string() + "asblob";
     return make_native_scalar_function<true>(name, bytes_type, { from_type },
-            [] (std::span<const bytes_opt> parameters) {
+            [] (std::span<const managed_bytes_opt> parameters) {
         return parameters[0];
     });
 }
@@ -38,18 +38,18 @@ shared_ptr<function>
 make_from_blob_function(data_type to_type) {
     sstring name = sstring("blobas") + to_type->as_cql3_type().to_string();
     return make_native_scalar_function<true>(name, to_type, { bytes_type },
-            [name, to_type] (std::span<const bytes_opt> parameters) -> bytes_opt {
+            [name, to_type] (std::span<const managed_bytes_opt> parameters) -> managed_bytes_opt {
         auto&& val = parameters[0];
         if (!val) {
             return val;
         }
         try {
-            to_type->validate(*val);
+            to_type->validate(managed_bytes_view(*val));
             return val;
         } catch (marshal_exception& e) {
             using namespace exceptions;
             throw invalid_request_exception(format("In call to function {}, value 0x{} is not a valid binary representation for type {}",
-                    name, to_hex(val), to_type->as_cql3_type().to_string()));
+                    name, to_hex(to_bytes_opt(val)), to_type->as_cql3_type().to_string()));
         }
     });
 }
@@ -58,7 +58,7 @@ inline
 shared_ptr<function>
 make_varchar_as_blob_fct() {
     return make_native_scalar_function<true>("varcharasblob", bytes_type, { utf8_type },
-            [] (std::span<const bytes_opt> parameters) -> bytes_opt {
+            [] (std::span<const managed_bytes_opt> parameters) -> managed_bytes_opt {
         return parameters[0];
     });
 }
@@ -67,7 +67,7 @@ inline
 shared_ptr<function>
 make_blob_as_varchar_fct() {
     return make_native_scalar_function<true>("blobasvarchar", utf8_type, { bytes_type },
-            [] (std::span<const bytes_opt> parameters) -> bytes_opt {
+            [] (std::span<const managed_bytes_opt> parameters) -> managed_bytes_opt {
         return parameters[0];
     });
 }

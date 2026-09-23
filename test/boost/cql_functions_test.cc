@@ -432,12 +432,12 @@ SEASTAR_THREAD_TEST_CASE(test_extract_float_vector) {
         for (float f : values) {
             data_vals.push_back(data_value(f));
         }
-        return vector_type->decompose(make_list_value(vector_type, data_vals));
+        return managed_bytes(vector_type->decompose(make_list_value(vector_type, data_vals)));
     };
 
-    auto deserialize_standard = [](size_t dim, const bytes_opt& serialized) {
+    auto deserialize_standard = [](size_t dim, const managed_bytes_opt& serialized) {
         auto vector_type = vector_type_impl::get_instance(float_type, dim);
-        data_value v = vector_type->deserialize(*serialized);
+        data_value v = vector_type->deserialize(managed_bytes_view(*serialized));
         const auto& elements = value_cast<std::vector<data_value>>(v);
         std::vector<float> result;
         result.reserve(elements.size());

@@ -10,8 +10,8 @@
 
 #pragma once
 
-#include "bytes_fwd.hh"
 #include "function.hh"
+#include "utils/managed_bytes.hh"
 #include <span>
 
 namespace db::functions {
@@ -25,7 +25,7 @@ public:
      * @return the result of applying this function to the parameter
      * @throws InvalidRequestException if this function cannot not be applied to the parameter
      */
-    virtual bytes_opt execute(std::span<const bytes_opt> parameters) = 0;
+    virtual managed_bytes_opt execute(std::span<const managed_bytes_opt> parameters) = 0;
 };
 
 

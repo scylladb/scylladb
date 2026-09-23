@@ -42,20 +42,20 @@ class internal_scalar_function : public scalar_function {
     function_name _name;
     data_type _return_type;
     std::vector<data_type> _arg_types;
-    noncopyable_function<bytes_opt (std::span<const bytes_opt> parameters)> _func;
+    noncopyable_function<managed_bytes_opt (std::span<const managed_bytes_opt> parameters)> _func;
 public:
     internal_scalar_function(
             sstring name,
             data_type return_type,
             std::vector<data_type> arg_types,
-            noncopyable_function<bytes_opt (std::span<const bytes_opt> parameters)> func)
+            noncopyable_function<managed_bytes_opt (std::span<const managed_bytes_opt> parameters)> func)
             : _name(function_name::native_function(std::move(name)))
             , _return_type(std::move(return_type))
             , _arg_types(std::move(arg_types))
             , _func(std::move(func)) {
     }
 
-    virtual bytes_opt execute(std::span<const bytes_opt> parameters) override {
+    virtual managed_bytes_opt execute(std::span<const managed_bytes_opt> parameters) override {
         return _func(parameters);
     }
 
@@ -97,32 +97,32 @@ public:
 };
 
 // Called if any of the inputs is NULL
-using null_handler = bytes_opt (*)(std::span<const bytes_opt>);
+using null_handler = managed_bytes_opt (*)(std::span<const managed_bytes_opt>);
 
-bytes_opt
-return_accumulator_on_null(std::span<const bytes_opt> args) {
+managed_bytes_opt
+return_accumulator_on_null(std::span<const managed_bytes_opt> args) {
     return args[0];
 }
 
-bytes_opt
-return_any_nonnull(std::span<const bytes_opt> args) {
-    auto i = std::ranges::find_if(args, std::mem_fn(&bytes_opt::has_value));
-    return i != args.end() ? *i : bytes_opt();
+managed_bytes_opt
+return_any_nonnull(std::span<const managed_bytes_opt> args) {
+    auto i = std::ranges::find_if(args, std::mem_fn(&managed_bytes_opt::has_value));
+    return i != args.end() ? *i : managed_bytes_opt();
 }
 
 template <typename Ret, typename... Args>
-noncopyable_function<bytes_opt (std::span<const bytes_opt>)>
+noncopyable_function<managed_bytes_opt (std::span<const managed_bytes_opt>)>
 wrap_function_autonull(null_handler nullhandler, Ret (*func)(Args...)) {
-    return [nullhandler, func] (std::span<const bytes_opt> args) -> bytes_opt {
-        if (!std::all_of(args.begin(), args.end(), std::mem_fn(&bytes_opt::has_value))) {
+    return [nullhandler, func] (std::span<const managed_bytes_opt> args) -> managed_bytes_opt {
+        if (!std::all_of(args.begin(), args.end(), std::mem_fn(&managed_bytes_opt::has_value))) {
             return nullhandler(args);
         }
         using args_tuple_type = std::tuple<Args...>;
         auto ret = std::invoke([&] <size_t... Indexes> (std::index_sequence<Indexes...>) {
             return func(value_cast<std::tuple_element_t<Indexes, args_tuple_type>>(
-                         data_type_for<std::tuple_element_t<Indexes, args_tuple_type>>()->deserialize_value(*args[Indexes]))...);
+                         data_type_for<std::tuple_element_t<Indexes, args_tuple_type>>()->deserialize_value(managed_bytes_view(*args[Indexes])))...);
         }, std::index_sequence_for<Args...>());
-        return data_value(std::move(ret)).serialize_nonnull();
+        return managed_bytes(data_value(std::move(ret)).serialize_nonnull());
     };
 }
 
@@ -178,7 +178,7 @@ make_sum_function() {
             .state_type = data_type_for<accumulator_for<Type>>(),
             .result_type = data_type_for<Type>(),
             .argument_types = {data_type_for<Type>()},
-            .initial_state = data_type_for<accumulator_for<Type>>()->decompose(Acc(0)),
+            .initial_state = managed_bytes(data_type_for<accumulator_for<Type>>()->decompose(Acc(0))),
             .aggregation_function = make_internal_scalar_function("sum_step", return_accumulator_on_null, [] (Acc acc, Type addend) -> Acc { return acc + addend; }),
             .state_to_result_function = make_internal_scalar_function("sum_finalizer", return_any_nonnull, [] (Acc acc) -> Type { return narrow<Type>(acc); }),
             .state_reduction_function = make_internal_scalar_function("sum_reducer", return_any_nonnull, [] (Acc a1, Acc a2) -> Acc { return a1 + a2; }),
@@ -213,57 +213,57 @@ make_avg_function() {
             .state_type = accumulator_tuple_type,
             .result_type = data_type_for<Type>(),
             .argument_types = {data_type_for<Type>()},
-            .initial_state = make_tuple_value(accumulator_tuple_type, std::vector({data_value(sum_type(0)), data_value(int64_t(0))})).serialize(),
+            .initial_state = managed_bytes(make_tuple_value(accumulator_tuple_type, std::vector({data_value(sum_type(0)), data_value(int64_t(0))})).serialize_nonnull()),
             .aggregation_function = ::make_shared<internal_scalar_function>(
                     "avg_step",
                     accumulator_tuple_type,
                     std::vector<data_type>({accumulator_tuple_type, data_type_for<Type>()}),
-                    [accumulator_tuple_type] (std::span<const bytes_opt> args) -> bytes_opt {
+                    [accumulator_tuple_type] (std::span<const managed_bytes_opt> args) -> managed_bytes_opt {
                         if (!args[0]) {
                             return std::nullopt;
                         }
                         if (!args[1]) {
                             return args[0];
                         }
-                        data_value acc_value = accumulator_tuple_type->deserialize(*args[0]);
+                        data_value acc_value = accumulator_tuple_type->deserialize(managed_bytes_view(*args[0]));
                         std::vector<data_value> acc = value_cast<tuple_type_impl::native_type>(std::move(acc_value));
                         auto sum = value_cast<sum_type>(acc[0]);
                         auto count = value_cast<int64_t>(acc[1]);
-                        auto input = value_cast<Type>(data_type_for<Type>()->deserialize(*args[1]));
+                        auto input = value_cast<Type>(data_type_for<Type>()->deserialize(managed_bytes_view(*args[1])));
                         sum += input;
                         count += 1;
                         acc[0] = data_value(std::move(sum));
                         acc[1] = data_value(count);
-                        return make_tuple_value(accumulator_tuple_type, acc).serialize();
+                        return managed_bytes(make_tuple_value(accumulator_tuple_type, acc).serialize_nonnull());
                     }),
             .state_to_result_function = ::make_shared<internal_scalar_function>(
                     "avg_finalizer",
                     data_type_for<Type>(),
                     std::vector<data_type>({accumulator_tuple_type}),
-                    [accumulator_tuple_type] (std::span<const bytes_opt> args) -> bytes_opt {
-                        data_value acc_value = accumulator_tuple_type->deserialize(*args[0]);
+                    [accumulator_tuple_type] (std::span<const managed_bytes_opt> args) -> managed_bytes_opt {
+                        data_value acc_value = accumulator_tuple_type->deserialize(managed_bytes_view(*args[0]));
                         std::vector<data_value> acc = value_cast<tuple_type_impl::native_type>(std::move(acc_value));
                         auto sum = value_cast<sum_type>(acc[0]);
                         auto count = value_cast<int64_t>(acc[1]);
                         auto result = count ? impl_div_for_avg<Type>::div(sum, count) : Type();
-                        return data_type_for<Type>()->decompose(result);
+                        return managed_bytes(data_type_for<Type>()->decompose(result));
                     }),
             .state_reduction_function = ::make_shared<internal_scalar_function>(
                     "avg_reducer",
                     accumulator_tuple_type,
                     std::vector<data_type>({accumulator_tuple_type, accumulator_tuple_type}),
-                    [accumulator_tuple_type] (std::span<const bytes_opt> args) -> bytes_opt {
-                        data_value acc1_value = accumulator_tuple_type->deserialize(*args[0]);
+                    [accumulator_tuple_type] (std::span<const managed_bytes_opt> args) -> managed_bytes_opt {
+                        data_value acc1_value = accumulator_tuple_type->deserialize(managed_bytes_view(*args[0]));
                         std::vector<data_value> acc1 = value_cast<tuple_type_impl::native_type>(std::move(acc1_value));
                         auto sum1 = value_cast<sum_type>(acc1[0]);
                         auto count1 = value_cast<int64_t>(acc1[1]);
-                        data_value acc2_value = accumulator_tuple_type->deserialize(*args[1]);
+                        data_value acc2_value = accumulator_tuple_type->deserialize(managed_bytes_view(*args[1]));
                         std::vector<data_value> acc2 = value_cast<tuple_type_impl::native_type>(std::move(acc2_value));
                         auto sum2 = value_cast<sum_type>(acc2[0]);
                         auto count2 = value_cast<int64_t>(acc2[1]);
                         acc1[0] = data_value(sum1 + sum2);
                         acc1[1] = data_value(count1 + count2);
-                        return make_tuple_value(accumulator_tuple_type, acc1).serialize();
+                        return managed_bytes(make_tuple_value(accumulator_tuple_type, acc1).serialize_nonnull());
                     }),
         });
 }
@@ -309,18 +309,18 @@ aggregate_fcts::make_count_function(data_type input_type) {
             .state_type = long_type,
             .result_type = long_type,
             .argument_types = {input_type},
-            .initial_state = data_value(int64_t(0)).serialize(),
+            .initial_state = managed_bytes(data_value(int64_t(0)).serialize_nonnull()),
             .aggregation_function = ::make_shared<internal_scalar_function>(
                     "count_step",
                     long_type,
                     std::vector<data_type>({long_type, input_type}),
-                    [] (std::span<const bytes_opt> args) {
+                    [] (std::span<const managed_bytes_opt> args) -> managed_bytes_opt {
                         if (!args[1]) {
                             return args[0];
                         }
-                        auto count = value_cast<int64_t>(long_type->deserialize(*args[0]));
+                        auto count = value_cast<int64_t>(long_type->deserialize(managed_bytes_view(*args[0])));
                         count += 1;
-                        return data_value(count).serialize();
+                        return managed_bytes(data_value(count).serialize_nonnull());
                     }),
             .state_to_result_function = make_internal_scalar_function("count_finalizer", return_any_nonnull, [] (int64_t count) { return count; }),
             .state_reduction_function = make_internal_scalar_function("count_reducer", return_any_nonnull, [] (int64_t c1, int64_t c2) { return c1 + c2; }),
@@ -342,7 +342,7 @@ static data_type uda_return_type(const ::shared_ptr<scalar_function>& ffunc, con
     return ffunc ? ffunc->return_type() : sfunc->return_type();
 }
 
-user_aggregate::user_aggregate(function_name fname, bytes_opt initcond, ::shared_ptr<scalar_function> sfunc, ::shared_ptr<scalar_function> reducefunc, ::shared_ptr<scalar_function> finalfunc)
+user_aggregate::user_aggregate(function_name fname, managed_bytes_opt initcond, ::shared_ptr<scalar_function> sfunc, ::shared_ptr<scalar_function> reducefunc, ::shared_ptr<scalar_function> finalfunc)
         : aggregate_function(db::functions::stateless_aggregate_function{
                 .name = fname,
                 .state_type = sfunc->return_type(),
@@ -387,7 +387,7 @@ description user_aggregate::describe(with_create_statement with_stmt) const {
             os << "\n" << "FINALFUNC " << cql3::util::maybe_quote(_agg.state_to_result_function->name().name);
         }
         if (_agg.initial_state) {
-            os << "\n" << "INITCOND " << _agg.aggregation_function->return_type()->deserialize(bytes_view(*_agg.initial_state)).to_parsable_string();
+            os << "\n" << "INITCOND " << _agg.aggregation_function->return_type()->deserialize(managed_bytes_view(*_agg.initial_state)).to_parsable_string();
         }
         os << ";";
 
@@ -411,7 +411,7 @@ aggregate_fcts::make_count_rows_function() {
             .state_type = long_type,
             .result_type = long_type,
             .argument_types = {},
-            .initial_state = data_value(int64_t(0)).serialize(),
+            .initial_state = managed_bytes(data_value(int64_t(0)).serialize_nonnull()),
             .aggregation_function = make_internal_scalar_function("count_step", return_any_nonnull, [] (int64_t accumulator) {
                 return accumulator + 1;
             }),
@@ -428,7 +428,7 @@ aggregate_fcts::make_count_rows_function() {
 shared_ptr<aggregate_function>
 aggregate_fcts::make_max_function(data_type io_type) {
     io_type = io_type->without_reversed().shared_from_this();
-    auto max = ::make_shared<internal_scalar_function>("max_step", io_type, std::vector({io_type, io_type}), [io_type] (std::span<const bytes_opt> args) -> bytes_opt {
+    auto max = ::make_shared<internal_scalar_function>("max_step", io_type, std::vector({io_type, io_type}), [io_type] (std::span<const managed_bytes_opt> args) -> managed_bytes_opt {
         if (!args[0]) {
             return args[1];
         }
@@ -445,7 +445,7 @@ aggregate_fcts::make_max_function(data_type io_type) {
             .argument_types = {io_type},
             .initial_state = std::nullopt,
             .aggregation_function = max,
-            .state_to_result_function = ::make_shared<internal_scalar_function>("max_finalizer", io_type, std::vector({io_type}), [] (std::span<const bytes_opt> args) {
+            .state_to_result_function = ::make_shared<internal_scalar_function>("max_finalizer", io_type, std::vector({io_type}), [] (std::span<const managed_bytes_opt> args) {
                 return args[0];
             }),
             .state_reduction_function = max,
@@ -456,7 +456,7 @@ aggregate_fcts::make_max_function(data_type io_type) {
 shared_ptr<aggregate_function>
 aggregate_fcts::make_min_function(data_type io_type) {
     io_type = io_type->without_reversed().shared_from_this();
-    auto min = ::make_shared<internal_scalar_function>("min_step", io_type, std::vector({io_type, io_type}), [io_type] (std::span<const bytes_opt> args) -> bytes_opt {
+    auto min = ::make_shared<internal_scalar_function>("min_step", io_type, std::vector({io_type, io_type}), [io_type] (std::span<const managed_bytes_opt> args) -> managed_bytes_opt {
         if (!args[0]) {
             return args[1];
         }
@@ -473,7 +473,7 @@ aggregate_fcts::make_min_function(data_type io_type) {
             .argument_types = {io_type},
             .initial_state = std::nullopt,
             .aggregation_function = min,
-            .state_to_result_function = ::make_shared<internal_scalar_function>("min_finalizer", io_type, std::vector({io_type}), [] (std::span<const bytes_opt> args) {
+            .state_to_result_function = ::make_shared<internal_scalar_function>("min_finalizer", io_type, std::vector({io_type}), [] (std::span<const managed_bytes_opt> args) {
                 return args[0];
             }),
             .state_reduction_function = min,
@@ -499,20 +499,20 @@ aggregate_fcts::make_first_function(data_type io_type) {
             .result_type = io_type,
             .argument_types = {io_type},
             .initial_state = std::nullopt,
-            .aggregation_function = ::make_shared<internal_scalar_function>("first_agg", state_type, std::vector({state_type, io_type}), [] (std::span<const bytes_opt> args) -> bytes_opt {
+            .aggregation_function = ::make_shared<internal_scalar_function>("first_agg", state_type, std::vector({state_type, io_type}), [] (std::span<const managed_bytes_opt> args) -> managed_bytes_opt {
                 if (!args[0]) {
                     // First call: create a tuple with the input
-                    return tuple_type_impl::build_value(args.subspan(1, 1));
+                    return tuple_type_impl::build_value_fragmented(args.subspan(1, 1));
                 } else {
                     // Second or later call: return result of first call
                     return args[0];
                 }
             }),
-            .state_to_result_function = ::make_shared<internal_scalar_function>("first_finalizer", io_type, std::vector({state_type}), [] (std::span<const bytes_opt> args) -> bytes_opt {
+            .state_to_result_function = ::make_shared<internal_scalar_function>("first_finalizer", io_type, std::vector({state_type}), [] (std::span<const managed_bytes_opt> args) -> managed_bytes_opt {
                 if (!args[0]) {
                     return std::nullopt;
                 } else {
-                    return to_bytes_opt(get_nth_tuple_element(managed_bytes_view(*args[0]), 0));
+                    return get_nth_tuple_element(managed_bytes_view(*args[0]), 0);
                 }
             }),
             .state_reduction_function = ::make_shared<internal_scalar_function>("first_reducer", state_type, std::vector({state_type, state_type}), return_any_nonnull),

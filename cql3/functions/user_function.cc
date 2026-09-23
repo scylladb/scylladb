@@ -36,7 +36,7 @@ bool user_function::is_aggregate() const { return false; }
 
 bool user_function::requires_thread() const { return true; }
 
-bytes_opt user_function::execute(std::span<const bytes_opt> parameters) {
+managed_bytes_opt user_function::execute(std::span<const managed_bytes_opt> parameters) {
     const auto& types = arg_types();
     if (parameters.size() != types.size()) {
         throw std::logic_error("Wrong number of parameters");
@@ -50,24 +50,28 @@ bytes_opt user_function::execute(std::span<const bytes_opt> parameters) {
             return std::nullopt;
         }
     }
-    return seastar::visit(_ctx,
+    return to_managed_bytes_opt(seastar::visit(_ctx,
         [&] (lua_context& ctx) -> bytes_opt {
             std::vector<data_value> values;
             values.reserve(parameters.size());
             for (int i = 0, n = types.size(); i != n; ++i) {
                 const data_type& type = types[i];
-                const bytes_opt& bytes = parameters[i];
-                values.push_back(bytes ? type->deserialize(*bytes) : data_value::make_null(type));
+                const managed_bytes_opt& bytes = parameters[i];
+                values.push_back(bytes ? type->deserialize(managed_bytes_view(*bytes)) : data_value::make_null(type));
             }
             return lua::run_script(lua::bitcode_view{ctx.bitcode}, values, return_type(), ctx.cfg).get();
         },
         [&] (wasm::context& ctx) -> bytes_opt {
+            // FIXME: change wasm::run_script to accept fragmented buffers
+            auto linear_parameters = parameters
+                    | std::views::transform([] (const managed_bytes_opt& parameter) { return to_bytes_opt(parameter); })
+                    | std::ranges::to<std::vector>();
             try {
-                return wasm::run_script(name(), ctx, arg_types(), parameters, return_type(), _called_on_null_input).get();
+                return wasm::run_script(name(), ctx, arg_types(), linear_parameters, return_type(), _called_on_null_input).get();
             } catch (const wasm::exception& e) {
                 throw exceptions::invalid_request_exception(format("UDF error: {}", e.what()));
             }
-        });
+        }));
 }
 
 description user_function::describe(with_create_statement with_stmt) const {
