@@ -1731,3 +1731,11 @@ def test_alter_table(cql, test_keyspace):
         cql.execute(f"alter table {table} drop r2")
         cql.execute(f"alter table {table} add r2 int")
         assert list(cql.execute(f"select * from {table}")) == [(1, 2, 3, None, 6, None)]
+
+
+def test_map_query(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "k int PRIMARY KEY, m map<text, int>") as table:
+        cql.execute(f"insert into {table} (k, m) values (0, {{'v2': 1}})")
+        assert list(cql.execute(f"select m from {table} where k = 0")) == [({'v2': 1},)]
+        cql.execute(f"delete m['v2'] from {table} where k = 0")
+        assert list(cql.execute(f"select m from {table} where k = 0")) == [(None,)]
