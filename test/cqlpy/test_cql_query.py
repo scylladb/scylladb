@@ -478,3 +478,91 @@ def test_twcs_max_window(cql, test_keyspace, scylla_only):
     finally:
         for t in [tbl, tbl2]:
             cql.execute(f"DROP TABLE IF EXISTS {t}")
+
+
+def test_twcs_restrictions_mixed(cql, test_keyspace, scylla_only):
+    tables = {i: f"{test_keyspace}.{unique_name()}" for i in range(1, 13)}
+    def set_max_windows(n):
+        cql.execute(f"UPDATE system.config SET value='{n}' WHERE name='twcs_max_window_count'")
+    twcs = "{'class': 'TimeWindowCompactionStrategy'}"
+    stcs = "{'class': 'SizeTieredCompactionStrategy'}"
+    try:
+        # Hardcode restriction to max 10 windows
+        with config_value_context(cql, 'twcs_max_window_count', '10'):
+            # Scenario 1: STCS->TWCS with no TTL defined
+            cql.execute(f"CREATE TABLE {tables[1]} (a int PRIMARY KEY, b int)")
+            cql.execute(f"ALTER TABLE {tables[1]} WITH compaction = {twcs}")
+
+            # Scenario 2: STCS->TWCS with small TTL. Note: TWCS default window size is 1 day (86400s)
+            cql.execute(f"CREATE TABLE {tables[2]} (a int PRIMARY KEY, b int) WITH default_time_to_live = 60")
+            cql.execute(f"ALTER TABLE {tables[2]} WITH compaction = {twcs}")
+
+            # Scenario 3: STCS->TWCS with large TTL value
+            cql.execute(f"CREATE TABLE {tables[3]} (a int PRIMARY KEY, b int) WITH default_time_to_live = 8640000")
+            with pytest.raises(ConfigurationException):
+                cql.execute(f"ALTER TABLE {tables[3]} WITH compaction = {twcs}")
+
+            # Scenario 4: TWCS table with small to large TTL
+            cql.execute(f"CREATE TABLE {tables[4]} (a int PRIMARY KEY, b int) WITH compaction = {twcs} AND default_time_to_live = 60")
+            with pytest.raises(ConfigurationException):
+                cql.execute(f"ALTER TABLE {tables[4]} WITH default_time_to_live = 86400000")
+
+            # Scenario 5: No TTL TWCS to large TTL and then small TTL
+            cql.execute(f"CREATE TABLE {tables[5]} (a int PRIMARY KEY, b int) WITH compaction = {twcs}")
+            with pytest.raises(ConfigurationException):
+                cql.execute(f"ALTER TABLE {tables[5]} WITH default_time_to_live = 86400000")
+            cql.execute(f"ALTER TABLE {tables[5]} WITH default_time_to_live = 60")
+
+            # Scenario 6: twcs_max_window_count LiveUpdate - Decrease TTL
+            set_max_windows(0)
+            cql.execute(f"CREATE TABLE {tables[6]} (a int PRIMARY KEY, b int) WITH compaction = {twcs} AND default_time_to_live = 86400000")
+            set_max_windows(50)
+            cql.execute(f"ALTER TABLE {tables[6]} WITH default_time_to_live = 60")
+
+            # Scenario 7: twcs_max_window_count LiveUpdate - Switch CompactionStrategy
+            set_max_windows(0)
+            cql.execute(f"CREATE TABLE {tables[7]} (a int PRIMARY KEY, b int) WITH compaction = {twcs} AND default_time_to_live = 86400000")
+            set_max_windows(50)
+            cql.execute(f"ALTER TABLE {tables[7]} WITH compaction = {stcs}")
+
+            # Scenario 8: No TTL TWCS table to STCS
+            cql.execute(f"CREATE TABLE {tables[8]} (a int PRIMARY KEY, b int) WITH compaction = {twcs}")
+            cql.execute(f"ALTER TABLE {tables[8]} WITH compaction = {stcs}")
+
+            # Scenario 9: Large TTL TWCS table, modify attribute other than compaction and default_time_to_live
+            set_max_windows(0)
+            cql.execute(f"CREATE TABLE {tables[9]} (a int PRIMARY KEY, b int) WITH compaction = {twcs} AND default_time_to_live = 86400000")
+            set_max_windows(50)
+            cql.execute(f"ALTER TABLE {tables[9]} WITH gc_grace_seconds = 0")
+
+            # Scenario 10: Large TTL STCS table, fail to switch to TWCS with no TTL
+            cql.execute(f"CREATE TABLE {tables[10]} (a int PRIMARY KEY, b int) WITH default_time_to_live = 8640000")
+            with pytest.raises(ConfigurationException):
+                cql.execute(f"ALTER TABLE {tables[10]} WITH compaction = {twcs}")
+            cql.execute(f"ALTER TABLE {tables[10]} WITH compaction = {twcs} AND default_time_to_live = 0")
+
+            # Scenario 11: Ensure default_time_to_live updates reference existing table properties
+            cql.execute(f"CREATE TABLE {tables[11]} (a int PRIMARY KEY, b int) WITH compaction = "
+                        "{'class': 'TimeWindowCompactionStrategy', 'compaction_window_size': '1', "
+                        "'compaction_window_unit': 'MINUTES'} AND default_time_to_live=3000")
+            with pytest.raises(ConfigurationException):
+                cql.execute(f"ALTER TABLE {tables[11]} WITH default_time_to_live=3600")
+            cql.execute(f"ALTER TABLE {tables[11]} WITH compaction = {{'class': 'TimeWindowCompactionStrategy', "
+                        "'compaction_window_size': '2', 'compaction_window_unit': 'MINUTES'}")
+            cql.execute(f"ALTER TABLE {tables[11]} WITH default_time_to_live=3600")
+
+            # Scenario 12: Ensure that window sizes <= 0 are forbidden
+            with pytest.raises(ConfigurationException):
+                cql.execute(f"CREATE TABLE {tables[12]} (a int PRIMARY KEY, b int) WITH compaction = "
+                            "{'class': 'TimeWindowCompactionStrategy', 'compaction_window_size': '0'}")
+            with pytest.raises(ConfigurationException):
+                cql.execute(f"CREATE TABLE {tables[12]} (a int PRIMARY KEY, b int) WITH compaction = "
+                            "{'class': 'TimeWindowCompactionStrategy', 'compaction_window_size': -65535}")
+            cql.execute(f"CREATE TABLE {tables[12]} (a int PRIMARY KEY, b int) WITH compaction = "
+                        "{'class': 'TimeWindowCompactionStrategy', 'compaction_window_size': 1}")
+            with pytest.raises(ConfigurationException):
+                cql.execute(f"ALTER TABLE {tables[12]} WITH compaction = {{'class': 'TimeWindowCompactionStrategy', "
+                            "'compaction_window_size': 0}")
+    finally:
+        for t in tables.values():
+            cql.execute(f"DROP TABLE IF EXISTS {t}")
