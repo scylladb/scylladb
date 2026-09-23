@@ -1127,6 +1127,9 @@ public:
 
     std::optional<uint32_t> get_component_digest(component_type c) const;
 
+    std::optional<db_clock::time_point> get_scrub_time() const;
+    void set_scrub_time(db_clock::time_point scrub_time);
+
     // Gets ratio of droppable tombstone. A tombstone is considered droppable here
     // for cells and tombstones expired before the time point "GC before", which
     // is the point before which expiring data can be purged.
@@ -1271,7 +1274,7 @@ public:
             std::function<void(sstable&)> modifier,
             update_sstable_id);
     // Must be called in a seastar thread
-    void write_component_with_metadata(component_type type);
+    void write_component_with_metadata_and_modifier(component_type type, std::function<void(sstable&)> modifier);
 private:
     future<uint64_t> component_filesize(component_type type) const noexcept;
 };
@@ -1424,6 +1427,7 @@ public:
 struct sstable_stream_sink_cfg {
     bool last_component = false;
     bool leave_unsealed = false;
+    bool update_scrub_time = false;
 };
 
 // Creates a sink object which can receive a component file sourced from above source object data.
