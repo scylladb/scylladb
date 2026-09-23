@@ -1001,3 +1001,37 @@ def test_range_deletion_scenarios_with_compact_storage(cql, test_keyspace, compa
         for where in ["c <= 3", "c >= 0", "c > 0 and c <= 3", "c >= 0 and c < 3", "c > 0 and c < 3", "c >= 0 and c <= 3"]:
             with pytest.raises(InvalidRequest):
                 cql.execute(f"delete from {table} where p = 1 and {where}")
+
+
+def test_map_insert_update(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p1 varchar primary key, map1 map<int, int>") as table:
+        def check(expected):
+            assert list(cql.execute(f"select map1 from {table} where p1 = 'key1'")) == [(expected,)]
+        cql.execute(f"insert into {table} (p1, map1) values ('key1', {{ 1001: 2001 }})")
+        check({1001: 2001})
+        cql.execute(f"update {table} set map1[1002] = 2002 where p1 = 'key1'")
+        check({1001: 2001, 1002: 2002})
+        # overwrite an element
+        cql.execute(f"update {table} set map1[1001] = 3001 where p1 = 'key1'")
+        check({1001: 3001, 1002: 2002})
+        # overwrite whole map
+        cql.execute(f"update {table} set map1 = {{1003: 4003}} where p1 = 'key1'")
+        check({1003: 4003})
+        # overwrite whole map, but bad syntax
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"update {table} set map1 = {{1003, 4003}} where p1 = 'key1'")
+        # overwrite whole map
+        cql.execute(f"update {table} set map1 = {{1001: 5001, 1002: 5002, 1003: 5003}} where p1 = 'key1'")
+        check({1001: 5001, 1002: 5002, 1003: 5003})
+        # discard some keys
+        cql.execute(f"update {table} set map1 = map1 - {{1001, 1003, 1005}} where p1 = 'key1'")
+        check({1002: 5002})
+        assert list(cql.execute(f"select * from {table} where p1 = 'key1'")) == [('key1', {1002: 5002})]
+        # overwrite an element
+        cql.execute(f"update {table} set map1[1009] = 5009 where p1 = 'key1'")
+        # delete a key
+        cql.execute(f"delete map1[1002] from {table} where p1 = 'key1'")
+        check({1009: 5009})
+        cql.execute(f"insert into {table} (p1, map1) values ('key1', null)")
+        # An empty non-frozen map is returned as null
+        check(None)
