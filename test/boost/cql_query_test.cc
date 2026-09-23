@@ -517,29 +517,6 @@ static future<> with_parallelized_aggregation_enabled_thread(std::function<void(
     return do_with_cql_env_thread(std::forward<std::function<void(cql_test_env&)>>(func), db_cfg_ptr);
 }
 
-SEASTAR_TEST_CASE(test_parallelized_select_sum_group_by) {
-    return with_parallelized_aggregation_enabled_thread([](cql_test_env& e) {
-        auto& qp = e.local_qp();
-        auto stat_parallelized = qp.get_cql_stats().select_parallelized;
-
-        e.execute_cql("CREATE TABLE tbl (k int, c int, v int, PRIMARY KEY (k, c));").get();
-        int value_count = 10;
-        for (int k = 0; k < 2; k++) {
-            for (int c = 0; c < value_count; c++) {
-                e.execute_cql(format("INSERT INTO tbl (k, c, v) VALUES ({:d}, {:d}, {:d});", k, c, c)).get();
-            }
-        }
-    
-        auto msg = e.execute_cql("SELECT k, SUM(v) FROM tbl GROUP BY k;").get();
-        assert_that(msg).is_rows().with_rows({
-            {int32_type->decompose(int32_t(1)), int32_type->decompose(int32_t((value_count - 1) * value_count / 2))},
-            {int32_type->decompose(int32_t(0)), int32_type->decompose(int32_t((value_count - 1) * value_count / 2))}
-        });
-
-        BOOST_CHECK_EQUAL(stat_parallelized, qp.get_cql_stats().select_parallelized);
-    });
-}
-
 SEASTAR_TEST_CASE(test_parallelized_select_counter_type) {
     return with_parallelized_aggregation_enabled_thread([](cql_test_env& e) {
         auto& qp = e.local_qp();

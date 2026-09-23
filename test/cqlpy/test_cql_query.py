@@ -3123,3 +3123,16 @@ def test_non_parallelized_multiple_select(cql, test_keyspace, scylla_only):
         assert list(cql.execute(f"SELECT MIN(k), MAX(k) FROM {table}")) == [(0, value_count - 1)]
         # Despite the test's name, a SELECT with multiple aggregates is parallelized.
         assert parallelized_count() == 1
+
+
+# GROUP BY queries are not parallelized.
+def test_parallelized_select_sum_group_by(cql, test_keyspace, scylla_only):
+    with parallelized_aggregation_enabled(cql) as parallelized_count, \
+            new_test_table(cql, test_keyspace, "k int, c int, v int, PRIMARY KEY (k, c)") as table:
+        value_count = 10
+        for k in range(2):
+            for c in range(value_count):
+                cql.execute(f"INSERT INTO {table} (k, c, v) VALUES ({k}, {c}, {c})")
+        expected_sum = (value_count - 1) * value_count // 2
+        assert list(cql.execute(f"SELECT k, SUM(v) FROM {table} GROUP BY k")) == [(1, expected_sum), (0, expected_sum)]
+        assert parallelized_count() == 0
