@@ -378,28 +378,6 @@ SEASTAR_TEST_CASE(test_ttl) {
     });
 }
 
-SEASTAR_TEST_CASE(test_frozen_collections) {
-    return do_with_cql_env([] (cql_test_env& e) {
-        auto set_of_ints = set_type_impl::get_instance(int32_type, false);
-        auto list_of_ints = list_type_impl::get_instance(int32_type, false);
-        auto frozen_map_of_set_and_list = map_type_impl::get_instance(set_of_ints, list_of_ints, false);
-        return e.execute_cql("CREATE TABLE tfc (a int, b int, c frozen<map<set<int>, list<int>>> static, d int, PRIMARY KEY (a, b));").discard_result().then([&e] {
-            return e.execute_cql("INSERT INTO tfc (a, b, c, d) VALUES (0, 0, {}, 0);").discard_result();
-        }).then([&e] {
-            return e.execute_cql("SELECT * FROM tfc;");
-        }).then([frozen_map_of_set_and_list] (shared_ptr<cql_transport::messages::result_message> msg) {
-            assert_that(msg).is_rows().with_rows({
-                { int32_type->decompose(0),
-                  int32_type->decompose(0),
-                  frozen_map_of_set_and_list->decompose(make_map_value(
-                          frozen_map_of_set_and_list, map_type_impl::native_type({}))),
-                  int32_type->decompose(0) },
-            });
-        });
-    });
-}
-
-
 SEASTAR_TEST_CASE(test_alter_table) {
     return do_with_cql_env([] (cql_test_env& e) {
         return e.execute_cql("create table tat (pk1 int, c1 int, ck2 int, r1 int, r2 int, PRIMARY KEY (pk1, c1, ck2));").discard_result().then([&e] {

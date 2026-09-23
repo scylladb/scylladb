@@ -1699,3 +1699,10 @@ def test_result_order(cql, test_keyspace, compact_storage):
             (1, 'cccc', 6),
             (1, 'z', 1),
         ]
+
+
+def test_frozen_collections(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "a int, b int, c frozen<map<set<int>, list<int>>> static, d int, PRIMARY KEY (a, b)") as table:
+        cql.execute(f"INSERT INTO {table} (a, b, c, d) VALUES (0, 0, {{}}, 0)")
+        # An empty frozen map is a value, not null
+        assert list(cql.execute(f"SELECT * FROM {table}")) == [(0, 0, {}, 0)]
