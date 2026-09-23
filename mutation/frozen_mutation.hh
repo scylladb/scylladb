@@ -131,7 +131,14 @@ public:
     }
 
     auto on_end_of_partition() {
-        flush_rows_and_tombstones(position_in_partition::after_all_clustered_rows());
+        // A consumer which asked to stop gets no more fragments. An unflushed range
+        // tombstone in particular must not close after the position where the consumer
+        // stopped: a consumer which tracks its position would then report one past the
+        // rows it consumed, and the next page would skip the rest. The consumer closes
+        // the tombstone at its own stop instead. mutation::consume() skips the same flush.
+        if (!_stop_consuming) {
+            flush_rows_and_tombstones(position_in_partition::after_all_clustered_rows());
+        }
         _stop_consuming = _consumer.consume_end_of_partition();
         using consume_res_type = decltype(_consumer.consume_end_of_stream());
         if constexpr (std::is_same_v<consume_res_type, void>) {

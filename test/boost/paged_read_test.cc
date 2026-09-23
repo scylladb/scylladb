@@ -363,6 +363,30 @@ SEASTAR_THREAD_TEST_CASE(test_witness_of_distinct_with_filtering) {
     });
 }
 
+// A case which catches a defect of a page which stops inside a range
+// tombstone. The replicas differ, so the coordinator reconciles the page and
+// converts it to a data result. The conversion stops after row 2 of partition
+// 4, because the page holds one row. If the conversion still passes on the end
+// of the range tombstone, the page's cursor moves to the end of the tombstone,
+// before row 5. The next page starts there, and row 4 is lost.
+SEASTAR_THREAD_TEST_CASE(test_witness_of_stop_inside_range_tombstone) {
+    const read_case witness{
+        placed_history{
+            {regular_cell_write{4, 2, regular_column::v2, 4, 14, lifetime::permanent}, 0b1},
+            {row_deletion{2, 4, 21}, 0b10},
+            {regular_cell_write{3, 2, regular_column::v1, 6, 19, lifetime::permanent}, 0b1},
+            {range_deletion{4, bound{2, true}, bound{5, false}, 8}, 0b1},
+            {regular_cell_write{4, 4, regular_column::v1, 3, 10, lifetime::permanent}, 0b10},
+            {regular_cell_write{2, 4, regular_column::v2, 2, 17, lifetime::permanent}, 0b1},
+        },
+        select_query{.per_partition_limit = 3},
+        read_options{.replica_count = 2, .page_size = 1},
+    };
+    with_harness([&] (harness& hs) {
+        run_and_check(hs, witness);
+    });
+}
+
 namespace {
 
 // 1 to 4 replicas, of which all but one may be extra replicas.
