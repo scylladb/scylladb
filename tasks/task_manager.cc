@@ -412,8 +412,8 @@ task_manager::generic_task_impl::generic_task_impl(
         tasks::is_internal is_internal,
         tasks::is_user_task is_user_task,
         action_fn action,
-        progress_fn progress_fn,
-        workload_fn workload_fn,
+        lw_shared_ptr<progress_fn> progress_fn,
+        lw_shared_ptr<workload_fn> workload_fn,
         abort_fn abort_fn,
         finalize_fn finalizer) noexcept
     : impl(std::move(module), id, sequence_number, std::move(scope), std::move(keyspace), std::move(table), std::move(entity), parent_info.get_id())
@@ -442,7 +442,8 @@ future<task_manager::task::progress> task_manager::generic_task_impl::get_progre
         co_return *_cached_progress;
     }
     auto complete = is_complete();
-    auto progress = co_await (_progress_fn ? _progress_fn() : task::impl::get_progress());
+    auto progress_fn = _progress_fn;
+    auto progress = co_await (progress_fn ? (*progress_fn)() : task::impl::get_progress());
     if (complete) {
         _cached_progress = progress;
     }
@@ -500,7 +501,8 @@ future<std::optional<double>> task_manager::generic_task_impl::expected_total_wo
     if (_cached_workload) {
         co_return _cached_workload;
     }
-    auto workload = co_await (_workload_fn ? _workload_fn() : task::impl::expected_total_workload());
+    auto workload_fn = _workload_fn;
+    auto workload = co_await (workload_fn ? (*workload_fn)() : task::impl::expected_total_workload());
     if (workload) {
         _cached_workload = workload;
     }
@@ -590,6 +592,8 @@ task_manager::task_builder& task_manager::task_builder::set_finalizer(generic_ta
 }
 
 future<task_manager::task_ptr> task_manager::task_builder::build(generic_task_impl::action_fn action) && {
+    auto progress_fn = _progress_fn ? make_lw_shared<generic_task_impl::progress_fn>(std::move(_progress_fn)) : lw_shared_ptr<generic_task_impl::progress_fn>{};
+    auto workload_fn = _workload_fn ? make_lw_shared<generic_task_impl::workload_fn>(std::move(_workload_fn)) : lw_shared_ptr<generic_task_impl::workload_fn>{};
     auto task_impl = seastar::make_shared<generic_task_impl>(
         _module,
         _id,
@@ -605,8 +609,8 @@ future<task_manager::task_ptr> task_manager::task_builder::build(generic_task_im
         _is_internal.value_or(tasks::is_internal{_parent_info && *_parent_info && _parent_info->get_kind() == task_kind::node}),
         _is_user_task.value_or(tasks::is_user_task::no),
         std::move(action),
-        std::move(_progress_fn),
-        std::move(_workload_fn),
+        std::move(progress_fn),
+        std::move(workload_fn),
         std::move(_abort_fn),
         std::move(_finalizer)
     );
