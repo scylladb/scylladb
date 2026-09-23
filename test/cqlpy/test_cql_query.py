@@ -905,3 +905,15 @@ def test_limit_is_respected_across_partitions(cql, test_keyspace):
         assert list(cql.execute(f"select s1 from {cf} limit 1")) == [(k2,)]
         cql.execute(f"update {cf} set s1 = null where k = 0x{k2.hex()}")
         assert list(cql.execute(f"select s1 from {cf} limit 1")) == []
+
+
+def test_partitions_have_consistent_ordering_in_range_query(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "k blob, v int, primary key (k)") as cf:
+        cql.execute("begin unlogged batch \n" +
+                    "".join(f"  insert into {cf} (k, v) values (0x0{i}, 0); \n" for i in range(1, 7)) +
+                    "apply batch;")
+        # Determine partition order
+        keys = [row.k for row in cql.execute(f"select k from {cf}")]
+        assert len(keys) == 6
+        for limit in range(1, 7):
+            assert list(cql.execute(f"select k from {cf} limit {limit}")) == [(k,) for k in keys[:limit]]
