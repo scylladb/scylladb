@@ -62,6 +62,9 @@
 
 namespace hll {
 
+// Precision of the sketches written to Statistics.db: 1KiB, ~3.25% standard error.
+inline constexpr uint8_t cardinality_precision = 10;
+
 inline size_t size_unsigned_var_int(unsigned int value) {
     size_t size = 0;
     while ((value & 0xFFFFFF80) != 0L) {

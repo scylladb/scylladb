@@ -16,7 +16,7 @@
 
 namespace {
 
-constexpr uint8_t precision = 10;
+constexpr uint8_t precision = hll::cardinality_precision;
 // 4 standard errors at p=10 (1.04 / sqrt(1024) ~= 3.25%).
 constexpr double tolerance = 0.13;
 
@@ -71,6 +71,12 @@ BOOST_AUTO_TEST_CASE(test_merge_overlapping) {
     auto a = make_sketch(0, 600'000);
     a.merge(make_sketch(400'000, 1'000'000));
     check_estimate(a, 1'000'000);
+}
+
+// Sketches of different precision (e.g. legacy b=4 ones) can't be merged.
+BOOST_AUTO_TEST_CASE(test_merge_rejects_mixed_precision) {
+    auto a = make_sketch(0, 1000);
+    BOOST_REQUIRE_THROW(a.merge(make_sketch(0, 1000, 4)), std::invalid_argument);
 }
 
 // Bits below the low 32 of the shifted hash used to be dropped.

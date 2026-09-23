@@ -73,6 +73,10 @@ namespace data_consumer {
 class continuous_data_consumer_input_stream;
 }
 
+namespace hll {
+class HyperLogLog;
+}
+
 namespace sstables {
 
 template <typename ChecksumType, bool calculate_chunk_checksums>
@@ -672,6 +676,8 @@ private:
     // a rewrite, not a fresh write. In this case it should ignore schema/config
     // and strictly obey scylla_metadata.
     bool _created_by_component_rewrite = false;
+    // The Compaction metadata in memory lacks its cardinality sketch (see read_compaction_metadata()).
+    bool _cardinality_sketch_dropped = false;
 
     db_clock::time_point _now;
 
@@ -744,6 +750,10 @@ private:
     future<> read_simple_and_verify_digest(T& comp);
     future<> do_read_simple(component_type type,
                             noncopyable_function<future<> (version_types, file&&, uint64_t sz)> read_component);
+    future<compaction_metadata> read_compaction_metadata_from(file f, uint64_t size, bool verify_digest) const;
+    // Like do_read_simple(), but doesn't account the size in _metadata_size_on_disk; returns it instead.
+    future<uint64_t> do_read_component(component_type type,
+                            noncopyable_function<future<> (version_types, file&&, uint64_t sz)> read_component) const;
     // this variant closes the file on parse completion
     future<> do_read_simple(component_type type,
                             noncopyable_function<future<> (version_types, file)> read_component);
@@ -1131,6 +1141,11 @@ public:
         const compaction_metadata& s = *static_cast<compaction_metadata *>(p.get());
         return s;
     }
+    // Reads Compaction metadata from disk, verifying the whole file: its cardinality sketch is not kept in memory.
+    future<compaction_metadata> read_compaction_metadata() const;
+    // Partition key cardinality sketch; nullopt if not in our encoding (e.g. written by Cassandra).
+    // Reads only the Compaction section, without checking the Statistics digest.
+    future<std::optional<hll::HyperLogLog>> read_cardinality_estimator() const;
     const serialization_header& get_serialization_header() const {
         return get_mutable_serialization_header(*_components);
     }
