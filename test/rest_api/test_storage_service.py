@@ -952,6 +952,17 @@ def test_drop_quarantined_sstables(cql, this_dc, rest_api):
                 resp = rest_api.send("POST", f"storage_service/keyspace_flush/{keyspace}")
                 resp.raise_for_status()
 
+                # Rejected when data resurrection risk acceptance is omitted.
+                resp = rest_api.send("POST", "storage_service/drop_quarantined_sstables")
+                assert resp.status_code == requests.codes.bad_request
+                assert 'To accept the risk and carry out the operation, provide the "accept_data_resurrection_risk" parameter.' in resp.json()["message"]
+
+                # Rejected when data resurrection risk is not accepted.
+                resp = rest_api.send("POST", "storage_service/drop_quarantined_sstables",
+                                   params={"accept_data_resurrection_risk": "false"})
+                assert resp.status_code == requests.codes.bad_request
+                assert 'To accept the risk and carry out the operation, provide the "accept_data_resurrection_risk" parameter.' in resp.json()["message"]
+
                 # Drop quarantined sstables from all keyspaces
                 resp = rest_api.send("POST", "storage_service/drop_quarantined_sstables",
                                    params={"accept_data_resurrection_risk": "true"})
