@@ -19,7 +19,7 @@ from cassandra import InvalidRequest, Unauthorized
 from cassandra.cluster import NoHostAvailable
 import cassandra.cqltypes
 from cassandra.protocol import ConfigurationException, SyntaxException
-from cassandra.query import UNSET_VALUE
+from cassandra.query import SimpleStatement, UNSET_VALUE
 from cassandra.util import Date, Duration, Time
 import pytest
 
@@ -1393,3 +1393,42 @@ def test_types(cql, test_keyspace):
             'zażółć gęślą jaźń', ts, uuid, uuid, 'varchar', 123, Decimal('1.23'), 3, 3,
             Date(1), Time(1),
             Duration(10 * 12 + 9, 8 * 7 + 7, 6 * h + 5 * m + 4 * s + 3 * ms + 2 * us + 1 * ns))]
+
+
+def test_order_by(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p1 int, c1 int, c2 int, r1 int, r2 int, PRIMARY KEY(p1, c1, c2)") as table:
+        def check(where_and_order, expected):
+            # ORDER BY with IN on the partition key cannot be paged, so disable
+            # paging for all queries here.
+            stmt = SimpleStatement(f"select c1, c2, r1 from {table} where {where_and_order}", fetch_size=None)
+            assert list(cql.execute(stmt)) == expected
+
+        cql.execute(f"insert into {table} (p1, c1, c2, r1) values (0, 1, 2, 3)")
+        cql.execute(f"insert into {table} (p1, c1, c2, r1) values (0, 2, 1, 0)")
+
+        check("p1 = 0 order by c1 asc", [(1, 2, 3), (2, 1, 0)])
+        check("p1 = 0 order by c1 desc", [(2, 1, 0), (1, 2, 3)])
+
+        cql.execute(f"insert into {table} (p1, c1, c2, r1) values (0, 1, 1, 4)")
+        cql.execute(f"insert into {table} (p1, c1, c2, r1) values (0, 2, 2, 5)")
+        check("p1 = 0 order by c1 desc, c2 desc", [(2, 2, 5), (2, 1, 0), (1, 2, 3), (1, 1, 4)])
+
+        cql.execute(f"insert into {table} (p1, c1, c2, r1) values (1, 1, 0, 6)")
+        cql.execute(f"insert into {table} (p1, c1, c2, r1) values (1, 2, 3, 7)")
+
+        check("p1 in (0, 1) order by c1 desc, c2 desc",
+            [(2, 3, 7), (2, 2, 5), (2, 1, 0), (1, 2, 3), (1, 1, 4), (1, 0, 6)])
+        check("p1 in (0, 1) order by c1 asc, c2 asc",
+            [(1, 0, 6), (1, 1, 4), (1, 2, 3), (2, 1, 0), (2, 2, 5), (2, 3, 7)])
+        check("p1 in (0, 1) and c1 < 2 order by c1 desc, c2 desc limit 1", [(1, 2, 3)])
+        check("p1 in (0, 1) and c1 >= 2 order by c1 asc, c2 asc limit 1", [(2, 1, 0)])
+        check("p1 in (0, 1) order by c1 desc, c2 desc limit 1", [(2, 3, 7)])
+        check("p1 in (0, 1) order by c1 asc, c2 asc limit 1", [(1, 0, 6)])
+        check("p1 = 0 and c1 > 1 order by c1 desc, c2 desc", [(2, 2, 5), (2, 1, 0)])
+        check("p1 = 0 and c1 >= 2 order by c1 desc, c2 desc", [(2, 2, 5), (2, 1, 0)])
+        check("p1 = 0 and c1 >= 2 order by c1 desc, c2 desc limit 1", [(2, 2, 5)])
+        check("p1 = 0 order by c1 desc, c2 desc limit 1", [(2, 2, 5)])
+        check("p1 = 0 and c1 > 1 order by c1 asc, c2 asc", [(2, 1, 0), (2, 2, 5)])
+        check("p1 = 0 and c1 >= 2 order by c1 asc, c2 asc", [(2, 1, 0), (2, 2, 5)])
+        check("p1 = 0 and c1 >= 2 order by c1 asc, c2 asc limit 1", [(2, 1, 0)])
+        check("p1 = 0 order by c1 asc, c2 asc limit 1", [(1, 1, 4)])
