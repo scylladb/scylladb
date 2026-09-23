@@ -517,25 +517,6 @@ static future<> with_parallelized_aggregation_enabled_thread(std::function<void(
     return do_with_cql_env_thread(std::forward<std::function<void(cql_test_env&)>>(func), db_cfg_ptr);
 }
 
-SEASTAR_TEST_CASE(test_parallelized_select_count) {
-    return with_parallelized_aggregation_enabled_thread([](cql_test_env& e) {
-        auto& qp = e.local_qp();
-        auto stat_parallelized = qp.get_cql_stats().select_parallelized;
-
-        e.execute_cql("CREATE TABLE tbl (k int, v int, PRIMARY KEY (k));").get();
-        int value_count = 10;
-        for (int i = 0; i < value_count; i++) {
-            e.execute_cql(format("INSERT INTO tbl (k, v) VALUES ({:d}, {:d});", i, i)).get();
-        }
-        auto msg = e.execute_cql("SELECT COUNT(*) FROM tbl;").get();
-        assert_that(msg).is_rows().with_rows({
-            {long_type->decompose(int64_t(value_count))}
-        });
-
-        BOOST_CHECK_EQUAL(stat_parallelized + 1, qp.get_cql_stats().select_parallelized);
-    });
-}
-
 SEASTAR_TEST_CASE(test_parallelized_select_min) {
     return with_parallelized_aggregation_enabled_thread([](cql_test_env& e) {
         auto& qp = e.local_qp();

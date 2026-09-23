@@ -29,7 +29,7 @@ import pytest
 
 from . import nodetool
 from .nodetool import flush, no_autocompaction_context
-from .util import config_value_context, is_scylla, new_session, new_test_keyspace, new_test_table, new_type, new_user, unique_name
+from .util import ScyllaMetrics, config_value_context, is_scylla, new_session, new_test_keyspace, new_test_table, new_type, new_user, unique_name
 
 
 def test_create_keyspace_statement(cql):
@@ -3056,3 +3056,29 @@ def test_timeuuid_fcts_prepared_re_evaluation(cql, test_keyspace, function, type
         # different value.
         cql.execute(insert)
         assert len(list(cql.execute(f"SELECT * FROM {table}"))) == 2
+
+
+# Returns the number of parallelized aggregation SELECT query executions,
+# summed over all shards.
+def get_select_parallelized(cql):
+    return ScyllaMetrics.query(cql).get("scylla_cql_select_parallelized") or 0
+
+
+# Run the enclosed block with parallelized aggregation enabled, and yield a
+# function returning how many aggregation queries were parallelized since
+# the block started.
+@contextmanager
+def parallelized_aggregation_enabled(cql):
+    with config_value_context(cql, "enable_parallelized_aggregation", "true"):
+        before = get_select_parallelized(cql)
+        yield lambda: get_select_parallelized(cql) - before
+
+
+def test_parallelized_select_count(cql, test_keyspace, scylla_only):
+    with parallelized_aggregation_enabled(cql) as parallelized_count, \
+            new_test_table(cql, test_keyspace, "k int, v int, PRIMARY KEY (k)") as table:
+        value_count = 10
+        for i in range(value_count):
+            cql.execute(f"INSERT INTO {table} (k, v) VALUES ({i}, {i})")
+        assert list(cql.execute(f"SELECT COUNT(*) FROM {table}")) == [(value_count,)]
+        assert parallelized_count() == 1
