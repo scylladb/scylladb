@@ -34,8 +34,10 @@ value set at a broader one:
 * ``NODE`` overrides ``RACK``, which overrides ``DATACENTER``, which overrides ``CLUSTER``.
 
 Each option supports a fixed set of scopes. Options that describe a table (such as
-``auto_repair_enabled``) can be set at ``TABLE``, ``KEYSPACE`` and ``CLUSTER`` scope. No option
-currently supports the ``DATACENTER``, ``RACK`` or ``NODE`` scopes.
+``auto_repair_enabled``) can be set at ``TABLE``, ``KEYSPACE`` and ``CLUSTER`` scope. Options that
+describe the cluster as a whole (such as ``repair_hints_batchlog_flush_discard_unreplayed_hints``)
+can be set at ``CLUSTER`` scope only. No option currently supports the ``DATACENTER``, ``RACK`` or
+``NODE`` scopes.
 
 Each scope stores only the values that were explicitly set there. The *effective* value of an
 option for a table is the value stored at the narrowest scope that has one: the table's own value
@@ -161,3 +163,13 @@ Available options
      - boolean
      - ``CLUSTER``, ``KEYSPACE``, ``TABLE``
      - Enable automatic repair for tablet-based tables. Default: ``false``.
+   * - ``repair_hints_batchlog_flush_discard_unreplayed_hints``
+     - boolean
+     - ``CLUSTER``
+     - A repair of a table with ``tombstone_gc`` in ``repair`` mode waits for every hint written
+       before it to be sent, and records no repair time if the wait times out. With this option
+       on, such a timeout discards the hints the repair waited for, so that the next repair no
+       longer waits for them. The discard covers every regular hint on the node, for all tables
+       and destinations. A discarded write that some replica received comes back with a repair of
+       its table; a write acknowledged at consistency level ``ANY`` that only hints hold is lost.
+       Hints for materialized views are never discarded. Default: ``false``.
