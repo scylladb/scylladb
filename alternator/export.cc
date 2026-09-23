@@ -11,12 +11,14 @@
 #include "alternator/error.hh"
 #include "alternator/executor.hh"
 #include "alternator/executor_util.hh"
+#include "db/system_distributed_keyspace.hh"
 #include "db_clock.hh"
 #include "service/storage_proxy.hh"
 #include "utils/rjson.hh"
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -341,6 +343,91 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
         rjson::add(export_desc, "S3Prefix", rjson::from_string(s3_prefix));
     }
     rjson::add(export_desc, "TableArn", rjson::from_string(table_arn));
+
+    rjson::value response = rjson::empty_object();
+    rjson::add(response, "ExportDescription", std::move(export_desc));
+    co_return rjson::print(std::move(response));
+}
+
+future<executor::request_return_type> executor::describe_export(client_state& client_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+    _stats.api_operations.describe_export++;
+
+    // An export ARN is the ARN of the exported table with `/export/<id>` appended, so parsing it
+    // also tells us which table the export belongs to.
+    static constexpr std::string_view export_infix = "/export/";
+    auto export_arn = get_non_empty_string_attribute(request, "ExportArn");
+    auto parts = parse_arn(export_arn, "ExportArn", "Export", export_infix);
+    // parse_arn only requires the ARN to continue with `/export/`, leaving the export id itself
+    // unexamined, and an ARN that names no export is malformed rather than unknown.
+    if (parts.postfix.size() == export_infix.size()) {
+        co_return api_error::validation(fmt::format("ExportArn: Invalid Export ARN `{}` - no export id after `{}`", export_arn, export_infix));
+    }
+
+    maybe_audit(audit_info, audit::statement_category::QUERY, parts.keyspace_name, parts.table_name, "DescribeExport", request);
+
+    // Only Alternator tables are exported, so an ARN naming anything else names no export. Unlike
+    // ExportTableToPointInTime, DescribeExport cannot say so with ResourceNotFoundException -
+    // DynamoDB does not list it among the errors this operation returns.
+    if (!parts.keyspace_name.starts_with(executor::KEYSPACE_NAME_PREFIX)) {
+        co_return api_error::export_not_found(fmt::format("ExportArn: Export `{}` not found", export_arn));
+    }
+    // The exported table may have been dropped after the export was accepted, and DynamoDB keeps
+    // describing such exports. Per-table metrics live on the table object, so they only exist for
+    // as long as it does.
+    if (auto table = _proxy.data_dictionary().try_find_table(parts.keyspace_name, parts.table_name)) {
+        get_stats_from_schema(_proxy, *table->schema())->api_operations.describe_export++;
+    }
+
+    auto normal_token_owners = _proxy.get_token_metadata_ptr()->count_normal_token_owners();
+    auto exp = co_await _sdks.get_alternator_export(export_arn, { normal_token_owners });
+    if (!exp) {
+        co_return api_error::export_not_found(fmt::format("ExportArn: Export `{}` not found", export_arn));
+    }
+
+    rjson::value export_desc = rjson::empty_object();
+    rjson::add(export_desc, "ExportArn", rjson::from_string(export_arn));
+    rjson::add(export_desc, "ExportStatus", rjson::from_string(exp->status));
+    rjson::add(export_desc, "StartTime", rjson::value(to_epoch_seconds(exp->accepted_at)));
+
+    // The fields describing the request are echoed back from the request that started the export,
+    // with the same defaults which ExportTableToPointInTime applies to a request that omits them.
+    auto exported_request = rjson::parse(exp->request);
+    rjson::add(export_desc, "TableArn", rjson::from_string(get_non_empty_string_attribute(exported_request, "TableArn")));
+    rjson::add(export_desc, "S3Bucket", rjson::from_string(get_non_empty_string_attribute(exported_request, "S3Bucket")));
+    auto s3_prefix = get_non_empty_string_attribute(exported_request, "S3Prefix", "");
+    if (!s3_prefix.empty()) {
+        rjson::add(export_desc, "S3Prefix", rjson::from_string(s3_prefix));
+    }
+    rjson::add(export_desc, "ExportFormat", rjson::from_string(get_non_empty_string_attribute(exported_request, "ExportFormat", "DYNAMODB_JSON")));
+    if (rjson::find(exported_request, "ExportType")) {
+        rjson::add(export_desc, "ExportType", rjson::from_string(get_non_empty_string_attribute(exported_request, "ExportType")));
+    }
+
+    // TableId identifies the table the export was taken from, not whatever table now answers to
+    // the export's name - names can be reused, ids cannot.
+    rjson::add(export_desc, "TableId", rjson::from_string(exp->table_id.to_sstring()));
+    rjson::add(export_desc, "ExportTime", rjson::value(to_epoch_seconds(exp->export_time)));
+    rjson::add(export_desc, "ClientToken", rjson::from_string(exp->client_token));
+
+    // Everything below describes a finished export, so it is only there once one has run.
+    if (exp->manifest) {
+        rjson::add(export_desc, "ExportManifest", rjson::from_string(*exp->manifest));
+    }
+    if (exp->failure_code) {
+        rjson::add(export_desc, "FailureCode", rjson::from_string(*exp->failure_code));
+    }
+    if (exp->failure_message) {
+        rjson::add(export_desc, "FailureMessage", rjson::from_string(*exp->failure_message));
+    }
+    if (exp->item_count) {
+        rjson::add(export_desc, "ItemCount", rjson::value(*exp->item_count));
+    }
+    if (exp->billed_size_bytes) {
+        rjson::add(export_desc, "BilledSizeBytes", rjson::value(*exp->billed_size_bytes));
+    }
+    if (exp->completed_at) {
+        rjson::add(export_desc, "EndTime", rjson::value(to_epoch_seconds(*exp->completed_at)));
+    }
 
     rjson::value response = rjson::empty_object();
     rjson::add(response, "ExportDescription", std::move(export_desc));

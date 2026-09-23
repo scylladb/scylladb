@@ -644,6 +644,42 @@ system_distributed_keyspace::cdc_current_generation_timestamp(context ctx) {
     co_return timestamp_cql->one().get_as<db_clock::time_point>("time");
 }
 
+future<std::optional<system_distributed_keyspace::alternator_export>>
+system_distributed_keyspace::get_alternator_export(std::string_view export_arn, context ctx) {
+    auto rs = co_await _qp.execute_internal(
+            format("SELECT * FROM {}.{} WHERE export_arn = ?", NAME, ALTERNATOR_EXPORT_TO_S3_EXPORTS),
+            quorum_if_many(ctx.num_token_owners),
+            internal_distributed_query_state(),
+            { sstring(export_arn) },
+            cql3::query_processor::cache_internal::yes);
+
+    if (rs->empty()) {
+        co_return std::nullopt;
+    }
+    const auto& row = rs->one();
+    // The export row is created by a single statement which fills all of these in, so a row missing
+    // any of them was not written by the export code and there is no export to describe.
+    for (auto column : {"client_token", "request", "export_status", "table_id", "export_time", "accepted_at"}) {
+        if (!row.has(column)) {
+            throw std::runtime_error(format("Export '{}' has no {} in {}.{}", export_arn, column, NAME, ALTERNATOR_EXPORT_TO_S3_EXPORTS));
+        }
+    }
+    co_return alternator_export {
+        .client_token = row.get_as<sstring>("client_token"),
+        .request = row.get_as<sstring>("request"),
+        .status = row.get_as<sstring>("export_status"),
+        .table_id = ::table_id(row.get_as<utils::UUID>("table_id")),
+        .export_time = row.get_as<db_clock::time_point>("export_time"),
+        .accepted_at = row.get_as<db_clock::time_point>("accepted_at"),
+        .manifest = row.get_opt<sstring>("export_manifest"),
+        .failure_code = row.get_opt<sstring>("failure_code"),
+        .failure_message = row.get_opt<sstring>("failure_message"),
+        .item_count = row.get_opt<int64_t>("item_count"),
+        .billed_size_bytes = row.get_opt<int64_t>("billed_size_bytes"),
+        .completed_at = row.get_opt<db_clock::time_point>("completed_at"),
+    };
+}
+
 // TODO: this is very hardcoded.
 static constexpr uint64_t snapshot_table_ttl_seconds = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::days(3)).count();
 
