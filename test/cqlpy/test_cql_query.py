@@ -164,3 +164,34 @@ def test_cluster_config_rejects_invalid_boolean_value(cql, scylla_only):
             cql.execute(f"ALTER KEYSPACE {ks} WITH auto_repair_enabled = 'yes'")
         with pytest.raises(ConfigurationException):
             cql.execute(f"ALTER TABLE {ks}.tbl WITH auto_repair_enabled = 'yes'")
+
+
+# `= NULL` removes a stored override; the string literal `= 'null'` is an ordinary value.
+# propertyValue renders both as the text "null", so only the parser's null-keyword flag
+# tells them apart - without it a quoted 'null' would silently erase the override at the
+# table and keyspace scopes instead of being rejected as an invalid boolean (ALTER CLUSTER
+# goes through configPropertyValue and has always distinguished the two).
+def test_cluster_config_quoted_null_is_a_value_not_the_removal_keyword(cql, scylla_only):
+    with new_config_test_keyspace(cql) as ks:
+        keyspace_configs = keyspace_configs_query(ks)
+        table_configs = table_configs_query(ks, 'tbl')
+
+        cql.execute(f"CREATE TABLE {ks}.tbl (pk int PRIMARY KEY)")
+        cql.execute(f"ALTER KEYSPACE {ks} WITH auto_repair_enabled = true")
+        cql.execute(f"ALTER TABLE {ks}.tbl WITH auto_repair_enabled = true")
+
+        with pytest.raises(ConfigurationException):
+            cql.execute(f"ALTER KEYSPACE {ks} WITH auto_repair_enabled = 'null'")
+        with pytest.raises(ConfigurationException):
+            cql.execute(f"ALTER TABLE {ks}.tbl WITH auto_repair_enabled = 'null'")
+        with pytest.raises(ConfigurationException):
+            cql.execute(f"CREATE TABLE {ks}.tbl2 (pk int PRIMARY KEY) WITH auto_repair_enabled = 'null'")
+
+        # The rejected statements left both overrides in place.
+        assert fetch_configs(cql, keyspace_configs) == [{'auto_repair_enabled': 'true'}]
+        assert fetch_configs(cql, table_configs) == [{'auto_repair_enabled': 'true'}]
+
+        # The bare keyword still removes.
+        cql.execute(f"ALTER TABLE {ks}.tbl WITH auto_repair_enabled = null")
+        assert fetch_configs(cql, table_configs) == [None]
+        assert fetch_configs(cql, keyspace_configs) == [{'auto_repair_enabled': 'true'}]

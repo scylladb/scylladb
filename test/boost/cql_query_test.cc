@@ -112,53 +112,6 @@ SEASTAR_TEST_CASE(test_alter_cluster_without_auth_enabled_is_allowed) {
     });
 }
 
-// `= NULL` removes a stored override; the string literal `= 'null'` is an ordinary value.
-// propertyValue renders both as the text "null", so only the parser's null-keyword flag
-// tells them apart - without it a quoted 'null' would silently erase the override at the
-// table and keyspace scopes instead of being rejected as an invalid boolean (ALTER CLUSTER
-// goes through configPropertyValue and has always distinguished the two).
-SEASTAR_TEST_CASE(test_cluster_config_quoted_null_is_a_value_not_the_removal_keyword) {
-    return do_with_cql_env_thread([](cql_test_env& e) {
-        auto configs_type = map_type_impl::get_instance(utf8_type, utf8_type, false);
-        auto expect_stored = [&] (const sstring& query, const sstring& expected) {
-            assert_that(e.execute_cql(query).get())
-                .is_rows().with_rows({{
-                    {configs_type->decompose(make_map_value(configs_type, map_type_impl::native_type({
-                        {sstring("auto_repair_enabled"), expected},
-                    })))}
-                }});
-        };
-        const sstring keyspace_configs =
-                "SELECT configs FROM system_schema.scylla_keyspaces WHERE keyspace_name = 'ks_cfg_qnull'";
-        const sstring table_configs =
-                "SELECT configs FROM system_schema.scylla_tables WHERE keyspace_name = 'ks_cfg_qnull' AND table_name = 'tbl'";
-
-        e.execute_cql("CREATE KEYSPACE ks_cfg_qnull WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}").get();
-        e.execute_cql("CREATE TABLE ks_cfg_qnull.tbl (pk int PRIMARY KEY)").get();
-        e.execute_cql("ALTER KEYSPACE ks_cfg_qnull WITH auto_repair_enabled = true").get();
-        e.execute_cql("ALTER TABLE ks_cfg_qnull.tbl WITH auto_repair_enabled = true").get();
-
-        BOOST_REQUIRE_THROW(
-            e.execute_cql("ALTER KEYSPACE ks_cfg_qnull WITH auto_repair_enabled = 'null'").get(),
-            exceptions::configuration_exception);
-        BOOST_REQUIRE_THROW(
-            e.execute_cql("ALTER TABLE ks_cfg_qnull.tbl WITH auto_repair_enabled = 'null'").get(),
-            exceptions::configuration_exception);
-        BOOST_REQUIRE_THROW(
-            e.execute_cql("CREATE TABLE ks_cfg_qnull.tbl2 (pk int PRIMARY KEY) WITH auto_repair_enabled = 'null'").get(),
-            exceptions::configuration_exception);
-
-        // The rejected statements left both overrides in place.
-        expect_stored(keyspace_configs, "true");
-        expect_stored(table_configs, "true");
-
-        // The bare keyword still removes.
-        e.execute_cql("ALTER TABLE ks_cfg_qnull.tbl WITH auto_repair_enabled = null").get();
-        assert_that(e.execute_cql(table_configs).get()).is_rows().with_rows({{{}}});
-        expect_stored(keyspace_configs, "true");
-    });
-}
-
 // CREATE TABLE ... WITH <config_key> = ... must persist the override, not accept it and
 // silently drop it. cf_prop_defs::validate() allow-lists registry keys for every statement
 // that uses cf_prop_defs, but only ALTER TABLE used to write them, so DESCRIBE output
