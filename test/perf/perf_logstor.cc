@@ -55,6 +55,10 @@
 //   --columns                    value columns of the table. The description of the schema a record
 //                                carries and the framing of its cells both scale with this
 //   --value-size                 bytes of the value of one column
+//   --select-columns             how many of the value columns a read asks for, the first ones of
+//                                the table; 0, the default, asks for all of them. The slice is
+//                                given to the whole reads - `read-cached` and `read-disk` - and to
+//                                none of the single steps
 //   --concurrency                operations in flight per shard, for the tests that wait for the disk
 //   --duration                   one second iterations per test
 //   --operations-per-shard       a fixed number of operations per shard instead, for comparing builds
@@ -359,6 +363,8 @@ struct test_config {
     unsigned partitions;
     unsigned columns;
     size_t value_size;
+    // How many of the value columns a read asks for, the first ones of the table. 0 asks for all.
+    unsigned select_columns;
     unsigned concurrency;
     unsigned duration_in_seconds;
     unsigned operations_per_shard;
@@ -373,6 +379,7 @@ std::ostream& operator<<(std::ostream& os, const test_config& cfg) {
     return os << "{partitions=" << cfg.partitions
            << ", columns=" << cfg.columns
            << ", value_size=" << cfg.value_size
+           << ", select_columns=" << (cfg.select_columns ? std::to_string(cfg.select_columns) : std::string("all"))
            << ", concurrency=" << cfg.concurrency
            << ", segment_size=" << cfg.segment_size
            << ", disk_size=" << cfg.disk_size
@@ -506,6 +513,22 @@ void print_record_size_report(const std::vector<size_t>& key_sizes, const std::v
     }
 }
 
+// The slice a read of the dataset is given: the first select_columns value columns of the table,
+// or all of them when that is 0. Only a whole read consults it; the single steps copy or decode the
+// whole partition regardless.
+query::partition_slice make_read_slice(const schema& s, unsigned select_columns, bool bypass_cache) {
+    partition_slice_builder builder(s);
+    if (select_columns) {
+        for (unsigned i = 0; i < select_columns; ++i) {
+            builder.with_regular_column(to_bytes(fmt::format("v{}", i)));
+        }
+    }
+    if (bypass_cache) {
+        builder.with_option<query::partition_slice::option::bypass_cache>();
+    }
+    return builder.build();
+}
+
 // One logstor of one shard, with a dataset written to it, which is what a shard of a node has: the
 // segments of a shard are its own, and so is its index.
 class logstor_bench {
@@ -551,10 +574,8 @@ public:
         : _cfg(cfg)
         , _schema(make_kv_schema(cfg.columns))
         , _value(bytes::initialized_later(), cfg.value_size)
-        , _slice(partition_slice_builder(*_schema).build())
-        , _slice_bypassing_cache(partition_slice_builder(*_schema)
-                .with_option<query::partition_slice::option::bypass_cache>()
-                .build())
+        , _slice(make_read_slice(*_schema, cfg.select_columns, false))
+        , _slice_bypassing_cache(make_read_slice(*_schema, cfg.select_columns, true))
         , _serialization_buffer(std::make_unique<raw_write_buffer>(cfg.segment_size, segment_kind::mixed))
         , _dir(dir) {
         std::ranges::fill(_value, int8_t('v'));
@@ -1006,6 +1027,7 @@ void write_json_result(const std::string& file, const test_config& cfg, test_kin
     params["partitions"] = cfg.partitions;
     params["columns"] = cfg.columns;
     params["value_size"] = cfg.value_size;
+    params["select_columns"] = cfg.select_columns;
     params["concurrency"] = cfg.concurrency;
     params["cpus"] = this_smp_shard_count();
     params["duration"] = cfg.duration_in_seconds;
@@ -1077,6 +1099,7 @@ run_config make_run_config(const boost::program_options::variables_map& config) 
             .partitions = config["partitions"].as<unsigned>(),
             .columns = config["columns"].as<unsigned>(),
             .value_size = config["value-size"].as<unsigned>(),
+            .select_columns = config["select-columns"].as<unsigned>(),
             .concurrency = config["concurrency"].as<unsigned>(),
             .duration_in_seconds = config["duration"].as<unsigned>(),
             .operations_per_shard = 0,
@@ -1105,6 +1128,10 @@ run_config make_run_config(const boost::program_options::variables_map& config) 
     if (run.test.concurrency == 0) {
         throw std::invalid_argument("--concurrency must be at least one: it is how many operations the tests that wait for the disk keep in flight");
     }
+    if (run.test.select_columns > run.test.columns) {
+        throw std::invalid_argument(fmt::format("--select-columns {} asks for more value columns than the {} the table has",
+                run.test.select_columns, run.test.columns));
+    }
     // The test builds a buffer of one segment before logstor is started, so a zero segment size
     // would fail there rather than at the geometry checks. The rest of the geometry is left to the
     // segment manager, which has to check it anyway for the configuration a node is started with.
@@ -1125,6 +1152,7 @@ int main(int argc, char** argv) {
         ("partitions", bpo::value<unsigned>()->default_value(100000), "number of partitions written per shard")
         ("columns", bpo::value<unsigned>()->default_value(1), "number of value columns of the table, each holding a value of --value-size bytes")
         ("value-size", bpo::value<unsigned>()->default_value(200), "size of the value of a column in bytes")
+        ("select-columns", bpo::value<unsigned>()->default_value(0), "how many of the value columns a read asks for, the first ones of the table; 0 asks for all")
         ("concurrency", bpo::value<unsigned>()->default_value(50), "operations in flight per shard, for the tests that wait for the disk")
         ("duration", bpo::value<unsigned>()->default_value(5), "number of one second iterations per test")
         ("operations-per-shard", bpo::value<unsigned>(), "run this many operations per shard (overrides duration)")
