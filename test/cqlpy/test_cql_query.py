@@ -713,3 +713,15 @@ def test_in_clause_cartesian_product_limits(cql, test_keyspace):
             cql.execute(f"SELECT * FROM {tab3} WHERE pk1 IN {make_tuple(101)}")
         with pytest.raises(NoHostAvailable, match="is greater than maximum 100"):
             cql.execute(f"SELECT * FROM {tab3} WHERE pk1 = 3 AND ck1 IN {make_tuple(101)}")
+
+
+def test_tuple_elements_validation(cql, test_keyspace, raw_utf8_serialization):
+    with new_test_table(cql, test_keyspace, "a int, b tuple<int, date>, PRIMARY KEY (a)") as tbl:
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"INSERT INTO {tbl} (a, b) VALUES(1, (1, 'definitely not a date value'))")
+        cql.execute(f"INSERT INTO {tbl} (a, b) VALUES(1, (1, '2015-05-03'))")
+    with new_test_table(cql, test_keyspace, "a int, b tuple<int, text>, PRIMARY KEY (a)") as tbl2:
+        stmt = cql.prepare(f"INSERT INTO {tbl2} (a, b) VALUES(?, ?)")
+        with pytest.raises(InvalidRequest, match='UTF8'):
+            cql.execute(stmt, [1, (2, bad_utf8_string)])
+        cql.execute(stmt, [1, (2, "proper utf8 string")])
