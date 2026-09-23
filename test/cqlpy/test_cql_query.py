@@ -3400,3 +3400,14 @@ def test_bind_variable_type_checking_disabled(cql, test_keyspace, scylla_only):
         cql.execute(prepared, [1, "abc"])
 
         assert list(cql.execute(f"SELECT a, b FROM {table} WHERE p = 0")) == [(1, "abc")]
+
+
+def prepared_variable_names(cql, query):
+    return ', '.join(col.name for col in cql.prepare(query).column_metadata)
+
+def test_in_bind_variable_name(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "p int, c int, v int, PRIMARY KEY (p, c)") as table:
+        assert prepared_variable_names(cql, f"SELECT * FROM {table} WHERE p = ? AND c IN ?") == "p, IN(c)"
+        # The IF condition of an LWT statement is prepared as an expression rather than
+        # as a restriction, so the name is reached along a different path.
+        assert prepared_variable_names(cql, f"UPDATE {table} SET v = 1 WHERE p = 0 AND c = 0 IF v IN ?") == "IN(v)"
