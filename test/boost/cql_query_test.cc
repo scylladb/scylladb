@@ -510,46 +510,6 @@ SEASTAR_TEST_CASE(test_internal_schema_changes_on_a_distributed_table) {
     });
 }
 
-SEASTAR_THREAD_TEST_CASE(test_query_unselected_columns) {
-    cql_test_config cfg;
-
-    cfg.db_config->max_memory_for_unlimited_query_soft_limit(1024 * 1024, utils::config_file::config_source::CommandLine);
-    cfg.db_config->max_memory_for_unlimited_query_hard_limit(1024 * 1024, utils::config_file::config_source::CommandLine);
-
-    cfg.dbcfg.emplace();
-    cfg.dbcfg->available_memory = memory::stats().total_memory();
-
-    do_with_cql_env_thread([] (cql_test_env& e) {
-        // Sanity test, this test-case has to run in the statement group that is != default group.
-        auto groups = get_scheduling_groups().get();
-        BOOST_REQUIRE(groups.statement_scheduling_group == current_scheduling_group());
-        BOOST_REQUIRE(default_scheduling_group() != current_scheduling_group());
-
-        e.execute_cql("CREATE TABLE tbl (pk int, ck int, v text, PRIMARY KEY (pk, ck))").get();
-
-        const int num_rows = 20;
-        const sstring val(100 * 1024, 'a');
-        const auto id = e.prepare(format("INSERT INTO tbl (pk, ck, v) VALUES (0, ?, '{}')", val)).get();
-        for (int ck = 0; ck < num_rows; ++ck) {
-            e.execute_prepared(id, {cql3::raw_value::make_value(int32_type->decompose(ck))}).get();
-        }
-
-        {
-            testlog.info("Single partition scan");
-            auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, std::vector<cql3::raw_value>{},
-                    cql3::query_options::specific_options{-1, nullptr, {}, api::new_timestamp()});
-            assert_that(e.execute_cql("SELECT pk, ck FROM tbl WHERE pk = 0", std::move(qo)).get()).is_rows().with_size(num_rows);
-        }
-
-        {
-            testlog.info("Full scan");
-            auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, std::vector<cql3::raw_value>{},
-                    cql3::query_options::specific_options{-1, nullptr, {}, api::new_timestamp()});
-            assert_that(e.execute_cql("SELECT pk, ck FROM tbl", std::move(qo)).get()).is_rows().with_size(num_rows);
-        }
-    }, std::move(cfg)).get();
-}
-
 SEASTAR_TEST_CASE(test_user_based_sla_queries) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         // test create service level with defaults

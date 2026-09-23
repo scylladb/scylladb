@@ -2931,3 +2931,26 @@ def test_twcs_optimal_query_path(cql, test_keyspace, scylla_only):
         # sstable read path of TWCS tables too, allowing ASAN to shake out any memory
         # related bugs.
         assert len(list(cql.execute(f"SELECT * FROM {table} WHERE pk = 0 BYPASS CACHE"))) == 1
+
+
+# Check that unselected columns don't count towards the memory limit of
+# unpaged queries: each row has a 100KB column, 20 rows in total (2MB),
+# while the limit is 1MB, but we select only the (small) key columns.
+# NOTE: the original C++ test also set the reader concurrency semaphore's
+# available memory to the total memory and sanity-checked that it runs in
+# the statement scheduling group; neither is reachable (or needed) here, as
+# CQL requests always run in the statement scheduling group.
+def test_query_unselected_columns(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "pk int, ck int, v text, PRIMARY KEY (pk, ck)") as table:
+        num_rows = 20
+        val = 'a' * (100 * 1024)
+        insert = cql.prepare(f"INSERT INTO {table} (pk, ck, v) VALUES (0, ?, '{val}')")
+        for ck in range(num_rows):
+            cql.execute(insert, [ck])
+
+        with config_value_context(cql, 'max_memory_for_unlimited_query_soft_limit', str(1024 * 1024)), \
+                config_value_context(cql, 'max_memory_for_unlimited_query_hard_limit', str(1024 * 1024)):
+            # Single partition scan
+            assert len(list(cql.execute(SimpleStatement(f"SELECT pk, ck FROM {table} WHERE pk = 0", fetch_size=None)))) == num_rows
+            # Full scan
+            assert len(list(cql.execute(SimpleStatement(f"SELECT pk, ck FROM {table}", fetch_size=None)))) == num_rows
