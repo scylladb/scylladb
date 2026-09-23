@@ -15,7 +15,7 @@ import re
 import struct
 from uuid import UUID
 
-from cassandra import InvalidRequest, Unauthorized
+from cassandra import ConsistencyLevel, InvalidRequest, Unauthorized
 from cassandra.cluster import NoHostAvailable
 from cassandra.concurrent import execute_concurrent_with_args
 import cassandra.cqltypes
@@ -1879,3 +1879,12 @@ def test_time_conversions(cql, test_keyspace):
             1497139200000,
             1528243200000,
         )]
+
+
+# Corner-case test that checks for the paging code's preparedness for an empty
+# range list.
+def test_empty_partition_range_scan(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "a int, b int, c int, val int, PRIMARY KEY ((a,b),c)") as table:
+        stmt = SimpleStatement(f"select * from {table} where token (a,b) > 1 and token(a,b) <= 1",
+                               fetch_size=1, consistency_level=ConsistencyLevel.LOCAL_ONE)
+        assert list(cql.execute(stmt)) == []

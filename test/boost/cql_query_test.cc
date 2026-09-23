@@ -378,21 +378,6 @@ SEASTAR_TEST_CASE(test_ttl) {
     });
 }
 
-// Corner-case test that checks for the paging code's preparedness for an empty
-// range list.
-SEASTAR_TEST_CASE(test_empty_partition_range_scan) {
-    return do_with_cql_env_thread([] (cql_test_env& e) {
-        e.execute_cql("create keyspace empty_partition_range_scan with replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1};").get();
-        e.execute_cql("create table empty_partition_range_scan.tb (a int, b int, c int, val int, PRIMARY KEY ((a,b),c) );").get();
-
-
-        auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, std::vector<cql3::raw_value>{},
-                cql3::query_options::specific_options{1, nullptr, {}, api::new_timestamp()});
-        auto res = e.execute_cql("select * from empty_partition_range_scan.tb where token (a,b) > 1 and token(a,b) <= 1;", std::move(qo)).get();
-        assert_that(res).is_rows().is_empty();
-    });
-}
-
 SEASTAR_TEST_CASE(test_allow_filtering_contains) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("CREATE TABLE t (p frozen<map<text, text>>, c1 frozen<list<int>>, c2 frozen<set<int>>, v map<text, text>, PRIMARY KEY(p, c1, c2));").get();
