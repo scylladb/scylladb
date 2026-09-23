@@ -17,7 +17,7 @@ import struct
 import uuid
 from uuid import UUID
 
-from cassandra import ConsistencyLevel, InvalidRequest, Unauthorized
+from cassandra import ConsistencyLevel, InvalidRequest, ReadFailure, Unauthorized
 from cassandra.cluster import NoHostAvailable
 from cassandra.concurrent import execute_concurrent_with_args
 import cassandra.cqltypes
@@ -2794,3 +2794,37 @@ def test_impossible_where(cql, test_keyspace):
         cql.execute(f"INSERT INTO {table} (p, c) VALUES (2, 20)")
         assert list(cql.execute(f"SELECT * FROM {table} WHERE c>10 AND c<10 ALLOW FILTERING")) == []
         assert list(cql.execute(f"SELECT * FROM {table} WHERE c>=10 AND c<=0 ALLOW FILTERING")) == []
+
+
+# Check that unpaged queries in the statement scheduling group are subject to
+# max_memory_for_unlimited_query_{soft,hard}_limit, while paged queries are not.
+# NOTE: the original C++ test also ran the queries in the streaming and default
+# scheduling groups (where unpaged queries are not limited); CQL requests always
+# run in the statement scheduling group, so only that part is checked here.
+def test_query_limit(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "pk int, ck int, v text, PRIMARY KEY (pk, ck)") as table:
+        insert = cql.prepare(f"INSERT INTO {table} (pk, ck, v) VALUES (?, ?, ?)")
+        pk = 0
+        value = 'a' * 1024
+        num_rows = 10
+        for i in range(num_rows):
+            cql.execute(insert, [pk, i, value])
+
+        normal_rows = [(pk, ck, value) for ck in range(num_rows)]
+        reversed_rows = list(reversed(normal_rows))
+
+        with config_value_context(cql, 'max_memory_for_unlimited_query_soft_limit', '256'), \
+                config_value_context(cql, 'max_memory_for_unlimited_query_hard_limit', '1024'):
+            for is_paged in [True, False]:
+                for is_reversed in [True, False]:
+                    should_fail = not is_paged
+                    select = SimpleStatement(f"SELECT * FROM {table} WHERE pk = {pk} ORDER BY ck {'DESC' if is_reversed else 'ASC'}",
+                                             fetch_size=10000 if is_paged else None)
+                    expected_rows = reversed_rows if is_reversed else normal_rows
+                    # Even though we chose a large page size, for reversed queries we may
+                    # still obtain multiple pages; the driver fetches them all for us.
+                    if should_fail:
+                        with pytest.raises(ReadFailure):
+                            list(cql.execute(select))
+                    else:
+                        assert list(cql.execute(select)) == expected_rows
