@@ -8,15 +8,19 @@
 #############################################################################
 
 from contextlib import contextmanager
+from datetime import datetime
+from decimal import Decimal
 import json
 import re
 import struct
+from uuid import UUID
 
 from cassandra import InvalidRequest, Unauthorized
 from cassandra.cluster import NoHostAvailable
 import cassandra.cqltypes
 from cassandra.protocol import ConfigurationException, SyntaxException
 from cassandra.query import UNSET_VALUE
+from cassandra.util import Date, Duration, Time
 import pytest
 
 from .util import config_value_context, new_session, new_test_keyspace, new_test_table, new_type, new_user, unique_name
@@ -1318,3 +1322,74 @@ def test_table_compression(cql, test_keyspace):
         default = json.loads(cql.execute("SELECT value FROM system.config WHERE name = 'sstable_compression_user_table_options'").one().value)
         strip_prefix = lambda name: name.removeprefix('org.apache.cassandra.io.compress.')
         assert strip_prefix(get_sstable_compression(cql, tb6)['sstable_compression']) == strip_prefix(default['sstable_compression'])
+
+
+def test_types(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace,
+            "a ascii PRIMARY KEY, b bigint, c blob, d boolean, e double, f float, g inet, h int, i text, "
+            "j timestamp, k timeuuid, l uuid, m varchar, n varint, o decimal, p tinyint, q smallint, "
+            "r date, s time, u duration") as table:
+        cql.execute(f"""INSERT INTO {table} (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s, u) VALUES (
+            'ascii',
+            123456789,
+            0xdeadbeef,
+            true,
+            3.14,
+            3.14,
+            '127.0.0.1',
+            3,
+            'zażółć gęślą jaźń',
+            '2001-10-18 14:15:55.134+0000',
+            d2177dd0-eaa2-11de-a572-001b779c76e3,
+            d2177dd0-eaa2-11de-a572-001b779c76e3,
+            'varchar',
+            123,
+            1.23,
+            3,
+            3,
+            '1970-01-02',
+            '00:00:00.000000001',
+            1y2mo3w4d5h6m7s8ms9us10ns
+            )""")
+
+        float_3_14 = struct.unpack('f', struct.pack('f', 3.14))[0]
+        ts = datetime(2001, 10, 18, 14, 15, 55, 134000)
+        uuid = UUID('d2177dd0-eaa2-11de-a572-001b779c76e3')
+        ns = 1
+        us = 1000 * ns
+        ms = 1000 * us
+        s = 1000 * ms
+        m = 60 * s
+        h = 60 * m
+        assert list(cql.execute(f"SELECT * FROM {table} WHERE a = 'ascii'")) == [(
+            'ascii', 123456789, b'\xde\xad\xbe\xef', True, 3.14, float_3_14, '127.0.0.1', 3,
+            'zażółć gęślą jaźń', ts, uuid, uuid, 'varchar', 123, Decimal('1.23'), 3, 3,
+            Date(1), Time(1),
+            Duration(1 * 12 + 2, 3 * 7 + 4, 5 * h + 6 * m + 7 * s + 8 * ms + 9 * us + 10 * ns))]
+
+        cql.execute(f"""INSERT INTO {table} (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s, u) VALUES (
+            blobAsAscii(asciiAsBlob('ascii2')),
+            blobAsBigint(bigintAsBlob(123456789)),
+            bigintAsBlob(12),
+            blobAsBoolean(booleanAsBlob(true)),
+            blobAsDouble(doubleAsBlob(3.14)),
+            blobAsFloat(floatAsBlob(3.14)),
+            blobAsInet(inetAsBlob('127.0.0.1')),
+            blobAsInt(intAsBlob(3)),
+            blobAsText(textAsBlob('zażółć gęślą jaźń')),
+            blobAsTimestamp(timestampAsBlob('2001-10-18 14:15:55.134+0000')),
+            blobAsTimeuuid(timeuuidAsBlob(d2177dd0-eaa2-11de-a572-001b779c76e3)),
+            blobAsUuid(uuidAsBlob(d2177dd0-eaa2-11de-a572-001b779c76e3)),
+            blobAsVarchar(varcharAsBlob('varchar')), blobAsVarint(varintAsBlob(123)),
+            blobAsDecimal(decimalAsBlob(1.23)),
+            blobAsTinyint(tinyintAsBlob(3)),
+            blobAsSmallint(smallintAsBlob(3)),
+            blobAsDate(dateAsBlob('1970-01-02')),
+            blobAsTime(timeAsBlob('00:00:00.000000001')),
+            blobAsDuration(durationAsBlob(10y9mo8w7d6h5m4s3ms2us1ns))
+            )""")
+        assert list(cql.execute(f"SELECT * FROM {table} WHERE a = 'ascii2'")) == [(
+            'ascii2', 123456789, bytes.fromhex('000000000000000c'), True, 3.14, float_3_14, '127.0.0.1', 3,
+            'zażółć gęślą jaźń', ts, uuid, uuid, 'varchar', 123, Decimal('1.23'), 3, 3,
+            Date(1), Time(1),
+            Duration(10 * 12 + 9, 8 * 7 + 7, 6 * h + 5 * m + 4 * s + 3 * ms + 2 * us + 1 * ns))]
