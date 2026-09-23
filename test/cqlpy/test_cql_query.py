@@ -9,11 +9,11 @@
 
 from contextlib import contextmanager
 
-from cassandra import InvalidRequest
+from cassandra import InvalidRequest, Unauthorized
 from cassandra.protocol import ConfigurationException, SyntaxException
 import pytest
 
-from .util import new_test_keyspace, unique_name
+from .util import config_value_context, new_session, new_test_keyspace, new_user, unique_name
 
 
 def test_create_keyspace_statement(cql):
@@ -214,3 +214,23 @@ def test_create_table_persists_cluster_config_property(cql, scylla_only):
         cql.execute(f"CREATE TABLE {ks}.plain (pk int PRIMARY KEY)")
         assert list(cql.execute(f"SELECT configs['auto_repair_enabled'] FROM system_schema.scylla_tables "
                                 f"WHERE keyspace_name = '{ks}' AND table_name = 'plain'")) == [(None,)]
+
+
+# Regression test for the superuser check on node-oriented ALTER statements: it must be
+# awaited, not resolved with a blocking future::get(). With authentication enabled and the
+# permissions cache disabled, has_superuser() returns a non-ready future, so a blocking get()
+# outside a seastar::thread would abort the node. Exercises both the superuser-allowed path
+# (default cassandra user) and the non-superuser-rejected path.
+# cqlpy's Scylla already runs with PasswordAuthenticator and CassandraAuthorizer; the
+# permissions cache is disabled here via the live-updatable permissions_validity_in_ms.
+def test_alter_cluster_superuser_check_is_async_with_auth_enabled(cql, scylla_only):
+    with config_value_context(cql, 'permissions_validity_in_ms', '0'), cluster_config_cleanup(cql):
+        # Default logged-in user is a superuser: allowed, and must not crash on the async
+        # has_superuser() lookup.
+        cql.execute("ALTER CLUSTER WITH auto_repair_enabled = true")
+
+        # A non-superuser is rejected with Unauthorized (also via the async path).
+        with new_user(cql) as username:
+            with new_session(cql, username) as user_session:
+                with pytest.raises(Unauthorized):
+                    user_session.execute("ALTER CLUSTER WITH auto_repair_enabled = false")

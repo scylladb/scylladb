@@ -112,38 +112,6 @@ SEASTAR_TEST_CASE(test_alter_cluster_without_auth_enabled_is_allowed) {
     });
 }
 
-// Regression test for the superuser check on node-oriented ALTER statements: it must be
-// awaited, not resolved with a blocking future::get(). With authentication enabled and the
-// permissions cache disabled, has_superuser() returns a non-ready future, so a blocking get()
-// outside a seastar::thread would abort the node. Exercises both the superuser-allowed path
-// (default cassandra user) and the non-superuser-rejected path.
-SEASTAR_TEST_CASE(test_alter_cluster_superuser_check_is_async_with_auth_enabled) {
-    auto db_config = make_shared<db::config>();
-    db_config->authorizer.set("CassandraAuthorizer");
-    db_config->authenticator.set("PasswordAuthenticator");
-    // Disable permissions caching so the superuser lookup resolves a non-ready future.
-    db_config->permissions_validity_in_ms.set(0);
-
-    return do_with_cql_env_thread([] (cql_test_env& e) {
-        // Default logged-in user is a superuser: allowed, and must not crash on the async
-        // has_superuser() lookup.
-        BOOST_REQUIRE_NO_THROW(e.execute_cql("ALTER CLUSTER WITH auto_repair_enabled = true").get());
-
-        // A non-superuser is rejected with unauthorized_exception (also via the async path).
-        e.execute_cql("CREATE USER alice WITH PASSWORD 'alice'").get();
-        auto& cs = e.local_client_state();
-        std::optional<auth::authenticated_user> old_user = cs.user();
-        BOOST_REQUIRE(old_user);
-        cs.set_login(auth::authenticated_user(sstring("alice")));
-        auto restore_user = defer([&cs, old_user = std::move(old_user)] mutable noexcept {
-            cs.set_login(std::move(*old_user));
-        });
-        BOOST_REQUIRE_THROW(
-            e.execute_cql("ALTER CLUSTER WITH auto_repair_enabled = false").get(),
-            exceptions::unauthorized_exception);
-    }, db_config);
-}
-
 SEASTAR_TEST_CASE(test_registry_backed_cluster_config_statements_reject_when_feature_is_disabled) {
     cql_test_config cfg;
     cfg.disabled_features.emplace("CLUSTER_CONFIG_REGISTRY_V0");
