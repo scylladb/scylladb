@@ -2219,3 +2219,15 @@ def test_bigint_sum(cql, test_keyspace):
 
         cql.execute(f"insert into {table} (pk, val) values ('z', -4294967295)")
         assert list(cql.execute(sum_query)) == [(-1,)]
+
+
+def test_int_sum_with_cast(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "pk text, val int, primary key(pk)") as table:
+        cql.execute(f"insert into {table} (pk, val) values ('a', 2147483647)")
+        cql.execute(f"insert into {table} (pk, val) values ('b', 2147483647)")
+        sum_as_bigint_query = f"select sum(cast(val as bigint)) from {table}"
+        assert list(cql.execute(sum_as_bigint_query)) == [(4294967294,)]
+
+        cql.execute(f"insert into {table} (pk, val) values ('a', -2147483648)")
+        cql.execute(f"insert into {table} (pk, val) values ('b', -2147483647)")
+        assert list(cql.execute(sum_as_bigint_query)) == [(-4294967295,)]
