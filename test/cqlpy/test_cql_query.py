@@ -3033,3 +3033,26 @@ def test_user_based_sla_queries(cql, scylla_only):
         finally:
             cql.execute(f"DROP SERVICE_LEVEL IF EXISTS {sl_1}")
             cql.execute(f"DROP SERVICE_LEVEL IF EXISTS {sl_2}")
+
+
+# Check that `current*()` CQL functions are re-evaluated on each execute
+# even for prepared statements.
+# Refs: #8816 (https://github.com/scylladb/scylla/issues/8816)
+# We don't test the `currentdate()` function since we can't move the clock one
+# day forward to demonstrate the desired behavior.
+@pytest.mark.parametrize("function, type", [
+    ("currenttimestamp", "timestamp"),
+    ("currenttime", "time"),
+    ("currenttimeuuid", "timeuuid"),
+])
+def test_timeuuid_fcts_prepared_re_evaluation(cql, test_keyspace, function, type):
+    with new_test_table(cql, test_keyspace, f"pk {type} PRIMARY KEY") as table:
+        insert = cql.prepare(f"INSERT INTO {table} (pk) VALUES ({function}())")
+        cql.execute(insert)
+        # currenttimestamp() has millisecond resolution, so make sure the
+        # clock advances between the two executions.
+        time.sleep(0.001)
+        # Check that the second execution is evaluated again and yields a
+        # different value.
+        cql.execute(insert)
+        assert len(list(cql.execute(f"SELECT * FROM {table}"))) == 2
