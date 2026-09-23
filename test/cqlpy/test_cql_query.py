@@ -2536,3 +2536,95 @@ def test_basic_time_uuid_fcts(cql, time_uuid_fcts_table):
     cql_func_require_nofail(cql, table, "now", "")
     cql_func_require_nofail(cql, table, "currenttimeuuid", "")
     cql_func_require_nofail(cql, table, "currenttimestamp", "")
+
+
+def test_time_uuid_fcts_input_validation(cql, time_uuid_fcts_table):
+    table = time_uuid_fcts_table
+
+    def nofail(fct, inp):
+        cql_func_require_nofail(cql, table, fct, inp)
+
+    def throw(exception, fct, inp):
+        cql_func_require_throw(cql, table, exception, fct, inp)
+
+    # test timestamp arg
+    def require_timestamp(fct):
+        nofail(fct, "t")
+        throw(ServerError, fct, "l")
+        throw(InvalidRequest, fct, "f")
+        throw(InvalidRequest, fct, "u")
+        throw(InvalidRequest, fct, "d")
+
+        throw(InvalidRequest, fct, "currenttime()")
+        throw(InvalidRequest, fct, "currentdate()")
+        throw(InvalidRequest, fct, "now()")
+        throw(InvalidRequest, fct, "currenttimeuuid()")
+        nofail(fct, "currenttimestamp()")
+
+    require_timestamp("mintimeuuid")
+    require_timestamp("maxtimeuuid")
+
+    # test timeuuid arg
+    def require_timeuuid(fct):
+        throw(InvalidRequest, fct, "t")
+        throw(InvalidRequest, fct, "l")
+        throw(InvalidRequest, fct, "f")
+        nofail(fct, "u")
+        throw(InvalidRequest, fct, "d")
+
+        throw(InvalidRequest, fct, "currenttime()")
+        throw(InvalidRequest, fct, "currentdate()")
+        nofail(fct, "now()")
+        nofail(fct, "currenttimeuuid()")
+        throw(InvalidRequest, fct, "currenttimestamp()")
+
+    require_timeuuid("dateof")
+    require_timeuuid("unixtimestampof")
+
+    # test timeuuid or date arg
+    def require_timeuuid_or_date(fct):
+        throw(InvalidRequest, fct, "t")
+        throw(InvalidRequest, fct, "l")
+        throw(InvalidRequest, fct, "f")
+        nofail(fct, "u")
+        nofail(fct, "d")
+
+        throw(InvalidRequest, fct, "currenttime()")
+        nofail(fct, "currentdate()")
+        nofail(fct, "now()")
+        nofail(fct, "currenttimeuuid()")
+        throw(InvalidRequest, fct, "currenttimestamp()")
+
+    require_timeuuid_or_date("totimestamp")
+
+    # test timestamp or timeuuid arg
+    def require_timestamp_or_timeuuid(fct):
+        nofail(fct, "t")
+        throw(Exception, fct, "l")
+        throw(InvalidRequest, fct, "f")
+        nofail(fct, "u")
+        throw(InvalidRequest, fct, "d")
+
+        throw(InvalidRequest, fct, "currenttime()")
+        throw(InvalidRequest, fct, "currentdate()")
+        nofail(fct, "now()")
+        nofail(fct, "currenttimeuuid()")
+        nofail(fct, "currenttimestamp()")
+
+    require_timestamp_or_timeuuid("todate")
+
+    # test timestamp, timeuuid, or date arg
+    def require_timestamp_timeuuid_or_date(fct):
+        nofail(fct, "t")
+        throw(ServerError, fct, "l")
+        throw(InvalidRequest, fct, "f")
+        nofail(fct, "u")
+        nofail(fct, "d")
+
+        throw(InvalidRequest, fct, "currenttime()")
+        nofail(fct, "currentdate()")
+        nofail(fct, "now()")
+        nofail(fct, "currenttimeuuid()")
+        nofail(fct, "currenttimestamp()")
+
+    require_timestamp_timeuuid_or_date("tounixtimestamp")
