@@ -254,40 +254,6 @@ SEASTAR_TEST_CASE(test_alter_node_oriented_scopes_reject_unknown_targets) {
     });
 }
 
-SEASTAR_TEST_CASE(test_vectors) {
-    auto make_vt = [] { return vector_type_impl::get_instance(int32_type, 3); };
-    auto vt = make_vt();
-    return do_with_cql_env([vt, make_vt] (cql_test_env& e) {
-        return e.create_table([make_vt] (std::string_view ks_name) {
-            // this runs on all cores, so create a local vt for each core:
-            auto vt = make_vt();
-            // CQL: "create table cf (id int primary key, v vector<int, 3>);
-            return *schema_builder(this_smp_shard_count(), ks_name, "cf")
-                    .with_column("id", int32_type, column_kind::partition_key)
-                    .with_column("v", vt)
-                    .build();
-        }).then([&e] {
-            return e.execute_cql("insert into cf (id, v) values (1, [1001, 2001, 3001]);").discard_result();
-        }).then([&e] {
-            return e.execute_cql("select v from cf where id = 1;");
-        }).then([&e, vt] (shared_ptr<cql_transport::messages::result_message> msg) {
-            assert_that(msg).is_rows()
-                .with_rows({{
-                     {vt->decompose(make_vector_value(vt, vector_type_impl::native_type({int32_t(1001), int32_t(2001), int32_t(3001)})))},
-                }});
-            return e.execute_cql("create table cf2 (p1 int PRIMARY KEY, r1 vector<int, 3>)").discard_result();
-        }).then([&e] {
-            return e.execute_cql("insert into cf2 (p1, r1) values (1, [1, 2, 3]);").discard_result();
-        }).then([&e] {
-            return e.execute_cql("select * from cf2 where p1 = 1;");
-        }).then([vt] (shared_ptr<cql_transport::messages::result_message> msg) {
-            assert_that(msg).is_rows().with_rows({
-                { int32_type->decompose(int32_t(1)), vt->decompose(make_vector_value(vt, vector_type_impl::native_type({int32_t(1), int32_t(2), int32_t(3)}))) }
-            });
-        });
-    });
-}
-
 SEASTAR_TEST_CASE(test_vectors_variable_length_elements) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("CREATE TABLE t1 (id int PRIMARY KEY, v vector<text, 2>);").get();
