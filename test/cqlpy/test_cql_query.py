@@ -3444,3 +3444,15 @@ def test_setting_synchronous_updates_property(cql, test_keyspace, scylla_only):
             cql.execute(f"create table {test_keyspace}.{unique_name()} (k int, v int, primary key (k)) with synchronous_updates = true")
         with pytest.raises(InvalidRequest):
             cql.execute(f"alter table {base} with synchronous_updates = true")
+
+
+# Reproduces #20768
+# The C++ test checked the in-memory keyspace metadata directly; here we check
+# it via DESCRIBE, which is generated from the in-memory keyspace metadata.
+def test_alter_keyspace_updates_in_memory_objects_with_data_from_system_schema_scylla_keyspaces(cql, scylla_only):
+    with new_test_keyspace(cql, "with replication = { 'class': 'NetworkTopologyStrategy', "
+                                "'replication_factor': 1 } and tablets = { 'initial': 1 }") as ks:
+        cql.execute(f"alter keyspace {ks} with tablets = {{ 'initial': 2 }}")
+        cql.execute(f"alter keyspace {ks} with tablets = {{ 'initial': 3 }}")
+        desc = cql.execute(f"describe keyspace {ks}").one().create_statement
+        assert "'initial': 3" in desc
