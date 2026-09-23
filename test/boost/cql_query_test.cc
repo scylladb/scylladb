@@ -504,15 +504,6 @@ SEASTAR_TEST_CASE(test_view_with_two_regular_base_columns_in_key) {
     });
 }
 
-SEASTAR_TEST_CASE(test_alter_table_default_ttl_reset) {
-    return do_with_cql_env_thread([](cql_test_env& e) {
-        e.execute_cql("CREATE TABLE tbl (a int, b int, PRIMARY KEY (a)) WITH default_time_to_live=10").get();
-        BOOST_REQUIRE(e.local_db().find_schema("ks", "tbl")->default_time_to_live().count() == 10);
-        e.execute_cql("ALTER TABLE tbl WITH gc_grace_seconds=0").get();
-        BOOST_REQUIRE(e.local_db().find_schema("ks", "tbl")->default_time_to_live().count() == 10);
-    });
-}
-
 SEASTAR_TEST_CASE(test_internal_schema_changes_on_a_distributed_table) {
     return do_with_cql_env_thread([](cql_test_env& e) {
         cquery_nofail(e, "create table t (p int primary key, v int)");

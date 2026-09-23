@@ -2766,3 +2766,15 @@ def test_range_deletions_for_specific_column(cql, test_keyspace):
 
         with pytest.raises(InvalidRequest):
             cql.execute(f"DELETE col FROM {table} WHERE pk = 0 AND ck > 1 AND ck <= 3")
+
+
+# Check that altering an unrelated table property doesn't reset default_time_to_live.
+def test_alter_table_default_ttl_reset(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "a int, b int, PRIMARY KEY (a)", "WITH default_time_to_live=10") as table:
+        ks, cf = table.split('.')
+        def default_ttl():
+            return cql.execute("SELECT default_time_to_live FROM system_schema.tables WHERE keyspace_name = %s AND table_name = %s",
+                               (ks, cf)).one().default_time_to_live
+        assert default_ttl() == 10
+        cql.execute(f"ALTER TABLE {table} WITH gc_grace_seconds=0")
+        assert default_ttl() == 10
