@@ -254,35 +254,6 @@ SEASTAR_TEST_CASE(test_alter_node_oriented_scopes_reject_unknown_targets) {
     });
 }
 
-SEASTAR_TEST_CASE(test_range_deletion_scenarios) {
-    return do_with_cql_env_thread([] (cql_test_env& e) {
-        e.execute_cql("create table cf (p int, c int, v text, primary key (p, c));").get();
-        for (auto i = 0; i < 10; ++i) {
-            e.execute_cql(format("insert into cf (p, c, v) values (1, {:d}, 'abc');", i)).get();
-        }
-
-        e.execute_cql("delete from cf where p = 1 and c <= 3").get();
-        e.execute_cql("delete from cf where p = 1 and c >= 8").get();
-
-        e.execute_cql("delete from cf where p = 1 and c >= 0 and c <= 5").get();
-        auto msg = e.execute_cql("select * from cf").get();
-        assert_that(msg).is_rows().with_size(2);
-        e.execute_cql("delete from cf where p = 1 and c > 3 and c < 10").get();
-        msg = e.execute_cql("select * from cf").get();
-        assert_that(msg).is_rows().with_size(0);
-
-        e.execute_cql("insert into cf (p, c, v) values (1, 1, '1');").get();
-        e.execute_cql("insert into cf (p, c, v) values (1, 3, '3');").get();
-        e.execute_cql("delete from cf where p = 1 and c >= 2 and c <= 3").get();
-        e.execute_cql("insert into cf (p, c, v) values (1, 2, '2');").get();
-        msg = e.execute_cql("select * from cf").get();
-        assert_that(msg).is_rows().with_size(2);
-        e.execute_cql("delete from cf where p = 1 and c >= 2 and c <= 3").get();
-        msg = e.execute_cql("select * from cf").get();
-        assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)}, {int32_type->decompose(1)}, {utf8_type->decompose("1")} }});
-    });
-}
-
 SEASTAR_TEST_CASE(test_range_deletion_scenarios_with_compact_storage) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("update system.config SET value='true' where name='enable_create_table_with_compact_storage';").get();

@@ -969,3 +969,25 @@ def test_deletion_scenarios(cql, test_keyspace):
         # deleting an orphan cell (row is considered as deleted) yields no row
         cql.execute(f"update {cf} using timestamp 5 set v = null where k = 0x00 and c = 0x05")
         assert select_v() == []
+
+
+def test_range_deletion_scenarios(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p int, c int, v text, primary key (p, c)") as cf:
+        for i in range(10):
+            cql.execute(f"insert into {cf} (p, c, v) values (1, {i}, 'abc')")
+
+        cql.execute(f"delete from {cf} where p = 1 and c <= 3")
+        cql.execute(f"delete from {cf} where p = 1 and c >= 8")
+
+        cql.execute(f"delete from {cf} where p = 1 and c >= 0 and c <= 5")
+        assert len(list(cql.execute(f"select * from {cf}"))) == 2
+        cql.execute(f"delete from {cf} where p = 1 and c > 3 and c < 10")
+        assert len(list(cql.execute(f"select * from {cf}"))) == 0
+
+        cql.execute(f"insert into {cf} (p, c, v) values (1, 1, '1')")
+        cql.execute(f"insert into {cf} (p, c, v) values (1, 3, '3')")
+        cql.execute(f"delete from {cf} where p = 1 and c >= 2 and c <= 3")
+        cql.execute(f"insert into {cf} (p, c, v) values (1, 2, '2')")
+        assert len(list(cql.execute(f"select * from {cf}"))) == 2
+        cql.execute(f"delete from {cf} where p = 1 and c >= 2 and c <= 3")
+        assert list(cql.execute(f"select * from {cf}")) == [(1, 1, '1')]
