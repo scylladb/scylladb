@@ -10,6 +10,7 @@
 from contextlib import contextmanager
 
 from cassandra import InvalidRequest, Unauthorized
+from cassandra.cluster import NoHostAvailable
 import cassandra.cqltypes
 from cassandra.protocol import ConfigurationException, SyntaxException
 import pytest
@@ -673,3 +674,42 @@ def test_in_clause_validation(cql, test_keyspace, raw_utf8_serialization):
         with pytest.raises(InvalidRequest, match='UTF8'):
             cql.execute(stmt, [[(2, bad_utf8_string)]])
         cql.execute(stmt, [[(2, "proper utf8 string")]])
+
+
+def test_in_clause_cartesian_product_limits(cql, test_keyspace):
+    # These limits are the defaults of max_partition_key_restrictions_per_query
+    # and max_clustering_key_restrictions_per_query (100). Scylla reports
+    # exceeding them as a generic server error (the C++ test just expects
+    # std::runtime_error), which the driver, after trying all hosts, reports
+    # as NoHostAvailable.
+    with new_test_table(cql, test_keyspace, "pk1 int, pk2 int, PRIMARY KEY ((pk1, pk2))") as tab1:
+        # 100 partitions, should pass
+        cql.execute(f"SELECT * FROM {tab1} WHERE pk1 IN (0, 1, 2, 3, 4, 5, 6, 7, 8, 9)"
+                    "                           AND pk2 IN (0, 1, 2, 3, 4, 5, 6, 7, 8, 9)")
+        # 110 partitions, should fail
+        with pytest.raises(NoHostAvailable, match="is greater than maximum 100"):
+            cql.execute(f"SELECT * FROM {tab1} WHERE pk1 IN (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10)"
+                        "                          AND pk2 IN (0, 1, 2, 3, 4, 5, 6, 7, 8, 9)")
+
+    with new_test_table(cql, test_keyspace, "pk1 int, ck1 int, ck2 int, PRIMARY KEY (pk1, ck1, ck2)") as tab2:
+        # 100 clustering rows, should pass
+        cql.execute(f"SELECT * FROM {tab2} WHERE pk1 = 1"
+                    "                          AND ck1 IN (0, 1, 2, 3, 4, 5, 6, 7, 8, 9)"
+                    "                          AND ck2 IN (0, 1, 2, 3, 4, 5, 6, 7, 8, 9)")
+        # 110 clustering rows, should fail
+        with pytest.raises(NoHostAvailable, match="is greater than maximum 100"):
+            cql.execute(f"SELECT * FROM {tab2} WHERE pk1 = 1"
+                        "                           AND ck1 IN (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10)"
+                        "                           AND ck2 IN (0, 1, 2, 3, 4, 5, 6, 7, 8, 9)")
+
+    def make_tuple(count):
+        return "(" + ",".join(str(i) for i in range(count)) + ")"
+    with new_test_table(cql, test_keyspace, "pk1 int, ck1 int, PRIMARY KEY (pk1, ck1)") as tab3:
+        # tuple with 100 keys, should pass
+        cql.execute(f"SELECT * FROM {tab3} WHERE pk1 IN {make_tuple(100)}")
+        cql.execute(f"SELECT * FROM {tab3} WHERE pk1 = 1 AND ck1 IN {make_tuple(100)}")
+        # tuple with 101 keys, should fail
+        with pytest.raises(NoHostAvailable, match="is greater than maximum 100"):
+            cql.execute(f"SELECT * FROM {tab3} WHERE pk1 IN {make_tuple(101)}")
+        with pytest.raises(NoHostAvailable, match="is greater than maximum 100"):
+            cql.execute(f"SELECT * FROM {tab3} WHERE pk1 = 3 AND ck1 IN {make_tuple(101)}")
