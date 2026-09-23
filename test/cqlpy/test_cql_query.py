@@ -10,7 +10,7 @@
 from contextlib import contextmanager
 
 from cassandra import InvalidRequest
-from cassandra.protocol import ConfigurationException
+from cassandra.protocol import ConfigurationException, SyntaxException
 import pytest
 
 from .util import new_test_keyspace, unique_name
@@ -136,3 +136,18 @@ def test_cluster_config_boolean_value_is_case_insensitive_and_stored_canonically
         # NULL removal stays case-insensitive too.
         cql.execute(f"ALTER TABLE {ks}.tbl WITH auto_repair_enabled = NULL")
         assert fetch_configs(cql, table_configs_query(ks, 'tbl')) == [None]
+
+
+# The grammar accepts `<ident> = <mapLiteral>` for any property name, so a map value must
+# surface as a CQL error rather than escaping as std::bad_variant_access (which the client
+# would see as a generic ServerError).
+def test_cluster_config_rejects_map_value_with_cql_error(cql, scylla_only):
+    with new_config_test_keyspace(cql) as ks:
+        cql.execute(f"CREATE TABLE {ks}.tbl (pk int PRIMARY KEY)")
+
+        with pytest.raises(SyntaxException):
+            cql.execute(f"ALTER TABLE {ks}.tbl WITH auto_repair_enabled = {{'a': 'b'}}")
+        with pytest.raises(SyntaxException):
+            cql.execute(f"ALTER KEYSPACE {ks} WITH auto_repair_enabled = {{'a': 'b'}}")
+        with pytest.raises(SyntaxException):
+            cql.execute(f"CREATE TABLE {ks}.tbl2 (pk int PRIMARY KEY) WITH auto_repair_enabled = {{'a': 'b'}}")

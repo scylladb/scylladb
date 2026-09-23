@@ -112,26 +112,6 @@ SEASTAR_TEST_CASE(test_alter_cluster_without_auth_enabled_is_allowed) {
     });
 }
 
-// The grammar accepts `<ident> = <mapLiteral>` for any property name, so a map value must
-// surface as a CQL error rather than escaping as std::bad_variant_access (which the client
-// would see as a generic ServerError).
-SEASTAR_TEST_CASE(test_cluster_config_rejects_map_value_with_cql_error) {
-    return do_with_cql_env_thread([](cql_test_env& e) {
-        e.execute_cql("CREATE KEYSPACE ks_cfg_map WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}").get();
-        e.execute_cql("CREATE TABLE ks_cfg_map.tbl (pk int PRIMARY KEY)").get();
-
-        BOOST_REQUIRE_THROW(
-            e.execute_cql("ALTER TABLE ks_cfg_map.tbl WITH auto_repair_enabled = {'a': 'b'}").get(),
-            exceptions::syntax_exception);
-        BOOST_REQUIRE_THROW(
-            e.execute_cql("ALTER KEYSPACE ks_cfg_map WITH auto_repair_enabled = {'a': 'b'}").get(),
-            exceptions::syntax_exception);
-        BOOST_REQUIRE_THROW(
-            e.execute_cql("CREATE TABLE ks_cfg_map.tbl2 (pk int PRIMARY KEY) WITH auto_repair_enabled = {'a': 'b'}").get(),
-            exceptions::syntax_exception);
-    });
-}
-
 // A non-boolean value for a boolean-typed option must be rejected at every scope.
 SEASTAR_TEST_CASE(test_cluster_config_rejects_invalid_boolean_value) {
     return do_with_cql_env_thread([](cql_test_env& e) {
