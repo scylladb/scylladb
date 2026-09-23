@@ -83,8 +83,8 @@ class cql_test_env;
 //   limits, with each limit clamped to the history's bounds, and for
 //   frontier_reconciliation also the range and the slice. storage_proxy
 //   would retry until the read times out;
-// - reports a short result which has neither a partition nor a cursor as a
-//   failed read. The pager would fail an assertion on it;
+// - reports an internal error of the production code as a failed page,
+//   instead of aborting. See outcome::allowed_error for the one it allows;
 // - checks that no repair mutation adds data which no replica has, and
 //   applies the repair mutations to the replicas iff apply_repairs is set;
 // - ignores the preferred replicas and the read repair decision of the paging
@@ -221,6 +221,13 @@ struct outcome {
     // which repeats an earlier one, too many pages, or a failed page. A page
     // fails also when the statement makes too many reads for it.
     std::optional<std::string> error;
+    // A failed page which the case's configuration allows, instead of
+    // `error`. Without read_frontiers, the coordinator can return a short
+    // page which has neither a partition nor a cursor. The pager then fails
+    // the page with an internal error of
+    // query::result_view::calculate_last_position(). The client gets an
+    // error instead of wrong rows, so the harness allows it.
+    std::optional<std::string> allowed_error;
     // The number of repair mutations which the coordinator planned.
     size_t repair_mutations = 0;
     // The properties which the coordinator's reads violated: a repair
@@ -234,8 +241,10 @@ struct outcome {
 // The properties which `o` violates, compared with the complete answer
 // `expected`:
 // - after every page, the rows so far are a prefix of the complete answer;
-// - the client reaches the end of the query;
-// - the rows of all pages equal the complete answer;
+// - the client reaches the end of the query, unless a page failed with
+//   outcome::allowed_error;
+// - the rows of all pages equal the complete answer, with the same
+//   exception;
 // - the properties of outcome::coordinator_violations.
 std::vector<std::string> check(const outcome& o, const std::vector<read_model::answer_row>& expected);
 
