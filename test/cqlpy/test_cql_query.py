@@ -456,3 +456,25 @@ def test_create_twcs_table_no_ttl(cql, test_keyspace, scylla_only):
     finally:
         for t in [tbl, tbl2, tbl3]:
             cql.execute(f"DROP TABLE IF EXISTS {t}")
+
+
+TWCS_1_HOUR = ("compaction = {'class': 'TimeWindowCompactionStrategy', "
+               "'compaction_window_size': '1', 'compaction_window_unit': 'HOURS'}")
+
+def test_twcs_max_window(cql, test_keyspace, scylla_only):
+    tbl = f"{test_keyspace}.{unique_name()}"
+    tbl2 = f"{test_keyspace}.{unique_name()}"
+    try:
+        # Hardcode restriction to max 10 windows
+        with config_value_context(cql, 'twcs_max_window_count', '10'):
+            # Creating a TWCS table with a large number of windows/buckets should fail
+            with pytest.raises(ConfigurationException):
+                cql.execute(f"CREATE TABLE {tbl} (a int, b int, PRIMARY KEY (a)) WITH {TWCS_1_HOUR} AND default_time_to_live=86400")
+            # However the creation of a table within bounds should succeed
+            cql.execute(f"CREATE TABLE {tbl} (a int, b int, PRIMARY KEY (a)) WITH {TWCS_1_HOUR} AND default_time_to_live=36000")
+            # LiveUpdate - Disable check
+            cql.execute("UPDATE system.config SET value='0' WHERE name='twcs_max_window_count'")
+            cql.execute(f"CREATE TABLE {tbl2} (a int, b int, PRIMARY KEY (a)) WITH {TWCS_1_HOUR} AND default_time_to_live=864000000")
+    finally:
+        for t in [tbl, tbl2]:
+            cql.execute(f"DROP TABLE IF EXISTS {t}")

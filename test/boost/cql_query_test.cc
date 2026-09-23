@@ -254,31 +254,6 @@ SEASTAR_TEST_CASE(test_alter_node_oriented_scopes_reject_unknown_targets) {
     });
 }
 
-SEASTAR_TEST_CASE(test_twcs_max_window) {
-    return do_with_cql_env_thread([](cql_test_env& e) {
-        // Hardcode restriction to max 10 windows
-        e.execute_cql("UPDATE system.config SET value='10' WHERE name='twcs_max_window_count';").get();
-        // Creating a TWCS table with a large number of windows/buckets should fail
-        BOOST_REQUIRE_THROW(e.execute_cql("CREATE TABLE tbl (a int, b int, PRIMARY KEY (a)) WITH "
-                        "compaction = {'class': 'TimeWindowCompactionStrategy', "
-                        "'compaction_window_size': '1', 'compaction_window_unit': 'HOURS'} "
-                        "AND default_time_to_live=86400;").get(), exceptions::configuration_exception);
-        // However the creation of a table within bounds should succeed
-        e.execute_cql("CREATE TABLE tbl (a int, b int, PRIMARY KEY (a)) WITH "
-                      "compaction = {'class': 'TimeWindowCompactionStrategy', "
-                      "'compaction_window_size': '1', 'compaction_window_unit': 'HOURS'} "
-                      "AND default_time_to_live=36000;").get();
-        BOOST_REQUIRE(e.local_db().has_schema("ks", "tbl"));
-        // LiveUpdate - Disable check
-        e.execute_cql("UPDATE system.config SET value='0' WHERE name='twcs_max_window_count';").get();
-        e.execute_cql("CREATE TABLE tbl2 (a int, b int, PRIMARY KEY (a)) WITH "
-                      "compaction = {'class': 'TimeWindowCompactionStrategy', "
-                      "'compaction_window_size': '1', 'compaction_window_unit': 'HOURS'} "
-                      "AND default_time_to_live=864000000;").get();
-        BOOST_REQUIRE(e.local_db().has_schema("ks", "tbl2"));
-    });
-}
-
 SEASTAR_TEST_CASE(test_twcs_restrictions_mixed) {
     return do_with_cql_env_thread([](cql_test_env& e) {
         // Hardcode restriction to max 10 windows
