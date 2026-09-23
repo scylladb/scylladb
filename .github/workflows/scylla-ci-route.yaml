@@ -2,7 +2,7 @@ name: Scylla CI Route
 
 on:
   pull_request_target:
-    types: [opened, reopened, synchronize, ready_for_review, unlabeled, labeled]
+    types: [opened, reopened, synchronize, ready_for_review, unlabeled]
   issue_comment:
     types: [created]
   workflow_dispatch:
@@ -17,26 +17,22 @@ on:
         default: 'scylladb/scylladb'
         type: string
 
+# Deny all by default; each job grants only what it needs.
+permissions: {}
+
 jobs:
   route-ci:
     # Run on:
     # 1. PR events (opened/reopened/synchronize/ready_for_review) for non-draft PRs
     # 2. PR unlabeled event when 'conflicts' label is removed
-    # 3. PR labeled event when 'ci/run-for-draft' is added (thin CI for draft PRs, RELENG-860).
-    #    Deliberately not restricted to draft PRs: the label must be vetted on
-    #    *every* application, so that its later presence always implies an org
-    #    member applied it. A non-draft PR is then dropped in 'Resolve PR
-    #    context' without triggering CI.
-    # 4. PR synchronize event on a draft PR that already carries 'ci/run-for-draft'
-    #    (re-run thin CI on later pushes; the label was already vetted when added)
-    # 5. issue_comment event when a non-bot org member comments '@scylladbbot trigger-ci'
-    # 6. workflow_dispatch (manual trigger for testing)
+    # 3. issue_comment event when a non-bot org member comments an @scylladbbot
+    #    command: 'trigger-ci', 'run-for-draft' (thin CI on a draft PR) or 'help'
+    #    (RELENG-935)
+    # 4. workflow_dispatch (manual trigger for testing)
     if: |
       github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'pull_request_target' && github.event.action != 'unlabeled' && github.event.action != 'labeled' && !github.event.pull_request.draft) ||
+      (github.event_name == 'pull_request_target' && github.event.action != 'unlabeled' && !github.event.pull_request.draft) ||
       (github.event_name == 'pull_request_target' && github.event.action == 'unlabeled' && github.event.label.name == 'conflicts') ||
-      (github.event_name == 'pull_request_target' && github.event.action == 'labeled' && github.event.label.name == 'ci/run-for-draft') ||
-      (github.event_name == 'pull_request_target' && github.event.action == 'synchronize' && github.event.pull_request.draft && contains(github.event.pull_request.labels.*.name, 'ci/run-for-draft')) ||
       (github.event_name == 'issue_comment' && github.event.issue.pull_request && github.event.comment.user.login != 'scylladbbot')
     runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 30
@@ -99,44 +95,6 @@ jobs:
           RETRY_EOF
           echo "BASH_ENV=$HELPERS_FILE" >> "$GITHUB_ENV"
 
-      - name: Enforce ci/run-for-draft is org-only
-        if: github.event_name == 'pull_request_target' && github.event.action == 'labeled' && github.event.label.name == 'ci/run-for-draft'
-        id: label-check
-        env:
-          GH_TOKEN: ${{ secrets.AUTO_BACKPORT_TOKEN }}
-          ACTOR: ${{ github.event.sender.login }}
-          PR_REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        shell: bash
-        run: |
-          # Use AUTO_BACKPORT_TOKEN (same as the trust-check step below): it can
-          # read org membership that GITHUB_TOKEN cannot, so members aren't
-          # mistaken for non-members. gh_api_retry already treats a 404 as a
-          # definitive non-member answer (not retried), while 403/429/5xx are
-          # retried first.
-          #
-          # Anything other than a confirmed member removes the label: a later
-          # 'synchronize' on the draft PR re-runs thin CI based on the label
-          # alone and never re-checks membership, so a label left behind by an
-          # unverified check would grant CI we never actually authorised. Fail
-          # closed instead -- a member can simply re-apply the label, which
-          # runs this check again.
-          if OUTPUT=$(gh_api_retry "orgs/scylladb/members/$ACTOR" --silent 2>&1); then
-            echo "valid=true" >> "$GITHUB_OUTPUT"
-          else
-            HTTP_CODE=$(printf '%s' "$OUTPUT" | grep -oE 'HTTP [0-9]{3}' | tail -1 | grep -oE '[0-9]{3}')
-            if [ "$HTTP_CODE" = "404" ]; then
-              echo "::warning::${ACTOR} is not a member of scylladb; removing 'ci/run-for-draft' label."
-              COMMENT="@${ACTOR} the \`ci/run-for-draft\` label can only be set by members of the scylladb org; removing it."
-            else
-              echo "::warning::Could not verify org membership for ${ACTOR}; removing 'ci/run-for-draft' label: $OUTPUT"
-              COMMENT="@${ACTOR} could not verify scylladb org membership (GitHub API error), so the \`ci/run-for-draft\` label was removed. If you are an org member, please re-apply it."
-            fi
-            gh_api_retry -X DELETE "repos/$PR_REPO/issues/$PR_NUMBER/labels/ci%2Frun-for-draft" --silent || true
-            gh_api_retry "repos/$PR_REPO/issues/$PR_NUMBER/comments" -f body="$COMMENT" || true
-            echo "valid=false" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Validate comment trigger
         if: github.event_name == 'issue_comment'
         id: comment-check
@@ -157,16 +115,52 @@ jobs:
           # (no lines left), which would otherwise fail the step under `bash -e`.
           CLEAN_BODY=$(echo "$COMMENT_BODY" | grep -v '^[[:space:]]*>' || true)
 
-          if echo "$CLEAN_BODY" | grep -qi '@scylladbbot' && echo "$CLEAN_BODY" | grep -qi 'trigger-ci'; then
+          # Supported commands (RELENG-935):
+          #   @scylladbbot run-for-draft - thin CI on a draft PR
+          #   @scylladbbot help          - list the available commands
+          #   @scylladbbot trigger-ci    - full CI (loosely matched, as before)
+          # 'valid' means "go on and trigger CI"; 'command' tells the later
+          # steps which command was requested.
+          if echo "$CLEAN_BODY" | grep -qiE '@scylladbbot[[:space:]]+run-for-draft\b'; then
+            echo "command=run-for-draft" >> "$GITHUB_OUTPUT"
+            echo "valid=true" >> "$GITHUB_OUTPUT"
+          elif echo "$CLEAN_BODY" | grep -qiE '@scylladbbot[[:space:]]+/?help\b'; then
+            echo "command=help" >> "$GITHUB_OUTPUT"
+            echo "valid=false" >> "$GITHUB_OUTPUT"
+          elif echo "$CLEAN_BODY" | grep -qi '@scylladbbot' && echo "$CLEAN_BODY" | grep -qi 'trigger-ci'; then
+            echo "command=trigger-ci" >> "$GITHUB_OUTPUT"
             echo "valid=true" >> "$GITHUB_OUTPUT"
           else
             echo "valid=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Reply to help command
+        if: github.event_name == 'issue_comment' && steps.comment-check.outputs.command == 'help'
+        env:
+          # Reply as scylladbbot rather than github-actions[bot]. Its own
+          # comments are excluded by the job-level 'if', so the command list
+          # in this reply cannot re-trigger the workflow.
+          GH_TOKEN: ${{ secrets.AUTO_BACKPORT_TOKEN }}
+          PR_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          ACTOR: ${{ github.event.comment.user.login }}
+        shell: bash
+        run: |
+          BODY=$(cat << 'HELP_EOF'
+          Available `@scylladbbot` commands (scylladb org members only):
+
+          | Command | Description |
+          |---------|-------------|
+          | `@scylladbbot trigger-ci` | Trigger a full CI run for this PR. |
+          | `@scylladbbot run-for-draft` | Trigger a thin CI run (dev-mode build + unit tests, no dtest or artifact tests) for a **draft** PR. Runs once per comment; comment again after pushing new changes. |
+          | `@scylladbbot help` | Show this message. |
+          HELP_EOF
+          )
+          gh_api_retry "repos/$PR_REPO/issues/$PR_NUMBER/comments" -f body="@${ACTOR} ${BODY}" --silent \
+            || echo "::warning::Failed to post help reply on PR #$PR_NUMBER"
+
       - name: Resolve PR context
-        if: |
-          (github.event_name != 'issue_comment' || steps.comment-check.outputs.valid == 'true') &&
-          (github.event_name != 'pull_request_target' || github.event.action != 'labeled' || steps.label-check.outputs.valid == 'true')
+        if: github.event_name != 'issue_comment' || steps.comment-check.outputs.valid == 'true'
         id: resolve-pr
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -180,11 +174,14 @@ jobs:
           PR_DRAFT_FROM_EVENT: ${{ github.event.pull_request.draft }}
           PR_BASE_FROM_EVENT: ${{ github.event.pull_request.base.ref }}
           PR_URL_FROM_EVENT: ${{ github.event.pull_request.html_url }}
-          PR_LABELS_FROM_EVENT: ${{ toJson(github.event.pull_request.labels) }}
           BEFORE_SHA: ${{ github.event.before }}
           AFTER_SHA: ${{ github.event.after }}
           # Comment event context
           ISSUE_NUMBER: ${{ github.event.issue.number }}
+          COMMENT_COMMAND: ${{ steps.comment-check.outputs.command }}
+          COMMENT_ACTOR: ${{ github.event.comment.user.login }}
+          # Replies to @scylladbbot commands are posted as scylladbbot
+          BOT_TOKEN: ${{ secrets.AUTO_BACKPORT_TOKEN }}
           # Manual dispatch context
           DISPATCH_PR_NUMBER: ${{ github.event.inputs.pr_number }}
           DISPATCH_TARGET_REPO: ${{ github.event.inputs.target_repo }}
@@ -202,7 +199,6 @@ jobs:
             PR_DRAFT=$(echo "$PR_JSON" | jq -r '.draft')
             BASE_BRANCH=$(echo "$PR_JSON" | jq -r '.base.ref')
             PR_URL=$(echo "$PR_JSON" | jq -r '.html_url')
-            PR_LABELS=$(echo "$PR_JSON" | jq -r '[.labels[].name] | join(",")')
           elif [ "$EVENT_NAME" = "issue_comment" ]; then
             # For comment events, fetch PR details from the API
             PR_NUMBER="$ISSUE_NUMBER"
@@ -212,20 +208,6 @@ jobs:
             PR_DRAFT=$(echo "$PR_JSON" | jq -r '.draft')
             BASE_BRANCH=$(echo "$PR_JSON" | jq -r '.base.ref')
             PR_URL=$(echo "$PR_JSON" | jq -r '.html_url')
-            PR_LABELS=$(echo "$PR_JSON" | jq -r '[.labels[].name] | join(",")')
-          elif [ "$EVENT_NAME" = "pull_request_target" ] && [ "$EVENT_ACTION" = "labeled" ]; then
-            # Re-fetch rather than trusting the labeled-event snapshot: the PR
-            # may have been marked ready for review between the label event
-            # being queued and this run starting, and a stale draft=true would
-            # wrongly grant a thin CI run to what is now a ready PR.
-            PR_NUMBER="$PR_NUMBER_FROM_EVENT"
-            PR_JSON=$(gh_api_retry "repos/$PR_REPO/pulls/$PR_NUMBER")
-            PR_SHA=$(echo "$PR_JSON" | jq -r '.head.sha')
-            PR_USER=$(echo "$PR_JSON" | jq -r '.user.login')
-            PR_DRAFT=$(echo "$PR_JSON" | jq -r '.draft')
-            BASE_BRANCH=$(echo "$PR_JSON" | jq -r '.base.ref')
-            PR_URL=$(echo "$PR_JSON" | jq -r '.html_url')
-            PR_LABELS=$(echo "$PR_JSON" | jq -r '[.labels[].name] | join(",")')
           else
             PR_NUMBER="$PR_NUMBER_FROM_EVENT"
             PR_SHA="$PR_SHA_FROM_EVENT"
@@ -233,29 +215,32 @@ jobs:
             PR_DRAFT="$PR_DRAFT_FROM_EVENT"
             BASE_BRANCH="$PR_BASE_FROM_EVENT"
             PR_URL="$PR_URL_FROM_EVENT"
-            PR_LABELS=$(echo "$PR_LABELS_FROM_EVENT" | jq -r '[.[].name] | join(",")')
           fi
 
-          # The labeled-event path bypasses the author trust-check (label-check
-          # already vetted the labeler), on the assumption that it only ever
-          # grants a thin run on a still-draft PR. If the PR was made ready for
-          # review between the label event and this refetch, stop here instead
-          # of falling through to a full, untrusted-author CI run below.
-          if [ "$EVENT_NAME" = "pull_request_target" ] && [ "$EVENT_ACTION" = "labeled" ] && [ "$PR_DRAFT" != "true" ]; then
-            echo "::warning::PR #$PR_NUMBER is no longer a draft; skipping thin CI trigger from 'ci/run-for-draft' label"
+          # '@scylladbbot run-for-draft' only makes sense on a draft PR; point
+          # the commenter at 'trigger-ci' instead of silently doing nothing.
+          if [ "$EVENT_NAME" = "issue_comment" ] && [ "$COMMENT_COMMAND" = "run-for-draft" ] && [ "$PR_DRAFT" != "true" ]; then
+            echo "::warning::PR #$PR_NUMBER is not a draft; ignoring '@scylladbbot run-for-draft'"
+            GH_TOKEN="$BOT_TOKEN" gh_api_retry "repos/$PR_REPO/issues/$PR_NUMBER/comments" \
+              -f body="@${COMMENT_ACTOR} this PR is not a draft, so \`run-for-draft\` does not apply. Use \`@scylladbbot trigger-ci\` to run full CI." --silent || true
             echo "should_continue=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          # Draft PRs get no CI by default, unless they carry 'ci/run-for-draft'
-          # (RELENG-860), in which case they get a thin (dev-mode only) CI run.
+          # Draft PRs get no CI by default. They get a thin (dev-mode only) CI
+          # run when an org member comments '@scylladbbot run-for-draft'
+          # (RELENG-935).
           THIN_CI=false
           if [ "$PR_DRAFT" = "true" ]; then
-            if echo "$PR_LABELS" | tr ',' '\n' | grep -qx 'ci/run-for-draft'; then
-              echo "PR #$PR_NUMBER is a draft with 'ci/run-for-draft', running thin CI"
+            if [ "$EVENT_NAME" = "issue_comment" ] && [ "$COMMENT_COMMAND" = "run-for-draft" ]; then
+              echo "PR #$PR_NUMBER is a draft and '@scylladbbot run-for-draft' was requested, running thin CI"
               THIN_CI=true
             else
               echo "::warning::PR #$PR_NUMBER is a draft, skipping CI trigger"
+              if [ "$EVENT_NAME" = "issue_comment" ]; then
+                GH_TOKEN="$BOT_TOKEN" gh_api_retry "repos/$PR_REPO/issues/$PR_NUMBER/comments" \
+                  -f body="@${COMMENT_ACTOR} this PR is a draft, so full CI was not triggered. Use \`@scylladbbot run-for-draft\` for a thin CI run, or mark the PR ready for review." --silent || true
+              fi
               echo "should_continue=false" >> "$GITHUB_OUTPUT"
               exit 0
             fi
@@ -568,7 +553,7 @@ jobs:
             ARTIFACTS_REQUIRED=false
           fi
 
-          # Thin CI for draft PRs (RELENG-860): dev-mode build + unit tests only,
+          # Thin CI for draft PRs (RELENG-860, RELENG-935): dev-mode build + unit tests only,
           # never dtest or artifact tests.
           if [ "${{ steps.resolve-pr.outputs.thin_ci }}" = "true" ]; then
             DTEST_REQUIRED=false
@@ -584,12 +569,7 @@ jobs:
           echo "Required checks: build=$BUILD_REQUIRED dtest=$DTEST_REQUIRED unittest=$UNITTEST_REQUIRED artifacts=$ARTIFACTS_REQUIRED gdb=$GDB_REQUIRED"
 
       - name: Check trusted contributor
-        # Skipped for the labeled ci/run-for-draft event, and for a later
-        # synchronize on a draft PR that already carries the label: label-check
-        # already confirmed the labeler (not necessarily the PR author) is an
-        # org member, which is the trust signal for that path. Both bypasses
-        # name the label explicitly, so no other label can reach them.
-        if: steps.resolve-pr.outputs.should_continue == 'true' && steps.docs-check.outputs.is_docs_only != 'true' && github.event_name != 'issue_comment' && github.event_name != 'workflow_dispatch' && !(github.event.action == 'labeled' && github.event.label.name == 'ci/run-for-draft') && !(github.event.action == 'synchronize' && github.event.pull_request.draft && contains(github.event.pull_request.labels.*.name, 'ci/run-for-draft'))
+        if: steps.resolve-pr.outputs.should_continue == 'true' && steps.docs-check.outputs.is_docs_only != 'true' && github.event_name != 'issue_comment' && github.event_name != 'workflow_dispatch'
         id: trust-check
         env:
           GH_TOKEN: ${{ secrets.AUTO_BACKPORT_TOKEN }}
@@ -626,7 +606,7 @@ jobs:
         if: |
           steps.resolve-pr.outputs.should_continue == 'true' &&
           steps.docs-check.outputs.is_docs_only != 'true' &&
-          (steps.trust-check.outputs.trusted == 'true' || github.event_name == 'issue_comment' || github.event_name == 'workflow_dispatch' || (github.event.action == 'labeled' && github.event.label.name == 'ci/run-for-draft' && steps.label-check.outputs.valid == 'true') || (github.event.action == 'synchronize' && github.event.pull_request.draft && contains(github.event.pull_request.labels.*.name, 'ci/run-for-draft'))) &&
+          (steps.trust-check.outputs.trusted == 'true' || github.event_name == 'issue_comment' || github.event_name == 'workflow_dispatch') &&
           steps.pr-details.outputs.has_conflicts != 'true' &&
           steps.required-checks.outputs.build_required == 'true' &&
           steps.target-folder.outputs.folder != ''
