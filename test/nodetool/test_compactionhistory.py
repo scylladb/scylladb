@@ -105,25 +105,7 @@ HISTORY_RESPONSE = [
 EXPECTED_REQUEST = expected_request("GET", "/compaction_manager/compaction_history", response=HISTORY_RESPONSE)
 
 
-def _test_text_nodetool_cassandra(nodetool):
-    expected_response = \
-"""Compaction History:
-id                                   keyspace_name columnfamily_name compacted_at            bytes_in bytes_out rows_merged
-8b857440-0e35-11f0-9fcc-a895cfb212f2 system_schema functions         {} 579      594   {{}}
-edef82f0-5e9c-11ee-a8f6-7d85dcfeb8f4 system_schema functions         {} 5790     5944  {{1: 5, 2: 1}}
-edde9300-5e9c-11ee-a8f6-7d85dcfeb8f4 system        peers             {} 11714    11808 {{1: 12}}
-""".format(format_compacted_at(1695973859492), format_compacted_at(1695973859491), format_compacted_at(1695973259380))
-
-    VALID_KEYS = ["id", "cf", "ks", "compaction_type", "compacted_at", "bytes_in", "bytes_out"]
-    CASSANDRA_HISTORY_RESPONSE = [{key: data[key] for key in VALID_KEYS} for data in HISTORY_RESPONSE]
-    CASSANDRA_EXPECTED_REQUEST = expected_request("GET", "/compaction_manager/compaction_history", response=CASSANDRA_HISTORY_RESPONSE)
-
-    for cmd in [("compactionhistory",), ("compactionhistory", "--format", "text")]:
-        response = nodetool(*cmd, expected_requests=[CASSANDRA_EXPECTED_REQUEST])
-        assert response.stdout == expected_response
-
-
-def _test_text_nodetool_scylla(nodetool):
+def test_text(nodetool):
     # Scylla aligns number columns to the right.
     expected_response = \
 """Compaction History:
@@ -137,13 +119,6 @@ edde9300-5e9c-11ee-a8f6-7d85dcfeb8f4        0 system        peers             Co
     for cmd in [("compactionhistory",), ("compactionhistory", "--format", "text"), ("compactionhistory", "-F", "text")]:
         response = nodetool(*cmd, expected_requests=[EXPECTED_REQUEST])
         assert response.stdout == expected_response
-
-
-def test_text(request, nodetool):
-    if request.config.getoption("nodetool") == "scylla":
-        _test_text_nodetool_scylla(nodetool)
-    else:
-        _test_text_nodetool_cassandra(nodetool)
 
 
 def test_json(nodetool):
@@ -367,7 +342,7 @@ def format_log_at(timestamp: int):
             timestamp % 1000)
 
 
-def test_log(nodetool, scylla_only):
+def test_log(nodetool):
     expected_response = \
 """DEBUG {} [shard 0:comp] compaction - [Compact system.peers edde9300-5e9c-11ee-a8f6-7d85dcfeb8f4] Compacting [{{generation: 5d022760-b617-11ef-8294-8437c36f0e31, origin: memtable, size: 5466}},{{generation: 5b756ce0-b617-11ef-a97d-8438c36f0e31, origin: memtable, size: 5519}}]
 DEBUG {} [shard 0:comp] compaction - [Compact system.peers edde9300-5e9c-11ee-a8f6-7d85dcfeb8f4] Compacted 2 sstables to [{{generation: 5d03ae00-b617-11ef-8294-8437c36f0e31, origin: compaction, size: 5457}}]. 11kB to 11kB (~100% of original) in 600000ms = 19 bytes/s.
@@ -390,5 +365,4 @@ def test_invalid_format(nodetool):
             ("compactionhistory", "-F", "foo"),
             {},
             ["error processing arguments: invalid format foo, valid formats are: {text, json, yaml, log}",
-             "error processing arguments: invalid format foo, valid formats are: [\"text\", \"json\", \"yaml\", \"log\"]",
-             "nodetool: arguments for -F are json,yaml only."])
+             "error processing arguments: invalid format foo, valid formats are: [\"text\", \"json\", \"yaml\", \"log\"]"])

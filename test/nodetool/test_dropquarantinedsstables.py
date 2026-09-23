@@ -49,8 +49,7 @@ def test_dropquarantinedsstables_non_existent_keyspace(nodetool):
         nodetool,
         ("dropquarantinedsstables", "--i-accept-data-resurrection-risk", "--keyspace", "non_existent_ks"),
         {"expected_requests": [expected_request("GET", "/storage_service/keyspaces", response=["ks1", "ks2"])]},
-        ["nodetool: Keyspace [non_existent_ks] does not exist.",
-         "error processing arguments: keyspace non_existent_ks does not exist"])
+        ["error processing arguments: keyspace non_existent_ks does not exist"])
 
 
 def test_dropquarantinedsstables_keyspace_positional(nodetool):

@@ -8,13 +8,13 @@ from test.nodetool.rest_api_mock import expected_request
 from test.nodetool.utils import check_nodetool_fails_with
 
 
-def test_cleanup(nodetool, scylla_only):
+def test_cleanup(nodetool):
     nodetool("cleanup", expected_requests=[
         expected_request("POST", "/storage_service/cleanup_all/", params={"global": "false"}, response=0),
     ])
 
 
-def test_cleanup_global(nodetool, scylla_only):
+def test_cleanup_global(nodetool):
     nodetool("cluster", "cleanup", expected_requests=[
         expected_request("POST", "/storage_service/cleanup_all/", params={"global": "true"}, response=0),
     ])
@@ -49,8 +49,7 @@ def test_cleanup_nonexistent_keyspace(nodetool):
             ("cleanup", "non_existent_ks"),
             {"expected_requests": [
                 expected_request("GET", "/storage_service/keyspaces", response=["ks1", "ks2", "system"])]},
-            ["nodetool: Keyspace [non_existent_ks] does not exist.",
-             "error processing arguments: keyspace non_existent_ks does not exist"])
+            ["error processing arguments: keyspace non_existent_ks does not exist"])
 
 
 def test_cleanup_jobs_arg(nodetool):

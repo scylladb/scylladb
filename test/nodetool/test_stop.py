@@ -23,9 +23,8 @@ def test_stop_common_scylla(nodetool):
         check_compaction_type(nodetool, compaction_type)
 
 
-# Even though our docs says it is supported, cassandra-nodetool doesn't know about RESHARD
 # Although RESHARD is a valid compaction type, RESHARD compaction cannot be stopped
-def test_stop_reshard(nodetool, scylla_only):
+def test_stop_reshard(nodetool):
     check_nodetool_fails_with(
             nodetool,
             ("stop", "RESHARD"),
@@ -34,13 +33,13 @@ def test_stop_reshard(nodetool, scylla_only):
 
 
 # Cassandra calls UPGRADE, UPGRADE_SSTABLES, which the scylla-code doesn't recognize
-def test_stop_upgrade(nodetool, scylla_only):
+def test_stop_upgrade(nodetool):
     check_compaction_type(nodetool, "UPGRADE")
 
 
 # Scylla-specific compaction types, see scylladb/scylladb#SCYLLADB-3761.
 # COMPACTION stops both regular and major compactions, REGULAR and MAJOR stop just one of them.
-def test_stop_regular_and_major(nodetool, scylla_only):
+def test_stop_regular_and_major(nodetool):
     for compaction_type in ("REGULAR", "MAJOR"):
         check_compaction_type(nodetool, compaction_type)
 
@@ -63,7 +62,7 @@ def test_stop_unknown(nodetool):
             ["error processing arguments: Invalid compaction type FOO, valid compaction types are: (COMPACTION, CLEANUP, SCRUB, UPGRADE, RESHAPE, SPLIT, MAJOR, REWRITE_COMPONENT and REGULAR)"])
 
 
-def test_stop_no_type(nodetool, scylla_only):
+def test_stop_no_type(nodetool):
     check_nodetool_fails_with(
             nodetool,
             ("stop",),
@@ -72,7 +71,7 @@ def test_stop_no_type(nodetool, scylla_only):
 
 
 # This is not implemented, nodetool logs a message and exits
-def test_stop_by_id(nodetool, scylla_only):
+def test_stop_by_id(nodetool):
     expected_error = "error processing arguments: stopping compactions by id is not implemented"
 
     check_nodetool_fails_with(nodetool, ("stop", "-id", "123"), {}, [expected_error])

@@ -33,7 +33,7 @@ def test_clearnapshot_keyspaces(nodetool):
     ])
 
 
-def test_clearnapshot_nonexistent_keyspaces(nodetool, scylla_only):
+def test_clearnapshot_nonexistent_keyspaces(nodetool):
     check_nodetool_fails_with(
             nodetool,
             ("clearsnapshot", "non_existent_ks"),
@@ -64,7 +64,7 @@ def test_clearnapshot_tag_and_keyspaces(nodetool):
     ])
 
 
-def test_listsnapshots(nodetool, request):
+def test_listsnapshots(nodetool):
     res = nodetool("listsnapshots", expected_requests=[
         expected_request("GET", "/storage_service/snapshots", response=[
             {"key": "1698236289867", "value": [{"ks": "ks1", "cf": "tbl1", "total": 45056, "live": 0},
@@ -89,14 +89,11 @@ Total TrueDiskSpaceUsed: 923.08 KiB
     assert res.stdout == expected_output
 
 
-def test_listsnapshots_no_snapshots(nodetool, request):
+def test_listsnapshots_no_snapshots(nodetool):
     res = nodetool("listsnapshots", expected_requests=[
         expected_request("GET", "/storage_service/snapshots", response=[]),
         ])
-    if request.config.getoption("nodetool") == "scylla":
-        assert res.stdout == "There are no snapshots\n"
-    else:
-        assert res.stdout == "Snapshot Details: \nThere are no snapshots\n"
+    assert res.stdout == "There are no snapshots\n"
 
 
 def check_snapshot_out(res, tag, ktlist, skip_flush, ttl):
@@ -183,7 +180,7 @@ class kn_param(NamedTuple):
     kn_param(("--kt-list", "ks1.1/tbl1,ks1.2/tbl2"), "ks1.1/tbl1,ks1.2/tbl2", "",
              ["ks1.1/tbl1", "ks1.2/tbl2"]),
 ))
-def test_snapshot_keyspace_table_single_arg(nodetool, param, scylla_only):
+def test_snapshot_keyspace_table_single_arg(nodetool, param):
     tag = "my_snapshot"
 
     req_params = {"tag": tag, "sf": "false", "ttl": "0", "kn": param.kn}
@@ -287,8 +284,7 @@ def test_snapshot_multiple_keyspace_with_table(nodetool):
             nodetool,
             ("snapshot", "--table", "tbl1", "ks1", "ks2"),
             {"expected_requests": []},
-            ["error: When specifying the table for a snapshot, you must specify one and only one keyspace",
-             "error processing arguments: when specifying the table for the snapshot,"
+            ["error processing arguments: when specifying the table for the snapshot,"
              " you must specify one and only one keyspace"])
 
 
@@ -297,9 +293,7 @@ def test_snapshot_table_with_ktlist(nodetool):
             nodetool,
             ("snapshot", "--table", "tbl1", "-kt", "ks1.tbl1"),
             {"expected_requests": []},
-            ["error: When specifying the Keyspace columfamily list for a snapshot,"
-             " you should not specify columnfamily",
-             "error processing arguments: when specifying the keyspace-table list for a snapshot,"
+            ["error processing arguments: when specifying the keyspace-table list for a snapshot,"
              " you should not specify table(s)"])
 
 
@@ -308,13 +302,11 @@ def test_snapshot_keyspace_with_ktlist(nodetool):
             nodetool,
             ("snapshot", "-kt", "ks1.tbl1", "ks1"),
             {"expected_requests": []},
-            ["error: When specifying the Keyspace columfamily list for a snapshot,"
-             " you should not specify columnfamily",
-             "error processing arguments: when specifying the keyspace-table list for a snapshot,"
+            ["error processing arguments: when specifying the keyspace-table list for a snapshot,"
              " you should not specify keyspace(s)"])
 
 
-def test_snapshot_keyspace_with_tables(nodetool, scylla_only):
+def test_snapshot_keyspace_with_tables(nodetool):
     check_nodetool_fails_with(
             nodetool,
             ("snapshot", "--table", "tbl1", "-cf", "tbl2", "ks1"),

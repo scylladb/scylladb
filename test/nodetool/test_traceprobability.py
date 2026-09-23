@@ -25,8 +25,7 @@ def test_settraceprobability_missing_param(nodetool):
             nodetool,
             ("settraceprobability",),
             {},
-            ["nodetool: Required parameters are missing: trace_probability",
-             "error processing arguments: required parameters are missing: trace_probability"])
+            ["error processing arguments: required parameters are missing: trace_probability"])
 
 
 def test_settraceprobability_invalid_type(nodetool):
@@ -34,8 +33,7 @@ def test_settraceprobability_invalid_type(nodetool):
             nodetool,
             ("settraceprobability", "adadad"),
             {},
-            ["nodetool: trace_probability: can not convert \"adadad\" to a Double",
-             "error: the argument ('adadad') for option '--trace_probability' is invalid"])
+            ["error: the argument ('adadad') for option '--trace_probability' is invalid"])
 
 
 def test_settraceprobability_out_of_bounds(nodetool):
@@ -44,5 +42,4 @@ def test_settraceprobability_out_of_bounds(nodetool):
                 nodetool,
                 ("settraceprobability", "--", value),
                 {},
-                ["nodetool: Trace probability must be between 0 and 1",
-                 "error processing arguments: trace probability must be between 0 and 1"])
+                ["error processing arguments: trace probability must be between 0 and 1"])

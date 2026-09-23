@@ -64,7 +64,7 @@ def test_removenode_force(nodetool):
     assert res.stdout == "RemovalStatus: SOME STATUS\n"
 
 
-def test_removenode_status_with_ignore_dead_nodes(nodetool, scylla_only):
+def test_removenode_status_with_ignore_dead_nodes(nodetool):
     check_nodetool_fails_with(
             nodetool,
             ("removenode", "status", "--ignore-dead-nodes", "ac9e2ad5-c6d7-4769-a64b-6e73173ccd86"),
@@ -72,7 +72,7 @@ def test_removenode_status_with_ignore_dead_nodes(nodetool, scylla_only):
             ["error processing arguments: cannot use --ignore-dead-nodes with status or force"])
 
 
-def test_removenode_force_with_ignore_dead_nodes(nodetool, scylla_only):
+def test_removenode_force_with_ignore_dead_nodes(nodetool):
     check_nodetool_fails_with(
             nodetool,
             ("removenode", "force", "--ignore-dead-nodes", "ac9e2ad5-c6d7-4769-a64b-6e73173ccd86"),

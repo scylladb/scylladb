@@ -11,7 +11,7 @@ from test.nodetool.rest_api_mock import expected_request
 @pytest.mark.parametrize("nowait,task_state,task_error", [(False, "failed", "error"),
                                                           (False, "done", ""),
                                                           (True, "", "")])
-def test_restore(nodetool, scylla_only, nowait, task_state, task_error):
+def test_restore(nodetool, nowait, task_state, task_error):
     endpoint = "s3.us-east-2.amazonaws.com"
     bucket = "bucket-foo"
     keyspace = "ks"
@@ -94,7 +94,7 @@ end: {end_time}
 # malformed_sstable_exception. Text files usually end with a newline, so make
 # sure it doesn't turn into such an empty entry in the request body.
 @pytest.mark.parametrize("trailing_newline", [False, True])
-def test_restore_sstables_file_list(nodetool, scylla_only, tmp_path, trailing_newline):
+def test_restore_sstables_file_list(nodetool, tmp_path, trailing_newline):
     endpoint = "s3.us-east-2.amazonaws.com"
     bucket = "bucket-foo"
     keyspace = "ks"
@@ -136,7 +136,7 @@ def test_restore_sstables_file_list(nodetool, scylla_only, tmp_path, trailing_ne
 
 @pytest.mark.parametrize("scope_val", ["all", "dc", "rack"])
 @pytest.mark.parametrize("pro_val", ["--primary-replica-only", "-pro"])
-def test_restore_scope_primary_replica(nodetool, scylla_only, scope_val, pro_val):
+def test_restore_scope_primary_replica(nodetool, scope_val, pro_val):
     nodetool("restore", "--endpoint", "s3.us-east-2.amazonaws.com", "--bucket", "test_bucket", "--prefix",
              "test_prefix", "--keyspace", "ks", "--table", "tbl", f"--scope={scope_val}", pro_val,
              "me-1-big-TOC.txt",

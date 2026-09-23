@@ -9,7 +9,6 @@ import pytest
 
 from test.nodetool.utils import check_nodetool_fails_with
 from test.nodetool.rest_api_mock import expected_request
-from test.pylib.skip_types import skip_env
 
 
 class scrub_status(enum.Enum):
@@ -52,8 +51,7 @@ def test_scrub_non_existent_keyspace(nodetool):
             nodetool,
             ("scrub", "non_existent_ks"),
             {"expected_requests": [expected_request("GET", "/storage_service/keyspaces", response=["ks"])]},
-            ["nodetool: Keyspace [non_existent_ks] does not exist.",
-             "error processing arguments: keyspace non_existent_ks does not exist"])
+            ["error processing arguments: keyspace non_existent_ks does not exist"])
 
 
 # We don't test all values for --mode and --qurantine-mode, they are passed as-is
@@ -62,7 +60,7 @@ def test_scrub_non_existent_keyspace(nodetool):
 @pytest.mark.parametrize("mode", [None, ("-m", "ABORT"), ("--mode", "ABORT"), "ABORT"])
 @pytest.mark.parametrize("quarantine_mode", [None, ("--quarantine-mode", "INCLUDE"), ("-q", "ONLY")])
 @pytest.mark.parametrize("disable_snapshot", [None, "--no-snapshot", "-ns"])
-def test_scrub_options(request, nodetool, table, mode, quarantine_mode, disable_snapshot):
+def test_scrub_options(nodetool, table, mode, quarantine_mode, disable_snapshot):
     args = ["scrub", "ks"] + table
     expected_params = {}
 
@@ -78,11 +76,8 @@ def test_scrub_options(request, nodetool, table, mode, quarantine_mode, disable_
             expected_params["scrub_mode"] = mode
 
     if quarantine_mode is not None:
-        if request.config.getoption("nodetool") == "scylla":
-            args += list(quarantine_mode)
-            expected_params["quarantine_mode"] = quarantine_mode[1]
-        else:
-            skip_env("--quarantine-mode only supported by scylla-nodetool")
+        args += list(quarantine_mode)
+        expected_params["quarantine_mode"] = quarantine_mode[1]
 
     if disable_snapshot:
         args.append(disable_snapshot)
@@ -111,8 +106,7 @@ def test_scrub_skip_corrupted_with_mode(nodetool):
             nodetool,
             ("scrub", "ks", "--skip-corrupted", "--mode", "ABORT"),
             {"expected_requests": [expected_request("GET", "/storage_service/keyspaces", response=["ks"])]},
-            ["nodetool: skipCorrupted and scrubMode must not be specified together",
-             "error processing arguments: cannot use --skip-corrupted when --mode is used"])
+            ["error processing arguments: cannot use --skip-corrupted when --mode is used"])
 
 
 @pytest.mark.parametrize("ignored_opt", ["--reinsert-overflowed-ttl", "-r", ("--jobs", "2"), "-j2", "--no-validate",
@@ -129,16 +123,7 @@ def test_scrub_ignored_options(nodetool, ignored_opt):
         expected_request("GET", "/storage_service/keyspace_scrub/ks", response=scrub_status.successful.value)])
 
 
-# Cassandra nodetool ignores the returned status
-@pytest.mark.parametrize("status", [scrub_status.successful, scrub_status.aborted, scrub_status.validation_errors])
-def test_scrub_return_status(nodetool, status, cassandra_only):
-    nodetool("scrub", "ks", "--mode=VALIDATE", expected_requests=[
-        expected_request("GET", "/storage_service/keyspaces", response=["ks"]),
-        expected_request("GET", "/storage_service/keyspace_scrub/ks", params={"scrub_mode": "VALIDATE"},
-                         response=status.value)])
-
-
-def test_scrub_validation_errors_exit_code(nodetool, scylla_only):
+def test_scrub_validation_errors_exit_code(nodetool):
     nodetool("scrub", "ks", "--mode=VALIDATE", expected_requests=[
         expected_request("GET", "/storage_service/keyspaces", response=["ks"]),
         expected_request("GET", "/storage_service/keyspace_scrub/ks", params={"scrub_mode": "VALIDATE"},
@@ -166,7 +151,7 @@ def test_scrub_validation_errors_exit_code(nodetool, scylla_only):
             ["scrub failed: there are invalid sstables"])
 
 
-def test_scrub_abort_exit_code(nodetool, scylla_only):
+def test_scrub_abort_exit_code(nodetool):
     nodetool("scrub", "ks", "--mode=ABORT", expected_requests=[
         expected_request("GET", "/storage_service/keyspaces", response=["ks"]),
         expected_request("GET", "/storage_service/keyspace_scrub/ks", params={"scrub_mode": "ABORT"},
@@ -207,7 +192,7 @@ def test_scrub_drop_unfixable_sstables_option(nodetool):
             ["error processing arguments: --drop-unfixable-sstables is only valid with --mode=SEGREGATE"])
 
 
-def test_scrub_no_quarantine_option(nodetool, scylla_only):
+def test_scrub_no_quarantine_option(nodetool):
     # --quarantine-invalid-sstables=false with --mode=VALIDATE passes quarantine_invalid_sstables=false to the API
     nodetool("scrub", "ks", "tbl1", "--mode=VALIDATE", "--quarantine-invalid-sstables=false", expected_requests=[
         expected_request("GET", "/storage_service/keyspaces", response=["ks"]),

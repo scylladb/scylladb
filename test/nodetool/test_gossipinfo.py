@@ -68,10 +68,8 @@ def print_application_state(application_state):
 
 
 def normalize_endpoints(endpoints):
-    # Cassandra's nodetool uses HashMap under the hood for collecting the map
-    # from state to the value of that state, and print out them by iterating
-    # the keys, but the order is not guaranteed to be ordered or consistent, so
-    # let's extract the state values out and sort them before comparing.
+    # The order of the states in the output is not guaranteed to be consistent,
+    # so let's extract the state values out and sort them before comparing.
     normalized = {}
     addrs = None
     state = []

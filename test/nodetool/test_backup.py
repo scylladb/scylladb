@@ -33,7 +33,7 @@ def test_statusbackup(nodetool):
 @pytest.mark.parametrize("nowait,task_state,task_error,move_files", [(False, "failed", "error", False),
                                                           (False, "done", "", True),
                                                           (True, "", "", True)])
-def test_backup(nodetool, scylla_only, nowait, task_state, task_error, move_files):
+def test_backup(nodetool, nowait, task_state, task_error, move_files):
     endpoint = "s3.us-east-2.amazonaws.com"
     bucket = "bucket-foo"
     prefix = "foo/bar/baz"
@@ -113,7 +113,7 @@ end: {end_time}
 @pytest.mark.parametrize("nowait,task_state,task_error,move_files", [(False, "failed", "error", False),
                                                           (False, "done", "", True),
                                                           (True, "", "", True)])
-def test_cluster_backup(nodetool, scylla_only, nowait, task_state, task_error, move_files):
+def test_cluster_backup(nodetool, nowait, task_state, task_error, move_files):
     endpoint = "s3.us-east-2.amazonaws.com"
     bucket = "bucket-foo"
     prefix = "foo/bar/baz"
