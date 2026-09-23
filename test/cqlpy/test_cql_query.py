@@ -22,14 +22,14 @@ from cassandra import ConsistencyLevel, InvalidRequest, ReadFailure, Unauthorize
 from cassandra.cluster import NoHostAvailable
 from cassandra.concurrent import execute_concurrent_with_args
 import cassandra.cqltypes
-from cassandra.protocol import ConfigurationException, ServerError, SyntaxException
+from cassandra.protocol import ConfigurationException, RESULT_KIND_SCHEMA_CHANGE, ResultMessage, ServerError, SyntaxException
 from cassandra.query import PreparedStatement, SimpleStatement, UNSET_VALUE
 from cassandra.util import Date, Duration, Time
 import pytest
 
 from . import nodetool
 from .nodetool import flush, no_autocompaction_context
-from .util import ScyllaMetrics, config_value_context, is_scylla, new_aggregate, new_function, new_session, new_test_keyspace, new_test_table, new_type, new_user, unique_name
+from .util import ScyllaMetrics, config_value_context, is_scylla, new_aggregate, new_cql, new_function, new_session, new_test_keyspace, new_test_table, new_type, new_user, unique_name
 
 
 def test_create_keyspace_statement(cql):
@@ -3456,3 +3456,62 @@ def test_alter_keyspace_updates_in_memory_objects_with_data_from_system_schema_s
         cql.execute(f"alter keyspace {ks} with tablets = {{ 'initial': 3 }}")
         desc = cql.execute(f"describe keyspace {ks}").one().create_statement
         assert "'initial': 3" in desc
+
+
+# Returns a new session that records the kind of every RESULT message it
+# receives, so a test can check whether a request returned a SCHEMA_CHANGE
+# result (the driver itself doesn't expose that).
+@contextmanager
+def result_kind_recording_cql(cql):
+    with new_cql(cql) as session:
+        kinds = []
+        base_handler = session.client_protocol_handler
+        class recording_handler(base_handler):
+            @classmethod
+            def decode_message(cls, *args, **kwargs):
+                msg = super().decode_message(*args, **kwargs)
+                if isinstance(msg, ResultMessage):
+                    kinds.append(msg.kind)
+                return msg
+        session.client_protocol_handler = recording_handler
+        yield session, kinds
+
+# check if create statements emit schema change event properly
+# we emit it even if resource wasn't created due to github.com/scylladb/scylladb/issues/16909
+def test_schema_change_events(cql, test_keyspace, scylla_only):
+    with result_kind_recording_cql(cql) as (session, kinds):
+        def returns_schema_change(stmt):
+            kinds.clear()
+            session.execute(stmt)
+            return kinds == [RESULT_KIND_SCHEMA_CHANGE]
+        # keyspace
+        ks = unique_name()
+        assert returns_schema_change(f"create keyspace {ks} with replication = {{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }};")
+        try:
+            assert returns_schema_change(f"create keyspace if not exists {ks} with replication = {{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }};")
+        finally:
+            cql.execute(f"drop keyspace {ks}")
+
+        # table
+        users = f"{test_keyspace}.{unique_name()}"
+        assert returns_schema_change(f"create table {users} (user_name varchar PRIMARY KEY);")
+        try:
+            assert returns_schema_change(f"create table if not exists {users} (user_name varchar PRIMARY KEY);")
+
+            # view
+            users_view = f"{test_keyspace}.{unique_name()}"
+            assert returns_schema_change(f"create materialized view {users_view} as select user_name from {users} where user_name is not null primary key (user_name)")
+            try:
+                assert returns_schema_change(f"create materialized view if not exists {users_view} as select user_name from {users} where user_name is not null primary key (user_name)")
+            finally:
+                cql.execute(f"drop materialized view {users_view}")
+        finally:
+            cql.execute(f"drop table {users}")
+
+        # type
+        my_type = f"{test_keyspace}.{unique_name()}"
+        assert returns_schema_change(f"create type {my_type} (first text);")
+        try:
+            assert returns_schema_change(f"create type if not exists {my_type} (first text);")
+        finally:
+            cql.execute(f"drop type {my_type}")
