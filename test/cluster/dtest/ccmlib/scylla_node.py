@@ -15,6 +15,7 @@ import os
 import re
 import shutil
 import signal
+import socket
 import subprocess
 import time
 import uuid
@@ -26,11 +27,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import aiohttp
+import requests
 import yaml
 from ruamel.yaml import YAML
 
 from test import TOP_SRC_DIR
-from test.cluster.dtest.ccmlib import scylla_repository
+from test.cluster.dtest.ccmlib import ccm_parity as parity, scylla_repository
 from test.cluster.dtest.ccmlib.common import (
     ArgumentError,
     wait_for,
@@ -93,6 +95,7 @@ CQLSH_BIN = TOP_SRC_DIR / BIN_DIR / "cqlsh"
 # update_yaml() must not take them from another node's copy of the file.
 NODE_SPECIFIC_CONFIG_OPTIONS = frozenset({
     "workdir",
+    "workdir,W",  # ccm's spelling of it, which ccm parity writes (ccm_parity.py)
     "maintenance_socket",
     "api_doc_dir",
     "cluster_name",
@@ -171,6 +174,10 @@ class ToolError(Exception):
 
 
 NodetoolError = ToolError
+
+# `nodetool compactionstats` lines ccm's Node._parse_tasks() counted (ccmlib/node.py).
+_CCM_PENDING_TASKS = re.compile(r"- (?P<ks>\w+)\.(?P<cf>\w+): (?P<tasks>\d+)")
+_CCM_ACTIVE_TASKS = re.compile(r"\s*([\w-]+)\s+\w+\s+(?P<ks>\w+)\s+(?P<cf>\w+)\s+\d+\s+\d+\s+\w+\s+\d+\.\d+%")
 
 
 # Restored verbatim (imports aside) from ccm's ccmlib/scylla_node.py, since
@@ -283,6 +290,9 @@ class ScyllaNode:
         self.bootstrap = True
 
         self._hostid = None
+        # Under ccm parity, the seeds ccm would have written into this node's
+        # scylla.yaml (ScyllaCluster._save_ccm_seeds()).
+        self.ccm_seeds: list[str] | None = None
         # Exit status of the process stop() ended, which the manager does not keep.
         self._stop_returncode: int | None = None
 
@@ -394,6 +404,11 @@ class ScyllaNode:
         if self.is_running():
             raise NodeError(f"Can't change the IP of a running node {self.name}; stop it first")
         new_ip = str(self.cluster.manager.server_change_ip(server_id=self.server_id))
+        if self.cluster.ccm_parity:
+            # The test's set_configuration_options(listen_address=...) made ccm rewrite the
+            # node's seeds, before it reassigned network_interfaces: its own old address,
+            # and the new ones of the nodes moved before it.
+            self.cluster._save_ccm_seeds([self])  # noqa: SLF001
         # server_change_ip() rewrites rpc_address too, so both interfaces move.
         self.network_interfaces = {name: (new_ip, port) for name, (_, port) in self.network_interfaces.items()}
         logger.debug(f"Changed IP of {self.name} to {new_ip}")
@@ -604,6 +619,25 @@ class ScyllaNode:
         self.debug(f"watch_rest_for_alive: {tofind=} {found=}: {tofind_host_id_map=} {found_host_id_map=}")
         raise TimeoutError(f"watch_rest_for_alive() timeout after {timeout} seconds")
 
+    def _check_binary_socket_listening(self, timeout: float = 10) -> None:
+        """ccm's second step of wait_for_binary_interface(): connect to the CQL port.
+
+        ccm (ccmlib/node.py, common.check_socket_listening()) opened and closed a
+        plain TCP connection every 0.2 s until one succeeded, and only warned if
+        none did in 10 s.  The server sees a connection that sends no frame.
+        """
+        itf = (self.address(), parity.CCM_NATIVE_TRANSPORT_PORT)
+        deadline = time.perf_counter() + timeout
+        while time.perf_counter() < deadline:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                try:
+                    sock.connect(itf)
+                    return
+                except OSError:
+                    time.sleep(0.2)
+        logger.warning(f"Binary interface {itf[0]}:{itf[1]} is not listening after {timeout} seconds, "
+                       "node may have failed to start.")
+
     def wait_for_binary_interface(self,
                                   from_mark: int | None = None,
                                   timeout: float | None = None,
@@ -621,6 +655,8 @@ class ScyllaNode:
             try:
                 self.watch_log_for(exprs="Starting listening for CQL clients", from_mark=from_mark,
                                    timeout=max(0.1, min(2.0, deadline - time.perf_counter())))
+                if self.cluster.ccm_parity:
+                    self._check_binary_socket_listening()
                 return
             except TimeoutError:
                 if not self.is_running():
@@ -683,8 +719,21 @@ class ScyllaNode:
             "--commitlog-use-o-dsync": ["0"],
             "--max-networking-io-control-blocks": ["1000"],
             "--unsafe-bypass-fsync": ["1"],
-            "--num-tokens": [self._num_tokens()],
         }
+        if self.cluster.ccm_parity:
+            # ccm's command line (ccmlib/scylla_node.py _start_scylla()): the vnode
+            # count comes from scylla.yaml, which dtest's options set; a test that
+            # changes cluster.num_tokens still gets it.
+            default_scylla_args["--log-to-stdout"] = ["1"]
+            # ccm named the config file and gave the addresses on the command line;
+            # test.py leaves Scylla to find conf/scylla.yaml from its working directory.
+            default_scylla_args["--options-file"] = [os.path.join(self.get_conf_dir(), "scylla.yaml")]
+            default_scylla_args["--api-address"] = [self.address()]
+            default_scylla_args["--prometheus-address"] = [self.address()]
+            if self.cluster.num_tokens != parity.UPSTREAM_NUM_TOKENS:
+                default_scylla_args["--num-tokens"] = [self._num_tokens()]
+        else:
+            default_scylla_args["--num-tokens"] = [self._num_tokens()]
 
         if self.scylla_mode() == "debug":
             default_scylla_args["--blocked-reactor-notify-ms"] = ["5000"]
@@ -760,6 +809,9 @@ class ScyllaNode:
             *(["--replace-node-first-boot", replace_node_host_id] if replace_node_host_id else []),
         )
         scylla_env = self._process_scylla_env()
+        if self.cluster.ccm_parity:
+            # ccm ran every node with SCYLLA_HOME set to the node's directory.
+            scylla_env.setdefault("SCYLLA_HOME", self.get_path())
 
         marks = []
         if wait_other_notice:
@@ -790,7 +842,9 @@ class ScyllaNode:
             # would make it form a cluster of its own.  Let the manager pick the
             # running nodes, as for any other node -- unless the test took the
             # seeds out of the node's scylla.yaml, see _seeds_left_on_disk().
-            seeds=self._seeds_left_on_disk(),
+            # Under ccm parity the node starts with the seeds ccm wrote for it,
+            # down ones included.
+            seeds=self._seeds_left_on_disk() or (self.ccm_seeds if self.cluster.ccm_parity else None),
             expected_error=expected_error,
             expected_server_up_state=(ServerUpState.SERVING if expected_error
                                       else ServerUpState.PROCESS_STARTED),
@@ -850,7 +904,7 @@ class ScyllaNode:
         if marks is None:
             marks = [
                 (node, node.mark_log())
-                for node in other_nodes or self.cluster.nodelist()
+                for node in (self.cluster.nodelist() if other_nodes is None else other_nodes)
                 if node.server_id != self.server_id and node.is_live()
             ] if wait_other_notice else []
 
@@ -885,22 +939,28 @@ class ScyllaNode:
         if capture_output and not wait:
             raise ArgumentError("Cannot set capture_output while wait is False.")
 
-        nodetool_cmd = [
-            self.cluster.manager.server_get_exe(server_id=self.server_id),
-            "nodetool",
-            "-h",
-            str(self.cluster.manager.get_host_ip(server_id=self.server_id)),
-            *cmd.split(),
-        ]
+        exe = self.cluster.manager.server_get_exe(server_id=self.server_id)
+        nodetool_cmd = [exe, "nodetool", "-h", str(self.cluster.manager.get_host_ip(server_id=self.server_id))]
+        env = None
+        if self.cluster.ccm_parity:
+            # ccm's ScyllaNode.nodetool(): the node's launch environment, a
+            # `<command> --help` run first to check the command exists, and the
+            # REST API port named explicitly.
+            env = os.environ | self._process_scylla_env() | {"SCYLLA_HOME": self.get_path()}
+            command = next(arg for arg in cmd.split() if not arg.startswith("-"))
+            subprocess.run([exe, "nodetool", command, "--help"], env=env, check=False,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+            nodetool_cmd += ["-p", str(self.api_port)]
+        nodetool_cmd += cmd.split()
 
         if verbose:
             self.debug(f"nodetool cmd={nodetool_cmd} wait={wait} timeout={timeout}")
 
         if capture_output:
-            p = subprocess.Popen(nodetool_cmd, universal_newlines=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            p = subprocess.Popen(nodetool_cmd, universal_newlines=True, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             stdout, stderr = p.communicate(timeout=timeout)
         else:
-            p = subprocess.Popen(nodetool_cmd, universal_newlines=True)
+            p = subprocess.Popen(nodetool_cmd, universal_newlines=True, env=env)
             stdout, stderr = None, None
 
         if wait and p.wait(timeout=timeout):
@@ -1029,6 +1089,10 @@ class ScyllaNode:
         host, port = self.network_interfaces["binary"]
         self.cluster.manager.server_update_config(server_id=self.server_id,
                                                   config_options={"rpc_address": host, "native_transport_port": port})
+        if self.cluster.ccm_parity:
+            # ccm's update_yaml() wrote the seeds as well: what the cluster's seeds are now
+            # (a test that narrows cluster.seeds before a replace relies on it).
+            self.cluster._save_ccm_seeds([self])  # noqa: SLF001
 
     def start_scylla_manager_agent(self, create_config: bool = True) -> None:
         agent_bin = self.scylla_manager._get_bin("scylla-manager-agent")
@@ -1205,14 +1269,22 @@ class ScyllaNode:
         """Flush memtables to sstables via the REST API.
 
         Uses ScyllaRESTAPIClient (same as test/pylib/nodetool.py) which is
-        much faster than spawning a nodetool subprocess.
+        much faster than spawning a nodetool subprocess.  Under ccm parity it
+        is ccm's Node.flush(): `nodetool flush [ks [table]]`.
         """
+        if self.cluster.ccm_parity:
+            self.nodetool(" ".join(["flush", *([ks] if ks else []), *([table] if table else [])]), **kwargs)
+            return
         if ks:
             self.cluster.manager.api.keyspace_flush(node_ip=self.address(), keyspace=ks, table=table)
         else:
             self.cluster.manager.api.flush_all_keyspaces(node_ip=self.address())
 
     def compact(self, keyspace: str = "", tables: tuple | list = ()) -> None:
+        if self.cluster.ccm_parity:
+            # ccm's Node.compact(): `nodetool compact [keyspace [tables...]]`.
+            self.nodetool(" ".join(["compact", *([keyspace] if keyspace else []), *tables]))
+            return
         node_ip = self.address()
         if keyspace:
             self.cluster.manager.api.keyspace_compaction(
@@ -1241,6 +1313,10 @@ class ScyllaNode:
         if column_family and not keyspace:
             raise ArgumentError("Cannot wait on a column family without naming its keyspace")
 
+        if self.cluster.ccm_parity:
+            self._wait_for_compactions_as_ccm(keyspace, column_family, timeout, quiesce_time)
+            return
+
         pending_states = {"created", "running", "suspended"}
         deadline = time.perf_counter() + timeout
         idle_since = None
@@ -1265,6 +1341,43 @@ class ScyllaNode:
                     f"compactions on {self.name} did not finish within {timeout}s; still active: {active}")
             time.sleep(0.1)
 
+    def _wait_for_compactions_as_ccm(self, keyspace: str, column_family: str, timeout: float, quiesce_time: float) -> None:
+        """ccm's Node.wait_for_compactions(): poll `nodetool compactionstats`.
+
+        Counts the pending and active tasks it prints (for the keyspace/table, if
+        given); done once there have been none for `quiesce_time`.  Times out only
+        after `timeout` seconds without the count changing, as ccm did.
+        """
+        pending_tasks = -1
+        last_change = None
+        idle_since = None
+        output = ""
+        while not last_change or time.time() - last_change < timeout:
+            output, _ = self.nodetool("compactionstats")
+            tasks: dict[tuple[str, str], int] = {}
+            for line in output.strip().splitlines():
+                line = line.strip()
+                if m := _CCM_PENDING_TASKS.match(line):
+                    key = (m.group("ks"), m.group("cf"))
+                    tasks[key] = tasks.get(key, 0) + int(m.group("tasks"))
+                elif m := _CCM_ACTIVE_TASKS.match(line):
+                    key = (m.group("ks"), m.group("cf"))
+                    tasks[key] = tasks.get(key, 0) + 1
+            n = sum(v for (ks, cf), v in tasks.items()
+                    if (not keyspace or ks == keyspace) and (not column_family or cf == column_family))
+            if n == 0:
+                if idle_since is None:
+                    idle_since = time.time()
+                elif time.time() - idle_since >= quiesce_time:
+                    return
+            else:
+                idle_since = None
+                if n != pending_tasks:
+                    last_change = time.time()
+                    pending_tasks = n
+            time.sleep(0.1)
+        raise TimeoutError(f"Waiting for compactions timed out after {timeout} seconds with pending tasks remaining: {output}.")
+
     def cleanup(self) -> None:
         """Clean up this node, as ccm's Node.cleanup() did: `nodetool cleanup`.
 
@@ -1276,9 +1389,12 @@ class ScyllaNode:
         self.nodetool("cleanup")
 
     def drain(self, block_on_log: bool = False) -> None:
-        """Drain the node via the REST API."""
+        """Drain the node via the REST API (under ccm parity, ccm's `nodetool drain`)."""
         mark = self.mark_log()
-        self.cluster.manager.api.drain(node_ip=self.address())
+        if self.cluster.ccm_parity:
+            self.nodetool("drain")
+        else:
+            self.cluster.manager.api.drain(node_ip=self.address())
         if block_on_log:
             self.watch_log_for("DRAINED", from_mark=mark)
 
@@ -1302,6 +1418,9 @@ class ScyllaNode:
         waits for completion.  Returns a ("", "") pair, only for source compatibility
         with nodetool()'s (stdout, stderr).
         """
+        if self.cluster.ccm_parity:
+            return self._repair_as_ccm(options, keyspace=keyspace, tables=tables, dcs=dcs, hosts=hosts,
+                                       local=local, partitioner_range=partitioner_range, timeout=timeout)
         if options is not None:
             opt_keyspace, opt_table, opt_dc = self._parse_repair_options(options)
             keyspace = keyspace or opt_keyspace
@@ -1337,6 +1456,41 @@ class ScyllaNode:
             raise NodetoolError(command, 1, stderr=str(exc)) from exc
         return ("", "")
 
+    def _repair_as_ccm(self,  # noqa: PLR0913
+                       options: list[str] | None,
+                       keyspace: str,
+                       tables: list[str] | None,
+                       dcs: list[str] | None,
+                       hosts: list[str] | None,
+                       local: bool,
+                       partitioner_range: bool,
+                       timeout: float | None) -> tuple:
+        """ccm's repair, run through nodetool.
+
+        The CLI-style options went to ccm's Node.repair(): `nodetool repair
+        <options>`.  The keyword form is ccm's ScyllaNode.repair(): `nodetool
+        repair` for a vnodes keyspace, `nodetool cluster repair` for a tablets
+        one (asking the REST API which it is), and both when no keyspace is
+        named; the (stdout, stderr) pairs come back zipped, as ccm returned them.
+        """
+        if options is not None:
+            return self.nodetool(" ".join(["repair", *options]), timeout=timeout)
+        common = [*([keyspace, " ".join(tables)] if keyspace and tables else [keyspace] if keyspace else []),
+                  *(["--in-hosts", ",".join(hosts)] if hosts else []),
+                  *(["--in-dc", ",".join(dcs)] if dcs else [])]
+        vnode = ["repair", *common, *(["--in-local-dc"] if local else []),
+                 *(["--partitioner-range"] if partitioner_range else [])]
+        tablet = ["cluster", "repair", *common]
+        if keyspace:
+            response = requests.get(url=f"http://{self.address()}:{self.api_port}/storage_service/keyspaces",
+                                    params={"replication": "vnodes"})
+            response.raise_for_status()
+            runs = [vnode if keyspace in response.json() else tablet]
+        else:
+            runs = [vnode, tablet]
+        outs, errs = zip(*(self.nodetool(" ".join(run), timeout=timeout) for run in runs))
+        return outs, errs
+
     @staticmethod
     def _parse_repair_options(options: list[str]) -> tuple[str, str, str]:
         parser = argparse.ArgumentParser(description="Parse repair options")
@@ -1347,6 +1501,12 @@ class ScyllaNode:
         return args.keyspace, args.table, args.source_dc
 
     def decommission(self) -> None:
+        if self.cluster.ccm_parity:
+            # ccm's Node.decommission(): `nodetool decommission`, and the node
+            # keeps running until the test stops it.
+            self.nodetool("decommission")
+            self._decommissioned = True
+            return
         # ccm ran `nodetool decommission`, so tests expect a NodetoolError when
         # Scylla refuses, or when the node dies under the request.
         try:
@@ -1499,7 +1659,11 @@ class ScyllaNode:
         if datafiles is None and keyspace is not None and self.is_running():
             tag = "sstable-dump-{}".format(uuid.uuid1())
             self.debug(f"run_scylla_sstable(): creating snapshot with tag {tag} to be used for sstable dumping")
-            self.take_snapshot(keyspace=keyspace, tag=tag, tables=list(column_families))
+            if self.cluster.ccm_parity:
+                # ccm: `nodetool snapshot -t <tag> <ks>.<cf>,...`
+                self.nodetool(f"snapshot -t {tag} " + ",".join(f"{keyspace}.{cf}" for cf in column_families))
+            else:
+                self.take_snapshot(keyspace=keyspace, tag=tag, tables=list(column_families))
             sstables = []
             for column_family in column_families:
                 sstables.extend(glob.glob(os.path.join(self.get_path(), 'data', keyspace, f"{column_family}-*/snapshots/{tag}/*-Data.db")))
@@ -1522,7 +1686,11 @@ class ScyllaNode:
                 else:
                     return stdout.encode('utf-8'), stderr.encode('utf-8')
             common_args = [scylla_path, "sstable", command] + additional_args
-            res = subprocess.run(common_args + sstables, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=text, check=False, env=env)
+            # Under ccm parity, from a directory with no conf/: the tool falls back to
+            # ./conf/scylla.yaml, which the repository's root has and scylla-dtest's checkout
+            # has not.
+            res = subprocess.run(common_args + sstables, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=text, check=False, env=env,
+                                 cwd=self.cluster.get_path() if self.cluster.ccm_parity else None)
             if res.returncode:
                 raise ToolError(command=' '.join(common_args + sstables), exit_status=res.returncode, stdout=res.stdout, stderr=res.stderr)
             return (res.stdout, res.stderr)
@@ -1539,7 +1707,10 @@ class ScyllaNode:
         # above failed, leave the snapshot with the sstables around for
         # post-mortem analysis.
         if tag is not None:
-            self.clear_snapshot(tag=tag, keyspace=keyspace)
+            if self.cluster.ccm_parity:
+                self.nodetool(f"clearsnapshot -t {tag} {keyspace}")
+            else:
+                self.clear_snapshot(tag=tag, keyspace=keyspace)
 
         return ret
 
@@ -1732,7 +1903,11 @@ class ScyllaNode:
         nodes = self.cluster.nodelist()
         removed = (next((node for node in nodes if node._hostid == hid), None)
                    or next((node for node in nodes if node.hostid() == hid), None))
-        if removed:
+        if removed and self.cluster.ccm_parity:
+            # ccm's Node.removenode(): `nodetool removenode <host id>`.
+            self.nodetool(f"removenode {hid}")
+            self.cluster.manager.cluster.server_mark_removed(removed.server_id)
+        elif removed:
             # The manager sends the id it holds for the server, which it cannot
             # fetch from a node that is down.
             server = self.cluster.manager.cluster.servers[removed.server_id]
@@ -1783,6 +1958,16 @@ class ScyllaNode:
         # its whole life, and it can only be read over the REST API while the
         # node is up -- which is exactly when a stopped node's callers
         # (watch_log_for_death(), removenode()) cannot ask for it any more.
+        if self._hostid is None and self.cluster.ccm_parity:
+            # ccm's ScyllaNode.hostid() read the whole log first -- the last id any
+            # run of the node logged -- and asked the REST API only when the log
+            # had none.
+            try:
+                m = self.grep_log(r"init - Setting local host id to ([0-9a-f-]{36})")
+            except Exception:  # noqa: BLE001 -- e.g. a node that never started has no log
+                m = []
+            if m:
+                self._hostid = m[-1][1].group(1)
         if self._hostid is None:
             try:
                 self._hostid = self.cluster.manager.get_host_id(server_id=self.server_id)

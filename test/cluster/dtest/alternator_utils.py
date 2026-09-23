@@ -573,6 +573,9 @@ class BaseAlternator(Tester):
         return stress_thread
 
     def run_decommission_then_add_node(self):
+        if self.cluster.ccm_parity:
+            self._run_decommission_then_rebootstrap()
+            return
         node_to_remove = self.cluster.nodelist()[-1]
         logger.info(f"Decommissioning {node_to_remove.name}..")
         try:
@@ -584,6 +587,39 @@ class BaseAlternator(Tester):
         node = new_node(self.cluster, bootstrap=True)
         node.start(wait_for_binary_proto=True, wait_other_notice=True)
         logger.info(f"Node successfully added!")
+        time.sleep(5)
+
+    def _run_decommission_then_rebootstrap(self):
+        """scylla-dtest's run_decommission_then_add_node(), for the ported tests (ccm parity).
+
+        Decommission the last node, then wipe it and bootstrap it again, instead of
+        adding a new node: under ccm parity a decommissioned node keeps running, as
+        with ccm, so the next round has to take care of it.
+        """
+        node_to_remove = self.cluster.nodelist()[-1]
+        if not node_to_remove.is_running():
+            # Node is already down (e.g. crashed during a previous bootstrap attempt).
+            # Skip decommission — the cluster already considers it removed.
+            logger.info(f"{node_to_remove.name} is not running, skipping decommission")
+        else:
+            logger.info(f"Decommissioning {node_to_remove.name}..")
+            try:
+                node_to_remove.decommission()
+            except Exception as error:  # noqa: BLE001
+                logger.info(f"Decommissioning {node_to_remove.name} failed with: {error}")
+                return
+        logger.info(f"Wiping and re-bootstrapping {node_to_remove.name}..")
+        node_to_remove.stop(wait_other_notice=False)
+        node_to_remove.clear(clear_all=True)
+        node_to_remove.auto_bootstrap = True
+        try:
+            node_to_remove.start(wait_for_binary_proto=True, wait_other_notice=True)
+        except Exception as error:  # noqa: BLE001
+            logger.info(f"Re-bootstrapping {node_to_remove.name} failed with: {error}")
+            # Ensure the node is stopped so the next iteration can retry cleanly.
+            node_to_remove.stop(wait_other_notice=False)
+            return
+        logger.info(f"{node_to_remove.name} successfully re-bootstrapped!")
         time.sleep(5)
 
     def run_create_table(self):

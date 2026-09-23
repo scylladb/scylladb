@@ -905,7 +905,7 @@ class TestNodetool(Tester):
         def verify_token_ranges(nodes_count, rf):
             token_ranges_distribution = self.get_token_ranges_distribution(ks_name, cf_name)
             self.verify_token_ranges_are_distributed_among_all_nodes(nodes_count=nodes_count, token_ranges_distribution=token_ranges_distribution)
-            self.verify_token_ranges_distribution_is_even(token_ranges_distribution, tokens_per_node=num_tokens_per_node(session), rf=rf)
+            self.verify_token_ranges_distribution_is_even(token_ranges_distribution, tokens_per_node=num_tokens_per_node(self.cluster), rf=rf)
 
         verify_token_ranges(nodes_count=3, rf=2)
 
@@ -971,8 +971,7 @@ class TestNodetool(Tester):
         self.run_cluster()
         node = self.cluster.nodelist()[0]
         # scylla-dtest expected 512: two nodes of 256 vnodes each.
-        with self.patient_cql_connection(node) as session:
-            expected_tokens_num = len(self.cluster.nodelist()) * num_tokens_per_node(session)
+        expected_tokens_num = len(self.cluster.nodelist()) * num_tokens_per_node(self.cluster)
         if "tablets" in self.scylla_features:
             expected_tokens_num = 4
             with self.patient_cql_connection(node) as session:

@@ -27,11 +27,18 @@ logger = logging.getLogger(__name__)
 def new_node(cluster: ScyllaCluster, bootstrap: bool = True,
              data_center: str | None = None,
              rack: str | None = None) -> ScyllaNode:
-    if data_center and rack:
+    if cluster.ccm_parity:
+        # scylla-dtest's new_node(): an auto_bootstrap node added with cluster.add(),
+        # which places it in the first node's datacenter when it names none, and
+        # makes it a seed unless it bootstraps.
+        node = cluster.new_node(len(cluster.nodes) + 1, auto_bootstrap=True, is_seed=not bootstrap,
+                                data_center=data_center, rack=rack)
+    elif data_center and rack:
         cluster.populate({data_center: {rack: 1}})
+        node = cluster.nodelist()[-1]
     else:
         cluster.populate(1)
-    node = cluster.nodelist()[-1]
+        node = cluster.nodelist()[-1]
     node.bootstrap = bootstrap
     return node
 

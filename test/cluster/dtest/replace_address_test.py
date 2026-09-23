@@ -535,7 +535,7 @@ class TestReplaceAddress(Tester):
 
         logger.info("Verifying system.peers table.")
         session = self.exclusive_cql_connection(node1)
-        tokens_per_node = num_tokens_per_node(session)
+        tokens_per_node = num_tokens_per_node(self.cluster)
         # ccm's node3 (127.0.0.3) sorted before node5 (127.0.0.5); leased addresses need not.
         expected_peers = sorted([(node3.address(), node3.hostid(), tokens_per_node), (node5_address, node5_hostid, tokens_per_node)])
         res = session.execute("SELECT peer, host_id, tokens FROM system.peers")

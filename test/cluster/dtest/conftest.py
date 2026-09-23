@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 import test.cluster.dtest.ccmlib
+from test.cluster.dtest.ccmlib.ccm_parity import runs_as_upstream
 from test.cluster.dtest.dtest_config import DTestConfig
 from test.cluster.dtest.dtest_setup import DTestSetup
 from test.cluster.dtest.dtest_setup_overrides import DTestSetupOverrides
@@ -143,6 +144,7 @@ def fixture_dtest_setup(request: FixtureRequest,
         manager=manager,
         scylla_mode=build_mode,
         manager_install_dir=manager_install_dir,
+        ccm_parity=runs_as_upstream(request.node),
     )
 
     if request.node.get_closest_marker("single_node") or not request.node.get_closest_marker("no_boot_speedups"):

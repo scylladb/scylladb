@@ -4,12 +4,14 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 
+import asyncio
 import logging
 import os
 import random
 import re
 import shutil
 import time
+import uuid
 from datetime import UTC, datetime, timedelta
 from glob import glob
 from pathlib import Path
@@ -31,6 +33,7 @@ from google.auth.credentials import AnonymousCredentials
 from google.cloud import storage
 from mypy_boto3_s3 import S3Client
 
+from test.cluster.dtest.ccmlib.ccm_parity import runs_as_upstream
 from test.pylib.object_storage import S3MockWrapper, Storage, StorageFactory
 
 from dtest_class import Tester, WaitTimeoutExpiredError, create_cf, create_ks, wait_for
@@ -45,7 +48,10 @@ from dtest_scylla_manager import (
 from encryption_at_rest_test import EncryptionAtRestBase, KeyProviderEnum, all_providers
 from test.pylib.skip_types import skip_bug, skip_env
 from tools.cluster_topology import generate_cluster_topology, generate_cluster_topology_based_rf
+from tools.docker_versions import get_docker_version
+from tools.fake_gcs_server import FakeGCSDocker
 from tools.files import get_sstables_files
+from tools.minio import MinioDocker
 
 CLUSTER_NAME = "cluster1"
 DESTINATION_BUCKET = "backup-bucket"
@@ -59,7 +65,8 @@ class ManagerBackupMixin:
     method: Literal["native", "rclone"] = None
 
     @pytest.fixture(scope="function", autouse=True)
-    async def object_storage(self, object_storage_factory: StorageFactory, setup_backend, suite_log_dir, scylla_cluster_teardowns):
+    async def object_storage(self, request, object_storage_factory: StorageFactory, setup_backend, suite_log_dir,
+                             scylla_cluster_teardowns):
         """The backup target: S3Mock for s3, fake-gcs-server for gcs.
 
         Both are containers run through test.pylib's DockerizedServer, one per
@@ -69,8 +76,16 @@ class ManagerBackupMixin:
         empty or purge it, and it is never cleaned up; and should the server
         fall over, it takes all the remaining S3 tests of the run with it.
         The server is torn down after the cluster is gone.
+
+        Under ccm parity they are scylla-dtest's own: minio and the pinned
+        fake-gcs-server, straight (test.py fronts its fake-gcs-server with an upload
+        validator), since what the node's HTTP client parses is theirs.
         """
 
+        if runs_as_upstream(request.node):
+            await self._upstream_object_storage(scylla_cluster_teardowns)
+            self.endpoint_create_bucket(DESTINATION_BUCKET)
+            return
         if self.backend == "s3":
             server: Storage = S3MockWrapper(suite_log_dir)
             await server.start()
@@ -101,6 +116,44 @@ class ManagerBackupMixin:
                 client_options={"api_endpoint": server.address},
             )
         self.endpoint_create_bucket(DESTINATION_BUCKET)
+
+    async def _upstream_object_storage(self, scylla_cluster_teardowns) -> None:
+        """scylla-dtest's minio_docker / fake_gcs_docker fixtures, for this test only."""
+
+        name = f"{self.backend}-{str(uuid.uuid4())[:8]}"
+        if self.backend == "s3":
+            container = MinioDocker(name=f"minio-{name}", image=get_docker_version("minio"))
+            # scylla-dtest's MinioDocker takes AWS_* from the environment, where test.py's own
+            # S3 mock credentials are; minio needs a secret of 8 characters or more.
+            container.access_key, container.secret_key = "test1", "12345678"
+            await asyncio.to_thread(container.create_minio_container)
+        else:
+            container = FakeGCSDocker(name=f"fake-gcs-{name}", image=get_docker_version("fake-gcs-server"))
+            await asyncio.to_thread(container.create_fake_gcs_container)
+
+        async def remove() -> None:
+            await asyncio.to_thread(container.remove_container)
+        scylla_cluster_teardowns.append(remove)
+
+        self.storage_endpoint_url = container.endpoint_url
+        self.storage_endpoint_host = container.address
+        self.storage_endpoint_port = int(container.port)
+        if self.backend == "s3":
+            self.storage_access_key = container.access_key
+            self.storage_secret_key = container.secret_key
+            self.storage_endpoint_client: S3Client = boto3.client(
+                service_name="s3",
+                aws_access_key_id=container.access_key,
+                aws_secret_access_key=container.secret_key,
+                endpoint_url=container.endpoint_url,
+            )
+        else:
+            self.storage_access_key = self.storage_secret_key = None
+            self.storage_endpoint_client = storage.Client(
+                credentials=AnonymousCredentials(),
+                project="test",
+                client_options={"api_endpoint": container.endpoint_url},
+            )
 
     @staticmethod
     def _set_gcs_external_url(endpoint: str) -> None:
