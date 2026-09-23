@@ -859,3 +859,25 @@ def test_ordering_of_composites_with_variable_length_components(cql, test_keyspa
         cql.execute(f"update {cf} set v = 0x04 where k = 0x00 and c0 = 0x05 and c1 = 0x00")
         assert list(cql.execute(f"select v from {cf} where k = 0x00 allow filtering")) == [
             (b'\x01',), (b'\x02',), (b'\x03',), (b'\x04',)]
+
+
+def test_query_with_static_columns(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "k blob, c blob, v blob, s1 blob static, s2 blob static, primary key (k, c)") as cf:
+        cql.execute(f"update {cf} set s1 = 0x01 where k = 0x00")
+        cql.execute(f"update {cf} set v = 0x02 where k = 0x00 and c = 0x01")
+        cql.execute(f"update {cf} set v = 0x03 where k = 0x00 and c = 0x02")
+        assert list(cql.execute(f"select s1, v from {cf}")) == [(b'\x01', b'\x02'), (b'\x01', b'\x03')]
+        assert list(cql.execute(f"select s1 from {cf}")) == [(b'\x01',), (b'\x01',)]
+        assert list(cql.execute(f"select s1 from {cf} limit 1")) == [(b'\x01',)]
+        assert list(cql.execute(f"select s1, v from {cf} limit 1")) == [(b'\x01', b'\x02')]
+        cql.execute(f"update {cf} set v = null where k = 0x00 and c = 0x02")
+        assert list(cql.execute(f"select s1 from {cf}")) == [(b'\x01',)]
+        cql.execute(f"insert into {cf} (k, c) values (0x00, 0x02)")
+        assert list(cql.execute(f"select s1 from {cf}")) == [(b'\x01',), (b'\x01',)]
+        # Try 'in' restriction out
+        assert list(cql.execute(f"select s1, v from {cf} where k = 0x00 and c in (0x01, 0x02)")) == [
+            (b'\x01', b'\x02'), (b'\x01', None)]
+        # Verify that limit is respected for multiple clustering ranges and that static columns
+        # are populated when limit kicks in.
+        assert list(cql.execute(f"select s1, v from {cf} where k = 0x00 and c in (0x01, 0x02) limit 1")) == [
+            (b'\x01', b'\x02')]
