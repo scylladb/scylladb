@@ -25,7 +25,7 @@ from cassandra.util import Date, Duration, Time
 import pytest
 
 from . import nodetool
-from .util import config_value_context, new_session, new_test_keyspace, new_test_table, new_type, new_user, unique_name
+from .util import config_value_context, is_scylla, new_session, new_test_keyspace, new_test_table, new_type, new_user, unique_name
 
 
 def test_create_keyspace_statement(cql):
@@ -2131,3 +2131,42 @@ def test_alter_type_on_compact_storage_with_no_regular_columns_does_not_crash(cq
         with new_type(cql, test_keyspace, "(first text)") as typ:
             with new_test_table(cql, test_keyspace, f"pk int, ck frozen<{typ}>, primary key(pk, ck)", "with compact storage"):
                 cql.execute(f"alter type {typ} add test_int int")
+
+
+def test_rf_expand(cql, this_dc):
+    simple = "org.apache.cassandra.locator.SimpleStrategy"
+    network_topology = "org.apache.cassandra.locator.NetworkTopologyStrategy"
+
+    def get_replication(ks):
+        rows = list(cql.execute(f"SELECT replication FROM system_schema.keyspaces WHERE keyspace_name = '{ks}'"))
+        assert len(rows) == 1
+        return rows[0].replication
+
+    def assert_replication_contains(ks, kvs):
+        repl = get_replication(ks)
+        for k, v in kvs.items():
+            assert repl[k] == v
+
+    # RF=3 on a single-node, single-rack cluster is only allowed for vnodes
+    # keyspaces (cqlpy enables tablets and rf_rack_valid_keyspaces by default).
+    vnodes = " AND tablets = {'enabled': false}" if is_scylla(cql) else ""
+
+    # 'replication_factor' option should be translated to datacenter name for NetworkTopologyStrategy
+    with new_test_keyspace(cql, f"WITH replication = {{'class': '{network_topology}', 'replication_factor': 3}}{vnodes}") as ks:
+        assert_replication_contains(ks, {"class": network_topology, this_dc: "3"})
+
+    with new_test_keyspace(cql, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 3}}{vnodes}") as ks:
+        assert_replication_contains(ks, {"class": network_topology, this_dc: "3"})
+        # The auto-expansion should not change existing replication factors.
+        cql.execute(f"ALTER KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 2}}")
+        assert_replication_contains(ks, {"class": network_topology, this_dc: "3"})
+
+    with new_test_keyspace(cql, f"WITH replication = {{'class': 'SimpleStrategy', 'replication_factor': 3}}{vnodes}") as ks:
+        assert_replication_contains(ks, {"class": simple, "replication_factor": "3"})
+        # Should auto-expand when switching from SimpleStrategy to NetworkTopologyStrategy without additional options.
+        cql.execute(f"ALTER KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy'}}")
+        assert_replication_contains(ks, {"class": network_topology, this_dc: "3"})
+
+    # Respect factors specified manually.
+    with new_test_keyspace(cql, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 3, '{this_dc}': 2}}{vnodes}") as ks:
+        assert_replication_contains(ks, {"class": network_topology, this_dc: "2"})
