@@ -2271,3 +2271,10 @@ def test_double_sum_overflow(cql, test_keyspace):
         # cause negative overflow
         cql.execute(f"insert into {table} (pk, val) values ('c', -1e+308)")
         assert list(cql.execute(sum_query)) == [(-math.inf,)]
+
+
+def test_int_avg(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "pk text, val int, primary key(pk)") as table:
+        cql.execute(f"insert into {table} (pk, val) values ('a', 2147483647)")
+        cql.execute(f"insert into {table} (pk, val) values ('b', 2147483647)")
+        assert list(cql.execute(f"select avg(val) from {table}")) == [(2147483647,)]

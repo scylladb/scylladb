@@ -417,19 +417,6 @@ auto T(const char* t) { return utf8_type->decompose(t); }
 
 } // anonymous namespace
 
-SEASTAR_TEST_CASE(test_int_avg) {
-    return do_with_cql_env_thread([] (cql_test_env& e) {
-        cquery_nofail(e, "create table cf (pk text, val int, primary key(pk));");
-        cquery_nofail(e, "insert into cf (pk, val) values ('a', 2147483647);");
-        cquery_nofail(e, "insert into cf (pk, val) values ('b', 2147483647);");
-        auto result = e.execute_cql("select avg(val) from cf;").get();
-        assert_that(result)
-            .is_rows()
-            .with_size(1)
-            .with_row({int32_type->decompose(int32_t(2147483647))});
-    });
-}
-
 SEASTAR_TEST_CASE(test_bigint_avg) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         cquery_nofail(e, "create table cf (pk text, val bigint, primary key(pk));");
