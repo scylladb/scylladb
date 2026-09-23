@@ -1090,3 +1090,16 @@ def test_list_insert_update(cql, test_keyspace):
         cql.execute(f"insert into {table} (p1, list1) values ('key1', [])")
         # Empty non-frozen list is indistinguishable from NULL
         check(None)
+
+
+def test_writetime_and_ttl(cql, test_keyspace):
+    the_timestamp = 123456789
+    with new_test_table(cql, test_keyspace, "p1 varchar primary key, i int, fc frozen<set<int>>, c set<int>") as table:
+        cql.execute(f"insert into {table} (p1, i) values ('key1', 1) using timestamp {the_timestamp}")
+        assert list(cql.execute(f"select writetime(i) from {table} where p1 in ('key1')")) == [(the_timestamp,)]
+        ts1 = the_timestamp + 1
+        cql.execute(f"UPDATE {table} USING TIMESTAMP {ts1} SET fc = {{1}}, c = {{2}} WHERE p1 = 'key1'")
+        assert list(cql.execute(f"SELECT writetime(fc) FROM {table}")) == [(ts1,)]
+        # writetime() of a non-frozen collection is not allowed
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"SELECT writetime(c) FROM {table}")
