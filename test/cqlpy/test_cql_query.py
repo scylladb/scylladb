@@ -1464,3 +1464,35 @@ def test_multi_column_restrictions(cql, test_keyspace):
         check("(c1, c2, c3) >= (0, 1, 1) and (c1, c2, c3) < (1, 1, 0)", [3, 4, 5])
         check("(c1, c2) >= (0, 1) and (c1, c2, c3) < (1, 0, 1)", [2, 3, 4])
         check("(c1, c2, c3) > (0, 1, 0) and (c1, c2) <= (0, 1)", [3])
+
+
+def test_select_distinct(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p1 int, c1 int, r1 int, PRIMARY KEY (p1, c1)") as table:
+        cql.execute(f"insert into {table} (p1, c1, r1) values (0, 0, 0)")
+        cql.execute(f"insert into {table} (p1, c1, r1) values (1, 1, 1)")
+        cql.execute(f"insert into {table} (p1, c1, r1) values (1, 1, 2)")
+        cql.execute(f"insert into {table} (p1, c1, r1) values (2, 2, 2)")
+        cql.execute(f"insert into {table} (p1, c1, r1) values (2, 3, 3)")
+        assert sorted(cql.execute(f"select distinct p1 from {table}")) == [(0,), (1,), (2,)]
+        assert sorted(cql.execute(f"select distinct p1 from {table} limit 3")) == [(0,), (1,), (2,)]
+
+    with new_test_table(cql, test_keyspace, "p1 int, p2 int, c1 int, r1 int, PRIMARY KEY ((p1, p2), c1)") as table:
+        for p in range(3):
+            for c in range(2):
+                cql.execute(f"insert into {table} (p1, p2, c1, r1) values ({p}, {p}, {c}, {c})")
+        assert sorted(cql.execute(f"select distinct p1, p2 from {table}")) == [(0, 0), (1, 1), (2, 2)]
+        assert sorted(cql.execute(f"select distinct p1, p2 from {table} limit 3")) == [(0, 0), (1, 1), (2, 2)]
+
+    with new_test_table(cql, test_keyspace, "p1 int, r1 int, PRIMARY KEY (p1)") as table:
+        cql.execute(f"insert into {table} (p1, r1) values (0, 0)")
+        cql.execute(f"insert into {table} (p1, r1) values (1, 1)")
+        cql.execute(f"insert into {table} (p1, r1) values (1, 2)")
+        cql.execute(f"insert into {table} (p1, r1) values (2, 2)")
+        assert sorted(cql.execute(f"select distinct p1 from {table}")) == [(0,), (1,), (2,)]
+
+    with new_test_table(cql, test_keyspace, "p1 int, c1 int, s1 int static, r1 int, PRIMARY KEY (p1, c1)") as table:
+        cql.execute(f"insert into {table} (p1, c1, s1, r1) values (0, 0, 0, 0)")
+        cql.execute(f"insert into {table} (p1, c1, r1) values (0, 1, 1)")
+        cql.execute(f"insert into {table} (p1, s1) values (2, 1)")
+        cql.execute(f"insert into {table} (p1, s1) values (3, 2)")
+        assert sorted(cql.execute(f"select distinct p1, s1 from {table}")) == [(0, 0), (2, 1), (3, 2)]
