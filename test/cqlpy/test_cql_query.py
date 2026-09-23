@@ -2101,3 +2101,15 @@ def test_select_with_mixed_order_table(cql, test_keyspace):
         for test_case in test_cases:
             query = f"SELECT f FROM {table} WHERE a=0 AND {test_case.generate_cql_slice_expression(column_names)}"
             assert [r.f for r in cql.execute(query)] == test_case.generate_results(ordering), query
+
+
+# Test that, like cassandra, a varchar column is represented as a text column.
+def test_describe_varchar(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "id int PRIMARY KEY, t text, v varchar") as table:
+        ks, tbl = table.split('.')
+        rows = list(cql.execute(f"select * from system_schema.columns where keyspace_name = '{ks}' and table_name = '{tbl}'"))
+        assert rows == [
+            (ks, tbl, 'id', 'NONE', b'id', 'partition_key', 0, 'int'),
+            (ks, tbl, 't', 'NONE', b't', 'regular', -1, 'text'),
+            (ks, tbl, 'v', 'NONE', b'v', 'regular', -1, 'text'),
+        ]
