@@ -2914,3 +2914,20 @@ def test_twcs_non_optimal_query_path(cql, test_keyspace, scylla_only):
         # The non-optimal read path is triggered by having a static column, see
         # `sstables::time_series_sstable_set::create_single_key_sstable_reader()`.
         cql.execute(f"SELECT * FROM {table} WHERE pk = 0 BYPASS CACHE")
+
+
+def test_twcs_optimal_query_path(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "pk int, ck int, v int, PRIMARY KEY (pk, ck)",
+                        " WITH compaction = {"
+                        "   'compaction_window_size': '1',"
+                        "   'compaction_window_unit': 'MINUTES',"
+                        "   'class': 'org.apache.cassandra.db.compaction.TimeWindowCompactionStrategy'"
+                        "}") as table:
+        cql.execute(f"INSERT INTO {table} (pk, ck, v) VALUES (0, 0, 0)")
+
+        flush(cql, table)
+
+        # Not really testing anything, just ensure that we execute the optimal
+        # sstable read path of TWCS tables too, allowing ASAN to shake out any memory
+        # related bugs.
+        assert len(list(cql.execute(f"SELECT * FROM {table} WHERE pk = 0 BYPASS CACHE"))) == 1
