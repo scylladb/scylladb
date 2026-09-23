@@ -1221,8 +1221,19 @@ std::string describe(const placed_history& h) {
     return fmt::format("placed_history{{\n    {},\n}}", fmt::join(ops, ",\n    "));
 }
 
-std::vector<std::string> check(const outcome& o, const std::vector<answer_row>& expected) {
+contract contract_of(const read_options& opts) {
+    return opts.read_frontiers ? contract::full : contract::no_internal_error;
+}
+
+std::vector<std::string> check(const outcome& o, const std::vector<answer_row>& expected, contract ct) {
     std::vector<std::string> violations;
+    if (ct == contract::no_internal_error) {
+        violations = o.coordinator_violations;
+        if (o.error && o.internal_error) {
+            violations.push_back(*o.error);
+        }
+        return violations;
+    }
     size_t rows_so_far = 0;
     for (size_t i = 0; i < o.pages.size(); ++i) {
         rows_so_far += o.pages[i].rows.size();
@@ -1401,7 +1412,8 @@ outcome harness::run(const read_case& c) {
             // An internal error carries a backtrace, whose addresses depend
             // on the build. The kind of a failure must not.
             auto what = fmt::format("{}", std::current_exception());
-            if (auto backtrace = what.find(" Backtrace:"); backtrace != std::string::npos) {
+            const auto backtrace = what.find(" Backtrace:");
+            if (backtrace != std::string::npos) {
                 what.replace(backtrace, std::string::npos, ")");
             }
             auto error = fmt::format("Page {} failed: {}", o.pages.size() - 1, what);
@@ -1409,6 +1421,7 @@ outcome harness::run(const read_case& c) {
                 o.allowed_error = std::move(error);
             } else {
                 o.error = std::move(error);
+                o.internal_error = backtrace != std::string::npos;
             }
             break;
         }
@@ -1432,7 +1445,7 @@ outcome harness::run(const read_case& c) {
 
 std::vector<std::string> harness::violations(const read_case& c) {
     const auto expected = read_model::evaluate(*schema(), complete_history(c.history), c.query);
-    return check(run(c), expected);
+    return check(run(c), expected, contract_of(c.options));
 }
 
 read_case harness::shrink(read_case c) {

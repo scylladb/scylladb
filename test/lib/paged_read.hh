@@ -223,6 +223,8 @@ struct outcome {
     // which repeats an earlier one, too many pages, or a failed page. A page
     // fails also when the statement makes too many reads for it.
     std::optional<std::string> error;
+    // Whether `error` is an internal error of the production code.
+    bool internal_error = false;
     // A failed page which the case's configuration allows, instead of
     // `error`. Without read_frontiers, the coordinator can return a short
     // page which has neither a partition nor a cursor. The pager then fails
@@ -240,15 +242,34 @@ struct outcome {
     std::vector<std::string> coordinator_violations;
 };
 
+// What a run must satisfy.
+enum class contract {
+    // The run returns the complete answer.
+    full,
+    // Without read_frontiers, the coordinator runs the pre-READ_FRONTIERS
+    // code, whose defects stay: it may lose or invent rows, and its retries
+    // may not end. The run must still avoid internal errors other than
+    // outcome::allowed_error, and the properties of
+    // outcome::coordinator_violations, which check the replicas and the
+    // repairs.
+    no_internal_error,
+};
+
+// The contract of a run with `opts`: full with read_frontiers, and
+// no_internal_error without it.
+contract contract_of(const read_options& opts);
+
 // The properties which `o` violates, compared with the complete answer
-// `expected`:
+// `expected`. The full contract checks that:
 // - after every page, the rows so far are a prefix of the complete answer;
 // - the client reaches the end of the query, unless a page failed with
 //   outcome::allowed_error;
 // - the rows of all pages equal the complete answer, with the same
 //   exception;
-// - the properties of outcome::coordinator_violations.
-std::vector<std::string> check(const outcome& o, const std::vector<read_model::answer_row>& expected);
+// - the properties of outcome::coordinator_violations hold.
+// The no_internal_error contract checks only that no page failed with an
+// internal error, except outcome::allowed_error, and the last property.
+std::vector<std::string> check(const outcome& o, const std::vector<read_model::answer_row>& expected, contract ct = contract::full);
 
 // The kind of a failure: its violation messages with all digits removed.
 // Shrinking a case keeps the kind of its failure.
@@ -277,7 +298,8 @@ public:
     // client stops.
     outcome run(const read_case& c);
 
-    // The properties which a run of `c` violates. See check().
+    // The properties which a run of `c` violates under the contract of its
+    // options. See check() and contract_of().
     std::vector<std::string> violations(const read_case& c);
 
     // A smaller case whose run fails like the run of `c`. The run of `c`
