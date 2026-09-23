@@ -399,6 +399,36 @@ static sstring print_alternator_table_names(const audit_table_set& tables) {
     return res;
 }
 
+// An Alternator batch request names each of its tables by a key of its
+// RequestItems map, which may be either the table's name or its ARN. This
+// function returns the table name in either case. Alternator only accepts
+// ARNs which alternator::parse_arn() can parse: after the five fields
+// "arn:partition:service:region:account-id:" comes "table/", and then
+// either the table name or "<keyspace>@<table name>", optionally followed
+// by a '/' or ':' and more.
+static std::string_view alternator_batch_table_name(std::string_view name) {
+    if (!name.starts_with("arn:")) {
+        return name;
+    }
+    std::string_view rest = name;
+    for (int i = 0; i < 5; i++) {
+        auto colon = rest.find(':');
+        if (colon == std::string_view::npos) {
+            return name;
+        }
+        rest.remove_prefix(colon + 1);
+    }
+    if (!rest.starts_with("table/")) {
+        return name;
+    }
+    rest.remove_prefix(6);
+    rest = rest.substr(0, rest.find_first_of("/:"));
+    if (auto at = rest.find('@'); at != std::string_view::npos) {
+        rest.remove_prefix(at + 1);
+    }
+    return rest;
+}
+
 static sstring print_filtered_alternator_batch_query(const audit_info& audit_info, const audit_table_set& tables) {
     // Alternator audit query strings are built by audit_info::set_query_string()
     // as "<operation>|<serialized request JSON>".
@@ -411,7 +441,7 @@ static sstring print_filtered_alternator_batch_query(const audit_info& audit_inf
         auto request = rjson::parse(std::string_view(audit_info.query()).substr(sep + 1));
         auto& request_items = request["RequestItems"];
         for (auto it = request_items.MemberBegin(); it != request_items.MemberEnd(); ) {
-            std::string_view table_name = rjson::to_string_view(it->name);
+            std::string_view table_name = alternator_batch_table_name(rjson::to_string_view(it->name));
             auto found = std::ranges::any_of(tables, [table_name] (const auto& table) {
                 return table.second == table_name;
             });

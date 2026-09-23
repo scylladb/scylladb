@@ -2792,6 +2792,13 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
     bool should_add_rcu = rcu_consumed_capacity_counter::should_add_capacity(request);
     struct table_requests {
         schema_ptr schema;
+        // How this request spelled the table's name - which may be the
+        // table's ARN rather than its name. The reply's "Responses" and
+        // "UnprocessedKeys" maps, and its "ConsumedCapacity" entries, use
+        // exactly this spelling, as DynamoDB does, so that a client which
+        // sent ARNs also gets ARNs back and can feed UnprocessedKeys directly
+        // into a retry.
+        std::string requested_table_name;
         db::consistency_level cl;
         ::shared_ptr<const std::optional<alternator::attrs_to_get>> attrs_to_get;
         // clustering_keys keeps a sorted set of clustering keys. It must
@@ -2816,9 +2823,12 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
         }
     };
     std::vector<table_requests> requests;
+    std::unordered_set<table_id> seen_tables;
     uint batch_size = 0;
     for (auto it = request_items.MemberBegin(); it != request_items.MemberEnd(); ++it) {
         table_requests rs(get_table_from_batch_request(_proxy, it));
+        validate_batch_table_not_repeated(seen_tables, *rs.schema);
+        rs.requested_table_name = rjson::to_string(it->name);
         lw_shared_ptr<stats> per_table_stats = get_stats_from_schema(_proxy, *rs.schema);
         per_table_stats->api_operations.batch_get_item++;
         tracing::add_alternator_table_name(trace_state, rs.schema->cf_name());
@@ -2932,6 +2942,10 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
     for (size_t i = 0; i < requests.size(); i++) {
         const table_requests& rs = requests[i];
         std::string table = rs.schema->cf_name();
+        // The reply's per-table maps and ConsumedCapacity entries use the
+        // table's name as the request spelled it, which may be an ARN and not
+        // the name in `table` above - see table_requests::requested_table_name.
+        const std::string& requested_table_name = rs.requested_table_name;
         if (should_audit) {
             if (_audit.local().will_log(audit::statement_category::QUERY, rs.schema->ks_name(), table)) {
                 audited_table_names.emplace(rs.schema->ks_name(), table);
@@ -2951,20 +2965,20 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
                     if (!query_error) {
                         query_error.emplace(std::move(result).assume_error());
                     }
-                    add_unprocessed_keys(table, cks);
+                    add_unprocessed_keys(requested_table_name, cks);
                     continue;
                 }
                 std::vector<rjson::value> results = std::move(result).assume_value();
                 some_succeeded = true;
-                if (!response["Responses"].HasMember(table)) {
-                    rjson::add_with_string_name(response["Responses"], table, rjson::empty_array());
+                if (!response["Responses"].HasMember(requested_table_name)) {
+                    rjson::add_with_string_name(response["Responses"], requested_table_name, rjson::empty_array());
                 }
                 for (rjson::value& json : results) {
-                    rjson::push_back(response["Responses"][table], std::move(json));
+                    rjson::push_back(response["Responses"][requested_table_name], std::move(json));
                 }
             } catch(...) {
                 eptr = std::current_exception();
-                add_unprocessed_keys(table, cks);
+                add_unprocessed_keys(requested_table_name, cks);
             }
         }
         uint64_t rcu_half_units = consumed_rcu_half_units_per_table[i];
@@ -2973,7 +2987,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
         per_table_stats->rcu_half_units_total += rcu_half_units;
         if (should_add_rcu) {
             rjson::value entry = rjson::empty_object();
-            rjson::add(entry, "TableName", table);
+            rjson::add(entry, "TableName", requested_table_name);
             rjson::add(entry, "CapacityUnits", rcu_half_units*0.5);
             rjson::push_back(consumed_capacity, std::move(entry));
         }

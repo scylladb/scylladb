@@ -348,6 +348,11 @@ double get_table_creation_time(const schema &schema) {
 void executor::supplement_table_info(rjson::value& descr, const schema& schema, service::storage_proxy& sp) {
     auto creation_time = get_table_creation_time(schema);
 
+    // Our callers (CreateTable and UpdateTable) build the table's description
+    // out of the request itself, so its "TableName" is whatever the request
+    // said, and may have been the table's ARN rather than its name. But our
+    // response must contain the actual table name, not the ARN.
+    rjson::replace_with_string_name(descr, "TableName", rjson::from_string(schema.cf_name()));
     rjson::add(descr, "CreationDateTime", rjson::value(creation_time));
     rjson::add(descr, "TableStatus", "ACTIVE");
     rjson::add(descr, "TableId", rjson::from_string(schema.id().to_sstring()));
@@ -4348,16 +4353,25 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
     // WCU calculation is performed at the end of execution.
     // We need to keep track of changes per table, both for internal metrics
     // and to be able to return the values if should_add_wcu is true.
-    // For each table, we need its stats and schema.
-    std::vector<std::pair<lw_shared_ptr<stats>, schema_ptr>> per_table_wcu;
+    // For each table, we need its stats and schema - and also its name as the
+    // request spelled it (which may be the table's ARN rather than its name),
+    // because that is how DynamoDB's ConsumedCapacity names the table.
+    struct table_wcu {
+        lw_shared_ptr<stats> per_table_stats;
+        schema_ptr schema;
+        std::string requested_table_name;
+    };
+    std::vector<table_wcu> per_table_wcu;
 
     audit::audit_table_set audited_table_names;
     bool only_audited_tables = true;
     bool should_audit = _audit.local_is_initialized() && _audit.local().will_log(audit::statement_category::DML);
     mutation_builders.reserve(request_items.MemberCount());
     per_table_wcu.reserve(request_items.MemberCount());
+    std::unordered_set<table_id> seen_tables;
     for (auto it = request_items.MemberBegin(); it != request_items.MemberEnd(); ++it) {
         schema_ptr schema = get_table_from_batch_request(_proxy, it);
+        validate_batch_table_not_repeated(seen_tables, *schema);
         lw_shared_ptr<stats> per_table_stats = get_stats_from_schema(_proxy, *(schema));
         per_table_stats->api_operations.batch_write_item++;
         per_table_stats->api_operations.batch_write_item_batch_total += it->value.Size();
@@ -4410,7 +4424,7 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
                 co_return api_error::validation(fmt::format("Unknown BatchWriteItem request type: {}", r_name));
             }
         }
-        per_table_wcu.emplace_back(std::make_pair(per_table_stats, schema));
+        per_table_wcu.emplace_back(per_table_stats, schema, rjson::to_string(it->name));
     }
     for (const auto& b : mutation_builders) {
         co_await verify_permission(_enforce_authorization, _warn_authorization, client_state, b.first, auth::permission::MODIFY, _stats);
@@ -4473,23 +4487,23 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
     for (const auto& w : per_table_wcu) {
         total_wcu = 0;
         // The following loop goes over all items from the same table
-        while(pos < mutation_builders.size() && w.second->id() == mutation_builders[pos].first->id()) {
+        while(pos < mutation_builders.size() && w.schema->id() == mutation_builders[pos].first->id()) {
             uint64_t item_size = mutation_builders[pos].second.length_in_bytes();
             size_t wcu = wcu_consumed_capacity_counter::get_units(item_size ? item_size : 1);
             total_wcu += wcu;
             if (mutation_builders[pos].second.is_put_item()) {
-                w.first->wcu_total[stats::PUT_ITEM] += wcu;
+                w.per_table_stats->wcu_total[stats::PUT_ITEM] += wcu;
                 wcu_put_units += wcu;
             } else {
-                w.first->wcu_total[stats::DELETE_ITEM] += wcu;
+                w.per_table_stats->wcu_total[stats::DELETE_ITEM] += wcu;
                 wcu_delete_units += wcu;
             }
-            w.first->operation_sizes.batch_write_item_op_size_kb.add(bytes_to_kb_ceil(item_size));
+            w.per_table_stats->operation_sizes.batch_write_item_op_size_kb.add(bytes_to_kb_ceil(item_size));
             pos++;
         }
         if (should_add_wcu) {
             rjson::value entry = rjson::empty_object();
-            rjson::add(entry, "TableName", rjson::from_string(w.second->cf_name()));
+            rjson::add(entry, "TableName", rjson::from_string(w.requested_table_name));
             rjson::add(entry, "CapacityUnits", total_wcu);
             rjson::push_back(consumed_capacity, std::move(entry));
         }
@@ -4510,7 +4524,7 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
     auto duration = std::chrono::steady_clock::now() - start_time;
     _stats.api_operations.batch_write_item_latency.mark(duration);
     for (const auto& w : per_table_wcu) {
-        w.first->api_operations.batch_write_item_latency.mark(duration);
+        w.per_table_stats->api_operations.batch_write_item_latency.mark(duration);
     }
     if (!audited_table_names.empty()) {
         if (!only_audited_tables) {
