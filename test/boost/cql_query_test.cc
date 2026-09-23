@@ -260,46 +260,6 @@ using std::source_location;
 
 } // anonymous namespace
 
-SEASTAR_TEST_CASE(test_table_compression) {
-    return do_with_cql_env_thread([] (cql_test_env& e) {
-        e.execute_cql("create table tb1 (foo text PRIMARY KEY, bar text) with compression = { };").get();
-        BOOST_REQUIRE(e.local_db().has_schema("ks", "tb1"));
-        BOOST_REQUIRE(e.local_db().find_schema("ks", "tb1")->get_compressor_params().get_algorithm() == compression_parameters::algorithm::none);
-
-        e.execute_cql("create table tb5 (foo text PRIMARY KEY, bar text) with compression = { 'sstable_compression' : '' };").get();
-        BOOST_REQUIRE(e.local_db().has_schema("ks", "tb5"));
-        BOOST_REQUIRE(e.local_db().find_schema("ks", "tb5")->get_compressor_params().get_algorithm() == compression_parameters::algorithm::none);
-
-        BOOST_REQUIRE_THROW(e.execute_cql(
-                "create table tb2 (foo text PRIMARY KEY, bar text) with compression = { 'sstable_compression' : 'LossyCompressor' };").get(),
-                std::exception);
-        BOOST_REQUIRE_THROW(e.execute_cql(
-                "create table tb2 (foo text PRIMARY KEY, bar text) with compression = { 'sstable_compression' : 'LZ4Compressor', 'chunk_length_kb' : -1 };").get(),
-                std::exception);
-        BOOST_REQUIRE_THROW(e.execute_cql(
-                "create table tb2 (foo text PRIMARY KEY, bar text) with compression = { 'sstable_compression' : 'LZ4Compressor', 'chunk_length_kb' : 3 };").get(),
-                std::exception);
-
-        e.execute_cql("create table tb2 (foo text PRIMARY KEY, bar text) with compression = { 'sstable_compression' : 'LZ4Compressor', 'chunk_length_kb' : 2 };").get();
-        BOOST_REQUIRE(e.local_db().has_schema("ks", "tb2"));
-        BOOST_REQUIRE(e.local_db().find_schema("ks", "tb2")->get_compressor_params().get_algorithm() == compression_parameters::algorithm::lz4);
-        BOOST_REQUIRE(e.local_db().find_schema("ks", "tb2")->get_compressor_params().chunk_length() == 2 * 1024);
-
-        e.execute_cql("create table tb3 (foo text PRIMARY KEY, bar text) with compression = { 'sstable_compression' : 'DeflateCompressor' };").get();
-        BOOST_REQUIRE(e.local_db().has_schema("ks", "tb3"));
-        BOOST_REQUIRE(e.local_db().find_schema("ks", "tb3")->get_compressor_params().get_algorithm() == compression_parameters::algorithm::deflate);
-
-        e.execute_cql("create table tb4 (foo text PRIMARY KEY, bar text) with compression = { 'sstable_compression' : 'org.apache.cassandra.io.compress.DeflateCompressor' };").get();
-        BOOST_REQUIRE(e.local_db().has_schema("ks", "tb4"));
-        BOOST_REQUIRE(e.local_db().find_schema("ks", "tb4")->get_compressor_params().get_algorithm() == compression_parameters::algorithm::deflate);
-
-        e.execute_cql("create table tb6 (foo text PRIMARY KEY, bar text);").get();
-        BOOST_REQUIRE(e.local_db().has_schema("ks", "tb6"));
-        const auto dicts_feature_enabled = bool(e.local_db().features().sstable_compression_dicts);
-        BOOST_REQUIRE(e.local_db().find_schema("ks", "tb6")->get_compressor_params().get_algorithm() == e.local_db().get_config().get_sstable_compression_user_table_options(dicts_feature_enabled).get_algorithm());
-    });
-}
-
 SEASTAR_TEST_CASE(test_ttl) {
     return do_with_cql_env([] (cql_test_env& e) {
         auto make_my_list_type = [] { return list_type_impl::get_instance(utf8_type, true); };

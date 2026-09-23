@@ -8,6 +8,7 @@
 #############################################################################
 
 from contextlib import contextmanager
+import json
 import re
 import struct
 
@@ -1271,3 +1272,49 @@ def test_validate_table(cql, test_keyspace):
         cql.execute(f"create table {tb} (foo text PRIMARY KEY, bar text) with min_index_interval = -1")
     with pytest.raises(ConfigurationException):
         cql.execute(f"create table {tb} (foo text PRIMARY KEY, bar text) with min_index_interval = 1024 and max_index_interval = 128")
+
+
+def get_sstable_compression(cql, table):
+    ks, cf = table.split('.')
+    return cql.execute(f"SELECT compression FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = '{cf}'").one().compression
+
+
+def test_table_compression(cql, test_keyspace):
+    # Compression disabled: the compression options map doesn't have a
+    # sstable_compression class.
+    with new_test_table(cql, test_keyspace, "foo text PRIMARY KEY, bar text", "with compression = { }") as tb1:
+        assert 'sstable_compression' not in get_sstable_compression(cql, tb1)
+    with new_test_table(cql, test_keyspace, "foo text PRIMARY KEY, bar text", "with compression = { 'sstable_compression' : '' }") as tb5:
+        assert 'sstable_compression' not in get_sstable_compression(cql, tb5)
+
+    tb2 = f"{test_keyspace}.{unique_name()}"
+    # An unknown compressor class is rejected. Scylla currently reports it
+    # as a generic server error (std::runtime_error thrown from
+    # sstables/compressor.cc), which the driver surfaces as NoHostAvailable,
+    # so we only check that the request fails with the expected message.
+    with pytest.raises(Exception, match="Unknown sstable_compression: LossyCompressor"):
+        cql.execute(f"create table {tb2} (foo text PRIMARY KEY, bar text) with compression = {{ 'sstable_compression' : 'LossyCompressor' }}")
+    with pytest.raises(ConfigurationException):
+        cql.execute(f"create table {tb2} (foo text PRIMARY KEY, bar text) with compression = {{ 'sstable_compression' : 'LZ4Compressor', 'chunk_length_kb' : -1 }}")
+    with pytest.raises(ConfigurationException):
+        cql.execute(f"create table {tb2} (foo text PRIMARY KEY, bar text) with compression = {{ 'sstable_compression' : 'LZ4Compressor', 'chunk_length_kb' : 3 }}")
+
+    with new_test_table(cql, test_keyspace, "foo text PRIMARY KEY, bar text",
+            "with compression = { 'sstable_compression' : 'LZ4Compressor', 'chunk_length_kb' : 2 }") as tb2:
+        compression = get_sstable_compression(cql, tb2)
+        assert compression['sstable_compression'] == 'org.apache.cassandra.io.compress.LZ4Compressor'
+        assert compression['chunk_length_in_kb'] == '2'
+    with new_test_table(cql, test_keyspace, "foo text PRIMARY KEY, bar text",
+            "with compression = { 'sstable_compression' : 'DeflateCompressor' }") as tb3:
+        assert get_sstable_compression(cql, tb3)['sstable_compression'] == 'org.apache.cassandra.io.compress.DeflateCompressor'
+    with new_test_table(cql, test_keyspace, "foo text PRIMARY KEY, bar text",
+            "with compression = { 'sstable_compression' : 'org.apache.cassandra.io.compress.DeflateCompressor' }") as tb4:
+        assert get_sstable_compression(cql, tb4)['sstable_compression'] == 'org.apache.cassandra.io.compress.DeflateCompressor'
+    # Default compression comes from the sstable_compression_user_table_options
+    # config. (The C++ test also accounted for the sstable_compression_dicts
+    # cluster feature, which may downgrade a dictionary compressor to its
+    # non-dictionary variant; it is enabled in a normal cluster.)
+    with new_test_table(cql, test_keyspace, "foo text PRIMARY KEY, bar text") as tb6:
+        default = json.loads(cql.execute("SELECT value FROM system.config WHERE name = 'sstable_compression_user_table_options'").one().value)
+        strip_prefix = lambda name: name.removeprefix('org.apache.cassandra.io.compress.')
+        assert strip_prefix(get_sstable_compression(cql, tb6)['sstable_compression']) == strip_prefix(default['sstable_compression'])
