@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from decimal import Decimal
 import json
+import math
 import re
 import struct
 from uuid import UUID
@@ -2231,3 +2232,25 @@ def test_int_sum_with_cast(cql, test_keyspace):
         cql.execute(f"insert into {table} (pk, val) values ('a', -2147483648)")
         cql.execute(f"insert into {table} (pk, val) values ('b', -2147483647)")
         assert list(cql.execute(sum_as_bigint_query)) == [(-4294967295,)]
+
+
+# Rounds a Python float to the nearest 32-bit float, like a C++ float literal.
+def to_float32(x):
+    return struct.unpack('f', struct.pack('f', x))[0]
+
+
+def test_float_sum_overflow(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "pk text, val float, primary key(pk)") as table:
+        sum_query = f"select sum(val) from {table}"
+        # make sure we can sum close to the max value
+        cql.execute(f"insert into {table} (pk, val) values ('a', 3.4028234e+38)")
+        assert list(cql.execute(sum_query)) == [(to_float32(3.4028234e+38),)]
+        # cause overflow
+        cql.execute(f"insert into {table} (pk, val) values ('b', 1e+38)")
+        assert list(cql.execute(sum_query)) == [(math.inf,)]
+        # test maximum negative value
+        cql.execute(f"insert into {table} (pk, val) values ('a', -3.4028234e+38)")
+        assert list(cql.execute(sum_query)) == [(to_float32(-2.4028234e+38),)]
+        # cause negative overflow
+        cql.execute(f"insert into {table} (pk, val) values ('c', -2e+38)")
+        assert list(cql.execute(sum_query)) == [(-math.inf,)]
