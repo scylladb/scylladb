@@ -1370,10 +1370,6 @@ static void test_twcs_reversed_restricted_query(bool enable_optimized_twcs_queri
     }).get();
 }
 
-SEASTAR_THREAD_TEST_CASE(test_twcs_reversed_restricted_query_optimized) {
-    test_twcs_reversed_restricted_query(true);
-}
-
 SEASTAR_THREAD_TEST_CASE(test_twcs_reversed_restricted_query_regular) {
     test_twcs_reversed_restricted_query(false);
 }

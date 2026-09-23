@@ -3698,3 +3698,46 @@ def test_widening_value_into_wider_sink(cql, test_keyspace, scylla_only):
         # UPDATE sink + WHERE-key widening together.
         cql.execute(f"UPDATE {table} SET d = (float)3.5 WHERE pk = 1 AND ck = (int)5")
         assert list(cql.execute(f"SELECT d FROM {table} WHERE pk = 1")) == [(3.5,)]
+
+
+# Reproduces a bug in which TWCS sstable sets filtered sstables by clustering key
+# using the query-schema (reversed) ranges, which `sstable::may_contain_rows()`
+# interprets as table-schema ranges. Both the optimized TWCS read path
+# (`time_series_sstable_set::create_single_key_sstable_reader()`) and the regular
+# path (`filter_sstable_for_reader_by_ck()`) had the bug, so we exercise both,
+# switching between them with the `enable_optimized_twcs_queries` option.
+def do_test_twcs_reversed_restricted_query(cql, keyspace, enable_optimized_twcs_queries):
+    with new_test_table(cql, keyspace, "pk int, ck int, v int, PRIMARY KEY (pk, ck)",
+            " WITH compaction = {"
+            "   'compaction_window_size': '1',"
+            "   'compaction_window_unit': 'MINUTES',"
+            f"   'enable_optimized_twcs_queries': '{'true' if enable_optimized_twcs_queries else 'false'}',"
+            "   'class': 'org.apache.cassandra.db.compaction.TimeWindowCompactionStrategy'"
+            "}") as table:
+        # Compactions would merge the sstables together, defeating the purpose
+        # of the test. Note that we can't use the `enabled: false` compaction
+        # option for this, because it replaces the strategy (and hence the
+        # sstable set) with the null strategy, which wouldn't exercise the
+        # TWCS read paths at all.
+        with no_autocompaction_context(cql, table):
+            # One sstable per clustering key, so that each sstable has a narrow
+            # min/max clustering position range.
+            n = 10
+            for i in range(n):
+                cql.execute(f"INSERT INTO {table} (pk, ck, v) VALUES (0, {i}, {i})")
+                flush(cql, table)
+
+            def count(where):
+                return len(list(cql.execute(f"SELECT * FROM {table} WHERE {where} BYPASS CACHE")))
+
+            assert count("pk = 0") == n
+            assert count("pk = 0 ORDER BY ck DESC") == n
+            assert count("pk = 0 AND ck >= 5") == n - 5
+            assert count("pk = 0 AND ck >= 5 ORDER BY ck DESC") == n - 5
+            assert count("pk = 0 AND ck < 5") == 5
+            assert count("pk = 0 AND ck < 5 ORDER BY ck DESC") == 5
+            assert count("pk = 0 AND ck >= 3 AND ck <= 6") == 4
+            assert count("pk = 0 AND ck >= 3 AND ck <= 6 ORDER BY ck DESC") == 4
+
+def test_twcs_reversed_restricted_query_optimized(cql, test_keyspace, scylla_only):
+    do_test_twcs_reversed_restricted_query(cql, test_keyspace, True)
