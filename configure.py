@@ -1761,6 +1761,8 @@ deps['test/boost/combined_tests'] += [
     'test/boost/mutation_reader_test.cc',
     'test/boost/mutation_writer_test.cc',
     'test/boost/network_topology_strategy_test.cc',
+    'test/boost/paged_read_test.cc',
+    'test/lib/paged_read.cc',
     'test/boost/paxos_state_test.cc',
     'test/boost/per_partition_rate_limit_test.cc',
     'test/boost/pluggable_test.cc',

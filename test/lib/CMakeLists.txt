@@ -30,6 +30,7 @@ target_sources(test-lib
     gcp_kms_fixture.cc
     limiting_data_source.cc
     read_model.cc
+    paged_read.cc
     )
 target_include_directories(test-lib
   PUBLIC
