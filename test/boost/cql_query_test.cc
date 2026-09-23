@@ -378,21 +378,6 @@ SEASTAR_TEST_CASE(test_ttl) {
     });
 }
 
-SEASTAR_TEST_CASE(test_long_text_value) {
-    return do_with_cql_env_thread([] (cql_test_env& e) {
-        auto prepared = e.execute_cql("CREATE TABLE t (id int PRIMARY KEY, v text, v2 varchar)").get();
-        BOOST_REQUIRE(e.local_db().has_schema("ks", "t"));
-        sstring big_one(17324, 'x');
-        sstring bigger_one(29123, 'y');
-        e.execute_cql(format("INSERT INTO t (id, v, v2) values (1, '{}', '{}')", big_one, big_one)).get();
-        e.execute_cql(format("INSERT INTO t (id, v, v2) values (2, '{}', '{}')", bigger_one, bigger_one)).get();
-        auto msg = e.execute_cql("select v, v2 from t where id = 1").get();
-        assert_that(msg).is_rows().with_rows({{utf8_type->decompose(big_one), utf8_type->decompose(big_one)}});
-        msg = e.execute_cql("select v, v2 from t where id = 2").get();
-        assert_that(msg).is_rows().with_rows({{utf8_type->decompose(bigger_one), utf8_type->decompose(bigger_one)}});
-    });
-}
-
 SEASTAR_TEST_CASE(test_time_conversions) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         auto prepared = e.execute_cql(

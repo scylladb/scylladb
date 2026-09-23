@@ -1852,3 +1852,13 @@ def test_pg_style_string_literal(cql, test_keyspace):
             ("$''valid$_$key",),
             ("$normal$valid$$$$key$",),
         ]
+
+
+def test_long_text_value(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "id int PRIMARY KEY, v text, v2 varchar") as table:
+        big_one = 'x' * 17324
+        bigger_one = 'y' * 29123
+        cql.execute(f"INSERT INTO {table} (id, v, v2) values (1, '{big_one}', '{big_one}')")
+        cql.execute(f"INSERT INTO {table} (id, v, v2) values (2, '{bigger_one}', '{bigger_one}')")
+        assert list(cql.execute(f"select v, v2 from {table} where id = 1")) == [(big_one, big_one)]
+        assert list(cql.execute(f"select v, v2 from {table} where id = 2")) == [(bigger_one, bigger_one)]
