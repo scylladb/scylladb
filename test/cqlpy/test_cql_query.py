@@ -1706,3 +1706,28 @@ def test_frozen_collections(cql, test_keyspace):
         cql.execute(f"INSERT INTO {table} (a, b, c, d) VALUES (0, 0, {{}}, 0)")
         # An empty frozen map is a value, not null
         assert list(cql.execute(f"SELECT * FROM {table}")) == [(0, 0, {}, 0)]
+
+
+def test_alter_table(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "pk1 int, c1 int, ck2 int, r1 int, r2 int, PRIMARY KEY (pk1, c1, ck2)") as table:
+        ks, cf = table.split('.')
+        cql.execute(f"insert into {table} (pk1, c1, ck2, r1, r2) values (1, 2, 3, 4, 5)")
+        cql.execute(f"alter table {table} with comment = 'This is a comment.'")
+        assert cql.execute(f"SELECT comment FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = '{cf}'").one().comment == 'This is a comment.'
+        cql.execute(f"alter table {table} alter r2 type blob")
+        assert list(cql.execute(f"select pk1, c1, ck2, r1, r2 from {table}")) == [(1, 2, 3, 4, struct.pack('>i', 5))]
+        cql.execute(f"insert into {table} (pk1, c1, ck2, r2) values (1, 2, 3, 0x1234567812345678)")
+        blob = bytes.fromhex('1234567812345678')
+        assert list(cql.execute(f"select pk1, c1, ck2, r1, r2 from {table}")) == [(1, 2, 3, 4, blob)]
+        cql.execute(f"alter table {table} rename pk1 to p1 and ck2 to c2")
+        assert list(cql.execute(f"select p1, c1, c2, r1, r2 from {table}")) == [(1, 2, 3, 4, blob)]
+        cql.execute(f"alter table {table} add r1_2 int")
+        cql.execute(f"insert into {table} (p1, c1, c2, r1_2) values (1, 2, 3, 6)")
+        assert list(cql.execute(f"select * from {table}")) == [(1, 2, 3, 4, 6, blob)]
+        cql.execute(f"alter table {table} drop r1")
+        assert list(cql.execute(f"select * from {table}")) == [(1, 2, 3, 6, blob)]
+        cql.execute(f"alter table {table} add r1 int")
+        assert list(cql.execute(f"select * from {table}")) == [(1, 2, 3, None, 6, blob)]
+        cql.execute(f"alter table {table} drop r2")
+        cql.execute(f"alter table {table} add r2 int")
+        assert list(cql.execute(f"select * from {table}")) == [(1, 2, 3, None, 6, None)]
