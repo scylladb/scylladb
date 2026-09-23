@@ -331,7 +331,11 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
     rjson::add(export_desc, "FailureCode", "NotImplemented");
     rjson::add(export_desc, "FailureMessage", "Not yet implemented - this is a placeholder response for testing the export API.");
     rjson::add(export_desc, "ExportTime", rjson::value(export_time));
-    rjson::add(export_desc, "ExportType", rjson::from_string(export_type));
+    // DynamoDB echoes ExportType only when the request carried one; a request that relied on the
+    // FULL_EXPORT default gets none back.
+    if (rjson::find(request, "ExportType")) {
+        rjson::add(export_desc, "ExportType", rjson::from_string(export_type));
+    }
     rjson::add(export_desc, "S3Bucket", rjson::from_string(s3_bucket));
     if (!s3_prefix.empty()) {
         rjson::add(export_desc, "S3Prefix", rjson::from_string(s3_prefix));

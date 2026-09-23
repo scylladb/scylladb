@@ -1270,6 +1270,21 @@ def test_export_table_basic(test_table_s_for_export_only, scylla_only):
     assert export_desc['ExportArn'].startswith("arn:aws:dynamodb:")
 
 
+# Test that ExportTableToPointInTime echoes ExportType only when the request carried one.
+# test_export_basic and test_export_basic_with_export_type document that this is what DynamoDB
+# does, but both of them need an export to actually run.
+def test_export_table_export_type_echoed_only_when_requested(test_table_s_for_export_only, scylla_only):
+    client = test_table_s_for_export_only.meta.client
+    table_arn = client.describe_table(TableName=test_table_s_for_export_only.name)['Table']['TableArn']
+
+    desc = client.export_table_to_point_in_time(TableArn=table_arn, S3Bucket='my-bucket')['ExportDescription']
+    assert 'ExportType' not in desc
+
+    desc = client.export_table_to_point_in_time(TableArn=table_arn, S3Bucket='my-bucket',
+                                                ExportType='FULL_EXPORT')['ExportDescription']
+    assert desc['ExportType'] == 'FULL_EXPORT'
+
+
 # Test that non-DYNAMODB_JSON format (ION) is rejected.
 def test_export_table_unsupported_format_ion(test_table_s_for_export_only, scylla_only):
     client = test_table_s_for_export_only.meta.client
