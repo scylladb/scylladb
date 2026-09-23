@@ -38,7 +38,7 @@ from alternator_utils import (
     random_string,
     set_write_isolation,
 )
-from dtest_class import get_ip_from_node, wait_for
+from dtest_class import get_ip_from_node, read_barrier, wait_for
 from tools.cluster import new_node
 from tools.retrying import retrying
 
@@ -195,6 +195,9 @@ class TesterAlternator(BaseAlternator):
 
         logger.info(f"Starting {node2.name}")
         node2.start(wait_other_notice=True, wait_for_binary_proto=True)
+        # node2 may start serving requests before it has pulled the schema of the table created
+        # while it was down. Issue a read barrier to make sure it sees the latest schema before repair.
+        read_barrier(node2)
         logger.info(f"starting repair on {node2.name}...")
         node2.repair(options=[self.keyspace_name_template.format(TABLE_NAME), TABLE_NAME])
         logger.info(f"repair finished on {node2.name}")
