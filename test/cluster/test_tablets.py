@@ -2757,6 +2757,11 @@ async def test_split_completion_with_data_in_main_cg(manager: ManagerClient):
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH tablets = {{'min_tablet_count': 1}};")
         await cql.run_async(f"ALTER TABLE {ks}.test WITH tablets = {{'min_tablet_count': 2}};")
 
+        # Match each log message below against this table only, so that every
+        # assertion says which table it is about.
+        table = re.escape(f"{ks}.test")
+        table_id = (await cql.run_async(f"SELECT id FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = 'test'"))[0].id
+
         # Wait for entry B to actually be committed before restarting the target.
         #
         # The ALTER only raises min_tablet_count in the schema; the resize decision
@@ -2769,7 +2774,7 @@ async def test_split_completion_with_data_in_main_cg(manager: ManagerClient):
         # Either of the two alive nodes may be the coordinator, so wait on both and
         # take whichever reports first.
         await wait_for_first_completed([
-            logs[s.server_id].wait_for('Emitting resize decision of type split for table',
+            logs[s.server_id].wait_for(f'Emitting resize decision of type split for table {table_id},',
                                        from_mark=marks[s.server_id], timeout=180)
             for s in servers[:2]
         ], timeout=180)
@@ -2786,12 +2791,21 @@ async def test_split_completion_with_data_in_main_cg(manager: ManagerClient):
 
         log_target = await manager.server_open_log(target.server_id)
 
+        # The node starts serving CQL before it finishes replaying the group0
+        # entries it missed while down: the replay only starts once the failure
+        # detector marks the peers alive, so entries A and B are applied some
+        # time after server_start() returns.  Issue a group0 read barrier to
+        # make sure the target has caught up before looking at its log.
+        await read_barrier(manager.api, target.ip_addr)
+
         # Verify the fix code path was hit: the log message from the else-if
         # branch in update_effective_replication_map().  Entry B may still be
         # replaying when the node starts serving CQL, so wait rather than grep.
-        await log_target.wait_for(
-            'Detected new split decision for table.*setting split mode on existing storage groups',
-            timeout=60)
+        try:
+            await log_target.wait_for(f'Detected new split decision for table {table} at tablet count .*, '
+                                      'setting split mode on existing storage groups', timeout=60)
+        except TimeoutError:
+            pytest.fail("Fix code path not hit: set_split_mode() was not called via update_effective_replication_map()")
 
         # Insert data to confirm writes land in split-ready groups (not _main_cg).
         keys = range(100)
@@ -2805,12 +2819,12 @@ async def test_split_completion_with_data_in_main_cg(manager: ManagerClient):
         await manager.api.message_injection(target.ip_addr, "tablet_split_monitor_wait")
 
         # Wait for the split to complete on the target node.
-        await log_target.wait_for('Detected tablet split for table', from_mark=mark_target, timeout=60)
+        await log_target.wait_for(f'Detected tablet split for table {table}, increasing from ', from_mark=mark_target, timeout=60)
 
         # The bug manifests as on_internal_error logged at ERR level.
         # With the fix, _main_cg is empty because set_split_mode() was called
         # during Raft log replay, so writes landed in split-ready groups.
-        errors = await log_target.grep("wasn't split correctly", from_mark=mark_target)
+        errors = await log_target.grep(f"Found that storage of group .* for table {table_id} wasn't split correctly", from_mark=mark_target)
         assert not errors, f"Crash reproduced — storage group wasn't split correctly: {errors}"
 
         # Release the split monitor hold for clean shutdown.
