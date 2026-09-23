@@ -8,6 +8,7 @@
 #############################################################################
 
 from contextlib import contextmanager
+import re
 import struct
 
 from cassandra import InvalidRequest, Unauthorized
@@ -17,7 +18,7 @@ from cassandra.protocol import ConfigurationException, SyntaxException
 from cassandra.query import UNSET_VALUE
 import pytest
 
-from .util import config_value_context, new_session, new_test_keyspace, new_test_table, new_user, unique_name
+from .util import config_value_context, new_session, new_test_keyspace, new_test_table, new_type, new_user, unique_name
 
 
 def test_create_keyspace_statement(cql):
@@ -1175,3 +1176,52 @@ def test_vectors_variable_length_elements(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, "id int PRIMARY KEY, v vector<tuple<int, text>, 2>") as table:
         cql.execute(f"INSERT INTO {table} (id, v) VALUES (1, [(123, 'abc'), (456, '')])")
         assert list(cql.execute(f"SELECT * FROM {table}")) == [(1, [(123, 'abc'), (456, '')])]
+
+
+# Since durations don't have a well-defined ordering on their semantic value,
+# a number of restrictions exist on their use.
+def test_duration_restrictions(cql, test_keyspace):
+    def validate_request_failure(request, expected_message):
+        with pytest.raises(InvalidRequest, match=re.escape(expected_message)):
+            cql.execute(request)
+
+    # Disallow "direct" use of durations in ordered collection types to avoid
+    # user confusion when their ordering doesn't match expectations.
+    my_type = f"{test_keyspace}.{unique_name()}"
+    validate_request_failure(f"create type {my_type} (a set<duration>)",
+        "Durations are not allowed inside sets: set<duration>")
+    validate_request_failure(f"create type {my_type} (a map<duration, int>)",
+        "Durations are not allowed as map keys: map<duration, int>")
+
+    # Disallow any type referring to a duration from being used in a primary
+    # key of a table or a materialized view.
+    my_table = f"{test_keyspace}.{unique_name()}"
+    validate_request_failure(f"create table {my_table} (direct_key duration PRIMARY KEY)",
+        "duration type is not supported for PRIMARY KEY part direct_key")
+    validate_request_failure(f"create table {my_table} (collection_key frozen<list<duration>> PRIMARY KEY)",
+        "duration type is not supported for PRIMARY KEY part collection_key")
+    with new_type(cql, test_keyspace, "(span duration)") as my_type0:
+        validate_request_failure(f"create table {my_table} (udt_key frozen<{my_type0}> PRIMARY KEY)",
+            "duration type is not supported for PRIMARY KEY part udt_key")
+    validate_request_failure(f"create table {my_table} (tuple_key tuple<int, duration, int> PRIMARY KEY)",
+        "duration type is not supported for PRIMARY KEY part tuple_key")
+    validate_request_failure(f"create table {my_table} (a int, b duration, PRIMARY KEY ((a), b)) WITH CLUSTERING ORDER BY (b DESC)",
+        "duration type is not supported for PRIMARY KEY part b")
+    with new_test_table(cql, test_keyspace, "key int PRIMARY KEY, name text, span duration") as my_table0:
+        my_mv = f"{test_keyspace}.{unique_name()}"
+        validate_request_failure(f"create materialized view {my_mv} as select * from {my_table0} primary key (key, span)",
+            "Cannot use Duration column 'span' in PRIMARY KEY of materialized view")
+
+        # Disallow creating secondary indexes on durations.
+        validate_request_failure(f"create index {unique_name()} on {my_table0} (span)",
+            "Secondary indexes are not supported on duration columns")
+
+        # Disallow slice-based restrictions and conditions on durations.
+        #
+        # Note that multi-column restrictions are only supported on clustering
+        # columns (which cannot be `duration`) and that multi-column conditions
+        # are not supported in the grammar.
+        validate_request_failure(f"select * from {my_table0} where key = 0 and span < 3d",
+            "Duration type is unordered for span")
+        validate_request_failure(f"update {my_table0} set name = 'joe' where key = 0 if span >= 5m",
+            "Duration type is unordered for span")
