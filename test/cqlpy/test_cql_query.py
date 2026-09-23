@@ -3374,3 +3374,16 @@ def test_null_and_unset_in_collections(cql, test_keyspace):
 
         where_in_list_marker = cql.prepare(f"SELECT * FROM {table} WHERE p IN ?")
         assert list(execute_with_raw_values(cql, where_in_list_marker, [list_with_null])) == []
+
+
+def test_bind_variable_type_checking(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "p int primary key, a int, b text, c int") as table:
+        # Test :var needing to have two conflicting types
+        with pytest.raises(InvalidRequest, match="variable :var has type"):
+            cql.prepare(f"INSERT INTO {table} (p, a, b) VALUES (0, :var, :var)")
+        with pytest.raises(InvalidRequest, match="variable :var has type"):
+            cql.prepare(f"SELECT * FROM {table} WHERE a = :var AND b = :var ALLOW FILTERING")
+
+        # Test :var with a compatible type
+        cql.prepare(f"INSERT INTO {table} (p, a, c) VALUES (0, :var, :var)")
+        cql.prepare(f"SELECT * FROM {table} WHERE a = :var AND c = :var ALLOW FILTERING")

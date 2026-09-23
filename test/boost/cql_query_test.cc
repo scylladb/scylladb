@@ -510,27 +510,6 @@ SEASTAR_TEST_CASE(test_internal_schema_changes_on_a_distributed_table) {
     });
 }
 
-SEASTAR_TEST_CASE(test_bind_variable_type_checking) {
-    return do_with_cql_env_thread([](cql_test_env& e) {
-        e.execute_cql("CREATE TABLE tab1 (p int primary key, a int, b text, c int)").get();
-
-        // The predicate that checks the message has to be a lambda to preserve source_location
-        auto check_type_conflict = [](std::source_location loc = std::source_location::current()) {
-            return exception_predicate::message_contains("variable :var has type", loc);
-        };
-
-        // Test :var needing to have two conflicting types
-        BOOST_REQUIRE_EXCEPTION(e.prepare("INSERT INTO tab1 (p, a, b) VALUES (0, :var, :var)").get(),
-                                exceptions::invalid_request_exception, check_type_conflict());
-        BOOST_REQUIRE_EXCEPTION(e.prepare("SELECT * FROM tab1 WHERE a = :var AND b = :var ALLOW FILTERING").get(),
-                                exceptions::invalid_request_exception, check_type_conflict());
-
-        // Test :var with a compatible type
-        e.prepare("INSERT INTO tab1 (p, a, c) VALUES (0, :var, :var)").get();
-        e.prepare("SELECT * FROM tab1 WHERE a = :var AND c = :var ALLOW FILTERING").get();
-    });
-}
-
 SEASTAR_TEST_CASE(test_bind_variable_type_checking_disabled) {
     auto db_config = make_shared<db::config>();
     db_config->cql_duplicate_bind_variable_names_refer_to_same_variable(false);
