@@ -254,40 +254,6 @@ SEASTAR_TEST_CASE(test_alter_node_oriented_scopes_reject_unknown_targets) {
     });
 }
 
-SEASTAR_TEST_CASE(test_tuples) {
-    auto make_tt = [] { return tuple_type_impl::get_instance({int32_type, long_type, utf8_type}); };
-    auto tt = make_tt();
-    return do_with_cql_env([tt, make_tt] (cql_test_env& e) {
-        return e.create_table([make_tt] (std::string_view ks_name) {
-            // this runs on all cores, so create a local tt for each core:
-            auto tt = make_tt();
-            // CQL: "create table cf (id int primary key, t tuple<int, bigint, text>);
-            return *schema_builder(this_smp_shard_count(), ks_name, "cf")
-                    .with_column("id", int32_type, column_kind::partition_key)
-                    .with_column("t", tt)
-                    .build();
-        }).then([&e] {
-            return e.execute_cql("insert into cf (id, t) values (1, (1001, 2001, 'abc1'));").discard_result();
-        }).then([&e] {
-            return e.execute_cql("select t from cf where id = 1;");
-        }).then([&e, tt] (shared_ptr<cql_transport::messages::result_message> msg) {
-            assert_that(msg).is_rows()
-                .with_rows({{
-                     {tt->decompose(make_tuple_value(tt, tuple_type_impl::native_type({int32_t(1001), int64_t(2001), sstring("abc1")})))},
-                }});
-            return e.execute_cql("create table cf2 (p1 int PRIMARY KEY, r1 tuple<int, bigint, text>)").discard_result();
-        }).then([&e] {
-            return e.execute_cql("insert into cf2 (p1, r1) values (1, (1, 2, 'abc'));").discard_result();
-        }).then([&e] {
-            return e.execute_cql("select * from cf2 where p1 = 1;");
-        }).then([tt] (shared_ptr<cql_transport::messages::result_message> msg) {
-            assert_that(msg).is_rows().with_rows({
-                { int32_type->decompose(int32_t(1)), tt->decompose(make_tuple_value(tt, tuple_type_impl::native_type({int32_t(1), int64_t(2), sstring("abc")}))) }
-            });
-        });
-    });
-}
-
 SEASTAR_TEST_CASE(test_vectors) {
     auto make_vt = [] { return vector_type_impl::get_instance(int32_type, 3); };
     auto vt = make_vt();

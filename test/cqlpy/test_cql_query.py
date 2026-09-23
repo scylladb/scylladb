@@ -1145,3 +1145,12 @@ def test_batch(cql, test_keyspace):
             apply batch;""")
         assert list(cql.execute(f"select r1 from {table} where p1 = 'key1' and c1 = 1")) == [(100,)]
         assert list(cql.execute(f"select r1 from {table} where p1 = 'key1' and c1 = 2")) == [(200,)]
+
+
+def test_tuples(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "id int primary key, t tuple<int, bigint, text>") as table:
+        cql.execute(f"insert into {table} (id, t) values (1, (1001, 2001, 'abc1'))")
+        assert list(cql.execute(f"select t from {table} where id = 1")) == [((1001, 2001, 'abc1'),)]
+    with new_test_table(cql, test_keyspace, "p1 int PRIMARY KEY, r1 tuple<int, bigint, text>") as table:
+        cql.execute(f"insert into {table} (p1, r1) values (1, (1, 2, 'abc'))")
+        assert list(cql.execute(f"select * from {table} where p1 = 1")) == [(1, (1, 2, 'abc'))]
