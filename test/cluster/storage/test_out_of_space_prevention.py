@@ -576,7 +576,6 @@ async def test_repair_failure_on_split_rejection(manager: ScyllaClusterManager, 
 
                 await manager.api.wait_for_injection_enter(servers[0].ip_addr, "maybe_split_new_sstable_wait",
                                                            deadline=time.time() + 600.0)
-                await manager.api.disable_injection(coord_serv.ip_addr, "tablet_resize_finalization_postpone")
 
                 logger.info("Create a big file on the target node to reach critical disk utilization level")
                 disk_info = psutil.disk_usage(workdir)
@@ -597,6 +596,13 @@ async def test_repair_failure_on_split_rejection(manager: ScyllaClusterManager, 
                 mark, _ = await log.wait_for("Dropped below the critical disk utilization level", from_mark=mark)
                 for _ in range(2):
                     mark, _ = await log.wait_for("compaction_manager - Enabled", from_mark=mark)
+
+                # Keep resize finalization postponed until the node has left the critical disk
+                # utilization mode. A failed tablet repair ends its transition after a 1s back-off,
+                # and since all replicas are already split-ready, the coordinator would otherwise
+                # finalize the split while the disk is still full, before the mark above
+                # (SCYLLADB-4684).
+                await manager.api.disable_injection(coord_serv.ip_addr, "tablet_resize_finalization_postpone")
 
                 await repair_task
 
