@@ -940,3 +940,32 @@ def test_partition_range_queries_with_bounds(cql, test_keyspace):
         check(f"token(k) >= {tokens[4]} and token(k) <= {tokens[2]}", [])
         min_token = -2**63
         check(f"token(k) > {min_token} and token (k) < {min_token}", keys)
+
+
+def test_deletion_scenarios(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "k blob, c blob, v blob, primary key (k, c)") as cf:
+        def select_v():
+            return list(cql.execute(f"select v from {cf}"))
+        cql.execute(f"insert into {cf} (k, c, v) values (0x00, 0x05, 0x01) using timestamp 1")
+        assert select_v() == [(b'\x01',)]
+        cql.execute(f"update {cf} using timestamp 2 set v = null where k = 0x00 and c = 0x05")
+        assert select_v() == [(None,)]
+        # same tampstamp, dead cell wins
+        cql.execute(f"update {cf} using timestamp 2 set v = 0x02 where k = 0x00 and c = 0x05")
+        assert select_v() == [(None,)]
+        cql.execute(f"update {cf} using timestamp 3 set v = 0x02 where k = 0x00 and c = 0x05")
+        assert select_v() == [(b'\x02',)]
+        # same timestamp, greater value wins
+        cql.execute(f"update {cf} using timestamp 3 set v = 0x03 where k = 0x00 and c = 0x05")
+        assert select_v() == [(b'\x03',)]
+        # same tampstamp, delete whole row, delete should win
+        cql.execute(f"delete from {cf} using timestamp 3 where k = 0x00 and c = 0x05")
+        assert select_v() == []
+        # same timestamp, update should be shadowed by range tombstone
+        cql.execute(f"update {cf} using timestamp 3 set v = 0x04 where k = 0x00 and c = 0x05")
+        assert select_v() == []
+        cql.execute(f"update {cf} using timestamp 4 set v = 0x04 where k = 0x00 and c = 0x05")
+        assert select_v() == [(b'\x04',)]
+        # deleting an orphan cell (row is considered as deleted) yields no row
+        cql.execute(f"update {cf} using timestamp 5 set v = null where k = 0x00 and c = 0x05")
+        assert select_v() == []
