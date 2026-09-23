@@ -737,3 +737,9 @@ def test_vector_elements_validation(cql, test_keyspace, raw_utf8_serialization):
         with pytest.raises(InvalidRequest, match='UTF8'):
             cql.execute(stmt, [1, [bad_utf8_string]])
         cql.execute(stmt, [1, ["proper utf8 string"]])
+
+
+# Reproduces #4209
+def test_list_of_tuples_with_bound_var(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, c1 list<frozen<tuple<int,int>>>") as cf:
+        cql.prepare(f"update {cf} SET c1 = c1 + [(?,9999)] where pk = 999")

@@ -254,14 +254,6 @@ SEASTAR_TEST_CASE(test_alter_node_oriented_scopes_reject_unknown_targets) {
     });
 }
 
-/// Reproduces #4209
-SEASTAR_TEST_CASE(test_list_of_tuples_with_bound_var) {
-    return do_with_cql_env_thread([](cql_test_env& e) {
-        e.execute_cql("create table cf (pk int PRIMARY KEY, c1 list<frozen<tuple<int,int>>>);").get();
-        e.prepare("update cf SET c1 = c1 + [(?,9999)] where pk = 999;").get();
-    });
-}
-
 SEASTAR_TEST_CASE(test_bound_var_in_collection_literal) {
     return do_with_cql_env_thread([](cql_test_env& e) {
         e.execute_cql("create table list_t (pk int PRIMARY KEY, c1 list<int>);").get();
