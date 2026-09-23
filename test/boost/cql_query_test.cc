@@ -570,18 +570,6 @@ static void create_time_uuid_fcts_schema(cql_test_env& e) {
     cquery_nofail(e, "SELECT * FROM t;");
 }
 
-SEASTAR_TEST_CASE(test_basic_time_uuid_fcts) {
-    return do_with_cql_env_thread([] (auto& e) {
-        create_time_uuid_fcts_schema(e);
-
-        cql_func_require_nofail(e, "currenttime", "");
-        cql_func_require_nofail(e, "currentdate", "");
-        cql_func_require_nofail(e, "now", "");
-        cql_func_require_nofail(e, "currenttimeuuid", "");
-        cql_func_require_nofail(e, "currenttimestamp", "");
-    });
-}
-
 SEASTAR_TEST_CASE(test_time_uuid_fcts_input_validation) {
     return do_with_cql_env_thread([] (auto& e) {
         create_time_uuid_fcts_schema(e);

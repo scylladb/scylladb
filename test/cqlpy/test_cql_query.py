@@ -20,7 +20,7 @@ from cassandra import ConsistencyLevel, InvalidRequest, Unauthorized
 from cassandra.cluster import NoHostAvailable
 from cassandra.concurrent import execute_concurrent_with_args
 import cassandra.cqltypes
-from cassandra.protocol import ConfigurationException, SyntaxException
+from cassandra.protocol import ConfigurationException, ServerError, SyntaxException
 from cassandra.query import PreparedStatement, SimpleStatement, UNSET_VALUE
 from cassandra.util import Date, Duration, Time
 import pytest
@@ -2499,3 +2499,40 @@ def test_describe_view_schema(cql, this_dc, scylla_only):
             assert normalize_white_space(base_desc) == normalize_white_space(base_table)
     finally:
         cql.execute(f"DROP KEYSPACE {ks}")
+
+
+def cql_func_require_nofail(cql, table, fct, inp):
+    return cql.execute(f"SELECT {fct}({inp}) FROM {table}")
+
+
+def cql_func_require_throw(cql, table, exception, fct, inp):
+    query = f"SELECT {fct}({inp}) FROM {table}"
+    if exception is ServerError:
+        # The driver retries a query failing with a server error on the
+        # other hosts, and eventually raises NoHostAvailable wrapping the
+        # server errors.
+        with pytest.raises(NoHostAvailable) as excinfo:
+            cql.execute(query)
+        errors = excinfo.value.errors.values()
+        assert errors and all(isinstance(e, ServerError) for e in errors)
+    else:
+        with pytest.raises(exception):
+            cql.execute(query)
+
+
+@pytest.fixture(scope="module")
+def time_uuid_fcts_table(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "id int primary key, t timestamp, l bigint, f float, u timeuuid, d date") as table:
+        cql.execute(f"INSERT INTO {table} (id, t, l, f, u, d) VALUES "
+                    "(1, 1579072460606, 1579072460606000, 1579072460606, a66525e0-3766-11ea-8080-808080808080, '2020-01-13')")
+        cql.execute(f"SELECT * FROM {table}")
+        yield table
+
+
+def test_basic_time_uuid_fcts(cql, time_uuid_fcts_table):
+    table = time_uuid_fcts_table
+    cql_func_require_nofail(cql, table, "currenttime", "")
+    cql_func_require_nofail(cql, table, "currentdate", "")
+    cql_func_require_nofail(cql, table, "now", "")
+    cql_func_require_nofail(cql, table, "currenttimeuuid", "")
+    cql_func_require_nofail(cql, table, "currenttimestamp", "")
