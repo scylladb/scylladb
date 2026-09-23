@@ -2778,3 +2778,19 @@ def test_alter_table_default_ttl_reset(cql, test_keyspace):
         assert default_ttl() == 10
         cql.execute(f"ALTER TABLE {table} WITH gc_grace_seconds=0")
         assert default_ttl() == 10
+
+
+def test_impossible_where(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, r int") as table:
+        cql.execute(f"INSERT INTO {table} (p, r) VALUES (0, 0)")
+        cql.execute(f"INSERT INTO {table} (p, r) VALUES (1, 10)")
+        cql.execute(f"INSERT INTO {table} (p, r) VALUES (2, 20)")
+        assert list(cql.execute(f"SELECT * FROM {table} WHERE r>10 AND r<10 ALLOW FILTERING")) == []
+        assert list(cql.execute(f"SELECT * FROM {table} WHERE r>=10 AND r<=0 ALLOW FILTERING")) == []
+
+    with new_test_table(cql, test_keyspace, "p int, c int, PRIMARY KEY(p, c)", "WITH CLUSTERING ORDER BY (c DESC)") as table:
+        cql.execute(f"INSERT INTO {table} (p, c) VALUES (0, 0)")
+        cql.execute(f"INSERT INTO {table} (p, c) VALUES (1, 10)")
+        cql.execute(f"INSERT INTO {table} (p, c) VALUES (2, 20)")
+        assert list(cql.execute(f"SELECT * FROM {table} WHERE c>10 AND c<10 ALLOW FILTERING")) == []
+        assert list(cql.execute(f"SELECT * FROM {table} WHERE c>=10 AND c<=0 ALLOW FILTERING")) == []
