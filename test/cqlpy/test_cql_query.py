@@ -2285,3 +2285,128 @@ def test_bigint_avg(cql, test_keyspace):
         cql.execute(f"insert into {table} (pk, val) values ('x', 9223372036854775807)")
         cql.execute(f"insert into {table} (pk, val) values ('y', 9223372036854775807)")
         assert list(cql.execute(f"select avg(val) from {table}")) == [(9223372036854775807,)]
+
+
+# Changes all white space into a single space, for more robust comparison
+# of DESCRIBE output.
+def normalize_white_space(s):
+    return re.sub(r'\s+', ' ', ' ' + s + ' ').replace(', ', ',')
+
+
+def test_describe_simple_schema(cql, this_dc, scylla_only):
+    cql_create_tables = {
+        "cf": "CREATE TABLE {ks}.cf (\n"
+              "    pk blob,\n"
+              "    \"COL2\" blob,\n"
+              "    col1 blob,\n"
+              "    PRIMARY KEY (pk)\n"
+              ") WITH bloom_filter_fp_chance = 0.01\n"
+              "    AND caching = {{'keys': 'ALL', 'rows_per_partition': 'ALL'}}\n"
+              "    AND comment = ''\n"
+              "    AND compaction = {{'class': 'SizeTieredCompactionStrategy'}}\n"
+              "    AND compression = {{'sstable_compression': 'org.apache.cassandra.io.compress.LZ4Compressor'}}\n"
+              "    AND crc_check_chance = 1\n"
+              "    AND default_time_to_live = 0\n"
+              "    AND gc_grace_seconds = 864000\n"
+              "    AND max_index_interval = 2048\n"
+              "    AND memtable_flush_period_in_ms = 0\n"
+              "    AND min_index_interval = 128\n"
+              "    AND speculative_retry = '99.0PERCENTILE'\n"
+              "    AND paxos_grace_seconds = 43200\n"
+              "    AND tombstone_gc = {{'mode': 'timeout', 'propagation_delay_in_seconds': '3600'}};\n",
+        "cf1": "CREATE TABLE {ks}.cf1 (\n"
+               "    pk blob,\n"
+               "    ck blob,\n"
+               "    col1 blob,\n"
+               "    col2 blob,\n"
+               "    PRIMARY KEY (pk, ck)\n"
+               ") WITH CLUSTERING ORDER BY (ck ASC)\n"
+               "    AND bloom_filter_fp_chance = 0.01\n"
+               "    AND caching = {{'keys': 'ALL','rows_per_partition': 'ALL'}}\n"
+               "    AND comment = ''\n"
+               "    AND compaction = {{'class': 'SizeTieredCompactionStrategy'}}\n"
+               "    AND compression = {{'sstable_compression': 'org.apache.cassandra.io.compress.LZ4Compressor'}}\n"
+               "    AND crc_check_chance = 1\n"
+               "    AND default_time_to_live = 0\n"
+               "    AND gc_grace_seconds = 864000\n"
+               "    AND max_index_interval = 2048\n"
+               "    AND memtable_flush_period_in_ms = 0\n"
+               "    AND min_index_interval = 128\n"
+               "    AND speculative_retry = '99.0PERCENTILE'\n"
+               "    AND paxos_grace_seconds = 43200\n"
+               "    AND tombstone_gc = {{'mode': 'timeout', 'propagation_delay_in_seconds': '3600'}};\n",
+        "\"CF2\"": "CREATE TABLE {ks}.\"CF2\" (\n"
+                 "    pk blob,\n"
+                 "    \"CK\" blob,\n"
+                 "    col1 blob,\n"
+                 "    col2 blob,\n"
+                 "    PRIMARY KEY (pk, \"CK\")\n"
+                 ") WITH CLUSTERING ORDER BY (\"CK\" DESC)\n"
+                 "    AND bloom_filter_fp_chance = 0.02\n"
+                 "    AND caching = {{'keys': 'ALL', 'rows_per_partition': 'ALL'}}\n"
+                 "    AND comment = ''\n"
+                 "    AND compaction = {{'class': 'SizeTieredCompactionStrategy'}}\n"
+                 "    AND compression = {{'sstable_compression': 'org.apache.cassandra.io.compress.LZ4Compressor'}}\n"
+                 "    AND crc_check_chance = 1\n"
+                 "    AND default_time_to_live = 0\n"
+                 "    AND gc_grace_seconds = 954000\n"
+                 "    AND max_index_interval = 3048\n"
+                 "    AND memtable_flush_period_in_ms = 60000\n"
+                 "    AND min_index_interval = 128\n"
+                 "    AND speculative_retry = '99.0PERCENTILE'\n"
+                 "    AND paxos_grace_seconds = 43200\n"
+                 "    AND tombstone_gc = {{'mode': 'timeout', 'propagation_delay_in_seconds': '3600'}};\n",
+        "\"Cf3\"": "CREATE TABLE {ks}.\"Cf3\" (\n"
+                 "    pk blob,\n"
+                 "    pk2 blob,\n"
+                 "    \"CK\" blob,\n"
+                 "    col1 blob,\n"
+                 "    col2 blob,\n"
+                 "    PRIMARY KEY ((pk, pk2), \"CK\")\n"
+                 ") WITH CLUSTERING ORDER BY (\"CK\" DESC)\n"
+                 "    AND bloom_filter_fp_chance = 0.02\n"
+                 "    AND caching = {{'keys': 'ALL', 'rows_per_partition': 'ALL'}}\n"
+                 "    AND comment = ''\n"
+                 "    AND compaction = {{'class': 'SizeTieredCompactionStrategy'}}\n"
+                 "    AND compression = {{'sstable_compression': 'org.apache.cassandra.io.compress.LZ4Compressor'}}\n"
+                 "    AND crc_check_chance = 1\n"
+                 "    AND default_time_to_live = 0\n"
+                 "    AND gc_grace_seconds = 954000\n"
+                 "    AND max_index_interval = 3048\n"
+                 "    AND memtable_flush_period_in_ms = 60000\n"
+                 "    AND min_index_interval = 128\n"
+                 "    AND speculative_retry = '99.0PERCENTILE'\n"
+                 "    AND paxos_grace_seconds = 43200\n"
+                 "    AND tombstone_gc = {{'mode': 'timeout', 'propagation_delay_in_seconds': '3600'}};\n",
+        "cf4": "CREATE TABLE {ks}.cf4 (\n"
+               "    pk blob,\n"
+               "    col1 blob,\n"
+               "    col2 blob,\n"
+               "    pn phone,\n"
+               "    PRIMARY KEY (pk)\n"
+               ") WITH "
+               "     bloom_filter_fp_chance = 0.02\n"
+               "    AND caching = {{'keys': 'ALL', 'rows_per_partition': 'ALL'}}\n"
+               "    AND comment = ''\n"
+               "    AND compaction = {{'class': 'SizeTieredCompactionStrategy'}}\n"
+               "    AND compression = {{'sstable_compression': 'org.apache.cassandra.io.compress.LZ4Compressor'}}\n"
+               "    AND crc_check_chance = 1\n"
+               "    AND default_time_to_live = 0\n"
+               "    AND gc_grace_seconds = 954000\n"
+               "    AND max_index_interval = 3048\n"
+               "    AND memtable_flush_period_in_ms = 60000\n"
+               "    AND min_index_interval = 128\n"
+               "    AND speculative_retry = '99.0PERCENTILE'\n"
+               "    AND paxos_grace_seconds = 43200\n"
+               "    AND tombstone_gc = {{'mode': 'timeout', 'propagation_delay_in_seconds': '3600'}};\n",
+    }
+    with new_test_keyspace(cql, f"WITH replication = {{'class': 'NetworkTopologyStrategy', '{this_dc}': 1}}") as ks:
+        with new_type(cql, ks, "(country_code int, number text)", name="phone"):
+            for name, create in cql_create_tables.items():
+                create = create.format(ks=ks)
+                cql.execute(create)
+                try:
+                    desc = cql.execute(f"DESCRIBE TABLE {ks}.{name}").one().create_statement
+                    assert normalize_white_space(desc) == normalize_white_space(create)
+                finally:
+                    cql.execute(f"DROP TABLE {ks}.{name}")
