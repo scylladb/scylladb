@@ -774,6 +774,8 @@ b) Backup
 This is mostly an in-place promotion.
 The components are already in the table's own bucket and pinned by the snapshot references since snapshot time,
 so nothing is uploaded and no new references are created.
+The destination named in the backup request must be the table's own location (endpoint, bucket and prefix),
+any other destination is rejected before the backup starts.
 The `snapshot_remote_locations` catalog rows flip state to `remote`.
 For the `snapshot_sstables` catalog, the per-node handler rewrites each uploaded sstable's row with the state promoted.
 The only new created object on remote is the manifest at `scylla-bucket/sstables/snapshots/ks/t/<tag>/manifest.json`.
