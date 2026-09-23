@@ -25,6 +25,7 @@
 #include <cstring>
 #include <flat_set>
 #include <iterator>
+#include <ranges>
 #include <chrono>
 
 #include <fmt/ranges.h>
@@ -2186,8 +2187,7 @@ auto fmt::formatter<locator::tablet_map>::format(const locator::tablet_map& r, f
     }
     out = fmt::format_to(out, "{{");
     bool first = true;
-    locator::tablet_id tid = r.first_tablet();
-    for (auto&& tablet : r._tablets) {
+    for (auto&& [tablet, tid] : std::views::zip(r._tablets, r.tablet_ids())) {
         if (!first) {
             out = fmt::format_to(out, ",");
         }
@@ -2205,7 +2205,6 @@ auto fmt::formatter<locator::tablet_map>::format(const locator::tablet_map& r, f
             }
         }
         first = false;
-        tid = *r.next_tablet(tid);
     }
     return fmt::format_to(out, "}}");
 }
