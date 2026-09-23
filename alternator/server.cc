@@ -1103,6 +1103,11 @@ future<> server::init(net::inet_address addr, std::optional<uint16_t> port, std:
     return seastar::async([this, addr, port, https_port, port_proxy_protocol, https_port_proxy_protocol, creds] {
         _executor.start().get();
 
+        // Bound the request line and headers which Seastar's HTTP server
+        // buffers in memory before our handler ever runs.
+        _http_server.set_request_size_limit(request_line_and_headers_limit);
+        _https_server.set_request_size_limit(request_line_and_headers_limit);
+
         // Apply current config values and register observers for live updates
         // before listen() so that no responses are ever sent with stale defaults.
         // Both options drive Seastar's built-in header generation directly.
