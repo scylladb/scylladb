@@ -3092,3 +3092,13 @@ def test_parallelized_select_min(cql, test_keyspace, scylla_only):
             cql.execute(f"INSERT INTO {table} (k) VALUES ({i})")
         assert list(cql.execute(f"SELECT MIN(k) FROM {table}")) == [(0,)]
         assert parallelized_count() == 1
+
+
+def test_parallelized_select_max(cql, test_keyspace, scylla_only):
+    with parallelized_aggregation_enabled(cql) as parallelized_count, \
+            new_test_table(cql, test_keyspace, "k int, PRIMARY KEY (k)") as table:
+        value_count = 10
+        for i in range(value_count):
+            cql.execute(f"INSERT INTO {table} (k) VALUES ({i})")
+        assert list(cql.execute(f"SELECT MAX(k) FROM {table}")) == [(value_count - 1,)]
+        assert parallelized_count() == 1
