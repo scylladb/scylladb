@@ -1035,3 +1035,31 @@ def test_map_insert_update(cql, test_keyspace):
         cql.execute(f"insert into {table} (p1, map1) values ('key1', null)")
         # An empty non-frozen map is returned as null
         check(None)
+
+
+def test_set_insert_update(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p1 varchar primary key, set1 set<int>") as table:
+        def check(expected):
+            assert list(cql.execute(f"select set1 from {table} where p1 = 'key1'")) == [(expected,)]
+        cql.execute(f"insert into {table} (p1, set1) values ('key1', {{ 1001 }})")
+        check({1001})
+        cql.execute(f"update {table} set set1 = set1 + {{ 1002 }} where p1 = 'key1'")
+        check({1001, 1002})
+        # overwrite an element
+        cql.execute(f"update {table} set set1 = set1 + {{ 1001 }} where p1 = 'key1'")
+        check({1001, 1002})
+        # overwrite entire set
+        cql.execute(f"update {table} set set1 = {{ 1007, 1019 }} where p1 = 'key1'")
+        check({1007, 1019})
+        # discard keys
+        cql.execute(f"update {table} set set1 = set1 - {{ 1007, 1008 }} where p1 = 'key1'")
+        check({1019})
+        assert list(cql.execute(f"select * from {table} where p1 = 'key1'")) == [('key1', {1019})]
+        cql.execute(f"update {table} set set1 = set1 + {{ 1009 }} where p1 = 'key1'")
+        cql.execute(f"delete set1[1019] from {table} where p1 = 'key1'")
+        check({1009})
+        cql.execute(f"insert into {table} (p1, set1) values ('key1', null)")
+        check(None)
+        cql.execute(f"insert into {table} (p1, set1) values ('key1', {{}})")
+        # Empty non-frozen set is indistinguishable from NULL
+        check(None)
