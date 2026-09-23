@@ -3573,3 +3573,110 @@ def test_select_constant_type_inference(cql, scylla_only):
     # count(1) works
     rs = cql.execute("SELECT count(1) FROM system.local")
     assert len(list(rs)) == 1
+
+
+# Note: the C++ test expected frozen collection types; the native protocol's
+# result metadata doesn't carry frozenness, so we only check the collection
+# and element types.
+def test_select_collection_literal_type_inference(cql, scylla_only):
+    # List literal
+    rs = cql.execute("SELECT [1, 2, 3] FROM system.local")
+    assert column_types(rs) == ['list<int>']
+    assert len(list(rs)) == 1
+
+    # Set literal
+    rs = cql.execute("SELECT {1, 2, 3} FROM system.local")
+    assert column_types(rs) == ['set<int>']
+    assert len(list(rs)) == 1
+
+    # Map literal
+    rs = cql.execute("SELECT {'a': 1, 'b': 2} FROM system.local")
+    assert column_types(rs) == ['map<varchar, int>']
+    assert len(list(rs)) == 1
+
+    # Nested collection literal
+    rs = cql.execute("SELECT [[1, 2], [3, 4]] FROM system.local")
+    assert column_types(rs) == ['list<list<int>>']
+    assert len(list(rs)) == 1
+
+    # Type widening within integer chain. The int literal 1 must be converted to
+    # the 8-byte bigint representation, not just relabelled.
+    rs = cql.execute("SELECT [1, 10000000000] FROM system.local")
+    assert column_types(rs) == ['list<bigint>']
+    assert list(rs) == [([1, 10000000000],)]
+
+    rs = cql.execute("SELECT {1, 10000000000} FROM system.local")
+    assert column_types(rs) == ['set<bigint>']
+    assert len(list(rs)) == 1
+
+    rs = cql.execute("SELECT {'a': 1, 'b': 10000000000} FROM system.local")
+    assert column_types(rs) == ['map<varchar, bigint>']
+    assert len(list(rs)) == 1
+
+    # Integer widening: int32 + int64 + varint (from literal values)
+    rs = cql.execute("SELECT [1, 10000000000, 99999999999999999999] FROM system.local")
+    assert column_types(rs) == ['list<varint>']
+    assert len(list(rs)) == 1
+
+    # Full integer widening chain with C-style type hints
+    rs = cql.execute("SELECT [(tinyint)1, (smallint)2, 3, 10000000000, 99999999999999999999] FROM system.local")
+    assert column_types(rs) == ['list<varint>']
+    assert len(list(rs)) == 1
+
+    # Float chain: float + double → double. The (float)1.0 element must be
+    # converted to a double value, not reinterpreted as 4 bytes.
+    rs = cql.execute("SELECT [(float)1.0, 3.14] FROM system.local")
+    assert column_types(rs) == ['list<double>']
+    assert list(rs) == [([1.0, 3.14],)]
+
+    for stmt in [
+        # Cross-chain widening (int + double) should fail
+        "SELECT [1, 3.14] FROM system.local",
+        "SELECT {1, 3.14} FROM system.local",
+        "SELECT {'a': 1, 'b': 3.14} FROM system.local",
+        "SELECT {1: 'a', 3.14: 'b'} FROM system.local",
+        # Cross-chain: float + int
+        "SELECT [(float)1.0, 1] FROM system.local",
+        # Mixed types in collection should fail
+        "SELECT [1, 'hello'] FROM system.local",
+        "SELECT {1, 'hello'} FROM system.local",
+        "SELECT {'a': 1, 'b': 'hello'} FROM system.local",
+        "SELECT {'a': 1, 2: 3} FROM system.local",
+        "SELECT [1, true] FROM system.local",
+        # Nested collection type mismatch
+        "SELECT [[1, 2], [3, 'a']] FROM system.local",
+        # Empty collection should fail (can't infer type)
+        "SELECT {} FROM system.local",
+        "SELECT [] FROM system.local",
+        # Null has no inherent type. As a top-level selector there is no
+        # column or function parameter to provide type context, so type
+        # inference fails.
+        "SELECT null FROM system.local",
+        # Null cannot self-type, so collections containing null fail
+        # at type inference time ("Could not infer type of ...").
+        "SELECT [1, null] FROM system.local",
+        "SELECT {1, null} FROM system.local",
+        "SELECT {'a': null} FROM system.local",
+        "SELECT {null: 1} FROM system.local",
+        # All nulls in collection — no consensus possible
+        "SELECT [null, null] FROM system.local",
+        "SELECT {null: null} FROM system.local",
+    ]:
+        with pytest.raises(InvalidRequest):
+            cql.execute(stmt)
+
+    # Function calls inside collections — infer_type resolves return types
+    # via functions::get() without producing prepared expressions
+    rs = cql.execute("SELECT [now(), now()] FROM system.local")
+    assert column_types(rs) == ['list<timeuuid>']
+    assert len(list(rs)) == 1
+
+    # Tuple literal
+    rs = cql.execute("SELECT (1, 'hello', true) FROM system.local")
+    assert column_types(rs) == ['frozen<tuple<int, varchar, boolean>>']
+    assert len(list(rs)) == 1
+
+    # SQL CAST in SELECT clause
+    rs = cql.execute("SELECT CAST(1 AS bigint) FROM system.local")
+    assert column_types(rs) == ['bigint']
+    assert list(rs) == [(1,)]
