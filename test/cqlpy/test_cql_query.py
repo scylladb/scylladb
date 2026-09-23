@@ -2756,3 +2756,13 @@ def test_select_serial_consistency(cql, test_keyspace):
         check_fails(f"select * from {table} where  b > 0 allow filtering")
         check_fails(f"select * from {table} where  a in (1, 3)")
         execute_prepared_serial(cql, f"select * from {table} where a = 1", [], [(1, 1), (1, 2)], ConsistencyLevel.SERIAL)
+
+
+def test_range_deletions_for_specific_column(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "pk int, ck int, col text, PRIMARY KEY(pk, ck)") as table:
+        cql.execute(f"INSERT INTO {table} (pk, ck, col) VALUES (1, 1, 'aaa')")
+        cql.execute(f"INSERT INTO {table} (pk, ck, col) VALUES (1, 2, 'bbb')")
+        cql.execute(f"INSERT INTO {table} (pk, ck, col) VALUES (1, 3, 'ccc')")
+
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"DELETE col FROM {table} WHERE pk = 0 AND ck > 1 AND ck <= 3")

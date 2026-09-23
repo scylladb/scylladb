@@ -504,18 +504,6 @@ SEASTAR_TEST_CASE(test_view_with_two_regular_base_columns_in_key) {
     });
 }
 
-SEASTAR_TEST_CASE(test_range_deletions_for_specific_column) {
-    return do_with_cql_env_thread([] (cql_test_env& e) {
-        cquery_nofail(e, "CREATE TABLE t (pk int, ck int, col text, PRIMARY KEY(pk, ck))");
-        cquery_nofail(e, "INSERT INTO  t (pk, ck, col) VALUES (1, 1, 'aaa')");
-        cquery_nofail(e, "INSERT INTO  t (pk, ck, col) VALUES (1, 2, 'bbb')");
-        cquery_nofail(e, "INSERT INTO  t (pk, ck, col) VALUES (1, 3, 'ccc')");
-
-        BOOST_REQUIRE_THROW(e.execute_cql("DELETE col FROM t WHERE pk = 0 AND ck > 1 AND ck <= 3").get(),
-                exceptions::invalid_request_exception);
-    });
-}
-
 SEASTAR_TEST_CASE(test_alter_table_default_ttl_reset) {
     return do_with_cql_env_thread([](cql_test_env& e) {
         e.execute_cql("CREATE TABLE tbl (a int, b int, PRIMARY KEY (a)) WITH default_time_to_live=10").get();
