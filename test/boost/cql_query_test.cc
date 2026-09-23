@@ -378,38 +378,6 @@ SEASTAR_TEST_CASE(test_ttl) {
     });
 }
 
-SEASTAR_TEST_CASE(test_pg_style_string_literal) {
-    return do_with_cql_env([] (cql_test_env& e) {
-        return e.execute_cql("create table test (p1 text, PRIMARY KEY (p1));").discard_result().then([&e] {
-            return e.execute_cql("insert into test (p1) values ($$Apostrophe's$ $ not$ $ '' escaped$$);").discard_result();
-        }).then([&e] {
-            return e.execute_cql("insert into test (p1) values ($$$''valid$_$key$$);").discard_result();
-        }).then([&e] {
-            return e.execute_cql("insert into test (p1) values ('$normal$valid$$$$key$');").discard_result();
-        }).then([&e] {
-            return e.execute_cql("insert into test (p1) values ($ $invalid$$);").discard_result();
-        }).then_wrapped([&e] (future<> f) {
-            assert_that_failed(f);
-            return e.execute_cql("insert into test (p1) values ($$invalid$ $);").discard_result();
-        }).then_wrapped([&e] (future<> f) {
-            assert_that_failed(f);
-            return e.execute_cql("insert into test (p1) values ($ $invalid$$$);").discard_result();
-        }).then_wrapped([&e] (future<> f) {
-            assert_that_failed(f);
-            return e.execute_cql("insert into test (p1) values ($$ \n\n$invalid);").discard_result();
-        }).then_wrapped([&e] (future<> f) {
-            assert_that_failed(f);
-            return e.execute_cql("select * from test;");
-        }).then([] (shared_ptr<cql_transport::messages::result_message> msg) {
-            assert_that(msg).is_rows().with_rows({
-                { utf8_type->decompose(sstring("Apostrophe's$ $ not$ $ '' escaped")) },
-                { utf8_type->decompose(sstring("$''valid$_$key")) },
-                { utf8_type->decompose(sstring("$normal$valid$$$$key$")) },
-            });
-        });
-    });
-}
-
 SEASTAR_TEST_CASE(test_long_text_value) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         auto prepared = e.execute_cql("CREATE TABLE t (id int PRIMARY KEY, v text, v2 varchar)").get();

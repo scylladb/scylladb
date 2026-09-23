@@ -1832,3 +1832,23 @@ def test_alter_table_validation(cql, test_keyspace):
         # blob is compatible with any type, so re-adding as blob is allowed
         cql.execute(f"alter table {table} add r3 map<int, blob>")
         cql.execute(f"alter table {table} add r4 set<blob>")
+
+
+def test_pg_style_string_literal(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p1 text, PRIMARY KEY (p1)") as table:
+        cql.execute(f"insert into {table} (p1) values ($$Apostrophe's$ $ not$ $ '' escaped$$)")
+        cql.execute(f"insert into {table} (p1) values ($$$''valid$_$key$$)")
+        cql.execute(f"insert into {table} (p1) values ('$normal$valid$$$$key$')")
+        with pytest.raises(SyntaxException):
+            cql.execute(f"insert into {table} (p1) values ($ $invalid$$)")
+        with pytest.raises(SyntaxException):
+            cql.execute(f"insert into {table} (p1) values ($$invalid$ $)")
+        with pytest.raises(SyntaxException):
+            cql.execute(f"insert into {table} (p1) values ($ $invalid$$$)")
+        with pytest.raises(SyntaxException):
+            cql.execute(f"insert into {table} (p1) values ($$ \n\n$invalid)")
+        assert list(cql.execute(f"select * from {table}")) == [
+            ("Apostrophe's$ $ not$ $ '' escaped",),
+            ("$''valid$_$key",),
+            ("$normal$valid$$$$key$",),
+        ]
