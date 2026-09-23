@@ -372,3 +372,54 @@ def test_describe_config_output_replays_verbatim(cql, scylla_only):
         # The replayed CREATE stored the table-scope override again.
         assert list(cql.execute(f"SELECT configs['auto_repair_enabled'] FROM system_schema.scylla_tables "
                                 f"WHERE keyspace_name = '{ks}' AND table_name = 'tbl'")) == [('true',)]
+
+
+# Changes cluster-scope configuration with ALTER CLUSTER while active, and
+# restores the original stored cluster-scope value (or its absence) at exit,
+# so that the cluster-wide state doesn't leak into other tests.
+@contextmanager
+def cluster_config_context(cql, option, value):
+    rows = list(cql.execute("SELECT configs FROM system_schema.scylla_clusters"))
+    original = None
+    if rows and rows[0].configs:
+        original = rows[0].configs.get(option)
+    cql.execute(f"ALTER CLUSTER WITH {option} = {value}")
+    try:
+        yield
+    finally:
+        cql.execute(f"ALTER CLUSTER WITH {option} = {original if original is not None else 'null'}")
+
+
+# The commented-out property is a real, executable property behind its comment marker:
+# replaying the describe output as-is stores nothing at the described scope (inheritance
+# is preserved), while erasing just the leading "-- " pins the effective value there.
+def test_describe_config_uncomment_pins_inherited_value(cql, this_dc, scylla_only):
+    with new_test_keyspace(cql, f"WITH replication = {{'class': 'NetworkTopologyStrategy', '{this_dc}': 1}}") as ks:
+        table_name = unique_name()
+        table = f"{ks}.{table_name}"
+        cql.execute(f"CREATE TABLE {table} (pk int PRIMARY KEY)")
+        try:
+            with cluster_config_context(cql, "auto_repair_enabled", "true"):
+                table_desc = describe_create_statement(cql, f"DESCRIBE TABLE {table}")
+                commented = "\n    -- AND auto_repair_enabled = true  -- from cluster (table=NULL, keyspace=NULL, cluster=true)"
+                pos = table_desc.find(commented)
+                assert pos != -1
+
+                # Replaying as-is keeps the table purely inheriting: no stored override.
+                cql.execute(f"DROP TABLE {table}")
+                cql.execute(table_desc)
+                rows = list(cql.execute(f"SELECT configs FROM system_schema.scylla_tables "
+                                        f"WHERE keyspace_name = '{ks}' AND table_name = '{table_name}'"))
+                assert len(rows) == 1 and not rows[0].configs
+
+                # Erasing the comment marker turns the line into a live property; the trailing
+                # provenance stays a valid inline comment. Replaying now pins the value.
+                commented_marker = "\n    -- AND"
+                pinned_desc = table_desc[:pos] + "\n    AND" + table_desc[pos + len(commented_marker):]
+                cql.execute(f"DROP TABLE {table}")
+                cql.execute(pinned_desc)
+                rows = list(cql.execute(f"SELECT configs['auto_repair_enabled'] FROM system_schema.scylla_tables "
+                                        f"WHERE keyspace_name = '{ks}' AND table_name = '{table_name}'"))
+                assert [tuple(r) for r in rows] == [("true",)]
+        finally:
+            cql.execute(f"DROP TABLE IF EXISTS {table}")

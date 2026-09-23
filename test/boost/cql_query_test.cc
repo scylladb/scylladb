@@ -76,20 +76,6 @@ BOOST_AUTO_TEST_SUITE(cql_query_test)
 using namespace std::literals::chrono_literals;
 using namespace tests;
 
-static sstring describe_create_statement(cql_test_env& e, std::string_view query) {
-    auto msg = e.execute_cql(query).get();
-    auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
-    BOOST_REQUIRE(rows);
-
-    const auto& rs = rows->rs().result_set();
-    BOOST_REQUIRE_EQUAL(rs.rows().size(), 1);
-    const auto& row = rs.rows().front();
-    BOOST_REQUIRE_EQUAL(row.size(), 4);
-    BOOST_REQUIRE(row[3]);
-
-    return value_cast<sstring>(utf8_type->deserialize(*row[3]));
-}
-
 // All create_statement cells of a multi-row describe (e.g. DESC SCHEMA), in row order.
 static std::vector<sstring> describe_create_statements(cql_test_env& e, std::string_view query) {
     auto msg = e.execute_cql(query).get();
@@ -265,42 +251,6 @@ SEASTAR_TEST_CASE(test_alter_node_oriented_scopes_reject_unknown_targets) {
             e.execute_cql(seastar::format("ALTER NODE {} WITH test_node_only_option = 1", utils::make_random_uuid())).get(),
             exceptions::invalid_request_exception,
             missing_target("does not exist"));
-    });
-}
-
-// The commented-out property is a real, executable property behind its comment marker:
-// replaying the describe output as-is stores nothing at the described scope (inheritance
-// is preserved), while erasing just the leading "-- " pins the effective value there.
-SEASTAR_TEST_CASE(test_describe_config_uncomment_pins_inherited_value) {
-    return do_with_cql_env_thread([](cql_test_env& e) {
-        e.execute_cql("CREATE KEYSPACE ks_pin WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}").get();
-        e.execute_cql("CREATE TABLE ks_pin.tbl (pk int PRIMARY KEY)").get();
-        e.execute_cql("ALTER CLUSTER WITH auto_repair_enabled = true").get();
-
-        auto table_desc = describe_create_statement(e, "DESCRIBE TABLE ks_pin.tbl");
-        const sstring commented = "\n    -- AND auto_repair_enabled = true  -- from cluster (table=NULL, keyspace=NULL, cluster=true)";
-        const auto pos = table_desc.find(commented);
-        BOOST_REQUIRE_NE(pos, sstring::npos);
-
-        // Replaying as-is keeps the table purely inheriting: no stored override.
-        e.execute_cql("DROP TABLE ks_pin.tbl").get();
-        BOOST_REQUIRE_NO_THROW(e.execute_cql(table_desc).get());
-        auto rows = e.execute_cql("SELECT configs FROM system_schema.scylla_tables "
-                                  "WHERE keyspace_name = 'ks_pin' AND table_name = 'tbl'").get();
-        assert_that(rows).is_rows().with_rows({{{}}});
-
-        // Erasing the comment marker turns the line into a live property; the trailing
-        // provenance stays a valid inline comment. Replaying now pins the value.
-        constexpr std::string_view commented_marker = "\n    -- AND";
-        auto pinned_desc = std::string(table_desc);
-        pinned_desc.replace(pos, commented_marker.size(), "\n    AND");
-        e.execute_cql("DROP TABLE ks_pin.tbl").get();
-        BOOST_REQUIRE_NO_THROW(e.execute_cql(pinned_desc).get());
-        rows = e.execute_cql("SELECT configs['auto_repair_enabled'] FROM system_schema.scylla_tables "
-                             "WHERE keyspace_name = 'ks_pin' AND table_name = 'tbl'").get();
-        assert_that(rows).is_rows().with_rows({{
-            {utf8_type->decompose(sstring("true"))}
-        }});
     });
 }
 
