@@ -254,59 +254,6 @@ SEASTAR_TEST_CASE(test_alter_node_oriented_scopes_reject_unknown_targets) {
     });
 }
 
-SEASTAR_TEST_CASE(test_limit_is_respected_across_partitions) {
-    return do_with_cql_env([] (cql_test_env& e) {
-        return e.execute_cql("create table cf (k blob, c blob, v blob, s1 blob static, primary key (k, c));").discard_result().then([&e] {
-            return e.execute_cql("update cf set s1 = 0x01 where k = 0x01;").discard_result();
-        }).then([&e] {
-            return e.execute_cql("update cf set s1 = 0x02 where k = 0x02;").discard_result();
-        }).then([&e] {
-            // Determine partition order
-            return e.execute_cql("select k from cf;");
-        }).then([&e](shared_ptr<cql_transport::messages::result_message> msg) {
-            auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
-            BOOST_REQUIRE(rows);
-            std::vector<bytes> keys;
-            const auto& rs = rows->rs().result_set();
-            for (auto&& row : rs.rows()) {
-                BOOST_REQUIRE(row[0]);
-                keys.push_back(to_bytes(*row[0]));
-            }
-            BOOST_REQUIRE(keys.size() == 2);
-            bytes k1 = keys[0];
-            bytes k2 = keys[1];
-
-            return now().then([k1, k2, &e] {
-                return e.execute_cql("select s1 from cf limit 1;").then([k1, k2](shared_ptr<cql_transport::messages::result_message> msg) {
-                    assert_that(msg).is_rows().with_rows({
-                        {k1},
-                    });
-                });
-            }).then([&e, k1, k2] {
-                return e.execute_cql("select s1 from cf limit 2;").then([k1, k2](shared_ptr<cql_transport::messages::result_message> msg) {
-                    assert_that(msg).is_rows().with_rows({
-                        {k1}, {k2}
-                    });
-                });
-            }).then([&e, k1, k2] {
-                return e.execute_cql(format("update cf set s1 = null where k = 0x{};", to_hex(k1))).discard_result();
-            }).then([&e, k1, k2] {
-                return e.execute_cql("select s1 from cf limit 1;").then([k1, k2](shared_ptr<cql_transport::messages::result_message> msg) {
-                    assert_that(msg).is_rows().with_rows({
-                        {k2}
-                    });
-                });
-            }).then([&e, k1, k2] {
-                return e.execute_cql(format("update cf set s1 = null where k = 0x{};", to_hex(k2))).discard_result();
-            }).then([&e, k1, k2] {
-                return e.execute_cql("select s1 from cf limit 1;").then([k1, k2](shared_ptr<cql_transport::messages::result_message> msg) {
-                    assert_that(msg).is_rows().is_empty();
-                });
-            });
-        });
-    });
-}
-
 SEASTAR_TEST_CASE(test_partitions_have_consistent_ordering_in_range_query) {
     return do_with_cql_env([] (cql_test_env& e) {
         return e.execute_cql("create table cf (k blob, v int, primary key (k));").discard_result().then([&e] {

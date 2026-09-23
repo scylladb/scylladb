@@ -888,3 +888,20 @@ def test_insert_without_clustering_key(cql, test_keyspace):
         cql.execute(f"insert into {cf} (k) values (0x01)")
         assert list(cql.execute(f"select * from {cf}")) == [(b'\x01', None)]
         assert list(cql.execute(f"select k from {cf}")) == [(b'\x01',)]
+
+
+def test_limit_is_respected_across_partitions(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "k blob, c blob, v blob, s1 blob static, primary key (k, c)") as cf:
+        cql.execute(f"update {cf} set s1 = 0x01 where k = 0x01")
+        cql.execute(f"update {cf} set s1 = 0x02 where k = 0x02")
+        # Determine partition order
+        keys = [row.k for row in cql.execute(f"select k from {cf}")]
+        assert len(keys) == 2
+        k1, k2 = keys
+        # Note that s1 happens to have the same value as k in every partition
+        assert list(cql.execute(f"select s1 from {cf} limit 1")) == [(k1,)]
+        assert list(cql.execute(f"select s1 from {cf} limit 2")) == [(k1,), (k2,)]
+        cql.execute(f"update {cf} set s1 = null where k = 0x{k1.hex()}")
+        assert list(cql.execute(f"select s1 from {cf} limit 1")) == [(k2,)]
+        cql.execute(f"update {cf} set s1 = null where k = 0x{k2.hex()}")
+        assert list(cql.execute(f"select s1 from {cf} limit 1")) == []
