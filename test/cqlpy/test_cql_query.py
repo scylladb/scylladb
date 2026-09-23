@@ -3411,3 +3411,10 @@ def test_in_bind_variable_name(cql, test_keyspace, scylla_only):
         # The IF condition of an LWT statement is prepared as an expression rather than
         # as a restriction, so the name is reached along a different path.
         assert prepared_variable_names(cql, f"UPDATE {table} SET v = 1 WHERE p = 0 AND c = 0 IF v IN ?") == "IN(v)"
+
+
+def test_in_bind_variable_name_lowercase_operator(cql, test_keyspace, scylla_only):
+    with config_value_context(cql, 'cql_in_bind_variable_name_uses_uppercase_operator', 'false'):
+        with new_test_table(cql, test_keyspace, "p int, c int, v int, PRIMARY KEY (p, c)") as table:
+            assert prepared_variable_names(cql, f"SELECT * FROM {table} WHERE p = ? AND c IN ?") == "p, in(c)"
+            assert prepared_variable_names(cql, f"UPDATE {table} SET v = 1 WHERE p = 0 AND c = 0 IF v IN ?") == "in(v)"
