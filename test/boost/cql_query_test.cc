@@ -112,24 +112,6 @@ SEASTAR_TEST_CASE(test_alter_cluster_without_auth_enabled_is_allowed) {
     });
 }
 
-// A non-boolean value for a boolean-typed option must be rejected at every scope.
-SEASTAR_TEST_CASE(test_cluster_config_rejects_invalid_boolean_value) {
-    return do_with_cql_env_thread([](cql_test_env& e) {
-        e.execute_cql("CREATE KEYSPACE ks_cfg_bad WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}").get();
-        e.execute_cql("CREATE TABLE ks_cfg_bad.tbl (pk int PRIMARY KEY)").get();
-
-        BOOST_REQUIRE_THROW(
-            e.execute_cql("ALTER CLUSTER WITH auto_repair_enabled = 'yes'").get(),
-            exceptions::invalid_request_exception);
-        BOOST_REQUIRE_THROW(
-            e.execute_cql("ALTER KEYSPACE ks_cfg_bad WITH auto_repair_enabled = 'yes'").get(),
-            exceptions::configuration_exception);
-        BOOST_REQUIRE_THROW(
-            e.execute_cql("ALTER TABLE ks_cfg_bad.tbl WITH auto_repair_enabled = 'yes'").get(),
-            exceptions::configuration_exception);
-    });
-}
-
 // `= NULL` removes a stored override; the string literal `= 'null'` is an ordinary value.
 // propertyValue renders both as the text "null", so only the parser's null-keyword flag
 // tells them apart - without it a quoted 'null' would silently erase the override at the

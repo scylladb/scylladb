@@ -151,3 +151,16 @@ def test_cluster_config_rejects_map_value_with_cql_error(cql, scylla_only):
             cql.execute(f"ALTER KEYSPACE {ks} WITH auto_repair_enabled = {{'a': 'b'}}")
         with pytest.raises(SyntaxException):
             cql.execute(f"CREATE TABLE {ks}.tbl2 (pk int PRIMARY KEY) WITH auto_repair_enabled = {{'a': 'b'}}")
+
+
+# A non-boolean value for a boolean-typed option must be rejected at every scope.
+def test_cluster_config_rejects_invalid_boolean_value(cql, scylla_only):
+    with new_config_test_keyspace(cql) as ks, cluster_config_cleanup(cql):
+        cql.execute(f"CREATE TABLE {ks}.tbl (pk int PRIMARY KEY)")
+
+        with pytest.raises(InvalidRequest):
+            cql.execute("ALTER CLUSTER WITH auto_repair_enabled = 'yes'")
+        with pytest.raises(ConfigurationException):
+            cql.execute(f"ALTER KEYSPACE {ks} WITH auto_repair_enabled = 'yes'")
+        with pytest.raises(ConfigurationException):
+            cql.execute(f"ALTER TABLE {ks}.tbl WITH auto_repair_enabled = 'yes'")
