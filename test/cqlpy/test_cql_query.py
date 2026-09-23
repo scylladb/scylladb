@@ -795,3 +795,17 @@ def test_insert_statement(cql, test_keyspace):
         assert list(cql.execute(f"select r1 from {cf} where p1 = 'key1' and c1 = 1")) == [(100,)]
         cql.execute(f"update {cf} set r1 = 66 where p1 = 'key1' and c1 = 1")
         assert list(cql.execute(f"select r1 from {cf} where p1 = 'key1' and c1 = 1")) == [(66,)]
+
+
+def test_select_statement(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p1 varchar, c1 int, c2 int, r1 int, PRIMARY KEY (p1, c1, c2)") as cf:
+        cql.execute(f"insert into {cf} (p1, c1, c2, r1) values ('key1', 1, 2, 3)")
+        cql.execute(f"insert into {cf} (p1, c1, c2, r1) values ('key2', 1, 2, 13)")
+        cql.execute(f"insert into {cf} (p1, c1, c2, r1) values ('key3', 1, 2, 23)")
+        # Test wildcard
+        assert list(cql.execute(f"select * from {cf} where p1 = 'key1' and c2 = 2 and c1 = 1")) == [('key1', 1, 2, 3)]
+        # Test with only regular column
+        assert list(cql.execute(f"select r1 from {cf} where p1 = 'key1' and c2 = 2 and c1 = 1")) == [(3,)]
+        # Test full partition range, singular clustering range
+        assert sorted(cql.execute(f"select * from {cf} where c1 = 1 and c2 = 2 allow filtering")) == [
+            ('key1', 1, 2, 3), ('key2', 1, 2, 13), ('key3', 1, 2, 23)]

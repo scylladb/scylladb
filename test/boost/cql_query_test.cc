@@ -254,69 +254,6 @@ SEASTAR_TEST_CASE(test_alter_node_oriented_scopes_reject_unknown_targets) {
     });
 }
 
-SEASTAR_TEST_CASE(test_select_statement) {
-   return do_with_cql_env([] (cql_test_env& e) {
-        return e.create_table([](std::string_view ks_name) {
-            // CQL: create table cf (p1 varchar, c1 int, c2 int, r1 int, PRIMARY KEY (p1, c1, c2));
-            return *schema_builder(this_smp_shard_count(), ks_name, "cf")
-                    .with_column("p1", utf8_type, column_kind::partition_key)
-                    .with_column("c1", int32_type, column_kind::clustering_key)
-                    .with_column("c2", int32_type, column_kind::clustering_key)
-                    .with_column("r1", int32_type)
-                    .build();
-        }).then([&e] {
-            return e.execute_cql("insert into cf (p1, c1, c2, r1) values ('key1', 1, 2, 3);").discard_result();
-        }).then([&e] {
-            return e.execute_cql("insert into cf (p1, c1, c2, r1) values ('key2', 1, 2, 13);").discard_result();
-        }).then([&e] {
-            return e.execute_cql("insert into cf (p1, c1, c2, r1) values ('key3', 1, 2, 23);").discard_result();
-        }).then([&e] {
-            // Test wildcard
-            return e.execute_cql("select * from cf where p1 = 'key1' and c2 = 2 and c1 = 1;").then([] (shared_ptr<cql_transport::messages::result_message> msg) {
-                assert_that(msg).is_rows()
-                    .with_size(1)
-                    .with_row({
-                         {utf8_type->decompose(sstring("key1"))},
-                         {int32_type->decompose(1)},
-                         {int32_type->decompose(2)},
-                         {int32_type->decompose(3)}
-                     });
-            });
-        }).then([&e] {
-            // Test with only regular column
-            return e.execute_cql("select r1 from cf where p1 = 'key1' and c2 = 2 and c1 = 1;").then([] (shared_ptr<cql_transport::messages::result_message> msg) {
-                assert_that(msg).is_rows()
-                    .with_size(1)
-                    .with_row({
-                         {int32_type->decompose(3)}
-                     });
-            });
-        }).then([&e] {
-            // Test full partition range, singular clustering range
-            return e.execute_cql("select * from cf where c1 = 1 and c2 = 2 allow filtering;").then([] (shared_ptr<cql_transport::messages::result_message> msg) {
-                assert_that(msg).is_rows()
-                    .with_size(3)
-                    .with_row({
-                         {utf8_type->decompose(sstring("key1"))},
-                         {int32_type->decompose(1)},
-                         {int32_type->decompose(2)},
-                         {int32_type->decompose(3)}})
-                    .with_row({
-                         {utf8_type->decompose(sstring("key2"))},
-                         {int32_type->decompose(1)},
-                         {int32_type->decompose(2)},
-                         {int32_type->decompose(13)}})
-                    .with_row({
-                         {utf8_type->decompose(sstring("key3"))},
-                         {int32_type->decompose(1)},
-                         {int32_type->decompose(2)},
-                         {int32_type->decompose(23)}
-                     });
-            });
-        });
-    });
-}
-
 SEASTAR_TEST_CASE(test_cassandra_stress_like_write_and_read) {
     return do_with_cql_env([] (cql_test_env& e) {
         auto execute_update_for_key = [&e](sstring key) {
