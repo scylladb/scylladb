@@ -1580,3 +1580,29 @@ def test_batch_multi_table_has_no_partition_key_bind_indices(cql, test_keyspace,
             f"INSERT INTO {ta} (pk, v) VALUES (?, ?); "
             f"INSERT INTO {ta} (pk, v) VALUES (?, ?); "
             "APPLY BATCH")
+
+
+def test_in_restriction(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p1 int, c1 int, r1 int, PRIMARY KEY (p1, c1)") as table:
+        cql.execute(f"insert into {table} (p1, c1, r1) values (0, 0, 0)")
+        cql.execute(f"insert into {table} (p1, c1, r1) values (1, 0, 1)")
+        cql.execute(f"insert into {table} (p1, c1, r1) values (1, 1, 2)")
+        cql.execute(f"insert into {table} (p1, c1, r1) values (1, 2, 3)")
+        cql.execute(f"insert into {table} (p1, c1, r1) values (2, 3, 4)")
+        assert list(cql.execute(f"select * from {table} where p1 in ()")) == []
+        assert sorted(cql.execute(f"select r1 from {table} where p1 in (2, 0, 2, 1)")) == [(0,), (1,), (2,), (3,), (4,)]
+        assert list(cql.execute(f"select r1 from {table} where p1 = 1 and c1 in ()")) == []
+        assert list(cql.execute(f"select r1 from {table} where p1 = 1 and c1 in (2, 0, 2, 1)")) == [(1,), (2,), (3,)]
+        assert list(cql.execute(f"select r1 from {table} where p1 = 1 and c1 in (2, 0, 2, 1) order by c1 desc")) == [(3,), (2,), (1,)]
+        stmt = cql.prepare(f"select r1 from {table} where p1 in ?")
+        assert sorted(cql.execute(stmt, [[2, 0, 2, 1]])) == [(0,), (1,), (2,), (3,), (4,)]
+
+    with new_test_table(cql, test_keyspace, "p1 int, c1 int, r1 int, PRIMARY KEY (p1, c1, r1)") as table:
+        cql.execute(f"insert into {table} (p1, c1, r1) values (0, 0, 0)")
+        cql.execute(f"insert into {table} (p1, c1, r1) values (1, 0, 1)")
+        cql.execute(f"insert into {table} (p1, c1, r1) values (1, 1, 2)")
+        cql.execute(f"insert into {table} (p1, c1, r1) values (1, 2, 3)")
+        cql.execute(f"insert into {table} (p1, c1, r1) values (2, 3, 4)")
+        assert list(cql.execute(f"select r1 from {table} where (c1,r1) in ((0, 1),(1,2),(0,1),(1,2),(3,3)) allow filtering")) == [(1,), (2,)]
+        stmt = cql.prepare(f"select r1 from {table} where (c1,r1) in ? allow filtering")
+        assert list(cql.execute(stmt, [[(0, 1), (1, 2), (0, 1), (1, 2), (3, 3)]])) == [(1,), (2,)]
