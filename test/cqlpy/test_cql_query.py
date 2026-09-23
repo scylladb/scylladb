@@ -2410,3 +2410,92 @@ def test_describe_simple_schema(cql, this_dc, scylla_only):
                     assert normalize_white_space(desc) == normalize_white_space(create)
                 finally:
                     cql.execute(f"DROP TABLE {ks}.{name}")
+
+
+def test_describe_view_schema(cql, this_dc, scylla_only):
+    # The C++ test used a keyspace named "KS", to check quoting of the
+    # keyspace name in the DESCRIBE output. We use a similar mixed-case name.
+    ks = '"KS' + unique_name() + '"'
+    base_table = ("CREATE TABLE {ks}.\"cF\" (\n"
+                  "    pk blob,\n"
+                  "    pk1 blob,\n"
+                  "    ck blob,\n"
+                  "    ck1 blob,\n"
+                  "    \"COL1\" blob,\n"
+                  "    col2 blob,\n"
+                  "    PRIMARY KEY ((pk, pk1), ck, ck1)\n"
+                  ") WITH CLUSTERING ORDER BY (ck ASC, ck1 ASC)\n"
+                  "    AND bloom_filter_fp_chance = 0.01\n"
+                  "    AND caching = {{'keys': 'ALL', 'rows_per_partition': 'ALL'}}\n"
+                  "    AND comment = ''\n"
+                  "    AND compaction = {{'class': 'SizeTieredCompactionStrategy'}}\n"
+                  "    AND compression = {{'sstable_compression': 'org.apache.cassandra.io.compress.LZ4Compressor'}}\n"
+                  "    AND crc_check_chance = 1\n"
+                  "    AND default_time_to_live = 0\n"
+                  "    AND gc_grace_seconds = 864000\n"
+                  "    AND max_index_interval = 2048\n"
+                  "    AND memtable_flush_period_in_ms = 0\n"
+                  "    AND min_index_interval = 128\n"
+                  "    AND speculative_retry = '99.0PERCENTILE'\n"
+                  "    AND paxos_grace_seconds = 43200\n"
+                  "    AND tombstone_gc = {{'mode': 'timeout', 'propagation_delay_in_seconds': '3600'}};\n").format(ks=ks)
+
+    def index_statement(name, target):
+        return (f"CREATE INDEX {name} ON {ks}.\"cF\"({target}) WITH bloom_filter_fp_chance = 0.01\n"
+                "    AND caching = {'keys': 'ALL', 'rows_per_partition': 'ALL'}\n"
+                "    AND comment = ''\n"
+                "    AND compaction = {'class': 'IncrementalCompactionStrategy'}\n"
+                "    AND compression = {'sstable_compression': 'org.apache.cassandra.io.compress.LZ4Compressor'}\n"
+                "    AND crc_check_chance = 1\n"
+                "    AND default_time_to_live = 0\n"
+                "    AND gc_grace_seconds = 864000\n"
+                "    AND max_index_interval = 2048\n"
+                "    AND memtable_flush_period_in_ms = 0\n"
+                "    AND min_index_interval = 128\n"
+                "    AND speculative_retry = '99.0PERCENTILE'\n"
+                "    AND scylla_tags = {'system:synchronous_view_updates': 'true'}\n"
+                "    AND tombstone_gc = {'mode': 'timeout', 'propagation_delay_in_seconds': '3600'}\n"
+                "    AND synchronous_updates = true;")
+
+    # (object type for DESCRIBE, object name, create statement)
+    cql_create_objects = [
+        ("MATERIALIZED VIEW", "cf_view",
+         f"CREATE MATERIALIZED VIEW {ks}.cf_view AS\n"
+         "    SELECT \"COL1\", pk, pk1, ck1, ck\n"
+         f"    FROM {ks}.\"cF\"\n"
+         "    WHERE pk IS NOT null AND \"COL1\" IS NOT null AND pk1 IS NOT null AND ck1 IS NOT null AND ck IS NOT null\n"
+         "    PRIMARY KEY (\"COL1\", pk, pk1, ck1, ck)\n"
+         "    WITH CLUSTERING ORDER BY (pk ASC, pk1 ASC, ck1 ASC, ck ASC)\n"
+         "    AND bloom_filter_fp_chance = 0.01\n"
+         "    AND caching = {'keys': 'ALL', 'rows_per_partition': 'ALL'}\n"
+         "    AND comment = ''\n"
+         "    AND compaction = {'class': 'SizeTieredCompactionStrategy'}\n"
+         "    AND compression = {'sstable_compression': 'org.apache.cassandra.io.compress.LZ4Compressor'}\n"
+         "    AND crc_check_chance = 1\n"
+         "    AND default_time_to_live = 0\n"
+         "    AND gc_grace_seconds = 864000\n"
+         "    AND max_index_interval = 2048\n"
+         "    AND memtable_flush_period_in_ms = 0\n"
+         "    AND min_index_interval = 128\n"
+         "    AND speculative_retry = '99.0PERCENTILE'\n"
+         "    AND paxos_grace_seconds = 43200\n"
+         "    AND tombstone_gc = {'mode': 'timeout', 'propagation_delay_in_seconds': '3600'};\n"),
+        ("INDEX", "cf_index", index_statement("cf_index", "col2")),
+        ("INDEX", "cf_index1", index_statement("cf_index1", "pk")),
+        ("INDEX", "cf_index2", index_statement("cf_index2", "pk1")),
+        ("INDEX", "cf_index3", index_statement("cf_index3", "ck1")),
+        ("INDEX", "cf_index4", index_statement("cf_index4", "(pk, pk1),col2")),
+    ]
+
+    cql.execute(f"CREATE KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', '{this_dc}': 1}}")
+    try:
+        cql.execute(base_table)
+        for kind, name, create in cql_create_objects:
+            cql.execute(create)
+            desc = cql.execute(f"DESCRIBE {kind} {ks}.{name}").one().create_statement
+            assert normalize_white_space(desc) == normalize_white_space(create)
+
+            base_desc = cql.execute(f"DESCRIBE TABLE {ks}.\"cF\"").one().create_statement
+            assert normalize_white_space(base_desc) == normalize_white_space(base_table)
+    finally:
+        cql.execute(f"DROP KEYSPACE {ks}")
