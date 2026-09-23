@@ -800,18 +800,19 @@ read_options random_options(read_options opts) {
 // The general test. It draws random histories on random replicas. It reads
 // each history with ten random queries and random options: page sizes, byte
 // and tombstone limits, cluster features, a querier cache, repairs and a
-// schedule of the coordinator. It uses every feature of the harness, and it
-// treats no case specially.
+// schedule of the coordinator. It uses every feature of the harness. It
+// checks each run under the contract of its options, see contract_of():
+// without read_frontiers, the coordinator runs the pre-READ_FRONTIERS code,
+// whose defects stay.
 //
-// The baseline code has known defects and fails many cases. So the test runs
-// only when the environment variable SCYLLA_PAGED_READ_CAMPAIGN is set. Its
-// value is the number of histories. The test reports each failure with a
-// shrunk case, and logs the number of failures of each kind. When the
-// environment variable SCYLLA_PAGED_READ_STOP_AT_FAILURE is set, the test
-// stops after its first failure. When the environment variable
-// SCYLLA_PAGED_READ_VIOLATION is set, a run fails only if one of its
-// violations contains the variable's value. This keeps a campaign on one
-// kind of defect while the baseline still has others.
+// A useful campaign takes long, so the test runs only when the environment
+// variable SCYLLA_PAGED_READ_CAMPAIGN is set. Its value is the number of
+// histories. The test reports each failure with a shrunk case, and logs the
+// number of failures of each kind. When the environment variable
+// SCYLLA_PAGED_READ_STOP_AT_FAILURE is set, the test stops after its first
+// failure. When the environment variable SCYLLA_PAGED_READ_VIOLATION is set,
+// a run fails only if one of its violations contains the variable's value.
+// This keeps a campaign on one kind of defect while the code has others.
 SEASTAR_THREAD_TEST_CASE(test_general) {
     const char* histories = std::getenv("SCYLLA_PAGED_READ_CAMPAIGN");
     if (!histories) {
@@ -844,7 +845,7 @@ SEASTAR_THREAD_TEST_CASE(test_general) {
                 const auto shrunk = hs.shrink(c);
                 const auto expected = evaluate(*hs.schema(), complete_history(shrunk.history), shrunk.query);
                 const auto o = hs.run(shrunk);
-                BOOST_ERROR(fmt::format("Shrunk from:\n{}\n{}", describe(c), report(shrunk, o, expected, check(o, expected))));
+                BOOST_ERROR(fmt::format("Shrunk from:\n{}\n{}", describe(c), report(shrunk, o, expected, check(o, expected, contract_of(shrunk.options)))));
             }
         }
         for (const auto& [kind, count] : failures) {
