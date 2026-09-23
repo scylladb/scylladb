@@ -45,6 +45,7 @@
  */
 
 #include <vector>
+#include <bit>
 #include <cmath>
 #include <sstream>
 #include <stdexcept>
@@ -61,10 +62,6 @@
 #define HLL_HASH_SEED 313
 
 namespace hll {
-
-static constexpr double pow_2_32 = 4294967296.0; ///< 2^32
-static constexpr double neg_pow_2_32 = -4294967296.0; ///< -(2^32)
-
 
 inline size_t size_unsigned_var_int(unsigned int value) {
     size_t size = 0;
@@ -227,8 +224,6 @@ public:
             if (zeros != 0) {
                 estimate = m_ * log(static_cast<double>(m_)/ zeros);
             }
-        } else if (estimate > (1.0 / 30.0) * pow_2_32) {
-            estimate = neg_pow_2_32 * log(1.0 - (estimate / pow_2_32));
         }
         return estimate;
     }
@@ -321,13 +316,8 @@ private:
     double alphaMM_; ///< alpha * m^2
     std::vector<uint8_t> M_; ///< registers
 
-    uint8_t rho(uint32_t x, uint8_t b) {
-        uint8_t v = 1;
-        while (v <= b && !(x & 0x80000000)) {
-            v++;
-            x <<= 1;
-        }
-        return v;
+    uint8_t rho(uint64_t x, uint8_t b) {
+        return std::min(std::countl_zero(x) + 1, b + 1);
     }
 
 };
