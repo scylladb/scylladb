@@ -3226,3 +3226,151 @@ def test_not_parallelized_select_uda(cql, test_keyspace, scylla_only):
             cql.execute(f"INSERT INTO {table} (k) VALUES ({i})")
         assert list(cql.execute(f"SELECT {test_keyspace}.{aggr}(k) FROM {table}")) == [(-((value_count - 1) * value_count // 2),)]
         assert parallelized_count() == 0
+
+
+# Serialize a collection (in the native protocol v3+ format) whose elements
+# may be null (None). The Python driver refuses to serialize nulls inside
+# collections, so we build the bytes ourselves. `size_to_write` is the
+# element count written in the header (for maps - the number of entries,
+# while `elements_to_write` holds the keys and values interleaved).
+def make_collection_raw_value(size_to_write, elements_to_write):
+    out = struct.pack('>i', size_to_write)
+    for val in elements_to_write:
+        if val is None:
+            out += struct.pack('>i', -1)
+        else:
+            out += struct.pack('>i', len(val)) + val
+    return out
+
+
+def make_int(val):
+    return struct.pack('>i', val)
+
+
+# Execute a prepared statement with the given already-serialized bound values,
+# bypassing the driver's serialization.
+def execute_with_raw_values(cql, stmt, raw_values):
+    bound = stmt.bind([None] * len(raw_values))
+    bound.values = raw_values
+    return cql.execute(bound)
+
+
+def test_null_and_unset_in_collections(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p int primary key, l list<int>, s set<int>, m map<int, int>") as table:
+        null_msg = "(null|NULL)"
+        unset_msg = "unset"
+
+        # Test null when specified inside a collection literal
+        # It's impossible to specify unset value this way
+        with pytest.raises(InvalidRequest, match=null_msg):
+            cql.execute(f"INSERT INTO {table} (p, l) VALUES (0, [1, null, 3])")
+        with pytest.raises(InvalidRequest, match=null_msg):
+            cql.execute(f"INSERT INTO {table} (p, s) VALUES (0, {{1, null, 3}})")
+        with pytest.raises(InvalidRequest, match=null_msg):
+            cql.execute(f"INSERT INTO {table} (p, m) VALUES (0, {{0:1, null:3, 4:5}})")
+        with pytest.raises(InvalidRequest, match=null_msg):
+            cql.execute(f"INSERT INTO {table} (p, m) VALUES (0, {{0:1, 2:null, 4:5}})")
+
+        # Test null and unset when sent as bind marker for collection value
+        insert_list_with_marker = cql.prepare(f"INSERT INTO {table} (p, l) VALUES (0, [1, ?, 3])")
+        insert_set_with_marker = cql.prepare(f"INSERT INTO {table} (p, s) VALUES (0, {{1, ?, 3}})")
+        insert_map_with_key_marker = cql.prepare(f"INSERT INTO {table} (p, m) VALUES (0, {{0:1, ?:3, 4:5}})")
+        insert_map_with_value_marker = cql.prepare(f"INSERT INTO {table} (p, m) VALUES (0, {{0:1, 2:?, 4:5}})")
+
+        for stmt in [insert_list_with_marker, insert_set_with_marker, insert_map_with_key_marker, insert_map_with_value_marker]:
+            with pytest.raises(InvalidRequest, match=null_msg):
+                cql.execute(stmt, [None])
+        for stmt in [insert_list_with_marker, insert_set_with_marker, insert_map_with_key_marker, insert_map_with_value_marker]:
+            with pytest.raises(InvalidRequest, match=unset_msg):
+                cql.execute(stmt, [UNSET_VALUE])
+
+        # Test sending whole collections with null and unset inside as bound value
+        insert_list = cql.prepare(f"INSERT INTO {table} (p, l) VALUES (0, ?)")
+        insert_set = cql.prepare(f"INSERT INTO {table} (p, s) VALUES (0, ?)")
+        insert_map = cql.prepare(f"INSERT INTO {table} (p, m) VALUES (0, ?)")
+
+        list_with_null = make_collection_raw_value(3, [make_int(1), None, make_int(2)])
+        set_with_null = make_collection_raw_value(3, [make_int(1), None, make_int(2)])
+        map_with_null_key = make_collection_raw_value(3, [make_int(0), make_int(1),
+                                                          None, make_int(3),
+                                                          make_int(4), make_int(5)])
+        map_with_null_value = make_collection_raw_value(3, [make_int(0), make_int(1),
+                                                            make_int(2), None,
+                                                            make_int(4), make_int(5)])
+
+        with pytest.raises(InvalidRequest, match=null_msg):
+            execute_with_raw_values(cql, insert_list, [list_with_null])
+        with pytest.raises(InvalidRequest, match=null_msg):
+            execute_with_raw_values(cql, insert_set, [set_with_null])
+        with pytest.raises(InvalidRequest, match=null_msg):
+            execute_with_raw_values(cql, insert_map, [map_with_null_key])
+        with pytest.raises(InvalidRequest, match=null_msg):
+            execute_with_raw_values(cql, insert_map, [map_with_null_value])
+
+        # Update setting to bad collection value
+        with pytest.raises(InvalidRequest, match=null_msg):
+            cql.execute(f"UPDATE {table} SET l = [1, null, 2] WHERE p = 0")
+        with pytest.raises(InvalidRequest, match=null_msg):
+            cql.execute(f"UPDATE {table} SET s = {{1, null, 2}} WHERE p = 0")
+        with pytest.raises(InvalidRequest, match=null_msg):
+            cql.execute(f"UPDATE {table} SET m = {{0:1, null:3, 4:5}} WHERE p = 0")
+        with pytest.raises(InvalidRequest, match=null_msg):
+            cql.execute(f"UPDATE {table} SET m = {{0:1, 2:null, 4:5}} WHERE p = 0")
+
+        # Update adding a bad single-element collection value
+        with pytest.raises(InvalidRequest, match=null_msg):
+            cql.execute(f"UPDATE {table} SET l = l + [null] WHERE p = 0")
+        with pytest.raises(InvalidRequest, match=null_msg):
+            cql.execute(f"UPDATE {table} SET s = s + {{null}} WHERE p = 0")
+        with pytest.raises(InvalidRequest, match=null_msg):
+            cql.execute(f"UPDATE {table} SET m = m + {{null:3}} WHERE p = 0")
+        with pytest.raises(InvalidRequest, match=null_msg):
+            cql.execute(f"UPDATE {table} SET m = m + {{2:null}} WHERE p = 0")
+
+        # Update adding a bad collection value
+        with pytest.raises(InvalidRequest, match=null_msg):
+            cql.execute(f"UPDATE {table} SET l = l + [1, null, 2] WHERE p = 0")
+        with pytest.raises(InvalidRequest, match=null_msg):
+            cql.execute(f"UPDATE {table} SET s = s + {{1, null, 2}} WHERE p = 0")
+        with pytest.raises(InvalidRequest, match=null_msg):
+            cql.execute(f"UPDATE {table} SET m = m + {{0:1, null:3, 4:5}} WHERE p = 0")
+        with pytest.raises(InvalidRequest, match=null_msg):
+            cql.execute(f"UPDATE {table} SET m = m + {{0:1, 2:null, 4:5}} WHERE p = 0")
+
+        # Update adding a collection value with bad bind marker
+        add_list_with_marker = cql.prepare(f"UPDATE {table} SET l = l + [1, ?, 2] WHERE p = 0")
+        add_set_with_marker = cql.prepare(f"UPDATE {table} SET s = s + {{1, ?, 2}} WHERE p = 0")
+        add_map_with_key_marker = cql.prepare(f"UPDATE {table} SET m = m + {{0:1, ?:3, 4:5}} WHERE p = 0")
+        add_map_with_value_marker = cql.prepare(f"UPDATE {table} SET m = m + {{0:1, 2:?, 4:5}} WHERE p = 0")
+
+        for stmt in [add_list_with_marker, add_set_with_marker, add_map_with_key_marker, add_map_with_value_marker]:
+            with pytest.raises(InvalidRequest, match=null_msg):
+                cql.execute(stmt, [None])
+        for stmt in [add_list_with_marker, add_set_with_marker, add_map_with_key_marker, add_map_with_value_marker]:
+            with pytest.raises(InvalidRequest, match=unset_msg):
+                cql.execute(stmt, [UNSET_VALUE])
+
+        # Update adding a collection value with bad bind marker
+        add_list = cql.prepare(f"UPDATE {table} SET l = l + ? WHERE p = 0")
+        add_set = cql.prepare(f"UPDATE {table} SET s = s + ? WHERE p = 0")
+        add_map = cql.prepare(f"UPDATE {table} SET m = m + ? WHERE p = 0")
+
+        with pytest.raises(InvalidRequest, match=null_msg):
+            execute_with_raw_values(cql, add_list, [list_with_null])
+        with pytest.raises(InvalidRequest, match=null_msg):
+            execute_with_raw_values(cql, add_set, [set_with_null])
+        with pytest.raises(InvalidRequest, match=null_msg):
+            execute_with_raw_values(cql, add_map, [map_with_null_key])
+        with pytest.raises(InvalidRequest, match=null_msg):
+            execute_with_raw_values(cql, add_map, [map_with_null_value])
+
+        # List of IN values can contain NULL (which doesn't match anything)
+        assert list(cql.execute(f"SELECT * FROM {table} WHERE p IN (1, null, 2)")) == []
+
+        where_in_list_with_marker = cql.prepare(f"SELECT * FROM {table} WHERE p IN (1, ?, 2)")
+        assert list(cql.execute(where_in_list_with_marker, [None])) == []
+        with pytest.raises(InvalidRequest, match=unset_msg):
+            cql.execute(where_in_list_with_marker, [UNSET_VALUE])
+
+        where_in_list_marker = cql.prepare(f"SELECT * FROM {table} WHERE p IN ?")
+        assert list(execute_with_raw_values(cql, where_in_list_marker, [list_with_null])) == []
