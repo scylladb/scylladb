@@ -3680,3 +3680,21 @@ def test_select_collection_literal_type_inference(cql, scylla_only):
     rs = cql.execute("SELECT CAST(1 AS bigint) FROM system.local")
     assert column_types(rs) == ['bigint']
     assert list(rs) == [(1,)]
+
+
+# A narrower (T) cast widening into a wider sink (clustering key, column, WHERE RHS) must be
+# converted to the sink's representation, not just relabelled.
+def test_widening_value_into_wider_sink(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "pk int, ck bigint, d double, PRIMARY KEY (pk, ck)") as table:
+        # INSERT sink: (int)5 widens to the bigint clustering key, (float)2.5 widens to
+        # the double column. A relabel would store 4 bytes; we require real conversion.
+        cql.execute(f"INSERT INTO {table} (pk, ck, d) VALUES (1, (int)5, (float)2.5)")
+        assert list(cql.execute(f"SELECT ck, d FROM {table} WHERE pk = 1")) == [(5, 2.5)]
+
+        # WHERE RHS sink: (int)5 must be converted to bigint to match the clustering key.
+        # An unconverted 4-byte value would never compare equal to the stored bigint.
+        assert list(cql.execute(f"SELECT ck, d FROM {table} WHERE pk = 1 AND ck = (int)5")) == [(5, 2.5)]
+
+        # UPDATE sink + WHERE-key widening together.
+        cql.execute(f"UPDATE {table} SET d = (float)3.5 WHERE pk = 1 AND ck = (int)5")
+        assert list(cql.execute(f"SELECT d FROM {table} WHERE pk = 1")) == [(3.5,)]
