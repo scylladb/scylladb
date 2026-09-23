@@ -1888,3 +1888,21 @@ def test_empty_partition_range_scan(cql, test_keyspace):
         stmt = SimpleStatement(f"select * from {table} where token (a,b) > 1 and token(a,b) <= 1",
                                fetch_size=1, consistency_level=ConsistencyLevel.LOCAL_ONE)
         assert list(cql.execute(stmt)) == []
+
+
+def test_allow_filtering_contains(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace,
+            "p frozen<map<text, text>>, c1 frozen<list<int>>, c2 frozen<set<int>>, v map<text, text>, PRIMARY KEY(p, c1, c2)") as table:
+        cql.execute(f"INSERT INTO {table} (p, c1, c2, v) VALUES ({{'a':'a'}}, [1,2,3], {{1, 5}}, {{'x':'xyz', 'y1':'abc'}})")
+        cql.execute(f"INSERT INTO {table} (p, c1, c2, v) VALUES ({{'b':'b'}}, [2,3,4], {{3, 4}}, {{'d':'def', 'y1':'abc'}})")
+        cql.execute(f"INSERT INTO {table} (p, c1, c2, v) VALUES ({{'c':'c'}}, [3,4,5], {{1, 2, 3}}, {{}})")
+
+        assert list(cql.execute(f"SELECT p FROM {table} WHERE p CONTAINS KEY 'a' ALLOW FILTERING")) == [({'a': 'a'},)]
+        assert list(cql.execute(f"SELECT c1 FROM {table} WHERE c1 CONTAINS 3 ALLOW FILTERING")) == [
+            ([1, 2, 3],), ([2, 3, 4],), ([3, 4, 5],)]
+        assert list(cql.execute(f"SELECT c2 FROM {table} WHERE c2 CONTAINS 1 ALLOW FILTERING")) == [
+            ({1, 5},), ({1, 2, 3},)]
+        assert list(cql.execute(f"SELECT v FROM {table} WHERE v CONTAINS KEY 'y1' ALLOW FILTERING")) == [
+            ({'x': 'xyz', 'y1': 'abc'},), ({'d': 'def', 'y1': 'abc'},)]
+        assert list(cql.execute(f"SELECT c2, v FROM {table} WHERE v CONTAINS KEY 'y1' AND c2 CONTAINS 5 ALLOW FILTERING")) == [
+            ({1, 5}, {'x': 'xyz', 'y1': 'abc'})]
