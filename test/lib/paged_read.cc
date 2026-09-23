@@ -440,7 +440,8 @@ class coordinator {
             saved = cache->lookup_data_querier(cmd.query_uuid, *query_schema, range, cmd.slice, _semaphore.semaphore(), {}, db::no_timeout);
             trace_lookup(replica, saved);
         }
-        return with_saved_querier(saved, [&] {
+        const bool reused = bool(saved);
+        auto result = with_saved_querier(saved, [&] {
             auto permit = saved ? saved->permit() : _semaphore.make_permit();
             permit.set_max_result_size(max_size);
             auto result = tests::read_data_page(_replicas[replica], query_schema, std::move(permit), cmd, opts, {range}, {}, std::move(accounter),
@@ -450,6 +451,28 @@ class coordinator {
             }
             return result;
         });
+        if (reused) {
+            // A cached querier must not change what a page returns.
+            auto fresh_accounter = (opts.request == query::result_request::only_digest
+                    ? _limiter.new_digest_read(max_size, short_read_allowed)
+                    : _limiter.new_data_read(max_size, short_read_allowed)).get();
+            auto permit = _semaphore.make_permit();
+            permit.set_max_result_size(max_size);
+            auto fresh = tests::read_data_page(_replicas[replica], query_schema, std::move(permit), cmd, opts, {range}, {}, std::move(fresh_accounter),
+                    tombstone_gc_state::no_gc(), {}, nullptr).get();
+            const auto& pos = result->last_position();
+            const auto& fresh_pos = fresh->last_position();
+            const bool same_position = bool(pos) == bool(fresh_pos) && (!pos || full_position::cmp(*query_schema, *pos, *fresh_pos) == 0);
+            if (!(result->buf() == fresh->buf()) || !same_position || result->is_short_read() != fresh->is_short_read()
+                    || result->digest() != fresh->digest()) {
+                trace("  replica {} returns with its cached querier: {}, {}, cursor {}", replica, result->pretty_printer(query_schema, cmd.slice),
+                        describe(result->is_short_read()), describe(*query_schema, result->last_position()));
+                trace("  replica {} returns with a new querier: {}, {}, cursor {}", replica, fresh->pretty_printer(query_schema, cmd.slice),
+                        describe(fresh->is_short_read()), describe(*query_schema, fresh->last_position()));
+                violation("A page read with a cached querier differs from the page read with a new querier");
+            }
+        }
+        return result;
     }
 
     // Reads a mutation page of `range` from `replica`, like
@@ -467,6 +490,7 @@ class coordinator {
             saved = cache->lookup_mutation_querier(cmd.query_uuid, *query_schema, range, cmd.slice, _semaphore.semaphore(), {}, db::no_timeout);
             trace_lookup(replica, saved);
         }
+        const bool reused = bool(saved);
         auto reply = with_saved_querier(saved, [&] {
             auto permit = saved ? saved->permit() : _semaphore.make_permit();
             permit.set_max_result_size(max_size);
@@ -477,6 +501,18 @@ class coordinator {
             }
             return result;
         });
+        if (reused) {
+            // A cached querier must not change what a page returns.
+            auto permit = _semaphore.make_permit();
+            permit.set_max_result_size(max_size);
+            auto fresh = tests::read_mutation_page(_replicas[replica], query_schema, std::move(permit), cmd, range, {},
+                    _limiter.new_mutation_read(max_size, short_read_allowed).get(), tombstone_gc_state::no_gc(), {}, nullptr).get();
+            if (!(reply == fresh) || reply.row_count() != fresh.row_count() || reply.is_short_read() != fresh.is_short_read()) {
+                trace("  replica {} returns with its cached querier: {}", replica, reply.pretty_printer(query_schema));
+                trace("  replica {} returns with a new querier: {}", replica, fresh.pretty_printer(query_schema));
+                violation("A page read with a cached querier differs from the page read with a new querier");
+            }
+        }
         if (legacy_format(replica, coordinator_cmd)) {
             // Like handle_read(), the replica returns the mutations in the
             // legacy format, and the coordinator converts them back, like

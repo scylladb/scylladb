@@ -2021,36 +2021,53 @@ const partition_key* query_result_builder::start_partition_of(const dht::partiti
     return &*start->value().key();
 }
 
+stop_iteration query_result_builder::count_tombstone(position_in_partition_view pos) {
+    if (_first_partition) {
+        if (_first_partition->equal(_schema, *_start_partition)) {
+            const auto& ranges = _rb.slice().row_ranges(_schema, *_start_partition);
+            const auto page_start = ranges.empty() ? position_in_partition_view::after_all_clustered_rows()
+                    : position_in_partition_view::for_range_start(ranges.front());
+            if (position_in_partition::tri_compare(_schema)(pos, page_start) <= 0) {
+                return _stop;
+            }
+        }
+        _first_partition = nullptr;
+    }
+    _stop = _rb.bump_and_check_tombstone_limit();
+    return _stop;
+}
+
 void query_result_builder::consume_new_partition(const dht::decorated_key& dk) {
+    // `dk` stays alive until consume_end_of_partition(), which clears the
+    // pointer. See CompactedFragmentsConsumer.
+    _first_partition = std::exchange(_before_first_partition, false) && _start_partition ? &dk.key() : nullptr;
     _mutation_consumer.emplace(mutation_querier(_schema, _rb.add_partition(_schema, dk.key()), _rb.memory_accounter()));
 }
 
 void query_result_builder::consume(tombstone t) {
     _mutation_consumer->consume(t);
-    _stop = _rb.bump_and_check_tombstone_limit();
+    count_tombstone(position_in_partition_view::for_partition_start());
 }
 stop_iteration query_result_builder::consume(static_row&& sr, tombstone t, bool is_live) {
     if (!is_live) {
-        _stop = _rb.bump_and_check_tombstone_limit();
-        return _stop;
+        return count_tombstone(sr.position());
     }
     _stop = _mutation_consumer->consume(std::move(sr), t);
     return _stop;
 }
 stop_iteration query_result_builder::consume(clustering_row&& cr, row_tombstone t,  bool is_live) {
     if (!is_live) {
-        _stop = _rb.bump_and_check_tombstone_limit();
-        return _stop;
+        return count_tombstone(cr.position());
     }
     _stop = _mutation_consumer->consume(std::move(cr), t);
     return _stop;
 }
 stop_iteration query_result_builder::consume(range_tombstone_change&& rtc) {
-    _stop = _rb.bump_and_check_tombstone_limit();
-    return _stop;
+    return count_tombstone(rtc.position());
 }
 
 stop_iteration query_result_builder::consume_end_of_partition() {
+    _first_partition = nullptr;
     auto live_rows_in_partition = _mutation_consumer->consume_end_of_stream();
     if (live_rows_in_partition > 0 && !_stop) {
         _stop = _rb.memory_accounter().check();

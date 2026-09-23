@@ -229,7 +229,21 @@ class query_result_builder {
     // We need to remember that we requested stop, to mark the read as short in the end.
     stop_iteration _stop;
     // The partition which the page starts inside, if any.
-    [[maybe_unused]] const partition_key* _start_partition;
+    const partition_key* _start_partition;
+    // Whether the page has yet to consume its first partition.
+    bool _before_first_partition = true;
+    // While the page may be in its start partition, before the position
+    // where it starts there, the key of the page's first partition, which
+    // the compactor keeps until the partition ends. The page's start there
+    // is the start of the partition's first clustering range.
+    //
+    // This is used to avoid counting replayed fragments (static row,
+    // open range tombstone) against the limits.
+    // This ensures progress regardless of how low the limits are,
+    // as long as they are positive.
+    const partition_key* _first_partition = nullptr;
+
+    stop_iteration count_tombstone(position_in_partition_view pos);
 public:
     // `start_partition` is the partition which the page starts inside, if
     // any. See start_partition_of(). It must stay alive while the builder

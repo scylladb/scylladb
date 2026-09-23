@@ -50,9 +50,15 @@ concept data_page_context = page_context<Context> && requires (Context& ctx) {
 /// reaches its limits.
 ///
 /// The result's last position is the position of the last fragment which the
-/// querier that read last consumed. It is set whenever that querier entered a
-/// partition, also when the page read its ranges to the end. So it tells where
-/// the reader is, not whether the page stopped before the end of its ranges.
+/// querier that read last consumed on this page. It is set whenever that
+/// querier consumed a fragment, also when the page read its ranges to the
+/// end. So it tells where the reader is, not whether the page stopped before
+/// the end of its ranges. A page which continues a partition consumes the
+/// partition's state again first, like a new reader.
+///
+/// In the partition which the page starts inside, only the fragments after
+/// the page's start count against the tombstone limit. See
+/// query_result_builder.
 ///
 /// `saved_querier` is an input and an output. On input, it holds the querier
 /// which the previous page saved, if any. That querier reads the first range.
