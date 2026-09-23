@@ -250,3 +250,75 @@ def test_alter_schema_with_persists_scope_configs(cql, scylla_only):
 
         assert fetch_configs(cql, keyspace_configs_query(ks)) == [{'auto_repair_enabled': 'true'}]
         assert fetch_configs(cql, table_configs_query(ks, 'tbl')) == [None]
+
+
+# The create_statement of a single-row DESCRIBE result.
+def describe_create_statement(cql, query):
+    rows = list(cql.execute(query))
+    assert len(rows) == 1
+    assert rows[0].create_statement is not None
+    return rows[0].create_statement
+
+
+def test_describe_schema_with_inherited_auto_repair_scope_config(cql, scylla_only):
+    with new_config_test_keyspace(cql) as ks, cluster_config_cleanup(cql):
+        cql.execute(f"CREATE TABLE {ks}.tbl (pk int PRIMARY KEY)")
+        cql.execute("ALTER CLUSTER WITH auto_repair_enabled = true")
+
+        # A live property is emitted only for what is stored at the described object's own
+        # scope: nothing is stored at the keyspace or table yet, so the option appears as a
+        # commented-out property carrying the effective value, with a trailing provenance
+        # comment. The terminating ';' sits on its own line so the trailing comment lexes.
+        keyspace_desc = describe_create_statement(cql, f"DESCRIBE ONLY KEYSPACE {ks}")
+        assert "\n    AND auto_repair_enabled" not in keyspace_desc
+        assert "\n    -- AND auto_repair_enabled = true  -- from cluster (keyspace=NULL, cluster=true)\n;" in keyspace_desc
+        assert keyspace_desc.endswith(';')
+
+        table_desc = describe_create_statement(cql, f"DESCRIBE TABLE {ks}.tbl")
+        assert "\n    AND auto_repair_enabled" not in table_desc
+        assert "\n    -- AND auto_repair_enabled = true  -- from cluster (table=NULL, keyspace=NULL, cluster=true)\n;" in table_desc
+        assert table_desc.endswith(';')
+
+        # WITH INTERNALS output is pure replayable CQL: no comment block, and no property
+        # either - nothing is stored at table scope, and the cluster-scope override is
+        # carried by the ALTER CLUSTER block of DESC SCHEMA instead.
+        internals_desc = describe_create_statement(cql, f"DESCRIBE TABLE {ks}.tbl WITH INTERNALS")
+        assert "auto_repair_enabled" not in internals_desc
+
+        cql.execute(f"ALTER KEYSPACE {ks} WITH auto_repair_enabled = false")
+        keyspace_desc = describe_create_statement(cql, f"DESCRIBE ONLY KEYSPACE {ks}")
+        # Now stored at the keyspace itself: live property, annotated with the chain.
+        assert "\n    AND auto_repair_enabled = false  -- from keyspace (keyspace=false, cluster=true)\n;" in keyspace_desc
+        assert "-- AND auto_repair_enabled" not in keyspace_desc
+
+        table_desc = describe_create_statement(cql, f"DESCRIBE TABLE {ks}.tbl")
+        # The table only inherits the keyspace override: commented-out property.
+        assert "\n    AND auto_repair_enabled" not in table_desc
+        assert "\n    -- AND auto_repair_enabled = false  -- from keyspace (table=NULL, keyspace=false, cluster=true)\n;" in table_desc
+
+        cql.execute(f"ALTER TABLE {ks}.tbl WITH auto_repair_enabled = true")
+        table_desc = describe_create_statement(cql, f"DESCRIBE TABLE {ks}.tbl")
+        # Now stored at the table itself: live property, annotated with the chain.
+        assert ";\n AND auto_repair_enabled" not in table_desc
+        assert "\n    AND auto_repair_enabled = true  -- from table (table=true, keyspace=false, cluster=true)\n;" in table_desc
+        assert "-- AND auto_repair_enabled" not in table_desc
+
+        # WITH INTERNALS keeps the stored override as a property, still without comments.
+        internals_desc = describe_create_statement(cql, f"DESCRIBE TABLE {ks}.tbl WITH INTERNALS")
+        assert "auto_repair_enabled = true" in internals_desc
+        assert "-- AND auto_repair_enabled" not in internals_desc
+        assert "-- from" not in internals_desc
+
+        cql.execute(f"ALTER TABLE {ks}.tbl WITH auto_repair_enabled = null")
+        table_desc = describe_create_statement(cql, f"DESCRIBE TABLE {ks}.tbl")
+        assert "\n    AND auto_repair_enabled" not in table_desc
+        assert "\n    -- AND auto_repair_enabled = false  -- from keyspace (table=NULL, keyspace=false, cluster=true)\n;" in table_desc
+
+        cql.execute(f"ALTER KEYSPACE {ks} WITH auto_repair_enabled = null")
+        keyspace_desc = describe_create_statement(cql, f"DESCRIBE ONLY KEYSPACE {ks}")
+        assert "\n    AND auto_repair_enabled" not in keyspace_desc
+        assert "\n    -- AND auto_repair_enabled = true  -- from cluster (keyspace=NULL, cluster=true)\n;" in keyspace_desc
+
+        table_desc = describe_create_statement(cql, f"DESCRIBE TABLE {ks}.tbl")
+        assert "\n    AND auto_repair_enabled" not in table_desc
+        assert "\n    -- AND auto_repair_enabled = true  -- from cluster (table=NULL, keyspace=NULL, cluster=true)\n;" in table_desc
