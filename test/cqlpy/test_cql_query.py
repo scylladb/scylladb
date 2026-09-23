@@ -1739,3 +1739,11 @@ def test_map_query(cql, test_keyspace):
         assert list(cql.execute(f"select m from {table} where k = 0")) == [({'v2': 1},)]
         cql.execute(f"delete m['v2'] from {table} where k = 0")
         assert list(cql.execute(f"select m from {table} where k = 0")) == [(None,)]
+
+
+def test_drop_table(cql, test_keyspace):
+    tmp = f"{test_keyspace}.{unique_name()}"
+    cql.execute(f"create table {tmp} (pk int, v int, PRIMARY KEY (pk))")
+    cql.execute(f"drop columnfamily {tmp}")
+    cql.execute(f"create table {tmp} (pk int, v int, PRIMARY KEY (pk))")
+    cql.execute(f"drop columnfamily {tmp}")

@@ -378,15 +378,6 @@ SEASTAR_TEST_CASE(test_ttl) {
     });
 }
 
-SEASTAR_TEST_CASE(test_drop_table) {
-    return do_with_cql_env_thread([] (cql_test_env& e) {
-        e.execute_cql("create table tmp (pk int, v int, PRIMARY KEY (pk));").get();
-        e.execute_cql("drop columnfamily tmp;").get();
-        e.execute_cql("create table tmp (pk int, v int, PRIMARY KEY (pk));").get();
-        e.execute_cql("drop columnfamily tmp;").get();
-    });
-}
-
 SEASTAR_TEST_CASE(test_reversed_slice_with_empty_range_before_all_rows) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("CREATE TABLE test (a int, b int, c int, s1 int static, s2 int static, PRIMARY KEY (a, b));").get();
