@@ -254,61 +254,6 @@ SEASTAR_TEST_CASE(test_alter_node_oriented_scopes_reject_unknown_targets) {
     });
 }
 
-SEASTAR_TEST_CASE(test_cassandra_stress_like_write_and_read) {
-    return do_with_cql_env([] (cql_test_env& e) {
-        auto execute_update_for_key = [&e](sstring key) {
-            return e.execute_cql(fmt::format("UPDATE cf SET "
-                                            "\"C0\" = 0x8f75da6b3dcec90c8a404fb9a5f6b0621e62d39c69ba5758e5f41b78311fbb26cc7a,"
-                                            "\"C1\" = 0xa8761a2127160003033a8f4f3d1069b7833ebe24ef56b3beee728c2b686ca516fa51,"
-                                            "\"C2\" = 0x583449ce81bfebc2e1a695eb59aad5fcc74d6d7311fc6197b10693e1a161ca2e1c64,"
-                                            "\"C3\" = 0x62bcb1dbc0ff953abc703bcb63ea954f437064c0c45366799658bd6b91d0f92908d7,"
-                                            "\"C4\" = 0x222fcbe31ffa1e689540e1499b87fa3f9c781065fccd10e4772b4c7039c2efd0fb27 "
-                                            "WHERE \"KEY\"={};", key)).discard_result();
-        };
-
-        auto verify_row_for_key = [&e](sstring key) {
-            return e.execute_cql(
-                format("select \"C0\", \"C1\", \"C2\", \"C3\", \"C4\" from cf where \"KEY\" = {}", key)).then(
-                [](shared_ptr<cql_transport::messages::result_message> msg) {
-                    assert_that(msg).is_rows()
-                        .with_size(1)
-                        .with_row({
-                                      {from_hex(
-                                          "8f75da6b3dcec90c8a404fb9a5f6b0621e62d39c69ba5758e5f41b78311fbb26cc7a")},
-                                      {from_hex(
-                                          "a8761a2127160003033a8f4f3d1069b7833ebe24ef56b3beee728c2b686ca516fa51")},
-                                      {from_hex(
-                                          "583449ce81bfebc2e1a695eb59aad5fcc74d6d7311fc6197b10693e1a161ca2e1c64")},
-                                      {from_hex(
-                                          "62bcb1dbc0ff953abc703bcb63ea954f437064c0c45366799658bd6b91d0f92908d7")},
-                                      {from_hex("222fcbe31ffa1e689540e1499b87fa3f9c781065fccd10e4772b4c7039c2efd0fb27")}
-                                  });
-                });
-        };
-
-        return e.create_table([](std::string_view ks_name) {
-            return *schema_builder(this_smp_shard_count(), ks_name, "cf")
-                    .with_column("KEY", bytes_type, column_kind::partition_key)
-                    .with_column("C0", bytes_type)
-                    .with_column("C1", bytes_type)
-                    .with_column("C2", bytes_type)
-                    .with_column("C3", bytes_type)
-                    .with_column("C4", bytes_type)
-                    .build();
-        }).then([execute_update_for_key, verify_row_for_key] {
-            static auto make_key = [](int suffix) { return format("0xdeadbeefcafebabe{:02d}", suffix); };
-            auto suffixes = std::views::iota(0, 10);
-            return parallel_for_each(suffixes.begin(), suffixes.end(), [execute_update_for_key](int suffix) {
-                return execute_update_for_key(make_key(suffix));
-            }).then([suffixes, verify_row_for_key] {
-                return parallel_for_each(suffixes.begin(), suffixes.end(), [verify_row_for_key](int suffix) {
-                    return verify_row_for_key(make_key(suffix));
-                });
-            });
-        });
-    });
-}
-
 SEASTAR_TEST_CASE(test_range_queries) {
    return do_with_cql_env([] (cql_test_env& e) {
         return e.create_table([](std::string_view ks_name) {

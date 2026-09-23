@@ -809,3 +809,24 @@ def test_select_statement(cql, test_keyspace):
         # Test full partition range, singular clustering range
         assert sorted(cql.execute(f"select * from {cf} where c1 = 1 and c2 = 2 allow filtering")) == [
             ('key1', 1, 2, 3), ('key2', 1, 2, 13), ('key3', 1, 2, 23)]
+
+
+def test_cassandra_stress_like_write_and_read(cql, test_keyspace):
+    values = [
+        "8f75da6b3dcec90c8a404fb9a5f6b0621e62d39c69ba5758e5f41b78311fbb26cc7a",
+        "a8761a2127160003033a8f4f3d1069b7833ebe24ef56b3beee728c2b686ca516fa51",
+        "583449ce81bfebc2e1a695eb59aad5fcc74d6d7311fc6197b10693e1a161ca2e1c64",
+        "62bcb1dbc0ff953abc703bcb63ea954f437064c0c45366799658bd6b91d0f92908d7",
+        "222fcbe31ffa1e689540e1499b87fa3f9c781065fccd10e4772b4c7039c2efd0fb27",
+    ]
+    with new_test_table(cql, test_keyspace, '"KEY" blob PRIMARY KEY, "C0" blob, "C1" blob, "C2" blob, "C3" blob, "C4" blob') as cf:
+        keys = [f"0xdeadbeefcafebabe{suffix:02d}" for suffix in range(10)]
+        # The C++ test issues the writes (and then the reads) in parallel
+        futures = [cql.execute_async(
+            f'UPDATE {cf} SET "C0" = 0x{values[0]}, "C1" = 0x{values[1]}, "C2" = 0x{values[2]}, '
+            f'"C3" = 0x{values[3]}, "C4" = 0x{values[4]} WHERE "KEY"={key}') for key in keys]
+        for f in futures:
+            f.result()
+        futures = [cql.execute_async(f'select "C0", "C1", "C2", "C3", "C4" from {cf} where "KEY" = {key}') for key in keys]
+        for f in futures:
+            assert list(f.result()) == [tuple(bytes.fromhex(v) for v in values)]
