@@ -202,6 +202,128 @@ SEASTAR_THREAD_TEST_CASE(test_single_replica_with_a_small_page_size_in_bytes) {
     });
 }
 
+// Cases which catch defects of a page which continues a partition. With each
+// defect, its case returns a wrong answer or fails. Each comment describes the
+// defect.
+SEASTAR_THREAD_TEST_CASE(test_witnesses_of_page_resume) {
+    const std::vector<read_case> witnesses{
+        // A page which continues a partition drops the partition tombstone, so a
+        // deleted row is returned.
+        read_case{
+            placed_history{
+                {partition_deletion{1, 9}, 0b10},
+                {regular_cell_write{1, 4, regular_column::v2, 8, 11, lifetime::permanent}, 0b10},
+                {regular_cell_write{1, 5, regular_column::v2, 2, 2, lifetime::expiring}, 0b1},
+            },
+            select_query{.partitions = std::vector<int32_t>{1}, .select_v1 = false, .select_v2 = false},
+            read_options{.replica_count = 2, .page_size = 5, .page_size_in_bytes = 1, .querier_cache = true},
+        },
+        // A page which continues a partition drops the static row, so a row is
+        // returned without its static cell.
+        read_case{
+            placed_history{
+                {regular_cell_write{4, 2, regular_column::v2, 9, 16, lifetime::expiring}, 0b10},
+                {regular_cell_write{4, 4, regular_column::v2, 1, 22, lifetime::permanent}, 0b1},
+                {static_cell_write{4, 5, 2, lifetime::permanent}, 0b10},
+            },
+            select_query{.partitions = std::vector<int32_t>{4}, .select_v2 = false},
+            read_options{.replica_count = 2, .page_size = 1, .querier_cache = true},
+        },
+        // A page which continues a partition reopens its range tombstone after
+        // the static row, so a deleted row is returned.
+        read_case{
+            placed_history{
+                {range_deletion{4, bound{2, true}, bound{2, true}, 18}, 0b1},
+                {range_deletion{4, bound{0, true}, std::nullopt, 12}, 0b1},
+                {regular_cell_write{4, 3, regular_column::v1, 6, 10, lifetime::expiring}, 0b10},
+                {static_cell_write{4, 3, 11, lifetime::permanent}, 0b1},
+            },
+            select_query{.partitions = std::vector<int32_t>{4}, .select_s = false, .select_v1 = false},
+            read_options{.replica_count = 2, .page_size = 2, .page_size_in_bytes = 279, .querier_cache = true},
+        },
+        // A page which continues a partition decides its static-only row with the
+        // querier's slice. It fills the row limit with a row which it does not
+        // return, so the query ends, and the next partition's row is lost.
+        read_case{
+            placed_history{
+                {static_cell_write{1, 4, 3, lifetime::permanent}, 0b1},
+                {row_deletion{1, 4, 4}, 0b1},
+                {row_marker_write{1, 2, 6, lifetime::permanent}, 0b1},
+                {row_marker_write{2, 1, 7, lifetime::permanent}, 0b1},
+            },
+            select_query{.select_s = false},
+            read_options{.replica_count = 1, .page_size = 1, .querier_cache = true},
+        },
+        // A cached querier which finished a partition is reused for a page which
+        // continues it, and skips the partition. The page has neither a partition
+        // nor a cursor, and a later row is lost.
+        read_case{
+            placed_history{
+                {static_cell_write{3, 2, 10, lifetime::permanent}, 0b1},
+                {regular_cell_write{3, 2, regular_column::v1, std::nullopt, 6, lifetime::permanent}, 0b10},
+                {range_deletion{2, bound{0, true}, bound{5, true}, 7}, 0b1},
+                {static_cell_write{2, 5, 3, lifetime::permanent}, 0b1},
+            },
+            select_query{.select_v1 = false, .select_v2 = false},
+            read_options{.replica_count = 2, .page_size = 1, .querier_cache = true},
+        },
+        // A cached querier is reused for a page which asks for no clustering row
+        // of its partition. It returns a row which another replica deleted, and a
+        // later row is lost.
+        read_case{
+            placed_history{
+                {regular_cell_write{1, 2, regular_column::v2, 6, 7, lifetime::permanent}, 0b1},
+                {static_cell_write{2, 1, 17, lifetime::permanent}, 0b1},
+                {range_deletion{1, std::nullopt, std::nullopt, 20}, 0b10},
+                {row_marker_write{1, 4, 11, lifetime::permanent}, 0b1},
+            },
+            select_query{.select_v1 = false, .select_v2 = false},
+            read_options{.replica_count = 2, .page_size = 100, .page_size_in_bytes = 6, .querier_cache = true},
+        },
+        // A cached querier which stopped before a row, at the end of a range
+        // tombstone, is reused for a page which starts after the row, and returns
+        // the row again.
+        read_case{
+            placed_history{
+                {row_marker_write{2, 5, 8, lifetime::permanent}, 0b1},
+                {regular_cell_write{2, 1, regular_column::v1, 6, 7, lifetime::permanent}, 0b1},
+                {range_deletion{2, bound{0, false}, bound{5, false}, 6}, 0b1},
+            },
+            select_query{.select_v2 = false},
+            read_options{.replica_count = 2, .extra_replicas = 1, .page_size = 1, .tombstone_limit = 2, .querier_cache = true, .schedule_seed = 3},
+        },
+        // A cached querier which reads nothing reports the previous page's
+        // position, so the next page returns a row again.
+        read_case{
+            placed_history{
+                {regular_cell_write{2, 1, regular_column::v2, 3, 9, lifetime::expiring}, 0b11},
+                {row_marker_write{2, 3, 15, lifetime::expiring}, 0b1},
+            },
+            select_query{.select_s = false, .select_v1 = false},
+            read_options{.replica_count = 2, .extra_replicas = 1, .page_size = 1, .querier_cache = true},
+        },
+        // The same defect, with another effect. Replica 2's cached querier
+        // reads nothing new on page 1, and reports the position where page 0
+        // ended. The digests match, and that position is the smallest one, so
+        // page 1 ends where page 0 did, and the paging state repeats.
+        read_case{
+            placed_history{
+                {row_deletion{2, 3, 4}, 0b101},
+                {row_marker_write{2, 5, 3, lifetime::expired}, 0b1},
+                {regular_cell_write{4, 2, regular_column::v1, 4, 12, lifetime::permanent}, 0b1},
+                {regular_cell_write{1, 5, regular_column::v1, 4, 11, lifetime::permanent}, 0b1},
+            },
+            select_query{},
+            read_options{.replica_count = 3, .extra_replicas = 2, .page_size = 2, .tombstone_limit = 1, .querier_cache = true, .schedule_seed = 2389981646},
+        },
+    };
+    with_harness([&] (harness& hs) {
+        for (const auto& c : witnesses) {
+            run_and_check(hs, c);
+        }
+    });
+}
+
 namespace {
 
 // 1 to 4 replicas, of which all but one may be extra replicas.

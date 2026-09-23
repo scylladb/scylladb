@@ -206,8 +206,10 @@ struct outcome {
     // The number of repair mutations which the coordinator planned.
     size_t repair_mutations = 0;
     // The properties which the coordinator's reads violated: a repair
-    // mutation adds data which no replica has, or the result of a range
-    // exceeds the limits of its command. Each property appears once.
+    // mutation adds data which no replica has, the result of a range
+    // exceeds the limits of its command, or a page which a replica read
+    // with a cached querier differs from the page which a fresh querier would read.
+    // Each property appears once.
     std::vector<std::string> coordinator_violations;
 };
 
