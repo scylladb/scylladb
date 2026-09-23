@@ -917,3 +917,26 @@ def test_partitions_have_consistent_ordering_in_range_query(cql, test_keyspace):
         assert len(keys) == 6
         for limit in range(1, 7):
             assert list(cql.execute(f"select k from {cf} limit {limit}")) == [(k,) for k in keys[:limit]]
+
+
+def test_partition_range_queries_with_bounds(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "k blob, v int, primary key (k)") as cf:
+        cql.execute("begin unlogged batch \n" +
+                    "".join(f"  insert into {cf} (k, v) values (0x0{i}, 0); \n" for i in range(1, 6)) +
+                    "apply batch;")
+        # Determine partition order
+        rows = list(cql.execute(f"select k, token(k) from {cf}"))
+        keys = [r[0] for r in rows]
+        tokens = [r[1] for r in rows]
+        assert len(keys) == 5
+        def check(where, expected):
+            assert list(cql.execute(f"select k from {cf} where {where}")) == [(k,) for k in expected]
+        check(f"token(k) > {tokens[1]}", keys[2:5])
+        check(f"token(k) >= {tokens[1]}", keys[1:5])
+        check(f"token(k) > {tokens[1]} and token(k) < {tokens[4]}", keys[2:4])
+        check(f"token(k) < {tokens[3]}", keys[0:3])
+        check(f"token(k) = {tokens[3]}", [keys[3]])
+        check(f"token(k) < {tokens[3]} and token(k) > {tokens[3]}", [])
+        check(f"token(k) >= {tokens[4]} and token(k) <= {tokens[2]}", [])
+        min_token = -2**63
+        check(f"token(k) > {min_token} and token (k) < {min_token}", keys)
