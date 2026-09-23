@@ -2628,3 +2628,65 @@ def test_time_uuid_fcts_input_validation(cql, time_uuid_fcts_table):
         nofail(fct, "currenttimestamp()")
 
     require_timestamp_timeuuid_or_date("tounixtimestamp")
+
+
+def test_time_uuid_fcts_result(cql, time_uuid_fcts_table):
+    table = time_uuid_fcts_table
+
+    def nofail(fct, inp):
+        cql_func_require_nofail(cql, table, fct, inp)
+
+    def throw(exception, fct, inp):
+        cql_func_require_throw(cql, table, exception, fct, inp)
+
+    # test timestamp arg
+    def require_timestamp(fct):
+        throw(InvalidRequest, fct, "mintimeuuid(t)")
+        throw(InvalidRequest, fct, "maxtimeuuid(t)")
+        nofail(fct, "dateof(u)")
+        nofail(fct, "unixtimestampof(u)")
+        nofail(fct, "totimestamp(u)")
+        throw(InvalidRequest, fct, "todate(u)")
+        nofail(fct, "tounixtimestamp(u)")
+
+    require_timestamp("mintimeuuid")
+    require_timestamp("maxtimeuuid")
+
+    # test timeuuid arg
+    def require_timeuuid(fct):
+        nofail(fct, "mintimeuuid(t)")
+        nofail(fct, "maxtimeuuid(t)")
+        throw(InvalidRequest, fct, "dateof(u)")
+        throw(InvalidRequest, fct, "unixtimestampof(u)")
+        throw(InvalidRequest, fct, "totimestamp(u)")
+        throw(InvalidRequest, fct, "todate(u)")
+        throw(InvalidRequest, fct, "tounixtimestamp(u)")
+
+    require_timeuuid("dateof")
+    require_timeuuid("unixtimestampof")
+
+    # test timeuuid or date arg
+    def require_timeuuid_or_date(fct):
+        nofail(fct, "mintimeuuid(t)")
+        nofail(fct, "maxtimeuuid(t)")
+        throw(InvalidRequest, fct, "dateof(u)")
+        throw(InvalidRequest, fct, "unixtimestampof(u)")
+        throw(InvalidRequest, fct, "totimestamp(u)")
+        nofail(fct, "todate(u)")
+        throw(InvalidRequest, fct, "tounixtimestamp(u)")
+
+    require_timeuuid_or_date("totimestamp")
+
+    # test timestamp or timeuuid arg ("todate"): the C++ test had no checks here.
+
+    # test timestamp, timeuuid, or date arg
+    def require_timestamp_timeuuid_or_date(fct):
+        nofail(fct, "mintimeuuid(t)")
+        nofail(fct, "maxtimeuuid(t)")
+        nofail(fct, "dateof(u)")
+        nofail(fct, "unixtimestampof(u)")
+        nofail(fct, "totimestamp(u)")
+        nofail(fct, "todate(u)")
+        nofail(fct, "tounixtimestamp(u)")
+
+    require_timestamp_timeuuid_or_date("tounixtimestamp")
