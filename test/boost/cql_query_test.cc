@@ -112,40 +112,6 @@ SEASTAR_TEST_CASE(test_alter_cluster_without_auth_enabled_is_allowed) {
     });
 }
 
-// The CQL BOOLEAN token is case-insensitive but case-preserving, so `= TRUE` reaches the
-// registry as "TRUE". Every scope must accept it and persist the canonical lowercase form,
-// so that consumers can compare the stored text without re-normalizing it.
-SEASTAR_TEST_CASE(test_cluster_config_boolean_value_is_case_insensitive_and_stored_canonically) {
-    return do_with_cql_env_thread([](cql_test_env& e) {
-        auto configs_type = map_type_impl::get_instance(utf8_type, utf8_type, false);
-        auto expect_stored = [&] (const sstring& query, const sstring& expected) {
-            assert_that(e.execute_cql(query).get())
-                .is_rows().with_rows({{
-                    {configs_type->decompose(make_map_value(configs_type, map_type_impl::native_type({
-                        {sstring("auto_repair_enabled"), expected},
-                    })))}
-                }});
-        };
-
-        e.execute_cql("CREATE KEYSPACE ks_cfg_case WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}").get();
-        e.execute_cql("CREATE TABLE ks_cfg_case.tbl (pk int PRIMARY KEY)").get();
-
-        e.execute_cql("ALTER CLUSTER WITH auto_repair_enabled = TRUE").get();
-        expect_stored("SELECT configs FROM system_schema.scylla_clusters WHERE cluster_name = 'cluster'", "true");
-
-        e.execute_cql("ALTER KEYSPACE ks_cfg_case WITH auto_repair_enabled = False").get();
-        expect_stored("SELECT configs FROM system_schema.scylla_keyspaces WHERE keyspace_name = 'ks_cfg_case'", "false");
-
-        e.execute_cql("ALTER TABLE ks_cfg_case.tbl WITH auto_repair_enabled = TrUe").get();
-        expect_stored("SELECT configs FROM system_schema.scylla_tables WHERE keyspace_name = 'ks_cfg_case' AND table_name = 'tbl'", "true");
-
-        // NULL removal stays case-insensitive too.
-        e.execute_cql("ALTER TABLE ks_cfg_case.tbl WITH auto_repair_enabled = NULL").get();
-        assert_that(e.execute_cql("SELECT configs FROM system_schema.scylla_tables WHERE keyspace_name = 'ks_cfg_case' AND table_name = 'tbl'").get())
-            .is_rows().with_rows({{ {} }});
-    });
-}
-
 // The grammar accepts `<ident> = <mapLiteral>` for any property name, so a map value must
 // surface as a CQL error rather than escaping as std::bad_variant_access (which the client
 // would see as a generic ServerError).

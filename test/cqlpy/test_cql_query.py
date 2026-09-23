@@ -13,7 +13,7 @@ from cassandra import InvalidRequest
 from cassandra.protocol import ConfigurationException
 import pytest
 
-from .util import unique_name
+from .util import new_test_keyspace, unique_name
 
 
 def test_create_keyspace_statement(cql):
@@ -102,3 +102,37 @@ def test_alter_cluster_with_persists_cluster_config_override(cql, scylla_only):
         cql.execute("ALTER CLUSTER WITH auto_repair_enabled = null")
 
         assert fetch_configs(cql, cluster_configs_query) == []
+
+
+# A fresh keyspace per test, so keyspace-scope overrides don't leak.
+def new_config_test_keyspace(cql):
+    return new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}")
+
+
+def keyspace_configs_query(ks):
+    return f"SELECT configs FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{ks}'"
+
+
+def table_configs_query(ks, table):
+    return f"SELECT configs FROM system_schema.scylla_tables WHERE keyspace_name = '{ks}' AND table_name = '{table}'"
+
+
+# The CQL BOOLEAN token is case-insensitive but case-preserving, so `= TRUE` reaches the
+# registry as "TRUE". Every scope must accept it and persist the canonical lowercase form,
+# so that consumers can compare the stored text without re-normalizing it.
+def test_cluster_config_boolean_value_is_case_insensitive_and_stored_canonically(cql, scylla_only):
+    with new_config_test_keyspace(cql) as ks, cluster_config_cleanup(cql):
+        cql.execute(f"CREATE TABLE {ks}.tbl (pk int PRIMARY KEY)")
+
+        cql.execute("ALTER CLUSTER WITH auto_repair_enabled = TRUE")
+        assert fetch_configs(cql, cluster_configs_query) == [{'auto_repair_enabled': 'true'}]
+
+        cql.execute(f"ALTER KEYSPACE {ks} WITH auto_repair_enabled = False")
+        assert fetch_configs(cql, keyspace_configs_query(ks)) == [{'auto_repair_enabled': 'false'}]
+
+        cql.execute(f"ALTER TABLE {ks}.tbl WITH auto_repair_enabled = TrUe")
+        assert fetch_configs(cql, table_configs_query(ks, 'tbl')) == [{'auto_repair_enabled': 'true'}]
+
+        # NULL removal stays case-insensitive too.
+        cql.execute(f"ALTER TABLE {ks}.tbl WITH auto_repair_enabled = NULL")
+        assert fetch_configs(cql, table_configs_query(ks, 'tbl')) == [None]
