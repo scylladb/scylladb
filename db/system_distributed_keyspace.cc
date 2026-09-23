@@ -287,6 +287,8 @@ schema_ptr alternator_export_to_s3_exports() {
                 // The ExportTableToPointInTime request which created this export, as JSON. Kept because
                 // DescribeExport echoes the request's parameters back to the user.
                 .with_column("request", utf8_type)
+                // Id of the exported table, as resolved when the request was accepted (ExportDescription.TableId)
+                .with_column("table_id", uuid_type)
                 // Key of the export's manifest object in the target bucket, set once the export completes
                 // (ExportDescription.ExportManifest)
                 .with_column("export_manifest", utf8_type)
@@ -297,10 +299,15 @@ schema_ptr alternator_export_to_s3_exports() {
                 .with_column("failure_message", utf8_type)
                 // Number of items exported, set once the export completes
                 .with_column("item_count", long_type)
+                // Billable size of what the export wrote, set once the export completes
+                // (ExportDescription.BilledSizeBytes)
+                .with_column("billed_size_bytes", long_type)
                 // The identifier generated for this export: it forms both the part of export_arn which
                 // follows "/export/" and the AWSDynamoDB/<export id>/ prefix of the objects written to S3.
                 // Unlike client_token, it is never chosen by the user.
                 .with_column("export_id_token", utf8_type)
+                // The point in time the data is exported from (ExportDescription.ExportTime)
+                .with_column("export_time", timestamp_type)
                 // When the export request was accepted
                 .with_column("accepted_at", timestamp_type)
                 // When the export reached a terminal state (COMPLETED or FAILED)
