@@ -202,6 +202,36 @@ auto make_options(clevel cl) {
 
 } // anonymous namespace
 
+// query_internal() with a deadline reads all pages before the deadline and
+// fails with a timeout, reading nothing, once the deadline has passed.
+SEASTAR_TEST_CASE(test_query_internal_with_deadline) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("create table ks.cf (k text, v int, primary key (k));").get();
+        for (auto i = 0; i < 10; i++) {
+            e.local_qp().execute_internal("insert into ks.cf (k , v) values (?, ? );", { to_sstring(i), i}, cql3::query_processor::cache_internal::yes).get();
+        }
+        int counter = 0;
+        auto count_rows = [&counter] (const cql3::untyped_result_set::row&) {
+            counter++;
+            return make_ready_future<stop_iteration>(stop_iteration::no);
+        };
+        // Four pages, each fetched with the time left until the deadline.
+        e.local_qp().query_internal("SELECT * from ks.cf", db::consistency_level::ONE, {}, 3,
+                db::timeout_clock::now() + std::chrono::minutes(1), count_rows).get();
+        BOOST_CHECK_EQUAL(counter, 10);
+
+        counter = 0;
+        try {
+            e.local_qp().query_internal("SELECT * from ks.cf", db::consistency_level::ONE, {}, 3,
+                    db::timeout_clock::now(), count_rows).get();
+            BOOST_FAIL("query_internal() did not fail past its deadline");
+        } catch (const exceptions::read_timeout_exception&) {
+        } catch (const semaphore_timed_out&) {
+        }
+        BOOST_CHECK_EQUAL(counter, 0);
+    });
+}
+
 SEASTAR_TEST_CASE(test_query_counters) {
     cql_test_config cfg;
     cfg.need_remote_proxy = true;
