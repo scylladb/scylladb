@@ -3280,3 +3280,222 @@ async def test_restore_tablets_shares_components_left_in_place(build_mode: str, 
     left = bucket_objects(object_storage)
     assert_objects_intact(crafted, left, 'drop of the restored keyspace')
     assert snapshot_refs <= left.keys(), f'The drop removed snapshot references of the backup: {sorted(snapshot_refs - left.keys())}'
+
+
+async def take_in_place_backup(manager, server, object_storage, ks, cf, tag):
+    """Snapshot ks.cf and back it up into its own bucket. The supplied prefix
+    is not honored for object-storage tables. Returns the manifest key,
+    relative to the unified layout prefix the restore read the backup from."""
+    await manager.api.take_cluster_snapshot(server.ip_addr, ks, tag=tag, tables=[cf])
+    tid = await manager.api.backup_cluster_snapshot(server.ip_addr, ks, tag, server.datacenter,
+                                                    object_storage.address, object_storage.bucket_name,
+                                                    'ignored_backup_prefix', tables=[cf])
+    status = await manager.api.wait_task(server.ip_addr, tid)
+    assert status is not None and status.get('state') == 'done', f'Backup failed: {status}'
+    return f'snapshots/{ks}/{cf}/{tag}/manifest.json'
+
+
+async def test_object_storage_backup_in_place(manager: ScyllaClusterManager, object_storage):
+    """Backing up an object-storage table just promotes a previously taken snapshot to a "backup".
+    The backup promotes the catalog rows and
+    writes one manifest under the unified layout prefix."""
+    topology = topo(rf=3, nodes=3, racks=3, dcs=1)
+    servers, _ = await create_cluster(topology, manager, logger, object_storage)
+    await manager.disable_tablet_balancing()
+    cql = manager.get_cql()
+    server = servers[0]
+    tag = unique_name('snap_')
+
+    async with new_test_keyspace(manager, keyspace_options(object_storage, rf=topology.rf) + " AND tablets = {'initial': 4}") as ks:
+        async with new_test_table(manager, ks, "key int, c1 text, c2 text, PRIMARY KEY (key)") as tbl:
+            cf = tbl.split('.')[1]
+            await prepare_write_workload(cql, tbl, flush=False, n=50)
+            await asyncio.gather(*(manager.api.flush_keyspace(s.ip_addr, ks) for s in servers))
+            await manager.api.take_cluster_snapshot(server.ip_addr, ks, tag=tag, tables=[cf])
+
+            before = bucket_objects(object_storage)
+            tid = await manager.api.backup_cluster_snapshot(server.ip_addr, ks, tag, server.datacenter,
+                                                            object_storage.address, object_storage.bucket_name,
+                                                            'ignored_backup_prefix', tables=[cf])
+            status = await manager.api.wait_task(server.ip_addr, tid)
+            assert status is not None and status.get('state') == 'done', f'Backup failed: {status}'
+
+            # The only new object is the manifest, and nothing was touched.
+            after = bucket_objects(object_storage)
+            manifest_key = f'sstables/snapshots/{ks}/{cf}/{tag}/manifest.json'
+            assert set(after) - set(before) == {manifest_key}, f'Backup created data objects: {set(after) - set(before)}'
+            assert_objects_intact(before, after, 'backup')
+
+            # The coordinator dedups repaired data to one replica copy per
+            # tablet, so the promoted rows are a subset; the manifest
+            # enumerates exactly that subset.
+            rows = snapshot_catalog_sstable_rows(cql, tag, ks, cf, servers)
+            promoted = {str(r.sstable_id) for r in rows if r.state == 3}
+            assert promoted, f'No rows promoted: {[(str(r.sstable_id), r.state) for r in rows]}'
+            assert backup_sstable_ids(object_storage, [manifest_key]) == promoted
+
+            locations = list(cql.execute(f"SELECT * FROM system_distributed.snapshot_remote_locations"
+                                         f" WHERE snapshot_name = '{tag}' AND datacenter = '{server.datacenter}'"))
+            assert len(locations) == 1 and locations[0].state >= 3
+
+            # Re-run: recognized as already backed up, changes nothing.
+            tid = await manager.api.backup_cluster_snapshot(server.ip_addr, ks, tag, server.datacenter,
+                                                            object_storage.address, object_storage.bucket_name,
+                                                            'ignored_backup_prefix', tables=[cf])
+            status = await manager.api.wait_task(server.ip_addr, tid)
+            assert status is not None and status.get('state') == 'done', f'Backup re-run failed: {status}'
+            assert bucket_objects(object_storage) == after, 'Backup re-run changed the bucket'
+
+
+async def test_object_storage_backup_restore_end_to_end(manager: ScyllaClusterManager, object_storage):
+    """A real in-place backup restores through the reference-sharing path:
+    the restored keyspace shares the backed-up components, nothing is copied,
+    and the source table and its backup stay intact."""
+    topology = topo(rf=3, nodes=3, racks=3, dcs=1)
+    servers, _ = await create_cluster(topology, manager, logger, object_storage)
+    await manager.disable_tablet_balancing()
+    cql = manager.get_cql()
+    server = servers[0]
+    tag = unique_name('snap_')
+
+    async with new_test_keyspace(manager, keyspace_options(object_storage, rf=topology.rf) + " AND tablets = {'initial': 4}") as ks:
+        async with new_test_table(manager, ks, "pk text primary key, value int") as tbl:
+            cf = tbl.split('.')[1]
+            insert_stmt = cql.prepare(f"INSERT INTO {tbl} (pk, value) VALUES (?, ?)")
+            insert_stmt.consistency_level = ConsistencyLevel.ALL
+            await asyncio.gather(*(cql.run_async(insert_stmt, (str(i), i)) for i in range(50)))
+            await asyncio.gather(*(manager.api.flush_keyspace(s.ip_addr, ks) for s in servers))
+            # Repaired data is deduplicated to one replica copy per tablet.
+            await manager.api.repair(server.ip_addr, ks, cf)
+            manifest = await take_in_place_backup(manager, server, object_storage, ks, cf, tag)
+
+            # The backup is deduplicated: it promoted a strict subset of the
+            # snapshot rows, and the manifest enumerates exactly that subset.
+            rows = snapshot_catalog_sstable_rows(cql, tag, ks, cf, servers)
+            promoted = {str(r.sstable_id) for r in rows if r.state == 3}
+            assert promoted and len(promoted) < len(rows), f'backup was not deduplicated: {len(promoted)}/{len(rows)}'
+            assert backup_sstable_ids(object_storage, [f'sstables/{manifest}']) == promoted
+
+            # The same tablet count as the backup, so the restore does not resize.
+            async with new_test_keyspace(manager, keyspace_options(object_storage, rf=topology.rf) + " AND tablets = {'initial': 4}") as ks2:
+                async with new_test_table(manager, ks2, "pk text primary key, value int") as tbl2:
+                    cf2 = tbl2.split('.')[1]
+                    before = bucket_objects(object_storage)
+                    tid = await manager.api.restore_tablets(server.ip_addr, ks2, cf2, tag, server.datacenter,
+                                                            object_storage.address, object_storage.bucket_name,
+                                                            [manifest], 'sstables')
+                    status = await manager.api.wait_task(server.ip_addr, tid)
+                    assert status is not None and status.get('state') == 'done', f'Restore failed: {status}'
+
+                    # Reference install only: the restore added node references
+                    # and copied no components.
+                    after = bucket_objects(object_storage)
+                    added = set(after) - set(before)
+                    assert added, 'The restore created nothing'
+                    non_refs = sorted(k for k in added if '/refs/nodes/' not in k)
+                    assert not non_refs, f'The restore copied objects: {non_refs}'
+                    assert_objects_intact(before, after, 'restore')
+
+                    # Re-duplication: the manifest's single copy was fanned
+                    # out, so every key is replicated rf times again.
+                    await check_mutation_replicas(cql, manager, servers, range(50), topology, logger, ks2, cf2)
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_object_storage_backup_failure_resume(manager: ScyllaClusterManager, object_storage):
+    """A backup attempt failing mid-promotion resumes: the re-run skips the
+    rows already promoted and promotes the rest."""
+    topology = topo(rf=3, nodes=3, racks=3, dcs=1)
+    servers, _ = await create_cluster(topology, manager, logger, object_storage)
+    await manager.disable_tablet_balancing()
+    cql = manager.get_cql()
+    server = servers[0]
+    tag = unique_name('snap_')
+
+    async with new_test_keyspace(manager, keyspace_options(object_storage, rf=topology.rf) + " AND tablets = {'initial': 4}") as ks:
+        async with new_test_table(manager, ks, "key int, c1 text, c2 text, PRIMARY KEY (key)") as tbl:
+            cf = tbl.split('.')[1]
+            await prepare_write_workload(cql, tbl, flush=False, n=50)
+            await asyncio.gather(*(manager.api.flush_keyspace(s.ip_addr, ks) for s in servers))
+            await manager.api.take_cluster_snapshot(server.ip_addr, ks, tag=tag, tables=[cf])
+            before = bucket_objects(object_storage)
+
+            await asyncio.gather(*(manager.api.enable_injection(s.ip_addr, 'cluster_backup_object_storage_flip', one_shot=True)
+                                   for s in servers))
+            tid = await manager.api.backup_cluster_snapshot(server.ip_addr, ks, tag, server.datacenter,
+                                                            object_storage.address, object_storage.bucket_name,
+                                                            'ignored_backup_prefix', tables=[cf])
+            status = await manager.api.wait_task(server.ip_addr, tid)
+            assert status is not None and status.get('state') == 'failed', f'Expected the backup to fail: {status}'
+
+            # The re-run promotes what the failed attempt left behind.
+            tid = await manager.api.backup_cluster_snapshot(server.ip_addr, ks, tag, server.datacenter,
+                                                            object_storage.address, object_storage.bucket_name,
+                                                            'ignored_backup_prefix', tables=[cf])
+            status = await manager.api.wait_task(server.ip_addr, tid)
+            assert status is not None and status.get('state') == 'done', f'Backup re-run failed: {status}'
+
+            rows = snapshot_catalog_sstable_rows(cql, tag, ks, cf, servers)
+            assert any(r.state == 3 for r in rows), f'No rows promoted: {[(str(r.sstable_id), r.state) for r in rows]}'
+            manifest_key = f'sstables/snapshots/{ks}/{cf}/{tag}/manifest.json'
+            assert set(bucket_objects(object_storage)) - set(before) == {manifest_key}
+
+
+async def test_object_storage_backup_survives_table_drop(manager: ScyllaClusterManager, object_storage):
+    """Dropping the backed-up table keeps the backup usable. The drop destroys
+    the live sstables, which removes their node references, but the snapshot
+    references keep the components, the registry retains the rows as
+    snapshot_owned, the catalog and the manifest survive, and the backup
+    restores into a new keyspace without its source table."""
+    topology = topo(rf=3, nodes=3, racks=3, dcs=1)
+    servers, _ = await create_cluster(topology, manager, logger, object_storage)
+    await manager.disable_tablet_balancing()
+    cql = manager.get_cql()
+    server = servers[0]
+    tag = unique_name('snap_')
+
+    async with new_test_keyspace(manager, keyspace_options(object_storage, rf=topology.rf) + " AND tablets = {'initial': 4}") as ks:
+        cf = unique_name('test_cf')
+        await cql.run_async(f"CREATE TABLE {ks}.{cf} (pk text primary key, value int)")
+        insert_stmt = cql.prepare(f"INSERT INTO {ks}.{cf} (pk, value) VALUES (?, ?)")
+        insert_stmt.consistency_level = ConsistencyLevel.ALL
+        await asyncio.gather(*(cql.run_async(insert_stmt, (str(i), i)) for i in range(50)))
+        await asyncio.gather(*(manager.api.flush_keyspace(s.ip_addr, ks) for s in servers))
+        manifest = await take_in_place_backup(manager, server, object_storage, ks, cf, tag)
+
+        table_id = str(await manager.get_table_or_view_id(ks, cf))
+        sids = {str(r.sstable_id) for r in snapshot_catalog_sstable_rows(cql, tag, ks, cf, servers)}
+        assert sids
+        before = bucket_objects(object_storage)
+
+        await cql.run_async(f"DROP TABLE {ks}.{cf}")
+        # destroy() of the dropped table's sstables runs asynchronously.
+        await wait_node_refs_gone(object_storage, sids)
+
+        # The node references are the only objects the drop removed.
+        after = bucket_objects(object_storage)
+        gone = set(before) - set(after)
+        assert gone and all('/refs/nodes/' in k for k in gone), f'The drop removed backup objects: {sorted(k for k in gone if "/refs/nodes/" not in k)}'
+        assert not (set(after) - set(before))
+        assert_objects_intact({k: v for k, v in before.items() if k in after}, after, 'drop')
+
+        # The registry retains the pinned sstables as snapshot_owned.
+        for srv in servers:
+            host = (await wait_for_cql_and_get_hosts(cql, [srv], time.time() + 30))[0]
+            owned = await snapshot_owned_rows(cql, table_id, host=host)
+            assert owned and {str(r.sstable_id) for r in owned} <= sids, f'{srv.ip_addr}: no snapshot_owned rows after drop'
+
+        # The catalog still commits and enumerates the snapshot.
+        assert len(snapshot_commit_rows(cql, tag)) == 1
+        assert {str(r.sstable_id) for r in snapshot_catalog_sstable_rows(cql, tag, ks, cf, servers)} == sids
+
+        # The backup restores without its source table.
+        async with new_test_keyspace(manager, keyspace_options(object_storage, rf=topology.rf) + " AND tablets = {'initial': 4}") as ks2:
+            async with new_test_table(manager, ks2, "pk text primary key, value int") as tbl2:
+                cf2 = tbl2.split('.')[1]
+                tid = await manager.api.restore_tablets(server.ip_addr, ks2, cf2, tag, server.datacenter,
+                                                        object_storage.address, object_storage.bucket_name,
+                                                        [manifest], 'sstables')
+                status = await manager.api.wait_task(server.ip_addr, tid)
+                assert status is not None and status.get('state') == 'done', f'Restore failed: {status}'
+                await check_mutation_replicas(cql, manager, servers, range(50), topology, logger, ks2, cf2)
