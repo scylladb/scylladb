@@ -790,10 +790,56 @@ void print_compactionhistory(const std::vector<Entry>& history) {
     }
 }
 
+// Reproduces the log lines compaction emits at debug level when it starts and when
+// it finishes, so that the history of a node can be merged back into its log with
+// sort(1), e.g.:
+//
+//   nodetool compactionhistory -F log > history.log
+//   sort -k2 scylla.log history.log > merged.log
+//
+// The history doesn't record everything the log line carries, so the sstables are
+// identified by generation rather than by file name, and the partition counts are
+// left out.
+void print_compactionhistory_log(const std::vector<history_entry>& history) {
+    // The verbs used by report_start_desc() and report_finish_desc(), see compaction/compaction.cc.
+    // Types not listed here are compacted by regular_compaction, which uses the default below.
+    static const std::unordered_map<std::string_view, std::pair<std::string_view, std::string_view>> verbs{
+            {"Cleanup", {"Cleaning", "Cleaned"}},
+            {"Upgrade", {"Cleaning", "Cleaned"}},
+            {"Scrub", {"Scrubbing", "Finished scrubbing"}},
+            {"Reshape", {"Reshaping", "Reshaped"}},
+            {"Reshard", {"Resharding", "Resharded"}},
+            {"Split", {"Splitting", "Split"}},
+    };
+
+    auto print_line = [] (const history_entry& e, int64_t timestamp, std::string_view msg) {
+        fmt::print(std::cout, "DEBUG {:%F %T},{:03d} [shard {}:comp] compaction - [{} {}.{} {}] {}\n",
+                localtime(std::time_t(timestamp / 1000)), timestamp % 1000, e.shard_id,
+                e.compaction_type, e.ks, e.cf, e.id, msg);
+    };
+
+    // history is sorted by descending compacted_at, print the log in chronological order.
+    for (const auto& e : history | std::views::reverse) {
+        const auto it = verbs.find(std::string_view(e.compaction_type));
+        const auto [start_verb, finish_verb] = it != verbs.end()
+                ? it->second : std::pair<std::string_view, std::string_view>{"Compacting", "Compacted"};
+
+        print_line(e, e.started_at, fmt::format("{} [{}]", start_verb, fmt::join(e.sstables_in, ",")));
+
+        const auto duration_ms = e.compacted_at - e.started_at;
+        const auto ratio = e.bytes_in ? double(e.bytes_out) / double(e.bytes_in) : 0;
+        print_line(e, e.compacted_at, fmt::format("{} {} sstables to [{}]. {} to {} (~{}% of original) in {}ms = {}.",
+                finish_verb, e.sstables_in.size(), fmt::join(e.sstables_out, ","),
+                utils::pretty_printed_data_size(e.bytes_in), utils::pretty_printed_data_size(e.bytes_out),
+                int(ratio * 100), duration_ms,
+                utils::pretty_printed_throughput(e.bytes_in, std::chrono::duration<float>(std::chrono::milliseconds(duration_ms)))));
+    }
+}
+
 void compactionhistory_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     const auto format = vm["format"].as<sstring>();
 
-    static const std::vector<std::string_view> recognized_formats{"text", "json", "yaml"};
+    static const std::vector<std::string_view> recognized_formats{"text", "json", "yaml", "log"};
     if (std::ranges::find(recognized_formats, format) == recognized_formats.end()) {
         throw std::invalid_argument(fmt::format("invalid format {}, valid formats are: {}", format, recognized_formats));
     }
@@ -905,6 +951,8 @@ void compactionhistory_operation(scylla_rest_client& client, const bpo::variable
         print_compactionhistory<json_writer>(history);
     } else if (format == "yaml") {
         print_compactionhistory<yaml_writer>(history);
+    } else if (format == "log") {
+        print_compactionhistory_log(history);
     }
 }
 
@@ -4258,7 +4306,9 @@ fmt::format(R"(
 For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/compactionhistory.html")),
                 {
-                    typed_option<sstring>("format,F", "text", "Output format, one of: (json, yaml or text); defaults to text"),
+                    typed_option<sstring>("format,F", "text", "Output format, one of: (json, yaml, text or log); defaults to text. "
+                            "The log format reproduces the log lines compaction would have emitted, so that the history can be "
+                            "merged into a scylla log with sort(1), e.g. sort -k2 scylla.log history.log"),
                 },
             },
             {

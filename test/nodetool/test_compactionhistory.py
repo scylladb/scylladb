@@ -361,11 +361,34 @@ def test_yaml(nodetool):
         assert yaml.load(res.stdout, Loader=yaml.Loader) == expected_res
 
 
+def format_log_at(timestamp: int):
+    return "{:%F %T},{:03d}".format(
+            datetime.datetime.fromtimestamp(timestamp / 1000),
+            timestamp % 1000)
+
+
+def test_log(nodetool, scylla_only):
+    expected_response = \
+"""DEBUG {} [shard 0:comp] compaction - [Compact system.peers edde9300-5e9c-11ee-a8f6-7d85dcfeb8f4] Compacting [{{generation: 5d022760-b617-11ef-8294-8437c36f0e31, origin: memtable, size: 5466}},{{generation: 5b756ce0-b617-11ef-a97d-8438c36f0e31, origin: memtable, size: 5519}}]
+DEBUG {} [shard 0:comp] compaction - [Compact system.peers edde9300-5e9c-11ee-a8f6-7d85dcfeb8f4] Compacted 2 sstables to [{{generation: 5d03ae00-b617-11ef-8294-8437c36f0e31, origin: compaction, size: 5457}}]. 11kB to 11kB (~100% of original) in 600000ms = 19 bytes/s.
+DEBUG {} [shard 0:comp] compaction - [Compact system_schema.functions edef82f0-5e9c-11ee-a8f6-7d85dcfeb8f4] Compacting [{{generation: 5d022760-b617-11ef-a97d-8438c36f0e31, origin: memtable, size: 5668}},{{generation: 5b756ce0-b617-11ef-a97d-8438c36f0e31, origin: memtable, size: 5669}}]
+DEBUG {} [shard 0:comp] compaction - [Compact system_schema.functions edef82f0-5e9c-11ee-a8f6-7d85dcfeb8f4] Compacted 2 sstables to [{{generation: 5d049860-b617-11ef-a97d-8438c36f0e31, origin: compaction, size: 5687}}]. 5790 bytes to 5944 bytes (~102% of original) in 600000ms = 9 bytes/s.
+DEBUG {} [shard 0:comp] compaction - [Compact system_schema.functions 8b857440-0e35-11f0-9fcc-a895cfb212f2] Compacting []
+DEBUG {} [shard 0:comp] compaction - [Compact system_schema.functions 8b857440-0e35-11f0-9fcc-a895cfb212f2] Compacted 0 sstables to []. 579 bytes to 594 bytes (~102% of original) in 0ms = 0 bytes/s.
+""".format(format_log_at(1695973259380), format_log_at(1695973859380),
+           format_log_at(1695973259491), format_log_at(1695973859491),
+           format_log_at(1695973859492), format_log_at(1695973859492))
+
+    for cmd in [("compactionhistory", "--format", "log"), ("compactionhistory", "-F", "log")]:
+        res = nodetool(*cmd, expected_requests=[EXPECTED_REQUEST])
+        assert res.stdout == expected_response
+
+
 def test_invalid_format(nodetool):
     check_nodetool_fails_with(
             nodetool,
             ("compactionhistory", "-F", "foo"),
             {},
-            ["error processing arguments: invalid format foo, valid formats are: {text, json, yaml}",
-             "error processing arguments: invalid format foo, valid formats are: [\"text\", \"json\", \"yaml\"]",
+            ["error processing arguments: invalid format foo, valid formats are: {text, json, yaml, log}",
+             "error processing arguments: invalid format foo, valid formats are: [\"text\", \"json\", \"yaml\", \"log\"]",
              "nodetool: arguments for -F are json,yaml only."])
