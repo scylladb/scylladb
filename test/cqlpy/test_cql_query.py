@@ -351,3 +351,24 @@ def test_describe_schema_emits_cluster_config_block(cql, scylla_only):
         internals_stmts = describe_create_statements(cql, "DESCRIBE SCHEMA WITH INTERNALS")
         assert internals_stmts
         assert internals_stmts[0] == "ALTER CLUSTER WITH auto_repair_enabled = false;"
+
+
+# Every emitted create_statement must replay verbatim as a single request, comment lines
+# included. This is what moving the terminating ';' to its own line buys: the CQL COMMENT
+# lexer token needs a newline terminator, so a trailing comment with no final newline
+# fails to parse.
+def test_describe_config_output_replays_verbatim(cql, scylla_only):
+    with new_config_test_keyspace(cql) as ks, cluster_config_cleanup(cql):
+        cql.execute(f"CREATE TABLE {ks}.tbl (pk int PRIMARY KEY)")
+        cql.execute("ALTER CLUSTER WITH auto_repair_enabled = false")
+        cql.execute(f"ALTER TABLE {ks}.tbl WITH auto_repair_enabled = true")
+
+        table_desc = describe_create_statement(cql, f"DESCRIBE TABLE {ks}.tbl")
+        assert "\n    AND auto_repair_enabled = true  -- from table (table=true, keyspace=NULL, cluster=false)\n;" in table_desc
+
+        cql.execute(f"DROP TABLE {ks}.tbl")
+        cql.execute(table_desc)
+
+        # The replayed CREATE stored the table-scope override again.
+        assert list(cql.execute(f"SELECT configs['auto_repair_enabled'] FROM system_schema.scylla_tables "
+                                f"WHERE keyspace_name = '{ks}' AND table_name = 'tbl'")) == [('true',)]

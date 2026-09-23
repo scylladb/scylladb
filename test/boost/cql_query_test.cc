@@ -268,32 +268,6 @@ SEASTAR_TEST_CASE(test_alter_node_oriented_scopes_reject_unknown_targets) {
     });
 }
 
-// Every emitted create_statement must replay verbatim as a single request, comment lines
-// included. This is what moving the terminating ';' to its own line buys: the CQL COMMENT
-// lexer token needs a newline terminator, so a trailing comment with no final newline
-// fails to parse.
-SEASTAR_TEST_CASE(test_describe_config_output_replays_verbatim) {
-    return do_with_cql_env_thread([](cql_test_env& e) {
-        e.execute_cql("CREATE KEYSPACE ks_replay WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}").get();
-        e.execute_cql("CREATE TABLE ks_replay.tbl (pk int PRIMARY KEY)").get();
-        e.execute_cql("ALTER CLUSTER WITH auto_repair_enabled = false").get();
-        e.execute_cql("ALTER TABLE ks_replay.tbl WITH auto_repair_enabled = true").get();
-
-        auto table_desc = describe_create_statement(e, "DESCRIBE TABLE ks_replay.tbl");
-        BOOST_REQUIRE_NE(table_desc.find("\n    AND auto_repair_enabled = true  -- from table (table=true, keyspace=NULL, cluster=false)\n;"), sstring::npos);
-
-        e.execute_cql("DROP TABLE ks_replay.tbl").get();
-        BOOST_REQUIRE_NO_THROW(e.execute_cql(table_desc).get());
-
-        // The replayed CREATE stored the table-scope override again.
-        auto rows = e.execute_cql("SELECT configs['auto_repair_enabled'] FROM system_schema.scylla_tables "
-                                  "WHERE keyspace_name = 'ks_replay' AND table_name = 'tbl'").get();
-        assert_that(rows).is_rows().with_rows({{
-            {utf8_type->decompose(sstring("true"))}
-        }});
-    });
-}
-
 // The commented-out property is a real, executable property behind its comment marker:
 // replaying the describe output as-is stores nothing at the described scope (inheritance
 // is preserved), while erasing just the leading "-- " pins the effective value there.
