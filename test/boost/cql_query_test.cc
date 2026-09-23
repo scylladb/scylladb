@@ -254,58 +254,6 @@ SEASTAR_TEST_CASE(test_alter_node_oriented_scopes_reject_unknown_targets) {
     });
 }
 
-SEASTAR_TEST_CASE(test_map_elements_validation) {
-    return do_with_cql_env_thread([](cql_test_env& e) {
-        auto test_inline = [&] (sstring value, bool should_throw) {
-            auto cql1 = fmt::format("INSERT INTO tbl (a, b) VALUES(1, {{'10-10-2010' : '{}'}})", value);
-            auto cql2 = fmt::format("INSERT INTO tbl (a, b) VALUES(1, {{'{}' : '10-10-2010'}})", value);
-            if (should_throw) {
-                BOOST_REQUIRE_THROW(e.execute_cql(cql1).get(), exceptions::invalid_request_exception);
-                BOOST_REQUIRE_THROW(e.execute_cql(cql2).get(), exceptions::invalid_request_exception);
-            } else {
-                BOOST_REQUIRE_NO_THROW(e.execute_cql(cql1).get());
-                BOOST_REQUIRE_NO_THROW(e.execute_cql(cql2).get());
-            }
-        };
-        e.execute_cql("CREATE TABLE tbl (a int, b map<date, date>, PRIMARY KEY (a))").get();
-        test_inline("definitely not a date value", true);
-        test_inline("2015-05-03", false);
-        e.execute_cql("CREATE TABLE tbl2 (a int, b map<text, text>, PRIMARY KEY (a))").get();
-        auto id = e.prepare("INSERT INTO tbl2 (a, b) VALUES(?, ?)").get();
-        auto test_bind = [&] (sstring value, bool should_throw) {
-            auto my_map_type = map_type_impl::get_instance(utf8_type, utf8_type, true);
-            std::vector<cql3::raw_value> raw_values;
-            raw_values.emplace_back(cql3::raw_value::make_value(int32_type->decompose(int32_t{1})));
-            auto values =
-                my_map_type->decompose(make_map_value(my_map_type,
-                                                      {std::make_pair(value, sstring("foo"))}));
-            raw_values.emplace_back(cql3::raw_value::make_value(values));
-            if (should_throw) {
-                BOOST_REQUIRE_THROW(
-                    e.execute_prepared(id, raw_values).get(),
-                    exceptions::invalid_request_exception);
-            } else {
-                BOOST_REQUIRE_NO_THROW(e.execute_prepared(id, raw_values).get());
-            }
-            raw_values.pop_back();
-            values =
-                my_map_type->decompose(make_map_value(my_map_type,
-                                                      {std::make_pair(sstring("foo"), value)}));
-            raw_values.emplace_back(cql3::raw_value::make_value(values));
-            if (should_throw) {
-                BOOST_REQUIRE_THROW(
-                    e.execute_prepared(id, raw_values).get(),
-                    exceptions::invalid_request_exception);
-            } else {
-                e.execute_prepared(id, raw_values).get();
-                BOOST_REQUIRE_NO_THROW(e.execute_prepared(id, raw_values).get());
-            }
-        };
-        test_bind(sstring(1, '\255'), true);
-        test_bind("proper utf8 string", false);
-    });
-}
-
 SEASTAR_TEST_CASE(test_in_clause_validation) {
     return do_with_cql_env_thread([](cql_test_env& e) {
         auto test_inline = [&] (sstring value, bool should_throw) {

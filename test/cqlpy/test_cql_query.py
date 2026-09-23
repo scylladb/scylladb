@@ -633,3 +633,31 @@ def test_set_elements_validation(cql, test_keyspace, raw_utf8_serialization):
         with pytest.raises(InvalidRequest, match='UTF8'):
             cql.execute(stmt, [1, {bad_utf8_string}])
         cql.execute(stmt, [1, {"proper utf8 string"}])
+
+
+def test_map_elements_validation(cql, test_keyspace, raw_utf8_serialization):
+    with new_test_table(cql, test_keyspace, "a int, b map<date, date>, PRIMARY KEY (a)") as tbl:
+        def test_inline(value, should_throw):
+            cql1 = f"INSERT INTO {tbl} (a, b) VALUES(1, {{'10-10-2010' : '{value}'}})"
+            cql2 = f"INSERT INTO {tbl} (a, b) VALUES(1, {{'{value}' : '10-10-2010'}})"
+            if should_throw:
+                with pytest.raises(InvalidRequest):
+                    cql.execute(cql1)
+                with pytest.raises(InvalidRequest):
+                    cql.execute(cql2)
+            else:
+                cql.execute(cql1)
+                cql.execute(cql2)
+        test_inline("definitely not a date value", True)
+        test_inline("2015-05-03", False)
+    with new_test_table(cql, test_keyspace, "a int, b map<text, text>, PRIMARY KEY (a)") as tbl2:
+        stmt = cql.prepare(f"INSERT INTO {tbl2} (a, b) VALUES(?, ?)")
+        def test_bind(value, should_throw):
+            for m in [{value: "foo"}, {"foo": value}]:
+                if should_throw:
+                    with pytest.raises(InvalidRequest, match='UTF8'):
+                        cql.execute(stmt, [1, m])
+                else:
+                    cql.execute(stmt, [1, m])
+        test_bind(bad_utf8_string, True)
+        test_bind("proper utf8 string", False)
