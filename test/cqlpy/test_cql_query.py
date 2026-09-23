@@ -2954,3 +2954,82 @@ def test_query_unselected_columns(cql, test_keyspace, scylla_only):
             assert len(list(cql.execute(SimpleStatement(f"SELECT pk, ck FROM {table} WHERE pk = 0", fetch_size=None)))) == num_rows
             # Full scan
             assert len(list(cql.execute(SimpleStatement(f"SELECT pk, ck FROM {table}", fetch_size=None)))) == num_rows
+
+
+def test_user_based_sla_queries(cql, scylla_only):
+    # Service level names are unique, but all start with "sl_" so they sort
+    # after the pre-existing "driver" service level, and sl_1 < sl_2.
+    prefix = f"sl_{unique_name()}"
+    sl_1 = f"{prefix}_sl_1"
+    sl_2 = f"{prefix}_sl_2"
+    with new_user(cql) as tester:
+        try:
+            # test create service level with defaults
+            cql.execute(f"CREATE SERVICE_LEVEL {sl_1}")
+            assert list(cql.execute(f"LIST SERVICE_LEVEL {sl_1}")) == [(sl_1, None, None, 1000)]
+            # create and alter service levels
+            cql.execute(f"CREATE SERVICE_LEVEL {sl_2} WITH SHARES = 200")
+            cql.execute(f"ALTER SERVICE_LEVEL {sl_1} WITH SHARES = 111")
+            assert list(cql.execute("LIST ALL SERVICE_LEVELS")) == [
+                ("driver", None, "batch", 200, "39.14%"),
+                (sl_1, None, None, 111, "21.72%"),
+                (sl_2, None, None, 200, "39.14%"),
+            ]
+            # drop service levels
+            cql.execute(f"DROP SERVICE_LEVEL {sl_1}")
+            assert list(cql.execute("LIST ALL SERVICE_LEVELS")) == [
+                ("driver", None, "batch", 200, "50.00%"),
+                (sl_2, None, None, 200, "50.00%"),
+            ]
+
+            # validate exceptions (illegal requests)
+            with pytest.raises(InvalidRequest):
+                cql.execute(f"DROP SERVICE_LEVEL {sl_1}")
+            cql.execute(f"DROP SERVICE_LEVEL IF EXISTS {sl_1}")
+
+            with pytest.raises(InvalidRequest):
+                cql.execute(f"CREATE SERVICE_LEVEL {sl_2}")
+            with pytest.raises(InvalidRequest):
+                cql.execute(f"CREATE SERVICE_LEVEL {sl_2} WITH SHARES = 999")
+            cql.execute(f"CREATE SERVICE_LEVEL IF NOT EXISTS {sl_2}")
+
+            with pytest.raises(SyntaxException):
+                cql.execute(f"CREATE SERVICE_LEVEL {sl_1} WITH SHARES = 0")
+            with pytest.raises(SyntaxException):
+                cql.execute(f"CREATE SERVICE_LEVEL {sl_1} WITH SHARES = 1001")
+
+            # test attach role
+            cql.execute(f"ATTACH SERVICE_LEVEL {sl_2} TO {tester}")
+            assert list(cql.execute(f"LIST ATTACHED SERVICE_LEVEL OF {tester}")) == [(tester, sl_2)]
+            assert list(cql.execute("LIST ALL ATTACHED SERVICE_LEVELS")) == [(tester, sl_2)]
+
+            # test attachment illegal request
+            with pytest.raises(InvalidRequest):
+                cql.execute(f"ATTACH SERVICE_LEVEL {sl_2} TO {unique_name()}")
+            with pytest.raises(InvalidRequest):
+                cql.execute(f"ATTACH SERVICE_LEVEL {sl_1} TO {tester}")
+
+            # tests detaching service levels
+            tester2 = unique_name()
+            cql.execute(f"CREATE ROLE {tester2}")
+            cql.execute(f"CREATE SERVICE_LEVEL {sl_1} WITH SHARES = 998")
+            cql.execute(f"ATTACH SERVICE_LEVEL {sl_1} TO {tester2}")
+            cql.execute(f"DETACH SERVICE_LEVEL FROM {tester}")
+            assert list(cql.execute(f"LIST ATTACHED SERVICE_LEVEL OF {tester2}")) == [(tester2, sl_1)]
+            assert list(cql.execute(f"LIST ATTACHED SERVICE_LEVEL OF {tester}")) == []
+            assert list(cql.execute("LIST ALL ATTACHED SERVICE_LEVELS")) == [(tester2, sl_1)]
+
+            # test implicit detach when removing role
+            cql.execute(f"DROP ROLE {tester2}")
+            assert list(cql.execute("LIST ALL ATTACHED SERVICE_LEVELS")) == []
+            cql.execute(f"ATTACH SERVICE_LEVEL {sl_1} TO {tester}")
+            assert list(cql.execute("LIST ALL ATTACHED SERVICE_LEVELS")) == [(tester, sl_1)]
+
+            # test implicit detach when removing service level
+            cql.execute(f"DROP SERVICE_LEVEL {sl_1}")
+            assert list(cql.execute("LIST ALL ATTACHED SERVICE_LEVELS")) == []
+            with pytest.raises(InvalidRequest):
+                cql.execute(f"ALTER SERVICE_LEVEL {unique_name()} WITH shares = 1")
+        finally:
+            cql.execute(f"DROP SERVICE_LEVEL IF EXISTS {sl_1}")
+            cql.execute(f"DROP SERVICE_LEVEL IF EXISTS {sl_2}")
