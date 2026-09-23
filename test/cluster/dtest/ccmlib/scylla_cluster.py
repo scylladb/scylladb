@@ -9,9 +9,10 @@ from __future__ import annotations
 import os
 import shutil
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from functools import cache
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import yaml
 from cassandra.auth import PlainTextAuthProvider
@@ -19,10 +20,10 @@ from cassandra.auth import PlainTextAuthProvider
 from test import TOP_SRC_DIR
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.scylla_server import ScyllaVersionDescription, get_current_version_description
-from test.cluster.dtest.ccmlib import scylla_repository
+from test.cluster.dtest.ccmlib import ccm_parity as parity, scylla_repository
 from test.cluster.dtest.ccmlib.common import logger
 from test.cluster.dtest.ccmlib.scylla_manager import ScyllaManager
-from test.cluster.dtest.ccmlib.scylla_node import ScyllaNode
+from test.cluster.dtest.ccmlib.scylla_node import NodeError, NodetoolError, ScyllaNode
 
 if TYPE_CHECKING:
     from typing import Any
@@ -32,6 +33,9 @@ if TYPE_CHECKING:
 # addresses, where the node keeps its files, and what the dtest setup or the
 # cluster suite sets (timeouts, tablets, rack validity) -- upstream's dtest
 # overrode the same ones on top of ccm's copy of the file.
+# ccm's snitch for a cluster whose populate() named datacenters (ccmlib/scylla_cluster.py SNITCH).
+CCM_SNITCH = "org.apache.cassandra.locator.GossipingPropertyFileSnitch"
+
 _NOT_FROM_SHIPPED_YAML = {
     "cluster_name", "listen_address", "rpc_address", "api_address", "api_port", "prometheus_address",
     "native_transport_port", "native_shard_aware_transport_port", "storage_port", "ssl_storage_port",
@@ -54,9 +58,19 @@ def _shipped_scylla_yaml() -> dict[str, Any]:
     without this those options would be at Scylla's built-in defaults and the
     tests would exercise different code than upstream did.
     """
-    with open(TOP_SRC_DIR / "conf" / "scylla.yaml") as f:
-        shipped = yaml.safe_load(f) or {}
-    return {k: v for k, v in shipped.items() if k not in _NOT_FROM_SHIPPED_YAML}
+    return {k: v for k, v in _full_shipped_scylla_yaml().items() if k not in _NOT_FROM_SHIPPED_YAML}
+
+
+@cache
+def _full_shipped_scylla_yaml(install_dir: Path = TOP_SRC_DIR) -> dict[str, Any]:
+    """conf/scylla.yaml of a Scylla install as is: what ccm copied into a node before rewriting its keys.
+
+    ccm copied it from the install the cluster was created on, so the nodes of an upgrade
+    test that starts on an older release get that release's conf/scylla.yaml -- kept
+    through the upgrade, and given to nodes added afterwards too.
+    """
+    with open(Path(install_dir) / "conf" / "scylla.yaml") as f:
+        return yaml.safe_load(f) or {}
 
 
 def _racks_of(dc_nodes: dict | list, topology: dict) -> dict:
@@ -76,8 +90,13 @@ class ScyllaCluster:
                  force_wait_for_cluster_start: bool = False,
                  scylla_version: str | None = None,
                  manager_install_dir: str | Path | None = None,
-                 skip_manager_server: bool = False):
+                 skip_manager_server: bool = False,
+                 ccm_parity: bool = False):
         self.manager = manager
+        # Run the nodes exactly as scylla-dtest/ccm did (scylla.yaml, command line,
+        # vnodes, snitch): the ported tests do, see ccm_parity.py.
+        self.ccm_parity = ccm_parity
+        self._ccm_use_vnodes = False
         self._path: Path | None = None
         self.scylla_mode = scylla_mode
         self._config_options = {}
@@ -89,10 +108,12 @@ class ScyllaCluster:
         # wait_other_notice) leave them alone.  The harness still owns their servers.
         self._detached: dict[str, ScyllaNode] = {}
 
-        # ccm's Cluster.seeds.  The in-tree manager decides which nodes a
-        # starting server actually seeds from, so this list is bookkeeping for
-        # the tests that maintain it (cluster_replacement_test, the repair-based
-        # node operations); nothing here overrides the manager's choice.
+        # ccm's Cluster.seeds.  Outside ccm parity the in-tree manager decides
+        # which nodes a starting server actually seeds from, so this list is
+        # bookkeeping for the tests that maintain it (cluster_replacement_test,
+        # the repair-based node operations).  Under parity it is ccm's list, and
+        # nodes start with the seeds ccm would have written for them
+        # (_save_ccm_seeds()).
         self.seeds: list = []
         # (level, logger or None for the default level), applied to new nodes too.
         self._log_levels: list[tuple[str, str | None]] = []
@@ -102,13 +123,17 @@ class ScyllaCluster:
         # scylla-dtest ran with dtest_config.num_tokens (256); 9280a039ee
         # lowered it to 16 for the whole suite.  With 16 random tokens a node
         # can own twice what another does, so a test that asserts on how evenly
-        # vnodes spread data sets this back to what upstream ran with.
-        self.num_tokens: int = 16
+        # vnodes spread data sets this back to what upstream ran with.  The ported
+        # tests run with upstream's 256 (ccm_parity).
+        self.num_tokens: int = parity.UPSTREAM_NUM_TOKENS if self.ccm_parity else 16
 
         # Which Scylla new nodes are started on.  Upgrade tests move this around
         # with set_install_dir(); everything else stays on the build under test.
         scylla_repository.set_build_mode(scylla_mode)
         self._install = scylla_repository.install(scylla_version or scylla_repository.current_version())
+        # The install whose conf/scylla.yaml ccm gave every node of the cluster, nodes added
+        # after an upgrade test moved the cluster to a newer version included.
+        self._created_install = self._install
 
         if self.scylla_mode == "debug":
             self.default_wait_other_notice_timeout = 600
@@ -150,6 +175,18 @@ class ScyllaCluster:
         if install.is_current:
             return get_current_version_description(self.current_scylla_exe)
         return ScyllaVersionDescription(path=str(install.exe), config={}, argv=[])
+
+    @property
+    def ccm_scylla_mode(self) -> str:
+        """The build mode ccm's ScyllaCluster reported.
+
+        ccm took it from the install's path (build/<mode>); a cluster made from a repository
+        version (--scylla-version, an upgrade test's older release) is a relocatable package,
+        which it called "release" unless the package was a debug one.
+        """
+        if self._created_install.is_current:
+            return self.scylla_mode
+        return "debug" if self.scylla_mode in scylla_repository.DEBUG_BUILD_MODES else "release"
 
     def get_install_dir(self) -> str:
         """The install dir of the Scylla this cluster's nodes run on.
@@ -197,7 +234,7 @@ class ScyllaCluster:
             self._path.mkdir(parents=True, exist_ok=True)
         return str(self._path)
 
-    def _add_nodes(self, servers: list) -> None:
+    def _add_nodes(self, servers: list, auto_bootstrap: bool = False) -> None:
         """Create ScyllaNode instances for the given servers and cache them."""
         for server in servers:
             name = f"node{self._next_node_num}"
@@ -205,6 +242,27 @@ class ScyllaCluster:
             node = self._nodes[name] = ScyllaNode(cluster=self, server=server, name=name)
             for level, class_name in self._log_levels:
                 node.set_log_level(level, class_name)
+            if self.ccm_parity:
+                self._write_ccm_scylla_yaml(node, auto_bootstrap=auto_bootstrap)
+
+    def _write_ccm_scylla_yaml(self, node: ScyllaNode, auto_bootstrap: bool) -> None:
+        """Give a new, still stopped node the scylla.yaml ccm would have written.
+
+        test.py builds a server's config from its own defaults (make_scylla_conf():
+        raised timeouts, authentication, shutdown_announce_in_ms 0, ...); ccm
+        started from the tree's conf/scylla.yaml and changed only what it had to.
+        Every key ccm would not have written is removed, and ccm's are set.
+        """
+        current = self.manager.server_get_config(server_id=node.server_id)
+        target = parity.ccm_scylla_yaml(shipped=_full_shipped_scylla_yaml(self._created_install.install_dir),
+                                            current=current,
+                                            options=self._config_options,
+                                            auto_bootstrap=auto_bootstrap,
+                                            initial_token=current.get("initial_token"),
+                                            use_vnodes=self._ccm_use_vnodes)
+        for key in current.keys() - target.keys():
+            self.manager.server_remove_config_option(server_id=node.server_id, key=key)
+        self.manager.server_update_config(server_id=node.server_id, config_options=target)
 
     def set_log_level(self, new_level: str, class_names: list[str] | None = None) -> ScyllaCluster:
         """Set the log level of every node, including nodes added later, as ccm's Cluster did."""
@@ -289,9 +347,28 @@ class ScyllaCluster:
     def add_seed(self, node: ScyllaNode | str) -> None:
         """Record a node (or address) as a seed, as ccm's Cluster.add_seed did."""
 
-        address = node.address() if isinstance(node, ScyllaNode) else node
+        # ccm's add_seed() turned only a plain Node into its address; a ScyllaNode
+        # went into the list as it was, and so counted as a seed in get_seeds(node).
+        address = node if self.ccm_parity or not isinstance(node, ScyllaNode) else node.address()
         if address not in self.seeds:
             self.seeds.append(address)
+
+    def _ccm_seeds_of(self, node: ScyllaNode) -> list[str]:
+        """ccm's Cluster.get_seeds(node): all seeds, or for a seed, those up to itself."""
+
+        seeds = self.seeds[:self.seeds.index(node) + 1] if node in self.seeds else self.seeds
+        return [s.address() if isinstance(s, ScyllaNode) else s for s in seeds]
+
+    def _save_ccm_seeds(self, nodes: list[ScyllaNode]) -> None:
+        """Note the seeds ccm's ScyllaNode.update_yaml() would write for these nodes now.
+
+        ccm wrote a node's seeds into its scylla.yaml when the node was added and
+        whenever its configuration was set, and never at start: a node keeps
+        seeds that are down, or no longer seeds, until then.  The node starts
+        with them (ScyllaNode.start()).
+        """
+        for node in nodes:
+            node.ccm_seeds = self._ccm_seeds_of(node)
 
     def get_seeds(self) -> list[str]:
         """The recorded seed addresses (ccm's Cluster.get_seeds)."""
@@ -362,6 +439,21 @@ class ScyllaCluster:
 
         assert initial_token is None, "argument `initial_token` is not supported"
 
+        if self.ccm_parity:
+            # ccm's Cluster.add(): a node named no datacenter takes the first
+            # existing node's datacenter (and its rack, if it names none either).
+            if data_center is None:
+                for existing in self.nodelist():
+                    if existing.data_center is not None:
+                        data_center = existing.data_center
+                        rack = rack if rack is not None else existing.rack
+                        break
+            node = self._add_ccm_node(data_center, rack, config=self._new_node_config, auto_bootstrap=auto_bootstrap,
+                                      is_seed=is_seed and add_node)
+            if not add_node:
+                self._detached[node.name] = self._nodes.pop(node.name)
+            return node
+
         if data_center and rack:
             placement = {"property_file": {"dc": data_center, "rack": rack}}
         else:
@@ -393,6 +485,10 @@ class ScyllaCluster:
         if data_center or rack:
             node.move_to(data_center=data_center or node.data_center, rack=rack or node.rack)
             node.placement_explicit = True
+        if self.ccm_parity:
+            if is_seed and node not in self.seeds:
+                self.seeds.append(node)
+            self._save_ccm_seeds([node])
         return self
 
     def clear(self) -> None:
@@ -415,6 +511,9 @@ class ScyllaCluster:
         if self._config_options.get("alternator_enforce_authorization"):
             self.manager.auth_provider = PlainTextAuthProvider(username="cassandra", password="cassandra")
         version = self.version_description()
+
+        if self.ccm_parity:
+            return self._populate_as_ccm(nodes, tokens=tokens, use_vnodes=use_vnodes, version=version)
 
         if tokens is None and use_vnodes is False:
             tokens = self.balanced_tokens(len(self._node_placements(nodes)))
@@ -488,6 +587,84 @@ class ScyllaCluster:
 
         return self
 
+    def _populate_as_ccm(self, nodes: int | list[int] | dict, tokens: list[str] | None,
+                         use_vnodes: bool | None, version: ScyllaVersionDescription) -> ScyllaCluster:
+        """populate() as ccm's Cluster.populate() placed the nodes (ccmlib/cluster.py).
+
+        A bare count means no datacenter at all: no cassandra-rackdc.properties and
+        the shipped SimpleSnitch, so Scylla calls it datacenter1/rack1.  A list or
+        dict names datacenters: GossipingPropertyFileSnitch for the whole cluster,
+        and a rack that is not named is RAC1.
+        """
+        match nodes:
+            case int():
+                locations = [(None, None)] * nodes
+            case list():
+                locations = [(f"dc{i}", None) for i, n in enumerate(nodes, start=1) for _ in range(n)]
+            case dict():
+                locations = []
+                for dc, x in nodes.items():
+                    if isinstance(x, int):
+                        locations += [(dc, None)] * x
+                    elif isinstance(x, list):
+                        locations += [(dc, f"RAC{i}") for i, n in enumerate(x, start=1) for _ in range(n)]
+                    elif isinstance(x, dict):
+                        locations += [(dc, rack) for rack, n in x.items() for _ in range(n)]
+                    else:
+                        raise RuntimeError(f"Unsupported topology specification: {nodes}")
+            case _:
+                raise RuntimeError(f"Unsupported topology specification: {nodes}")
+        if not locations:
+            raise RuntimeError(f"invalid topology {nodes}")
+        if any(dc is not None for dc, _ in locations):
+            self.set_configuration_options(values={"endpoint_snitch": CCM_SNITCH})
+        # ccm's populate(use_vnodes=False) -- its default -- balanced one token per node;
+        # with use_vnodes=True it left num_tokens alone.  dtest's options override both.
+        self._ccm_use_vnodes = bool(use_vnodes)
+        if tokens is None and not use_vnodes:
+            tokens = self.balanced_tokens(len(locations))
+        for i, (dc, rack) in enumerate(locations):
+            config = self._new_node_config
+            if tokens is not None and i < len(tokens):
+                config = config | {"initial_token": tokens[i]}
+            self._add_ccm_node(dc, rack, config=config, version=version)
+        self._ccm_cluster_cleanup()
+        return self
+
+    def _ccm_cluster_cleanup(self) -> None:
+        """ccm's Cluster.cluster_cleanup(), which its populate() ended with.
+
+        If any node is already running (the test is growing a live cluster), run
+        `nodetool cluster cleanup` on the first one, or, where that command does
+        not exist, `nodetool cleanup` on every running node but the newest.
+        """
+        nodes = [node for node in self.nodelist() if node.is_running()]
+        if not nodes:
+            return
+        try:
+            nodes[0].nodetool("cluster cleanup")
+        except NodetoolError:
+            for node in nodes[:-1]:
+                node.nodetool("cleanup")
+
+    def _add_ccm_node(self, dc: str | None, rack: str | None, config: dict[str, Any],
+                      version: ScyllaVersionDescription | None = None, auto_bootstrap: bool = False,
+                      is_seed: bool = True) -> ScyllaNode:
+        """Create one stopped node where ccm would have put it (see _populate_as_ccm())."""
+        placement = {} if dc is None else {"property_file": {"dc": dc, "rack": rack or "RAC1"}}
+        self._add_nodes([self.manager.server_add(config=config, version=version, start=False, **placement)],
+                        auto_bootstrap=auto_bootstrap)
+        node = self.nodelist()[-1]
+        # ccm's Node.data_center/rack: what the test asked for, None when it named nothing.
+        node.data_center, node.rack = dc, rack
+        node.placement_explicit = dc is not None and rack is not None
+        # ccm's new_node() -- populate() made every node that way -- added the node
+        # to the seeds unless told otherwise.
+        if is_seed:
+            self.seeds.append(node)
+        self._save_ccm_seeds([node])
+        return node
+
     def start_nodes(self,
                     nodes: list[ScyllaNode] | None = None,
                     no_wait: bool = False,
@@ -514,6 +691,11 @@ class ScyllaCluster:
             nodes = [nodes]
         started = []
 
+        if self.ccm_parity:
+            return self._start_nodes_as_ccm(nodes, no_wait=no_wait, wait_for_binary_proto=wait_for_binary_proto,
+                                            wait_other_notice=wait_other_notice,
+                                            wait_normal_token_owner=wait_normal_token_owner, jvm_args=jvm_args)
+
         for node in nodes:
             if not node.is_running():
                 node.start(
@@ -526,6 +708,54 @@ class ScyllaCluster:
                 started.append(node)
 
         return started
+
+    def _start_nodes_as_ccm(self, nodes: list[ScyllaNode], no_wait: bool, wait_for_binary_proto: bool | None,
+                            wait_other_notice: bool | None, wait_normal_token_owner: bool | None,
+                            jvm_args: list[str] | None) -> list[ScyllaNode]:
+        """ccm's ScyllaCluster.start_nodes() (ccmlib/scylla_cluster.py).
+
+        A node is started only once the one before it logged that it is normal or
+        serves CQL; each start waits for the nodes already up, but not for token
+        ownership; and at the end every node -- those that were running too --
+        waits in its log and over REST until it sees every started node alive,
+        so a test's first session finds the cluster settled.
+        """
+        if wait_for_binary_proto is None:
+            wait_for_binary_proto = self.force_wait_for_cluster_start
+        if wait_other_notice is None:
+            wait_other_notice = self.force_wait_for_cluster_start
+        if wait_normal_token_owner is None and wait_other_notice:
+            wait_normal_token_owner = True
+
+        marks = [(node, node.mark_log()) for node in self.nodelist() if node.is_running()] if wait_other_notice else []
+        started: list[tuple[ScyllaNode, int]] = []
+        for node in nodes:
+            if node.is_running():
+                continue
+            if started:
+                last_node, last_mark = started[-1]
+                last_node.watch_log_for("node is now in normal status|Starting listening for CQL clients",
+                                        from_mark=last_mark)
+            mark = node.mark_log() if os.path.exists(node.logfilename()) else 0
+            node.start(no_wait=no_wait, wait_for_binary_proto=wait_for_binary_proto,
+                       wait_other_notice=wait_other_notice, wait_normal_token_owner=False, jvm_args=jvm_args)
+            started.append((node, mark))
+            marks.append((node, mark))
+
+        for node, _ in started:
+            if not node.is_running():
+                raise NodeError(f"Error starting {node.name}.")
+        if wait_for_binary_proto:
+            for node, mark in started:
+                node.watch_log_for("Starting listening for CQL clients", from_mark=mark)
+        if wait_other_notice:
+            timeout = self.default_wait_other_notice_timeout
+            for old_node, mark in marks:
+                for node, _ in started:
+                    if old_node is not node:
+                        old_node.watch_log_for_alive(node, from_mark=mark, timeout=timeout)
+                        old_node.watch_rest_for_alive(node, timeout=timeout, wait_normal_token_owner=wait_normal_token_owner)
+        return [node for node, _ in started]
 
     def start(self,
               no_wait: bool = False,
@@ -565,8 +795,13 @@ class ScyllaCluster:
             nodes = self.nodelist()
         elif isinstance(nodes, ScyllaNode):
             nodes = [nodes]
+        if wait_other_notice and not other_nodes:
+            # As ccm's stop_nodes(): the nodes that must notice are the ones not being stopped.
+            # Left to each node, a node stopped alongside it would be waited on, and a node that
+            # is shutting down never logs another as down.
+            other_nodes = [node for node in self.nodelist() if node not in nodes]
 
-        for node in nodes:
+        def stop(node: ScyllaNode) -> None:
             node.stop(
                 wait=wait,
                 wait_other_notice=wait_other_notice,
@@ -574,6 +809,18 @@ class ScyllaCluster:
                 gently=gently,
                 wait_seconds=wait_seconds,
             )
+
+        if self.ccm_parity and len(nodes) > 1:
+            # ccm's ScyllaCluster.stop_nodes() signalled every node before waiting
+            # for any ("stop all nodes in parallel"), so none of them watched the
+            # others go down one by one.  A node's stop here blocks until the
+            # process is gone, so the nodes are stopped from threads of their own.
+            with ThreadPoolExecutor(max_workers=len(nodes)) as pool:
+                for future in [pool.submit(stop, node) for node in nodes]:
+                    future.result()
+        else:
+            for node in nodes:
+                stop(node)
 
         return [node for node in nodes if not node.is_running()]
 
@@ -615,6 +862,8 @@ class ScyllaCluster:
                 return
             node_path = node.get_path()
             del self._nodes[node.name]
+            if node in self.seeds:
+                self.seeds.remove(node)
             node.stop(gently=False, wait_other_notice=wait_other_notice, other_nodes=other_nodes)
 
         if remove_node_dir:
@@ -689,7 +938,21 @@ class ScyllaCluster:
             elif isinstance(nodes, ScyllaNode):
                 nodes = [nodes]
             for node in nodes:
-                self.manager.server_update_config(server_id=node.server_id, config_options=values)
+                if self.ccm_parity:
+                    # ccm deleted an option set to None (ccmlib/scylla_node.py update_yaml()),
+                    # and only wrote the file: a running node reads it when a test sends it
+                    # SIGHUP, or at its next start.
+                    for key in [k for k, v in values.items() if v is None]:
+                        self.manager.server_remove_config_option(server_id=node.server_id, key=key, reload=False)
+                    set_values = {k: v for k, v in values.items() if v is not None}
+                    if set_values:
+                        self.manager.server_update_config(server_id=node.server_id, config_options=set_values,
+                                                          reload=False)
+                else:
+                    self.manager.server_update_config(server_id=node.server_id, config_options=values)
+        if self.ccm_parity:
+            # ccm rewrote the scylla.yaml of every node it configured, seeds included.
+            self._save_ccm_seeds(self.nodelist() if nodes is None else [nodes] if isinstance(nodes, ScyllaNode) else nodes)
         return self
 
     def enable_internode_ssl(self, node_ssl_path: str, internode_encryption: str = "all") -> ScyllaCluster:

@@ -29,6 +29,7 @@ from test.cluster.dtest.tools.context import disable_autocompaction
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from test.cluster.dtest.ccmlib.scylla_cluster import ScyllaCluster
     from test.cluster.dtest.ccmlib.scylla_node import ScyllaNode
 
 
@@ -88,17 +89,16 @@ def list_to_hashed_dict(query_response_list: list) -> dict:
     return hashed_dict
 
 
-def num_tokens_per_node(session) -> int:
-    """How many vnode tokens each node of this cluster actually has.
+def num_tokens_per_node(cluster: ScyllaCluster) -> int:
+    """How many vnode tokens each node of this cluster has.
 
-    scylla-dtest could assume 256: nothing there overrode the num_tokens that
-    the setup writes into scylla.yaml.  In this tree every node is started with
-    `--num-tokens 16` on the command line (see ccmlib/scylla_node.py, added by
-    9280a039ee so that a 768-range bootstrap does not run out of file
-    descriptors), and a command line option wins over scylla.yaml.  Ask the
-    server what it ended up with rather than hard-coding upstream's number.
+    scylla-dtest hard-coded 256, the num_tokens its setup wrote into
+    scylla.yaml.  Here the shim decides it: ScyllaCluster.num_tokens, which
+    the ported tests run at upstream's 256 and the others at 16 (9280a039ee).
+    Taken from the cluster rather than asked of the server, so the test does
+    not read system.config where upstream did not.
     """
-    return int(session.execute("SELECT value FROM system.config WHERE name = 'num_tokens'").one().value)
+    return cluster.num_tokens
 
 
 def set_trace_probability(nodes: list[ScyllaNode], probability_value: float) -> None:

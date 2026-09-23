@@ -2,3 +2,7 @@ cassandra-stress:
   image: scylladb/cassandra-stress:3.21.1
 cassandra:
   image: cassandra:3.11.19
+minio:
+  image: docker.io/pgsty/silo:RELEASE.2026-09-16T00-00-00Z
+fake-gcs-server:
+  image: fsouza/fake-gcs-server:1.56.1

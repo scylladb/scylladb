@@ -208,8 +208,12 @@ class DTestSetup:
                  scylla_mode: str | None = None,
                  cluster_name: str = "test",
                  manager_install_dir: str | Path | None = None,
-                 skip_manager_server: bool = False):
+                 skip_manager_server: bool = False,
+                 ccm_parity: bool = False):
         self.dtest_config = dtest_config
+        # Whether this test's nodes run exactly as upstream's ccm ran them
+        # (ccmlib/ccm_parity.py): true for the ported tests.
+        self.ccm_parity = ccm_parity
         self.setup_overrides = setup_overrides
         self.cluster_name = cluster_name
         self.ignore_log_patterns = []
@@ -224,6 +228,7 @@ class DTestSetup:
             scylla_version=getattr(dtest_config, "scylla_version", None),
             manager_install_dir=manager_install_dir,
             skip_manager_server=skip_manager_server,
+            ccm_parity=ccm_parity,
             # scylla-dtest built every cluster this way (its dtest_setup.py).
             # It makes a bare cluster.start() wait for CQL and for the other
             # nodes to notice the new one, which is what the ported tests
@@ -475,7 +480,9 @@ class DTestSetup:
             # longer than a test timeout.
             # The base delay decides how long a reconnect is delayed after a node is
             # already back up; max_attempts keeps the overall budget at ~251s.
-            reconnection_policy=ExponentialReconnectionPolicy(0.1, 1.0, 250),
+            # Under ccm parity, scylla-dtest's own policy (1s to 4s, no limit).
+            reconnection_policy=(ExponentialReconnectionPolicy(1.0, 4.0) if self.ccm_parity
+                                 else ExponentialReconnectionPolicy(0.1, 1.0, 250)),
         )
         try:
             session = cluster.connect(wait_for_all_pools=True)
@@ -686,7 +693,12 @@ class DTestSetup:
 
         assert not found_cores, "Core file(s) found. Marking test as failed."
 
-    def init_default_config(self):  # noqa: PLR0912,PLR0915
+    def init_default_config(self, cluster: ScyllaCluster | None = None):  # noqa: PLR0912,PLR0915
+        """Give the test's cluster -- or, as scylla-dtest's secondary_cluster did with a
+        DTestSetup of its own, another `cluster` -- the dtest defaults.  Another cluster
+        gets none of the test's own cluster_options or setup overrides."""
+        own = cluster is None
+        cluster = self.cluster if own else cluster
         # the failure detector can be quite slow in such tests with quick start/stop
         timeout = self.cql_timeout() * 1000
         range_timeout = 3 * timeout
@@ -695,7 +707,7 @@ class DTestSetup:
         # need to adjust the session or query timeout respectively
         self.count_request_timeout = self.cql_timeout(400)
 
-        logger.debug(f"Scylla mode is '{self.cluster.scylla_mode}'")
+        logger.debug(f"Scylla mode is '{cluster.scylla_mode}'")
         logger.debug(f"Cluster *_request_timeout_in_ms={timeout}, range_request_timeout_in_ms={range_timeout}, cql request_timeout={self.cql_request_timeout}")
 
         # The test's own cluster_options go last: a @pytest.mark.cluster_options
@@ -716,9 +728,13 @@ class DTestSetup:
             # test.py's scylla.yaml sets strict_allow_filtering: true, which rejects queries that
             # scylla-dtest ran against Scylla's default ("warn": run them, with a warning).
             "strict_allow_filtering": "warn",
-        } | self.cluster_options
+        } | (self.cluster_options if own else {})
+        if self.ccm_parity and "sstable_format" not in (self.cluster_options if own else {}):
+            # scylla-dtest set no sstable_format: a node has its install's conf/scylla.yaml
+            # value -- mt for this tree, the default for an upgrade test's older release.
+            del values["sstable_format"]
 
-        if self.setup_overrides is not None and self.setup_overrides.cluster_options:
+        if own and self.setup_overrides is not None and self.setup_overrides.cluster_options:
             values.update(self.setup_overrides.cluster_options)
 
         if self.dtest_config.use_vnodes:
@@ -751,8 +767,21 @@ class DTestSetup:
             values["tablets_initial_scale_factor"] = 1
             values["tablets_per_shard_goal"] = 1000
 
-        self.cluster.set_configuration_options(values)
-        logger.debug("Done setting configuration options:\n" + pprint.pformat(self.cluster._config_options, indent=4))
+        if self.ccm_parity:
+            # What scylla-dtest's dtest_setup set on top of ccm (init_default_config()).
+            # test.py's scylla.yaml used to supply the superuser and set
+            # strict_allow_filtering to true, which is why the latter is overridden
+            # above; the ported tests get none of test.py's defaults, so it goes.
+            values.pop("strict_allow_filtering", None)
+            # upstream's --rf-rack-valid-keyspaces default, under a test's own cluster_options
+            values.setdefault("rf_rack_valid_keyspaces", True)
+            values.setdefault("auth_superuser_name", "cassandra")
+            # password is 'cassandra'
+            values.setdefault("auth_superuser_salted_password", "$6$x7IFjiX5VCpvNiFk$2IfjTvSyGL7zerpV.wbY7mJjaRCrJ/68dtT3UpT.sSmNYz1bPjtn3mH.kJKFvaZ2T4SbVeBijjmwGjcb83LlV/")
+            values.setdefault("maintenance_socket", "ignore")
+
+        cluster.set_configuration_options(values)
+        logger.debug("Done setting configuration options:\n" + pprint.pformat(cluster._config_options, indent=4))
 
     @staticmethod
     def get_tablets_config(enable_tablets: bool) -> dict[str, Any]:
@@ -771,9 +800,11 @@ class DTestSetup:
             seconds = self.base_cql_timeout
         factor = 1
         if isinstance(self.cluster, ScyllaCluster):
-            if self.cluster.scylla_mode == "debug":
+            # ccm's mode, under ccm parity: "release" for a cluster made from a repository version.
+            mode = self.cluster.ccm_scylla_mode if self.ccm_parity else self.cluster.scylla_mode
+            if mode == "debug":
                 factor = 3
-            elif self.cluster.scylla_mode != "release":
+            elif mode != "release":
                 factor = 2
         return seconds * factor
 

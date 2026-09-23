@@ -1927,8 +1927,16 @@ class ScyllaManagerMixin:
             scylla_mode=build_mode,
             manager_install_dir=self.cluster._scylla_manager.install_dir if self.cluster._scylla_manager else None,
             skip_manager_server=True,
+            ccm_parity=fixture_dtest_setup.ccm_parity,
+            force_wait_for_cluster_start=fixture_dtest_setup.ccm_parity,
         )
-        cluster.set_configuration_options(values={"ring_delay_ms": 10000, "skip_wait_for_gossip_to_settle": 0})
+        if fixture_dtest_setup.ccm_parity:
+            # scylla-dtest built it with a DTestSetup of its own: initialize_cluster() gave it
+            # the dtest defaults (vnodes, tablets off, timeouts, ...), then ring_delay_ms.
+            fixture_dtest_setup.init_default_config(cluster=cluster)
+            cluster.set_configuration_options(values={"ring_delay_ms": 10000})
+        else:
+            cluster.set_configuration_options(values={"ring_delay_ms": 10000, "skip_wait_for_gossip_to_settle": 0})
 
         yield cluster
 
