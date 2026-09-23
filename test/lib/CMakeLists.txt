@@ -29,6 +29,7 @@ target_sources(test-lib
     azure_kms_fixture.cc
     gcp_kms_fixture.cc
     limiting_data_source.cc
+    read_model.cc
     )
 target_include_directories(test-lib
   PUBLIC

@@ -394,6 +394,7 @@ add_scylla_test(combined_tests
     pluggable_test.cc
     querier_cache_test.cc
     query_processor_test.cc
+    read_model_test.cc
     reader_concurrency_semaphore_test.cc
     repair_test.cc
     replicator_test.cc
