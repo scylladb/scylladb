@@ -510,20 +510,6 @@ SEASTAR_TEST_CASE(test_internal_schema_changes_on_a_distributed_table) {
     });
 }
 
-SEASTAR_THREAD_TEST_CASE(test_invalid_using_timestamps) {
-    do_with_cql_env_thread([] (cql_test_env& e) {
-        auto now_nano = std::chrono::duration_cast<std::chrono::nanoseconds>(db_clock::now().time_since_epoch()).count();
-        e.execute_cql("CREATE TABLE tbl (a int, b int, PRIMARY KEY (a))").get();
-
-        BOOST_REQUIRE_THROW(e.execute_cql(format("INSERT INTO tbl (a, b) VALUES (1, 1) USING TIMESTAMP {}", now_nano)).get(), exceptions::invalid_request_exception);
-
-        e.execute_cql("INSERT INTO tbl (a, b) VALUES (1, 1)").get();
-        BOOST_REQUIRE_THROW(e.execute_cql(format("UPDATE tbl USING TIMESTAMP {} SET b = 10 WHERE a = 1", now_nano)).get(), exceptions::invalid_request_exception);
-        BOOST_REQUIRE_THROW(e.execute_cql(format("DELETE b FROM tbl USING TIMESTAMP {} WHERE a = 1", now_nano)).get(), exceptions::invalid_request_exception);
-        BOOST_REQUIRE_THROW(e.execute_cql(format("BEGIN BATCH USING TIMESTAMP {} INSERT INTO TBL (a, b) VALUES (2, 2); APPLY BATCH", now_nano)).get(), exceptions::invalid_request_exception);
-    }).get();
-}
-
 SEASTAR_THREAD_TEST_CASE(test_twcs_non_optimal_query_path) {
     do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql(

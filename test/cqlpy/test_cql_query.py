@@ -14,6 +14,7 @@ import json
 import math
 import re
 import struct
+import time
 import uuid
 from uuid import UUID
 
@@ -2874,3 +2875,20 @@ def test_counter_column_added_into_non_counter_table(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, "pk int, ck int, PRIMARY KEY(pk, ck)") as table:
         with pytest.raises(ConfigurationException):
             cql.execute(f'ALTER TABLE {table} ADD "c" counter')
+
+
+# Timestamps in nanoseconds (instead of microseconds) are too far in the future
+# and should be rejected.
+def test_invalid_using_timestamps(cql, test_keyspace, scylla_only):
+    now_nano = time.time_ns()
+    with new_test_table(cql, test_keyspace, "a int, b int, PRIMARY KEY (a)") as table:
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"INSERT INTO {table} (a, b) VALUES (1, 1) USING TIMESTAMP {now_nano}")
+
+        cql.execute(f"INSERT INTO {table} (a, b) VALUES (1, 1)")
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"UPDATE {table} USING TIMESTAMP {now_nano} SET b = 10 WHERE a = 1")
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"DELETE b FROM {table} USING TIMESTAMP {now_nano} WHERE a = 1")
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"BEGIN BATCH USING TIMESTAMP {now_nano} INSERT INTO {table} (a, b) VALUES (2, 2); APPLY BATCH")
