@@ -21,6 +21,7 @@
 #include "exceptions/coordinator_result.hh"
 #include "locator/host_id.hh"
 #include "service/cas_shard.hh"
+#include "service/pager/query_pager.hh"
 
 namespace service {
     class client_state;
@@ -146,6 +147,15 @@ public:
     virtual future<::shared_ptr<cql_transport::messages::result_message>>
         execute_without_checking_exception_message(query_processor& qp, service::query_state& qs, const query_options& options, std::optional<service::group0_guard> guard) const override;
 
+    // Executes the statement like do_execute() of this class, but reads
+    // through `*query_function` instead of storage_proxy::query_result(),
+    // unless `query_function` is null. The statement still builds its read
+    // command, its pager and its result. Tests of paging and reconciliation
+    // use it to read from simulated replicas. It does not run the
+    // do_execute() of a derived class.
+    future<::shared_ptr<cql_transport::messages::result_message>> execute_with_query_function(query_processor& qp,
+        service::query_state& state, const query_options& options, const service::pager::query_function* query_function) const;
+
     future<::shared_ptr<cql_transport::messages::result_message>> execute_non_aggregate_unpaged(query_processor& qp,
         lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector&& partition_ranges, service::query_state& state,
          const query_options& options, gc_clock::time_point now) const;
@@ -153,12 +163,12 @@ public:
     future<::shared_ptr<cql_transport::messages::result_message>> execute_without_checking_exception_message_non_aggregate_unpaged(query_processor& qp,
         lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector&& partition_ranges, service::query_state& state,
         const query_options& options, gc_clock::time_point now,
-        std::optional<service::cas_shard> cas_shard) const;
+        std::optional<service::cas_shard> cas_shard, const service::pager::query_function* query_function = nullptr) const;
 
     future<::shared_ptr<cql_transport::messages::result_message>> execute_without_checking_exception_message_aggregate_or_paged(query_processor& qp,
         lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector&& partition_ranges, service::query_state& state,
          const query_options& options, gc_clock::time_point now, int32_t page_size, bool aggregate, bool nonpaged_filtering, uint64_t limit,
-        std::optional<service::cas_shard> cas_shard) const;
+        std::optional<service::cas_shard> cas_shard, const service::pager::query_function* query_function = nullptr) const;
 
     future<shared_ptr<cql_transport::messages::result_message>> process_results(foreign_ptr<lw_shared_ptr<query::result>> results,
         lw_shared_ptr<query::read_command> cmd, const query_options& options, gc_clock::time_point now,
