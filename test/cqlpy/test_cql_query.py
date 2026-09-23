@@ -7,6 +7,10 @@
 # Tests for various CQL statements, converted from test/boost/cql_query_test.cc.
 #############################################################################
 
+from cassandra import InvalidRequest
+from cassandra.protocol import ConfigurationException
+import pytest
+
 from .util import unique_name
 
 
@@ -37,3 +41,25 @@ def test_create_table_statement(cql, test_keyspace):
             cql.execute(f"DROP TABLE {test_keyspace}.{cf}")
     finally:
         cql.execute(f"DROP TABLE {test_keyspace}.{users}")
+
+
+def test_create_table_with_id_statement(cql, test_keyspace, scylla_only):
+    tbl = f"{test_keyspace}.{unique_name()}"
+    tbl2 = f"{test_keyspace}.{unique_name()}"
+    cql.execute(f"CREATE TABLE {tbl} (a int, b int, PRIMARY KEY (a))")
+    ks, name = tbl.split(".")
+    id = cql.execute(f"SELECT id FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = '{name}'").one().id
+    cql.execute(f"DROP TABLE {tbl}")
+    with pytest.raises(InvalidRequest):
+        cql.execute(f"SELECT * FROM {tbl}")
+    cql.execute(f"CREATE TABLE {tbl} (a int, b int, PRIMARY KEY (a)) WITH id='{id}'")
+    try:
+        assert list(cql.execute(f"SELECT * FROM {tbl}")) == []
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"CREATE TABLE {tbl2} (a int, b int, PRIMARY KEY (a)) WITH id='{id}'")
+        with pytest.raises(ConfigurationException):
+            cql.execute(f"CREATE TABLE {tbl2} (a int, b int, PRIMARY KEY (a)) WITH id='55'")
+        with pytest.raises(ConfigurationException):
+            cql.execute(f"ALTER TABLE {tbl} WITH id='f2a8c099-e723-48cb-8cd9-53e647a011a3'")
+    finally:
+        cql.execute(f"DROP TABLE {tbl}")

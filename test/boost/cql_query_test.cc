@@ -106,28 +106,6 @@ static std::vector<sstring> describe_create_statements(cql_test_env& e, std::str
     return result;
 }
 
-SEASTAR_TEST_CASE(test_create_table_with_id_statement) {
-    return do_with_cql_env_thread([](cql_test_env& e) {
-        e.execute_cql("CREATE TABLE tbl (a int, b int, PRIMARY KEY (a))").get();
-        auto id = e.local_db().find_schema("ks", "tbl")->id();
-        e.execute_cql("DROP TABLE tbl").get();
-        BOOST_REQUIRE_THROW(e.execute_cql("SELECT * FROM tbl").get(), std::exception);
-        e.execute_cql(
-            format("CREATE TABLE tbl (a int, b int, PRIMARY KEY (a)) WITH id='{}'", id)).get();
-        assert_that(e.execute_cql("SELECT * FROM tbl").get())
-            .is_rows().with_size(0);
-        BOOST_REQUIRE_THROW(
-            e.execute_cql(format("CREATE TABLE tbl2 (a int, b int, PRIMARY KEY (a)) WITH id='{}'", id)).get(),
-            exceptions::invalid_request_exception);
-        BOOST_REQUIRE_THROW(
-            e.execute_cql("CREATE TABLE tbl2 (a int, b int, PRIMARY KEY (a)) WITH id='55'").get(),
-            exceptions::configuration_exception);
-        BOOST_REQUIRE_THROW(
-            e.execute_cql("ALTER TABLE tbl WITH id='f2a8c099-e723-48cb-8cd9-53e647a011a3'").get(),
-            exceptions::configuration_exception);
-    });
-}
-
 SEASTAR_TEST_CASE(test_alter_cluster_with_persists_cluster_config_override) {
     return do_with_cql_env_thread([](cql_test_env& e) {
         auto configs_type = map_type_impl::get_instance(utf8_type, utf8_type, false);
