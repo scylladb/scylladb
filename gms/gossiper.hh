@@ -544,7 +544,8 @@ public:
      * existing nodes can talk to the replacing node. So the probability of
      * replacing node being talked to is pretty high.
      */
-    future<> start_gossiping(gms::generation_type generation_nbr, application_state_map preload_local_states = {});
+    using joining = bool_class<class joining_tag>;
+    future<> start_gossiping(gms::generation_type generation_nbr, application_state_map preload_local_states = {}, joining is_joining = joining::no);
 
 public:
     using mandatory = bool_class<class mandatory_tag>;
