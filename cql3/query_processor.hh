@@ -396,6 +396,20 @@ public:
     static constexpr int32_t default_internal_page_size = 1000;
 
     /*
+     * \brief iterate over all cql results using paging, bounded by a deadline
+     * Like the above, but every page fetch runs with the time left until
+     * deadline as its read timeout, so the query fails with a read timeout
+     * once the deadline has passed. db::no_timeout means no bound.
+     */
+    future<> query_internal(
+            const sstring& query_string,
+            db::consistency_level cl,
+            const query_data_params& values,
+            int32_t page_size,
+            db::timeout_clock::time_point deadline,
+            noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)> f);
+
+    /*
      * \brief iterate over all cql results using paging
      * An overload of query_internal without query parameters
      * using CL = ONE, no timeout, and page size = default_internal_page_size.
@@ -586,7 +600,8 @@ private:
             db::consistency_level,
             const query_data_params& values,
             int32_t page_size,
-            std::optional<service::query_state> qs = std::nullopt);
+            std::optional<service::query_state> qs = std::nullopt,
+            db::timeout_clock::time_point deadline = db::no_timeout);
 
     /*!
      * \brief run a query using paging
