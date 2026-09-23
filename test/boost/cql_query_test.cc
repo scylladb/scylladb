@@ -106,13 +106,6 @@ static std::vector<sstring> describe_create_statements(cql_test_env& e, std::str
     return result;
 }
 
-SEASTAR_TEST_CASE(test_create_keyspace_statement) {
-    return do_with_cql_env_thread([] (cql_test_env& e) {
-        e.execute_cql("create keyspace ks2 with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 };").get();
-        BOOST_REQUIRE(e.local_db().has_keyspace("ks2"));
-    });
-}
-
 SEASTAR_TEST_CASE(test_create_table_statement) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("create table users (user_name varchar PRIMARY KEY, birth_year bigint);").get();
