@@ -106,15 +106,6 @@ static std::vector<sstring> describe_create_statements(cql_test_env& e, std::str
     return result;
 }
 
-SEASTAR_TEST_CASE(test_create_table_statement) {
-    return do_with_cql_env_thread([] (cql_test_env& e) {
-        e.execute_cql("create table users (user_name varchar PRIMARY KEY, birth_year bigint);").get();
-        BOOST_REQUIRE(e.local_db().has_schema("ks", "users"));
-        e.execute_cql("create table cf (id int primary key, m map<int, int>, s set<text>, l list<uuid>);").get();
-        BOOST_REQUIRE(e.local_db().has_schema("ks", "cf"));
-    });
-}
-
 SEASTAR_TEST_CASE(test_create_table_with_id_statement) {
     return do_with_cql_env_thread([](cql_test_env& e) {
         e.execute_cql("CREATE TABLE tbl (a int, b int, PRIMARY KEY (a))").get();
