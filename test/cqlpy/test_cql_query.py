@@ -10,10 +10,11 @@
 from contextlib import contextmanager
 
 from cassandra import InvalidRequest, Unauthorized
+import cassandra.cqltypes
 from cassandra.protocol import ConfigurationException, SyntaxException
 import pytest
 
-from .util import config_value_context, new_session, new_test_keyspace, new_user, unique_name
+from .util import config_value_context, new_session, new_test_keyspace, new_test_table, new_user, unique_name
 
 
 def test_create_keyspace_statement(cql):
@@ -592,3 +593,31 @@ def test_drop_table_with_si_and_mv(cql, this_dc):
         cql.execute(f"DROP KEYSPACE {ks}")
     finally:
         cql.execute(f"DROP KEYSPACE IF EXISTS {ks}")
+
+
+# The Python driver refuses to send invalid UTF-8 in a text value. This
+# fixture monkey-patches the driver's text serializer so that a string
+# containing "surrogateescape"-wrapped bytes is sent as those raw bytes,
+# allowing tests to bind invalid UTF-8 to text values (including inside
+# collections and tuples). See also test_validation.py.
+@pytest.fixture
+def raw_utf8_serialization(monkeypatch):
+    def serialize(ustr, protocol_version):
+        return ustr.encode('utf-8', errors='surrogateescape')
+    monkeypatch.setattr(cassandra.cqltypes.UTF8Type, 'serialize', staticmethod(serialize))
+
+# A single byte 0xAD - a UTF-8 continuation byte, which is invalid as the
+# first byte of a UTF-8 sequence - wrapped so it can be bound using the
+# raw_utf8_serialization fixture.
+bad_utf8_string = b'\xad'.decode('utf-8', errors='surrogateescape')
+
+def test_list_elements_validation(cql, test_keyspace, raw_utf8_serialization):
+    with new_test_table(cql, test_keyspace, "a int, b list<date>, PRIMARY KEY (a)") as tbl:
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"INSERT INTO {tbl} (a, b) VALUES(1, ['definitely not a date value'])")
+        cql.execute(f"INSERT INTO {tbl} (a, b) VALUES(1, ['2015-05-03'])")
+    with new_test_table(cql, test_keyspace, "a int, b list<text>, PRIMARY KEY (a)") as tbl2:
+        stmt = cql.prepare(f"INSERT INTO {tbl2} (a, b) VALUES(?, ?)")
+        with pytest.raises(InvalidRequest, match='UTF8'):
+            cql.execute(stmt, [1, [bad_utf8_string]])
+        cql.execute(stmt, [1, ["proper utf8 string"]])
