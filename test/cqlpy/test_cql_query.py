@@ -1747,3 +1747,12 @@ def test_drop_table(cql, test_keyspace):
     cql.execute(f"drop columnfamily {tmp}")
     cql.execute(f"create table {tmp} (pk int, v int, PRIMARY KEY (pk))")
     cql.execute(f"drop columnfamily {tmp}")
+
+
+def test_reversed_slice_with_empty_range_before_all_rows(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "a int, b int, c int, s1 int static, s2 int static, PRIMARY KEY (a, b)") as table:
+        for i in range(16):
+            cql.execute(f"INSERT INTO {table} (a, b, c, s1, s2) VALUES (99, {i}, {i}, 17, 42)")
+        assert list(cql.execute(f"select * from {table} WHERE a = 99 and b < 0 ORDER BY b DESC limit 2")) == []
+        assert len(list(cql.execute(f"select * from {table} WHERE a = 99 order by b desc"))) == 16
+        assert len(list(cql.execute(f"select * from {table}"))) == 16
