@@ -881,3 +881,10 @@ def test_query_with_static_columns(cql, test_keyspace):
         # are populated when limit kicks in.
         assert list(cql.execute(f"select s1, v from {cf} where k = 0x00 and c in (0x01, 0x02) limit 1")) == [
             (b'\x01', b'\x02')]
+
+
+def test_insert_without_clustering_key(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "k blob, v blob, primary key (k)") as cf:
+        cql.execute(f"insert into {cf} (k) values (0x01)")
+        assert list(cql.execute(f"select * from {cf}")) == [(b'\x01', None)]
+        assert list(cql.execute(f"select k from {cf}")) == [(b'\x01',)]
