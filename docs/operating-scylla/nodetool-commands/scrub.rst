@@ -161,7 +161,7 @@ to determine the root cause of the corruption.
 
 .. code-block:: shell
 
-   > nodetool dropquarantinedsstables keyspace_name table_name
+   > nodetool dropquarantinedsstables --i-accept-data-resurrection-risk keyspace_name table_name
 
 This permanently removes the quarantined SSTables from the specified table.
 

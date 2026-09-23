@@ -178,7 +178,8 @@ The per-table directory may contain several sub-directories, as listed below:
   They participate in reads, streaming, data migration, repairs
   and overlap checks for the tombstone-gc.
   They can be inspected manually for debugging purposes or removed using
-  the `drop_quarantined_sstables` API operation.
+  the `drop_quarantined_sstables` API operation. However, removing such sstables
+  is unsafe and may lead to data resurrection.
   
   The scrub operation can be configured to handle quarantined SSTables using the
   `quarantine_mode` parameter with the following options:
