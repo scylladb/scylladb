@@ -19,8 +19,11 @@ import hashlib
 import datetime
 import gzip
 import decimal
+import re
 
 from botocore.exceptions import ClientError
+from cassandra import ConsistencyLevel
+from cassandra.query import SimpleStatement
 from contextlib import contextmanager, ExitStack
 
 from test.alternator.util import get_table_arn, is_aws, new_test_table, create_test_table, random_string, manual_request
@@ -1013,8 +1016,8 @@ def test_describe_export(dynamodb, test_table_s):
         assert 'BilledSizeBytes' in desc
 
 
-# An id which no export has, in the shape DynamoDB mints for one: the export's StartTime in
-# milliseconds since the epoch, padded to 14 digits, a dash and 8 hex digits.
+# An export id that no export has, in the format of DynamoDB's export ids: the StartTime of the
+# export in milliseconds since the epoch, padded to 14 digits, a dash, and 8 hex digits.
 def unknown_export_id():
     return f'{int(time.time() * 1000):014d}-{uuid.uuid4().hex[:8]}'
 
@@ -1037,6 +1040,17 @@ def test_describe_export_nonexistent(test_table_s):
         client.describe_export(ExportArn=table_arn + '/export/')
 
 
+# Test that DescribeExport reports a well-formed ARN of an export that was never started as
+# ExportNotFoundException, whether the table it names exists or not.
+def test_describe_export_unknown(test_table_s):
+    client = test_table_s.meta.client
+    table_arn = get_table_arn(test_table_s)
+    for export_arn in [f'{table_arn}/export/{unknown_export_id()}', f'{table_arn}_nonexistent/export/{unknown_export_id()}']:
+        with pytest.raises(ClientError, match=f'ExportNotFoundException.*{re.escape(export_arn)}') as error:
+            client.describe_export(ExportArn=export_arn)
+        assert error.value.response['ResponseMetadata']['HTTPStatusCode'] == 400
+
+
 # An ARN with the part at `index` - arn, partition, service, region, account, resource - replaced by
 # `value`, or dropped if `value` is None.
 def arn_with_part(arn, index, value):
@@ -1045,9 +1059,8 @@ def arn_with_part(arn, index, value):
     return ':'.join(parts)
 
 
-# The ARN of an export of `table` which nobody started, in the aws partition Alternator hands out its
-# export ARNs in. Alternator's table ARN is in the scylla partition instead, where changing the
-# partition would change how the rest of the ARN is read.
+# The ARN of an export of `table` that does not exist; `table` itself may exist. On Alternator, the
+# ARN has the format of the export ARNs that ExportTableToPointInTime returns, not of the table ARN.
 def unknown_export_arn(table):
     table_arn = get_table_arn(table)
     if table_arn.startswith('arn:scylla:'):
@@ -1061,12 +1074,28 @@ def unknown_export_arn(table):
 def test_describe_export_incorrect_arns(test_table_s):
     client = test_table_s.meta.client
     export_arn = unknown_export_arn(test_table_s)
-    with pytest.raises(ClientError, match='ValidationException'):
-        client.describe_export(ExportArn=arn_with_part(export_arn, 0, 'qwerty'))
-    with pytest.raises(ClientError, match='ValidationException'):
-        client.describe_export(ExportArn=arn_with_part(export_arn, 4, None))
-    with pytest.raises(ClientError, match='ValidationException'):
+    with pytest.raises(ClientError, match='ValidationException.*Invalid Export ARN'):
+        client.describe_export(ExportArn=arn_with_part(export_arn, 0, 'qwerty'))  # arn -> qwerty
+    with pytest.raises(ClientError, match='ValidationException.*Invalid Export ARN'):
+        client.describe_export(ExportArn=arn_with_part(export_arn, 4, None))  # account dropped
+    with pytest.raises(ClientError, match='ValidationException.*Invalid Export ARN'):
         client.describe_export(ExportArn=export_arn.replace(':table/', ':qwerty/', 1))
+
+
+# Test that DescribeExport reports as ValidationException an export ARN naming another partition,
+# service or region, and as AccessDeniedException one naming another account.
+@pytest.mark.xfail(reason='Alternator does not check the partition, service, region or account of an ARN')
+def test_describe_export_incorrect_arn_parts(test_table_s):
+    client = test_table_s.meta.client
+    export_arn = unknown_export_arn(test_table_s)
+    with pytest.raises(ClientError, match='ValidationException.*Export ARN'):
+        client.describe_export(ExportArn=arn_with_part(export_arn, 1, 'qwerty'))  # partition -> qwerty
+    with pytest.raises(ClientError, match='ValidationException.*Export ARN'):
+        client.describe_export(ExportArn=arn_with_part(export_arn, 2, 'qwerty'))  # service -> qwerty
+    with pytest.raises(ClientError, match='ValidationException.*Export ARN'):
+        client.describe_export(ExportArn=arn_with_part(export_arn, 3, 'qwerty'))  # region -> qwerty
+    with pytest.raises(ClientError, match='AccessDeniedException'):
+        client.describe_export(ExportArn=arn_with_part(export_arn, 4, '123456789012'))  # account -> 123456789012
 
 
 # ---------------------------------------------------------------------------
@@ -1405,3 +1434,147 @@ def test_export_table_invalid_export_time_in_future(test_table_s_for_export_only
             S3Bucket='my-bucket',
             ExportTime=int(time.time()) + 60 * 5 + 60,
         )
+
+
+# ---------------------------------------------------------------------------
+# DescribeExport tests driven from the export metadata table
+# ---------------------------------------------------------------------------
+# FIXME: Nothing writes system_distributed.alternator_export_to_s3_exports until export
+# orchestration lands (SCYLLADB-1893), so the tests below put the row there over CQL and let
+# DescribeExport render it, which is how SCYLLADB-1891 asks for DescribeExport to be tested until
+# then. Once it lands, replace them with tests that start real exports. They only run against
+# Scylla, since they reach into Alternator's own tables.
+
+# An export ARN in the shape ExportTableToPointInTime hands out, for an export nobody started.
+def unstarted_export_arn(client, table_arn):
+    accepted = client.export_table_to_point_in_time(TableArn=table_arn, S3Bucket='my-bucket')
+    return accepted['ExportDescription']['ExportArn'].rsplit('/', 1)[0] + '/' + unknown_export_id()
+
+
+# The columns every export row carries from the moment the export is accepted, whatever state the
+# export goes on to reach. The sub-second parts are halves and quarters of a second so that they
+# survive the trip through a double exactly.
+def accepted_export_row(table_arn, **extra_request_fields):
+    return {
+        'client_token': random_string(20),
+        'request': json.dumps({'TableArn': table_arn, 'S3Bucket': 'my-bucket'} | extra_request_fields),
+        'export_status': 'IN_PROGRESS',
+        'table_id': uuid.uuid4(),
+        'export_time': datetime.datetime(2026, 9, 20, 12, 0, 0, 500000, tzinfo=datetime.timezone.utc),  # 2026-09-20 12:00:00.500 UTC
+        'accepted_at': datetime.datetime(2026, 9, 20, 12, 0, 1, 250000, tzinfo=datetime.timezone.utc),  # 2026-09-20 12:00:01.250 UTC
+    }
+
+
+# These tests run on a single node, so use CL=ONE
+@contextmanager
+def export_metadata(cql, export_arn, columns):
+    names = ', '.join(['export_arn', *columns])
+    placeholders = ', '.join(['%s'] * (1 + len(columns)))
+    cql.execute(SimpleStatement(
+        f"INSERT INTO system_distributed.alternator_export_to_s3_exports ({names}) VALUES ({placeholders})",
+        consistency_level=ConsistencyLevel.ONE), [export_arn, *columns.values()])
+    try:
+        yield export_arn
+    finally:
+        cql.execute(SimpleStatement(
+            "DELETE FROM system_distributed.alternator_export_to_s3_exports WHERE export_arn = %s",
+            consistency_level=ConsistencyLevel.ONE), [export_arn])
+
+
+# When the finished exports below finished.
+COMPLETED_AT = datetime.datetime(2026, 9, 20, 12, 5, 0, 750000, tzinfo=datetime.timezone.utc)  # 2026-09-20 12:05:00.750 UTC
+
+# The fields of an ExportDescription which not every export has: the request fields a request may
+# omit, and what a finished export produced.
+OPTIONAL_EXPORT_DESCRIPTION_FIELDS = ['S3Prefix', 'ExportType', 'ExportManifest', 'ItemCount', 'BilledSizeBytes',
+                                      'EndTime', 'FailureCode', 'FailureMessage']
+
+
+# Test that DescribeExport reports an export in each state it can be in - accepted and still
+# running, completed, and failed - with the fields every export has and exactly the optional ones
+# its request and its state carry. A stored status DynamoDB does not have is reported as
+# IN_PROGRESS.
+@pytest.mark.parametrize('request_fields, columns, status, optional_fields', [
+    pytest.param({}, {}, 'IN_PROGRESS', {}, id='in_progress'),
+    pytest.param({}, {'export_status': 'NOT_STARTED'}, 'IN_PROGRESS', {}, id='not_started'),
+    pytest.param({}, {'export_status': 'FAILING'}, 'IN_PROGRESS', {}, id='failing'),
+    pytest.param({'S3Prefix': 'exports/test', 'ExportType': 'FULL_EXPORT'}, {
+        'export_status': 'COMPLETED',
+        'export_manifest': 'AWSDynamoDB/01695353076000-06e2188f/manifest-files.json',
+        'item_count': 17,
+        'billed_size_bytes': 4096,
+        'completed_at': COMPLETED_AT,
+    }, 'COMPLETED', {
+        'S3Prefix': 'exports/test',
+        'ExportType': 'FULL_EXPORT',
+        'ExportManifest': 'AWSDynamoDB/01695353076000-06e2188f/manifest-files.json',
+        'ItemCount': 17,
+        'BilledSizeBytes': 4096,
+        'EndTime': COMPLETED_AT,
+    }, id='completed'),
+    pytest.param({}, {
+        'export_status': 'FAILED',
+        'failure_code': 'InternalServerError',
+        'failure_message': 'the export could not be written',
+        'completed_at': COMPLETED_AT,
+    }, 'FAILED', {
+        'FailureCode': 'InternalServerError',
+        'FailureMessage': 'the export could not be written',
+        'EndTime': COMPLETED_AT,
+    }, id='failed'),
+])
+def test_describe_export_states(test_table_s_for_export_only, cql, request_fields, columns, status, optional_fields):
+    client = test_table_s_for_export_only.meta.client
+    table_arn = get_table_arn(test_table_s_for_export_only)
+    export_arn = unstarted_export_arn(client, table_arn)
+    row = accepted_export_row(table_arn, **request_fields) | columns
+    with export_metadata(cql, export_arn, row):
+        desc = client.describe_export(ExportArn=export_arn)['ExportDescription']
+    assert desc['ExportArn'] == export_arn
+    assert desc['ExportStatus'] == status
+    assert desc['TableArn'] == table_arn
+    assert desc['TableId'] == str(row['table_id'])
+    assert desc['ClientToken'] == row['client_token']
+    assert desc['S3Bucket'] == 'my-bucket'
+    # No request names a format, so the default it was accepted with is reported.
+    assert desc['ExportFormat'] == 'DYNAMODB_JSON'
+    assert desc['ExportTime'] == row['export_time']
+    assert desc['StartTime'] == row['accepted_at']
+    assert {field: desc[field] for field in OPTIONAL_EXPORT_DESCRIPTION_FIELDS if field in desc} == optional_fields
+
+
+# Test that DescribeExport answers a corrupt export row - one missing a column every export has, or
+# one whose request cannot be read back - with InternalServerError. The node must stay up, and
+# test.py runs it with --abort-on-internal-error, so an error reported with on_internal_error()
+# would fail this test by taking the node down.
+@pytest.mark.parametrize('corrupt', [
+    pytest.param(lambda row: row.pop('request'), id='missing_column'),
+    pytest.param(lambda row: row.update(request='not json'), id='request_not_json'),
+    pytest.param(lambda row: row.update(request=json.dumps({'S3Bucket': 'my-bucket'})), id='request_without_table_arn'),
+])
+def test_describe_export_corrupt_row(test_table_s_for_export_only, cql, corrupt):
+    client = test_table_s_for_export_only.meta.client
+    table_arn = get_table_arn(test_table_s_for_export_only)
+    export_arn = unstarted_export_arn(client, table_arn)
+    row = accepted_export_row(table_arn)
+    corrupt(row)
+    with export_metadata(cql, export_arn, row):
+        with pytest.raises(ClientError, match='InternalServerError'):
+            client.describe_export(ExportArn=export_arn)
+
+
+# Test that DescribeExport still describes an export after the table it was taken from has been
+# deleted.
+def test_describe_export_table_deleted(dynamodb, cql):
+    with new_test_table(dynamodb,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
+        client = table.meta.client
+        table_arn = get_table_arn(table)
+        export_arn = unstarted_export_arn(client, table_arn)
+    row = accepted_export_row(table_arn)
+    with export_metadata(cql, export_arn, row):
+        desc = client.describe_export(ExportArn=export_arn)['ExportDescription']
+    assert desc['ExportArn'] == export_arn
+    assert desc['TableArn'] == table_arn
+    assert desc['TableId'] == str(row['table_id'])
