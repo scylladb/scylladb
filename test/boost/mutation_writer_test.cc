@@ -16,6 +16,7 @@
 
 #include "mutation/mutation_fragment.hh"
 #include "mutation/mutation_rebuilder.hh"
+#include "schema/schema_builder.hh"
 #include "test/lib/mutation_source_test.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
 #include "readers/from_mutations.hh"
@@ -283,6 +284,9 @@ private:
         }
         if (cr.tomb()) {
             check_timestamp(cr.tomb().tomb().timestamp);
+            if (cr.tomb().regular()) {
+                check_timestamp(cr.tomb().regular().timestamp);
+            }
         }
         verify_row_bucket_id(cr.cells(), column_kind::regular_column);
     }
@@ -443,6 +447,63 @@ static void assert_that_segregator_produces_correct_data(const bucket_map_t& buc
     for (size_t i = 0; i < muts.size(); ++i) {
         testlog.debug("Comparing mutation #{}", i);
         assert_that(combined_mutations[i]).is_equal_to(muts[i]);
+    }
+}
+
+// A row tombstone of a view row can have a regular part and a newer shadowable
+// part whose timestamps belong to different buckets. Each part must be written
+// to its own bucket, otherwise the bucket's output contains a timestamp of
+// another bucket. With TWCS, this makes reshape rewrite the same data forever.
+SEASTAR_THREAD_TEST_CASE(test_timestamp_based_splitting_mutation_writer_shadowable_tombstone) {
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("ck", int32_type, column_kind::clustering_key)
+            .with_column("v", int32_type)
+            .build();
+
+    const api::timestamp_type t1 = 1000;
+    const api::timestamp_type t2 = 2000;
+    auto classify_fn = [] (api::timestamp_type ts) {
+        return int64_t(ts / 1000);
+    };
+
+    const auto now = gc_clock::now();
+    const auto& v_def = *s->get_column_definition("v");
+    mutation m(s, partition_key::from_single_value(*s, int32_type->decompose(0)));
+    // The cells of row 0 are empty, the cells of row 1 belong to the bucket
+    // of the shadowable part, the cells of row 2 to the bucket of the regular part.
+    for (int ck : {0, 1, 2}) {
+        auto& row = m.partition().clustered_row(*s, clustering_key::from_single_value(*s, int32_type->decompose(ck)));
+        row.apply(row_marker(t2));
+        row.apply(row_tombstone(tombstone(t1, now), shadowable_tombstone(t2, now)));
+        if (ck == 1) {
+            row.cells().apply(v_def, atomic_cell::make_live(*v_def.type, t2 + 1, int32_type->decompose(ck)));
+        } else if (ck == 2) {
+            row.cells().apply(v_def, atomic_cell::make_live(*v_def.type, t1 + 1, int32_type->decompose(ck)));
+        }
+    }
+
+    bucket_map_t buckets;
+    auto consumer = [&] (mutation_reader bucket_reader) {
+        return with_closeable(std::move(bucket_reader), [&] (mutation_reader& rd) {
+            return rd.consume(test_bucket_writer(s, rd.permit(), classify_fn, buckets));
+        });
+    };
+    segregate_by_timestamp(make_mutation_reader_from_mutations(s, semaphore.make_permit(), m), classify_fn, std::move(consumer)).get();
+
+    BOOST_REQUIRE_EQUAL(buckets.size(), 2);
+    mutation merged(s, m.decorated_key());
+    for (const auto& bucket : buckets | std::views::values) {
+        for (const auto& bucket_mut : bucket) {
+            merged.apply(bucket_mut);
+        }
+    }
+    assert_that(merged).is_equal_to(m);
+    // row_tombstone equality ignores the regular part, so check it explicitly.
+    for (const auto& row : merged.partition().clustered_rows()) {
+        BOOST_REQUIRE_EQUAL(row.row().deleted_at().regular().timestamp, t1);
+        BOOST_REQUIRE_EQUAL(row.row().deleted_at().tomb().timestamp, t2);
     }
 }
 
