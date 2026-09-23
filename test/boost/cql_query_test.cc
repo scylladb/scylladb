@@ -254,40 +254,6 @@ SEASTAR_TEST_CASE(test_alter_node_oriented_scopes_reject_unknown_targets) {
     });
 }
 
-SEASTAR_TEST_CASE(test_vector_elements_validation) {
-    return do_with_cql_env_thread([](cql_test_env& e) {
-        auto test_inline = [&] (sstring value, bool should_throw) {
-            auto cql = fmt::format("INSERT INTO tbl (a, b) VALUES(1, ['{}'])", value);
-            if (should_throw) {
-                BOOST_REQUIRE_THROW(e.execute_cql(cql).get(), exceptions::invalid_request_exception);
-            } else {
-                BOOST_REQUIRE_NO_THROW(e.execute_cql(cql).get());
-            }
-        };
-        e.execute_cql("CREATE TABLE tbl (a int, b vector<date, 1>, PRIMARY KEY (a))").get();
-        test_inline("definitely not a date value", true);
-        test_inline("2015-05-03", false);
-        e.execute_cql("CREATE TABLE tbl2 (a int, b vector<text, 1>, PRIMARY KEY (a))").get();
-        auto id = e.prepare("INSERT INTO tbl2 (a, b) VALUES(?, ?)").get();
-        auto test_bind = [&] (sstring value, bool should_throw) {
-            auto my_vector_type = vector_type_impl::get_instance(utf8_type, 1);
-            std::vector<cql3::raw_value> raw_values;
-            raw_values.emplace_back(cql3::raw_value::make_value(int32_type->decompose(int32_t{1})));
-            auto values = my_vector_type->decompose(make_vector_value(my_vector_type, {value}));
-            raw_values.emplace_back(cql3::raw_value::make_value(values));
-            if (should_throw) {
-                BOOST_REQUIRE_THROW(
-                    e.execute_prepared(id, raw_values).get(),
-                    exceptions::invalid_request_exception);
-            } else {
-                BOOST_REQUIRE_NO_THROW(e.execute_prepared(id, raw_values).get());
-            }
-        };
-        test_bind(sstring(1, '\255'), true);
-        test_bind("proper utf8 string", false);
-    });
-}
-
 /// Reproduces #4209
 SEASTAR_TEST_CASE(test_list_of_tuples_with_bound_var) {
     return do_with_cql_env_thread([](cql_test_env& e) {

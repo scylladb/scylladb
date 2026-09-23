@@ -725,3 +725,15 @@ def test_tuple_elements_validation(cql, test_keyspace, raw_utf8_serialization):
         with pytest.raises(InvalidRequest, match='UTF8'):
             cql.execute(stmt, [1, (2, bad_utf8_string)])
         cql.execute(stmt, [1, (2, "proper utf8 string")])
+
+
+def test_vector_elements_validation(cql, test_keyspace, raw_utf8_serialization):
+    with new_test_table(cql, test_keyspace, "a int, b vector<date, 1>, PRIMARY KEY (a)") as tbl:
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"INSERT INTO {tbl} (a, b) VALUES(1, ['definitely not a date value'])")
+        cql.execute(f"INSERT INTO {tbl} (a, b) VALUES(1, ['2015-05-03'])")
+    with new_test_table(cql, test_keyspace, "a int, b vector<text, 1>, PRIMARY KEY (a)") as tbl2:
+        stmt = cql.prepare(f"INSERT INTO {tbl2} (a, b) VALUES(?, ?)")
+        with pytest.raises(InvalidRequest, match='UTF8'):
+            cql.execute(stmt, [1, [bad_utf8_string]])
+        cql.execute(stmt, [1, ["proper utf8 string"]])
