@@ -207,6 +207,20 @@ future<> cluster_backup_task::do_backup() {
         auto schema = t.schema();
         auto tid = schema->id();
 
+        // Recording the unified layout prefix as the destination makes the manifest land correctly at
+        // {prefix}/snapshots/{ks}/{cf}/{tag}/manifest.json, which is where restore reads it from.
+        const auto* remote_table = std::get_if<data_dictionary::storage_options::object_storage>(&t.get_storage_options().value);
+        auto effective_dst = [&] (const db::snapshot_dc_location& requested) -> db::snapshot_dc_location {
+            if (!remote_table) {
+                return requested;
+            }
+            return db::snapshot_dc_location {
+                .endpoint = remote_table->endpoint,
+                .bucket = remote_table->bucket,
+                .prefix = remote_table->location ? std::string(*remote_table->location) : std::string(sstables::object_storage_default_prefix),
+            };
+        };
+
         struct dst_data {
             utils::chunked_vector<db::snapshot_sstable_entry> sstables;
             std::unordered_set<std::string> datacenters;
@@ -243,7 +257,7 @@ future<> cluster_backup_task::do_backup() {
             assert(state_filter.count(node.datacenter));
             assert(_locations.count(node.datacenter));
 
-            auto& dst = _locations.at(node.datacenter);
+            auto dst = effective_dst(_locations.at(node.datacenter));
             auto& repair_master = repair_masters[dst];
             auto sstables = co_await sth.get_snapshot_sstables(_snapshot, keyspace, table, node.datacenter, node.rack);
             auto& tablets = dc_tablets.at(node.datacenter);
@@ -295,7 +309,7 @@ future<> cluster_backup_task::do_backup() {
 
             auto [off, n, _]= node_sstables_dc.at(node.node);
             auto filter = state_filter.at(node.datacenter);
-            auto& dst = _locations.at(node.datacenter);
+            auto dst = effective_dst(_locations.at(node.datacenter));
             auto& dst_info = dst_mapping[dst];
 
             // filter out sstables already backed up
@@ -329,7 +343,9 @@ future<> cluster_backup_task::do_backup() {
             snap_log.info("Requesting backup of {}: {}", node.node, sstable_ids);
 
             try {
-                auto prefix = db::snapshot::sstables_location(dst.prefix);
+                // For an object-storage table dst.prefix already names the
+                // data location
+                auto prefix = remote_table ? dst.prefix : db::snapshot::sstables_location(dst.prefix);
                 co_await ser::snapshot_backup_rpc_verbs::send_backup_snapshot_sstables(&_snap_ctl.ms(), node.node, tid, _snapshot, dst.endpoint, dst.bucket, prefix, first_token, last_token, std::move(sstable_ids), _remove_on_uploaded);
                 _total_progress.completed += 1;
             } catch (...) {
@@ -472,9 +488,21 @@ db::snapshot::backup_sstables(db::snapshot_ctl& snap, table_id table_id, std::st
 
     auto global_table = co_await get_table_on_all_shards(snap.db(), ksname, cfname);
     auto& storage_options = global_table->get_storage_options();
-    if (!storage_options.is_local_type()) {
-        throw std::invalid_argument("not able to backup a non-local table");
+    if (storage_options.is_object_storage_type()) {
+        for (auto& e : sstables) {
+            snap_log.debug("Marking {} as backed up in place", e.sstable_id);
+            // the state change doesnt say anything meaningful for remote tables
+            // we're just emulation the state change for consistency with local backups, but
+            // there is nothing functional about it really.
+            e.state = use_move ? db::snapshot_state::remote : db::snapshot_state::remote_and_local;
+            co_await sth.insert_snapshot_sstables(tag, ksname, cfname, local.dc, local.rack, { e });
+            utils::get_local_injector().inject("cluster_backup_object_storage_flip", [] {
+                throw std::runtime_error("cluster_backup_object_storage_flip: injected error");
+            });
+        }
+        co_return;
     }
+
     auto& local_storage_options = std::get<data_dictionary::storage_options::local>(storage_options.value);
     auto dir = (local_storage_options.dir / sstables::snapshots_dir / std::string_view(tag));
 
