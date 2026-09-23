@@ -3209,3 +3209,20 @@ def test_parallelized_select_uda(cql, test_keyspace, scylla_only):
             cql.execute(f"INSERT INTO {table} (k) VALUES ({i})")
         assert list(cql.execute(f"SELECT {test_keyspace}.{aggr}(k) FROM {table}")) == [(-((value_count - 1) * value_count // 2),)]
         assert parallelized_count() == 1
+
+
+# A UDA without a REDUCEFUNC cannot be parallelized.
+def test_not_parallelized_select_uda(cql, test_keyspace, scylla_only):
+    with parallelized_aggregation_enabled(cql) as parallelized_count, \
+            new_function(cql, test_keyspace, "(acc bigint, val int) RETURNS NULL ON NULL INPUT RETURNS bigint "
+                         "LANGUAGE lua AS $$ return acc+val $$") as row_fct, \
+            new_function(cql, test_keyspace, "(acc bigint) RETURNS NULL ON NULL INPUT RETURNS bigint "
+                         "LANGUAGE lua AS $$ return -acc $$") as final_fct, \
+            new_aggregate(cql, test_keyspace, f"(int) SFUNC {row_fct} STYPE bigint "
+                          f"FINALFUNC {final_fct} INITCOND 0") as aggr, \
+            new_test_table(cql, test_keyspace, "k int, PRIMARY KEY (k)") as table:
+        value_count = 10
+        for i in range(value_count):
+            cql.execute(f"INSERT INTO {table} (k) VALUES ({i})")
+        assert list(cql.execute(f"SELECT {test_keyspace}.{aggr}(k) FROM {table}")) == [(-((value_count - 1) * value_count // 2),)]
+        assert parallelized_count() == 0

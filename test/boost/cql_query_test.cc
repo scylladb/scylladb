@@ -510,55 +510,6 @@ SEASTAR_TEST_CASE(test_internal_schema_changes_on_a_distributed_table) {
     });
 }
 
-static future<> with_udf_and_parallel_aggregation_enabled_thread(std::function<void(cql_test_env&)>&& func) {
-    auto db_cfg_ptr = make_shared<db::config>();
-    auto& db_cfg = *db_cfg_ptr;
-    db_cfg.enable_user_defined_functions({true}, db::config::config_source::CommandLine);
-    db_cfg.user_defined_function_time_limit_ms(1000);
-    db_cfg.experimental_features({db::experimental_features_t::feature::UDF}, db::config::config_source::CommandLine);
-    db_cfg.enable_parallelized_aggregation({true}, db::config::config_source::CommandLine);
-    return do_with_cql_env_thread(std::forward<std::function<void(cql_test_env&)>>(func), db_cfg_ptr);
-}
-
-SEASTAR_TEST_CASE(test_not_parallelized_select_uda) {
-    return with_udf_and_parallel_aggregation_enabled_thread([](cql_test_env& e) {
-        auto& qp = e.local_qp();
-        auto stat_parallelized = qp.get_cql_stats().select_parallelized;
-
-        e.execute_cql("CREATE FUNCTION row_fct(acc bigint, val int) "
-                        "RETURNS NULL ON NULL INPUT "
-                        "RETURNS bigint "
-                        "LANGUAGE lua "
-                        "AS $$ "
-                        "return acc+val "
-                        "$$;").get();
-        e.execute_cql("CREATE FUNCTION final_fct(acc bigint) "
-                        "RETURNS NULL ON NULL INPUT "
-                        "RETURNS bigint "
-                        "LANGUAGE lua "
-                        "AS $$ "
-                        "return -acc "
-                        "$$;").get();
-        e.execute_cql("CREATE AGGREGATE aggr(int) "
-                        "SFUNC row_fct "
-                        "STYPE bigint "
-                        "FINALFUNC final_fct "
-                        "INITCOND 0;").get();
-        
-        e.execute_cql("CREATE TABLE tbl (k int, PRIMARY KEY (k));").get();
-        int value_count = 10;
-        for (int i = 0; i < value_count; i++) {
-            e.execute_cql(format("INSERT INTO tbl (k) VALUES ({:d});", i)).get();
-        }
-        auto msg = e.execute_cql("SELECT aggr(k) FROM tbl;").get();
-        assert_that(msg).is_rows().with_rows({
-            {long_type->decompose(-int64_t((value_count - 1) * value_count / 2))}
-        });
-
-        BOOST_CHECK_EQUAL(stat_parallelized, qp.get_cql_stats().select_parallelized);
-    });
-}
-
 cql3::raw_value make_collection_raw_value(size_t size_to_write, const std::vector<cql3::raw_value>& elements_to_write) {
     size_t serialized_len = 0;
     serialized_len += collection_size_len();
