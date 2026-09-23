@@ -1941,3 +1941,163 @@ def test_static_multi_cell_static_lists_with_ckey(cql, test_keyspace):
 
         cql.execute(f"UPDATE {table} SET slist = slist - [4] , v = 7 WHERE p = 1 AND c = 1")
         assert list(cql.execute(select)) == [([3], 7)]
+
+
+# A class to represent a single multi-column slice expression.
+# The purpose of this class is to provide facilities for testing
+# the multicolumn slice expression. The class uses an abstraction
+# of integer tuples with predefined max values as a counting system
+# with `digits` num of digits and base-1 as the maximum value.
+#
+# The table this class is designed to test is a table with exactly
+# `digits` clustering columns of type int and at least one non-clustering
+# column of type int.
+# The non-clustering column should contain the conversion of the
+# clustering key into an int according to base conversion rules where the
+# last clustering key is the smallest digit.
+# This conversion produces a mapping from int to the tuple space spanned
+# by the clustering keys of the table (including prefix tuples).
+#
+# The test case represents a specific slice expression and utility functions to
+# run and validate it.
+# For a usage example see: test_select_with_mixed_order_table
+class SliceTestcase:
+    def __init__(self, base, digits, gt_range, gt_inclusive, lt_range, lt_inclusive):
+        self.base = base
+        self.digits = digits
+        self.gt_range = gt_range
+        self.gt_inclusive = gt_inclusive
+        self.lt_range = lt_range
+        self.lt_inclusive = lt_inclusive
+
+    # The mapping of tuples is to integers between 0 and this value.
+    @staticmethod
+    def total_num_of_values(base, digits):
+        return base ** digits
+
+    # Generates the actual slice expression that can be embedded
+    # into a CQL select query.
+    def generate_cql_slice_expression(self, column_names):
+        parts = []
+        if self.gt_range:
+            op = ">=" if self.gt_inclusive else ">"
+            parts.append(f"({', '.join(column_names[:len(self.gt_range)])}) {op} ({', '.join(str(v) for v in self.gt_range)})")
+        if self.lt_range:
+            op = "<=" if self.lt_inclusive else "<"
+            parts.append(f"({', '.join(column_names[:len(self.lt_range)])}) {op} ({', '.join(str(v) for v in self.lt_range)})")
+        return " AND ".join(parts)
+
+    # Maps a tuple of integers to an integer.
+    @staticmethod
+    def tuple_to_bound_val(base, digits, tup):
+        ret = 0
+        factor = base ** (digits - 1)
+        for val in tup:
+            ret += val * factor
+            factor //= base
+        return ret
+
+    # Maps back from integer space to tuple space.
+    # There can be more than one tuple mapped to the same int.
+    # There will never be more than one tuple of a certain size
+    # that is mapped to the same int.
+    # For example: (1) and (1,0) will be mapped to the same integer,
+    # but no other tuple of size 1 or 2 will be mapped to this int.
+    @staticmethod
+    def bound_val_to_tuple(base, digits, val, num_components=None):
+        if num_components is None:
+            num_components = digits
+        tup = []
+        factor = base ** (digits - 1)
+        while len(tup) < num_components:
+            tup.append(val // factor)
+            val %= factor
+            factor //= base
+        return tup
+
+    # Generates the expected results of a select statement with this slice.
+    # The select statement is assumed to select only the non-clustering column.
+    # `orderings` is a list of booleans, True meaning the corresponding
+    # clustering column is in DESC order.
+    def generate_results(self, orderings):
+        base, digits = self.base, self.digits
+        start_val = 0
+        end_val = self.total_num_of_values(base, digits) - 1
+        if self.gt_range:
+            start_val = self.tuple_to_bound_val(base, digits, self.gt_range)
+            if not self.gt_inclusive:
+                start_val += base ** (digits - len(self.gt_range))
+        if self.lt_range:
+            end_val = self.tuple_to_bound_val(base, digits, self.lt_range)
+            if not self.lt_inclusive:
+                end_val -= 1
+            else:
+                end_val += base ** (digits - len(self.lt_range)) - 1
+
+        def sort_key(val):
+            tup = self.bound_val_to_tuple(base, digits, val)
+            return tuple(-x if desc else x for x, desc in zip(tup, orderings))
+        return sorted(range(start_val, end_val + 1), key=sort_key)
+
+
+def test_select_with_mixed_order_table(cql, test_keyspace):
+    base, digits = 5, 4
+    column_names = ["b", "c", "d", "e"]
+    with new_test_table(cql, test_keyspace, "a int, b int, c int,d int,e int,f int, PRIMARY KEY (a, b, c, d, e)",
+                        "WITH CLUSTERING ORDER BY (b DESC, c ASC, d DESC,e ASC)") as table:
+        # We convert the range 0-> max mapped integers to the mapped tuple,
+        # this will create a table satisfying the SliceTestcase assumption.
+        insert = cql.prepare(f"INSERT INTO {table} (a, b, c, d, e, f) VALUES (0, ?, ?, ?, ?, ?)")
+        for i in range(SliceTestcase.total_num_of_values(base, digits)):
+            tup = SliceTestcase.bound_val_to_tuple(base, digits, i)
+            cql.execute(insert, [*tup, i])
+
+        test_cases = []
+
+        # generates all inclusiveness permutations for the specified bounds
+        def generate_with_inclusiveness_permutations(gt_range, lt_range):
+            if not gt_range or not lt_range:
+                test_cases.append(SliceTestcase(base, digits, gt_range, False, lt_range, False))
+                test_cases.append(SliceTestcase(base, digits, gt_range, True, lt_range, True))
+            else:
+                for i in range(4):
+                    test_cases.append(SliceTestcase(base, digits, gt_range, bool(i & 1), lt_range, bool(i & 2)))
+
+        # DESC, ASC, DESC, ASC
+        ordering = [True, False, True, False]
+        # no overlap in components equal num of components - (b,c,d,e) >/>= (0,1,2,3) and (b,c,d,e) </<= (1,2,3,4)
+        generate_with_inclusiveness_permutations([0, 1, 2, 3], [1, 2, 3, 4])
+        # overlap in components equal num of components - (b,c,d,e) >/>= (0,1,2,3) and (b,c,d,e) </<= (0,2,2,2)
+        generate_with_inclusiveness_permutations([0, 1, 2, 3], [0, 2, 2, 2])
+        # overlap in components equal num of components - (b,c,d,e) >/>= (0,1,2,3) and (b,c,d,e) </<= (0,1,2,2)
+        generate_with_inclusiveness_permutations([0, 1, 2, 3], [0, 1, 2, 2])
+        # no overlap less components in </<= expression - (b,c,d,e) >/>= (0,1,2,3) and (b,c) </<= (1,2)
+        generate_with_inclusiveness_permutations([0, 1, 2, 3], [1, 2])
+        # overlap in components for less components in </<= expression - (b,c,d,e) >/>= (0,1,2,3) and (b,c) </<= (0,2)
+        generate_with_inclusiveness_permutations([0, 1, 2, 3], [0, 2])
+        # lt side is a prefix of gt side </<= expression - (b,c,d,e) >/>= (0,1,2,3) and (b,c) </<= (0,1)
+        generate_with_inclusiveness_permutations([0, 1, 2, 3], [0, 1])
+        # gt side is a prefix of lt side </<= expression - (b,c,d,e) >/>= (0,1) and (b,c) </<= (0,1,2,3)
+        generate_with_inclusiveness_permutations([0, 1], [0, 1, 2, 3])
+        # no overlap less components in >/>= expression - (b,c) >/>= (0,1) and (b,c,d,e) </<= (1,2,3,4)
+        generate_with_inclusiveness_permutations([0, 1], [1, 2, 3, 4])
+        # overlap in components for less components in >/>= expression - (b,c) >/>= (0,1) and (b,c,d,e) </<= (0,2,3,4)
+        generate_with_inclusiveness_permutations([0, 1], [0, 2, 3, 4])
+        # one sided >/>= 1 expression - (b) >/>= (1)
+        generate_with_inclusiveness_permutations([1], [])
+        # one sided >/>= partial expression - (b,c) >/>= (0,1)
+        generate_with_inclusiveness_permutations([0, 1], [])
+        # one sided >/>= full expression - (b,c,d,e) >/>= (0,1,2,3)
+        generate_with_inclusiveness_permutations([0, 1, 2, 3], [])
+        # one sided </<= 1 expression - - (b) </<= (3)
+        generate_with_inclusiveness_permutations([], [3])
+        # one sided </<= partial expression - (b,c) </<= (3,4)
+        generate_with_inclusiveness_permutations([], [3, 4])
+        # one sided </<= full expression - (b,c,d,e) </<= (2,3,4,4)
+        generate_with_inclusiveness_permutations([], [2, 3, 4, 4])
+        # equality and empty - (b,c,d,e) >/>= (0,1,2,3) and (b,c,d,e) </<= (0,1,2,3)
+        generate_with_inclusiveness_permutations([0, 1, 2, 3], [0, 1, 2, 3])
+
+        for test_case in test_cases:
+            query = f"SELECT f FROM {table} WHERE a=0 AND {test_case.generate_cql_slice_expression(column_names)}"
+            assert [r.f for r in cql.execute(query)] == test_case.generate_results(ordering), query
