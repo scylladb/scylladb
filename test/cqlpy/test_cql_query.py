@@ -2208,3 +2208,14 @@ def test_bigint_sum_overflow(cql, test_keyspace):
 
         cql.execute(f"insert into {table} (pk, ck, val) values ('p3', 'c2', -9223372036854775808)")
         assert list(cql.execute(sum_query)) == [(9223372036854775806,)]
+
+
+def test_bigint_sum(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "pk text, val bigint, primary key(pk)") as table:
+        cql.execute(f"insert into {table} (pk, val) values ('x', 2147483647)")
+        cql.execute(f"insert into {table} (pk, val) values ('y', 2147483647)")
+        sum_query = f"select sum(val) from {table}"
+        assert list(cql.execute(sum_query)) == [(4294967294,)]
+
+        cql.execute(f"insert into {table} (pk, val) values ('z', -4294967295)")
+        assert list(cql.execute(sum_query)) == [(-1,)]
