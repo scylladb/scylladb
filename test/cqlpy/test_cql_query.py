@@ -2892,3 +2892,25 @@ def test_invalid_using_timestamps(cql, test_keyspace, scylla_only):
             cql.execute(f"DELETE b FROM {table} USING TIMESTAMP {now_nano} WHERE a = 1")
         with pytest.raises(InvalidRequest):
             cql.execute(f"BEGIN BATCH USING TIMESTAMP {now_nano} INSERT INTO {table} (a, b) VALUES (2, 2); APPLY BATCH")
+
+
+def test_twcs_non_optimal_query_path(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "pk int, ck int, v int, s int static, PRIMARY KEY (pk, ck)",
+                        " WITH compaction = {"
+                        "   'compaction_window_size': '1',"
+                        "   'compaction_window_unit': 'MINUTES',"
+                        "   'class': 'org.apache.cassandra.db.compaction.TimeWindowCompactionStrategy'"
+                        "}") as table:
+        cql.execute(f"INSERT INTO {table} (pk, ck, v) VALUES (0, 0, 0)")
+        cql.execute(f"INSERT INTO {table} (pk, ck, v) VALUES (1, 0, 0)")
+        cql.execute(f"INSERT INTO {table} (pk, ck, v) VALUES (0, 1, 0)")
+        cql.execute(f"INSERT INTO {table} (pk, ck, v) VALUES (1, 1, 0)")
+
+        flush(cql, table)
+
+        # Not really testing anything, just ensure that we execute the non-optimal
+        # sstable read path of TWCS tables too, allowing ASAN to shake out any memory
+        # related bugs.
+        # The non-optimal read path is triggered by having a static column, see
+        # `sstables::time_series_sstable_set::create_single_key_sstable_reader()`.
+        cql.execute(f"SELECT * FROM {table} WHERE pk = 0 BYPASS CACHE")
