@@ -2254,3 +2254,20 @@ def test_float_sum_overflow(cql, test_keyspace):
         # cause negative overflow
         cql.execute(f"insert into {table} (pk, val) values ('c', -2e+38)")
         assert list(cql.execute(sum_query)) == [(-math.inf,)]
+
+
+def test_double_sum_overflow(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "pk text, val double, primary key(pk)") as table:
+        sum_query = f"select sum(val) from {table}"
+        # make sure we can sum close to the max value
+        cql.execute(f"insert into {table} (pk, val) values ('a', 1.79769313486231570814527423732e+308)")
+        assert list(cql.execute(sum_query)) == [(1.79769313486231570814527423732E308,)]
+        # cause overflow
+        cql.execute(f"insert into {table} (pk, val) values ('b', 0.5e+308)")
+        assert list(cql.execute(sum_query)) == [(math.inf,)]
+        # test maximum negative value
+        cql.execute(f"insert into {table} (pk, val) values ('a', -1.79769313486231570814527423732e+308)")
+        assert list(cql.execute(sum_query)) == [(-1.29769313486231570814527423732e+308,)]
+        # cause negative overflow
+        cql.execute(f"insert into {table} (pk, val) values ('c', -1e+308)")
+        assert list(cql.execute(sum_query)) == [(-math.inf,)]
