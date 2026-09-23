@@ -87,6 +87,39 @@ bool get_bool_attribute(const rjson::value& value, std::string_view attribute_na
     return attribute_value->GetBool();
 }
 
+// Wherever DynamoDB takes a table's name, it also allows that table's ARN
+// to be used instead - DynamoDB's "TableName" documentation says: "You can
+// also provide the Amazon Resource Name (ARN) of the table in this parameter".
+// So before a name given by the request is used for anything, it goes through
+// this function, which turns an ARN into the plain table name it refers to and
+// leaves a plain name alone.
+// Telling the two cases apart is unambiguous: a real table name may only
+// contain the characters [a-zA-Z0-9._-] (see validate_table_name()), so a
+// name can never begin with "arn:".
+// We only promise to understand the ARNs which Alternator itself produces
+// (see generate_arn_for_table()) - a client is expected to pass back an ARN
+// it got from DescribeTable, not to compose one. An ARN we can't parse is
+// rejected by parse_arn() rather than being mistaken for a table name.
+// The returned view points into `name` - the table's name is a substring of
+// the ARN - so the caller must keep `name` alive for as long as it uses the
+// result.
+static std::string_view resolve_table_name(std::string_view name) {
+    if (!name.starts_with("arn:")) {
+        return name;
+    }
+    try {
+        return parse_arn(name, "TableName", "table", "").table_name;
+    } catch (const api_error& e) {
+        // A string which doesn't parse as an ARN is a malformed TableName, so
+        // DynamoDB answers it with a ValidationException - it only turns to
+        // AccessDeniedException once the ARN is well-formed but names
+        // something which isn't the caller's to see. parse_arn() reports some
+        // of these failures as AccessDenied, which suits its use for tagging;
+        // for a TableName we want ValidationException.
+        throw api_error::validation(e._msg);
+    }
+}
+
 std::optional<std::string> find_table_name(const rjson::value& request) {
     const rjson::value* table_name_value = rjson::find(request, "TableName");
     if (!table_name_value) {
@@ -95,8 +128,7 @@ std::optional<std::string> find_table_name(const rjson::value& request) {
     if (!table_name_value->IsString()) {
         throw api_error::validation("Non-string TableName field in request");
     }
-    std::string table_name = rjson::to_string(*table_name_value);
-    return table_name;
+    return std::string(resolve_table_name(rjson::to_string_view(*table_name_value)));
 }
 
 std::string get_table_name(const rjson::value& request) {
@@ -465,7 +497,7 @@ schema_ptr try_get_internal_table(const data_dictionary::database& db, std::stri
 }
 
 schema_ptr get_table_from_batch_request(const service::storage_proxy& proxy, const rjson::value::ConstMemberIterator& batch_request) {
-    sstring table_name = rjson::to_sstring(batch_request->name); // JSON keys are always strings
+    sstring table_name = sstring(resolve_table_name(rjson::to_string_view(batch_request->name))); // JSON keys are always strings
     try {
         return proxy.data_dictionary().find_schema(sstring(executor::KEYSPACE_NAME_PREFIX) + table_name, table_name);
     } catch(data_dictionary::no_such_column_family&) {
@@ -685,7 +717,9 @@ body_writer make_streamed(rjson::value&& value) {
 void filter_batch_request_items_by_tbl_name(rjson::value& request, const audit::audit_table_set& tbl_name_filter) {
     rjson::value& items = request["RequestItems"];
     for (auto it = items.MemberBegin(); it != items.MemberEnd(); ) {
-        auto table_name = rjson::to_string_view(it->name);
+        // The filter holds real table names, while the request may name a
+        // table by its ARN instead - so compare the resolved name.
+        auto table_name = resolve_table_name(rjson::to_string_view(it->name));
         auto found = std::ranges::any_of(tbl_name_filter, [table_name] (const auto& table) {
             return table.second == table_name;
         });

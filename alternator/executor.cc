@@ -348,6 +348,11 @@ double get_table_creation_time(const schema &schema) {
 void executor::supplement_table_info(rjson::value& descr, const schema& schema, service::storage_proxy& sp) {
     auto creation_time = get_table_creation_time(schema);
 
+    // Our callers (CreateTable and Update) build the table's description out
+    // of the request itself, so its "TableName" is whatever the request said,
+    // and may have been the table's ARN rather than its name. But our response
+    // must contain the actual table name, not the ARN.
+    rjson::replace_with_string_name(descr, "TableName", rjson::from_string(schema.cf_name()));
     rjson::add(descr, "CreationDateTime", rjson::value(creation_time));
     rjson::add(descr, "TableStatus", "ACTIVE");
     rjson::add(descr, "TableId", rjson::from_string(schema.id().to_sstring()));
