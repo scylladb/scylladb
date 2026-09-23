@@ -267,6 +267,19 @@ Tests run in parallel via `pytest-xdist` workers (`gw0`, `gw1`, ...).
 Each worker writes its log to `testlog/pytest_log/pytest_gw{N}_{HOST_ID}.log`.
 This log contains cluster lifecycle messages and test pass/fail status.
 
+If a worker dies unexpectedly (no traceback, no core), the controller logs
+the dead worker's cgroup v2 `memory.events`/`memory.current` and its own to
+`testlog/pytest_log/pytest_main_{HOST_ID}.log`, next to the "worker crashed"
+failure. A nonzero `oom_kill` delta since the worker started indicates it was
+killed externally (OOM-killer or a cgroup memory limit) rather than crashing
+on its own.
+
+If the controller process itself is killed, there is no hook left to run at
+that point, so instead a best-effort snapshot of the controller's own cgroup
+state is refreshed periodically (at most every 45s) in
+`testlog/pytest_log/controller_cgroup_snapshot.txt` -- it can be up to that
+long stale by the time the controller dies.
+
 For example, imagine `cqlpy/test_null.py` fails. The relevant lines
 in the worker log will be:
 

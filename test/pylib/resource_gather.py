@@ -243,6 +243,164 @@ class ResourceGatherOn(ResourceGatherRecord):
         return result
 
 
+def _read_file_or_reason(path: Path) -> str:
+    """Read *path* as text, or describe why it could not be read."""
+    try:
+        return path.read_text().strip()
+    except OSError as exc:
+        return f"<unavailable: {exc}>"
+
+
+# Name of the small sidecar file _snapshot_oom_kill_baseline() writes under
+# baseline_dir/<worker_id>/, recording the oom_kill counter at
+# worker-cgroup-creation time (see setup_worker_cgroup()). It cannot live
+# inside the cgroup directory itself: cgroupfs is a kernfs-backed virtual
+# filesystem that only exposes the kernel's fixed set of control files per
+# cgroup (memory.events, cgroup.procs, ...) and does not support creating
+# arbitrary new files.
+_OOM_KILL_BASELINE_FILENAME = "oom_kill.baseline"
+
+
+def _read_memory_events_counters(cgroup_dir: Path) -> dict[str, int] | None:
+    """Parse cgroup v2's memory.events in *cgroup_dir* into {name: value}.
+
+    Returns None if the file could not be read at all (e.g. no cgroup was
+    ever created there, which happens when the harness was run without
+    --gather-metrics — see setup_worker_cgroup()).
+    """
+    try:
+        text = (cgroup_dir / "memory.events").read_text()
+    except OSError:
+        return None
+    counters: dict[str, int] = {}
+    for line in text.splitlines():
+        name, _, value = line.partition(" ")
+        value = value.strip()
+        if value.lstrip("-").isdigit():
+            counters[name] = int(value)
+    return counters
+
+
+def _mkdir_parents(path: Path) -> None:
+    """Indirection over Path.mkdir() so tests can monkeypatch it scoped to
+    this module, rather than patching the shared pathlib.Path class
+    process-wide."""
+    path.mkdir(parents=True, exist_ok=True)
+
+
+def _snapshot_oom_kill_baseline(cgroup_dir: Path, baseline_dir: Path) -> None:
+    """Record the current oom_kill counter under baseline_dir, once, at
+    worker-cgroup-creation time (called from setup_worker_cgroup()).
+
+    memory.events is cumulative for the whole life of the cgroup, and cgroup
+    v2 aggregates it recursively across descendants, so a worker's counter
+    also includes every Scylla process it has spawned across earlier tests.
+    Recording a baseline here lets gather_oom_kill_evidence() report the
+    delta since *this* worker started, rather than a lifetime total that
+    could misattribute an old or unrelated kill to a later, unrelated death.
+
+    The baseline is stored under baseline_dir, keyed by cgroup_dir's name
+    (the worker id) -- deliberately outside the cgroup hierarchy, since
+    cgroupfs does not support creating arbitrary new files (see
+    _OOM_KILL_BASELINE_FILENAME).
+    """
+    counters = _read_memory_events_counters(cgroup_dir)
+    baseline = counters.get("oom_kill", 0) if counters is not None else 0
+    baseline_path = baseline_dir / cgroup_dir.name / _OOM_KILL_BASELINE_FILENAME
+    try:
+        _mkdir_parents(baseline_path.parent)
+        baseline_path.write_text(str(baseline))
+    except OSError as exc:
+        logger.warning(f"Could not snapshot oom_kill baseline for {cgroup_dir} at {baseline_path}: {exc}")
+
+
+def _oom_kill_evidence(cgroup_dir: Path, baseline_dir: Path | None) -> str:
+    """Human-readable oom_kill/oom evidence for *cgroup_dir*.
+
+    Reports the delta since worker-cgroup-creation time when a baseline was
+    recorded by _snapshot_oom_kill_baseline() under baseline_dir; otherwise
+    (baseline_dir is None, or no baseline was recorded there -- e.g. the
+    controller's own cgroup, which never gets a baseline) falls back to the
+    raw lifetime-cumulative counters and says so explicitly, so a reader
+    never mistakes a cumulative count for evidence about one specific death.
+    """
+    counters = _read_memory_events_counters(cgroup_dir)
+    if counters is None:
+        return f"<unavailable: could not read {cgroup_dir / 'memory.events'}>"
+    oom_kill = counters.get("oom_kill", 0)
+    oom = counters.get("oom", 0)
+    baseline_path = baseline_dir / cgroup_dir.name / _OOM_KILL_BASELINE_FILENAME if baseline_dir is not None else None
+    try:
+        if baseline_path is None:
+            raise OSError("no baseline_dir given")
+        baseline = int(baseline_path.read_text().strip())
+    except (OSError, ValueError):
+        return (f"oom={oom} oom_kill={oom_kill} (cumulative for this cgroup's lifetime; "
+                f"no baseline recorded, may include earlier or descendant-process kills)")
+    return f"oom={oom} oom_kill={oom_kill} (delta since this worker started: {oom_kill - baseline}; baseline was {baseline})"
+
+
+def gather_oom_kill_evidence(worker_id: str | None, baseline_dir: Path | None = None) -> str:
+    """Collect circumstantial evidence for whether a dead xdist worker was killed externally.
+
+    Reads the dead worker's own cgroup memory.events/memory.current (only
+    present when the harness was run with --gather-metrics — see
+    setup_worker_cgroup()), the controller's own cgroup memory.events/
+    memory.current, and /proc/meminfo into one human-readable string suitable
+    for logging. No size cap is needed: these are small, fixed-format
+    snapshots (a handful of lines each), not an unbounded kernel log.
+    """
+    sections: list[str] = []
+
+    if worker_id is not None:
+        worker_cgroup = CGROUP_TESTS / worker_id
+        sections += [
+            f"--- {worker_id} worker cgroup ---",
+            f"memory.events: {_oom_kill_evidence(worker_cgroup, baseline_dir)}",
+            f"memory.current: {_read_file_or_reason(worker_cgroup / 'memory.current')}",
+        ]
+
+    try:
+        controller_cgroup = get_current_cgroup()
+        controller_section = (
+            f"memory.events: {_oom_kill_evidence(controller_cgroup, None)}\n"
+            f"memory.current: {_read_file_or_reason(controller_cgroup / 'memory.current')}"
+        )
+    except (OSError, IndexError) as exc:
+        controller_section = f"<unavailable: {exc}>"
+
+    sections += [
+        "--- controller cgroup ---",
+        controller_section,
+        "--- /proc/meminfo ---",
+        _read_file_or_reason(Path("/proc/meminfo")),
+    ]
+
+    return "\n".join(sections)
+
+
+def gather_controller_snapshot() -> str:
+    """Return a short, timestamped snapshot of the controller's own cgroup memory state.
+
+    Used by runner.py's pytest_runtest_logreport-piggybacked periodic
+    snapshot (see there for why it exists): the same small, fixed-format
+    cgroup v2 files gather_oom_kill_evidence() reads, just for the
+    controller's own cgroup, refreshed on disk periodically so something
+    useful survives even if the controller process itself is later killed
+    (a case pytest_testnodedown() cannot cover, since nothing is left alive
+    to run that hook once the controller is gone).
+    """
+    try:
+        controller_cgroup = get_current_cgroup()
+    except (OSError, IndexError) as exc:
+        return f"<unavailable: {exc}>"
+    return (
+        f"timestamp: {datetime.now().isoformat()}\n"
+        f"memory.events: {_oom_kill_evidence(controller_cgroup, None)}\n"
+        f"memory.current: {_read_file_or_reason(controller_cgroup / 'memory.current')}\n"
+    )
+
+
 def gather_host_info() -> HostInfo:
     """Collect static hardware information about the current host."""
     try:
@@ -339,7 +497,7 @@ def setup_cgroup(is_required: bool) -> None:
         propagate_subtree_controls(CGROUP_TESTS)
 
 
-def setup_worker_cgroup() -> None:
+def setup_worker_cgroup(oom_kill_baseline_dir: Path) -> None:
     from test.pylib.util import get_xdist_worker_id
     worker_id = get_xdist_worker_id() or "master"
     # this method is creating the worker cgroup, but the main cgroup is created in the master thread, so this is just to
@@ -354,6 +512,10 @@ def setup_worker_cgroup() -> None:
         if not group.exists():
             group.mkdir()
     propagate_subtree_controls(worker_cgroup_path)
+    # Baseline the oom_kill counter now, at this worker's cgroup-creation
+    # time, so gather_oom_kill_evidence() can later report the delta since
+    # this worker started rather than the cgroup's lifetime-cumulative total.
+    _snapshot_oom_kill_baseline(worker_cgroup_path, oom_kill_baseline_dir)
     # Move the current worker process into the worker's default leaf cgroup.
     # Scylla processes spawned by the test (via ScyllaClusterManager) will inherit
     # this cgroup. The worker-level cgroup (CGROUP_TESTS/{worker_id}) is used for
