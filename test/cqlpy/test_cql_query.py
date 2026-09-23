@@ -848,3 +848,14 @@ def test_range_queries(cql, test_keyspace):
         check(" and c0 < 0x02 allow filtering", [1, 2, 3])
         check(" and c0 = 0x02 and c1 > 0x02 allow filtering", [5, 6])
         check(" and c0 = 0x02 and c1 >= 0x02 and c1 <= 0x02 allow filtering", [4])
+
+
+def test_ordering_of_composites_with_variable_length_components(cql, test_keyspace):
+    # We need more than one clustering column so that the single-element tuple format optimisation doesn't kick in
+    with new_test_table(cql, test_keyspace, "k blob, c0 blob, c1 blob, v blob, PRIMARY KEY (k, c0, c1)") as cf:
+        cql.execute(f"update {cf} set v = 0x01 where k = 0x00 and c0 = 0x0001 and c1 = 0x00")
+        cql.execute(f"update {cf} set v = 0x02 where k = 0x00 and c0 = 0x03 and c1 = 0x00")
+        cql.execute(f"update {cf} set v = 0x03 where k = 0x00 and c0 = 0x035555 and c1 = 0x00")
+        cql.execute(f"update {cf} set v = 0x04 where k = 0x00 and c0 = 0x05 and c1 = 0x00")
+        assert list(cql.execute(f"select v from {cf} where k = 0x00 allow filtering")) == [
+            (b'\x01',), (b'\x02',), (b'\x03',), (b'\x04',)]

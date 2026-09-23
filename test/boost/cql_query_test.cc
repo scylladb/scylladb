@@ -254,34 +254,6 @@ SEASTAR_TEST_CASE(test_alter_node_oriented_scopes_reject_unknown_targets) {
     });
 }
 
-SEASTAR_TEST_CASE(test_ordering_of_composites_with_variable_length_components) {
-    return do_with_cql_env([] (cql_test_env& e) {
-        return e.create_table([](std::string_view ks) {
-            return *schema_builder(this_smp_shard_count(), ks, "cf")
-                    .with_column("k", bytes_type, column_kind::partition_key)
-                    // We need more than one clustering column so that the single-element tuple format optimisation doesn't kick in
-                    .with_column("c0", bytes_type, column_kind::clustering_key)
-                    .with_column("c1", bytes_type, column_kind::clustering_key)
-                    .with_column("v", bytes_type)
-                    .build();
-        }).then([&e] {
-            return e.execute_cql("update cf set v = 0x01 where k = 0x00 and c0 = 0x0001 and c1 = 0x00;").discard_result();
-        }).then([&e] {
-            return e.execute_cql("update cf set v = 0x02 where k = 0x00 and c0 = 0x03 and c1 = 0x00;").discard_result();
-        }).then([&e] {
-            return e.execute_cql("update cf set v = 0x03 where k = 0x00 and c0 = 0x035555 and c1 = 0x00;").discard_result();
-        }).then([&e] {
-            return e.execute_cql("update cf set v = 0x04 where k = 0x00 and c0 = 0x05 and c1 = 0x00;").discard_result();
-        }).then([&e] {
-            return e.execute_cql("select v from cf where k = 0x00 allow filtering;").then([](shared_ptr<cql_transport::messages::result_message> msg) {
-                assert_that(msg).is_rows().with_rows({
-                    {from_hex("01")}, {from_hex("02")}, {from_hex("03")}, {from_hex("04")}
-                });
-            });
-        });
-    });
-}
-
 SEASTAR_TEST_CASE(test_query_with_static_columns) {
     return do_with_cql_env([] (cql_test_env& e) {
         return e.execute_cql("create table cf (k blob, c blob, v blob, s1 blob static, s2 blob static, primary key (k, c));").discard_result().then([&e] {
