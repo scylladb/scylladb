@@ -1606,3 +1606,51 @@ def test_in_restriction(cql, test_keyspace):
         assert list(cql.execute(f"select r1 from {table} where (c1,r1) in ((0, 1),(1,2),(0,1),(1,2),(3,3)) allow filtering")) == [(1,), (2,)]
         stmt = cql.prepare(f"select r1 from {table} where (c1,r1) in ? allow filtering")
         assert list(cql.execute(stmt, [[(0, 1), (1, 2), (0, 1), (1, 2), (3, 3)]])) == [(1,), (2,)]
+
+
+def test_compact_storage(cql, test_keyspace, compact_storage):
+    with new_test_table(cql, test_keyspace, "p1 int, c1 int, r1 int, PRIMARY KEY (p1, c1)", "with compact storage") as table:
+        cql.execute(f"insert into {table} (p1, c1, r1) values (1, 2, 3)")
+        assert list(cql.execute(f"select r1 from {table} where p1 = 1 and c1 = 2")) == [(3,)]
+        cql.execute(f"update {table} set r1 = 4 where p1 = 1 and c1 = 2")
+        assert list(cql.execute(f"select r1 from {table} where p1 = 1 and c1 = 2")) == [(4,)]
+        assert list(cql.execute(f"select * from {table} where p1 = 1")) == [(1, 2, 4)]
+    with new_test_table(cql, test_keyspace, "p1 int, c1 int, PRIMARY KEY (p1, c1)", "with compact storage") as table:
+        cql.execute(f"insert into {table} (p1, c1) values (1, 2)")
+        assert list(cql.execute(f"select * from {table} where p1 = 1")) == [(1, 2)]
+    with new_test_table(cql, test_keyspace, "p1 int, c1 int, c2 int, r1 int, PRIMARY KEY (p1, c1, c2)", "with compact storage") as table:
+        cql.execute(f"insert into {table} (p1, c1, c2, r1) values (1, 2, 3, 4)")
+        cql.execute(f"insert into {table} (p1, c1, r1) values (1, 2, 5)")
+        cql.execute(f"insert into {table} (p1, c1, r1) values (1, 3, 6)")
+        cql.execute(f"insert into {table} (p1, c1, c2, r1) values (1, 3, 5, 7)")
+        cql.execute(f"insert into {table} (p1, c1, c2, r1) values (1, 3, blobasint(0x), 8)")
+        # A missing c2 (null) sorts before an empty c2, which sorts before any
+        # other value. Use intasblob() to distinguish null from empty values.
+        def select():
+            return list(cql.execute(f"select p1, c1, intasblob(c2), r1 from {table} where p1 = 1"))
+        i = lambda v: struct.pack('>i', v)
+        assert select() == [
+            (1, 2, None, 5),
+            (1, 2, i(3), 4),
+            (1, 3, None, 6),
+            (1, 3, b'', 8),
+            (1, 3, i(5), 7),
+        ]
+        cql.execute(f"delete from {table} where p1 = 1 and c1 = 2")
+        assert select() == [
+            (1, 3, None, 6),
+            (1, 3, b'', 8),
+            (1, 3, i(5), 7),
+        ]
+        cql.execute(f"delete from {table} where p1 = 1 and c1 = 3 and c2 = 5")
+        assert select() == [
+            (1, 3, None, 6),
+            (1, 3, b'', 8),
+        ]
+        cql.execute(f"delete from {table} where p1 = 1 and c1 = 3 and c2 = blobasint(0x)")
+        assert select() == [
+            (1, 3, None, 6),
+        ]
+    with new_test_table(cql, test_keyspace, "p1 int PRIMARY KEY, c1 int, c2 int", "with compact storage") as table:
+        cql.execute(f"insert into {table} (p1) values (1)")
+        assert list(cql.execute(f"select * from {table}")) == []
