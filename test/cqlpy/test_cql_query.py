@@ -2124,3 +2124,10 @@ def test_aggregate_and_simple_selection_together(cql, test_keyspace):
         assert list(cql.execute(f"select c, avg(c) from {table}")) == [(1, 2)]
         assert list(cql.execute(f"select p, sum(v) from {table}")) == [(1, 58)]
         assert list(cql.execute(f"select p, count(c) from {table} group by p")) == [(1, 3), (2, 1)]
+
+
+def test_alter_type_on_compact_storage_with_no_regular_columns_does_not_crash(cql, test_keyspace, scylla_only):
+    with config_value_context(cql, 'enable_create_table_with_compact_storage', 'true'):
+        with new_type(cql, test_keyspace, "(first text)") as typ:
+            with new_test_table(cql, test_keyspace, f"pk int, ck frozen<{typ}>, primary key(pk, ck)", "with compact storage"):
+                cql.execute(f"alter type {typ} add test_int int")

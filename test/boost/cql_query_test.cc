@@ -417,15 +417,6 @@ auto T(const char* t) { return utf8_type->decompose(t); }
 
 } // anonymous namespace
 
-SEASTAR_TEST_CASE(test_alter_type_on_compact_storage_with_no_regular_columns_does_not_crash) {
-    return do_with_cql_env_thread([] (cql_test_env& e) {
-        e.execute_cql("update system.config SET value='true' where name='enable_create_table_with_compact_storage';").get();
-        cquery_nofail(e, "CREATE TYPE my_udf (first text);");
-        cquery_nofail(e, "create table z (pk int, ck frozen<my_udf>, primary key(pk, ck)) with compact storage;");
-        cquery_nofail(e, "alter type my_udf add test_int int;");
-    });
-}
-
 SEASTAR_TEST_CASE(test_rf_expand) {
     constexpr static auto simple = "org.apache.cassandra.locator.SimpleStrategy";
     constexpr static auto network_topology = "org.apache.cassandra.locator.NetworkTopologyStrategy";
