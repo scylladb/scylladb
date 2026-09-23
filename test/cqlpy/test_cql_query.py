@@ -1917,3 +1917,27 @@ def test_in_restriction_on_not_last_partition_key(cql, test_keyspace):
             (1, 3, 2, 1400), (2, 2, 3, 1300), (2, 3, 2, 1400)])
         assert sorted(cql.execute(f"SELECT * FROM {table} WHERE a IN (1,3) AND b=1 AND c>=2 AND c<=3")) == sorted([
             (1, 1, 2, 200), (1, 1, 3, 300), (3, 1, 3, 1300)])
+
+
+def test_static_multi_cell_static_lists_with_ckey(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p int, c int, slist list<int> static, v int, PRIMARY KEY (p, c)") as table:
+        cql.execute(f"INSERT INTO {table} (p, c, slist, v) VALUES (1, 1, [1], 1)")
+        select = f"SELECT slist, v FROM {table} WHERE p = 1 AND c = 1"
+
+        cql.execute(f"UPDATE {table} SET slist[0] = 3, v = 3 WHERE p = 1 AND c = 1")
+        assert list(cql.execute(select)) == [([3], 3)]
+
+        cql.execute(f"UPDATE {table} SET slist = [4], v = 4 WHERE p = 1 AND c = 1")
+        assert list(cql.execute(select)) == [([4], 4)]
+
+        cql.execute(f"UPDATE {table} SET slist = [3] + slist , v = 5 WHERE p = 1 AND c = 1")
+        assert list(cql.execute(select)) == [([3, 4], 5)]
+
+        cql.execute(f"UPDATE {table} SET slist = slist + [5] , v = 6 WHERE p = 1 AND c = 1")
+        assert list(cql.execute(select)) == [([3, 4, 5], 6)]
+
+        cql.execute(f"DELETE slist[2] from {table} WHERE p = 1")
+        assert list(cql.execute(select)) == [([3, 4], 6)]
+
+        cql.execute(f"UPDATE {table} SET slist = slist - [4] , v = 7 WHERE p = 1 AND c = 1")
+        assert list(cql.execute(select)) == [([3], 7)]
