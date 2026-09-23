@@ -19,7 +19,7 @@ from cassandra import InvalidRequest, Unauthorized
 from cassandra.cluster import NoHostAvailable
 import cassandra.cqltypes
 from cassandra.protocol import ConfigurationException, SyntaxException
-from cassandra.query import SimpleStatement, UNSET_VALUE
+from cassandra.query import PreparedStatement, SimpleStatement, UNSET_VALUE
 from cassandra.util import Date, Duration, Time
 import pytest
 
@@ -1533,3 +1533,50 @@ update {table} set r1 = 33 where p1 = 'key2' and c1 = 2;
 APPLY BATCH;""")
         assert list(cql.execute(f"select r1 from {table} where p1 = 'key1' and c1 = 1")) == [(66,)]
         assert list(cql.execute(f"select r1 from {table} where p1 = 'key2' and c1 = 2")) == [(33,)]
+
+
+# Regression test for SCYLLADB-2474: have_multiple_cfs misclassification in
+# batch_statement::prepare(): the flag was assigned with = instead of |=, so a
+# batch whose first and last sub-statements target the same table (e.g.
+# [ta, tb, ta]) had the flag cleared on the last sub-statement and was
+# misclassified as targeting a single table. A single-table batch is given a
+# routing key (partition_key_bind_indices) computed from its first
+# sub-statement, while a multi-table batch has no single partition key and must
+# have none. The misclassification therefore makes the prepared statement
+# advertise a bogus routing key.
+def test_batch_multi_table_has_no_partition_key_bind_indices(cql, test_keyspace, scylla_only, monkeypatch):
+    # The Python driver, when the server returns no partition key indexes
+    # for a prepared statement, computes its own routing_key_indexes from
+    # the bound column names, so we can't check routing_key_indexes. Instead,
+    # capture the pk_indexes the server returned in the PREPARE response.
+    captured_pk_indexes = []
+    original_from_message = PreparedStatement.from_message
+    def capturing_from_message(cls, query_id, column_metadata, pk_indexes, *args, **kwargs):
+        captured_pk_indexes.append(pk_indexes)
+        return original_from_message(query_id, column_metadata, pk_indexes, *args, **kwargs)
+    monkeypatch.setattr(PreparedStatement, 'from_message', classmethod(capturing_from_message))
+    def prepare_and_get_pk_indexes(query):
+        captured_pk_indexes.clear()
+        cql.prepare(query)
+        assert len(captured_pk_indexes) == 1
+        return captured_pk_indexes[0]
+
+    with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int") as ta, \
+         new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int") as tb:
+        # A multi-table batch whose first and last sub-statements target the
+        # same table must not advertise a single routing key.
+        assert not prepare_and_get_pk_indexes(
+            "BEGIN BATCH "
+            f"INSERT INTO {ta} (pk, v) VALUES (?, ?); "
+            f"INSERT INTO {tb} (pk, v) VALUES (?, ?); "
+            f"INSERT INTO {ta} (pk, v) VALUES (?, ?); "
+            "APPLY BATCH")
+        # A single-table batch, on the other hand, must keep its routing key.
+        # This guards against the fix accidentally breaking the single-table
+        # case.
+        assert prepare_and_get_pk_indexes(
+            "BEGIN BATCH "
+            f"INSERT INTO {ta} (pk, v) VALUES (?, ?); "
+            f"INSERT INTO {ta} (pk, v) VALUES (?, ?); "
+            f"INSERT INTO {ta} (pk, v) VALUES (?, ?); "
+            "APPLY BATCH")
