@@ -1120,3 +1120,18 @@ def test_time_overflow_with_default_ttl(cql, test_keyspace, scylla_only):
         cql.execute(f"update {table} set i = 2 where p1 = 'key1'")
         verify(2, True)
         verify(2, False)
+
+
+def test_time_overflow_using_ttl(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "p1 varchar primary key, i int") as table:
+        def verify(key, value, bypass_cache):
+            bypass = "bypass cache" if bypass_cache else ""
+            assert list(cql.execute(f"select i from {table} where p1 = '{key}' {bypass}")) == [(value,)]
+        cql.execute(f"insert into {table} (p1, i) values ('key1', 1) using ttl {max_ttl}")
+        verify('key1', 1, False)
+        verify('key1', 1, True)
+        cql.execute(f"insert into {table} (p1, i) values ('key2', 0)")
+        cql.execute(f"update {table} using ttl {max_ttl} set i = 2 where p1 = 'key2'")
+        verify('key2', 2, False)
+        verify('key1', 1, False)
+        verify('key1', 1, True)

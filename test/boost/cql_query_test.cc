@@ -254,36 +254,6 @@ SEASTAR_TEST_CASE(test_alter_node_oriented_scopes_reject_unknown_targets) {
     });
 }
 
-SEASTAR_TEST_CASE(test_time_overflow_using_ttl) {
-    return do_with_cql_env_thread([] (cql_test_env& e) {
-        auto verify = [&e] (int value, bool bypass_cache) -> future<> {
-            auto sq = format("select i from cf where p1 = 'key1' {};", bypass_cache ? "bypass cache" : "");
-            return e.execute_cql(sq).then([value] (shared_ptr<cql_transport::messages::result_message> msg) {
-                assert_that(msg).is_rows()
-                    .with_size(1)
-                    .with_row({
-                         {int32_type->decompose(value)},
-                     });
-            });
-        };
-
-        auto cr = "create table cf (p1 varchar primary key, i int);";
-        e.execute_cql(cr).get();
-        auto q = format("insert into cf (p1, i) values ('key1', 1) using ttl {:d};", max_ttl.count());
-        e.execute_cql(q).get();
-        require_column_has_value(e, "cf", {sstring("key1")}, {}, "i", 1).get();
-        verify(1, true).get();
-        verify(1, false).get();
-        q = format("insert into cf (p1, i) values ('key2', 0);");
-        e.execute_cql(q).get();
-        q = format("update cf using ttl {:d} set i = 2 where p1 = 'key2';", max_ttl.count());
-        e.execute_cql(q).get();
-        require_column_has_value(e, "cf", {sstring("key2")}, {}, "i", 2).get();
-        verify(1, false).get();
-        verify(1, true).get();
-    });
-}
-
 SEASTAR_TEST_CASE(test_batch) {
     return do_with_cql_env([] (cql_test_env& e) {
         return e.execute_cql("create table cf (p1 varchar, c1 int, r1 int, PRIMARY KEY (p1, c1));").discard_result().then([&e] {
