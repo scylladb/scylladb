@@ -4060,6 +4060,10 @@
                "type":"string",
                "description":"The host ID"
             },
+            "endpoint":{
+               "type":"string",
+               "description":"The node IP address. Empty if the address is not known."
+            },
             "current_mode":{
                "type":"string",
                "description":"The current storage mode: `vnodes` or `tablets`"

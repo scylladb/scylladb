@@ -307,6 +307,10 @@ public:
 
     struct node_migration_status {
         locator::host_id host_id;
+        // The node's IP address, or empty if it is not known to the address map.
+        // Reported so that `migrate-to-tablets upgrade/downgrade`, which are
+        // addressed by IP, can be driven straight off `migrate-to-tablets status`.
+        sstring endpoint;
         sstring current_mode;  // "vnodes" or "tablets"
         sstring intended_mode; // "vnodes" or "tablets"
     };

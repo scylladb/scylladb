@@ -4618,8 +4618,11 @@ future<storage_service::keyspace_migration_status> storage_service::get_tablets_
             : intended_storage_mode::vnodes;
         auto intended_mode = rs.storage_mode.value_or(intended_storage_mode::vnodes);
 
+        auto ip = _address_map.find(host_id);
+
         result.nodes.push_back(node_migration_status{
             .host_id = host_id,
+            .endpoint = ip ? sstring(fmt::to_string(*ip)) : sstring(),
             .current_mode = fmt::format("{}", current_mode),
             .intended_mode = fmt::format("{}", intended_mode),
         });
