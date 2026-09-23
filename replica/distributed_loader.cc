@@ -9,6 +9,7 @@
 #include "db/view/view_building_worker.hh"
 #include "sstables/shared_sstable.hh"
 #include "utils/assert.hh"
+#include "utils/error_injection.hh"
 #include <fmt/std.h>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/smp.hh>
@@ -426,6 +427,9 @@ future<> table_populator::populate_subdir(sharded<sstables::sstable_directory>& 
     compaction::owned_ranges_ptr owned_ranges_ptr = nullptr;
 
     if (vnodes_resharding) {
+        utils::get_local_injector().inject("fail_vnodes_resharding",
+                [] { throw std::runtime_error("injected failure: vnodes resharding failed"); });
+
         // Build owned_ranges from the tablet map.
         auto table_uuid = _global_table->schema()->id();
         auto& tmap = _db.local().get_shared_token_metadata().get()->tablets().get_tablet_map(table_uuid);
