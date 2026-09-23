@@ -991,3 +991,13 @@ def test_range_deletion_scenarios(cql, test_keyspace):
         assert len(list(cql.execute(f"select * from {cf}"))) == 2
         cql.execute(f"delete from {cf} where p = 1 and c >= 2 and c <= 3")
         assert list(cql.execute(f"select * from {cf}")) == [(1, 1, '1')]
+
+
+def test_range_deletion_scenarios_with_compact_storage(cql, test_keyspace, compact_storage):
+    with new_test_table(cql, test_keyspace, "p int, c int, v text, primary key (p, c)", "with compact storage") as table:
+        for i in range(10):
+            cql.execute(f"insert into {table} (p, c, v) values (1, {i}, 'abc')")
+        # Range deletions are not allowed on compact storage tables
+        for where in ["c <= 3", "c >= 0", "c > 0 and c <= 3", "c >= 0 and c < 3", "c > 0 and c < 3", "c >= 0 and c <= 3"]:
+            with pytest.raises(InvalidRequest):
+                cql.execute(f"delete from {table} where p = 1 and {where}")
