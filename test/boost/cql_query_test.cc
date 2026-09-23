@@ -268,33 +268,6 @@ SEASTAR_TEST_CASE(test_alter_node_oriented_scopes_reject_unknown_targets) {
     });
 }
 
-// The DESC SCHEMA cluster-config block: stored cluster-scope overrides lead the dump,
-// before any keyspace, in all tiers - the executable slot is stored-only, so without this
-// block a schema dump would silently lose cluster scope. The plain tier annotates each
-// statement with a trailing provenance comment (and so keeps a final newline, which the
-// COMMENT lexer token requires); WITH INTERNALS stays pure CQL.
-SEASTAR_TEST_CASE(test_describe_schema_emits_cluster_config_block) {
-    return do_with_cql_env_thread([](cql_test_env& e) {
-        e.execute_cql("CREATE KEYSPACE ks_blk WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}").get();
-        e.execute_cql("CREATE TABLE ks_blk.tbl (pk int PRIMARY KEY)").get();
-
-        // Nothing stored at cluster scope: no cluster block at all.
-        for (const auto& stmt : describe_create_statements(e, "DESCRIBE SCHEMA")) {
-            BOOST_REQUIRE_EQUAL(stmt.find("ALTER CLUSTER"), sstring::npos);
-        }
-
-        e.execute_cql("ALTER CLUSTER WITH auto_repair_enabled = false").get();
-
-        auto schema_stmts = describe_create_statements(e, "DESCRIBE SCHEMA");
-        BOOST_REQUIRE(!schema_stmts.empty());
-        BOOST_REQUIRE_EQUAL(schema_stmts.front(), "ALTER CLUSTER WITH auto_repair_enabled = false;  -- from cluster (cluster=false)\n");
-
-        auto internals_stmts = describe_create_statements(e, "DESCRIBE SCHEMA WITH INTERNALS");
-        BOOST_REQUIRE(!internals_stmts.empty());
-        BOOST_REQUIRE_EQUAL(internals_stmts.front(), "ALTER CLUSTER WITH auto_repair_enabled = false;");
-    });
-}
-
 // Every emitted create_statement must replay verbatim as a single request, comment lines
 // included. This is what moving the terminating ';' to its own line buys: the CQL COMMENT
 // lexer token needs a newline terminator, so a trailing comment with no final newline

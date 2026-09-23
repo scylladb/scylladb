@@ -322,3 +322,32 @@ def test_describe_schema_with_inherited_auto_repair_scope_config(cql, scylla_onl
         table_desc = describe_create_statement(cql, f"DESCRIBE TABLE {ks}.tbl")
         assert "\n    AND auto_repair_enabled" not in table_desc
         assert "\n    -- AND auto_repair_enabled = true  -- from cluster (table=NULL, keyspace=NULL, cluster=true)\n;" in table_desc
+
+
+# All create_statement cells of a multi-row describe (e.g. DESC SCHEMA), in row order.
+def describe_create_statements(cql, query):
+    return [row.create_statement for row in cql.execute(query) if row.create_statement is not None]
+
+
+# The DESC SCHEMA cluster-config block: stored cluster-scope overrides lead the dump,
+# before any keyspace, in all tiers - the executable slot is stored-only, so without this
+# block a schema dump would silently lose cluster scope. The plain tier annotates each
+# statement with a trailing provenance comment (and so keeps a final newline, which the
+# COMMENT lexer token requires); WITH INTERNALS stays pure CQL.
+def test_describe_schema_emits_cluster_config_block(cql, scylla_only):
+    with new_config_test_keyspace(cql) as ks, cluster_config_cleanup(cql):
+        cql.execute(f"CREATE TABLE {ks}.tbl (pk int PRIMARY KEY)")
+
+        # Nothing stored at cluster scope: no cluster block at all.
+        for stmt in describe_create_statements(cql, "DESCRIBE SCHEMA"):
+            assert "ALTER CLUSTER" not in stmt
+
+        cql.execute("ALTER CLUSTER WITH auto_repair_enabled = false")
+
+        schema_stmts = describe_create_statements(cql, "DESCRIBE SCHEMA")
+        assert schema_stmts
+        assert schema_stmts[0] == "ALTER CLUSTER WITH auto_repair_enabled = false;  -- from cluster (cluster=false)\n"
+
+        internals_stmts = describe_create_statements(cql, "DESCRIBE SCHEMA WITH INTERNALS")
+        assert internals_stmts
+        assert internals_stmts[0] == "ALTER CLUSTER WITH auto_repair_enabled = false;"
