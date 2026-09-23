@@ -423,3 +423,36 @@ def test_describe_config_uncomment_pins_inherited_value(cql, this_dc, scylla_onl
                 assert [tuple(r) for r in rows] == [("true",)]
         finally:
             cql.execute(f"DROP TABLE IF EXISTS {table}")
+
+
+TWCS_1_MINUTE = ("compaction = {'class': 'TimeWindowCompactionStrategy', "
+                 "'compaction_window_size': '1', 'compaction_window_unit': 'MINUTES'}")
+
+def test_create_twcs_table_no_ttl(cql, test_keyspace, scylla_only):
+    tbl = f"{test_keyspace}.{unique_name()}"
+    tbl2 = f"{test_keyspace}.{unique_name()}"
+    tbl3 = f"{test_keyspace}.{unique_name()}"
+    try:
+        # Create a TWCS table with no TTL defined
+        with config_value_context(cql, 'restrict_twcs_without_default_ttl', 'warn'):
+            cql.execute(f"CREATE TABLE {tbl} (a int, b int, PRIMARY KEY (a)) WITH {TWCS_1_MINUTE}")
+            # Ensure ALTER TABLE works
+            cql.execute(f"ALTER TABLE {tbl} WITH default_time_to_live=60")
+            # LiveUpdate and enforce TTL to be defined
+            cql.execute("UPDATE system.config SET value='true' WHERE name='restrict_twcs_without_default_ttl'")
+            # default_time_to_live option is required
+            with pytest.raises(ConfigurationException):
+                cql.execute(f"CREATE TABLE {tbl2} (a int, b int, PRIMARY KEY (a)) WITH {TWCS_1_MINUTE}")
+            cql.execute(f"CREATE TABLE {tbl2} (a int, b int, PRIMARY KEY (a)) WITH {TWCS_1_MINUTE} AND default_time_to_live=60")
+            # default_time_to_live option must not be set to 0.
+            with pytest.raises(ConfigurationException):
+                cql.execute(f"ALTER TABLE {tbl} WITH default_time_to_live=0")
+            # LiveUpdate and disable the check, then try table creation again
+            cql.execute("UPDATE system.config SET value='false' WHERE name='restrict_twcs_without_default_ttl'")
+            cql.execute(f"CREATE TABLE {tbl3} (a int, b int, PRIMARY KEY (a)) WITH {TWCS_1_MINUTE}")
+            # LiveUpdate back, and ensure that unrelated CQL requests are able to get through
+            cql.execute("UPDATE system.config SET value='true' WHERE name='restrict_twcs_without_default_ttl'")
+            cql.execute(f"ALTER TABLE {tbl3} WITH gc_grace_seconds=0")
+    finally:
+        for t in [tbl, tbl2, tbl3]:
+            cql.execute(f"DROP TABLE IF EXISTS {t}")

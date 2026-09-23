@@ -254,42 +254,6 @@ SEASTAR_TEST_CASE(test_alter_node_oriented_scopes_reject_unknown_targets) {
     });
 }
 
-SEASTAR_TEST_CASE(test_create_twcs_table_no_ttl) {
-    return do_with_cql_env_thread([](cql_test_env& e) {
-        // Create a TWCS table with no TTL defined
-        e.execute_cql("UPDATE system.config SET value='warn' WHERE name='restrict_twcs_without_default_ttl';").get();
-        e.execute_cql("CREATE TABLE tbl (a int, b int, PRIMARY KEY (a)) WITH "
-                      "compaction = {'class': 'TimeWindowCompactionStrategy', "
-                      "'compaction_window_size': '1', 'compaction_window_unit': 'MINUTES'};").get();
-        BOOST_REQUIRE(e.local_db().has_schema("ks", "tbl"));
-        // Ensure ALTER TABLE works
-        e.execute_cql("ALTER TABLE tbl WITH default_time_to_live=60;").get();
-        // LiveUpdate and enforce TTL to be defined
-        e.execute_cql("UPDATE system.config SET value='true' WHERE name='restrict_twcs_without_default_ttl';").get();
-        // default_time_to_live option is required
-        BOOST_REQUIRE_THROW(e.execute_cql("CREATE TABLE tbl2 (a int, b int, PRIMARY KEY (a)) WITH "
-                    "compaction = {'class': 'TimeWindowCompactionStrategy', "
-                    "'compaction_window_size': '1', 'compaction_window_unit': 'MINUTES'};").get(), exceptions::configuration_exception);
-        e.execute_cql("CREATE TABLE tbl2 (a int, b int, PRIMARY KEY (a)) WITH "
-                      "compaction = {'class': 'TimeWindowCompactionStrategy', "
-                      "'compaction_window_size': '1', 'compaction_window_unit': 'MINUTES'} AND "
-                      "default_time_to_live=60").get();
-        BOOST_REQUIRE(e.local_db().has_schema("ks", "tbl2"));
-        // default_time_to_live option must not be set to 0.
-        BOOST_REQUIRE_THROW(e.execute_cql("ALTER TABLE tbl WITH default_time_to_live=0;").get(), exceptions::configuration_exception);
-        // LiveUpdate and disable the check, then try table creation again
-        e.execute_cql("UPDATE system.config SET value='false' WHERE name='restrict_twcs_without_default_ttl';").get();
-        e.execute_cql("CREATE TABLE tbl3 (a int, b int, PRIMARY KEY (a)) WITH "
-                      "compaction = {'class': 'TimeWindowCompactionStrategy', "
-                      "'compaction_window_size': '1', 'compaction_window_unit': 'MINUTES'};").get();
-        // LiveUpdate back, and ensure that unrelated CQL requests are able to get through 
-        e.execute_cql("UPDATE system.config SET value='true' WHERE name='restrict_twcs_without_default_ttl';").get();
-        e.execute_cql("ALTER TABLE tbl3 WITH gc_grace_seconds=0;").get();
-
-        BOOST_REQUIRE(e.local_db().has_schema("ks", "tbl3"));
-    });
-}
-
 SEASTAR_TEST_CASE(test_twcs_max_window) {
     return do_with_cql_env_thread([](cql_test_env& e) {
         // Hardcode restriction to max 10 windows
