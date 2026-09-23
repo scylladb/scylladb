@@ -169,6 +169,13 @@ future<> cluster_backup_task::do_backup() {
         state_filter[loc.datacenter] = filter;
     }
 
+    if (_locations.empty()) {
+        // Every requested location is already backed up. Abort early,
+        // the per-table loop below dereferences _locations.begin() and would crash the node.
+        snap_log.info("Snapshot {} is already backed up at every requested location", _snapshot);
+        co_return;
+    }
+
     auto new_locations = _locations | std::views::transform([&](auto& p) {
         return db::snapshot_remote_location_entry {
             .snapshot_name = _snapshot,
