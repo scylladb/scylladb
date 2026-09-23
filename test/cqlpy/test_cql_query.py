@@ -1802,3 +1802,33 @@ def test_query_with_range_tombstones(cql, test_keyspace):
         cql.execute(f"DELETE FROM {table} WHERE pk = 0 AND ck > 0 AND ck <= 1")
         assert list(cql.execute(f"SELECT v FROM {table} WHERE pk = 0 ORDER BY ck DESC")) == [(4,), (0,)]
         assert list(cql.execute(f"SELECT v FROM {table} WHERE pk = 0")) == [(0,), (4,)]
+
+
+def test_alter_table_validation(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p1 int, c1 int, c2 int, r1 int, r2 set<int>, PRIMARY KEY (p1, c1, c2)") as table:
+        cql.execute(f"alter table {table} drop r2")
+        # A dropped column cannot be re-added with an incompatible type
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"alter table {table} add r2 list<int>")
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"alter table {table} add r2 set<text>")
+        cql.execute(f"alter table {table} add r2 set<int>")
+        # Non-primary-key columns cannot be renamed
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"alter table {table} rename r2 to r3")
+        # Column types cannot be altered
+        with pytest.raises(ConfigurationException):
+            cql.execute(f"alter table {table} alter r1 type bigint")
+        with pytest.raises(ConfigurationException):
+            cql.execute(f"alter table {table} alter r2 type map<int, int>")
+        cql.execute(f"alter table {table} add r3 map<int, int>")
+        cql.execute(f"alter table {table} add r4 set<text>")
+        cql.execute(f"alter table {table} drop r3")
+        cql.execute(f"alter table {table} drop r4")
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"alter table {table} add r3 map<int, text>")
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"alter table {table} add r4 set<int>")
+        # blob is compatible with any type, so re-adding as blob is allowed
+        cql.execute(f"alter table {table} add r3 map<int, blob>")
+        cql.execute(f"alter table {table} add r4 set<blob>")

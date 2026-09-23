@@ -378,59 +378,6 @@ SEASTAR_TEST_CASE(test_ttl) {
     });
 }
 
-SEASTAR_TEST_CASE(test_alter_table_validation) {
-    return do_with_cql_env([] (cql_test_env& e) {
-        return e.execute_cql("create table tatv (p1 int, c1 int, c2 int, r1 int, r2 set<int>, PRIMARY KEY (p1, c1, c2));").discard_result().then_wrapped([&e] (future<> f) {
-            SCYLLA_ASSERT(!f.failed());
-            return e.execute_cql("alter table tatv drop r2;").discard_result();
-        }).then_wrapped([&e] (future<> f) {
-            SCYLLA_ASSERT(!f.failed());
-            return e.execute_cql("alter table tatv add r2 list<int>;").discard_result();
-        }).then_wrapped([&e] (future<> f) {
-            assert_that_failed(f);
-            return e.execute_cql("alter table tatv add r2 set<text>;").discard_result();
-        }).then_wrapped([&e] (future<> f) {
-            assert_that_failed(f);
-            return e.execute_cql("alter table tatv add r2 set<int>;").discard_result();
-        }).then_wrapped([&e] (future<> f) {
-            SCYLLA_ASSERT(!f.failed());
-            return e.execute_cql("alter table tatv rename r2 to r3;").discard_result();
-        }).then_wrapped([&e] (future<> f) {
-            assert_that_failed(f);
-            return e.execute_cql("alter table tatv alter r1 type bigint;").discard_result();
-        }).then_wrapped([&e] (future<> f) {
-            assert_that_failed(f);
-            return e.execute_cql("alter table tatv alter r2 type map<int, int>;").discard_result();
-        }).then_wrapped([&e] (future<> f) {
-            assert_that_failed(f);
-            return e.execute_cql("alter table tatv add r3 map<int, int>;").discard_result();
-        }).then_wrapped([&e] (future<> f) {
-            SCYLLA_ASSERT(!f.failed());
-            return e.execute_cql("alter table tatv add r4 set<text>;").discard_result();
-        }).then_wrapped([&e] (future<> f) {
-            SCYLLA_ASSERT(!f.failed());
-            return e.execute_cql("alter table tatv drop r3;").discard_result();
-        }).then_wrapped([&e] (future<> f) {
-            SCYLLA_ASSERT(!f.failed());
-            return e.execute_cql("alter table tatv drop r4;").discard_result();
-        }).then_wrapped([&e] (future<> f) {
-            SCYLLA_ASSERT(!f.failed());
-            return e.execute_cql("alter table tatv add r3 map<int, text>;").discard_result();
-        }).then_wrapped([&e] (future<> f) {
-            assert_that_failed(f);
-            return e.execute_cql("alter table tatv add r4 set<int>;").discard_result();
-        }).then_wrapped([&e] (future<> f) {
-            assert_that_failed(f);
-            return e.execute_cql("alter table tatv add r3 map<int, blob>;").discard_result();
-        }).then_wrapped([&e] (future<> f) {
-            SCYLLA_ASSERT(!f.failed());
-            return e.execute_cql("alter table tatv add r4 set<blob>;").discard_result();
-        }).then_wrapped([] (future<> f) {
-            SCYLLA_ASSERT(!f.failed());
-        });
-    });
-}
-
 SEASTAR_TEST_CASE(test_pg_style_string_literal) {
     return do_with_cql_env([] (cql_test_env& e) {
         return e.execute_cql("create table test (p1 text, PRIMARY KEY (p1));").discard_result().then([&e] {
