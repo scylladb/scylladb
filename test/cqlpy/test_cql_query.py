@@ -17,12 +17,14 @@ from uuid import UUID
 
 from cassandra import InvalidRequest, Unauthorized
 from cassandra.cluster import NoHostAvailable
+from cassandra.concurrent import execute_concurrent_with_args
 import cassandra.cqltypes
 from cassandra.protocol import ConfigurationException, SyntaxException
 from cassandra.query import PreparedStatement, SimpleStatement, UNSET_VALUE
 from cassandra.util import Date, Duration, Time
 import pytest
 
+from . import nodetool
 from .util import config_value_context, new_session, new_test_keyspace, new_test_table, new_type, new_user, unique_name
 
 
@@ -1756,3 +1758,36 @@ def test_reversed_slice_with_empty_range_before_all_rows(cql, test_keyspace):
         assert list(cql.execute(f"select * from {table} WHERE a = 99 and b < 0 ORDER BY b DESC limit 2")) == []
         assert len(list(cql.execute(f"select * from {table} WHERE a = 99 order by b desc"))) == 16
         assert len(list(cql.execute(f"select * from {table}"))) == 16
+
+
+# Test that the sstable layer correctly handles reversed slices, in particular
+# slices that read many clustering ranges, such that there is a large enough gap
+# between the ranges for the reader to attempt to use the promoted index for
+# skipping between them.
+# For this reason, the test writes a large partition (10MB), then issues a
+# reverse query which reads 4 singular clustering ranges from it. The ranges are
+# constructed such that there is many clustering rows between them: roughly 20%
+# which is ~2MB.
+# See #6171
+def test_reversed_slice_with_many_clustering_ranges(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "pk int, ck int, v text, PRIMARY KEY (pk, ck)") as table:
+        stmt = cql.prepare(f"INSERT INTO {table} (pk, ck, v) VALUES (?, ?, ?)")
+        pk = 0
+        value = 'a' * 1024
+        num_rows = 10 * 1024
+        execute_concurrent_with_args(cql, stmt, [(pk, i, value) for i in range(num_rows)], concurrency=100)
+
+        nodetool.flush(cql, table)
+
+        selected_cks = [2 * (num_rows // 10), 4 * (num_rows // 10), 6 * (num_rows // 10), 8 * (num_rows // 10)]
+
+        # Many singular ranges - to check that the right range is used for
+        # determining the disk read-range upper bound.
+        cks = ', '.join(str(ck) for ck in selected_cks)
+        rows = list(cql.execute(f"SELECT * FROM {table} WHERE pk = {pk} and ck IN ({cks}) ORDER BY ck DESC BYPASS CACHE"))
+        assert rows == [(pk, ck, value) for ck in reversed(selected_cks)]
+
+        # A single wide range - to check that the right range bound is used for
+        # determining the disk read-range upper bound.
+        rows = list(cql.execute(f"SELECT * FROM {table} WHERE pk = {pk} and ck >= {selected_cks[0]} and ck <= {selected_cks[1]} ORDER BY ck DESC BYPASS CACHE"))
+        assert rows == [(pk, ck, value) for ck in reversed(range(selected_cks[0], selected_cks[1] + 1))]
