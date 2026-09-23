@@ -24,7 +24,7 @@ from test.pylib.connect_options import add_cql_connection_options, add_s3_option
 from test.pylib.encryption_provider import KeyProvider, make_key_provider_factory
 from test.pylib.object_storage import Storage, StorageFactory, StorageKind, create_gs_server, create_s3_server, format_tuples
 from test.pylib.random_tables import RandomTables
-from test.pylib.runner import PHASE_REPORT_KEY, make_failed_test_dir
+from test.pylib.runner import PHASE_REPORT_KEY, SEASTAR_IO_KEY, make_failed_test_dir
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.scylla_server import ScyllaVersionDescription, get_scylla_2025_1_description, get_scylla_2026_1_description
 from test.pylib.skip_types import skip_env
@@ -203,8 +203,12 @@ async def manager(request: pytest.FixtureRequest,
         finally:
             # Tear down (after test): notify the manager that the test finished.
             logger.debug("after_test for %s (success: %s)", test_case_name, not failed)
-            cluster_status = await mgr.after_test(success=not failed)
+            cluster_status = await mgr.after_test(
+                success=not failed,
+                gather_io=bool(request.config.getoption("--gather-metrics")),
+            )
             logger.info("Cluster after test %s (success: %s): %s", test_case_name, not failed, cluster_status)
+            request.node.stash[SEASTAR_IO_KEY] = cluster_status.get("seastar_io")
 
         # Collect the teardown-detected failures and report them all at once,
         # so leaked tasks don't hide the found-errors report or vice versa.

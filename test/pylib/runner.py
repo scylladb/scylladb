@@ -135,6 +135,11 @@ PHASE_REPORT_KEY = pytest.StashKey[dict[str, pytest.CollectReport]]()
 # recycle_leftover_clusters() still has to dispose of.
 CLUSTER_KEY = pytest.StashKey[ScyllaCluster | None]()
 
+# Set by the `manager` fixture from after_test()'s result: this test's seastar
+# IO counter totals, keyed by metric name (SeastarIOMetricName).
+# Picked up by pytest_runtest_protocol to store with the per-test metrics.
+SEASTAR_IO_KEY = pytest.StashKey[dict[str, int]]()
+
 FAILED_TEST_DIR = "failed_test"
 
 
@@ -257,7 +262,8 @@ def pytest_runtest_protocol(item, nextitem):
                 # skipped test have no call report so need to get setup report instead
                 call_report = reports.get("call") if reports.get("call") is not None else reports.get("setup")
                 success = call_report is not None and not call_report.failed
-                test_metrics = resource_gather.get_test_metrics()
+                test_metrics = resource_gather.get_test_metrics(
+                    seastar_io=item.stash.get(SEASTAR_IO_KEY, None))
                 if call_report is not None:
                     status = "skipped" if call_report.skipped else call_report.outcome
                     if hasattr(call_report, "wasxfail"):
