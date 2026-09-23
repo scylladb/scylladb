@@ -247,10 +247,6 @@ private:
 
     bool _in_shadow_round = false;
 
-    // The highest generation a shadow round saw the peers associate with this node's
-    // address, belonging to a node other than this one.
-    gms::generation_type _generation_seen_for_my_address{};
-
     service::topology_state_machine& _topo_sm;
 
     // Must be called on shard 0.
