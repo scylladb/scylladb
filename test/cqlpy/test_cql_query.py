@@ -2716,3 +2716,18 @@ def test_null_value_tuple_floating_types_and_uuids(cql, test_keyspace):
     test_for_single_type("float", "1.0")
     test_for_single_type("uuid", str(uuid.uuid4()))
     test_for_single_type("timeuuid", "00000000-0000-1000-0000-000000000000")
+
+
+def test_like_parameter_marker(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, col text") as table:
+        cql.execute(f"INSERT INTO  {table} (pk, col) VALUES (1, 'aaa')")
+        cql.execute(f"INSERT INTO  {table} (pk, col) VALUES (2, 'bbb')")
+        cql.execute(f"INSERT INTO  {table} (pk, col) VALUES (3, 'ccc')")
+
+        query = f"UPDATE {table} SET col = ? WHERE pk = ? IF col LIKE ?"
+        execute_prepared_serial(cql, query, ["err", 9, "e%"], [(False, None)])
+        execute_prepared_serial(cql, query, ["err", 9, "e%"], [(False, None)])
+        execute_prepared_serial(cql, query, ["chg", 1, "a%"], [(True, "aaa")])
+        execute_prepared_serial(cql, query, ["err", 1, "a%"], [(False, "chg")])
+        execute_prepared_serial(cql, query, ["chg", 2, "b%"], [(True, "bbb")])
+        execute_prepared_serial(cql, query, ["err", 1, "a%"], [(False, "chg")])

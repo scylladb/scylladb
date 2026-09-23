@@ -563,25 +563,6 @@ static void prepared_on_shard(cql_test_env& e, const sstring& query,
     }
 }
 
-SEASTAR_TEST_CASE(test_like_parameter_marker) {
-    cql_test_config cfg;
-    cfg.need_remote_proxy = true;
-    return do_with_cql_env_thread([] (cql_test_env& e) {
-        cquery_nofail(e, "CREATE TABLE t (pk int PRIMARY KEY, col text)");
-        cquery_nofail(e, "INSERT INTO  t (pk, col) VALUES (1, 'aaa')");
-        cquery_nofail(e, "INSERT INTO  t (pk, col) VALUES (2, 'bbb')");
-        cquery_nofail(e, "INSERT INTO  t (pk, col) VALUES (3, 'ccc')");
-
-        const sstring query("UPDATE t SET col = ? WHERE pk = ? IF col LIKE ?");
-        prepared_on_shard(e, query, {T("err"), I(9), T("e%")}, {{B(false), {}}});
-        prepared_on_shard(e, query, {T("err"), I(9), T("e%")}, {{B(false), {}}});
-        prepared_on_shard(e, query, {T("chg"), I(1), T("a%")}, {{B(true),  "aaa"}});
-        prepared_on_shard(e, query, {T("err"), I(1), T("a%")}, {{B(false), "chg"}});
-        prepared_on_shard(e, query, {T("chg"), I(2), T("b%")}, {{B(true),  "bbb"}});
-        prepared_on_shard(e, query, {T("err"), I(1), T("a%")}, {{B(false), "chg"}});
-    }, std::move(cfg));
-}
-
 SEASTAR_TEST_CASE(test_list_parameter_marker) {
     cql_test_config cfg;
     cfg.need_remote_proxy = true;
