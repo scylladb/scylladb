@@ -1319,6 +1319,13 @@ static billing_mode_type verify_billing_mode(const rjson::value& request) {
         if (!wcu.has_value()) {
             throw api_error::validation("provisionedThroughput.writeCapacityUnits is missing, when BillingMode=PROVISIONED, ProvisionedThroughput must be specified.");
         }
+        // DynamoDB's minimum for either capacity is 1.
+        if (*rcu < 1) {
+            throw api_error::validation("provisionedThroughput.readCapacityUnits must be at least 1.");
+        }
+        if (*wcu < 1) {
+            throw api_error::validation("provisionedThroughput.writeCapacityUnits must be at least 1.");
+        }
         return billing_mode_type{true, *rcu, *wcu};
     } else {
         throw api_error::validation("Unknown BillingMode={}. Must be PAY_PER_REQUEST or PROVISIONED.");
