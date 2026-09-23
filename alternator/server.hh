@@ -35,6 +35,13 @@ class server : public peering_sharded_service<server> {
     // running out of memory when a client sends a very large request.
     // DynamoDB also has the same limit set to 16 MB.
     static constexpr size_t request_content_length_limit = 16*MB;
+    // The maximum combined size of a request's request line (the URL) and its
+    // headers, in bytes. Like request_content_length_limit above, this is a
+    // safety measure to prevent Alternator from running out of memory - the
+    // HTTP server needs to buffer all of these in memory (and each individual
+    // header in *contiguous* memory) before the request can be handled.
+    // We choose 16 KB as the limit to match DynamoDB's limit.
+    static constexpr size_t request_line_and_headers_limit = 16*KB;
     using alternator_callback = std::function<future<executor::request_return_type>(executor&, executor::client_state&,
             tracing::trace_state_ptr, service_permit, rjson::value, std::unique_ptr<http::request>, std::unique_ptr<audit::audit_info_alternator>&)>;
     using alternator_callbacks_map = std::unordered_map<std::string_view, alternator_callback>;
