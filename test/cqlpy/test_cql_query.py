@@ -1862,3 +1862,20 @@ def test_long_text_value(cql, test_keyspace):
         cql.execute(f"INSERT INTO {table} (id, v, v2) values (2, '{bigger_one}', '{bigger_one}')")
         assert list(cql.execute(f"select v, v2 from {table} where id = 1")) == [(big_one, big_one)]
         assert list(cql.execute(f"select v, v2 from {table} where id = 2")) == [(bigger_one, bigger_one)]
+
+
+def test_time_conversions(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "id timeuuid PRIMARY KEY, d date, ts timestamp") as table:
+        cql.execute(f"INSERT INTO {table} (id, d, ts) VALUES (f4e30f80-6958-11e8-96d6-000000000000, '2017-06-11', '2018-06-05 00:00:00+0000')")
+        rows = list(cql.execute(f"select todate(id), todate(ts), totimestamp(id), totimestamp(d), tounixtimestamp(id),"
+                                f"tounixtimestamp(ts), tounixtimestamp(d), tounixtimestamp(totimestamp(todate(totimestamp(todate(id))))) from {table}"))
+        assert rows == [(
+            Date(0x4518),  # 2018-06-06
+            Date(0x4517),  # 2018-06-05
+            datetime(2018, 6, 6, 7, 12, 22, 136000),
+            datetime(2017, 6, 11, 0, 0, 0),
+            1528269142136,
+            1528156800000,
+            1497139200000,
+            1528243200000,
+        )]
