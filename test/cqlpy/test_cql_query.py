@@ -566,3 +566,29 @@ def test_twcs_restrictions_mixed(cql, test_keyspace, scylla_only):
     finally:
         for t in tables.values():
             cql.execute(f"DROP TABLE IF EXISTS {t}")
+
+
+def test_drop_table_with_si_and_mv(cql, this_dc):
+    ks = unique_name()
+    cql.execute(f"CREATE KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', '{this_dc}': 1}}")
+    try:
+        tbl = f"{ks}.tbl"
+        cql.execute(f"CREATE TABLE {tbl} (a int, b int, c float, PRIMARY KEY (a))")
+        cql.execute(f"CREATE INDEX idx1 ON {tbl} (b)")
+        cql.execute(f"CREATE INDEX idx2 ON {tbl} (c)")
+        cql.execute(f"CREATE MATERIALIZED VIEW {ks}.tbl_view AS SELECT c FROM {tbl} WHERE c IS NOT NULL PRIMARY KEY (c, a)")
+        # dropping a table with materialized views is prohibited
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"DROP TABLE {tbl}")
+        cql.execute(f"DROP MATERIALIZED VIEW {ks}.tbl_view")
+        # dropping a table with secondary indexes is fine
+        cql.execute(f"DROP TABLE {tbl}")
+
+        cql.execute(f"CREATE TABLE {tbl} (a int, b int, c float, PRIMARY KEY (a))")
+        cql.execute(f"CREATE INDEX idx1 ON {tbl} (b)")
+        cql.execute(f"CREATE INDEX idx2 ON {tbl} (c)")
+        cql.execute(f"CREATE MATERIALIZED VIEW {ks}.tbl_view AS SELECT c FROM {tbl} WHERE c IS NOT NULL PRIMARY KEY (c, a)")
+        # dropping whole keyspace with MV and SI is fine too
+        cql.execute(f"DROP KEYSPACE {ks}")
+    finally:
+        cql.execute(f"DROP KEYSPACE IF EXISTS {ks}")
