@@ -3741,3 +3741,7 @@ def do_test_twcs_reversed_restricted_query(cql, keyspace, enable_optimized_twcs_
 
 def test_twcs_reversed_restricted_query_optimized(cql, test_keyspace, scylla_only):
     do_test_twcs_reversed_restricted_query(cql, test_keyspace, True)
+
+
+def test_twcs_reversed_restricted_query_regular(cql, test_keyspace, scylla_only):
+    do_test_twcs_reversed_restricted_query(cql, test_keyspace, False)
