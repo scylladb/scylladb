@@ -23,7 +23,7 @@ import decimal
 from botocore.exceptions import ClientError
 from contextlib import contextmanager, ExitStack
 
-from test.alternator.util import is_aws, new_test_table, create_test_table, random_string
+from test.alternator.util import get_table_arn, is_aws, new_test_table, create_test_table, random_string
 
 # NOTE: tests here use `pytest.mark.xfail(reason="Not yet implemented on Scylla and MinIO is not started")` as xfail marker as the implementation is ongoing.
 # The tests will pass against AWS.
@@ -37,12 +37,6 @@ def is_table_deleted(dynamodb, table_name: str) -> bool:
         if e.response['Error']['Code'] == 'ResourceNotFoundException':
             return True
         raise
-
-# Helper to get the table ARN from a table object.
-def get_table_arn(table):
-    desc = table.meta.client.describe_table(TableName=table.name)
-    return desc['Table']['TableArn']
-
 
 # Helper to create a unique S3 bucket name.
 def unique_bucket_name():

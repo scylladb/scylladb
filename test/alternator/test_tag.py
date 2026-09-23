@@ -17,7 +17,7 @@ from botocore.exceptions import ClientError
 from test.pylib.skip_types import skip_env
 from packaging.version import Version
 
-from test.alternator.util import multiset, create_test_table, unique_table_name, random_string
+from test.alternator.util import multiset, create_test_table, get_table_arn, unique_table_name, random_string
 
 # Until August 2024, TagResource was a synchronous operation in DynamoDB -
 # when it returned, the new tags were readable by ListTagsOfResource.
@@ -67,8 +67,7 @@ def delete_tags(table, arn):
 
 # Test checking that tagging and untagging is correctly handled
 def test_tag_resource_basic(test_table):
-    got = test_table.meta.client.describe_table(TableName=test_table.name)['Table']
-    arn =  got['TableArn']
+    arn = get_table_arn(test_table)
     tags = [
         {
             'Key': 'string',
@@ -108,8 +107,7 @@ def test_tag_resource_basic(test_table):
     assert len(got['Tags']) == 0
 
 def test_tag_resource_overwrite(test_table):
-    got = test_table.meta.client.describe_table(TableName=test_table.name)['Table']
-    arn =  got['TableArn']
+    arn = get_table_arn(test_table)
     tags = [
         {
             'Key': 'string',
@@ -152,15 +150,13 @@ def test_table_tags(dynamodb):
 
 # Test checking that tagging works during table creation
 def test_list_tags_from_creation(test_table_tags):
-    got = test_table_tags.meta.client.describe_table(TableName=test_table_tags.name)['Table']
-    arn =  got['TableArn']
+    arn = get_table_arn(test_table_tags)
     got = test_table_tags.meta.client.list_tags_of_resource(ResourceArn=arn)
     assert multiset(got['Tags']) == multiset(PREDEFINED_TAGS)
 
 # Test checking that incorrect parameters return proper error codes
 def test_tag_resource_incorrect(test_table):
-    got = test_table.meta.client.describe_table(TableName=test_table.name)['Table']
-    arn =  got['TableArn']
+    arn = get_table_arn(test_table)
     delete_tags(test_table, arn)
     # Note: Tags must have two entries in the map: Key and Value, and their values
     # must be at least 1 character long, but these are validated on boto3 level
@@ -186,7 +182,7 @@ def test_tag_resource_incorrect(test_table):
 # errors. Here we try a more subtle error - an ARN that looks like it could
 # have been a real one - it's close to an existing table's ARN - but isn't.
 def test_tag_resource_subtly_incorrect_arn(test_table):
-    arn = test_table.meta.client.describe_table(TableName=test_table.name)['Table']['TableArn']
+    arn = get_table_arn(test_table)
     # The very last component of the ARN, on both Alternator and DynamoDB,
     # is the table's name. If we add one character at the end of the ARN,
     # it will look like it might be correct, but the table would not found.
@@ -199,8 +195,7 @@ def test_tag_resource_subtly_incorrect_arn(test_table):
 
 # Test that only specific values are allowed for write isolation (system:write_isolation tag)
 def test_tag_resource_write_isolation_values(scylla_only, test_table):
-    got = test_table.meta.client.describe_table(TableName=test_table.name)['Table']
-    arn =  got['TableArn']
+    arn = get_table_arn(test_table)
     for i in ['f', 'forbid', 'forbid_rmw', 'a', 'always', 'always_use_lwt', 'o', 'only_rmw_uses_lwt', 'u', 'unsafe', 'unsafe_rmw']:
         tag_resource(test_table, arn, [{'Key':'system:write_isolation', 'Value':i}])
     with pytest.raises(ClientError, match='ValidationException'):
@@ -264,8 +259,7 @@ def test_forbidden_tags_from_creation(scylla_only, dynamodb):
 # Test checking that unicode tags are allowed
 @pytest.mark.xfail(reason="unicode tags not yet supported")
 def test_tag_resource_unicode(test_table):
-    got = test_table.meta.client.describe_table(TableName=test_table.name)['Table']
-    arn =  got['TableArn']
+    arn = get_table_arn(test_table)
     tags = [
         {
             'Key': 'законные буквы',
@@ -296,7 +290,7 @@ def test_tag_resource_unicode(test_table):
 # Test that the Tags option of TagResource is required
 def test_tag_resource_missing_tags(test_table):
     client = test_table.meta.client
-    arn = client.describe_table(TableName=test_table.name)['Table']['TableArn']
+    arn = get_table_arn(test_table)
     with pytest.raises(ClientError, match='ValidationException'):
         client.tag_resource(ResourceArn=arn)
 
@@ -376,7 +370,7 @@ def test_tag_lsi_gsi(table_lsi_gsi):
 @pytest.mark.veryslow
 def test_concurrent_tag(dynamodb, test_table):
     client = test_table.meta.client
-    arn = client.describe_table(TableName=test_table.name)['Table']['TableArn']
+    arn = get_table_arn(test_table)
     # Unfortunately by default Python threads print their exceptions
     # (e.g., assertion failures) but don't propagate them to the join(),
     # so the overall test doesn't fail. The following Thread wrapper
@@ -421,7 +415,7 @@ def test_concurrent_tag(dynamodb, test_table):
 # Reproduces #16904.
 def test_empty_tag_value(dynamodb, test_table):
     client = dynamodb.meta.client
-    arn = client.describe_table(TableName=test_table.name)['Table']['TableArn']
+    arn = get_table_arn(test_table)
     tag = random_string()
     tag_resource(test_table, arn, [{'Key': tag, 'Value': ''}])
     # Verify that the tag with the empty value was correctly saved:
@@ -433,7 +427,7 @@ def test_empty_tag_value(dynamodb, test_table):
 # However, an empty string is NOT allowed as a tag's key
 def test_empty_tag_key(dynamodb, test_table):
     client = dynamodb.meta.client
-    arn = client.describe_table(TableName=test_table.name)['Table']['TableArn']
+    arn = get_table_arn(test_table)
     with pytest.raises(ClientError, match='ValidationException'):
         client.tag_resource(ResourceArn=arn, Tags=[{'Key': '', 'Value': 'dog'}])
 
@@ -441,7 +435,7 @@ def test_empty_tag_key(dynamodb, test_table):
 # allowed:
 def test_missing_tag_value(dynamodb, test_table):
     client = dynamodb.meta.client
-    arn = client.describe_table(TableName=test_table.name)['Table']['TableArn']
+    arn = get_table_arn(test_table)
     with pytest.raises(ClientError, match='ValidationException'):
         client.tag_resource(ResourceArn=arn, Tags=[{'Key': 'dog'}])
 
@@ -454,7 +448,7 @@ def test_missing_tag_value(dynamodb, test_table):
         pytest.param(False, marks=pytest.mark.xfail(reason="#16908"))])
 def test_tag_key_length_128_allowed(dynamodb, test_table, is_ascii):
     client = dynamodb.meta.client
-    arn = client.describe_table(TableName=test_table.name)['Table']['TableArn']
+    arn = get_table_arn(test_table)
     tag = ('x' if is_ascii else 'א') * 128
     tag_resource(test_table, arn, [{'Key': tag, 'Value': 'dog'}])
     tags = client.list_tags_of_resource(ResourceArn=arn)['Tags']
@@ -463,7 +457,7 @@ def test_tag_key_length_128_allowed(dynamodb, test_table, is_ascii):
 
 def test_tag_key_length_129_forbidden(dynamodb, test_table):
     client = dynamodb.meta.client
-    arn = client.describe_table(TableName=test_table.name)['Table']['TableArn']
+    arn = get_table_arn(test_table)
     tag = 'x'*129
     with pytest.raises(ClientError, match='ValidationException'):
         client.tag_resource(ResourceArn=arn, Tags=[{'Key': tag, 'Value': 'dog'}])
@@ -477,7 +471,7 @@ def test_tag_key_length_129_forbidden(dynamodb, test_table):
         pytest.param(False, marks=pytest.mark.xfail(reason="#16908"))])
 def test_tag_value_length_256_allowed(dynamodb, test_table, is_ascii):
     client = dynamodb.meta.client
-    arn = client.describe_table(TableName=test_table.name)['Table']['TableArn']
+    arn = get_table_arn(test_table)
     tag = random_string()
     value = ('x' if is_ascii else 'א') * 256
     tag_resource(test_table, arn, [{'Key': tag, 'Value': value}])
@@ -487,7 +481,7 @@ def test_tag_value_length_256_allowed(dynamodb, test_table, is_ascii):
 
 def test_tag_value_length_257_forbidden(dynamodb, test_table):
     client = dynamodb.meta.client
-    arn = client.describe_table(TableName=test_table.name)['Table']['TableArn']
+    arn = get_table_arn(test_table)
     value = 'x'*257
     with pytest.raises(ClientError, match='ValidationException'):
         client.tag_resource(ResourceArn=arn, Tags=[{'Key': 'dog', 'Value': value}])
@@ -498,7 +492,7 @@ def test_tag_value_length_257_forbidden(dynamodb, test_table):
 # key or value.
 def test_tag_forbidden_chars(dynamodb, test_table):
     client = dynamodb.meta.client
-    arn = client.describe_table(TableName=test_table.name)['Table']['TableArn']
+    arn = get_table_arn(test_table)
     for x in ['hi!', 'd%g', '"hello"']:
         with pytest.raises(ClientError, match='ValidationException'):
             client.tag_resource(ResourceArn=arn, Tags=[{'Key': x, 'Value': 'dog'}])
@@ -508,7 +502,7 @@ def test_tag_forbidden_chars(dynamodb, test_table):
 # Check that's it's allowed to reassign a new value to an existing tag.
 def test_tag_reassign(dynamodb, test_table):
     client = dynamodb.meta.client
-    arn = client.describe_table(TableName=test_table.name)['Table']['TableArn']
+    arn = get_table_arn(test_table)
     tag = random_string()
     value1 = random_string()
     value2 = random_string()
