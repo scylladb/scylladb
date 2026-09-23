@@ -1519,3 +1519,17 @@ def test_select_distinct_with_where_clause(cql, test_keyspace):
             cql.execute(f"INSERT INTO {table} (k, a, b, s) VALUES ({i}, {i * 10}, {i * 10}, {i * 10})")
         assert list(cql.execute(f"SELECT DISTINCT s FROM {table} WHERE k = 5")) == [(50,)]
         assert sorted(cql.execute(f"SELECT DISTINCT s FROM {table} WHERE k IN (5, 6, 7)")) == [(50,), (60,), (70,)]
+
+
+def test_batch_insert_statement(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p1 varchar, c1 int, r1 int, PRIMARY KEY (p1, c1)") as table:
+        cql.execute(f"""BEGIN BATCH
+insert into {table} (p1, c1, r1) values ('key1', 1, 100);
+insert into {table} (p1, c1, r1) values ('key2', 2, 200);
+APPLY BATCH;""")
+        cql.execute(f"""BEGIN BATCH
+update {table} set r1 = 66 where p1 = 'key1' and c1 = 1;
+update {table} set r1 = 33 where p1 = 'key2' and c1 = 2;
+APPLY BATCH;""")
+        assert list(cql.execute(f"select r1 from {table} where p1 = 'key1' and c1 = 1")) == [(66,)]
+        assert list(cql.execute(f"select r1 from {table} where p1 = 'key2' and c1 = 2")) == [(33,)]
