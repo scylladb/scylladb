@@ -2852,6 +2852,12 @@ async def test_split_completion_with_data_in_main_cg(manager: ScyllaClusterManag
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH tablets = {{'min_tablet_count': 1}};")
         await cql.run_async(f"ALTER TABLE {ks}.test WITH tablets = {{'min_tablet_count': 2}};")
 
+        # All the log messages below are matched against this table only.  Other tables
+        # (in particular system keyspaces once they are migrated from vnodes to tablets)
+        # can be split concurrently and emit the very same messages.
+        table = re.escape(f"{ks}.test")
+        table_id = (await cql.run_async(f"SELECT id FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = 'test'"))[0].id
+
         # Configure the target to hold the split monitor at startup.
         await manager.server_update_config(target.server_id, "error_injections_at_startup", ['tablet_split_monitor_wait'])
 
@@ -2864,10 +2870,20 @@ async def test_split_completion_with_data_in_main_cg(manager: ScyllaClusterManag
 
         log_target = await manager.server_open_log(target.server_id)
 
+        # The node starts serving CQL before it finishes replaying the group0
+        # entries it missed while down: the replay only starts once the failure
+        # detector marks the peers alive, so entries A and B are applied some
+        # time after server_start() returns.  Issue a group0 read barrier to
+        # make sure the target has caught up before looking at its log.
+        await read_barrier(manager.api, target.ip_addr)
+
         # Verify the fix code path was hit: the log message from the else-if
         # branch in update_effective_replication_map().
-        matches = await log_target.grep('Detected new split decision for table.*setting split mode on existing storage groups')
-        assert matches, "Fix code path not hit: set_split_mode() was not called via update_effective_replication_map()"
+        try:
+            await log_target.wait_for(f'Detected new split decision for table {table} at tablet count .*, '
+                                      'setting split mode on existing storage groups', timeout=60)
+        except TimeoutError:
+            pytest.fail("Fix code path not hit: set_split_mode() was not called via update_effective_replication_map()")
 
         # Insert data to confirm writes land in split-ready groups (not _main_cg).
         keys = range(100)
@@ -2881,12 +2897,12 @@ async def test_split_completion_with_data_in_main_cg(manager: ScyllaClusterManag
         await manager.api.message_injection(target.ip_addr, "tablet_split_monitor_wait")
 
         # Wait for the split to complete on the target node.
-        await log_target.wait_for('Detected tablet split for table', from_mark=mark_target, timeout=60)
+        await log_target.wait_for(f'Detected tablet split for table {table}, increasing from ', from_mark=mark_target, timeout=60)
 
         # The bug manifests as on_internal_error logged at ERR level.
         # With the fix, _main_cg is empty because set_split_mode() was called
         # during Raft log replay, so writes landed in split-ready groups.
-        errors = await log_target.grep("wasn't split correctly", from_mark=mark_target)
+        errors = await log_target.grep(f"Found that storage of group .* for table {table_id} wasn't split correctly", from_mark=mark_target)
         assert not errors, f"Crash reproduced — storage group wasn't split correctly: {errors}"
 
         # Release the split monitor hold for clean shutdown.
