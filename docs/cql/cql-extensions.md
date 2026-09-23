@@ -139,6 +139,11 @@ configuration error.
 The storage type of a keyspace cannot be changed after it is created;
 `ALTER KEYSPACE` cannot move a keyspace between local and object storage.
 
+A cluster keeps all of its user keyspaces on one kind of storage. `CREATE
+KEYSPACE` is rejected when the storage it asks for differs from the storage the
+cluster's existing user keyspaces use, so object-storage and local keyspaces
+cannot be mixed on one cluster.
+
 **Example**
 
 Given this endpoint in `scylla.yaml`:

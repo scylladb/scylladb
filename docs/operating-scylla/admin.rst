@@ -512,12 +512,17 @@ Not supported
      - Not supported. An object-storage keyspace must use tablets, which is the
        default for new keyspaces.
    * - Mixed-storage clusters
-     - Not supported. A cluster must use either local storage or object storage
-       for its user keyspaces, not both.
+     - Not supported, and refused. A cluster must use either local storage or
+       object storage for its user keyspaces, not both. ``CREATE KEYSPACE`` is
+       rejected when the storage it asks for differs from the storage the
+       cluster's existing user keyspaces use. A cluster that already holds
+       keyspaces of both kinds keeps working, and is only warned about.
    * - Materialized views and secondary indexes
      - Not supported.
    * - LWT, counters, CDC, Alternator
-     - Not supported.
+     - Not supported. An Alternator table is stored locally, so ``CreateTable``
+       is rejected with a ``ValidationException`` on a cluster whose user
+       keyspaces are in object storage.
    * - Size based tablet load balancing
      - The load balancer's size based mode treats SSTable sizes as local disk
        usage, which does not hold for object storage. Set
