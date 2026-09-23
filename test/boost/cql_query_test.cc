@@ -106,32 +106,6 @@ static std::vector<sstring> describe_create_statements(cql_test_env& e, std::str
     return result;
 }
 
-SEASTAR_TEST_CASE(test_alter_cluster_with_persists_cluster_config_override) {
-    return do_with_cql_env_thread([](cql_test_env& e) {
-        auto configs_type = map_type_impl::get_instance(utf8_type, utf8_type, false);
-
-        e.execute_cql("ALTER CLUSTER WITH auto_repair_enabled = true").get();
-
-        assert_that(e.execute_cql("SELECT configs FROM system_schema.scylla_clusters WHERE cluster_name = 'cluster'").get())
-            .is_rows().with_rows({{
-                {configs_type->decompose(make_map_value(configs_type, map_type_impl::native_type({
-                    {sstring("auto_repair_enabled"), sstring("true")},
-                })))}
-            }});
-
-        // The string literal 'null' is a value, not the removal keyword: for a boolean
-        // option it is rejected as an invalid value and the stored override stays intact.
-        BOOST_REQUIRE_THROW(
-            e.execute_cql("ALTER CLUSTER WITH auto_repair_enabled = 'null'").get(),
-            exceptions::invalid_request_exception);
-
-        e.execute_cql("ALTER CLUSTER WITH auto_repair_enabled = null").get();
-
-        assert_that(e.execute_cql("SELECT configs FROM system_schema.scylla_clusters WHERE cluster_name = 'cluster'").get())
-            .is_rows().with_size(0);
-    });
-}
-
 SEASTAR_TEST_CASE(test_alter_cluster_without_auth_enabled_is_allowed) {
     return do_with_cql_env_thread([](cql_test_env& e) {
         BOOST_REQUIRE_NO_THROW(e.execute_cql("ALTER CLUSTER WITH auto_repair_enabled = true").get());

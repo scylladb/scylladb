@@ -7,6 +7,8 @@
 # Tests for various CQL statements, converted from test/boost/cql_query_test.cc.
 #############################################################################
 
+from contextlib import contextmanager
+
 from cassandra import InvalidRequest
 from cassandra.protocol import ConfigurationException
 import pytest
@@ -63,3 +65,40 @@ def test_create_table_with_id_statement(cql, test_keyspace, scylla_only):
             cql.execute(f"ALTER TABLE {tbl} WITH id='f2a8c099-e723-48cb-8cd9-53e647a011a3'")
     finally:
         cql.execute(f"DROP TABLE {tbl}")
+
+
+# The cluster-scope config overrides (ALTER CLUSTER) are global state of the
+# shared test server, so tests that set them must remove them when done.
+@contextmanager
+def cluster_config_cleanup(cql):
+    try:
+        yield
+    finally:
+        cql.execute("ALTER CLUSTER WITH auto_repair_enabled = null")
+
+
+# The key of the single row in system_schema.scylla_clusters
+# (schema_tables::CLUSTER_CONFIG_SINGLETON_KEY).
+cluster_configs_query = "SELECT configs FROM system_schema.scylla_clusters WHERE cluster_name = 'cluster'"
+
+
+# Returns the configs column of each row returned by the query, as dicts
+# (None for a null/empty configs map).
+def fetch_configs(cql, query):
+    return [dict(row.configs) if row.configs is not None else None for row in cql.execute(query)]
+
+
+def test_alter_cluster_with_persists_cluster_config_override(cql, scylla_only):
+    with cluster_config_cleanup(cql):
+        cql.execute("ALTER CLUSTER WITH auto_repair_enabled = true")
+
+        assert fetch_configs(cql, cluster_configs_query) == [{'auto_repair_enabled': 'true'}]
+
+        # The string literal 'null' is a value, not the removal keyword: for a boolean
+        # option it is rejected as an invalid value and the stored override stays intact.
+        with pytest.raises(InvalidRequest):
+            cql.execute("ALTER CLUSTER WITH auto_repair_enabled = 'null'")
+
+        cql.execute("ALTER CLUSTER WITH auto_repair_enabled = null")
+
+        assert fetch_configs(cql, cluster_configs_query) == []
