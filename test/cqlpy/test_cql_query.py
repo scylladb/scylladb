@@ -2170,3 +2170,22 @@ def test_rf_expand(cql, this_dc):
     # Respect factors specified manually.
     with new_test_keyspace(cql, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 3, '{this_dc}': 2}}{vnodes}") as ks:
         assert_replication_contains(ks, {"class": network_topology, this_dc: "2"})
+
+
+def test_int_sum_overflow(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "pk text, ck text, val int, primary key(pk, ck)") as table:
+        cql.execute(f"insert into {table} (pk, ck, val) values ('p1', 'c1', 2147483647)")
+        cql.execute(f"insert into {table} (pk, ck, val) values ('p1', 'c2', 1)")
+        sum_query = f"select sum(val) from {table}"
+        with pytest.raises(InvalidRequest, match="overflow"):
+            cql.execute(sum_query)
+
+        cql.execute(f"insert into {table} (pk, ck, val) values ('p2', 'c1', -1)")
+        assert list(cql.execute(sum_query)) == [(2147483647,)]
+
+        cql.execute(f"insert into {table} (pk, ck, val) values ('p3', 'c1', 2147483647)")
+        with pytest.raises(InvalidRequest, match="overflow"):
+            cql.execute(sum_query)
+
+        cql.execute(f"insert into {table} (pk, ck, val) values ('p3', 'c2', -2147483648)")
+        assert list(cql.execute(sum_query)) == [(2147483646,)]
