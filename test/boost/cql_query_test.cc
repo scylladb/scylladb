@@ -254,29 +254,6 @@ SEASTAR_TEST_CASE(test_alter_node_oriented_scopes_reject_unknown_targets) {
     });
 }
 
-/// The number of distinct values in a list is limited. Test the
-// limit.
-SEASTAR_TEST_CASE(test_list_append_limit) {
-    return do_with_cql_env_thread([](cql_test_env& e) {
-        e.execute_cql("CREATE TABLE t (pk int PRIMARY KEY, l list<int>);").get();
-        std::string value_list = "0";
-        for (int i = 0; i < utils::UUID_gen::SUBMICRO_LIMIT; i++) {
-            value_list.append(",0");
-        }
-        // Use a local copy of query_options to avoid impact on
-        // adjacent tests: that's where Scylla stores the list
-        // append sequence, which will be exceeded it in this
-        // test.
-        auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE,
-                std::vector<cql3::raw_value>{},
-                cql3::query_options::specific_options{1, nullptr, {}, api::new_timestamp()});
-        auto cql = fmt::format("UPDATE t SET l = l + [{}] WHERE pk = 0;", value_list);
-        BOOST_REQUIRE_THROW(e.execute_cql(cql, std::move(qo)).get(), exceptions::invalid_request_exception);
-        e.execute_cql("DROP TABLE t;").get();
-    });
-}
-
-
 SEASTAR_TEST_CASE(test_insert_statement) {
     return do_with_cql_env([] (cql_test_env& e) {
         return e.execute_cql("create table cf (p1 varchar, c1 int, r1 int, PRIMARY KEY (p1, c1));").discard_result().then([&e] {

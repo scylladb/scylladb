@@ -777,3 +777,13 @@ def test_bound_var_in_collection_literal(cql, test_keyspace, monkeypatch):
 
             # Inserting a valid value has to be successful
             cql.execute(stmt, [2])
+
+
+# The number of distinct values in a list is limited. Test the limit.
+def test_list_append_limit(cql, test_keyspace, scylla_only):
+    # utils::UUID_gen::SUBMICRO_LIMIT
+    SUBMICRO_LIMIT = 1 << 17
+    with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, l list<int>") as t:
+        value_list = ",".join(["0"] * (SUBMICRO_LIMIT + 1))
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"UPDATE {t} SET l = l + [{value_list}] WHERE pk = 0")
