@@ -421,7 +421,9 @@ syntax.
 
 .. important::
 
-   Review :ref:`Object storage keyspaces: status and limitations
+   Object-storage keyspaces are a **Preview** feature: they are available for
+   evaluation, but are not generally available and are not recommended for
+   production data. Review :ref:`Object storage keyspaces: status and limitations
    <object-storage-limitations>` before using this feature. In particular,
    snapshots and backup are **not available** for object-storage keyspaces.
 
@@ -475,6 +477,8 @@ all keyspaces.
 
 Object storage keyspaces: status and limitations
 -------------------------------------------------
+
+Object-storage keyspaces are a **Preview** feature in this release.
 
 Object-storage keyspaces target archival workloads: data that is queried
 infrequently and benefits from object-storage pricing. Read latency is
