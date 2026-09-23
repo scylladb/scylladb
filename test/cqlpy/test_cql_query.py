@@ -1654,3 +1654,30 @@ def test_compact_storage(cql, test_keyspace, compact_storage):
     with new_test_table(cql, test_keyspace, "p1 int PRIMARY KEY, c1 int, c2 int", "with compact storage") as table:
         cql.execute(f"insert into {table} (p1) values (1)")
         assert list(cql.execute(f"select * from {table}")) == []
+
+
+def test_collections_of_collections(cql, test_keyspace):
+    # The driver returns frozen sets nested inside a set or used as map keys
+    # as SortedSet objects; normalize them to frozensets for comparison.
+    with new_test_table(cql, test_keyspace, "p1 int PRIMARY KEY, v set<frozen<set<int>>>") as table:
+        def check(expected):
+            rows = list(cql.execute(f"select v from {table} where p1 = 1"))
+            assert len(rows) == 1
+            assert {frozenset(s) for s in rows[0].v} == expected
+        cql.execute(f"insert into {table} (p1, v) values (1, {{{{1, 2}}, {{3, 4}}, {{5, 6}}}})")
+        check({frozenset({1, 2}), frozenset({3, 4}), frozenset({5, 6})})
+        cql.execute(f"delete v[{{3, 4}}] from {table} where p1 = 1")
+        check({frozenset({1, 2}), frozenset({5, 6})})
+        cql.execute(f"update {table} set v = v - {{{{1, 2}}, {{5}}}} where p1 = 1")
+        check({frozenset({5, 6})})
+    with new_test_table(cql, test_keyspace, "p1 int PRIMARY KEY, v map<frozen<set<int>>, int>") as table:
+        def check(expected):
+            rows = list(cql.execute(f"select v from {table} where p1 = 1"))
+            assert len(rows) == 1
+            assert {frozenset(k): v for k, v in rows[0].v.items()} == expected
+        cql.execute(f"insert into {table} (p1, v) values (1, {{{{1, 2}}: 7, {{3, 4}}: 8, {{5, 6}}: 9}})")
+        check({frozenset({1, 2}): 7, frozenset({3, 4}): 8, frozenset({5, 6}): 9})
+        cql.execute(f"delete v[{{3, 4}}] from {table} where p1 = 1")
+        check({frozenset({1, 2}): 7, frozenset({5, 6}): 9})
+        cql.execute(f"update {table} set v = v - {{{{1, 2}}, {{5}}}} where p1 = 1")
+        check({frozenset({5, 6}): 9})

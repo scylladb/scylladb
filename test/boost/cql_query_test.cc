@@ -378,66 +378,6 @@ SEASTAR_TEST_CASE(test_ttl) {
     });
 }
 
-SEASTAR_TEST_CASE(test_collections_of_collections) {
-    return do_with_cql_env([] (cql_test_env& e) {
-        auto set_of_ints = set_type_impl::get_instance(int32_type, true);
-        auto set_of_sets = set_type_impl::get_instance(set_of_ints, true);
-        auto map_of_sets = map_type_impl::get_instance(set_of_ints, int32_type, true);
-        return e.execute_cql("create table cf_sos (p1 int PRIMARY KEY, v set<frozen<set<int>>>);").discard_result().then([&e] {
-            return e.execute_cql("insert into cf_sos (p1, v) values (1, {{1, 2}, {3, 4}, {5, 6}});").discard_result();
-        }).then([&e, set_of_sets, set_of_ints] {
-            return require_column_has_value(e, "cf_sos", {1}, {},
-                "v", make_set_value(set_of_sets, set_type_impl::native_type({
-                    make_set_value(set_of_ints, set_type_impl::native_type({1, 2})),
-                    make_set_value(set_of_ints, set_type_impl::native_type({3, 4})),
-                    make_set_value(set_of_ints, set_type_impl::native_type({5, 6})),
-                })));
-        }).then([&e, set_of_sets, set_of_ints] {
-            return e.execute_cql("delete v[{3, 4}] from cf_sos where p1 = 1;").discard_result();
-        }).then([&e, set_of_sets, set_of_ints] {
-            return require_column_has_value(e, "cf_sos", {1}, {},
-                "v", make_set_value(set_of_sets, set_type_impl::native_type({
-                    make_set_value(set_of_ints, set_type_impl::native_type({1, 2})),
-                    make_set_value(set_of_ints, set_type_impl::native_type({5, 6})),
-                })));
-        }).then([&e, set_of_sets, set_of_ints] {
-            return e.execute_cql("update cf_sos set v = v - {{1, 2}, {5}} where p1 = 1;").discard_result();
-        }).then([&e, set_of_sets, set_of_ints] {
-            return require_column_has_value(e, "cf_sos", {1}, {},
-                "v", make_set_value(set_of_sets, set_type_impl::native_type({
-                    make_set_value(set_of_ints, set_type_impl::native_type({5, 6})),
-                })));
-        }).then([&e] {
-            return e.execute_cql("create table cf_mos (p1 int PRIMARY KEY, v map<frozen<set<int>>, int>);").discard_result();
-        }).then([&e, map_of_sets, set_of_ints] {
-            return e.execute_cql("insert into cf_mos (p1, v) values (1, {{1, 2}: 7, {3, 4}: 8, {5, 6}: 9});").discard_result();
-        }).then([&e, map_of_sets, set_of_ints] {
-            return require_column_has_value(e, "cf_mos", {1}, {},
-                "v", make_map_value(map_of_sets, map_type_impl::native_type({
-                    { make_set_value(set_of_ints, set_type_impl::native_type({1, 2})), 7 },
-                    { make_set_value(set_of_ints, set_type_impl::native_type({3, 4})), 8 },
-                    { make_set_value(set_of_ints, set_type_impl::native_type({5, 6})), 9 },
-                })));
-        }).then([&e, map_of_sets, set_of_ints] {
-            return e.execute_cql("delete v[{3, 4}] from cf_mos where p1 = 1;").discard_result();
-        }).then([&e, map_of_sets, set_of_ints] {
-            return require_column_has_value(e, "cf_mos", {1}, {},
-                "v", make_map_value(map_of_sets, map_type_impl::native_type({
-                    { make_set_value(set_of_ints, set_type_impl::native_type({1, 2})), 7 },
-                    { make_set_value(set_of_ints, set_type_impl::native_type({5, 6})), 9 },
-                })));
-        }).then([&e, map_of_sets, set_of_ints] {
-            return e.execute_cql("update cf_mos set v = v - {{1, 2}, {5}} where p1 = 1;").discard_result();
-        }).then([&e, map_of_sets, set_of_ints] {
-            return require_column_has_value(e, "cf_mos", {1}, {},
-                "v", make_map_value(map_of_sets, map_type_impl::native_type({
-                    { make_set_value(set_of_ints, set_type_impl::native_type({5, 6})), 9 },
-                })));
-        });
-    });
-}
-
-
 SEASTAR_TEST_CASE(test_result_order) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("update system.config SET value='true' where name='enable_create_table_with_compact_storage';").get();
