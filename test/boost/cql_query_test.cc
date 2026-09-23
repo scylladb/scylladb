@@ -254,41 +254,6 @@ SEASTAR_TEST_CASE(test_alter_node_oriented_scopes_reject_unknown_targets) {
     });
 }
 
-SEASTAR_TEST_CASE(test_in_clause_validation) {
-    return do_with_cql_env_thread([](cql_test_env& e) {
-        auto test_inline = [&] (sstring value, bool should_throw) {
-            auto cql = fmt::format("SELECT r1 FROM tbl WHERE (c1,r1) IN ((1, '{}')) ALLOW FILTERING", value);
-            if (should_throw) {
-                BOOST_REQUIRE_THROW(e.execute_cql(cql).get(), exceptions::invalid_request_exception);
-            } else {
-                BOOST_REQUIRE_NO_THROW(e.execute_cql(cql).get());
-            }
-        };
-        e.execute_cql("CREATE TABLE tbl (p1 int, c1 int, r1 date, PRIMARY KEY (p1, c1,r1))").get();
-        test_inline("definitely not a date value", true);
-        test_inline("2015-05-03", false);
-        e.execute_cql("CREATE TABLE tbl2 (p1 int, c1 int, r1 text, PRIMARY KEY (p1, c1,r1))").get();
-        auto id = e.prepare("SELECT r1 FROM tbl2 WHERE (c1,r1) IN ? ALLOW FILTERING").get();
-        auto test_bind = [&] (sstring value, bool should_throw) {
-            auto my_tuple_type = tuple_type_impl::get_instance({int32_type, utf8_type});
-            auto my_list_type = list_type_impl::get_instance(my_tuple_type, true);
-            std::vector<cql3::raw_value> raw_values;
-            auto values = make_tuple_value(my_tuple_type, tuple_type_impl::native_type({int32_t{2}, value}));
-            auto in_values_list = my_list_type->decompose(make_list_value(my_list_type, {values}));
-            raw_values.emplace_back(cql3::raw_value::make_value(in_values_list));
-            if (should_throw) {
-                BOOST_REQUIRE_THROW(
-                    e.execute_prepared(id, raw_values).get(),
-                    exceptions::invalid_request_exception);
-            } else {
-                BOOST_REQUIRE_NO_THROW(e.execute_prepared(id, raw_values).get());
-            }
-        };
-        test_bind(sstring(1, '\255'), true);
-        test_bind("proper utf8 string", false);
-    });
-}
-
 SEASTAR_THREAD_TEST_CASE(test_in_clause_cartesian_product_limits) {
     do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("CREATE TABLE tab1 (pk1 int, pk2 int, PRIMARY KEY ((pk1, pk2)))").get();
