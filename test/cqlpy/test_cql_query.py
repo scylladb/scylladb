@@ -14,6 +14,7 @@ import json
 import math
 import re
 import struct
+import uuid
 from uuid import UUID
 
 from cassandra import ConsistencyLevel, InvalidRequest, Unauthorized
@@ -2690,3 +2691,28 @@ def test_time_uuid_fcts_result(cql, time_uuid_fcts_table):
         nofail(fct, "tounixtimestamp(u)")
 
     require_timestamp_timeuuid_or_date("tounixtimestamp")
+
+
+# Executes a prepared statement with SERIAL serial consistency (and the given
+# consistency level), and checks its result rows, ignoring order.
+def execute_prepared_serial(cql, query, params, expected_rows, cl=ConsistencyLevel.ONE):
+    stmt = cql.prepare(query)
+    bound = stmt.bind(params)
+    bound.consistency_level = cl
+    bound.serial_consistency_level = ConsistencyLevel.SERIAL
+    rows = [tuple(r) for r in cql.execute(bound)]
+    assert sorted(rows, key=repr) == sorted([tuple(r) for r in expected_rows], key=repr)
+
+
+def test_null_value_tuple_floating_types_and_uuids(cql, test_keyspace):
+    def test_for_single_type(typ, update_value):
+        with new_test_table(cql, test_keyspace, f"k int PRIMARY KEY, test {typ}") as table:
+            cql.execute(f"INSERT INTO {table} (k, test) VALUES (0, null)")
+            # a list containing a single null value
+            execute_prepared_serial(cql, f"UPDATE {table} SET test={update_value} WHERE k=0 IF test IN ?",
+                                    [[None]], [(True, None)])
+
+    test_for_single_type("double", "1.0")
+    test_for_single_type("float", "1.0")
+    test_for_single_type("uuid", str(uuid.uuid4()))
+    test_for_single_type("timeuuid", "00000000-0000-1000-0000-000000000000")
