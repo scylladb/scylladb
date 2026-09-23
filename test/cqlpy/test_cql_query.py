@@ -1432,3 +1432,15 @@ def test_order_by(cql, test_keyspace):
         check("p1 = 0 and c1 >= 2 order by c1 asc, c2 asc", [(2, 1, 0), (2, 2, 5)])
         check("p1 = 0 and c1 >= 2 order by c1 asc, c2 asc limit 1", [(2, 1, 0)])
         check("p1 = 0 order by c1 asc, c2 asc limit 1", [(1, 1, 4)])
+
+
+def test_order_by_validate(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p1 int, c1 int, c2 int, r1 int, r2 int, PRIMARY KEY(p1, c1, c2)") as table:
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"select c2, r1 from {table} where p1 = 0 order by c desc")
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"select c2, r1 from {table} where p1 = 0 order by c2 desc")
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"select c2, r1 from {table} where p1 = 0 order by c1 desc, c2 asc")
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"select c2, r1 from {table} order by c1 asc")

@@ -378,25 +378,6 @@ SEASTAR_TEST_CASE(test_ttl) {
     });
 }
 
-SEASTAR_TEST_CASE(test_order_by_validate) {
-    return do_with_cql_env([] (cql_test_env& e) {
-        return e.execute_cql("create table torderv (p1 int, c1 int, c2 int, r1 int, r2 int, PRIMARY KEY(p1, c1, c2));").discard_result().then([&e] {
-            return e.execute_cql("select c2, r1 from torderv where p1 = 0 order by c desc;");
-        }).then_wrapped([&e] (future<shared_ptr<cql_transport::messages::result_message>> f) {
-            assert_that_failed(f);
-            return e.execute_cql("select c2, r1 from torderv where p1 = 0 order by c2 desc;");
-        }).then_wrapped([&e] (future<shared_ptr<cql_transport::messages::result_message>> f) {
-            assert_that_failed(f);
-            return e.execute_cql("select c2, r1 from torderv where p1 = 0 order by c1 desc, c2 asc;");
-        }).then_wrapped([&e] (future<shared_ptr<cql_transport::messages::result_message>> f) {
-            assert_that_failed(f);
-            return e.execute_cql("select c2, r1 from torderv order by c1 asc;");
-        }).then_wrapped([] (future<shared_ptr<cql_transport::messages::result_message>> f) {
-            assert_that_failed(f);
-        });
-    });
-}
-
 SEASTAR_TEST_CASE(test_multi_column_restrictions) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("create table tmcr (p1 int, c1 int, c2 int, c3 int, r1 int, PRIMARY KEY (p1, c1, c2, c3));").get();
