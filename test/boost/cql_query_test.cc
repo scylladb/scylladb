@@ -254,50 +254,6 @@ SEASTAR_TEST_CASE(test_alter_node_oriented_scopes_reject_unknown_targets) {
     });
 }
 
-SEASTAR_TEST_CASE(test_bound_var_in_collection_literal) {
-    return do_with_cql_env_thread([](cql_test_env& e) {
-        e.execute_cql("create table list_t (pk int PRIMARY KEY, c1 list<int>);").get();
-        e.execute_cql("create table set_t (pk int PRIMARY KEY, c1 set<int>);").get();
-        e.execute_cql("create table map_t (pk int PRIMARY KEY, c1 map<int, int>);").get();
-
-        auto insert_list = e.prepare("insert into list_t (pk, c1) values (112, [997, ?])").get();
-        auto insert_set = e.prepare("insert into set_t (pk, c1) values (112, {997, ?})").get();
-        auto insert_map_key = e.prepare("insert into map_t (pk, c1) values (112, {997: 112, ?: 112})").get();
-        auto insert_map_value = e.prepare("insert into map_t (pk, c1) values (112, {997: 112, 112: ?})").get();
-        BOOST_REQUIRE_THROW(
-            e.prepare("insert into map_t (pk, c1) values (112, {997: 112, ?})").get(),
-            exceptions::syntax_exception
-        );
-
-        std::vector<cql3::prepared_cache_key_type> stmts = {insert_list, insert_set, insert_map_key, insert_map_value};
-
-        for (const auto& stmt : stmts) {
-            // Null value is not allowed as a collections element
-            const auto null_value = cql3::raw_value::make_null();
-            BOOST_REQUIRE_THROW(
-                e.execute_prepared(stmt, {null_value}).get(),
-                exceptions::invalid_request_exception
-            );
-
-            // Check if types mismatch is detected
-            const auto short_value = cql3::raw_value::make_value(short_type->decompose(data_value((int16_t)1)));
-            BOOST_REQUIRE_THROW(
-                e.execute_prepared(stmt, {short_value}).get(),
-                exceptions::invalid_request_exception
-            );
-
-            BOOST_REQUIRE_THROW(
-                e.execute_prepared(stmt, cql3::raw_value_vector_with_unset({null_value}, {true})).get(),
-                exceptions::invalid_request_exception
-            );
-
-            // Inserting a valid value has to be successful
-            const auto int_value = cql3::raw_value::make_value(int32_type->decompose(data_value(2)));
-            BOOST_REQUIRE_NO_THROW(e.execute_prepared(stmt, {int_value}).get());
-        }
-    });
-}
-
 /// The number of distinct values in a list is limited. Test the
 // limit.
 SEASTAR_TEST_CASE(test_list_append_limit) {

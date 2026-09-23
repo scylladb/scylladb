@@ -8,11 +8,13 @@
 #############################################################################
 
 from contextlib import contextmanager
+import struct
 
 from cassandra import InvalidRequest, Unauthorized
 from cassandra.cluster import NoHostAvailable
 import cassandra.cqltypes
 from cassandra.protocol import ConfigurationException, SyntaxException
+from cassandra.query import UNSET_VALUE
 import pytest
 
 from .util import config_value_context, new_session, new_test_keyspace, new_test_table, new_user, unique_name
@@ -743,3 +745,35 @@ def test_vector_elements_validation(cql, test_keyspace, raw_utf8_serialization):
 def test_list_of_tuples_with_bound_var(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, c1 list<frozen<tuple<int,int>>>") as cf:
         cql.prepare(f"update {cf} SET c1 = c1 + [(?,9999)] where pk = 999")
+
+
+def test_bound_var_in_collection_literal(cql, test_keyspace, monkeypatch):
+    with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, c1 list<int>") as list_t, \
+         new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, c1 set<int>") as set_t, \
+         new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, c1 map<int, int>") as map_t:
+        insert_list = cql.prepare(f"insert into {list_t} (pk, c1) values (112, [997, ?])")
+        insert_set = cql.prepare(f"insert into {set_t} (pk, c1) values (112, {{997, ?}})")
+        insert_map_key = cql.prepare(f"insert into {map_t} (pk, c1) values (112, {{997: 112, ?: 112}})")
+        insert_map_value = cql.prepare(f"insert into {map_t} (pk, c1) values (112, {{997: 112, 112: ?}})")
+        with pytest.raises(SyntaxException):
+            cql.prepare(f"insert into {map_t} (pk, c1) values (112, {{997: 112, ?}})")
+
+        for stmt in [insert_list, insert_set, insert_map_key, insert_map_value]:
+            # Null value is not allowed as a collections element
+            with pytest.raises(InvalidRequest):
+                cql.execute(stmt, [None])
+
+            # Check if types mismatch is detected: send a 2-byte smallint
+            # where a 4-byte int is expected. The driver serializes according
+            # to the prepared metadata, so we override the int serializer.
+            with monkeypatch.context() as m:
+                m.setattr(cassandra.cqltypes.Int32Type, 'serialize',
+                          staticmethod(lambda val, protocol_version: struct.pack('>h', val)))
+                with pytest.raises(InvalidRequest):
+                    cql.execute(stmt, [1])
+
+            with pytest.raises(InvalidRequest):
+                cql.execute(stmt, [UNSET_VALUE])
+
+            # Inserting a valid value has to be successful
+            cql.execute(stmt, [2])
