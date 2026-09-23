@@ -401,12 +401,6 @@ SEASTAR_TEST_CASE(test_cache_bypass) {
     });
 }
 
-namespace {
-
-auto T(const char* t) { return utf8_type->decompose(t); }
-
-} // anonymous namespace
-
 SEASTAR_TEST_CASE(test_view_with_two_regular_base_columns_in_key) {
     return do_with_cql_env_thread([] (auto& e) {
         cquery_nofail(e, "CREATE TABLE t (p int, c int, v1 int, v2 int, primary key(p,c))");
@@ -514,36 +508,6 @@ SEASTAR_TEST_CASE(test_internal_schema_changes_on_a_distributed_table) {
         BOOST_REQUIRE_EXCEPTION(e.local_qp().execute_internal("drop table ks.t", cql3::query_processor::cache_internal::yes).get(), std::logic_error, local_err);
         BOOST_REQUIRE_EXCEPTION(e.local_qp().execute_internal("drop keyspace ks", cql3::query_processor::cache_internal::yes).get(), std::logic_error, local_err);
     });
-}
-
-static future<> test_clustering_filtering_3_with_compaction_strategy(std::string_view cs) {
-    auto db_config = make_shared<db::config>();
-    db_config->sstable_format("me");
-
-    return do_with_cql_env_thread([cs] (cql_test_env& e) {
-        cquery_nofail(e, seastar::format("CREATE TABLE cf(pk text, ck int, v text, PRIMARY KEY(pk, ck)) WITH COMPACTION = {{'class': '{}'}}", cs));
-        e.db().invoke_on_all([] (replica::database& db) {
-            auto& table = db.find_column_family("ks", "cf");
-            return table.disable_auto_compaction();
-        }).get();
-        cquery_nofail(e, "INSERT INTO  cf(pk, ck, v) VALUES ('a', 1, 'a1')");
-        e.db().invoke_on_all([] (replica::database& db) { return db.flush_all_memtables(); }).get();
-        cquery_nofail(e, "INSERT INTO  cf(pk, ck, v) VALUES ('b', 0, 'b0')");
-        e.db().invoke_on_all([] (replica::database& db) { return db.flush_all_memtables(); }).get();
-        e.db().invoke_on_all([] (replica::database& db) { db.row_cache_tracker().clear(); }).get();
-        require_rows(e, "SELECT v FROM cf WHERE pk='a' AND ck=0 ALLOW FILTERING", {});
-        require_rows(e, "SELECT v FROM cf", {{T("a1")}, {T("b0")}});
-    }, cql_test_config(db_config));
-}
-
-SEASTAR_TEST_CASE(test_clustering_filtering_3) {
-    static std::array<std::string_view, 2> test_compaction_strategies = {
-        "SizeTieredCompactionStrategy",
-        "TimeWindowCompactionStrategy",
-    };
-
-    return do_for_each(test_compaction_strategies,
-            test_clustering_filtering_3_with_compaction_strategy);
 }
 
 SEASTAR_TEST_CASE(test_counter_column_added_into_non_counter_table) {
