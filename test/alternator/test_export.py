@@ -23,7 +23,7 @@ import decimal
 from botocore.exceptions import ClientError
 from contextlib import contextmanager, ExitStack
 
-from test.alternator.util import is_aws, new_test_table, create_test_table, random_string
+from test.alternator.util import get_table_arn, is_aws, new_test_table, create_test_table, random_string
 
 # NOTE: tests here use `pytest.mark.xfail(reason="Not yet implemented on Scylla and MinIO is not started")` as xfail marker as the implementation is ongoing.
 # The tests will pass against AWS.
@@ -37,12 +37,6 @@ def is_table_deleted(dynamodb, table_name: str) -> bool:
         if e.response['Error']['Code'] == 'ResourceNotFoundException':
             return True
         raise
-
-# Helper to get the table ARN from a table object.
-def get_table_arn(table):
-    desc = table.meta.client.describe_table(TableName=table.name)
-    return desc['Table']['TableArn']
-
 
 # Helper to create a unique S3 bucket name.
 def unique_bucket_name():
@@ -1245,7 +1239,7 @@ def test_list_exports_summary_fields(dynamodb, test_table_s):
 # In future it will be updated to use a minio bucket and `scylla_only` marker will be removed.
 def test_export_table_basic(test_table_s_for_export_only, scylla_only):
     client = test_table_s_for_export_only.meta.client
-    table_arn = client.describe_table(TableName=test_table_s_for_export_only.name)['Table']['TableArn']
+    table_arn = get_table_arn(test_table_s_for_export_only)
     client_token = random_string(20)
 
     response = client.export_table_to_point_in_time(
@@ -1270,7 +1264,7 @@ def test_export_table_basic(test_table_s_for_export_only, scylla_only):
 # Test that non-DYNAMODB_JSON format (ION) is rejected.
 def test_export_table_unsupported_format_ion(test_table_s_for_export_only, scylla_only):
     client = test_table_s_for_export_only.meta.client
-    table_arn = client.describe_table(TableName=test_table_s_for_export_only.name)['Table']['TableArn']
+    table_arn = get_table_arn(test_table_s_for_export_only)
 
     with pytest.raises(ClientError, match='ValidationException.*[eE]xportFormat'):
         client.export_table_to_point_in_time(
@@ -1294,7 +1288,7 @@ def test_update_continuous_backups_rejected(test_table_s_for_export_only, scylla
 # Test that incremental export is rejected.
 def test_export_table_unsupported_incremental(test_table_s_for_export_only, scylla_only):
     client = test_table_s_for_export_only.meta.client
-    table_arn = client.describe_table(TableName=test_table_s_for_export_only.name)['Table']['TableArn']
+    table_arn = get_table_arn(test_table_s_for_export_only)
 
     with pytest.raises(ClientError, match='ValidationException.*[eE]xportType'):
         client.export_table_to_point_in_time(
@@ -1307,7 +1301,7 @@ def test_export_table_unsupported_incremental(test_table_s_for_export_only, scyl
 # Test that IncrementalExportSpecification is rejected.
 def test_export_table_unsupported_incremental_spec(test_table_s_for_export_only, scylla_only):
     client = test_table_s_for_export_only.meta.client
-    table_arn = client.describe_table(TableName=test_table_s_for_export_only.name)['Table']['TableArn']
+    table_arn = get_table_arn(test_table_s_for_export_only)
 
     with pytest.raises(ClientError, match='ValidationException.*[iI]ncrementalExportSpecification'):
         client.export_table_to_point_in_time(
@@ -1328,7 +1322,7 @@ def test_export_table_unsupported_incremental_spec(test_table_s_for_export_only,
 ])
 def test_export_table_unsupported_s3_options(test_table_s_for_export_only, scylla_only, unsupported_parameter, value):
     client = test_table_s_for_export_only.meta.client
-    table_arn = client.describe_table(TableName=test_table_s_for_export_only.name)['Table']['TableArn']
+    table_arn = get_table_arn(test_table_s_for_export_only)
 
     with pytest.raises(ClientError, match=f'ValidationException.*{unsupported_parameter}'):
         client.export_table_to_point_in_time(
@@ -1343,7 +1337,7 @@ def test_export_table_unsupported_s3_options(test_table_s_for_export_only, scyll
 # For performance reasons in test we don't want to follow the suit with it.
 def test_export_table_export_time_now(test_table_s_for_export_only, scylla_only):
     client = test_table_s_for_export_only.meta.client
-    table_arn = client.describe_table(TableName=test_table_s_for_export_only.name)['Table']['TableArn']
+    table_arn = get_table_arn(test_table_s_for_export_only)
 
     response = client.export_table_to_point_in_time(
         TableArn=table_arn,
@@ -1356,7 +1350,7 @@ def test_export_table_export_time_now(test_table_s_for_export_only, scylla_only)
 # Test that ExportTime in the past (more than 5 minutes) is rejected.
 def test_export_table_invalid_export_time_before_now(test_table_s_for_export_only, scylla_only):
     client = test_table_s_for_export_only.meta.client
-    table_arn = client.describe_table(TableName=test_table_s_for_export_only.name)['Table']['TableArn']
+    table_arn = get_table_arn(test_table_s_for_export_only)
 
     with pytest.raises(ClientError, match='InvalidExportTimeException.*Export ?Time'):
         client.export_table_to_point_in_time(
@@ -1369,7 +1363,7 @@ def test_export_table_invalid_export_time_before_now(test_table_s_for_export_onl
 # We add additional time (1 minute) to avoid a race (where enough time will pass before the request is processed).
 def test_export_table_invalid_export_time_in_future(test_table_s_for_export_only, scylla_only):
     client = test_table_s_for_export_only.meta.client
-    table_arn = client.describe_table(TableName=test_table_s_for_export_only.name)['Table']['TableArn']
+    table_arn = get_table_arn(test_table_s_for_export_only)
 
     with pytest.raises(ClientError, match='InvalidExportTimeException.*Export ?Time'):
         client.export_table_to_point_in_time(

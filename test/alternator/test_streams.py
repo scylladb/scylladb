@@ -15,7 +15,7 @@ import pytest
 from boto3.dynamodb.types import TypeDeserializer
 from botocore.exceptions import ClientError
 
-from test.alternator.util import is_aws, scylla_config_temporary, unique_table_name, create_test_table, new_test_table, random_string, full_scan, freeze, list_tables, get_region, manual_request
+from test.alternator.util import is_aws, scylla_config_temporary, unique_table_name, create_test_table, new_test_table, random_string, full_scan, freeze, get_table_arn, list_tables, get_region, manual_request
 from test.pylib.skip_types import skip_env
 
 TAGS = []
@@ -2357,7 +2357,7 @@ def test_stream_arn_unchanging(dynamodb, dynamodbstreams):
     with create_stream_test_table(dynamodb, StreamViewType='KEYS_ONLY') as table:
         (arn, label) = wait_for_active_stream(dynamodbstreams, table)
         # Change a tag on the table. This changes its schema.
-        table_arn = table.meta.client.describe_table(TableName=table.name)['Table']['TableArn']
+        table_arn = get_table_arn(table)
         table.meta.client.tag_resource(ResourceArn=table_arn, Tags=[{'Key': 'animal', 'Value': 'dog' }])
         # The change in the table's schema should not change its stream ARN
         streams = dynamodbstreams.list_streams(TableName=table.name)
@@ -2514,7 +2514,7 @@ def test_streams_multiple_items_one_partition(dynamodb, dynamodbstreams, scylla_
     with create_table_ss(dynamodb, dynamodbstreams, 'NEW_AND_OLD_IMAGES') as stream:
         table, stream_arn = stream
         # Set write isolation mode on the table to the chosen "mode":
-        table_arn = table.meta.client.describe_table(TableName=table.name)['Table']['TableArn']
+        table_arn = get_table_arn(table)
         table.meta.client.tag_resource(ResourceArn=table_arn, Tags=[{'Key': 'system:write_isolation', 'Value': mode}])
         # Now try the test, a single BatchWriteItem writing three different
         # items in the same partition p:

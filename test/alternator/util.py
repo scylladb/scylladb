@@ -240,6 +240,11 @@ def is_aws(dynamodb):
         # If not, it must be a resource (table for example), which has meta.client object, which has the _endpoint.host attribute.
         return dynamodb.meta.client._endpoint.host.endswith('.amazonaws.com')
 
+# The ARN of a table.
+def get_table_arn(table):
+    desc = table.meta.client.describe_table(TableName=table.name)
+    return desc['Table']['TableArn']
+
 # Return the AWS region name, or the Scylla data center name.
 def get_region(dynamodb):
     if is_aws(dynamodb):
