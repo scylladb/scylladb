@@ -2844,3 +2844,14 @@ def test_clustering_filtering(cql, test_keyspace, compaction_strategy):
         flush(cql, table)
         assert list(cql.execute(f"SELECT v FROM {table} WHERE pk='a' AND ck=0 ALLOW FILTERING BYPASS CACHE")) == []
         assert list(cql.execute(f"SELECT v FROM {table} BYPASS CACHE")) == [('a1',)]
+
+
+@pytest.mark.parametrize("compaction_strategy", ["SizeTieredCompactionStrategy", "TimeWindowCompactionStrategy"])
+def test_clustering_filtering_2(cql, test_keyspace, compaction_strategy):
+    with new_test_table(cql, test_keyspace, "pk text, ck int, v text, PRIMARY KEY(pk, ck)",
+                        f"WITH COMPACTION = {{'class': '{compaction_strategy}'}}") as table:
+        cql.execute(f"INSERT INTO {table} (pk, ck, v) VALUES ('a', 1, 'a1')")
+        cql.execute(f"INSERT INTO {table} (pk, ck, v) VALUES ('b', 2, 'b2')")
+        flush(cql, table)
+        assert list(cql.execute(f"SELECT v FROM {table} WHERE pk='a' AND ck=0 ALLOW FILTERING BYPASS CACHE")) == []
+        assert list(cql.execute(f"SELECT v FROM {table} BYPASS CACHE")) == [('a1',), ('b2',)]

@@ -516,31 +516,6 @@ SEASTAR_TEST_CASE(test_internal_schema_changes_on_a_distributed_table) {
     });
 }
 
-static future<> test_clustering_filtering_2_with_compaction_strategy(std::string_view cs) {
-    auto db_config = make_shared<db::config>();
-    db_config->sstable_format("me");
-
-    return do_with_cql_env_thread([cs] (cql_test_env& e) {
-        cquery_nofail(e, seastar::format("CREATE TABLE cf(pk text, ck int, v text, PRIMARY KEY(pk, ck)) WITH COMPACTION = {{'class': '{}'}}", cs));
-        cquery_nofail(e, "INSERT INTO  cf(pk, ck, v) VALUES ('a', 1, 'a1')");
-        cquery_nofail(e, "INSERT INTO  cf(pk, ck, v) VALUES ('b', 2, 'b2')");
-        e.db().invoke_on_all([] (replica::database& db) { return db.flush_all_memtables(); }).get();
-        e.db().invoke_on_all([] (replica::database& db) { db.row_cache_tracker().clear(); }).get();
-        require_rows(e, "SELECT v FROM cf WHERE pk='a' AND ck=0 ALLOW FILTERING", {});
-        require_rows(e, "SELECT v FROM cf", {{T("a1")}, {T("b2")}});
-    }, cql_test_config(db_config));
-}
-
-SEASTAR_TEST_CASE(test_clustering_filtering_2) {
-    static std::array<std::string_view, 2> test_compaction_strategies = {
-        "SizeTieredCompactionStrategy",
-        "TimeWindowCompactionStrategy",
-    };
-
-    return do_for_each(test_compaction_strategies,
-            test_clustering_filtering_2_with_compaction_strategy);
-}
-
 static future<> test_clustering_filtering_3_with_compaction_strategy(std::string_view cs) {
     auto db_config = make_shared<db::config>();
     db_config->sstable_format("me");
