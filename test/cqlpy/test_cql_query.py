@@ -1496,3 +1496,26 @@ def test_select_distinct(cql, test_keyspace):
         cql.execute(f"insert into {table} (p1, s1) values (2, 1)")
         cql.execute(f"insert into {table} (p1, s1) values (3, 2)")
         assert sorted(cql.execute(f"select distinct p1, s1 from {table}")) == [(0, 0), (2, 1), (3, 2)]
+
+
+def test_select_distinct_with_where_clause(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "k int, a int, b int, PRIMARY KEY (k, a)") as table:
+        for i in range(10):
+            cql.execute(f"INSERT INTO {table} (k, a, b) VALUES ({i}, {i}, {i})")
+            cql.execute(f"INSERT INTO {table} (k, a, b) VALUES ({i}, {i * 10}, {i * 10})")
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"SELECT DISTINCT k FROM {table} WHERE a >= 80 ALLOW FILTERING")
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"SELECT DISTINCT k FROM {table} WHERE k IN (1, 2, 3) AND a = 10")
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"SELECT DISTINCT k FROM {table} WHERE b = 5")
+        assert list(cql.execute(f"SELECT DISTINCT k FROM {table} WHERE k = 1")) == [(1,)]
+        assert sorted(cql.execute(f"SELECT DISTINCT k FROM {table} WHERE k IN (5, 6, 7)")) == [(5,), (6,), (7,)]
+
+    # static columns
+    with new_test_table(cql, test_keyspace, "k int, a int, s int static, b int, PRIMARY KEY (k, a)") as table:
+        for i in range(10):
+            cql.execute(f"INSERT INTO {table} (k, a, b, s) VALUES ({i}, {i}, {i}, {i})")
+            cql.execute(f"INSERT INTO {table} (k, a, b, s) VALUES ({i}, {i * 10}, {i * 10}, {i * 10})")
+        assert list(cql.execute(f"SELECT DISTINCT s FROM {table} WHERE k = 5")) == [(50,)]
+        assert sorted(cql.execute(f"SELECT DISTINCT s FROM {table} WHERE k IN (5, 6, 7)")) == [(50,), (60,), (70,)]

@@ -378,45 +378,6 @@ SEASTAR_TEST_CASE(test_ttl) {
     });
 }
 
-SEASTAR_TEST_CASE(test_select_distinct_with_where_clause) {
-    return do_with_cql_env_thread([] (cql_test_env& e) {
-        e.execute_cql("CREATE TABLE cf (k int, a int, b int, PRIMARY KEY (k, a))").get();
-        for (int i = 0; i < 10; i++) {
-            e.execute_cql(format("INSERT INTO cf (k, a, b) VALUES ({:d}, {:d}, {:d})", i, i, i)).get();
-            e.execute_cql(format("INSERT INTO cf (k, a, b) VALUES ({:d}, {:d}, {:d})", i, i * 10, i * 10)).get();
-        }
-        BOOST_REQUIRE_THROW(e.execute_cql("SELECT DISTINCT k FROM cf WHERE a >= 80 ALLOW FILTERING").get(), std::exception);
-        BOOST_REQUIRE_THROW(e.execute_cql("SELECT DISTINCT k FROM cf WHERE k IN (1, 2, 3) AND a = 10").get(), std::exception);
-        BOOST_REQUIRE_THROW(e.execute_cql("SELECT DISTINCT k FROM cf WHERE b = 5").get(), std::exception);
-
-        assert_that(e.execute_cql("SELECT DISTINCT k FROM cf WHERE k = 1").get())
-            .is_rows().with_size(1)
-            .with_row({int32_type->decompose(1)});
-
-        assert_that(e.execute_cql("SELECT DISTINCT k FROM cf WHERE k IN (5, 6, 7)").get())
-           .is_rows().with_size(3)
-           .with_row({int32_type->decompose(5)})
-           .with_row({int32_type->decompose(6)})
-           .with_row({int32_type->decompose(7)});
-
-        // static columns
-        e.execute_cql("CREATE TABLE cf2 (k int, a int, s int static, b int, PRIMARY KEY (k, a))").get();
-        for (int i = 0; i < 10; i++) {
-            e.execute_cql(format("INSERT INTO cf2 (k, a, b, s) VALUES ({:d}, {:d}, {:d}, {:d})", i, i, i, i)).get();
-            e.execute_cql(format("INSERT INTO cf2 (k, a, b, s) VALUES ({:d}, {:d}, {:d}, {:d})", i, i * 10, i * 10, i * 10)).get();
-        }
-        assert_that(e.execute_cql("SELECT DISTINCT s FROM cf2 WHERE k = 5").get())
-            .is_rows().with_size(1)
-            .with_row({int32_type->decompose(50)});
-
-        assert_that(e.execute_cql("SELECT DISTINCT s FROM cf2 WHERE k IN (5, 6, 7)").get())
-           .is_rows().with_size(3)
-           .with_row({int32_type->decompose(50)})
-           .with_row({int32_type->decompose(60)})
-           .with_row({int32_type->decompose(70)});
-    });
-}
-
 SEASTAR_TEST_CASE(test_batch_insert_statement) {
     return do_with_cql_env([] (cql_test_env& e) {
         return e.execute_cql("create table cf (p1 varchar, c1 int, r1 int, PRIMARY KEY (p1, c1));").discard_result().then([&e] {
