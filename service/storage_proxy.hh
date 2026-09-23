@@ -75,6 +75,7 @@ class feature_service;
 namespace db {
 class system_keyspace;
 struct snapshot_options;
+struct snapshot_dc_location;
 enum class large_data_violation_type : uint8_t;
 
 namespace view {
@@ -122,6 +123,18 @@ using allow_hints = bool_class<allow_hints_tag>;
 using is_cancellable = bool_class<struct cancellable_tag>;
 
 using storage_proxy_clock_type = lowres_clock;
+
+class abortable_topology_task {
+    storage_proxy* _sp;
+    utils::UUID _request_id;
+public:
+    abortable_topology_task(storage_proxy&, utils::UUID request_id) noexcept;
+    abortable_topology_task(abortable_topology_task&&) noexcept;
+    abortable_topology_task& operator=(abortable_topology_task&&) noexcept;
+
+    future<> wait(topology_state_machine::completion_callback = {});
+    future<> abort();
+};
 
 class storage_proxy_coordinator_query_options {
     storage_proxy_clock_type::time_point _timeout;
@@ -230,6 +243,7 @@ private:
     using unique_response_handler_vector = utils::small_vector<unique_response_handler, 1>;
     using response_handlers_map = std::unordered_map<response_id_type, ::shared_ptr<abstract_write_response_handler>>;
 
+    friend class abortable_topology_task;
 public:
     static const sstring COORDINATOR_STATS_CATEGORY;
     static const sstring REPLICA_STATS_CATEGORY;
@@ -814,6 +828,8 @@ public:
      * Performs snapshot on keyspace/tables. To snapshot all tables in a keyspace, put "ks: ''" in map
      */
     future<> snapshot_keyspace(std::unordered_multimap<sstring, sstring> ks_tables, sstring tag, const db::snapshot_options& opts);
+
+    future<abortable_topology_task> start_backup_snapshot(std::unordered_map<sstring, db::snapshot_dc_location> locations, std::unordered_multimap<sstring, sstring> ks_tables, sstring tag, bool move_files);
 
     /*
      * Executes data query on the whole cluster.
