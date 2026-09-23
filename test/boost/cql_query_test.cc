@@ -413,25 +413,9 @@ auto B(bool x) { return boolean_type->decompose(x); }
 
 auto I(int32_t x) { return int32_type->decompose(x); }
 
-auto L(int64_t x) { return long_type->decompose(x); }
-
 auto T(const char* t) { return utf8_type->decompose(t); }
 
 } // anonymous namespace
-
-SEASTAR_TEST_CASE(test_aggregate_and_simple_selection_together) {
-    return do_with_cql_env_thread([] (cql_test_env& e) {
-        cquery_nofail(e, "create table t (p int, c int, v int, primary key(p, c))");
-        cquery_nofail(e, "insert into t (p, c, v) values (1, 1, 11)");
-        cquery_nofail(e, "insert into t (p, c, v) values (1, 2, 12)");
-        cquery_nofail(e, "insert into t (p, c, v) values (1, 3, 13)");
-        cquery_nofail(e, "insert into t (p, c, v) values (2, 2, 22)");
-        require_rows(e, "select c, avg(c) from t", {{I(1), I(2)}});
-        require_rows(e, "select p, sum(v) from t", {{I(1), I(58)}});
-        require_rows(e, "select p, count(c) from t group by p", {{I(1), L(3)}, {I(2), L(1)}});
-        return make_ready_future<>();
-    });
-}
 
 SEASTAR_TEST_CASE(test_alter_type_on_compact_storage_with_no_regular_columns_does_not_crash) {
     return do_with_cql_env_thread([] (cql_test_env& e) {

@@ -2113,3 +2113,14 @@ def test_describe_varchar(cql, test_keyspace):
             (ks, tbl, 't', 'NONE', b't', 'regular', -1, 'text'),
             (ks, tbl, 'v', 'NONE', b'v', 'regular', -1, 'text'),
         ]
+
+
+def test_aggregate_and_simple_selection_together(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p int, c int, v int, primary key(p, c)") as table:
+        cql.execute(f"insert into {table} (p, c, v) values (1, 1, 11)")
+        cql.execute(f"insert into {table} (p, c, v) values (1, 2, 12)")
+        cql.execute(f"insert into {table} (p, c, v) values (1, 3, 13)")
+        cql.execute(f"insert into {table} (p, c, v) values (2, 2, 22)")
+        assert list(cql.execute(f"select c, avg(c) from {table}")) == [(1, 2)]
+        assert list(cql.execute(f"select p, sum(v) from {table}")) == [(1, 58)]
+        assert list(cql.execute(f"select p, count(c) from {table} group by p")) == [(1, 3), (2, 1)]
