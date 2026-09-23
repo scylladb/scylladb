@@ -3136,3 +3136,16 @@ def test_parallelized_select_sum_group_by(cql, test_keyspace, scylla_only):
         expected_sum = (value_count - 1) * value_count // 2
         assert list(cql.execute(f"SELECT k, SUM(v) FROM {table} GROUP BY k")) == [(1, expected_sum), (0, expected_sum)]
         assert parallelized_count() == 0
+
+
+def test_parallelized_select_counter_type(cql, test_keyspace, scylla_only):
+    with parallelized_aggregation_enabled(cql) as parallelized_count, \
+            new_test_table(cql, test_keyspace, "k int, c counter, PRIMARY KEY (k)") as table:
+        cql.execute(f"UPDATE {table} SET c = c + 4 WHERE k = 0")
+        cql.execute(f"UPDATE {table} SET c = c + 2 WHERE k = 1")
+
+        assert list(cql.execute(f"SELECT SUM(c) FROM {table}")) == [(6,)]
+        assert list(cql.execute(f"SELECT MIN(c) FROM {table}")) == [(2,)]
+        assert list(cql.execute(f"SELECT MAX(c) FROM {table}")) == [(4,)]
+        assert list(cql.execute(f"SELECT AVG(c) FROM {table}")) == [(3,)]
+        assert parallelized_count() == 4
