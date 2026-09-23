@@ -830,3 +830,21 @@ def test_cassandra_stress_like_write_and_read(cql, test_keyspace):
         futures = [cql.execute_async(f'select "C0", "C1", "C2", "C3", "C4" from {cf} where "KEY" = {key}') for key in keys]
         for f in futures:
             assert list(f.result()) == [tuple(bytes.fromhex(v) for v in values)]
+
+
+def test_range_queries(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "k blob, c0 blob, c1 blob, v blob, PRIMARY KEY (k, c0, c1)") as cf:
+        for v, c0, c1 in [(1, 1, 1), (2, 1, 2), (3, 1, 3), (4, 2, 2), (5, 2, 3), (6, 2, 4), (7, 3, 4), (8, 3, 5)]:
+            cql.execute(f"update {cf} set v = 0x{v:02x} where k = 0x00 and c0 = 0x{c0:02x} and c1 = 0x{c1:02x}")
+        def check(where, expected):
+            assert list(cql.execute(f"select v from {cf} where k = 0x00{where}")) == [(bytes([v]),) for v in expected]
+        check("", [1, 2, 3, 4, 5, 6, 7, 8])
+        check(" and c0 = 0x02 allow filtering", [4, 5, 6])
+        check(" and c0 > 0x02 allow filtering", [7, 8])
+        check(" and c0 >= 0x02 allow filtering", [4, 5, 6, 7, 8])
+        check(" and c0 >= 0x02 and c0 < 0x03 allow filtering", [4, 5, 6])
+        check(" and c0 > 0x02 and c0 <= 0x03 allow filtering", [7, 8])
+        check(" and c0 >= 0x02 and c0 <= 0x02 allow filtering", [4, 5, 6])
+        check(" and c0 < 0x02 allow filtering", [1, 2, 3])
+        check(" and c0 = 0x02 and c1 > 0x02 allow filtering", [5, 6])
+        check(" and c0 = 0x02 and c1 >= 0x02 and c1 <= 0x02 allow filtering", [4])
