@@ -2731,3 +2731,12 @@ def test_like_parameter_marker(cql, test_keyspace):
         execute_prepared_serial(cql, query, ["err", 1, "a%"], [(False, "chg")])
         execute_prepared_serial(cql, query, ["chg", 2, "b%"], [(True, "bbb")])
         execute_prepared_serial(cql, query, ["err", 1, "a%"], [(False, "chg")])
+
+
+def test_list_parameter_marker(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "k int PRIMARY KEY, v list<int>") as table:
+        cql.execute(f"INSERT INTO  {table} (k, v) VALUES (1, [10, 20, 30])")
+
+        query = f"UPDATE {table} SET v=:upd_v WHERE k=1 IF v[:i] in :v"
+        execute_prepared_serial(cql, query, [[100, 200, 300], 1, [21, 22, 23]], [(False, [10, 20, 30])])
+        execute_prepared_serial(cql, query, [[100, 200, 300], 1, [20, 21, 22]], [(True, [10, 20, 30])])
