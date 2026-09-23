@@ -24,6 +24,7 @@ Querying data from data is done using a ``SELECT`` statement:
    select_clause: `selector` [ AS `identifier` ] ( ',' `selector` [ AS `identifier` ] )*
    selector: ( `column_name`
            : | CAST '(' `selector` AS `cql_type` ')'
+           : | '(' `cql_type` ')' `selector`
            : | `function_name` '(' [ `selector` ( ',' `selector` )* ] ')'
            : | COUNT '(' '*' ')'
            : | literal

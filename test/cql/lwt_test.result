@@ -130,7 +130,7 @@ Error from server: code=2200 [Invalid query] message="IN on the clustering key c
 Error from server: code=2200 [Invalid query] message="Missing mandatory PRIMARY KEY part b"
 > --  comparing columns
 > update lwt set c=3 where a=1 if c=a;
-<Error from server: code=2000 [Syntax error in CQL query] message="line 1:35 no viable alternative at input ';'">
+Error from server: code=2200 [Invalid query] message="Column a cannot be compared against in the IF clause: a relation compares a column with a value"
 > -- cleanup
 > drop table lwt;
 OK
@@ -1498,13 +1498,13 @@ OK
 > -- Compare with another column: cassandra doesn't allow anything but a
 > -- constant on the right hand side :(
 > update lwt set i = 7 where a = 1 if i = t;
-<Error from server: code=2000 [Syntax error in CQL query] message="line 1:41 no viable alternative at input ';'">
+Error from server: code=2200 [Invalid query] message="Column t cannot be compared against in the IF clause: a relation compares a column with a value"
 > update lwt set i = 7 where a = 1 if i = d;
-<Error from server: code=2000 [Syntax error in CQL query] message="line 1:41 no viable alternative at input ';'">
+Error from server: code=2200 [Invalid query] message="Column d cannot be compared against in the IF clause: a relation compares a column with a value"
 > update lwt set i = 7 where a = 1 if i = f;
-<Error from server: code=2000 [Syntax error in CQL query] message="line 1:41 no viable alternative at input ';'">
+Error from server: code=2200 [Invalid query] message="Column f cannot be compared against in the IF clause: a relation compares a column with a value"
 > update lwt set i = 7 where a = 1 if s = i;
-<Error from server: code=2000 [Syntax error in CQL query] message="line 1:41 no viable alternative at input ';'">
+Error from server: code=2200 [Invalid query] message="Column i cannot be compared against in the IF clause: a relation compares a column with a value"
 > -- float test
 > update lwt set f = 2 where a = 1 if f = 1;
 +-------------+-----+

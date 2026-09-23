@@ -55,6 +55,11 @@ constexpr bool is_single_domain(scope_set scopes) {
     return !(scopes.intersects(table_only_scopes) && scopes.intersects(node_only_scopes));
 }
 
+// A CQL dialect setting is a property of how statements are parsed, so it lives
+// at CLUSTER scope only: a statement can touch several tables and comes from a
+// node chosen by the client, so neither domain's narrower scopes could apply.
+constexpr scope_set cluster_only_scopes = scope_set::of<scope::cluster>();
+
 constexpr std::array registry_options = {
     option{
         .name = "auto_repair_enabled",
@@ -62,6 +67,13 @@ constexpr std::array registry_options = {
         .scopes = table_oriented_scopes,
         .min_version = version::v0,
         .default_value = false,
+    },
+    option{
+        .name = "cql_parentheses_around_a_single_term_make_a_tuple",
+        .description = "Read \"(x)\" in CQL as a one-element tuple; when false, as a parenthesized x. tuple(x) is the one-element tuple either way",
+        .scopes = cluster_only_scopes,
+        .min_version = version::v0,
+        .default_value = true,
     },
 };
 

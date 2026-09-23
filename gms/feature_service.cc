@@ -184,6 +184,7 @@ db::schema_features feature_service::cluster_schema_features() const {
     f.set_if<db::schema_feature::TABLET_OPTIONS>(bool(tablet_options));
     f.set_if<db::schema_feature::KEYSPACE_MULTI_RF_CHANGE>(bool(keyspace_multi_rf_change));
     f.set_if<db::schema_feature::CLUSTER_CONFIG_TABLES>(bool(cluster_config_registry_v0));
+    f.set_if<db::schema_feature::TUPLE_CONSTRUCTOR>(bool(tuple_constructor));
     return f;
 }
 

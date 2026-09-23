@@ -36,7 +36,6 @@ def test_cannot_create_empty_vector_column(cql, test_keyspace):
             f"CREATE TABLE {test_keyspace}.test_table (pk int, str_val text, val vector<float, 0>, PRIMARY KEY(pk))"
         )
 
-@pytest.mark.xfail(reason="similarity_cosine not implemented yet")
 def test_cannot_query_empty_vector_column(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(pk int, str_val text, val vector<float, 3>, PRIMARY KEY(pk))") as table:
         assert_invalid_message(

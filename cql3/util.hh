@@ -44,11 +44,13 @@ Result do_with_parser(utils::chunked_string_view cql, dialect d, Func&& f) {
     return std::move(*ret);
 }
 
-sstring relations_to_where_clause(const expr::expression& e);
+// Prints a WHERE clause for storing in the schema.  `one_element_tuple_as_constructor`
+// is whether the TUPLE_CONSTRUCTOR feature is enabled; see cql3::stored_statement_dialect.
+sstring relations_to_where_clause(const expr::expression& e, bool one_element_tuple_as_constructor);
 
 expr::expression where_clause_to_relations(const std::string_view& where_clause, dialect d);
 
-sstring rename_columns_in_where_clause(const std::string_view& where_clause, std::vector<std::pair<::shared_ptr<column_identifier>, ::shared_ptr<column_identifier>>> renames, dialect d);
+sstring rename_columns_in_where_clause(const std::string_view& where_clause, std::vector<std::pair<::shared_ptr<column_identifier>, ::shared_ptr<column_identifier>>> renames, dialect d, bool one_element_tuple_as_constructor);
 
 /// build a CQL "select" statement with the desired parameters.
 /// If select_all_columns==true, all columns are selected and the value of
@@ -57,7 +59,9 @@ std::unique_ptr<cql3::statements::raw::select_statement> build_select_statement(
         const std::string_view& cf_name,
         const std::string_view& where_clause,
         bool select_all_columns,
-        const utils::chunked_vector<column_definition>& selected_columns);
+        const utils::chunked_vector<column_definition>& selected_columns,
+            // stored_statement_dialect() for a where clause read from the schema
+            dialect d);
 
 /// maybe_quote() takes an identifier - the name of a column, table or
 /// keyspace name - and transforms it to a string which can be used in CQL

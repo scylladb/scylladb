@@ -2362,6 +2362,7 @@ binary_operator prepare_binary_operator(binary_operator binop, data_dictionary::
     lw_shared_ptr<column_specification> rhs_receiver = get_rhs_receiver(lhs_receiver, binop.op, d);
     expression prepared_rhs = prepare_expression(binop.rhs, db, table_schema.ks_name(), &table_schema, rhs_receiver);
 
+
     // IS NULL and IS NOT NULL require an additional check that the RHS is NULL.
     // Otherwise things like `int_col IS 123` or `int_col IS NOT 123` would be allowed - the types match, but the value is wrong.
     if (binop.op == oper_t::IS || binop.op == oper_t::IS_NOT) {

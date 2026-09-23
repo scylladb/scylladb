@@ -200,9 +200,12 @@ void validate_timestamp(const cql_config& cql_cfg, const query_options& options,
     }
 }
 
-sstring relations_to_where_clause(const expr::expression& e) {
-    auto expr_to_pretty_string = [](const expr::expression& e) -> sstring {
-        return fmt::format("{:user}", e);
+sstring relations_to_where_clause(const expr::expression& e, bool one_element_tuple_as_constructor) {
+    auto expr_to_pretty_string = [=](const expr::expression& e) -> sstring {
+        return fmt::format("{}", expr::expression::printer{
+                .expr_to_print = e,
+                .debug_mode = false,
+                .one_element_tuple_as_constructor = one_element_tuple_as_constructor});
     };
     auto relations = expr::boolean_factors(e);
     auto expressions = relations | std::views::transform(expr_to_pretty_string);
@@ -213,7 +216,7 @@ expr::expression where_clause_to_relations(const std::string_view& where_clause,
     return do_with_parser(utils::chunked_string_view(where_clause), d, std::mem_fn(&cql3_parser::CqlParser::whereClause));
 }
 
-sstring rename_columns_in_where_clause(const std::string_view& where_clause, std::vector<std::pair<::shared_ptr<column_identifier>, ::shared_ptr<column_identifier>>> renames, dialect d) {
+sstring rename_columns_in_where_clause(const std::string_view& where_clause, std::vector<std::pair<::shared_ptr<column_identifier>, ::shared_ptr<column_identifier>>> renames, dialect d, bool one_element_tuple_as_constructor) {
     std::vector<expr::expression> relations = boolean_factors(where_clause_to_relations(where_clause, d));
     std::vector<expr::expression> new_relations;
     new_relations.reserve(relations.size());
@@ -238,7 +241,7 @@ sstring rename_columns_in_where_clause(const std::string_view& where_clause, std
         );
     }
 
-    return relations_to_where_clause(expr::conjunction{std::move(new_relations)});
+    return relations_to_where_clause(expr::conjunction{std::move(new_relations)}, one_element_tuple_as_constructor);
 }
 
 }

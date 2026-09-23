@@ -176,6 +176,9 @@ public:
         const expression& expr_to_print;
         bool debug_mode = true;
         bool for_metadata = false;
+        // Spell a one-element tuple tuple(x) rather than "(x)"; see
+        // cql3::stored_statement_dialect for who needs which.
+        bool one_element_tuple_as_constructor = false;
     };
 
     friend bool operator==(const expression& e1, const expression& e2);

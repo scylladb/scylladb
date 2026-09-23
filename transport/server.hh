@@ -35,6 +35,8 @@
 #include "cql3/query_options.hh"
 #include "mutation/timestamp.hh"
 #include "cql3/dialect.hh"
+#include "db/cluster_config_manager.hh"
+#include "db/cluster_config_registry.hh"
 #include "transport/messages/result_message.hh"
 #include "utils/chunked_vector.hh"
 #include "exceptions/coordinator_result.hh"
@@ -243,6 +245,10 @@ private:
     gms::gossiper& _gossiper;
     scheduling_group_key _stats_key;
     maintenance_socket_enabled _used_by_maintenance_socket;
+    db::cluster_config_manager& _cluster_config;
+    // The cluster config option behind dialect::parentheses_around_a_single_term_make_a_tuple,
+    // looked up once rather than by name on every connection.
+    const db::cluster_config_registry::option& _single_term_parentheses_option;
 public:
     cql_server(sharded<cql3::query_processor>& qp, auth::service&,
             service::memory_limiter& ml,
@@ -251,7 +257,8 @@ public:
             gms::gossiper& g,
             scheduling_group_key stats_key,
             maintenance_socket_enabled used_by_maintenance_socket,
-            netw::messaging_service& ms);
+            netw::messaging_service& ms,
+            db::cluster_config_manager& cluster_config);
     ~cql_server();
     future<> stop();
 

@@ -111,12 +111,13 @@ view_info::view_info(const schema& schema, const raw_view_info& raw_view_info, d
 const cql3::restrictions::view_restrictions& view_info::restrictions(data_dictionary::database db) const {
     if (!_restrictions) {
         cql3::prepare_context ctx;
-        ctx.set_bound_variables({}, cql3::internal_dialect());
+        const auto dialect = cql3::stored_statement_dialect(db.features().tuple_constructor);
+        ctx.set_bound_variables({}, dialect);
         // A view backing a secondary index has no WHERE clause at all, and an
         // empty string is not a parseable one.
         auto where = where_clause().empty()
                 ? cql3::expr::expression(cql3::expr::conjunction{})
-                : cql3::util::where_clause_to_relations(where_clause(), cql3::internal_dialect());
+                : cql3::util::where_clause_to_relations(where_clause(), dialect);
         _restrictions = cql3::restrictions::analyze_view_restrictions(
                 db, db.find_schema(base_id()), where, ctx);
     }

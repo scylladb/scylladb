@@ -289,3 +289,35 @@ def test_select_column_named_json(cql, test_keyspace, scylla_only):
         row = cql.execute(f"SELECT json, p FROM {table} WHERE p = 1").one()
         assert row.json == 7
         assert row.p == 1
+
+# Terms and selectors are one grammar, and the parenthesized forms of a term -
+# a tuple literal and a C-style cast - are told apart by what follows the ')'.
+# These are the three tokens that could be either the start of a cast's operand
+# or the continuation of the enclosing statement.
+
+# AS is the alias, not a cast of a column named "AS" to the type "(1, 2)".
+def test_tuple_literal_selector_with_alias(cql, scylla_only):
+    assert list(cql.execute("SELECT (1, 2) AS t")) == [((1, 2),)]
+
+# '[' subscripts the tuple rather than starting a list literal to be cast, so
+# this fails the way any untyped subscript does, not as a bad cast.
+def test_tuple_literal_selector_subscript(cql, scylla_only):
+    with pytest.raises(InvalidRequest, match='Could not infer type'):
+        cql.execute("SELECT (1, 2)[0]")
+
+# ':' separates a map literal's key from its value when what precedes it could
+# not have been a type name - a two-element tuple, here.
+def test_map_literal_with_tuple_key(cql, scylla_only):
+    assert list(cql.execute("SELECT {(1, 2): 3}")) == [({(1, 2): 3},)]
+
+# A bind marker on its own has no type to infer, in a select clause as anywhere
+# else that nothing says what is expected.
+def test_bind_marker_selector_has_no_type(cql, scylla_only):
+    with pytest.raises(InvalidRequest, match='Could not infer type'):
+        cql.execute("SELECT ?")
+
+# A parenthesized term with nothing after it is a one-element tuple, not a type
+# name waiting for an operand.
+def test_one_element_tuple_literal_selector(cql, scylla_only):
+    assert list(cql.execute("SELECT (1)")) == [((1,),)]
+    assert list(cql.execute("SELECT ((1))")) == [(((1,),),)]

@@ -377,3 +377,30 @@ def test_validation_blob_as_int_len(cql, test_keyspace):
             if length - 1 != 0:
                 with pytest.raises(InvalidRequest, match='is not a valid binary'):
                     cql.execute(f"INSERT INTO {table} (k, {var}) VALUES ({k}, blobAs{typ}(0x{'00'*(length-1)}))")
+
+#############################################################################
+# Terms and selectors are one grammar, so the value of an INSERT or UPDATE
+# parses like a selector and syntactically accepts things that only make sense
+# when reading a row.  None of them can be a value, and each has to be turned
+# down when the statement is prepared - there being no row to read from, and no
+# schema to resolve a column against.
+#############################################################################
+
+def test_insert_value_cannot_be_a_column(cql, table1):
+    k = unique_key_int()
+    with pytest.raises(InvalidRequest, match='Cannot resolve column'):
+        cql.execute(f"INSERT INTO {table1} (k, t) VALUES ({k}, a)")
+    with pytest.raises(InvalidRequest, match='Cannot resolve column'):
+        cql.execute(f"UPDATE {table1} SET t = a WHERE k = {k}")
+
+def test_insert_value_cannot_be_a_row_attribute(cql, table1):
+    k = unique_key_int()
+    with pytest.raises(InvalidRequest):
+        cql.execute(f"INSERT INTO {table1} (k, t) VALUES ({k}, WRITETIME(a))")
+    with pytest.raises(InvalidRequest):
+        cql.execute(f"INSERT INTO {table1} (k, t) VALUES ({k}, TTL(a))")
+
+def test_insert_value_cannot_be_an_aggregate(cql, table1):
+    k = unique_key_int()
+    with pytest.raises(InvalidRequest):
+        cql.execute(f"INSERT INTO {table1} (k, t) VALUES ({k}, COUNT(*))")

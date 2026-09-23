@@ -202,6 +202,12 @@ extern expression prepare_expression_allowing_relations(const expression& expr, 
 // Check that a prepared expression has no aggregate functions. Throws on error.
 void verify_no_aggregate_functions(const expression& expr, std::string_view context_for_errors);
 
+// Terms and selectors share one grammar, so "a = b" parses.  Nothing downstream
+// is ready for it: statement_restrictions reads every restriction as a column
+// compared against a value, and the filtering path fetches only the columns that
+// appear on the left, so the restriction cannot even be evaluated.
+void verify_no_column_on_rhs(const expression& expr, std::string_view context_for_errors);
+
 // Prepares a binary operator received from the parser.
 // Does some basic type checks but no advanced validation.
 extern binary_operator prepare_binary_operator(binary_operator binop, data_dictionary::database db, const schema& table_schema, const dialect& d);

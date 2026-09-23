@@ -2831,7 +2831,8 @@ std::unique_ptr<cql3::statements::raw::select_statement> build_select_statement(
             const std::string_view& cf_name,
             const std::string_view& where_clause,
             bool select_all_columns,
-            const utils::chunked_vector<column_definition>& selected_columns) {
+            const utils::chunked_vector<column_definition>& selected_columns,
+            dialect d) {
     std::ostringstream out;
     out << "SELECT ";
     if (select_all_columns) {
@@ -2850,9 +2851,7 @@ std::unique_ptr<cql3::statements::raw::select_statement> build_select_statement(
     if (!where_clause.empty()) {
         out << " WHERE " << where_clause << " ALLOW FILTERING";
     }
-    // The database is talking to itself here, over a statement which was already validated when the
-    // user submitted it, so the client-facing dialect limits must not be applied again.
-    return do_with_parser(out.str(), internal_dialect(), std::mem_fn(&cql3_parser::CqlParser::selectStatement));
+    return do_with_parser(out.str(), d, std::mem_fn(&cql3_parser::CqlParser::selectStatement));
 }
 
 }

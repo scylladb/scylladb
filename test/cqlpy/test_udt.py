@@ -148,3 +148,19 @@ def test_ttl_frozen_udt(cql, test_keyspace):
             cql.execute(f"INSERT INTO {table}(p, x) VALUES ({p}, {{a: 1, b: 2}}) USING TTL {ttl}")
             [(t,)] = cql.execute(f"SELECT TTL(x) FROM {table} WHERE p={p}")
             assert t is not None and t <= ttl and t > ttl - 100
+# A user-defined type literal and a map literal both open with '{', and are told
+# apart by their keys: "{a: 1}" is a UDT literal, "{'a': 1}" a map.  A term can
+# be a bare column name now, so the first could also be read as a map keyed by a
+# column; it keeps the reading CQL has always had.
+def test_udt_literal_is_not_a_map_literal(cql, test_keyspace):
+    with new_type(cql, test_keyspace, "(x int, y int)") as typ:
+        schema = f"p int PRIMARY KEY, u frozen<{typ}>, m map<text, int>"
+        with new_test_table(cql, test_keyspace, schema) as table:
+            p = unique_key_int()
+            cql.execute(f"INSERT INTO {table} (p, u) VALUES ({p}, {{x: 1, y: 2}})")
+            assert list(cql.execute(f"SELECT u.x, u.y FROM {table} WHERE p = {p}")) == [(1, 2)]
+            cql.execute(f"INSERT INTO {table} (p, m) VALUES ({p}, {{'k': 1}})")
+            assert list(cql.execute(f"SELECT m FROM {table} WHERE p = {p}")) == [({'k': 1},)]
+            # A bare name makes it a UDT literal, which a map column refuses.
+            with pytest.raises(InvalidRequest, match='user type literal'):
+                cql.execute(f"INSERT INTO {table} (p, m) VALUES ({p}, {{k: 1}})")

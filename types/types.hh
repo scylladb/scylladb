@@ -371,7 +371,10 @@ public:
     friend inline auto visit(const data_value& v, Func&& f);
     // Prints a value of this type in a way which is parsable back from CQL.
     // Differs from operator<< for collections.
-    sstring to_parsable_string() const;
+    // Renders the value as a CQL literal.  A one-element tuple is spelled "(x)",
+    // or tuple(x) when asked, which is the spelling a reader that takes "(x)" for
+    // a parenthesized x needs; see cql3::stored_statement_dialect.
+    sstring to_parsable_string(bool one_element_tuple_as_constructor = false) const;
 };
 
 template<typename T>

@@ -221,6 +221,7 @@ binary_operator validate_and_prepare_new_restriction(const binary_operator& rest
     // Prepare the restriction
     binary_operator prepared_binop = prepare_binary_operator(restriction, db, *schema, ctx.get_dialect());
     expr::verify_no_aggregate_functions(prepared_binop, "WHERE clause");
+    expr::verify_no_column_on_rhs(prepared_binop, "WHERE clause");
 
     // Fill prepare context
     const column_value* lhs_pk_col_search_res = find_in_expression<column_value>(prepared_binop.lhs,

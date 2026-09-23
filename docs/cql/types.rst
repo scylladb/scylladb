@@ -615,7 +615,7 @@ thought as anonymous UDTs with anonymous fields. Tuple types and tuple literals 
 .. code-block::
    
    tuple_type: TUPLE '<' `cql_type` ( ',' `cql_type` )* '>'
-   tuple_literal: '(' `term` ( ',' `term` )* ')'
+   tuple_literal: '(' `term` ( ',' `term` )* ')' | TUPLE '(' `term` ( ',' `term` )* ')'
 
 and can be used thusly::
 
@@ -630,6 +630,27 @@ Unlike other "composed" types (collections and UDT), a tuple is always ``frozen<
 `frozen` keyword), and it is not possible to update only some elements of a tuple (without updating the whole tuple).
 Also, a tuple literal should always provide values for all the components of the tuple type (some of
 those values can be null, but they need to be explicitly declared as so).
+
+A tuple of one element is the one case where the parenthesized form is not
+enough on its own: ``(x)`` reads just as well as a parenthesized ``x``, and an
+expression grammar with operators needs it to be read that way, so that
+``(a + b) * c`` multiplies rather than building a tuple. The explicit
+constructor says which is meant, the way SQL's ``ROW(x)`` does::
+
+    INSERT INTO durations (event, duration) VALUES ('ev1', tuple(3, 'hours'));
+
+How ``(x)`` itself is read is the ``cql_parentheses_around_a_single_term_make_a_tuple``
+:ref:`cluster configuration option <cluster-config>`: as a one-element tuple by
+default, the reading CQL has always had, or as a parenthesized ``x``. ``tuple(x)``
+is the one-element tuple under either setting, parentheses around two or more
+terms are a tuple under either setting, and ``tuple()`` is not a value — a tuple
+has at least one element.
+
+The CQL that ScyllaDB itself writes — a materialized view's ``WHERE`` clause as
+stored in ``system_schema.views``, an aggregate's ``INITCOND`` in
+``system_schema.aggregates``, and the output of ``DESCRIBE`` — spells a
+one-element tuple ``tuple(x)`` once every node in the cluster understands the
+constructor, so that it means the same thing under either setting.
 
 .. _vectors:
 

@@ -49,6 +49,7 @@
 #include "db/config.hh"
 #include "db/batchlog_manager.hh"
 #include "db/cluster_config_manager.hh"
+#include "db/cluster_config_registry.hh"
 #include "schema/schema_builder.hh"
 #include "schema/compression_initializer.hh"
 #include "schema/speculative_retry_initializer.hh"
@@ -230,6 +231,9 @@ private:
             .duplicate_bind_variable_names_refer_to_same_variable = _db.local().get_config().cql_duplicate_bind_variable_names_refer_to_same_variable(),
             .max_relations_in_where_clause = _db.local().get_config().max_relations_in_where_clause(),
             .in_bind_variable_name_uses_uppercase_operator = _db.local().get_config().cql_in_bind_variable_name_uses_uppercase_operator(),
+            .parentheses_around_a_single_term_make_a_tuple = _cluster_config_manager.local().resolve_boolean_config(
+                    *db::cluster_config_registry::find("cql_parentheses_around_a_single_term_make_a_tuple"),
+                    db::cluster_config_manager::lookup_context{}),
         };
     }
 
