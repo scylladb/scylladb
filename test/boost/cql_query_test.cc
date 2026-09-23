@@ -520,52 +520,6 @@ static future<> with_udf_and_parallel_aggregation_enabled_thread(std::function<v
     return do_with_cql_env_thread(std::forward<std::function<void(cql_test_env&)>>(func), db_cfg_ptr);
 }
 
-SEASTAR_TEST_CASE(test_parallelized_select_uda) {
-    return with_udf_and_parallel_aggregation_enabled_thread([](cql_test_env& e) {
-        auto& qp = e.local_qp();
-        auto stat_parallelized = qp.get_cql_stats().select_parallelized;
-
-        e.execute_cql("CREATE FUNCTION row_fct(acc bigint, val int) "
-                        "RETURNS NULL ON NULL INPUT "
-                        "RETURNS bigint "
-                        "LANGUAGE lua "
-                        "AS $$ "
-                        "return acc+val "
-                        "$$;").get();
-        e.execute_cql("CREATE FUNCTION reduce_fct(acc1 bigint, acc2 bigint) "
-                        "RETURNS NULL ON NULL INPUT "
-                        "RETURNS bigint "
-                        "LANGUAGE lua "
-                        "AS $$ "
-                        "return acc1+acc2 "
-                        "$$;").get();
-        e.execute_cql("CREATE FUNCTION final_fct(acc bigint) "
-                        "RETURNS NULL ON NULL INPUT "
-                        "RETURNS bigint "
-                        "LANGUAGE lua "
-                        "AS $$ "
-                        "return -acc "
-                        "$$;").get();
-        e.execute_cql("CREATE AGGREGATE aggr(int) "
-                        "SFUNC row_fct "
-                        "STYPE bigint "
-                        "REDUCEFUNC reduce_fct "
-                        "FINALFUNC final_fct "
-                        "INITCOND 0;").get();
-        e.execute_cql("CREATE TABLE tbl (k int, PRIMARY KEY (k));").get();
-        int value_count = 10;
-        for (int i = 0; i < value_count; i++) {
-            e.execute_cql(format("INSERT INTO tbl (k) VALUES ({:d});", i)).get();
-        }
-        auto msg = e.execute_cql("SELECT aggr(k) FROM tbl;").get();
-        assert_that(msg).is_rows().with_rows({
-            {long_type->decompose(-int64_t((value_count - 1) * value_count / 2))}
-        });
-
-        BOOST_CHECK_EQUAL(stat_parallelized + 1, qp.get_cql_stats().select_parallelized);
-    });
-}
-
 SEASTAR_TEST_CASE(test_not_parallelized_select_uda) {
     return with_udf_and_parallel_aggregation_enabled_thread([](cql_test_env& e) {
         auto& qp = e.local_qp();

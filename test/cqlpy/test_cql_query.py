@@ -29,7 +29,7 @@ import pytest
 
 from . import nodetool
 from .nodetool import flush, no_autocompaction_context
-from .util import ScyllaMetrics, config_value_context, is_scylla, new_session, new_test_keyspace, new_test_table, new_type, new_user, unique_name
+from .util import ScyllaMetrics, config_value_context, is_scylla, new_aggregate, new_function, new_session, new_test_keyspace, new_test_table, new_type, new_user, unique_name
 
 
 def test_create_keyspace_statement(cql):
@@ -3190,3 +3190,22 @@ def test_single_partition_aggregation_is_not_parallelized(cql, test_keyspace, sc
             # is used for filtering but isn't sent to the client.)
             assert list(cql.execute(f"SELECT COUNT(*) FROM {table2} WHERE pk1 = 1 ALLOW FILTERING")) == [(value_count * 2,)]
             assert parallelized_count() == 0
+
+
+# A UDA with a REDUCEFUNC can be parallelized.
+def test_parallelized_select_uda(cql, test_keyspace, scylla_only):
+    with parallelized_aggregation_enabled(cql) as parallelized_count, \
+            new_function(cql, test_keyspace, "(acc bigint, val int) RETURNS NULL ON NULL INPUT RETURNS bigint "
+                         "LANGUAGE lua AS $$ return acc+val $$") as row_fct, \
+            new_function(cql, test_keyspace, "(acc1 bigint, acc2 bigint) RETURNS NULL ON NULL INPUT RETURNS bigint "
+                         "LANGUAGE lua AS $$ return acc1+acc2 $$") as reduce_fct, \
+            new_function(cql, test_keyspace, "(acc bigint) RETURNS NULL ON NULL INPUT RETURNS bigint "
+                         "LANGUAGE lua AS $$ return -acc $$") as final_fct, \
+            new_aggregate(cql, test_keyspace, f"(int) SFUNC {row_fct} STYPE bigint REDUCEFUNC {reduce_fct} "
+                          f"FINALFUNC {final_fct} INITCOND 0") as aggr, \
+            new_test_table(cql, test_keyspace, "k int, PRIMARY KEY (k)") as table:
+        value_count = 10
+        for i in range(value_count):
+            cql.execute(f"INSERT INTO {table} (k) VALUES ({i})")
+        assert list(cql.execute(f"SELECT {test_keyspace}.{aggr}(k) FROM {table}")) == [(-((value_count - 1) * value_count // 2),)]
+        assert parallelized_count() == 1
