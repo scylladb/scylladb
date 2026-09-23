@@ -1135,3 +1135,13 @@ def test_time_overflow_using_ttl(cql, test_keyspace, scylla_only):
         verify('key2', 2, False)
         verify('key1', 1, False)
         verify('key1', 1, True)
+
+
+def test_batch(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p1 varchar, c1 int, r1 int, PRIMARY KEY (p1, c1)") as table:
+        cql.execute(f"""begin unlogged batch
+              insert into {table} (p1, c1, r1) values ('key1', 1, 100);
+              insert into {table} (p1, c1, r1) values ('key1', 2, 200);
+            apply batch;""")
+        assert list(cql.execute(f"select r1 from {table} where p1 = 'key1' and c1 = 1")) == [(100,)]
+        assert list(cql.execute(f"select r1 from {table} where p1 = 'key1' and c1 = 2")) == [(200,)]

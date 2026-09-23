@@ -254,23 +254,6 @@ SEASTAR_TEST_CASE(test_alter_node_oriented_scopes_reject_unknown_targets) {
     });
 }
 
-SEASTAR_TEST_CASE(test_batch) {
-    return do_with_cql_env([] (cql_test_env& e) {
-        return e.execute_cql("create table cf (p1 varchar, c1 int, r1 int, PRIMARY KEY (p1, c1));").discard_result().then([&e] {
-            return e.execute_cql(
-                    "begin unlogged batch \n"
-                    "  insert into cf (p1, c1, r1) values ('key1', 1, 100); \n"
-                    "  insert into cf (p1, c1, r1) values ('key1', 2, 200); \n"
-                    "apply batch;"
-                    ).discard_result();
-        }).then([&e] {
-            return require_column_has_value(e, "cf", {sstring("key1")}, {1}, "r1", 100);
-        }).then([&e] {
-            return require_column_has_value(e, "cf", {sstring("key1")}, {2}, "r1", 200);
-        });
-    });
-}
-
 SEASTAR_TEST_CASE(test_tuples) {
     auto make_tt = [] { return tuple_type_impl::get_instance({int32_type, long_type, utf8_type}); };
     auto tt = make_tt();
