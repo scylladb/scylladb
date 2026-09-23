@@ -480,6 +480,10 @@ Object storage keyspaces: status and limitations
 
 Object-storage keyspaces are a **Preview** feature in this release.
 
+Not every limitation listed below is enforced. Materialized views, secondary
+indexes, LWT, counters and CDC are accepted on an object-storage keyspace
+without an error, and their behavior there is undefined and untested.
+
 Object-storage keyspaces target archival workloads: data that is queried
 infrequently and benefits from object-storage pricing. Read latency is
 substantially higher than on local disks, and there is no local disk cache, so
