@@ -99,3 +99,65 @@ BOOST_AUTO_TEST_CASE(test_large_range_estimate) {
     BOOST_REQUIRE(std::isfinite(h.estimate()));
     BOOST_REQUIRE_CLOSE(h.estimate(), raw, 1e-9);
 }
+
+namespace {
+
+std::vector<uint8_t> to_vector(const temporary_buffer<uint8_t>& b) {
+    return std::vector<uint8_t>(b.begin(), b.end());
+}
+
+// get_bytes() of an empty p=10 sketch, with a mutation applied.
+bool parses_after(auto mutate) {
+    auto bytes = to_vector(hll::HyperLogLog(precision).get_bytes());
+    mutate(bytes);
+    return hll::HyperLogLog::from_bytes(bytes).has_value();
+}
+
+}
+
+BOOST_AUTO_TEST_CASE(test_from_bytes_round_trip) {
+    for (uint8_t p : {4, 10, 16}) {
+        auto a = make_sketch(0, 100'000, p);
+        auto b = hll::HyperLogLog::from_bytes(to_vector(a.get_bytes()));
+        BOOST_REQUIRE(b);
+        BOOST_REQUIRE_EQUAL(b->registerSize(), 1u << p);
+        BOOST_REQUIRE(registers(*b) == registers(a));
+        BOOST_REQUIRE_EQUAL(b->estimate(), a.estimate());
+    }
+}
+
+// Written by earlier Scylla versions (b=4), from test/resource/sstables/3.x/uncompressed/write_many_live_partitions.
+BOOST_AUTO_TEST_CASE(test_from_bytes_legacy) {
+    const std::vector<uint8_t> bytes = {0xff, 0xff, 0xff, 0xfe, 0x04, 0x00, 0x00, 0x10, 0x0b, 0x0d, 0x0d, 0x0c,
+            0x10, 0x0b, 0x0d, 0x0b, 0x0c, 0x0c, 0x0f, 0x0d, 0x11, 0x0e, 0x0c, 0x0c};
+    auto h = hll::HyperLogLog::from_bytes(bytes);
+    BOOST_REQUIRE(h);
+    BOOST_REQUIRE_EQUAL(h->registerSize(), 16);
+}
+
+// clearspring HLL++ as written by Cassandra (p=13, sp=25, packed registers), from test/resource/sstables/3.x/uncompressed/partition_key_only.
+BOOST_AUTO_TEST_CASE(test_from_bytes_rejects_cassandra) {
+    const std::vector<uint8_t> bytes = {0xff, 0xff, 0xff, 0xfe, 0x0d, 0x19, 0x01, 0x05, 0xb0, 0xd9, 0xda, 0x03, 0xf2, 0xb3,
+            0xa0, 0x06, 0xbe, 0xce, 0xbb, 0x08, 0xf0, 0xaa, 0x84, 0x01, 0xa2, 0x84, 0xe4, 0x07};
+    BOOST_REQUIRE(!hll::HyperLogLog::from_bytes(bytes));
+}
+
+BOOST_AUTO_TEST_CASE(test_from_bytes_rejects_malformed) {
+    // Layout: 4-byte version, p=10, sp=0, type=0, 2-byte varint 1024, 1024 registers.
+    BOOST_REQUIRE(parses_after([] (auto&) {}));
+    BOOST_REQUIRE(!hll::HyperLogLog::from_bytes(std::vector<uint8_t>{}));
+    for (size_t len = 0; len < 1033; len++) {
+        BOOST_REQUIRE(!parses_after([len] (auto& b) { b.resize(len); }));
+    }
+    BOOST_REQUIRE(!parses_after([] (auto& b) { b[3] = 0xfd; }));
+    BOOST_REQUIRE(!parses_after([] (auto& b) { b[5] = 25; }));
+    BOOST_REQUIRE(!parses_after([] (auto& b) { b[6] = 1; }));
+    BOOST_REQUIRE(!parses_after([] (auto& b) { b[4] = 3; }));
+    BOOST_REQUIRE(!parses_after([] (auto& b) { b[4] = 17; }));
+    BOOST_REQUIRE(!parses_after([] (auto& b) { b[7] = 0xff; }));
+    BOOST_REQUIRE(!parses_after([] (auto& b) { b.push_back(0); }));
+    BOOST_REQUIRE(parses_after([] (auto& b) { b.back() = 55; }));
+    BOOST_REQUIRE(!parses_after([] (auto& b) { b.back() = 56; }));
+    // Unterminated varint.
+    BOOST_REQUIRE(!hll::HyperLogLog::from_bytes(std::vector<uint8_t>{0xff, 0xff, 0xff, 0xfe, 0x8a, 0x80, 0x80, 0x80, 0x80, 0x80}));
+}
