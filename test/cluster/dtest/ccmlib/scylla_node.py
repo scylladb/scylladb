@@ -788,8 +788,9 @@ class ScyllaNode:
             # list still held the seeds added before it (ccm Cluster.get_seeds()),
             # so it joined the existing cluster.  Seeding it with only itself
             # would make it form a cluster of its own.  Let the manager pick the
-            # running nodes, as for any other node.
-            seeds=None,
+            # running nodes, as for any other node -- unless the test took the
+            # seeds out of the node's scylla.yaml, see _seeds_left_on_disk().
+            seeds=self._seeds_left_on_disk(),
             expected_error=expected_error,
             expected_server_up_state=(ServerUpState.SERVING if expected_error
                                       else ServerUpState.PROCESS_STARTED),
@@ -1639,6 +1640,27 @@ class ScyllaNode:
             full_dir = path / name
             if full_dir.is_dir():
                 self.rmtree(full_dir)
+
+    def _seeds_left_on_disk(self) -> list[str] | None:
+        """The seeds to start with when a test broke the seeds entry of scylla.yaml.
+
+        ccm started Scylla on whatever the test left in the node's scylla.yaml; the
+        manager rewrites the seeds on every start, which would undo a test that
+        deliberately misspells the key (bootstrap_test's misspelled-seeds case).
+        Scylla without a "seeds" parameter falls back to 127.0.0.1 (init.cc,
+        get_seeds_from_db_config()), so start the node with exactly that.  None,
+        for the usual intact entry, lets the manager pick the running nodes.
+        """
+        conf_file = os.path.join(self.get_conf_dir(), "scylla.yaml")
+        try:
+            with open(conf_file) as f:
+                seed_provider = (yaml.safe_load(f) or {}).get("seed_provider")
+        except FileNotFoundError:
+            return None
+        if not seed_provider:
+            return None
+        parameters = (seed_provider[0].get("parameters") or [{}])[0]
+        return None if "seeds" in parameters else ["127.0.0.1"]
 
     def get_configuration_options(self) -> dict:
         """This node's scylla.yaml, as a dict."""

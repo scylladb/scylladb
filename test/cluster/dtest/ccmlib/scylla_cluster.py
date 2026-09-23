@@ -84,6 +84,10 @@ class ScyllaCluster:
         # Cached ScyllaNode instances, keyed by name and in the order
         # _add_nodes() creates them from servers_add().
         self._nodes: dict[str, ScyllaNode] = {}
+        # Nodes made by new_node(add_node=False) and not yet add()ed: as in ccm, the
+        # cluster does not list them, so cluster-wide operations (stop(), nodelist(),
+        # wait_other_notice) leave them alone.  The harness still owns their servers.
+        self._detached: dict[str, ScyllaNode] = {}
 
         # ccm's Cluster.seeds.  The in-tree manager decides which nodes a
         # starting server actually seeds from, so this list is bookkeeping for
@@ -350,8 +354,10 @@ class ScyllaCluster:
 
         `debug` opened a Java remote-debug port in ccm and means nothing to Scylla.
         With add_node=False ccm left the node out of the cluster until the test
-        called add(); the harness registers every server it creates, so the node
-        exists from here on and add() only settles where it lives.
+        called add(): the node could run and join Scylla's cluster, but ccm's
+        cluster did not list it and so did not stop or wait for it.  The harness
+        registers every server it creates, so here the node is only kept off the
+        cluster's node list until add().
         """
 
         assert initial_token is None, "argument `initial_token` is not supported"
@@ -371,6 +377,8 @@ class ScyllaCluster:
         ))
         node = self.nodelist()[-1]
         node.placement_explicit = bool(data_center and rack)
+        if not add_node:
+            self._detached[node.name] = self._nodes.pop(node.name)
         return node
 
     def add(self,
@@ -378,8 +386,10 @@ class ScyllaCluster:
             is_seed: bool,  # the manager picks seeds, see get_seeds()
             data_center: str | None = None,
             rack: str | None = None) -> ScyllaCluster:
-        """Finish adding a node created with new_node(add_node=False): place it."""
+        """Finish adding a node created with new_node(add_node=False): list it, place it."""
 
+        if self._detached.pop(node.name, None) is not None:
+            self._nodes[node.name] = node
         if data_center or rack:
             node.move_to(data_center=data_center or node.data_center, rack=rack or node.rack)
             node.placement_explicit = True
