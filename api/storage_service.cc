@@ -662,14 +662,23 @@ rest_get_token_endpoint(http_context& ctx, sharded<service::storage_service>& ss
         const auto table_name = req->get_query_param("cf");
 
         std::map<dht::token, gms::inet_address> token_endpoints;
-        if (keyspace_name.empty() && table_name.empty()) {
-            token_endpoints = ss.local().get_token_to_endpoint_map();
-        } else if (!keyspace_name.empty() && !table_name.empty()) {
+        if (!keyspace_name.empty() && !table_name.empty()) {
             auto& db = ctx.db.local();
             auto tid = validate_table(db, keyspace_name, table_name);
-            token_endpoints = co_await ss.local().get_tablet_to_endpoint_map(tid);
+            // Vnode tables have no tablet map, so they get the vnode ring.
+            if (db.find_column_family(tid).uses_tablets()) {
+                token_endpoints = co_await ss.local().get_tablet_to_endpoint_map(tid);
+            } else {
+                token_endpoints = ss.local().get_token_to_endpoint_map();
+            }
+        } else if (!keyspace_name.empty()) {
+            validate_keyspace(ctx, keyspace_name);
+            ensure_tablets_disabled(ctx, keyspace_name, "storage_service/tokens_endpoint");
+            token_endpoints = ss.local().get_token_to_endpoint_map();
+        } else if (!table_name.empty()) {
+            throw bad_param_exception("The 'cf' parameter requires the 'keyspace' parameter");
         } else {
-            throw bad_param_exception("Either provide both keyspace and table (for tablet table) or neither (for vnodes)");
+            token_endpoints = ss.local().get_token_to_endpoint_map();
         }
 
         co_return json::json_return_type(stream_range_as_array(token_endpoints, &map_to_json<dht::token, gms::inet_address>));
