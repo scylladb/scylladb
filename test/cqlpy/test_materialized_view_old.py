@@ -1824,3 +1824,53 @@ def test_view_update_generating_writetime(cql, test_keyspace, scylla_only):
             # update to the virtual column.
             cql.execute(f"UPDATE {table} USING TTL 300 AND TIMESTAMP 8 SET g=40 WHERE k=1 AND c=1")
             check('g', 8, 6, 1, 7)
+
+# Usually if only an unselected column in the base table is modified, we expect
+# an optimization that a view update is not done, but we had an
+# bug(https://scylladb.atlassian.net/browse/SCYLLADB-808) where the existence of
+# a collection selected in the view caused us to skip this optimization, even
+# when it was not modified. This test reproduces this bug.
+#
+# In this test we verify that we correctly skip (or not) view updates to a view
+# that selects a collection column. We use two MVs, similarly as in the test
+# above test.
+#
+# scylla_only for the same reasons as the test above - it counts view updates
+# by reading Scylla's metrics, and the optimization is Scylla's own.
+def test_view_update_unmodified_collection(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace,
+            'k int, c int, a int, b list<int>, g int, primary key(k, c)') as table:
+        with new_materialized_view(cql, table, 'k,c,a,b', 'c, k',
+                'k IS NOT NULL AND c IS NOT NULL') as mv1, \
+             new_materialized_view(cql, table, 'k,c,a,b', 'c, k, a',
+                'k IS NOT NULL AND c IS NOT NULL AND a IS NOT NULL') as mv2:
+            # Wait for the builds before counting, as in the test above -
+            # a build which starts after the test has written rows would copy
+            # them into the view and inflate the counts.
+            for mv in [mv1, mv2]:
+                wait_for_view_built(cql, mv)
+            before = view_updates_generated(cql)
+            def check(mv1_updates, mv2_updates, total_updates):
+                assert (mv1_updates, mv2_updates, total_updates) == (
+                    writes_to(cql, mv1), writes_to(cql, mv2),
+                    view_updates_generated(cql) - before)
+
+            cql.execute(f"INSERT INTO {table} (k, c, a) VALUES (1, 1, 1)")
+            check(1, 1, 2)
+
+            # We update an unselected column and the collection remains NULL, so
+            # we should generate an update to the virtual column in mv1 but not
+            # to mv2.
+            cql.execute(f"UPDATE {table} SET g=1 WHERE k=1 AND c=1")
+            check(2, 1, 3)
+
+            # We update the collection with an initial value
+            cql.execute(f"UPDATE {table} SET b=[1] WHERE k=1 AND c=1")
+            check(3, 2, 5)
+
+            # We update an unselected column again with a non-NULL selected
+            # collection. Because the liveness of the updated column is
+            # unchanged and no other selected column is updated (in particular,
+            # the collection column), we should generate no view updates.
+            cql.execute(f"UPDATE {table} SET g=2 WHERE k=1 AND c=1")
+            check(3, 2, 5)
