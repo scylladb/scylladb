@@ -2695,6 +2695,45 @@ def test_partial_delete_selected_column(cql, test_keyspace, flush, clock):
             maybe_flush()
             check([(1, 1, 1, None)])
 
+# The base column a is the view's partition key, so the view row can only live
+# as long as a does. When a is written with a TTL, the view row has to go away
+# when that TTL expires - even though the base row outlives it, because b is
+# still alive.
+@pytest.mark.parametrize("flush", [False, True], ids=["noflush", "flush"])
+def test_update_column_in_view_pk_with_ttl(cql, test_keyspace, flush, clock):
+    no_cache = "with caching = {'enabled': 'false'}" if flush and is_scylla(cql) else ""
+    def maybe_flush():
+        if flush:
+            nodetool.flush_all(cql)
+    with new_test_table(cql, test_keyspace, 'p int primary key, a int, b int',
+            extra=no_cache) as table:
+        with new_materialized_view(cql, table, '*', 'a, p',
+                'p is not null and a is not null', extra=no_cache) as mv:
+            def check(expected):
+                assert expected == list(cql.execute(f"select * from {mv}"))
+
+            cql.execute(f"update {table} set a = 1 where p = 1")
+            maybe_flush()
+            check([(1, 1, None)])
+
+            cql.execute(f"delete a from {table} where p = 1")
+            maybe_flush()
+            check([])
+
+            cql.execute(f"insert into {table} (p) values (1)")
+            check([])
+
+            cql.execute(f"update {table} using ttl {clock.ttl} set a = 10 where p = 1")
+            maybe_flush()
+            check([(10, 1, None)])
+
+            cql.execute(f"update {table} set b = 100 where p = 1")
+            maybe_flush()
+            check([(10, 1, 100)])
+
+            clock.jump(clock.ttl + 1)
+            check([])
+
 # A view selecting nothing but the base's key columns still has to know
 # whether the base row is alive, which depends on the liveness of columns the
 # view doesn't select - here v1 and v2.
