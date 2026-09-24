@@ -2021,3 +2021,42 @@ def test_delete_single_column_in_view_partition_key(cql, test_keyspace):
 
             cql.execute(f"delete d from {table} where a = 0 and b = 0")
             assert [] == list(cql.execute(f"select a, d, b from {mv}"))
+
+# A view may restrict one of the base's partition key columns to a value and
+# leave the rest unrestricted. Whichever way the view then arranges its own
+# key, and whichever way the base table arranges its own, the view must hold
+# exactly the base rows matching that value, and follow them through updates
+# and through deletions of a row or of a whole partition.
+@pytest.mark.parametrize("base_pk", ['(a, b), c', 'a, b, c'],
+                         ids=['compound_base_pk', 'simple_base_pk'])
+@pytest.mark.parametrize("pk", ['(a, b), c', '(b, a), c', 'a, b, c', 'c, b, a', '(c, a), b'])
+def test_partition_key_filtering_unrestricted_part(cql, test_keyspace, base_pk, pk):
+    with new_test_table(cql, test_keyspace,
+            f'a int, b int, c int, d int, primary key ({base_pk})') as table:
+        with new_materialized_view(cql, table, '*', pk,
+                'a = 1 and b is not null and c is not null') as mv:
+            def check(expected):
+                assert sorted(expected) == sorted(cql.execute(f"select a, b, c, d from {mv}"))
+            for a, b, c in [(0, 0, 0), (0, 1, 0), (1, 0, 0),
+                            (1, 0, 1), (1, 1, 0), (1, 1, 1)]:
+                cql.execute(f"insert into {table} (a, b, c, d) values ({a}, {b}, {c}, 0)")
+            check([(1, 0, 0, 0), (1, 0, 1, 0), (1, 1, 0, 0), (1, 1, 1, 0)])
+
+            # A row which the view filters out stays filtered out
+            cql.execute(f"update {table} set d = 1 where a = 0 and b = 0 and c = 0")
+            check([(1, 0, 0, 0), (1, 0, 1, 0), (1, 1, 0, 0), (1, 1, 1, 0)])
+
+            cql.execute(f"update {table} set d = 1 where a = 1 and b = 1 and c = 0")
+            check([(1, 0, 0, 0), (1, 0, 1, 0), (1, 1, 0, 1), (1, 1, 1, 0)])
+
+            cql.execute(f"delete from {table} where a = 0 and b = 0 and c = 0")
+            check([(1, 0, 0, 0), (1, 0, 1, 0), (1, 1, 0, 1), (1, 1, 1, 0)])
+
+            cql.execute(f"delete from {table} where a = 1 and b = 1 and c = 0")
+            check([(1, 0, 0, 0), (1, 0, 1, 0), (1, 1, 1, 0)])
+
+            cql.execute(f"delete from {table} where a = 1 and b = 0")
+            check([(1, 1, 1, 0)])
+
+            cql.execute(f"delete from {table} where a = 1 and b = 1")
+            check([])
