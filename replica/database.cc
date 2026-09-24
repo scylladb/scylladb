@@ -1422,12 +1422,19 @@ future<> database::cleanup_drop_table_on_all_shards(sharded<database>& sharded_d
     if (with_snapshot) {
         snapshot_name_opt = format("pre-drop-{}", db_clock::now().time_since_epoch().count());
     }
-    auto f = co_await coroutine::as_future(truncate_table_on_all_shards(sharded_db, sys_ks, table_shards, truncated_at, with_snapshot, std::move(snapshot_name_opt)));
+    auto f = co_await coroutine::as_future(truncate_table_on_all_shards(sharded_db, sys_ks, table_shards, truncated_at, with_snapshot, std::move(snapshot_name_opt), true /* dropping_table */));
     co_await smp::invoke_on_all([&] {
         return table_shards->stop();
     });
     f.get(); // re-throw exception from truncate() if any
-    co_await sys_ks.local().remove_truncation_records(table_shards->schema()->id());
+    // The truncate above did not save a truncation record, because the table
+    // is being dropped - but an *earlier*, ordinary TRUNCATE of this table may
+    // have left one behind, and once the table is gone nothing would ever read
+    // it or delete it. So clean it up - but only when there can be one, which
+    // for the great majority of dropped tables is not the case.
+    if (table_shards->has_truncation_record()) {
+        co_await sys_ks.local().remove_truncation_records(table_shards->schema()->id());
+    }
     co_await table_shards->destroy_storage();
 }
 
@@ -3167,7 +3174,8 @@ struct database::table_truncate_state {
 };
 
 future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, sharded<db::system_keyspace>& sys_ks,
-        const global_table_ptr& table_shards, std::optional<db_clock::time_point> truncated_at_opt, bool with_snapshot, std::optional<sstring> snapshot_name_opt) {
+        const global_table_ptr& table_shards, std::optional<db_clock::time_point> truncated_at_opt, bool with_snapshot, std::optional<sstring> snapshot_name_opt,
+        bool dropping_table) {
     auto& cf = *table_shards;
     auto s = cf.schema();
 
@@ -3288,12 +3296,12 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, s
         auto& views = table_shards.views();
         auto& st = *table_states[shard];
 
-        return db.truncate(sys_ks.local(), cf, views, st);
+        return db.truncate(sys_ks.local(), cf, views, st, dropping_table);
     });
     dblog.info("Truncated {}.{}", s->ks_name(), s->cf_name());
 }
 
-future<> database::truncate(db::system_keyspace& sys_ks, column_family& cf, std::vector<lw_shared_ptr<replica::table>>& views, const table_truncate_state& st) {
+future<> database::truncate(db::system_keyspace& sys_ks, column_family& cf, std::vector<lw_shared_ptr<replica::table>>& views, const table_truncate_state& st, bool dropping_table) {
     dblog.trace("Truncating {}.{} on shard", cf.schema()->ks_name(), cf.schema()->cf_name());
 
     const auto uuid = cf.schema()->id();
@@ -3334,15 +3342,39 @@ future<> database::truncate(db::system_keyspace& sys_ks, column_family& cf, std:
             rp = st.low_mark;
         }
     }
-    co_await coroutine::parallel_for_each(views, [&sys_ks, truncated_at] (lw_shared_ptr<replica::table> v) -> future<> {
+    co_await coroutine::parallel_for_each(views, [&sys_ks, truncated_at, dropping_table] (lw_shared_ptr<replica::table> v) -> future<> {
             db::replay_position rp = co_await v->discard_sstables(truncated_at);
-            co_await sys_ks.save_truncation_record(*v, truncated_at, rp);
+            if (!dropping_table) {
+                co_await sys_ks.save_truncation_record(*v, truncated_at, rp);
+            }
     });
-    // save_truncation_record() may actually fail after we cached the truncation time
-    // but this is not be worse that if failing without caching: at least the correct time
-    // will be available until next reboot and a client will have to retry truncation anyway.
-    cf.set_truncation_time(truncated_at);
-    co_await sys_ks.save_truncation_record(cf, truncated_at, rp);
+    // A truncation record tells commitlog replay, after a restart, to ignore
+    // everything written to this table below the recorded replay position -
+    // otherwise replay would resurrect the data we have just discarded.
+    //
+    // When the truncate is a step of dropping the table, that record is not
+    // needed, and we skip saving it. The reason is that the only reader of
+    // these records is commitlog_replayer, which looks them up per table over
+    // the tables which exist after the restart (see its init()) - and this
+    // table will not be one of them. Commitlog entries belonging to it are
+    // dropped by the replayer anyway, when looking up the table fails with
+    // no_such_column_family. The drop is also already durable by this point:
+    // the schema mutation deleting the table is written to the commitlog by
+    // do_merge_schema() before it gets here (see schema_applier), so a crash
+    // in the middle of the drop replays as a dropped table, never as a
+    // truncated one.
+    //
+    // Skipping this saves a blocking flush of system.truncated on every shard
+    // (and one more for each of the table's views, when it has any - its
+    // secondary indexes) on every DROP TABLE and DROP MATERIALIZED VIEW -
+    // records which were then deleted a moment later by the caller anyway.
+    if (!dropping_table) {
+        // save_truncation_record() may actually fail after we cached the truncation time
+        // but this is not be worse that if failing without caching: at least the correct time
+        // will be available until next reboot and a client will have to retry truncation anyway.
+        cf.set_truncation_time(truncated_at);
+        co_await sys_ks.save_truncation_record(cf, truncated_at, rp);
+    }
 
     auto& gc_state = get_compaction_manager().get_shared_tombstone_gc_state();
     gc_state.drop_repair_history_for_table(uuid);

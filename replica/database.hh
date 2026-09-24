@@ -670,6 +670,14 @@ public:
         _truncated_at = truncated_at;
     }
     db_clock::time_point get_truncation_time() const;
+    // Whether this table may have a truncation record in system.truncated.
+    // A table which was never truncated has its truncation time set to
+    // db_clock::time_point::min(): that is what a newly created table is
+    // initialized to, and what it is restored to on boot when
+    // load_truncation_times() found no record for it.
+    bool has_truncation_record() const noexcept {
+        return _truncated_at && *_truncated_at != db_clock::time_point::min();
+    }
 
     void notify_bootstrap_or_replace_start();
 
@@ -2243,8 +2251,11 @@ private:
     struct table_truncate_state;
 
     static future<> snapshot_table_on_all_shards(sharded<database>& sharded_db, const global_table_ptr& table_shards, sstring name, db::snapshot_options opts, snapshot_callback = {});
-    static future<> truncate_table_on_all_shards(sharded<database>& db, sharded<db::system_keyspace>& sys_ks, const global_table_ptr&, std::optional<db_clock::time_point> truncated_at_opt, bool with_snapshot, std::optional<sstring> snapshot_name_opt);
-    future<> truncate(db::system_keyspace& sys_ks, column_family& cf, std::vector<lw_shared_ptr<replica::table>>& views, const table_truncate_state&);
+    // dropping_table tells the truncate that it is being done as part of
+    // dropping the table, and not on its own. In that case no truncation
+    // record is saved - see the comment in database::truncate().
+    static future<> truncate_table_on_all_shards(sharded<database>& db, sharded<db::system_keyspace>& sys_ks, const global_table_ptr&, std::optional<db_clock::time_point> truncated_at_opt, bool with_snapshot, std::optional<sstring> snapshot_name_opt, bool dropping_table = false);
+    future<> truncate(db::system_keyspace& sys_ks, column_family& cf, std::vector<lw_shared_ptr<replica::table>>& views, const table_truncate_state&, bool dropping_table);
 public:
     /** Truncates the given column family */
     // If truncated_at_opt is not given, it is set to db_clock::now right after flush/clear.
