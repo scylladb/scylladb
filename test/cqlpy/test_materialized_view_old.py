@@ -1893,3 +1893,56 @@ def test_conflicting_batch(cql, test_keyspace):
 
             assert [] == list(cql.execute(f"SELECT * FROM {table}"))
             assert [] == list(cql.execute(f"SELECT * FROM {mv}"))
+
+# Test whether it is possible to drop columns from a base table which has
+# materialized views. This should be allowed, unless one of the views "needs"
+# the column, where needs means either this column was selected by the view,
+# or is a virtual column (i.e., the *liveness* of this column matters).
+# Reproduces issue #4448.
+# Because our secondary indexes are also implemented on top of materialized
+# views, the ability or inability to drop columns where secondary indexes
+# exist also needs to be tested - see the separate test case
+# test_secondary_index_allow_some_column_drops() in secondary_index_test.cc.
+#
+# scylla_only: allowing any of these drops at all is a Scylla extension.
+# Cassandra refuses to drop any regular column from a base table which has a
+# view - see the comment on test_column_dropped_from_base above.
+def test_mv_allow_some_column_drops(cql, test_keyspace, scylla_only):
+    needed = 'materialized view .* needs this column'
+    # When the view has a new key column that didn't exist in the base,
+    # virtual columns aren't needed, so unselected columns aren't needed
+    # by the view and may be dropped. Check that the drop is allowed and
+    # the view still works properly afterwards.
+    with new_test_table(cql, test_keyspace, 'p int primary key, a int, b int, c int') as table:
+        with new_materialized_view(cql, table, 'c', 'a, p', 'a is not null') as mv:
+            cql.execute(f"insert into {table} (p, a, b, c) VALUES (1, 2, 3, 4)")
+            assert [(1, 2, 3, 4)] == list(cql.execute(f"select * from {table}"))
+            cql.execute(f"alter table {table} drop b")
+            assert [(1, 2, 4)] == list(cql.execute(f"select * from {table}"))
+            assert [(2, 1, 4)] == list(cql.execute(f"select * from {mv} where a = 2"))
+            # Test that we cannot drop a selected column of a view. Both
+            # c and a are selected (one as a new key column, one as a regular
+            # column).
+            for column in ['c', 'a']:
+                with pytest.raises(InvalidRequest, match=needed):
+                    cql.execute(f"alter table {table} drop {column}")
+            # We also cannot drop a base's primary key column, of course.
+            with pytest.raises(InvalidRequest, match='Cannot drop PRIMARY KEY part p'):
+                cql.execute(f"alter table {table} drop p")
+            # Also cannot drop a non existent column :-)
+            with pytest.raises(InvalidRequest, match='Column xyz was not found'):
+                cql.execute(f"alter table {table} drop xyz")
+
+    # When a view has the same key columns as the base, virtual columns
+    # are added for all unselected columns, because the *liveness* is
+    # important for the view rows, even if the value isn't. In this case,
+    # we do not allow to drop any base columns.
+    with new_test_table(cql, test_keyspace,
+            'p int, c int, a int, b int, d int, primary key (p, c)') as table:
+        with new_materialized_view(cql, table, 'd', 'c, p', 'c is not null'):
+            for column in ['a', 'b', 'd']:
+                with pytest.raises(InvalidRequest, match=needed):
+                    cql.execute(f"alter table {table} drop {column}")
+            for column in ['p', 'c']:
+                with pytest.raises(InvalidRequest, match=f'Cannot drop PRIMARY KEY part {column}'):
+                    cql.execute(f"alter table {table} drop {column}")
