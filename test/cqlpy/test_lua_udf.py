@@ -45,3 +45,9 @@ def test_lua_use_null(cql, test_keyspace, scylla_only):
             call_lua(cql, test_keyspace, table, "(val int) CALLED ON NULL INPUT RETURNS int", "return val + 1")
         assert call_lua(cql, test_keyspace, table, "(val int) CALLED ON NULL INPUT RETURNS int", "return val") == [None]
         assert [row.val for row in cql.execute(f"SELECT val FROM {table}")] == [None]
+
+def test_lua_wrong_return_type(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val int") as table:
+        cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', null)")
+        with pytest.raises(InvalidRequest, match="value is not an integer"):
+            call_lua(cql, test_keyspace, table, "(val int) CALLED ON NULL INPUT RETURNS int", "return 1.2")
