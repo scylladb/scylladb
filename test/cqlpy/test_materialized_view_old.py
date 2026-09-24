@@ -39,6 +39,7 @@ from cassandra.protocol import ConfigurationException, InvalidRequest
 from cassandra.util import Time
 
 from . import nodetool
+from .test_materialized_view import wait_for_view_built
 from .util import new_test_table, new_type, new_materialized_view, unique_name, is_scylla, ScyllaMetrics
 
 # CQL usually folds identifier names - keyspace, table and column names -
@@ -2203,3 +2204,18 @@ def test_partition_key_and_clustering_key_filtering_restrictions(cql, test_keysp
             # Deleting the whole base partition removes what is left
             cql.execute(f"delete from {table} where a = 1")
             check([])
+
+# A base column may be empty - an empty string is a perfectly good value, as
+# opposed to null - and a view whose key is built from such columns must still
+# hold the row. Note that these views are created after the row already
+# exists, so each has to be built before it can be read.
+@pytest.mark.parametrize("pk", ['p1, v, c, p2', '(p2, v), c, p1', '(v, p2), c, p1',
+                                '(c, v), p1, p2', '(v, c), p1, p2'])
+def test_base_non_pk_columns_in_view_partition_key_are_non_empty(cql, test_keyspace, pk):
+    with new_test_table(cql, test_keyspace,
+            'p1 int, p2 text, c text, v text, primary key ((p1, p2), c)') as table:
+        cql.execute(f"insert into {table} (p1, p2, c, v) values (1, '', '', '')")
+        with new_materialized_view(cql, table, '*', pk,
+                'p1 is not null and p2 is not null and c is not null and v is not null') as mv:
+            wait_for_view_built(cql, mv)
+            assert [(1, '', '', '')] == list(cql.execute(f"select p1, p2, c, v from {mv}"))
