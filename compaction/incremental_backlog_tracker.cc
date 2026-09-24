@@ -9,6 +9,8 @@
 
 namespace compaction {
 
+extern logging::logger clogger;
+
 incremental_backlog_tracker::inflight_component incremental_backlog_tracker::compacted_backlog(const compaction_backlog_tracker::ongoing_compactions& ongoing_compactions) const {
     inflight_component in;
     for (auto& crp : ongoing_compactions) {
@@ -92,42 +94,75 @@ double incremental_backlog_tracker::backlog(const compaction_backlog_tracker::on
     return b > 0 ? b : 0;
 }
 
-// Removing could be the result of a failure of an in progress write, successful finish of a
-// compaction, or some one-off operation, like drop
+// O(K log R) per batch of size K, not O(N) in the total run count. Strong exception
+// safety: all fallible work (run copies, erase/insert, map growth) happens on a local
+// staging map that doesn't touch _all; only the final, non-throwing splice commits it.
 void incremental_backlog_tracker::replace_sstables(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts) {
-    auto all = _all;
-    auto total_bytes = _total_bytes;
-    auto threshold = _threshold;
-    for (auto&& sst : new_ssts) {
-    if (sst->data_size() > 0) {
-        // note: we don't expect failed insertions since each sstable will be inserted once
-        (void)all[sst->run_identifier()].insert(sst);
-        total_bytes += sst->data_size();
-        // Deduce threshold from the last SSTable added to the set
-        threshold = sst->get_schema()->min_compaction_threshold();
-    }
-    }
+    std::unordered_map<sstables::run_id, sstables::sstable_run> staging;
+    int64_t total_bytes_delta = 0;
 
-    for (auto&& sst : old_ssts) {
-    if (sst->data_size() > 0) {
-        auto run_identifier = sst->run_identifier();
-        all[run_identifier].erase(sst);
-        if (all[run_identifier].all().empty()) {
-            all.erase(run_identifier);
+    auto staged = [this, &staging] (const sstables::run_id& id) -> sstables::sstable_run& {
+        auto it = staging.find(id);
+        if (it != staging.end()) {
+            return it->second;
         }
-        total_bytes -= sst->data_size();
-    }
+        auto existing = _all.find(id);
+        return staging.emplace(id, existing != _all.end() ? existing->second : sstables::sstable_run{}).first->second;
+    };
+
+    // Remove before add: lets a rewrite/scrub/split that reuses the old run id succeed.
+    for (auto&& sst : old_ssts) {
+        if (sst->data_size() == 0) {
+            continue;
+        }
+        if (!_all.contains(sst->run_identifier()) && !staging.contains(sst->run_identifier())) {
+            continue;
+        }
+        auto& run = staged(sst->run_identifier());
+        // erase() matches by first-key ordering, not identity, so it can remove a
+        // different fragment than the one requested (e.g. two fragments sharing a
+        // first key, one of which was previously rejected by insert()). Verify the
+        // sstable is actually tracked before erasing/decrementing the byte count.
+        auto& run_set = run.all();
+        auto found = run_set.find(sst);
+        if (found == run_set.end() || (*found)->generation() != sst->generation()) {
+            continue;
+        }
+        if (!run.erase(sst)) {
+            continue;
+        }
+        total_bytes_delta -= sst->data_size();
     }
 
-    // commit calculations
-    std::invoke([&] () noexcept {
-        _all = std::move(all);
-        _total_bytes = total_bytes;
-        _threshold = threshold;
-        // Defer backlog contribution recalculation to the next backlog() call,
-        // avoiding O(N^2) cost when many sstables are added in a batch (e.g. boot).
-        _backlog_dirty = true;
-    });
+    for (auto&& sst : new_ssts) {
+        if (sst->data_size() == 0) {
+            continue;
+        }
+        if (staged(sst->run_identifier()).insert(sst)) {
+            total_bytes_delta += sst->data_size();
+        } else {
+            clogger.warn("incremental_backlog_tracker: SSTable {} overlaps an existing fragment of run {}; dropped from backlog tracking",
+                    sst->get_filename(), sst->run_identifier());
+        }
+    }
+
+    // Everything above only touched local state. extract()/insert() move nodes
+    // between the two maps without allocating, so this loop can't throw.
+    while (!staging.empty()) {
+        auto node = staging.extract(staging.begin());
+        _all.erase(node.key());
+        if (!node.mapped().empty()) {
+            _all.insert(std::move(node));
+        }
+    }
+    _total_bytes += total_bytes_delta;
+    if (!new_ssts.empty()) {
+        // All sstables in one instance share a table, so any carries the current threshold.
+        _threshold = new_ssts.back()->get_schema()->min_compaction_threshold();
+    }
+
+    // Deferred to backlog() to avoid O(N^2) on a large batch (e.g. boot).
+    _backlog_dirty = true;
 }
 
 }
