@@ -25,61 +25,6 @@ BOOST_AUTO_TEST_SUITE(view_complex_test)
 
 using namespace std::literals::chrono_literals;
 
-// Not moved to Python in issue #16134: an expired row marker is the whole
-// subject of this test, and making one expire needs forward_jump_clocks(),
-// which cqlpy has no equivalent of.
-SEASTAR_TEST_CASE(test_unselected_column_with_expired_marker) {
-    return do_with_cql_env_thread([] (auto& e) {
-        e.execute_cql("create table cf (p int, c int, a int, b int, primary key (p, c))").get();
-        e.execute_cql("create materialized view vcf as select p, c, b from cf "
-                      "where p is not null and c is not null "
-                      "primary key (c, p)").get();
-
-        e.execute_cql("update cf set a = 1 where p = 1 and c = 1").get();
-        e.local_db().flush_all_memtables().get();
-        e.execute_cql("insert into cf (p, c) values (1, 1) using ttl 100").get();
-        e.local_db().flush_all_memtables().get();
-        eventually([&] {
-            auto msg = e.execute_cql("select * from vcf").get();
-            assert_that(msg).is_rows().with_rows({{
-                {int32_type->decompose(1)},
-                {int32_type->decompose(1)},
-                { }
-            }});
-        });
-
-        forward_jump_clocks(101s);
-
-        eventually([&] {
-            auto msg = e.execute_cql("select * from vcf").get();
-            assert_that(msg).is_rows().with_rows({{
-                {int32_type->decompose(1)},
-                {int32_type->decompose(1)},
-                { }
-            }});
-        });
-
-        e.execute_cql("update cf set a = null where p = 1 and c = 1").get();
-        e.local_db().flush_all_memtables().get();
-        eventually([&] {
-            auto msg = e.execute_cql("select * from vcf").get();
-            assert_that(msg).is_rows().is_empty();
-        });
-
-        e.execute_cql("update cf using timestamp 1 set b = 1 where p = 1 and c = 1").get();
-        e.local_db().flush_all_memtables().get();
-        eventually([&] {
-            auto msg = e.execute_cql("select * from vcf").get();
-            assert_that(msg).is_rows().with_rows({{
-                {int32_type->decompose(1)},
-                {int32_type->decompose(1)},
-                {int32_type->decompose(1)}
-            }});
-        });
-
-    });
-}
-
 // Not moved to Python in issue #16134: the point of this test is a view row
 // which a TTL makes expire, and expiring one needs forward_jump_clocks(),
 // which cqlpy has no equivalent of.

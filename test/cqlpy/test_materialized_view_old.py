@@ -3005,6 +3005,36 @@ def test_commutative_row_deletion(cql, test_keyspace, flush):
             maybe_flush()
             check([(3, None, None)], [])
 
+# After the base row's marker expires, the row is kept alive by the unselected
+# column a - so the view row lives on too. Only when a goes as well does the
+# view row go, and writing the selected column b then brings it back.
+# The C++ original flushed after every write, unconditionally rather than as a
+# parametrized variant, so this test does the same.
+def test_unselected_column_with_expired_marker(cql, test_keyspace, clock):
+    with new_test_table(cql, test_keyspace,
+            'p int, c int, a int, b int, primary key (p, c)') as table:
+        with new_materialized_view(cql, table, 'p, c, b', 'c, p',
+                'p is not null and c is not null') as mv:
+            def check(expected):
+                assert expected == list(cql.execute(f"select * from {mv}"))
+
+            cql.execute(f"update {table} set a = 1 where p = 1 and c = 1")
+            nodetool.flush_all(cql)
+            cql.execute(f"insert into {table} (p, c) values (1, 1) using ttl {clock.ttl}")
+            nodetool.flush_all(cql)
+            check([(1, 1, None)])
+
+            clock.jump(clock.ttl + 1)
+            check([(1, 1, None)])
+
+            cql.execute(f"update {table} set a = null where p = 1 and c = 1")
+            nodetool.flush_all(cql)
+            check([])
+
+            cql.execute(f"update {table} using timestamp 1 set b = 1 where p = 1 and c = 1")
+            nodetool.flush_all(cql)
+            check([(1, 1, 1)])
+
 # The view's key column v1 can be rewritten at timestamps below that of the
 # base row's marker, and the view follows it - while v2, written earlier
 # still, keeps the write time it had all along.
