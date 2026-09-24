@@ -32,6 +32,7 @@
 #include "test/lib/test_utils.hh"
 #include "test/lib/key_utils.hh"
 #include "test/lib/eventually.hh"
+#include "test/lib/error_injection.hh"
 
 #include "replica/database.hh"
 #include "utils/assert.hh"
@@ -2430,10 +2431,12 @@ SEASTAR_TEST_CASE(replica_read_timeout_no_exception) {
         // Test 1: execute reads that reach the disk but time out while reading from the disk.
         // Ensure no exceptions are thrown, but the reads fail with a read timeout exception.
         if constexpr (std::is_same_v<utils::error_injection_type, utils::error_injection<true>>) {
-            utils::get_local_injector().enable("sstables_mx_reader_fill_buffer_timeout", false, {{"table", format("{}.{}", ks_name, tbl_name)}});
+            // The injection has to be armed on every shard: the partition may be
+            // owned by a shard other than the one running this test (that depends
+            // on the shard count), and the read happens on the owning shard.
+            scoped_error_injection injection("sstables_mx_reader_fill_buffer_timeout", {{"table", format("{}.{}", ks_name, tbl_name)}});
             execute_test("disk reads", false);
             execute_test("disk reads", true);
-            utils::get_local_injector().disable("sstables_mx_reader_fill_buffer_timeout");
         }
 
         // Test 2: execute reads that get queued on the semaphore and time out while waiting for the permit.
