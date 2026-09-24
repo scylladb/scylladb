@@ -1405,3 +1405,71 @@ def test_complex_timestamp_with_base_non_pk_columns_in_view_pk_deletion(cql, tes
             maybe_flush()
             assert [(1, 3, 4, 3)] == list(cql.execute(
                 f"select v1, p, v2, WRITETIME(v2) from {mv}"))
+
+# Test that we are not allowed to create a view without the "is not null"
+# restrictions on all the view's primary key columns.
+# We want to be sure that in every case, the error is caught when creating
+# the view - not later when adding data to the base table, as we discovered
+# was happening in some cases in issue #2628.
+#
+# Scylla currently makes one exception, and lets the IS NOT NULL be omitted
+# for a column which is the base's only partition key column - the reasoning
+# being that a partition key can never be null. Cassandra requires it even
+# there, and that disagreement is issue #11979, checked by
+# test_is_not_null_requirement() in test_materialized_view.py. This test
+# therefore sticks to the cases the two agree on.
+def test_is_not_null(cql, test_keyspace):
+    def check(table, pk, good, bad):
+        for where in good:
+            with new_materialized_view(cql, table, '*', pk, where):
+                pass
+        for where in bad:
+            with pytest.raises(InvalidRequest, match='Primary key column.*IS NOT NULL'):
+                with new_materialized_view(cql, table, '*', pk, where):
+                    pass
+
+    # Test 1: with one partition column in the base table.
+    # This should work with the "where v is not null" restriction
+    # on the view's new key column, but fail without it.
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY, v int, w int') as table:
+        check(table, 'v, p',
+              good=['v is not null and p is not null'],
+              # should fail, missing restriction on v
+              bad=['p is not null'])
+        # should fail, missing restriction on v (p is also missing, but
+        # as can be seen from the success above, not mandatory).
+        with pytest.raises(InvalidRequest, match='Primary key column.*IS NOT NULL'):
+            cql.execute(f"create materialized view {test_keyspace}.{unique_name()} as "
+                        f"select * from {table} primary key (v, p)")
+        # Test adding rows to cf and all views on it which we succeeded adding
+        # above. In issue #2628, we saw that the view creation was succeeding
+        # above despite the missing "is not null", and then the updates here
+        # were failing. This was wrong.
+        cql.execute(f"insert into {table} (p, v, w) values (1, 2, 3)")
+
+    # Test 2: where the base table has a composite partition key.
+    # It appears (see Cassandra's CreateViewStatement.getColumnIdentifier())
+    # that when the partition key is composite (composed of multiple columns)
+    # individual columns may be null, so we must have an IS NOT NULL
+    # restriction on those (p1 and p2 below) too, and it's no longer optional.
+    with new_test_table(cql, test_keyspace, 'p1 int, p2 int, v int, primary key ((p1, p2))') as table:
+        check(table, 'v, p1, p2',
+              good=['p1 is not null and p2 is not null and v is not null'],
+              bad=['p2 is not null and v is not null',       # missing p1
+                   'p1 is not null and v is not null',       # missing p2
+                   'p1 is not null and p2 is not null'])     # missing v
+        cql.execute(f"insert into {table} (p1, p2, v) values (1, 2, 3)")
+
+    # Test 3: this time the base has a non-composite partition key p1,
+    # and also a clustering key c. The IS NOT NULL is needed on c, and on
+    # the new view primary key column - v:
+    with new_test_table(cql, test_keyspace, 'p1 int, c int, v int, primary key (p1, c)') as table:
+        check(table, 'v, p1, c',
+              good=['c is not null and v is not null and p1 is not null'],
+              bad=['p1 is not null and v is not null',       # missing c
+                   'p1 is not null and c is not null'])      # missing v
+        cql.execute(f"insert into {table} (p1, c, v) values (1, 2, 3)")
+
+    # FIXME: we should also test that beyond "IS NOT NULL" being
+    # verified on view creation, it also does its job when adding
+    # rows - that those with NULL values are properly ignored.
