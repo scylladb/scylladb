@@ -846,6 +846,8 @@ public:
 
     // TODO : tune initial / default size
     static constexpr size_t default_size = 128 * 1024;
+    // Fragments per dma_write in cycle(); bounds synchronous per-write work such as encryption.
+    static constexpr size_t max_write_fragments = 8;
 
     segment(::shared_ptr<segment_manager> m, descriptor&& d, named_file&& f, size_t alignment)
             : _segment_manager(std::move(m)), _desc(std::move(d)), _file(std::move(f)),
@@ -1214,23 +1216,46 @@ public:
 
             co_await coroutine::switch_to(_segment_manager->cfg.sched_group);
 
+            ++_segment_manager->totals.cycle_count;
+
             for (;;) {
-                auto current = *view.begin();
                 try {
-                    auto bytes = co_await _file.dma_write(off, current.data(), current.size());
+                    // Vectored write of up to max_write_fragments fragments, instead of a serialized
+                    // write per fragment. Capped so synchronous per-write work (e.g. encryption) stays bounded.
+                    std::vector<iovec> iov;
+                    iov.reserve(max_write_fragments);
+                    size_t len = 0;
+                    for (auto frag : view) {
+                        if (iov.size() == max_write_fragments) {
+                            break;
+                        }
+                        iov.emplace_back(iovec{const_cast<int8_t*>(frag.data()), frag.size()});
+                        len += frag.size();
+                    }
+                    size_t bytes;
+                    // Iovec writes are trimmed to disk_write_dma_alignment, which can exceed our
+                    // (overwrite) _alignment, e.g. on XFS; a batch shorter than that would make no progress.
+                    if (iov.size() > 1 && len >= _file.disk_write_dma_alignment()) {
+                        bytes = co_await _file.dma_write(off, std::move(iov));
+                    } else {
+                        auto current = *view.begin();
+                        bytes = co_await _file.dma_write(off, current.data(), current.size());
+                    }
                     _segment_manager->totals.bytes_written += bytes;
                     _segment_manager->totals.active_size_on_disk += bytes;
-                    ++_segment_manager->totals.cycle_count;
                     if (bytes == view.size_bytes()) {
                         clogger.trace("Final write of {} to {}: {}/{} bytes at {}", bytes, *this, size, size, off);
                         break;
                     }
-                    // gah, partial write. should always get here with dma chunk sized
-                    // "bytes", but lets make sure...
+                    // Next batch, or a partial write. Should always get here with dma chunk
+                    // sized "bytes", but lets make sure...
                     bytes = align_down(bytes, _alignment);
+                    if (!bytes) [[unlikely]] {
+                        on_internal_error(clogger, format("dma_write made no progress: {} bytes left at {} in {}", view.size_bytes(), off, *this));
+                    }
                     off += bytes;
                     view.remove_prefix(bytes);
-                    clogger.trace("Partial write of {} to {}: {}/{} bytes at at {}", bytes, *this, size - view.size_bytes(), size, off - bytes);
+                    clogger.trace("Wrote {} to {}: {}/{} bytes at at {}", bytes, *this, size - view.size_bytes(), size, off - bytes);
                     continue;
                     // TODO: retry/ignore/fail/stop - optional behaviour in origin.
                     // we fast-fail the whole commit.

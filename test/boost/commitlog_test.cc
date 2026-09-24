@@ -30,6 +30,9 @@
 #include <seastar/core/seastar.hh>
 #include <seastar/util/noncopyable_function.hh>
 #include <seastar/util/closeable.hh>
+#include <seastar/util/defer.hh>
+#include <seastar/core/on_internal_error.hh>
+#include <seastar/util/internal/iovec_utils.hh>
 
 #include "utils/assert.hh"
 #include "utils/UUID_gen.hh"
@@ -2237,6 +2240,15 @@ SEASTAR_TEST_CASE(test_oversized_with_terminate_in_buffer_wait) {
             }
             co_return co_await checked_file_impl::write_dma(pos, buffer, len, intent);
         }
+        future<size_t> write_dma(uint64_t pos, std::vector<iovec> iov, io_intent* intent) override {
+            if (auto p = std::exchange(*_promise, nullptr)) {
+                if (auto s = std::exchange(*_signal, nullptr)) {
+                    s->set_value();
+                }
+                co_await p->get_future();
+            }
+            co_return co_await checked_file_impl::write_dma(pos, std::move(iov), intent);
+        }
     };
     // use extensions to wrap all cl files for this
     class my_cl_ext : public commitlog_file_extension {
@@ -2300,6 +2312,211 @@ SEASTAR_TEST_CASE(test_oversized_with_terminate_in_buffer_wait) {
     }, exts.get());
 }
 
+
+namespace {
+
+// Wraps commitlog files to count writes and optionally rewrite the result of an iovec write.
+struct write_tracker {
+    size_t pointer_writes = 0;
+    size_t iovec_writes = 0;
+    size_t max_iovs = 0;
+    size_t total_iovs = 0;
+    size_t expected_iovs = 0;
+    // If set, iovec writes are trimmed to this alignment, like posix_file_impl does with disk_write_dma_alignment.
+    size_t iovec_write_alignment = 0;
+    // Called with the iovec and the file alignment; may shrink the iovec and return a fake result.
+    std::function<std::optional<size_t>(std::vector<iovec>&, size_t)> iovec_hook;
+};
+
+class tracking_file_impl : public checked_file_impl {
+    write_tracker& _t;
+
+public:
+    tracking_file_impl(file f, write_tracker& t)
+        : checked_file_impl([](std::exception_ptr) {}, std::move(f))
+        , _t(t) {
+        if (_t.iovec_write_alignment) {
+            _disk_write_dma_alignment = _t.iovec_write_alignment;
+        }
+    }
+    future<size_t> write_dma(uint64_t pos, const void* buffer, size_t len, io_intent* intent) override {
+        ++_t.pointer_writes;
+        ++_t.total_iovs;
+        _t.expected_iovs += align_up(len, fragmented_temporary_buffer::default_fragment_size) / fragmented_temporary_buffer::default_fragment_size;
+        return checked_file_impl::write_dma(pos, buffer, len, intent);
+    }
+    future<size_t> write_dma(uint64_t pos, std::vector<iovec> iov, io_intent* intent) override {
+        ++_t.iovec_writes;
+        auto len = std::ranges::fold_left(iov | std::views::transform(&iovec::iov_len), size_t(0), std::plus<>());
+        _t.max_iovs = std::max(_t.max_iovs, iov.size());
+        _t.total_iovs += iov.size();
+        _t.expected_iovs += align_up(len, fragmented_temporary_buffer::default_fragment_size) / fragmented_temporary_buffer::default_fragment_size;
+        if (_t.iovec_write_alignment) {
+            seastar::internal::sanitize_iovecs(iov, _t.iovec_write_alignment);
+        }
+        if (_t.iovec_hook) {
+            if (auto res = _t.iovec_hook(iov, _disk_write_dma_alignment)) {
+                if (iov.empty()) {
+                    co_return *res;
+                }
+                co_await checked_file_impl::write_dma(pos, std::move(iov), intent);
+                co_return *res;
+            }
+        }
+        co_return co_await checked_file_impl::write_dma(pos, std::move(iov), intent);
+    }
+};
+
+class wrapping_cl_ext : public commitlog_file_extension {
+    std::function<file(file)> _wrap;
+
+public:
+    explicit wrapping_cl_ext(std::function<file(file)> wrap)
+        : _wrap(std::move(wrap)) {
+    }
+    seastar::future<seastar::file> wrap_file(const seastar::sstring&, seastar::file f, seastar::open_flags) override {
+        co_return _wrap(std::move(f));
+    }
+    seastar::future<> before_delete(const seastar::sstring&) override {
+        co_return;
+    }
+};
+
+std::unique_ptr<db::extensions> make_tracking_exts(write_tracker& t) {
+    auto exts = std::make_unique<db::extensions>();
+    exts->add_commitlog_file_extension("tracker", std::make_unique<wrapping_cl_ext>([&t](file f) {
+        return file(make_shared<tracking_file_impl>(std::move(f), t));
+    }));
+    return exts;
+}
+
+} // namespace
+
+// A multi-fragment buffer must go out as iovec writes of several fragments each, capped
+// at segment::max_write_fragments (8) per write. A 2 MiB segment gives 16-fragment buffers.
+SEASTAR_TEST_CASE(test_commitlog_multi_fragment_vectored_write) {
+    write_tracker t;
+    auto exts = make_tracking_exts(t);
+    co_await test_oversized(1, 2, {}, exts.get());
+    BOOST_CHECK_GT(t.iovec_writes, 0);
+    BOOST_CHECK_GT(t.max_iovs, 1);
+    BOOST_CHECK_LE(t.max_iovs, 8);
+    BOOST_CHECK_EQUAL(t.total_iovs, t.expected_iovs);
+}
+
+// A short write must be retried from where it stopped.
+SEASTAR_TEST_CASE(test_commitlog_partial_vectored_write_retry) {
+    write_tracker t;
+    size_t partial = 0;
+    t.iovec_hook = [&](std::vector<iovec>& iov, size_t align) -> std::optional<size_t> {
+        auto len = std::ranges::fold_left(iov | std::views::transform(&iovec::iov_len), size_t(0), std::plus<>());
+        auto want = align_down(len / 2, align);
+        if (partial || !want) {
+            return std::nullopt;
+        }
+        partial = want;
+        size_t acc = 0;
+        std::erase_if(iov, [&](iovec& i) {
+            i.iov_len = std::min(i.iov_len, want - acc);
+            acc += i.iov_len;
+            return i.iov_len == 0;
+        });
+        return want;
+    };
+    auto exts = make_tracking_exts(t);
+    co_await test_oversized(1, 1, {}, exts.get());
+    BOOST_CHECK_GT(partial, 0);
+}
+
+// With O_DSYNC, a segment is aligned to disk_overwrite_dma_alignment, which can be smaller
+// than the disk_write_dma_alignment iovec writes are trimmed to (XFS). Writes must still progress.
+SEASTAR_TEST_CASE(test_commitlog_vectored_write_overwrite_alignment) {
+    write_tracker t;
+    auto exts = make_tracking_exts(t);
+    commitlog::config cfg;
+    tmpdir tmp;
+    cfg.commit_log_location = tmp.path().string();
+    cfg.commitlog_segment_size_in_mb = 1;
+    cfg.use_o_dsync = true;
+    cfg.extensions = exts.get();
+    {
+        // Probe the overwrite alignment the segments will use.
+        tmpdir probe;
+        auto f = co_await open_file_dma((probe.path() / "probe").string(), open_flags::rw | open_flags::create);
+        t.iovec_write_alignment = 2 * f.disk_overwrite_dma_alignment();
+        co_await f.close();
+    }
+    auto log = co_await commitlog::create_commitlog(cfg);
+    auto uuid = make_table_id();
+    size_t count = 0;
+    // A single small entry, then one spanning several fragments with an unaligned tail.
+    for (size_t size : {size_t(100), size_t(3 * fragmented_temporary_buffer::default_fragment_size + 700)}) {
+        auto h = co_await log.add_mutation(uuid, size, db::commitlog::force_sync::yes, [size](db::commitlog::output& dst) {
+            dst.fill('x', size);
+        });
+        h.release();
+        ++count;
+    }
+    BOOST_CHECK_GT(t.iovec_writes, 0);
+    auto segments = log.get_active_segment_names();
+    co_await log.sync_all_segments();
+    size_t replayed = 0;
+    for (auto& seg : segments) {
+        co_await db::commitlog::read_log_file(seg, db::commitlog::descriptor::FILENAME_PREFIX, [&](db::commitlog::buffer_and_replay_position) -> future<> {
+            ++replayed;
+            co_return;
+        });
+    }
+    BOOST_CHECK_EQUAL(replayed, count);
+    co_await log.shutdown();
+    co_await log.clear();
+}
+
+// A write making no progress must fail the commit instead of retrying forever.
+SEASTAR_TEST_CASE(test_commitlog_zero_length_write_fails) {
+    write_tracker t;
+    bool returned_zero = false;
+    t.iovec_hook = [&](std::vector<iovec>& iov, size_t) -> std::optional<size_t> {
+        if (std::exchange(returned_zero, true)) {
+            return std::nullopt;
+        }
+        iov.clear();
+        return 0;
+    };
+    auto exts = make_tracking_exts(t);
+    auto abort_on_ie = set_abort_on_internal_error(false);
+    auto restore = defer([abort_on_ie]() noexcept {
+        set_abort_on_internal_error(abort_on_ie);
+    });
+
+    commitlog::config cfg;
+    tmpdir tmp;
+    cfg.commit_log_location = tmp.path().string();
+    cfg.commitlog_segment_size_in_mb = 1;
+    cfg.use_o_dsync = false;
+    cfg.extensions = exts.get();
+    auto log = co_await commitlog::create_commitlog(cfg);
+
+    // Two fragments, so the entry goes out as an iovec write.
+    constexpr size_t size = fragmented_temporary_buffer::default_fragment_size + 100;
+    auto f = log.add_mutation(make_table_id(), size, db::commitlog::force_sync::yes, [](db::commitlog::output& dst) {
+        dst.fill('x', size);
+    });
+    bool failed = false;
+    try {
+        co_await std::move(f);
+    } catch (...) {
+        failed = true;
+    }
+    BOOST_CHECK(returned_zero);
+    BOOST_CHECK(failed);
+
+    try {
+        co_await log.shutdown();
+    } catch (...) {
+    }
+    co_await log.clear();
+}
 
 SEASTAR_TEST_CASE(test_oversized_at_segment_boundary) {
     co_await test_oversized(1, 1, [&](commitlog& log) -> future<> {
