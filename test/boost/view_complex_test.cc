@@ -371,6 +371,9 @@ SEASTAR_TEST_CASE(test_unselected_columns_ttl_with_flush) {
     }, cfg);
 }
 
+// Not moved to Python in issue #16134: an expired row marker is the whole
+// subject of this test, and making one expire needs forward_jump_clocks(),
+// which cqlpy has no equivalent of.
 SEASTAR_TEST_CASE(test_unselected_column_with_expired_marker) {
     return do_with_cql_env_thread([] (auto& e) {
         e.execute_cql("create table cf (p int, c int, a int, b int, primary key (p, c))").get();
