@@ -118,3 +118,9 @@ def test_lua_blob_argument(cql, test_keyspace, scylla_only):
     with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val blob") as table:
         cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 0x123456)")
         assert call_lua(cql, test_keyspace, table, "(val blob) CALLED ON NULL INPUT RETURNS int", "return val:byte(2)") == [0x34]
+
+def test_lua_tuple_argument(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val tuple<int, bigint, int>") as table:
+        cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', (1, 2, 3))")
+        assert call_lua(cql, test_keyspace, table, "(val tuple<int, bigint, int>) CALLED ON NULL INPUT RETURNS bigint",
+                        "return val[1] + val[2] + val[3]") == [6]
