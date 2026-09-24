@@ -4777,10 +4777,29 @@ future<std::optional<group0_guard>> topology_coordinator::maybe_migrate_system_t
     // it's in `topology_coordinator::enable_features` ,so  topology_coordinator will re-run its loop
     // and `maybe_migrate_system_tables` will be called.
 
-    if (_feature_service.driver_service_level && !utils::get_local_injector().enter("skip_service_levels_v2_initialization")) {
-        const auto sl_driver_created = co_await _sys_ks.get_service_level_driver_created();
-        if (!sl_driver_created.value_or(false)) {
-            co_return co_await _sl_controller.migrate_to_driver_service_level(std::move(guard), _sys_ks);
+    const auto skip_service_levels_v2_initialization = utils::get_local_injector().enter("skip_service_levels_v2_initialization");
+
+    if (!skip_service_levels_v2_initialization) {
+        // Each internal service level is gated by its own cluster feature.
+        const std::pair<bool, std::string_view> internal_sls[] = {
+            {bool(_feature_service.driver_service_level), qos::service_level_controller::driver_service_level_name},
+            {bool(_feature_service.default_batch_service_level), qos::service_level_controller::default_batch_service_level_name},
+        };
+        for (const auto& [feature_enabled, sl_name] : internal_sls) {
+            if (!feature_enabled) {
+                continue;
+            }
+            const auto sl_created = co_await _sys_ks.get_service_level_created(sl_name);
+            if (sl_created.value_or(false)) {
+                continue;
+            }
+            auto guard_opt = co_await _sl_controller.migrate_to_internal_service_level(std::move(guard), _sys_ks, sl_name);
+            if (!guard_opt) {
+                co_return std::nullopt;
+            }
+            // Nothing was attempted (accessor not ready, or creation backed off), so the
+            // guard came back untouched. Keep going instead of dropping it and restarting.
+            guard = std::move(*guard_opt);
         }
     }
 

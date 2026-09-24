@@ -198,6 +198,7 @@ SEASTAR_TEST_CASE(test_alter_with_timeouts) {
         assert_that(msg).is_rows().with_rows({
             {to_bytes(duration_type->from_string("5ms"))},
             {{}}, // `sl:driver`
+            {{}}, // `sl:default_batch`
         });
 
         cquery_nofail(e, "ALTER SERVICE LEVEL sl WITH timeout = 35s");
@@ -285,6 +286,7 @@ SEASTAR_TEST_CASE(test_alter_with_workload_type) {
         assert_that(msg).is_rows().with_rows({
             {{}},
             {"batch"}, // `sl:driver`
+            {"batch"}, // `sl:default_batch`
         });
 
         e.refresh_client_state().get();
