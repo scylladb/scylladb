@@ -514,3 +514,8 @@ def test_lua_compilation_error(cql, test_keyspace, scylla_only):
     with pytest.raises(InvalidRequest, match=re.escape("""could not compile: [string "<internal>"]:2: <eof> expected near '@'""")):
         with new_function(cql, test_keyspace, "(val int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE lua AS 'return 2 @ val'"):
             pass
+
+def test_udf_bad_language(cql, test_keyspace, scylla_only):
+    with pytest.raises(InvalidRequest, match="Language 'java' is not supported"):
+        with new_function(cql, test_keyspace, "(val int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE Java AS 'return 2 * val'"):
+            pass
