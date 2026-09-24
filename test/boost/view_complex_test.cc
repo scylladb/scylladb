@@ -25,68 +25,6 @@ BOOST_AUTO_TEST_SUITE(view_complex_test)
 
 using namespace std::literals::chrono_literals;
 
-// Not moved to Python in issue #16134: these are the TTL versions of the
-// collection tests whose non-TTL versions did move (as
-// test_3362_no_ttls_with_collections in
-// test/cqlpy/test_materialized_view_old.py). Using a TTL is the whole
-// difference, and expiring one needs forward_jump_clocks(), which cqlpy has
-// no equivalent of.
-enum class collection_kind { set, list, map };
-void do_test_3362_with_ttls_with_collections(cql_test_env& e, collection_kind t) {
-    sstring type, pref, suf;
-    switch (t) {
-    case collection_kind::set:
-        type = "set<int>";
-        pref = "{";
-        suf = "}";
-        break;
-    case collection_kind::list:
-        type = "list<int>";
-        pref = "[";
-        suf = "]";
-        break;
-    case collection_kind::map:
-        type = "map<int, int>";
-        pref = "{";
-        suf = " : 17}";
-        break;
-    }
-    e.execute_cql(format("create table cf (p int, c int, a {}, primary key (p, c))", type)).get();
-    e.execute_cql("create materialized view vcf as select p, c from cf "
-            "where p is not null and c is not null "
-            "primary key (p, c)").get();
-    e.execute_cql(format("update cf using timestamp 2 and ttl 100 set a = a + {}1{} where p = 1 and c = 1", pref, suf)).get();
-    eventually([&] {
-        auto msg = e.execute_cql("select * from vcf where p = 1 and c = 1").get();
-        assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
-    });
-    e.execute_cql(format("update cf using timestamp 1 set a = a + {}2{} where p = 1 and c = 1", pref, suf)).get();
-    eventually([&] {
-        auto msg = e.execute_cql("select * from vcf where p = 1 and c = 1").get();
-        assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
-    });
-    forward_jump_clocks(101s);
-    eventually([&] {
-        auto msg = e.execute_cql("select * from vcf where p = 1 and c = 1").get();
-        assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
-    });
-}
-SEASTAR_TEST_CASE(test_3362_with_ttls_with_set) {
-    return do_with_cql_env_thread([] (auto& e) {
-        do_test_3362_with_ttls_with_collections(e, collection_kind::set);
-    });
-}
-SEASTAR_TEST_CASE(test_3362_with_ttls_with_list) {
-    return do_with_cql_env_thread([] (auto& e) {
-        do_test_3362_with_ttls_with_collections(e, collection_kind::list);
-    });
-}
-SEASTAR_TEST_CASE(test_3362_with_ttls_with_map) {
-    return do_with_cql_env_thread([] (auto& e) {
-        do_test_3362_with_ttls_with_collections(e, collection_kind::map);
-    });
-}
-
 // This is a version of test_3362_with_ttls with frozen collection fields
 // instead of integer fields in test_3362_with_ttls. The intention is to
 // verify that we properly fixed #3362 in this case - by replacing the

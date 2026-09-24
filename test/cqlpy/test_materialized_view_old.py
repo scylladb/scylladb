@@ -3382,6 +3382,35 @@ def test_3362_no_ttls_with_collections(cql, test_keyspace, kind, cassandra_bug):
             cql.execute(f"update {table} using timestamp 12 set a = a + {item(2)} where p = 1 and c = 1")
             check([(1, 1)])
 
+# The TTL versions of the collection tests above - the same as
+# test_3362_with_ttls, with a collection instead of the separate columns a
+# and b.
+#
+# cassandra_bug for the same reason as the tests above.
+@pytest.mark.parametrize("kind", ['set', 'list', 'map'])
+def test_3362_with_ttls_with_collections(cql, test_keyspace, kind, clock, cassandra_bug):
+    column_type = {'set': 'set<int>', 'list': 'list<int>', 'map': 'map<int, int>'}[kind]
+    def item(n):
+        return {'set': f'{{{n}}}', 'list': f'[{n}]', 'map': f'{{{n} : 17}}'}[kind]
+    with new_test_table(cql, test_keyspace, f'p int, c int, a {column_type}, primary key (p, c)') as table:
+        with new_materialized_view(cql, table, 'p, c', 'p, c',
+                'p is not null and c is not null') as mv:
+            def check(expected):
+                assert expected == list(cql.execute(f"select * from {mv} where p = 1 and c = 1"))
+
+            cql.execute(f"update {table} using timestamp 2 and ttl {clock.ttl} "
+                        f"set a = a + {item(1)} where p = 1 and c = 1")
+            check([(1, 1)])
+
+            cql.execute(f"update {table} using timestamp 1 "
+                        f"set a = a + {item(2)} where p = 1 and c = 1")
+            check([(1, 1)])
+
+            # The first element expires, but the second is still alive, so the
+            # base row - and with it the view row - must survive.
+            clock.jump(clock.ttl + 1)
+            check([(1, 1)])
+
 # Tests that after the fixes for issue #3362, various miscellaneous
 # combinations of appearance and disappearance of unselected base cells
 # and row markers which happen to cause view_updates::do_delete_old_entry()
