@@ -1793,7 +1793,6 @@ deps['test/boost/combined_tests'] += [
     'test/boost/user_types_test.cc',
     'test/boost/vector_index_test.cc',
     'test/boost/view_build_test.cc',
-    'test/boost/view_schema_test.cc',
     'test/boost/virtual_reader_test.cc',
     'test/boost/virtual_table_test.cc',
     'test/boost/vnodes_to_tablets_migration_test.cc',
