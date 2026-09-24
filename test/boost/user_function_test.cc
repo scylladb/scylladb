@@ -10,26 +10,16 @@
 #include <seastar/testing/test_case.hh>
 #include <fmt/ranges.h>
 #include <seastar/testing/thread_test_case.hh>
-#include "test/lib/cql_assertions.hh"
 #include "test/lib/cql_test_env.hh"
-#include "types/list.hh"
 #include "transport/messages/result_message.hh"
-#include "types/map.hh"
-#include "types/set.hh"
-#include "types/tuple.hh"
-#include "types/vector.hh"
-#include "types/user.hh"
-#include "utils/big_decimal.hh"
 #include "db/config.hh"
 #include "test/lib/tmpdir.hh"
 #include "test/lib/exception_utils.hh"
 #include "test/lib/test_utils.hh"
-#include <boost/date_time/gregorian/gregorian_types.hpp>
 
 BOOST_AUTO_TEST_SUITE(user_function_test)
 
 using ire = exceptions::invalid_request_exception;
-using exception_predicate::message_equals;
 using exception_predicate::message_contains;
 
 static shared_ptr<cql_transport::event::schema_change> get_schema_change(
