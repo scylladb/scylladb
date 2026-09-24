@@ -754,3 +754,17 @@ def test_range_tombstone(cql, test_keyspace):
 
             cql.execute(f"delete from {table} where p = 0 and c1 = 1 and c2 >= 50 and c2 < 101")
             assert 25 == len(list(cql.execute(f"select * from {mv}")))
+
+# A collection column of the base table is copied to the view, both when it
+# is written together with the view's key column and when the two are written
+# by separate statements.
+def test_collections(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int, v int, lv list<int>, primary key (p)') as table:
+        with new_materialized_view(cql, table, '*', 'v, p',
+                'p is not null and v is not null') as mv:
+            cql.execute(f"insert into {table} (p, v, lv) values (0, 0, [1, 2, 3])")
+            assert [(0, [1, 2, 3])] == list(cql.execute(f"select p, lv from {mv} where v = 0"))
+
+            cql.execute(f"insert into {table} (p, v) values (1, 1)")
+            cql.execute(f"insert into {table} (p, lv) values (1, [1, 2, 3])")
+            assert [(1, [1, 2, 3])] == list(cql.execute(f"select p, lv from {mv} where v = 1"))

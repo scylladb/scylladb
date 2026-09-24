@@ -22,40 +22,11 @@
 #include "test/lib/eventually.hh"
 #include "exceptions/unrecognized_entity_exception.hh"
 #include "db/config.hh"
-#include "types/list.hh"
 #include "utils/chunked_string.hh"
 
 BOOST_AUTO_TEST_SUITE(view_schema_test)
 
 using namespace std::literals::chrono_literals;
-
-SEASTAR_TEST_CASE(test_collections) {
-    return do_with_cql_env_thread([] (auto& e) {
-        e.execute_cql("create table cf (p int, v int, lv list<int>, primary key (p));").get();
-        e.execute_cql("create materialized view mv as select * from cf "
-                      "where p is not null and v is not null primary key (v, p)").get();
-
-        e.execute_cql("insert into cf (p, v, lv) values (0, 0, [1, 2, 3])").get();
-
-        auto s = e.local_db().find_schema(sstring("ks"), sstring("cf"));
-        auto list_type = s->get_column_definition(bytes("lv"))->type;
-        eventually([&] {
-        auto msg = e.execute_cql("select p, lv from mv where v = 0").get();
-        assert_that(msg).is_rows()
-                .with_size(1)
-                .with_row({ {int32_type->decompose(0)}, make_list_value(list_type, list_type_impl::native_type({1, 2, 3})).serialize() });
-        });
-
-        e.execute_cql("insert into cf (p, v) values (1, 1)").get();
-        e.execute_cql("insert into cf (p, lv) values (1, [1, 2, 3])").get();
-        eventually([&] {
-        auto msg = e.execute_cql("select p, lv from mv where v = 1").get();
-        assert_that(msg).is_rows()
-                .with_size(1)
-                .with_row({ {int32_type->decompose(1)}, make_list_value(list_type, list_type_impl::native_type({1, 2, 3})).serialize() });
-        });
-    });
-}
 
 SEASTAR_TEST_CASE(test_update) {
     return do_with_cql_env_thread([] (auto& e) {
