@@ -2829,3 +2829,45 @@ def test_update_with_column_timestamp_bigger_than_pk(cql, test_keyspace, flush):
             cql.execute(f"update {table} using timestamp 13 set a = 1 where p = 1")
             maybe_flush()
             check([(1, 1, 2)], limit='limit 1')
+
+# A view whose key is made only of base key columns: its row lives exactly as
+# long as the base row does, whether what keeps the base row alive is one of
+# its regular columns or just its row marker.
+@pytest.mark.parametrize("flush", [False, True], ids=["noflush", "flush"])
+def test_no_regular_base_column_in_view_pk(cql, test_keyspace, flush):
+    no_cache = "with caching = {'enabled': 'false'}" if flush and is_scylla(cql) else ""
+    def maybe_flush():
+        if flush:
+            nodetool.flush_all(cql)
+    with new_test_table(cql, test_keyspace, 'p int, c int, v1 int, v2 int, primary key (p, c)',
+            extra=no_cache) as table:
+        with new_materialized_view(cql, table, '*', 'c, p',
+                'p is not null and c is not null', extra=no_cache) as mv:
+            def check(expected):
+                assert expected == list(cql.execute(f"select * from {mv}"))
+
+            cql.execute(f"update {table} using timestamp 1 set v1 = 1 where p = 1 and c = 1")
+            maybe_flush()
+            check([(1, 1, 1, None)])
+
+            cql.execute(f"update {table} using timestamp 2 set v1 = null, v2 = 1 where p = 1 and c = 1")
+            maybe_flush()
+            check([(1, 1, None, 1)])
+
+            cql.execute(f"update {table} using timestamp 2 set v2 = null where p = 1 and c = 1")
+            maybe_flush()
+            check([])
+
+            # A bare row marker is enough to keep the base row, and the view
+            # row, alive
+            cql.execute(f"insert into {table} (p, c) values (1, 1) using timestamp 3")
+            maybe_flush()
+            check([(1, 1, None, None)])
+
+            cql.execute(f"delete from {table} using timestamp 4 where p = 1 and c = 1")
+            maybe_flush()
+            check([])
+
+            cql.execute(f"update {table} using timestamp 5 set v2 = 1 where p = 1 and c = 1")
+            maybe_flush()
+            check([(1, 1, None, 1)])
