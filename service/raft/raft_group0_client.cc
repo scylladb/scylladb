@@ -356,6 +356,20 @@ future<semaphore_units<>> raft_group0_client::hold_read_apply_mutex(abort_source
     return get_units(_read_apply_mutex, 1, as);
 }
 
+std::optional<locator::host_id> raft_group0_client::group0_leader() {
+    if (this_shard_id() != 0) {
+        on_internal_error(logger, "group0_leader: must run on shard 0");
+    }
+    if (!_raft_gr.is_group0_alive()) {
+        return std::nullopt;
+    }
+    auto leader = _raft_gr.group0().current_leader();
+    if (!leader) {
+        return std::nullopt;
+    }
+    return locator::host_id{leader.uuid()};
+}
+
 template void raft_group0_client::validate_change(const topology_change& change);
 template void raft_group0_client::validate_change(const mixed_change& change);
 
