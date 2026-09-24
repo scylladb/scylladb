@@ -418,3 +418,11 @@ def test_all_types_udt_positional_write(cql, test_keyspace, cassandra_bug):
                 assert [(0, 1, UUID(uuid2), {'bar', 'foo'})] == list(cql.execute(
                     f"select k, udtval.a, udtval.b, udtval.c from {mv} "
                     f"where udtval = {{a: 1, b: {uuid2}, c: {{'foo', 'bar'}}}}"))
+
+# A materialized view is dropped with DROP MATERIALIZED VIEW, not DROP TABLE.
+def test_drop_table_with_mv(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY, v int') as table:
+        with new_materialized_view(cql, table, '*', 'v, p',
+                'v is not null and p is not null') as mv:
+            with pytest.raises(InvalidRequest, match='Cannot use DROP TABLE on'):
+                cql.execute(f"drop table {mv}")
