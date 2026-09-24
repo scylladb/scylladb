@@ -3613,26 +3613,40 @@ db::commitlog::read_log_file(const replay_state& state, sstring filename, sstrin
                 // crc all but the final crc
                 size_t n = block_size - sizeof(uint32_t);
 
-                bool all_zero = true;
+                const bool has_initial = !initial.empty();
 
-                if (!initial.empty()) {
+                if (has_initial) {
                     for (auto& bv : initial) {
                         crc.process_bytes(bv.get(), bv.size());
                     }
                     initial = {};
-                    all_zero = false;
                 }
 
                 for (auto& bv : tmp) {
                     auto np = std::min(bv.size(), n);
                     crc.process_bytes(bv.get(), np);
-                    all_zero &= std::all_of(bv.get(), bv.get() + bv.size(), [](char c) { return c == 0; });
                     n -= np;
                 }
 
                 block_boundry += alignment;
 
-                if (!all_zero) {
+                auto valid = [&] {
+                    auto in = tmp.get_istream();
+                    in.skip(block_size - detail::sector_overhead_size);
+                    auto id = read<uint64_t>(in);
+                    return read<uint32_t>(in) == crc.checksum() && id == this->id;
+                };
+                auto all_zero = [&] {
+                    return !has_initial && std::all_of(tmp.begin(), tmp.end(), [](const temporary_buffer<char>& bv) {
+                        return std::all_of(bv.begin(), bv.end(), [](char c) {
+                            return c == 0;
+                        });
+                    });
+                };
+
+                // Scan for an all-zero (pre-allocated) sector only if validation fails,
+                // so a valid sector is not read a second time.
+                if (!valid() && !all_zero()) {
                     auto in = tmp.get_istream();
                     in.skip(block_size - detail::sector_overhead_size);
 
