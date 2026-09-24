@@ -5557,17 +5557,58 @@ public:
 
         bool has_diff = false;
 
+        // A logstor write replaces the replica's whole partition record, so the repair of a
+        // logstor table sends whole partitions instead of cell-level diffs.
+        const bool whole_partition_repair = schema.logstor_enabled();
+
+        // Per replica, whether it reported a partition higher than the one being processed.
+        // Partitions come in descending key order, so this is set as the loop descends, once
+        // the replica reports its first (= highest) partition. Indexed like the version
+        // vectors, which hold one entry per target in the same order for every partition.
+        utils::small_vector<bool, 3> reported_higher_partition;
+        if (whole_partition_repair && !versions.empty()) {
+            reported_higher_partition.resize(versions.front().size());
+        }
+
         // Сalculate differences: iterate over the versions from all the nodes and calculate the difference with the reconciled result.
         for (auto z : std::views::zip(versions, reconciled_partitions)) {
             const mutation& m = std::get<1>(z).mut;
+            size_t replica = 0;
             for (const version& v : std::get<0>(z)) {
+                const auto replica_index = replica++;
                 auto diff = v.par
                           ? m.partition().difference(schema, (co_await unfreeze_gently(v.par->mut(), _schema)).partition())
                           : mutation_partition(schema, m.partition());
                 std::optional<mutation> mdiff;
                 if (!diff.empty()) {
                     has_diff = true;
-                    mdiff = mutation(_schema, m.decorated_key(), std::move(diff));
+                    if (whole_partition_repair) {
+                        // The replica's result covers this partition when the replica returned
+                        // everything it has for the range, or when it reported a higher
+                        // partition - a result is truncated at its high end, never in the
+                        // middle. Only then does a missing version mean a missing record.
+                        const bool covered_by_result = v.reached_end || reported_higher_partition[replica_index];
+
+                        // Send the full reconciled partition. It replaces the stored record
+                        // on every divergent replica, converging them on the reconciled value.
+                        //
+                        // Not, however, to a replica whose result stops before this partition:
+                        // it can hold a version this reconciliation never saw, and replacing
+                        // its record would drop the cells only it has. Such a partition is
+                        // always outside the reconciled result the client gets, which
+                        // got_incomplete_information() keeps within what every replica
+                        // reported, so skipping it does not weaken the read.
+                        if (v.par || covered_by_result) {
+                            mdiff = m;
+                        }
+                    } else {
+                        mdiff = mutation(_schema, m.decorated_key(), std::move(diff));
+                    }
+                }
+                // The next partitions are lower than this one, so from now on this replica
+                // has reported a higher partition.
+                if (whole_partition_repair && v.par) {
+                    reported_higher_partition[replica_index] = true;
                 }
                 if (auto [it, added] = _diffs[m.key()].try_emplace(v.from, std::move(mdiff)); !added) {
                     // A collision could happen only in 2 cases:
@@ -5976,8 +6017,26 @@ protected:
             }
         });
     }
+    // The command the reconciliation reads the replicas' versions with.
+    //
+    // Read repair of a logstor table writes the whole reconciled partition, which replaces
+    // the replica's record, so the reconciled partition must hold every column of the row,
+    // not only the ones the query selects. The result returned to the client is still
+    // projected to the selected columns, by to_data_query_result() with _cmd->slice.
+    lw_shared_ptr<query::read_command> make_reconcile_command() const {
+        if (!_schema->logstor_enabled()) {
+            return _cmd;
+        }
+        auto cmd = make_lw_shared<query::read_command>(*_cmd);
+        auto column_ids = [] (const auto& columns) {
+            return columns | std::views::transform(std::mem_fn(&column_definition::id)) | std::ranges::to<query::column_id_vector>();
+        };
+        cmd->slice.static_columns = column_ids(_schema->static_columns());
+        cmd->slice.regular_columns = column_ids(_schema->regular_columns());
+        return cmd;
+    }
     void reconcile(db::consistency_level cl, storage_proxy::clock_type::time_point timeout) {
-        reconcile(cl, timeout, _cmd);
+        reconcile(cl, timeout, make_reconcile_command());
     }
 
 public:
