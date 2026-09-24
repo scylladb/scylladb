@@ -2130,7 +2130,7 @@ async def test_tablet_migration_rollback(manager: ScyllaClusterManager):
             assert rows[0].c == 101
 
 
-async def test_rf_change(manager: ScyllaClusterManager):
+async def test_rf_increase(manager: ScyllaClusterManager):
     """Test RF increase for strongly consistent keyspaces.
 
     Starts with RF=2, increases to RF=3, then verifies that writes still succeed
@@ -2205,6 +2205,81 @@ async def test_rf_change(manager: ScyllaClusterManager):
                 rows = await cql.run_async(f"SELECT * FROM {table} WHERE pk = {i}", host=leader_host)
                 assert len(rows) == 1, f"Expected 1 row for pk={i}, got {len(rows)}"
                 assert rows[0].c == i, f"Expected c={i}, got {rows[0].c}"
+
+
+@pytest.mark.parametrize("leader_on_dropped", [True, False], ids=["leader_dropped", "leader_kept"])
+async def test_rf_decrease(manager: ScyllaClusterManager, leader_on_dropped: bool):
+    """RF decrease removes a replica from the tablet's raft group.
+
+    The replica is dropped by a rebuild_v2 transition with no pending replica. It
+    has to leave the group - its raft server torn down - while the remaining two
+    keep serving reads and writes.
+
+    With `leader_on_dropped` the dropped replica is the leader of the group, so the
+    leader commits the configuration that removes it and the remaining two have to
+    elect a new one.
+    """
+    servers = await manager.servers_add(3, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE, property_file=[
+        {'dc': 'dc1', 'rack': 'rack1'},
+        {'dc': 'dc1', 'rack': 'rack2'},
+        {'dc': 'dc1', 'rack': 'rack3'},
+    ])
+    cql, hosts = await manager.get_ready_cql(servers)
+    host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
+
+    await manager.disable_tablet_balancing()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1', 'rack2', 'rack3']} "
+                                         "AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, c int") as table:
+            table_name = table.split('.')[-1]
+            group_id = await get_table_raft_group_id(manager, ks, table_name)
+
+            async def insert_rows(pks, host: Host):
+                for pk in pks:
+                    await cql.run_async(f"INSERT INTO {table} (pk, c) VALUES ({pk}, {pk + 1})", host=host)
+
+            async def check_rows(pks, host: Host):
+                for pk in pks:
+                    rows = await cql.run_async(f"SELECT * FROM {table} WHERE pk = {pk}", host=host)
+                    assert len(rows) == 1, f"Expected 1 row for pk={pk}, got {len(rows)}"
+                    assert rows[0].c == pk + 1, f"Expected c={pk + 1} for pk={pk}, got c={rows[0].c}"
+
+            # Pin the leader before the first writes, so that the coordinators which forward
+            # the writes to it cache it as the leader of the group.
+            leader = servers[2] if leader_on_dropped else servers[0]
+            await ensure_raft_group_leader_on(manager, leader, group_id)
+            for i, host in enumerate(hosts):
+                await insert_rows(range(i * 10, (i + 1) * 10), host=host)
+
+            dropped_log = await manager.server_open_log(servers[2].server_id)
+            mark = await dropped_log.mark()
+
+            logger.info("Decreasing RF from 3 to 2")
+            await cql.run_async(f"ALTER KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['rack1', 'rack2']}}")
+            await manager.api.quiesce_topology(servers[0].ip_addr)
+
+            tablets = await get_all_tablet_replicas(manager, servers[0], ks, table_name)
+            assert len(tablets) == 1
+            replica_hosts = {host_id for host_id, _ in tablets[0].replicas}
+            assert replica_hosts == {host_ids[0], host_ids[1]}, f"Expected replicas on rack1 and rack2, got {tablets[0].replicas}"
+
+            await dropped_log.wait_for(f"raft server for group id {group_id} is destroyed", from_mark=mark, timeout=60)
+
+            # Every node coordinates writes and reads. That includes the dropped replica,
+            # which is no longer a replica - and with `leader_on_dropped` was the leader - so
+            # it has to forward them to the current leader.
+            for i, host in enumerate(hosts):
+                await insert_rows(range(30 + i * 10, 30 + (i + 1) * 10), host=host)
+            for host in hosts:
+                await check_rows(range(60), host=host)
+
+            # Both remaining replicas must still be voters able to lead the group. A
+            # linearizable read is served by the leader, so reading through each of them
+            # as the leader also checks that it holds all the rows.
+            for server, host in zip(servers[:2], hosts[:2]):
+                await ensure_raft_group_leader_on(manager, server, group_id)
+                await check_rows(range(60), host=host)
 
 
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
