@@ -108,3 +108,8 @@ def test_lua_uuid_argument(cql, test_keyspace, scylla_only):
         cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 5375ddb6-d5a5-4cce-9aa1-b10c3fea36a3)")
         assert call_lua(cql, test_keyspace, table, "(val uuid) CALLED ON NULL INPUT RETURNS text", "return val") == [
             "5375ddb6-d5a5-4cce-9aa1-b10c3fea36a3"]
+
+def test_lua_utf8_argument(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val text") as table:
+        cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 'bár')")
+        assert call_lua(cql, test_keyspace, table, "(val text) CALLED ON NULL INPUT RETURNS int", "return val:byte(2)") == [0xc3]
