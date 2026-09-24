@@ -1997,3 +1997,12 @@ def test_compound_partition_key(cql, test_keyspace):
             assert [] == list(cql.execute(f"select p2 from {mv['mv3_v']} where v = 5 and p1 = 0"))
             assert [(2,)] == list(cql.execute(
                 f"select p2 from {mv['mv3_v']} where v = 8 and p1 = 0"))
+
+# A base table with nothing but a partition key still gets a working view.
+def test_partition_key_only_table(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p1 int, p2 int, primary key ((p1, p2))') as table:
+        with new_materialized_view(cql, table, '*', 'p2, p1',
+                'p1 is not null and p2 is not null') as mv:
+            cql.execute(f"insert into {table} (p1, p2) values (1, 1)")
+            assert [(1, 1)] == list(cql.execute(f"select * from {mv}"))
+

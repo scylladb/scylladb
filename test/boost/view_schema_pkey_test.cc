@@ -22,22 +22,6 @@ BOOST_AUTO_TEST_SUITE(view_schema_pkey_test)
 
 using namespace std::literals::chrono_literals;
 
-SEASTAR_TEST_CASE(test_partition_key_only_table) {
-    return do_with_cql_env_thread([] (auto& e) {
-        e.execute_cql("create table cf (p1 int, p2 int, primary key ((p1, p2)));").get();
-        e.execute_cql("create materialized view mv as select * from cf "
-                      "where p1 is not null and p2 is not null primary key (p2, p1)").get();
-
-        e.execute_cql("insert into cf (p1, p2) values (1, 1)").get();
-        eventually([&] {
-        auto msg = e.execute_cql("select * from mv").get();
-        assert_that(msg).is_rows()
-            .with_size(1)
-            .with_row({ {int32_type->decompose(1)}, {int32_type->decompose(1)} });
-        });
-    });
-}
-
 SEASTAR_TEST_CASE(test_delete_single_column_in_view_partition_key) {
     return do_with_cql_env_thread([] (auto& e) {
         e.execute_cql("create table cf (a int, b int, c int, d int, primary key (a, b))").get();
