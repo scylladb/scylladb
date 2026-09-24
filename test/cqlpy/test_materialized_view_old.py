@@ -1723,11 +1723,7 @@ def test_hide_ttl_and_writetime_for_virtual_columns(cql, test_keyspace):
 # columns it didn't select, except that those keep the base row itself alive.
 # This walks a single base row through a long series of writes and deletions
 # at assorted timestamps, checking the base table and the view after each one.
-#
-# The original C++ test ends with a few more steps using TTLs, which need to
-# make a TTL expire instantly; those stayed behind in view_schema_test.cc, as
-# test_no_base_column_in_view_pk_complex_timestamp_ttl.
-def test_no_base_column_in_view_pk_complex_timestamp(cql, test_keyspace):
+def test_no_base_column_in_view_pk_complex_timestamp(cql, test_keyspace, clock):
     with new_test_table(cql, test_keyspace,
             'k int, c int, a int, b int, e int, f int, primary key(k, c)') as table:
         with new_materialized_view(cql, table, 'k,c,a,b', 'c, k',
@@ -1787,6 +1783,20 @@ def test_no_base_column_in_view_pk_complex_timestamp(cql, test_keyspace):
             # add selected with ts=5, view row is alive (selected column should not affects each other)
             cql.execute(f"UPDATE {table} USING TIMESTAMP 5 SET a=1 WHERE k=1 AND c=1")
             check([(1, 1, 1, None, None, None)], [(1, 1, 1, None)])
+
+            # add selected with ttl
+            cql.execute(f"UPDATE {table} USING TTL {clock.ttl} SET a=1 WHERE k=1 AND c=1")
+            check([(1, 1, 1, None, None, None)], [(1, 1, 1, None)])
+
+            clock.jump(clock.ttl + 1)
+            assert [] == list(cql.execute(f"SELECT * FROM {mv}"))
+
+            # update unselected with ttl, view row should be alive
+            cql.execute(f"UPDATE {table} USING TTL {clock.ttl} SET f=1 WHERE k=1 AND c=1")
+            check([(1, 1, None, None, None, 1)], [(1, 1, None, None)])
+
+            clock.jump(clock.ttl + 1)
+            check([], [])
 
 # The same walk as test_no_base_column_in_view_pk_complex_timestamp above, but
 # for a view whose own key includes a base column which is *not* part of the
