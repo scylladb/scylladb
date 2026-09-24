@@ -6073,6 +6073,42 @@ SEASTAR_FIXTURE_TEST_CASE(produces_optimal_filter_by_estimating_correctly_partit
                                    test_env_config{.storage = make_test_object_storage_options("GS")});
 }
 
+// Overlapping inputs must not size the output filter from the sum of their key counts.
+SEASTAR_TEST_CASE(test_compaction_filter_sized_from_merged_cardinality) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto builder = schema_builder(this_smp_shard_count(), "tests", "test")
+                .with_column("id", utf8_type, column_kind::partition_key)
+                .with_column("value", int32_type);
+        auto s = builder.build();
+        // me writes the filter up front from the estimate; small filters aren't shrunk later.
+        auto sst_gen = env.make_sst_factory(s, sstable_version_types::me);
+
+        constexpr int keys = 100;
+        constexpr int copies = 4;
+        std::vector<shared_sstable> ssts;
+        for (int c = 0; c < copies; c++) {
+            utils::chunked_vector<mutation> muts;
+            for (int i = 0; i < keys; i++) {
+                mutation m(s, partition_key::from_exploded(*s, {to_bytes(to_sstring(i))}));
+                m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(int32_t(c)), api::new_timestamp());
+                muts.push_back(std::move(m));
+            }
+            ssts.push_back(make_sstable_containing(sst_gen, std::move(muts)).get());
+        }
+
+        auto t = env.make_table_for_tests(s);
+        auto stop = deferred_stop(t);
+        t->disable_auto_compaction().get();
+        auto ret = compact_sstables(env, compaction::compaction_descriptor(ssts), t, sst_gen).get();
+        BOOST_REQUIRE_EQUAL(ret.new_sstables.size(), 1);
+
+        auto optimal = utils::i_filter::get_filter(keys, s->bloom_filter_fp_chance(), utils::filter_format::m_format);
+        auto comp = ret.new_sstables.front()->get_open_info().get();
+        testlog.info("filter size: actual={}, optimal={}", comp.components->filter->memory_size(), optimal->memory_size());
+        BOOST_REQUIRE_LE(comp.components->filter->memory_size(), optimal->memory_size() * 5 / 4);
+    });
+}
+
 void splitting_compaction_fn(test_env& env) {
     auto builder = schema_builder(this_smp_shard_count(), "tests", "twcs_splitting")
             .with_column("id", utf8_type, column_kind::partition_key)

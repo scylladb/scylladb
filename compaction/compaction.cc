@@ -32,6 +32,7 @@
 #include "dht/i_partitioner.hh"
 #include "sstables/exceptions.hh"
 #include "sstables/sstables.hh"
+#include "sstables/hyperloglog.hh"
 #include "sstables/sstable_writer.hh"
 #include "sstables/progress_monitor.hh"
 #include "sstables/sstables_manager.hh"
@@ -867,6 +868,8 @@ private:
         int64_t repaired_at = 0;
         std::vector<int64_t> repaired_at_for_compacted_sstables;
         uint64_t compaction_size = 0;
+        std::optional<hll::HyperLogLog> merged_cardinality;
+        bool cardinality_usable = true;
         for (auto& sst : _sstables) {
             co_await coroutine::maybe_yield();
             auto& sst_stats = sst->get_stats_metadata();
@@ -893,10 +896,19 @@ private:
             compaction_size += sst->data_size();
             // We also capture the sstable, so we keep it alive while the read isn't done
             ssts->insert(sst);
-            // FIXME: If the sstables have cardinality estimation bitmaps, use that
-            // for a better estimate for the number of partitions in the merged
-            // sstable than just adding up the lengths of individual sstables.
             _estimated_partitions += sst->get_estimated_key_count();
+            if (cardinality_usable) {
+                auto card = sst->get_cardinality_estimator();
+                // Pre-p=10 sketches (b=4, ~26% error) would undersize filters; mixed precisions can't merge.
+                if (!card || card->registerSize() != 1024) {
+                    cardinality_usable = false;
+                    merged_cardinality.reset();
+                } else if (merged_cardinality) {
+                    merged_cardinality->merge(*card);
+                } else {
+                    merged_cardinality = std::move(card);
+                }
+            }
             sum_of_estimated_droppable_tombstone_ratio += sst->estimate_droppable_tombstone_ratio(gc_clock::now(), get_tombstone_gc_state(), _schema);
             _compacting_data_file_size += sst->ondisk_data_size();
             _compacting_max_timestamp = std::max(_compacting_max_timestamp, sst->get_stats_metadata().max_timestamp);
@@ -905,6 +917,10 @@ private:
             }
         }
         _cdata.compaction_size += compaction_size;        
+        // Overlapping inputs share keys, so the sum overcounts; the merged sketch counts distinct keys.
+        if (merged_cardinality) {
+            _estimated_partitions = std::min(_estimated_partitions, uint64_t(std::ceil(merged_cardinality->estimate())));
+        }
         log_debug("{} [{}]", report_start_desc(), fmt::join(_sstables | std::views::transform([] (auto sst) { return to_string(sst, true); }), ","));
         if (repaired_at) {
             _output_repaired_at = repaired_at;
