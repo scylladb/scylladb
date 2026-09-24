@@ -142,7 +142,10 @@ public:
     topology_mutation_builder& drop_first_global_topology_request_ids(const std::vector<utils::UUID>& queue,
             const std::vector<utils::UUID>& ids);
     topology_mutation_builder& pause_rf_change_request(const utils::UUID&);
-    topology_mutation_builder& resume_rf_change_request(const std::unordered_set<utils::UUID>&, const utils::UUID&);
+    // Removes every id in `ids` from paused_rf_change_requests in a single overwrite.
+    // Several overwrites of one set at the same write timestamp merge into their union,
+    // so a pass which un-pauses more than one request must do it in one call.
+    topology_mutation_builder& resume_rf_change_requests(const std::unordered_set<utils::UUID>& current, const std::unordered_set<utils::UUID>& ids);
     topology_mutation_builder& start_rf_change_migrations(const utils::UUID&);
     topology_mutation_builder& finish_rf_change_migrations(const std::unordered_set<utils::UUID>&, const utils::UUID&);
     topology_mutation_builder& start_restore_request(const utils::UUID& req_id);
