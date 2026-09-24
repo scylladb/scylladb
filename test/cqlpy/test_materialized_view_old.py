@@ -582,3 +582,19 @@ def test_static_table(cql, test_keyspace):
             # The view has no sv column, so it can't be selected from the view
             with pytest.raises(InvalidRequest, match='Unrecognized name sv|Undefined column name sv'):
                 cql.execute(f"select sv from {mv}")
+
+# A base table can have a static column even if its view doesn't select it,
+# and then writing a base row with or without a value for that static column
+# both produce the expected view row.
+def test_static_data(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'a int, b int, c int static, primary key (a, b)',
+            extra='with clustering order by (b asc)') as table:
+        with new_materialized_view(cql, table, 'a, b', 'b, a', 'a is not null and b is not null',
+                extra='with clustering order by (a asc)') as mv:
+            cql.execute(f"insert into {table} (a, b) values (1, 2)")
+            assert [(1, 2)] == list(cql.execute(f"select a, b from {table} where a = 1"))
+            assert [(1, 2)] == list(cql.execute(f"select a, b from {mv} where b = 2"))
+
+            cql.execute(f"insert into {table} (a, b, c) values (3, 4, 5)")
+            assert [(3, 4)] == list(cql.execute(f"select a, b from {table} where a = 3"))
+            assert [(3, 4)] == list(cql.execute(f"select a, b from {mv} where b = 4"))
