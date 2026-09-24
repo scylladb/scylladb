@@ -1641,3 +1641,68 @@ def test_no_base_column_in_view_pk_complex_timestamp(cql, test_keyspace):
             # add selected with ts=5, view row is alive (selected column should not affects each other)
             cql.execute(f"UPDATE {table} USING TIMESTAMP 5 SET a=1 WHERE k=1 AND c=1")
             check([(1, 1, 1, None, None, None)], [(1, 1, 1, None)])
+
+# The same walk as test_no_base_column_in_view_pk_complex_timestamp above, but
+# for a view whose own key includes a base column which is *not* part of the
+# base's key - here a. A view row can then only exist while that column is
+# alive, which is what makes this case different.
+#
+# As with that test, the last few steps of the C++ original use TTLs and so
+# stayed behind in view_schema_test.cc, as
+# test_base_column_in_view_pk_complex_timestamp_ttl.
+def test_base_column_in_view_pk_complex_timestamp(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace,
+            'k int, c int, a int, b int, e int, f int, primary key(k, c)') as table:
+        with new_materialized_view(cql, table, 'k, c, a, b', 'k, c, a',
+                'k IS NOT NULL AND c IS NOT NULL AND a IS NOT NULL') as mv:
+            def check(base, view):
+                assert base == list(cql.execute(f"SELECT * FROM {table}"))
+                assert view == list(cql.execute(f"SELECT * FROM {mv}"))
+
+            # update unselected, view row should not be here
+            cql.execute(f"UPDATE {table} USING TIMESTAMP 1 SET e=1 WHERE k=1 AND c=1")
+            assert [] == list(cql.execute(f"SELECT * FROM {mv}"))
+
+            # Set selected, view row should appear
+            cql.execute(f"UPDATE {table} USING TIMESTAMP 1 SET a=1, e=1 WHERE k=1 AND c=1")
+            check([(1, 1, 1, None, 1, None)], [(1, 1, 1, None)])
+
+            # remove unselected, add selected column, view row should be alive
+            cql.execute(f"UPDATE {table} USING TIMESTAMP 2 SET e=null, b=1 WHERE k=1 AND c=1")
+            check([(1, 1, 1, 1, None, None)], [(1, 1, 1, 1)])
+
+            # remove selected column, view row is removed
+            cql.execute(f"UPDATE {table} USING TIMESTAMP 2 SET a=null, e=null, b=null WHERE k=1 AND c=1")
+            check([], [])
+
+            # update unselected with ts=3, view row should be alive
+            cql.execute(f"UPDATE {table} USING TIMESTAMP 3 SET a=1, f=1 WHERE k=1 AND c=1")
+            check([(1, 1, 1, None, None, 1)], [(1, 1, 1, None)])
+
+            # insert livenesssInfo, view row should be alive
+            cql.execute(f"INSERT INTO {table}(k,c,a) VALUES(1,1,1) USING TIMESTAMP 3")
+            check([(1, 1, 1, None, None, 1)], [(1, 1, 1, None)])
+
+            # remove unselected, view row should be alive because of base livenessInfo alive
+            cql.execute(f"UPDATE {table} USING TIMESTAMP 3 SET a=1, f=null WHERE k=1 AND c=1")
+            check([(1, 1, 1, None, None, None)], [(1, 1, 1, None)])
+
+            # update unselected, view row should be alive
+            cql.execute(f"UPDATE {table} USING TIMESTAMP 4 SET a=1, f=1 WHERE k=1 AND c=1")
+            check([(1, 1, 1, None, None, 1)], [(1, 1, 1, None)])
+
+            # delete with ts=3, view row should be alive due to unselected@ts4
+            cql.execute(f"DELETE FROM {table} USING TIMESTAMP 3 WHERE k=1 AND c=1")
+            check([(1, 1, 1, None, None, 1)], [(1, 1, 1, None)])
+
+            # remove unselected, view row should be removed
+            cql.execute(f"UPDATE {table} USING TIMESTAMP 4 SET a=null, f=null WHERE k=1 AND c=1")
+            check([], [])
+
+            # add selected with ts=7, view row is alive
+            cql.execute(f"UPDATE {table} USING TIMESTAMP 7 SET a=1, b=1 WHERE k=1 AND c=1")
+            check([(1, 1, 1, 1, None, None)], [(1, 1, 1, 1)])
+
+            # remove selected with ts=7, view row is dead
+            cql.execute(f"UPDATE {table} USING TIMESTAMP 7 SET a=null, b=null WHERE k=1 AND c=1")
+            check([], [])

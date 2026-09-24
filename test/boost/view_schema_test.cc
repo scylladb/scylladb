@@ -231,155 +231,19 @@ SEASTAR_TEST_CASE(test_no_base_column_in_view_pk_complex_timestamp_ttl) {
     });
 }
 
-SEASTAR_TEST_CASE(test_base_column_in_view_pk_complex_timestamp) {
+// As with test_no_base_column_in_view_pk_complex_timestamp_ttl above, the
+// bulk of this test - its long series of writes at assorted timestamps - was
+// moved to Python in issue #16134, as
+// test_base_column_in_view_pk_complex_timestamp in
+// test/cqlpy/test_materialized_view_old.py. Only these last steps stayed
+// behind, because they need forward_jump_clocks() to expire a TTL instantly.
+SEASTAR_TEST_CASE(test_base_column_in_view_pk_complex_timestamp_ttl) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
 
         e.execute_cql("CREATE TABLE t (k int, c int, a int, b int, e int, f int, primary key(k, c))").get();
         e.execute_cql("CREATE MATERIALIZED VIEW mv AS SELECT k, c, a, b FROM t "
                          "WHERE k IS NOT NULL AND c IS NOT NULL AND a IS NOT NULL PRIMARY KEY (k, c, a)").get();
-        BOOST_TEST_PASSPOINT();
         ::shared_ptr<cql_transport::messages::result_message> msg;
-
-        // update unselected, view row should not be here
-        e.execute_cql("UPDATE t USING TIMESTAMP 1 SET e=1 WHERE k=1 AND c=1;").get();
-        eventually([&] {
-            msg = e.execute_cql("SELECT * FROM mv").get();
-            assert_that(msg).is_rows().with_size(0);
-        });
-
-        // Set selected, view row should appear
-        e.execute_cql("UPDATE t USING TIMESTAMP 1 SET a=1, e=1 WHERE k=1 AND c=1;").get();
-        eventually([&] {
-            msg = e.execute_cql("SELECT * FROM t").get();
-            assert_that(msg).is_rows().with_rows({
-                { int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1), {}, int32_type->decompose(1), {} },
-            });
-
-            msg = e.execute_cql("SELECT * FROM mv").get();
-            assert_that(msg).is_rows().with_rows({
-                { int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1), {} },
-            });
-        });
-
-        // remove unselected, add selected column, view row should be alive
-        e.execute_cql("UPDATE t USING TIMESTAMP 2 SET e=null, b=1 WHERE k=1 AND c=1;").get();
-        eventually([&] {
-            msg = e.execute_cql("SELECT * FROM t").get();
-            assert_that(msg).is_rows().with_rows({
-                { int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1), {}, {} },
-            });
-
-            msg = e.execute_cql("SELECT * FROM mv").get();
-            assert_that(msg).is_rows().with_rows({
-                { int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1) },
-            });
-        });
-
-        // remove selected column, view row is removed
-        e.execute_cql("UPDATE t USING TIMESTAMP 2 SET a=null, e=null, b=null WHERE k=1 AND c=1;").get();
-        eventually([&] {
-            msg = e.execute_cql("SELECT * FROM t").get();
-            assert_that(msg).is_rows().with_size(0);
-            msg = e.execute_cql("SELECT * FROM mv").get();
-            assert_that(msg).is_rows().with_size(0);
-        });
-
-        // update unselected with ts=3, view row should be alive
-        e.execute_cql("UPDATE t USING TIMESTAMP 3 SET a=1, f=1 WHERE k=1 AND c=1;").get();
-        eventually([&] {
-            msg = e.execute_cql("SELECT * FROM t").get();
-            assert_that(msg).is_rows().with_rows({
-                { int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1), {}, {}, int32_type->decompose(1) },
-            });
-            msg = e.execute_cql("SELECT * FROM mv").get();
-            assert_that(msg).is_rows().with_rows({
-                { int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1), {} },
-            });
-        });
-
-        // insert livenesssInfo, view row should be alive
-        e.execute_cql("INSERT INTO t(k,c,a) VALUES(1,1,1) USING TIMESTAMP 3").get();
-        eventually([&] {
-            msg = e.execute_cql("SELECT * FROM t").get();
-            assert_that(msg).is_rows().with_rows({
-                { int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1), {}, {}, int32_type->decompose(1) },
-            });
-            msg = e.execute_cql("SELECT * FROM mv").get();
-            assert_that(msg).is_rows().with_rows({
-                { int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1), {} },
-            });
-        });
-
-        // remove unselected, view row should be alive because of base livenessInfo alive
-        e.execute_cql("UPDATE t USING TIMESTAMP 3 SET a=1, f=null WHERE k=1 AND c=1;").get();
-        eventually([&] {
-            msg = e.execute_cql("SELECT * FROM t").get();
-            assert_that(msg).is_rows().with_rows({
-                { int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1), {}, {}, {} },
-            });
-            msg = e.execute_cql("SELECT * FROM mv").get();
-            assert_that(msg).is_rows().with_rows({
-                { int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1), {} },
-            });
-        });
-
-        // update unselected, view row should be alive
-        e.execute_cql("UPDATE t USING TIMESTAMP 4 SET a=1, f=1 WHERE k=1 AND c=1;").get();
-        eventually([&] {
-            msg = e.execute_cql("SELECT * FROM t").get();
-            assert_that(msg).is_rows().with_rows({
-                { int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1), {}, {}, int32_type->decompose(1) },
-            });
-            msg = e.execute_cql("SELECT * FROM mv").get();
-            assert_that(msg).is_rows().with_rows({
-                { int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1), {} },
-            });
-        });
-
-        // delete with ts=3, view row should be alive due to unselected@ts4
-        e.execute_cql("DELETE FROM t USING TIMESTAMP 3 WHERE k=1 AND c=1;").get();
-        eventually([&] {
-            msg = e.execute_cql("SELECT * FROM t").get();
-            assert_that(msg).is_rows().with_rows({
-                { int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1), {}, {}, int32_type->decompose(1) },
-            });
-
-            msg = e.execute_cql("SELECT * FROM mv").get();
-            assert_that(msg).is_rows().with_rows({
-                { int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1), {} },
-            });
-        });
-
-        // remove unselected, view row should be removed
-        e.execute_cql("UPDATE t USING TIMESTAMP 4 SET a=null, f=null WHERE k=1 AND c=1;").get();
-        eventually([&] {
-            msg = e.execute_cql("SELECT * FROM t").get();
-            assert_that(msg).is_rows().with_size(0);
-            msg = e.execute_cql("SELECT * FROM mv").get();
-            assert_that(msg).is_rows().with_size(0);
-        });
-
-        // add selected with ts=7, view row is alive
-        e.execute_cql("UPDATE t USING TIMESTAMP 7 SET a=1, b=1 WHERE k=1 AND c=1;").get();
-        eventually([&] {
-            msg = e.execute_cql("SELECT * FROM t").get();
-            assert_that(msg).is_rows().with_rows({
-                { int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1), {}, {} },
-            });
-            msg = e.execute_cql("SELECT * FROM mv").get();
-            assert_that(msg).is_rows().with_rows({
-                { int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1) },
-            });
-        });
-
-        // remove selected with ts=7, view row is dead
-        e.execute_cql("UPDATE t USING TIMESTAMP 7 SET a=null, b=null WHERE k=1 AND c=1;").get();
-        eventually([&] {
-            msg = e.execute_cql("SELECT * FROM t").get();
-            assert_that(msg).is_rows().with_size(0);
-            msg = e.execute_cql("SELECT * FROM mv").get();
-            assert_that(msg).is_rows().with_size(0);
-        });
 
         // add selected with ttl=1
         e.execute_cql("UPDATE t USING TTL 30 SET a=1, b=1 WHERE k=1 AND c=1;").get();
