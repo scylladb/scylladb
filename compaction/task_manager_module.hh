@@ -161,35 +161,7 @@ protected:
 
 inline constexpr auto upgrade_sstables_compaction_task_type = "upgrade sstables compaction";
 
-class scrub_sstables_compaction_task_impl : public sstables_compaction_task_impl {
-private:
-    sharded<replica::database>& _db;
-    std::vector<sstring> _column_families;
-    compaction_type_options::scrub _opts;
-    compaction_stats* _stats;
-public:
-    scrub_sstables_compaction_task_impl(tasks::task_manager::module_ptr module,
-            std::string keyspace,
-            sharded<replica::database>& db,
-            std::vector<sstring> column_families,
-            compaction_type_options::scrub opts,
-            compaction_stats* stats) noexcept
-        : sstables_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), "keyspace", std::move(keyspace), "", "", tasks::task_id::create_null_id())
-        , _db(db)
-        , _column_families(std::move(column_families))
-        , _opts(opts)
-        , _stats(stats)
-    {}
-
-    virtual std::string type() const override {
-        return "scrub " + sstables_compaction_task_impl::type();
-    }
-
-    tasks::is_user_task is_user_task() const noexcept override;
-protected:
-    virtual future<> run() override;
-    virtual future<std::optional<double>> expected_total_workload() const override;
-};
+inline constexpr auto scrub_sstables_compaction_task_type = "scrub sstables compaction";
 
 class shard_scrub_sstables_compaction_task_impl : public sstables_compaction_task_impl {
 private:
@@ -213,7 +185,7 @@ public:
     {}
 
     virtual std::string type() const override {
-        return "scrub " + sstables_compaction_task_impl::type();
+        return scrub_sstables_compaction_task_type;
     }
 protected:
     virtual future<> run() override;
@@ -240,7 +212,7 @@ public:
     {}
 
     virtual std::string type() const override {
-        return "scrub " + sstables_compaction_task_impl::type();
+        return scrub_sstables_compaction_task_type;
     }
 protected:
     virtual future<> run() override;
@@ -449,6 +421,10 @@ public:
 
     // Starts an sstable upgrade of a single table on this shard, once the turn is taken by the created task.
     future<tasks::task_manager::task_ptr> start_table_upgrade_sstables_compaction(replica::database& db, std::string keyspace, const table_info& info, compaction_turn& turn, bool exclude_current_version, tasks::task_info parent_info);
+
+    // Starts a scrub of the given tables of a keyspace on all the shards.
+    // If stats is set, it receives the scrub's result.
+    future<tasks::task_manager::task_ptr> start_scrub_sstables_keyspace_compaction(sharded<replica::database>& db, std::string keyspace, std::vector<sstring> column_families, compaction_type_options::scrub opts, compaction_stats* stats);
 };
 
 class regular_compaction_task_impl : public compaction_task_impl {

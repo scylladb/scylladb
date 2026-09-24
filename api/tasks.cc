@@ -110,7 +110,7 @@ void set_tasks_compaction_module(http_context& ctx, routes& r, sharded<replica::
         }
 
         auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
-        auto task = co_await compaction_module.make_and_start_task<compaction::scrub_sstables_compaction_task_impl>(tasks::make_empty_task_info(), std::move(info.keyspace), db, std::move(info.column_families), info.opts, nullptr);
+        auto task = co_await compaction_module.start_scrub_sstables_keyspace_compaction(db, std::move(info.keyspace), std::move(info.column_families), info.opts, nullptr);
 
         co_return json::json_return_type(task->get_status().id.to_sstring());
     });
