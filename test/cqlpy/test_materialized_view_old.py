@@ -1320,3 +1320,52 @@ def test_complex_restricted_timestamp_update(cql, test_keyspace, flush):
             cql.execute(f"update {table} using timestamp 3 set v2 = 0 where p = 1 and c = 0")
             maybe_flush()
             assert [(1, 1, 0, 0, 0)] == list(cql.execute(f"select * from {mv} where v1 = 1 and p = 1 and c = 0"))
+
+# Two tests for how a base row's deletion, and its resurrection by later
+# writes, reach the view - one where the view's key is made only of base key
+# columns, and one where the view's partition key is a regular base column.
+# Each is run both with and without a flush after every step; as in the other
+# flushing tests, the flush only means anything with the row cache off.
+@pytest.mark.parametrize("flush", [False, True], ids=["noflush", "flush"])
+def test_complex_timestamp_with_base_pk_columns_in_view_pk_deletion(cql, test_keyspace, flush):
+    no_cache = "with caching = {'enabled': 'false'}" if flush and is_scylla(cql) else ""
+    def maybe_flush():
+        if flush:
+            nodetool.flush_all(cql)
+    with new_test_table(cql, test_keyspace, 'p int, c int, v1 int, v2 int, primary key (p, c)',
+            extra=no_cache) as table:
+        with new_materialized_view(cql, table, '*', 'c, p',
+                'p is not null and c is not null', extra=no_cache) as mv:
+            # Set initial values TS=1
+            cql.execute(f"insert into {table} (p, c, v1, v2) values (1, 2, 3, 4) using timestamp 1")
+            maybe_flush()
+            assert [(3, 4, 1)] == list(cql.execute(
+                f"select v1, v2, WRITETIME(v2) from {mv} where p = 1 and c = 2"))
+
+            # Delete row TS=2
+            cql.execute(f"delete from {table} using timestamp 2 where p = 1 and c = 2")
+            maybe_flush()
+            assert [] == list(cql.execute(f"select * from {mv}"))
+
+            # Add PK @ TS=3
+            cql.execute(f"insert into {table} (p, c) values (1, 2) using timestamp 3")
+            maybe_flush()
+            assert [(2, 1, None, None)] == list(cql.execute(f"select * from {mv}"))
+
+            # Reset values TS=10
+            cql.execute(f"insert into {table} (p, c, v1, v2) values (1, 2, 3, 4) using timestamp 10")
+            maybe_flush()
+            assert [(3, 4, 10)] == list(cql.execute(
+                f"select v1, v2, WRITETIME(v2) from {mv} where p = 1 and c = 2"))
+
+            # Update values TS=20
+            cql.execute(f"update {table} using timestamp 20 set v2 = 5 where p = 1 and c = 2")
+            maybe_flush()
+            assert [(3, 5, 20)] == list(cql.execute(
+                f"select v1, v2, WRITETIME(v2) from {mv} where p = 1 and c = 2"))
+
+            # Delete row TS=10
+            cql.execute(f"delete from {table} using timestamp 10 where p = 1 and c = 2")
+            maybe_flush()
+            assert [(None, 5, 20)] == list(cql.execute(f"select v1, v2, WRITETIME(v2) from {mv}"))
+

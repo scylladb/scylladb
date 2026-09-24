@@ -132,64 +132,6 @@ SEASTAR_TEST_CASE(test_non_primary_key_restrictions_ttl_vk) {
     });
 }
 
-void complex_timestamp_with_base_pk_columns_in_view_pk_deletion_test(cql_test_env& e, std::function<void()>&& maybe_flush) {
-    e.execute_cql("create table cf (p int, c int, v1 int, v2 int, primary key (p, c))").get();
-    e.execute_cql("create materialized view vcf as select * from cf "
-                  "where p is not null and c is not null "
-                  "primary key (c, p)").get();
-
-    // Set initial values TS=1
-    e.execute_cql("insert into cf (p, c, v1, v2) values (1, 2, 3, 4) using timestamp 1").get();
-    maybe_flush();
-    eventually([&] {
-    auto msg = e.execute_cql("select v1, v2, WRITETIME(v2) from vcf where p = 1 and c = 2").get();
-    assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(3)}, {int32_type->decompose(4)}, {long_type->decompose(1L)} }});
-    });
-
-    // Delete row TS=2
-    e.execute_cql("delete from cf using timestamp 2 where p = 1 and c = 2").get();
-    maybe_flush();
-    eventually([&] {
-    auto msg = e.execute_cql("select * from vcf").get();
-    assert_that(msg).is_rows().with_size(0);
-    });
-
-    // Add PK @ TS=3
-    e.execute_cql("insert into cf (p, c) values (1, 2) using timestamp 3").get();
-    maybe_flush();
-    eventually([&] {
-    auto msg = e.execute_cql("select * from vcf").get();
-    assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(2)}, {int32_type->decompose(1)}, {}, {} }});
-    });
-
-    // Reset values TS=10
-    e.execute_cql("insert into cf (p, c, v1, v2) values (1, 2, 3, 4) using timestamp 10").get();
-    maybe_flush();
-    eventually([&] {
-    auto msg = e.execute_cql("select v1, v2, WRITETIME(v2) from vcf where p = 1 and c = 2").get();
-    assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(3)}, {int32_type->decompose(4)}, {long_type->decompose(10L)} }});
-    });
-
-    // Update values TS=20
-    e.execute_cql("update cf using timestamp 20 set v2 = 5 where p = 1 and c = 2").get();
-    maybe_flush();
-    eventually([&] {
-    auto msg = e.execute_cql("select v1, v2, WRITETIME(v2) from vcf where p = 1 and c = 2").get();
-    assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(3)}, {int32_type->decompose(5)}, {long_type->decompose(20L)} }});
-    });
-
-    // Delete row TS=10
-    e.execute_cql("delete from cf using timestamp 10 where p = 1 and c = 2").get();
-    maybe_flush();
-    eventually([&] {
-    auto msg = e.execute_cql("select v1, v2, WRITETIME(v2) from vcf").get();
-    assert_that(msg).is_rows().with_rows({{ { }, {int32_type->decompose(5)}, {long_type->decompose(20L)} }});
-    });
-
-    e.execute_cql("drop materialized view vcf").get();
-    e.execute_cql("drop table cf").get();
-}
-
 void complex_timestamp_with_base_non_pk_columns_in_view_pk_deletion_test(cql_test_env& e, std::function<void()>&& maybe_flush) {
     e.execute_cql("create table cf (p int primary key, v1 int, v2 int)").get();
     e.execute_cql("create materialized view vcf as select * from cf "
@@ -242,7 +184,6 @@ void complex_timestamp_with_base_non_pk_columns_in_view_pk_deletion_test(cql_tes
 
 SEASTAR_TEST_CASE(complex_timestamp_deletion_test) {
     return do_with_cql_env_thread([] (auto& e) {
-        complex_timestamp_with_base_pk_columns_in_view_pk_deletion_test(e, [] { });
         complex_timestamp_with_base_non_pk_columns_in_view_pk_deletion_test(e, [] { });
     });
 }
@@ -251,9 +192,6 @@ SEASTAR_TEST_CASE(complex_timestamp_deletion_test_with_flush) {
     auto cfg = make_shared<db::config>();
     cfg->enable_cache(false);
     return do_with_cql_env_thread([] (auto& e) {
-        complex_timestamp_with_base_pk_columns_in_view_pk_deletion_test(e, [&] {
-            e.local_db().flush_all_memtables().get();
-        });
         complex_timestamp_with_base_non_pk_columns_in_view_pk_deletion_test(e, [&] {
             e.local_db().flush_all_memtables().get();
         });
