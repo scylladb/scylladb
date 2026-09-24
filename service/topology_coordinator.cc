@@ -2004,15 +2004,22 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             generate_resize_update(out, guard, table_id, resize_decision);
         }
 
-        for (const auto& completion : plan.restore_completions()) {
-            rtlogger.info("All restore transitions for table {} completed, finishing request {}", completion.table, completion.request_id);
+        if (!plan.restore_completions().empty()) {
+            // Several overwrites of one set at the same write timestamp merge into their
+            // union, so every completed request has to be removed in a single overwrite.
+            std::unordered_set<utils::UUID> finished;
+            const auto end_time = db_clock::now();
+            for (const auto& completion : plan.restore_completions()) {
+                rtlogger.info("All restore transitions for table {} completed, finishing request {}", completion.table, completion.request_id);
+                finished.insert(completion.request_id);
+                out.emplace_back(
+                    topology_request_tracking_mutation_builder(completion.request_id)
+                        .done(completion.error.empty() ? std::nullopt : std::optional<sstring>(completion.error), end_time)
+                        .build());
+            }
             out.emplace_back(
                 topology_mutation_builder(guard.write_timestamp())
-                    .finish_restore_request(_topo_sm._topology.ongoing_restore_requests, completion.request_id)
-                    .build());
-            out.emplace_back(
-                topology_request_tracking_mutation_builder(completion.request_id)
-                    .done(completion.error.empty() ? std::nullopt : std::optional<sstring>(completion.error))
+                    .finish_restore_requests(_topo_sm._topology.ongoing_restore_requests, finished)
                     .build());
         }
     }
