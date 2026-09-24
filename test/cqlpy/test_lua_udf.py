@@ -95,3 +95,10 @@ def test_lua_duration_argument(cql, test_keyspace, scylla_only):
         cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 1mo2d3ns)")
         assert call_lua(cql, test_keyspace, table, "(val duration) CALLED ON NULL INPUT RETURNS int",
                         "return 100 * val.months + 10 * val.days + val.nanoseconds") == [123]
+
+def test_lua_inet_argument(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val inet") as table:
+        cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', '127.0.0.1')")
+        cql.execute(f"INSERT INTO {table} (key, val) VALUES ('bar', '::1')")
+        assert sorted(call_lua(cql, test_keyspace, table, "(val inet) CALLED ON NULL INPUT RETURNS text", "return val")) == [
+            "127.0.0.1", "::1"]
