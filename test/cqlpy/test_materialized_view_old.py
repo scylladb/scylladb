@@ -1517,3 +1517,41 @@ def test_alter_table_with_updates(cql, test_keyspace):
                 cql.execute(f"alter table {table} add {column} int")
             cql.execute(f"update {table} set v2 = 7 where p = 1 and c = 1")
             assert [(1, 1, 4, 7)] == list(cql.execute(f"select p, c, v1, v2 from {mv}"))
+
+# Test that a regular column which we did not add to the view is really
+# not in the view. Even if to fix issue #3362 we add "virtual cells"
+# for the unselected columns, those should not be visible to the end-user
+# of the view table.
+# Scylla and Cassandra word "there is no such column" differently.
+def no_such_column(name):
+    return f'Unrecognized name {name}|Undefined column name {name}'
+
+def test_unselected_column(cql, test_keyspace):
+    schema = 'p int, c int, x int, y list<int>, z set<int>, w map<int,int>, primary key (p, c)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        with new_materialized_view(cql, table, 'p, c', 'c, p',
+                'p is not null and c is not null') as mv:
+            cql.execute(f"insert into {table} (p, c, x) values (1, 2, 3)")
+            assert [(1, 2, None, 3, None, None)] == list(cql.execute(f"select * from {table}"))
+            # Check that when we ask for all of vcf's columns, we only get the
+            # ones we actually selected - c and p, not x, y, z, or w:
+            assert [(2, 1)] == list(cql.execute(f"select * from {mv}"))
+            # Check that we cannot explicitly select the x, y, z or w columns in
+            # vcf as they are not one of the columns we selected for the view.
+            # Check that we also cannot use the x column as a restriction,
+            # despite it nominally existing as a virtual column. This
+            # reproduces issue #4216: the error for "where x = 0" used to be a
+            # confusing complaint about the constant not fitting x's type,
+            # instead of simply saying there is no such column.
+            # Note that the original C++ test distinguished the two by the C++
+            # exception type, which isn't visible over CQL - both arrive as an
+            # InvalidRequest - so here we check the message instead.
+            for column in ['x', 'y', 'z', 'w']:
+                with pytest.raises(InvalidRequest, match=no_such_column(column)):
+                    cql.execute(f"select {column} from {mv}")
+            # This is a baseline check for the error we should expect
+            # when a completely non-existent column name is used.
+            with pytest.raises(InvalidRequest, match=no_such_column('nonexistent')):
+                cql.execute(f"select * from {mv} where nonexistent = 0")
+            with pytest.raises(InvalidRequest, match=no_such_column('x')):
+                cql.execute(f"select * from {mv} where x = 0")

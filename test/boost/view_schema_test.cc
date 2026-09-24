@@ -20,7 +20,6 @@
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/eventually.hh"
-#include "exceptions/unrecognized_entity_exception.hh"
 #include "utils/chunked_string.hh"
 
 BOOST_AUTO_TEST_SUITE(view_schema_test)
@@ -128,80 +127,6 @@ SEASTAR_TEST_CASE(test_non_primary_key_restrictions_ttl_vk) {
             assert_that(msg).is_rows().with_rows_ignore_order({
                 { {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
         });
-    });
-}
-
-// Test that a regular column which we did not add to the view is really
-// not in the view. Even if to fix issue #3362 we add "virtual cells"
-// for the unselected columns, those should not be visible to the end-user
-// of the view table.
-SEASTAR_TEST_CASE(test_unselected_column) {
-    return do_with_cql_env_thread([] (auto& e) {
-        e.execute_cql("create table cf (p int, c int, x int, y list<int>, z set<int>, w map<int,int>, primary key (p, c))").get();
-        e.execute_cql("create materialized view vcf as select p, c from cf "
-                      "where p is not null and c is not null "
-                      "primary key (c, p)").get();
-        e.execute_cql("insert into cf (p, c, x) values (1, 2, 3)").get();
-        BOOST_TEST_PASSPOINT();
-        auto msg = e.execute_cql("select * from cf").get();
-        assert_that(msg).is_rows().with_size(1)
-                .with_row({{int32_type->decompose(1)}, {int32_type->decompose(2)}, {}, {int32_type->decompose(3)}, {}, {}});
-        BOOST_TEST_PASSPOINT();
-        // Check that when we ask for all of vcf's columns, we only get the
-        // ones we actually selected - c and p, not x, y, z, or w:
-        eventually([&] {
-            auto msg = e.execute_cql("select * from vcf").get();
-            assert_that(msg).is_rows().with_size(1)
-                    .with_row({{int32_type->decompose(2)}, {int32_type->decompose(1)}});
-        });
-        // Check that we cannot explicitly select the x, y, z or w columns in
-        // vcf as they are not one of the columns we selected for the view.
-        try {
-            e.execute_cql("select x from vcf").get();
-            BOOST_ASSERT(false);
-        } catch (exceptions::invalid_request_exception&) {
-            // we expect: exceptions::invalid_request_exception: Undefined name x in selection clause
-        }
-        try {
-            e.execute_cql("select y from vcf").get();
-            BOOST_ASSERT(false);
-        } catch (exceptions::invalid_request_exception&) {
-        }
-        try {
-            e.execute_cql("select z from vcf").get();
-            BOOST_ASSERT(false);
-        } catch (exceptions::invalid_request_exception&) {
-        }
-        try {
-            e.execute_cql("select w from vcf").get();
-            BOOST_ASSERT(false);
-        } catch (exceptions::invalid_request_exception&) {
-        }
-        // Check that we also cannot use the x, y, z, or w columns
-        // as restrictions, despite these columns nominally existing as
-        // virtual columns. This reproduces issue #4216.
-        //
-        // In all these tests, we got errors both before and after fixing
-        // this bug, but the error is different. For example, "select * from
-        // vcf where x = 0" used to give an invalid_request_exception with
-        // the string "Invalid INTEGER constant (0) for "x" of type empty",
-        // but should throw a unrecognized_entity_exception with the string
-        // "Undefined name x in where clause ('x = 0')" as happens when a
-        // completely unknown column name is used.
-        BOOST_TEST_PASSPOINT();
-        try {
-            // This is a baseline check for the error type we should expect
-            // when a completely non-existent column name is used.
-            e.execute_cql("select * from vcf where nonexistent = 0").get();
-            BOOST_ASSERT(false);
-        } catch (exceptions::unrecognized_entity_exception&) {
-        }
-        BOOST_TEST_PASSPOINT();
-        try {
-            e.execute_cql("select * from vcf where x = 0").get();
-            BOOST_ASSERT(false);
-        } catch (exceptions::unrecognized_entity_exception&) {
-        }
     });
 }
 
