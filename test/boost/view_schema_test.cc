@@ -29,35 +29,6 @@ BOOST_AUTO_TEST_SUITE(view_schema_test)
 
 using namespace std::literals::chrono_literals;
 
-SEASTAR_TEST_CASE(test_regular_column_timestamp_updates) {
-    return do_with_cql_env_thread([] (auto& e) {
-        e.execute_cql("create table cf (p int primary key, v1 int, v2 int)").get();
-        e.execute_cql("create materialized view vcf as select * from cf "
-                      "where p is not null and v1 is not null "
-                      "primary key (p, v1)").get();
-
-        e.execute_cql("update cf using timestamp 1 set v1 = 0, v2 = 0 where p = 0").get();
-        e.execute_cql("update cf using timestamp 1 set v2 = 1 where p = 0").get();
-        e.execute_cql("update cf using timestamp 1 set v1 = 1 where p = 0").get();
-        eventually([&] {
-        auto msg = e.execute_cql("select * from vcf").get();
-        assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(0)}, {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
-        });
-
-        e.execute_cql("delete from cf using timestamp 2 where p = 0").get();
-
-        e.execute_cql("update cf using timestamp 3 set v1 = 0, v2 = 0 where p = 0").get();
-        e.execute_cql("update cf using timestamp 4 set v1 = 1 where p = 0").get();
-        e.execute_cql("update cf using timestamp 5 set v2 = 1 where p = 0").get();
-        e.execute_cql("update cf using timestamp 6 set v1 = 2 where p = 0").get();
-        e.execute_cql("update cf using timestamp 7 set v2 = 2 where p = 0").get();
-        eventually([&] {
-        auto msg = e.execute_cql("select * from vcf").get();
-        assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(0)}, {int32_type->decompose(2)}, {int32_type->decompose(2)} }});
-        });
-    });
-}
-
 SEASTAR_TEST_CASE(test_counters_table) {
     return do_with_cql_env_thread([] (auto& e) {
         e.execute_cql("create table cf (p int primary key, count counter)").get();

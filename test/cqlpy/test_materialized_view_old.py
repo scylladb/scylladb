@@ -620,3 +620,26 @@ def test_old_timestamps(cql, test_keyspace):
             cql.execute(f"update {table} set v = 5 where p = 0 and c = 0")
             assert [(0,)] == list(cql.execute(f"select c from {mv} where p = 0 and v = 5"))
             assert [(1,)] == list(cql.execute(f"select c from {mv} where p = 0 and v = 1"))
+
+# When a view's key column and an ordinary column are written by separate
+# updates, each with its own timestamp, the view row must reflect the winner
+# of each column separately - including across a row deletion which shadows
+# only the writes older than it.
+def test_regular_column_timestamp_updates(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int primary key, v1 int, v2 int') as table:
+        with new_materialized_view(cql, table, '*', 'p, v1',
+                'p is not null and v1 is not null') as mv:
+            cql.execute(f"update {table} using timestamp 1 set v1 = 0, v2 = 0 where p = 0")
+            cql.execute(f"update {table} using timestamp 1 set v2 = 1 where p = 0")
+            cql.execute(f"update {table} using timestamp 1 set v1 = 1 where p = 0")
+            assert [(0, 1, 1)] == list(cql.execute(f"select * from {mv}"))
+
+            cql.execute(f"delete from {table} using timestamp 2 where p = 0")
+
+            cql.execute(f"update {table} using timestamp 3 set v1 = 0, v2 = 0 where p = 0")
+            cql.execute(f"update {table} using timestamp 4 set v1 = 1 where p = 0")
+            cql.execute(f"update {table} using timestamp 5 set v2 = 1 where p = 0")
+            cql.execute(f"update {table} using timestamp 6 set v1 = 2 where p = 0")
+            cql.execute(f"update {table} using timestamp 7 set v2 = 2 where p = 0")
+            assert [(0, 2, 2)] == list(cql.execute(f"select * from {mv}"))
+
