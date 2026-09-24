@@ -89,3 +89,9 @@ def test_lua_counter_argument(cql, test_keyspace, scylla_only):
     with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val counter") as table:
         cql.execute(f"UPDATE {table} SET val = val + 1 WHERE key = 'foo'")
         assert call_lua(cql, test_keyspace, table, "(val counter) CALLED ON NULL INPUT RETURNS int", "return val * 2") == [2]
+
+def test_lua_duration_argument(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val duration") as table:
+        cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 1mo2d3ns)")
+        assert call_lua(cql, test_keyspace, table, "(val duration) CALLED ON NULL INPUT RETURNS int",
+                        "return 100 * val.months + 10 * val.days + val.nanoseconds") == [123]
