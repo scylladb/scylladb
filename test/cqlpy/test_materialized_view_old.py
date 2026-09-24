@@ -426,3 +426,18 @@ def test_drop_table_with_mv(cql, test_keyspace):
                 'v is not null and p is not null') as mv:
             with pytest.raises(InvalidRequest, match='Cannot use DROP TABLE on'):
                 cql.execute(f"drop table {mv}")
+
+# A base table cannot be dropped while a materialized view still reads from
+# it - the view has to be dropped first.
+def test_drop_table_with_active_mv(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int primary key, v int') as table:
+        mv = test_keyspace + '.' + unique_name()
+        cql.execute(f"create materialized view {mv} as select * from {table} "
+                    "where v is not null and p is not null primary key (v, p)")
+        try:
+            with pytest.raises(InvalidRequest, match='materialized views still depend on it'):
+                cql.execute(f"drop table {table}")
+        finally:
+            cql.execute(f"drop materialized view {mv}")
+        # Now that the view is gone, the base table can be dropped. We let
+        # new_test_table() above do that when it exits.
