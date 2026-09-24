@@ -38,10 +38,7 @@ async def await_api_task(task, allowed_exception: Optional[Type[Exception]]=None
 
 
 @pytest.mark.parametrize("action", ['move', 'add_replica',
-    pytest.param('del_replica', marks=pytest.mark.skip_storage('s3', 'gs',
-                          reason='del_replica leaves the tablet under RF, so the coordinator restores '
-                                 'the replica via failed-rebuild retry and races the post-delete check; '
-                                 'needs deeper investigation'))])
+    'del_replica'])
 async def test_tablet_transition_sanity(manager: ScyllaClusterManager, action, storage_config: FeatureConfig):
     logger.info("Bootstrapping cluster")
     cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled'}
