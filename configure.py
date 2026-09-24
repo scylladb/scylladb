@@ -1761,6 +1761,7 @@ deps['test/boost/combined_tests'] += [
     'test/boost/network_topology_strategy_test.cc',
     'test/boost/paxos_state_test.cc',
     'test/boost/per_partition_rate_limit_test.cc',
+    'test/boost/perf_sstable_test.cc',
     'test/boost/pluggable_test.cc',
     'test/boost/querier_cache_test.cc',
     'test/boost/query_processor_test.cc',
