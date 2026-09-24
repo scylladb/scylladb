@@ -237,7 +237,7 @@ SEASTAR_TEST_CASE(test_group_by_null_clustering) {
 // A grouped query with LIMIT should stop reading once LIMIT groups are
 // complete. Each page is one read of the table on its replica.
 // Regression test for SCYLLADB-4585.
-SEASTAR_TEST_CASE(test_group_by_limit_stops_reading, *boost::unit_test::expected_failures(1)) {
+SEASTAR_TEST_CASE(test_group_by_limit_stops_reading) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         cquery_nofail(e, "create table t (p int, c int, primary key(p, c))");
         for (int c = 0; c < 10; ++c) {
