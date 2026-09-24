@@ -36,6 +36,8 @@
 #include "replica/database.hh"
 #include <seastar/core/sleep.hh>
 #include <seastar/core/sharded.hh>
+#include <seastar/core/loop.hh>
+#include <ranges>
 
 static const sstring table_name = "cf";
 
@@ -65,31 +67,68 @@ static sstring make_collection_literal(unsigned n) {
     return result;
 }
 
-static void execute_update_for_key(cql_test_env& env, const bytes& key, unsigned collection) {
-    sstring col_suffix;
-    if (collection > 0) {
-        col_suffix = fmt::format(", \"CC\" = {}", make_collection_literal(collection));
-    }
-    // Strongly consistent writes need QUORUM/LOCAL_QUORUM.
-    // For eventual consistency it does not matter because there is only one node involved.
-    auto qo = std::make_unique<cql3::query_options>(db::consistency_level::QUORUM, std::vector<cql3::raw_value>{}, cql3::query_options::specific_options::DEFAULT);
-    env.execute_cql(fmt::format("UPDATE cf SET "
-        "\"C0\" = 0x8f75da6b3dcec90c8a404fb9a5f6b0621e62d39c69ba5758e5f41b78311fbb26cc7a,"
-        "\"C1\" = 0xa8761a2127160003033a8f4f3d1069b7833ebe24ef56b3beee728c2b686ca516fa51,"
-        "\"C2\" = 0x583449ce81bfebc2e1a695eb59aad5fcc74d6d7311fc6197b10693e1a161ca2e1c64,"
-        "\"C3\" = 0x62bcb1dbc0ff953abc703bcb63ea954f437064c0c45366799658bd6b91d0f92908d7,"
-        "\"C4\" = 0x222fcbe31ffa1e689540e1499b87fa3f9c781065fccd10e4772b4c7039c2efd0fb27{} "
-        "WHERE \"KEY\"= 0x{};", col_suffix, to_hex(key)), std::move(qo)).get();
+static constexpr std::string_view cell_values[] = {
+    "0x8f75da6b3dcec90c8a404fb9a5f6b0621e62d39c69ba5758e5f41b78311fbb26cc7a",
+    "0xa8761a2127160003033a8f4f3d1069b7833ebe24ef56b3beee728c2b686ca516fa51",
+    "0x583449ce81bfebc2e1a695eb59aad5fcc74d6d7311fc6197b10693e1a161ca2e1c64",
+    "0x62bcb1dbc0ff953abc703bcb63ea954f437064c0c45366799658bd6b91d0f92908d7",
+    "0x222fcbe31ffa1e689540e1499b87fa3f9c781065fccd10e4772b4c7039c2efd0fb27",
 };
 
-static void execute_counter_update_for_key(cql_test_env& env, const bytes& key) {
-    env.execute_cql(fmt::format("UPDATE cf SET "
-        "\"C0\" = \"C0\" + 1,"
-        "\"C1\" = \"C1\" + 2,"
-        "\"C2\" = \"C2\" + 3,"
-        "\"C3\" = \"C3\" + 4,"
-        "\"C4\" = \"C4\" + 5 "
-        "WHERE \"KEY\"= 0x{};", to_hex(key))).get();
+// How many partition reads the caches of all the shards served, and how many they had to go to the
+// storage engine for. Both the row cache of an sstable backed table and the logstor cache of a
+// logstor one count here, so this says which of the two paths a read test really measured.
+struct cache_counters {
+    uint64_t hits = 0;
+    uint64_t misses = 0;
+
+    static cache_counters sample(sharded<replica::database>& db) {
+        return db.map_reduce0([] (replica::database& db) {
+            const auto& stats = db.row_cache_tracker().get_stats();
+            return cache_counters{.hits = stats.partition_hits, .misses = stats.partition_misses};
+        }, cache_counters{}, [] (cache_counters a, cache_counters b) {
+            return cache_counters{.hits = a.hits + b.hits, .misses = a.misses + b.misses};
+        }).get();
+    }
+};
+
+struct cache_result_mixin {
+    double cache_hits = 0;
+    double cache_misses = 0;
+};
+
+// What every measurement iteration reports, on top of the throughput and the CPU counters: the IO
+// and the cache lookups one operation cost.
+struct query_perf_result : public perf_result, public io_result_mixin, public cache_result_mixin {};
+
+// The update function of the measurement loop. Like io_counters_updater, it holds the sample the
+// previous iteration ended with, and is constructed right before the run it measures.
+class query_stats_updater {
+    sharded<replica::database>& _db;
+    io_counters_updater _io;
+    cache_counters _last_cache;
+public:
+    explicit query_stats_updater(sharded<replica::database>& db)
+        : _db(db)
+        , _last_cache(cache_counters::sample(db)) {
+    }
+
+    void operator()(query_perf_result& result, const executor_shard_stats& stats) {
+        _io(result, stats);
+        auto sample = cache_counters::sample(_db);
+        result.cache_hits = double(sample.hits - _last_cache.hits) / stats.invocations;
+        result.cache_misses = double(sample.misses - _last_cache.misses) / stats.invocations;
+        _last_cache = sample;
+    }
+};
+
+template <> struct fmt::formatter<query_perf_result> : fmt::formatter<string_view> {
+    auto format(const query_perf_result& r, fmt::format_context& ctx) const -> decltype(ctx.out()) {
+        return fmt::format_to(ctx.out(), "{:.2f} tps ({:5.1f} allocs/op, {:5.1f} logallocs/op, {:5.1f} tasks/op, {:5.1f} polls/op, {:7.0f} insns/op, {:7.0f} cycles/op, {:8} errors,"
+                " {:5.2f} reads/op, {:8.0f} read bytes/op, {:5.2f} writes/op, {:8.0f} write bytes/op, {:5.2f} cache hits/op, {:5.2f} cache misses/op)",
+                r.throughput, r.mallocs_per_op, r.logallocs_per_op, r.tasks_per_op, r.polls_per_op, r.instructions_per_op, r.cpu_cycles_per_op, r.errors,
+                r.reads, r.read_bytes, r.writes, r.write_bytes, r.cache_hits, r.cache_misses);
+    }
 };
 
 struct test_config {
@@ -110,6 +149,13 @@ struct test_config {
     unsigned collection = 0;
     db::consistency_level consistency_level;
     bool shard_aware;
+    // Store the table with logstor rather than with sstables. Implies tablets, which is the only
+    // topology logstor is used with.
+    bool logstor;
+    // Compaction is off during the measurement by default, so that the hot path is measured on its
+    // own. A logstor run leaves it on, since compaction is what gives free segments back and
+    // without it a write test stalls once the segment pool is full of dead records.
+    bool auto_compaction;
 };
 
 // Partition sequence numbers grouped by the shard that services reads for them,
@@ -136,22 +182,93 @@ std::ostream& operator<<(std::ostream& os, const test_config& cfg) {
            << ", counters=" << (cfg.counters ? "yes" : "no")
            << ", collection=" << cfg.collection
            << ", shard_aware=" << (cfg.shard_aware ? "yes" : "no")
+           << ", logstor=" << (cfg.logstor ? "yes" : "no")
+           << ", auto_compaction=" << (cfg.auto_compaction ? "yes" : "no")
            << "}";
 }
 
+// The statements the test measures, with the key left to be bound. Logstor holds a whole row per
+// partition and takes the timestamp of its record from a row marker or a partition tombstone, so a
+// logstor run writes the row with an INSERT and deletes the whole partition, while an sstable run
+// keeps writing the cells with the UPDATE and the cell delete it has always measured.
+static sstring make_write_query(const test_config& cfg, std::string_view usings = "") {
+    if (cfg.logstor) {
+        std::string collection_column;
+        std::string collection_value;
+        if (cfg.collection > 0) {
+            collection_column = ", \"CC\"";
+            collection_value = fmt::format(", {}", make_collection_literal(cfg.collection));
+        }
+        return format("INSERT INTO cf (\"KEY\", \"C0\", \"C1\", \"C2\", \"C3\", \"C4\"{}) "
+                "VALUES (?, {}, {}, {}, {}, {}{}) {}",
+                collection_column, cell_values[0], cell_values[1], cell_values[2], cell_values[3], cell_values[4],
+                collection_value, usings);
+    }
+    std::string collection_assignment;
+    if (cfg.collection > 0) {
+        collection_assignment = fmt::format(", \"CC\" = {}", make_collection_literal(cfg.collection));
+    }
+    return format("UPDATE cf {}SET \"C0\" = {}, \"C1\" = {}, \"C2\" = {}, \"C3\" = {}, \"C4\" = {}{} "
+            "WHERE \"KEY\" = ?",
+            usings, cell_values[0], cell_values[1], cell_values[2], cell_values[3], cell_values[4],
+            collection_assignment);
+}
+
+static sstring make_counter_update_query(std::string_view usings = "") {
+    return format("UPDATE cf {}SET "
+            "\"C0\" = \"C0\" + 1, \"C1\" = \"C1\" + 2, \"C2\" = \"C2\" + 3, \"C3\" = \"C3\" + 4, \"C4\" = \"C4\" + 5 "
+            "WHERE \"KEY\" = ?", usings);
+}
+
+static sstring make_delete_query(const test_config& cfg, std::string_view usings = "") {
+    if (cfg.logstor) {
+        return format("DELETE FROM cf {}WHERE \"KEY\" = ?", usings);
+    }
+    std::string collection_column;
+    if (cfg.collection > 0) {
+        collection_column = ", \"CC\"";
+    }
+    return format("DELETE \"C0\", \"C1\", \"C2\", \"C3\", \"C4\"{} FROM cf {}WHERE \"KEY\" = ?", collection_column, usings);
+}
+
+// A USING clause, with the trailing space the statements above expect between it and what follows.
+// The per statement `usings` strings this replaces were built without that space, so --timeout made
+// the write `UPDATE cf USING TIMEOUT 5sSET "C0" = ...`.
+static std::string make_timeout_using(const test_config& cfg) {
+    return cfg.timeout.empty() ? std::string() : fmt::format("USING TIMEOUT {} ", std::string_view(cfg.timeout));
+}
+
+// How many partitions the loader writes at a time. A write to a logstor table completes only once
+// its record has been flushed to a segment, so loading a dataset of any size one write at a time
+// spends the whole populate phase waiting for the disk.
+static constexpr unsigned populate_concurrency = 100;
+
 static void create_partitions(cql_test_env& env, test_config& cfg) {
     std::cout << "Creating " << cfg.partitions << " partitions..." << std::endl;
-    unsigned next_flush = (cfg.memtable_partitions > 0 ? cfg.memtable_partitions : cfg.partitions);
-    for (unsigned sequence = 0; sequence < cfg.partitions; ++sequence) {
-        if (cfg.counters) {
-            execute_counter_update_for_key(env, make_key(sequence));
-        } else {
-            execute_update_for_key(env, make_key(sequence), cfg.collection);
+    auto id = env.prepare(cfg.counters ? make_counter_update_query() : make_write_query(cfg)).get();
+    // Strongly consistent writes need QUORUM/LOCAL_QUORUM. For eventual consistency it does not
+    // matter because there is only one node involved.
+    auto write = [&env, id] (unsigned sequence) {
+        return env.execute_prepared(id, {{cql3::raw_value::make_value(make_key(sequence))}},
+                db::consistency_level::QUORUM).discard_result();
+    };
+    if (cfg.memtable_partitions > 0) {
+        // Flushing every so many partitions needs the writes to happen in a known order.
+        unsigned next_flush = cfg.memtable_partitions;
+        for (unsigned sequence = 0; sequence < cfg.partitions; ++sequence) {
+            write(sequence).get();
+            if (sequence + 1 >= next_flush) {
+                env.db().invoke_on_all(&replica::database::flush_all_memtables).get();
+                next_flush += cfg.memtable_partitions;
+            }
         }
-        if (sequence + 1 >= next_flush) {
-            env.db().invoke_on_all(&replica::database::flush_all_memtables).get();
-            next_flush += cfg.memtable_partitions;
-        }
+    } else {
+        auto sequences = std::views::iota(0u, cfg.partitions);
+        max_concurrent_for_each(sequences.begin(), sequences.end(), populate_concurrency, std::move(write)).get();
+        // The loop this replaces flushed on its last iteration, which is what put the dataset into
+        // the sstables a read test means to measure; a read of a memtable is not one of those. A
+        // logstor table has no memtable, so this costs a logstor run nothing.
+        env.db().invoke_on_all(&replica::database::flush_all_memtables).get();
     }
 
     if (cfg.flush_memtables) {
@@ -199,7 +316,7 @@ static std::optional<bytes> next_key(test_config& cfg, const std::vector<uint64_
     return make_key(tests::random::get_int<uint64_t>(cfg.partitions - 1));
 }
 
-static std::vector<perf_result> test_read(cql_test_env& env, test_config& cfg, sharded<std::vector<uint64_t>>& shard_seqs) {
+static std::vector<query_perf_result> test_read(cql_test_env& env, test_config& cfg, sharded<std::vector<uint64_t>>& shard_seqs) {
     create_partitions(env, cfg);
     sstring query = "select \"C0\", \"C1\", \"C2\", \"C3\", \"C4\"";
     if (cfg.collection > 0) {
@@ -213,7 +330,7 @@ static std::vector<perf_result> test_read(cql_test_env& env, test_config& cfg, s
         query += " using timeout " + cfg.timeout;
     }
     auto id = env.prepare(query).get();
-    return time_parallel([&env, &cfg, &shard_seqs, id] {
+    return time_parallel_ex<query_perf_result>([&env, &cfg, &shard_seqs, id] {
             auto key = next_key(cfg, shard_seqs.local());
             if (!key) {
                 // This shard owns no partitions in shard-aware mode; idle for
@@ -221,27 +338,12 @@ static std::vector<perf_result> test_read(cql_test_env& env, test_config& cfg, s
                 return seastar::sleep(std::chrono::seconds(1));
             }
             return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(*key))}}, cfg.consistency_level).discard_result();
-        }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error);
+        }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error, query_stats_updater(env.db()));
 }
 
-static std::vector<perf_result> test_write(cql_test_env& env, test_config& cfg, sharded<std::vector<uint64_t>>& shard_seqs) {
-    sstring usings;
-    if (!cfg.timeout.empty()) {
-        usings += "USING TIMEOUT " + cfg.timeout;
-    }
-    sstring col_suffix;
-    if (cfg.collection > 0) {
-        col_suffix = fmt::format(", \"CC\" = {}", make_collection_literal(cfg.collection));
-    }
-    sstring query = format("UPDATE cf {}SET "
-            "\"C0\" = 0x8f75da6b3dcec90c8a404fb9a5f6b0621e62d39c69ba5758e5f41b78311fbb26cc7a,"
-            "\"C1\" = 0xa8761a2127160003033a8f4f3d1069b7833ebe24ef56b3beee728c2b686ca516fa51,"
-            "\"C2\" = 0x583449ce81bfebc2e1a695eb59aad5fcc74d6d7311fc6197b10693e1a161ca2e1c64,"
-            "\"C3\" = 0x62bcb1dbc0ff953abc703bcb63ea954f437064c0c45366799658bd6b91d0f92908d7,"
-            "\"C4\" = 0x222fcbe31ffa1e689540e1499b87fa3f9c781065fccd10e4772b4c7039c2efd0fb27{} "
-            "WHERE \"KEY\" = ?", usings, col_suffix);
-    auto id = env.prepare(query).get();
-    return time_parallel([&env, &cfg, &shard_seqs, id] {
+static std::vector<query_perf_result> test_write(cql_test_env& env, test_config& cfg, sharded<std::vector<uint64_t>>& shard_seqs) {
+    auto id = env.prepare(make_write_query(cfg, make_timeout_using(cfg))).get();
+    return time_parallel_ex<query_perf_result>([&env, &cfg, &shard_seqs, id] {
             auto key = next_key(cfg, shard_seqs.local());
             if (!key) {
                 // This shard owns no partitions in shard-aware mode; idle for
@@ -249,22 +351,13 @@ static std::vector<perf_result> test_write(cql_test_env& env, test_config& cfg, 
                 return seastar::sleep(std::chrono::seconds(1));
             }
             return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(*key))}}, cfg.consistency_level).discard_result();
-        }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error);
+        }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error, query_stats_updater(env.db()));
 }
 
-static std::vector<perf_result> test_delete(cql_test_env& env, test_config& cfg, sharded<std::vector<uint64_t>>& shard_seqs) {
+static std::vector<query_perf_result> test_delete(cql_test_env& env, test_config& cfg, sharded<std::vector<uint64_t>>& shard_seqs) {
     create_partitions(env, cfg);
-    sstring usings;
-    if (!cfg.timeout.empty()) {
-        usings += "USING TIMEOUT " + cfg.timeout;
-    }
-    sstring col_suffix;
-    if (cfg.collection > 0) {
-        col_suffix = ", \"CC\"";
-    }
-    sstring query = format("DELETE \"C0\", \"C1\", \"C2\", \"C3\", \"C4\"{} FROM cf {}WHERE \"KEY\" = ?", col_suffix, usings);
-    auto id = env.prepare(query).get();
-    return time_parallel([&env, &cfg, &shard_seqs, id] {
+    auto id = env.prepare(make_delete_query(cfg, make_timeout_using(cfg))).get();
+    return time_parallel_ex<query_perf_result>([&env, &cfg, &shard_seqs, id] {
             auto key = next_key(cfg, shard_seqs.local());
             if (!key) {
                 // This shard owns no partitions in shard-aware mode; idle for
@@ -272,23 +365,12 @@ static std::vector<perf_result> test_delete(cql_test_env& env, test_config& cfg,
                 return seastar::sleep(std::chrono::seconds(1));
             }
             return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(*key))}}, cfg.consistency_level).discard_result();
-        }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error);
+        }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error, query_stats_updater(env.db()));
 }
 
-static std::vector<perf_result> test_counter_update(cql_test_env& env, test_config& cfg, sharded<std::vector<uint64_t>>& shard_seqs) {
-    sstring usings;
-    if (!cfg.timeout.empty()) {
-        usings += "USING TIMEOUT " + cfg.timeout;
-    }
-    sstring query = format("UPDATE cf {}SET "
-            "\"C0\" = \"C0\" + 1,"
-            "\"C1\" = \"C1\" + 2,"
-            "\"C2\" = \"C2\" + 3,"
-            "\"C3\" = \"C3\" + 4,"
-            "\"C4\" = \"C4\" + 5 "
-            "WHERE \"KEY\" = ?", usings);
-    auto id = env.prepare(query).get();
-    return time_parallel([&env, &cfg, &shard_seqs, id] {
+static std::vector<query_perf_result> test_counter_update(cql_test_env& env, test_config& cfg, sharded<std::vector<uint64_t>>& shard_seqs) {
+    auto id = env.prepare(make_counter_update_query(make_timeout_using(cfg))).get();
+    return time_parallel_ex<query_perf_result>([&env, &cfg, &shard_seqs, id] {
             auto key = next_key(cfg, shard_seqs.local());
             if (!key) {
                 // This shard owns no partitions in shard-aware mode; idle for
@@ -296,7 +378,7 @@ static std::vector<perf_result> test_counter_update(cql_test_env& env, test_conf
                 return seastar::sleep(std::chrono::seconds(1));
             }
             return env.execute_prepared(id, {{cql3::raw_value::make_value(std::move(*key))}}, cfg.consistency_level).discard_result();
-        }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error);
+        }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error, query_stats_updater(env.db()));
 }
 
 static schema_ptr make_counter_schema(std::string_view ks_name) {
@@ -310,7 +392,7 @@ static schema_ptr make_counter_schema(std::string_view ks_name) {
             .build();
 }
 
-static std::vector<perf_result> do_cql_test(cql_test_env& env, test_config& cfg) {
+static std::vector<query_perf_result> do_cql_test(cql_test_env& env, test_config& cfg) {
     std::cout << "Running test with config: " << cfg << std::endl;
     env.create_table([&cfg] (auto ks_name) {
         if (cfg.counters) {
@@ -326,14 +408,19 @@ static std::vector<perf_result> do_cql_test(cql_test_env& env, test_config& cfg)
         if (cfg.collection > 0) {
             sb.with_column("CC", map_type_impl::get_instance(bytes_type, bytes_type, true));
         }
+        if (cfg.logstor) {
+            sb.set_logstor();
+        }
         return *sb.build();
     }).get();
 
-    std::cout << "Disabling auto compaction" << std::endl;
-    env.db().invoke_on_all([] (auto& db) {
-        auto& cf = db.find_column_family("ks", "cf");
-        return cf.disable_auto_compaction();
-    }).get();
+    if (!cfg.auto_compaction) {
+        std::cout << "Disabling auto compaction" << std::endl;
+        env.db().invoke_on_all([] (auto& db) {
+            auto& cf = db.find_column_family("ks", "cf");
+            return cf.disable_auto_compaction();
+        }).get();
+    }
 
     // Build the shard->sequences table once, then hand each shard its own slice
     // so the hot path reads only NUMA-local memory.
@@ -362,7 +449,7 @@ static std::vector<perf_result> do_cql_test(cql_test_env& env, test_config& cfg)
     abort();
 }
 
-void write_json_result(std::string result_file, const test_config& cfg, const aggregated_perf_results& agg) {
+void write_json_result(std::string result_file, const test_config& cfg, const aggregated_perf_results& agg, const query_perf_result& median) {
     Json::Value params;
     params["concurrency"] = cfg.concurrency;
     params["partitions"] = cfg.partitions;
@@ -375,6 +462,8 @@ void write_json_result(std::string result_file, const test_config& cfg, const ag
     if (cfg.collection > 0) {
         params["collection"] = cfg.collection;
     }
+    params["logstor"] = cfg.logstor;
+    params["auto_compaction"] = cfg.auto_compaction;
 
     std::string test_type;
     switch (cfg.mode) {
@@ -385,8 +474,19 @@ void write_json_result(std::string result_file, const test_config& cfg, const ag
     if (cfg.counters) {
         test_type += "_counters";
     }
+    if (cfg.logstor) {
+        test_type += "_logstor";
+    }
 
-    perf::write_json_result(result_file, agg, params, test_type);
+    Json::Value extra_stats;
+    extra_stats["reads_per_op"] = median.reads;
+    extra_stats["read_bytes_per_op"] = median.read_bytes;
+    extra_stats["writes_per_op"] = median.writes;
+    extra_stats["write_bytes_per_op"] = median.write_bytes;
+    extra_stats["cache_hits_per_op"] = median.cache_hits;
+    extra_stats["cache_misses_per_op"] = median.cache_misses;
+
+    perf::write_json_result(result_file, agg, params, test_type, extra_stats);
 }
 
 /// If app configuration contains the named parameter, store its value into \p store.
@@ -415,6 +515,12 @@ int scylla_simple_query_main(int argc, char** argv) {
         ("counters", "test counters")
         ("collection", bpo::value<unsigned>()->default_value(0), "add map<text,text> collection column with N cells per row (excludes --counters)")
         ("tablets", "use tablets")
+        ("logstor", "store the table with the logstor storage engine instead of sstables (implies --tablets)")
+        ("logstor-disk-size-in-mb", bpo::value<unsigned>()->default_value(1024), "size of the logstor segment pool")
+        ("logstor-file-size-in-mb", bpo::value<unsigned>()->default_value(32), "size of a logstor data file")
+        ("logstor-format-on-startup", bpo::value<bool>()->default_value(true), "format the logstor files upfront, so that no write pays for formatting")
+        ("logstor-sparse-files", bpo::value<bool>()->default_value(false), "create the logstor data files sparse instead of preallocating them. The test environment does this by default, to spare the disk of a unit test; a measurement wants the files a node has")
+        ("auto-compaction", bpo::value<bool>(), "run compaction during the measurement (defaults to on for --logstor, off otherwise)")
         ("strongly-consistent-tables", "use strongly consistent tables")
         ("consistency-level", bpo::value<std::string>()->default_value("QUORUM"), "consistency level used for read and write operations")
         ("initial-tablets", bpo::value<unsigned>()->default_value(128), "initial number of tablets")
@@ -465,14 +571,28 @@ int scylla_simple_query_main(int argc, char** argv) {
             }
             std::cout << "sstable-format=" << db_cfg->sstable_format() << '\n';
             cql_test_config cfg(db_cfg);
-            if (app.configuration().contains("tablets")) {
+            const auto logstor = app.configuration().contains("logstor");
+            // Logstor is only used with tablets, and its compaction groups are the tablets of the
+            // table, so a logstor run is a tablets run.
+            if (app.configuration().contains("tablets") || logstor) {
                 cfg.db_config->tablets_mode_for_new_keyspaces.set(db::tablets_mode_t::mode::enabled);
                 cfg.initial_tablets = app.configuration()["initial-tablets"].as<unsigned>();
             }
+            std::vector<enum_option<db::experimental_features_t>> experimental_features;
             if (app.configuration().contains("strongly-consistent-tables")) {
-                cfg.db_config->experimental_features({db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES},
-                                                     db::config::config_source::CommandLine);
+                experimental_features.push_back(db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES);
                 cfg.strongly_consistent_tables = true;
+            }
+            if (logstor) {
+                experimental_features.push_back(db::experimental_features_t::feature::LOGSTOR);
+                cfg.db_config->logstor_disk_size_in_mb(app.configuration()["logstor-disk-size-in-mb"].as<unsigned>());
+                cfg.db_config->logstor_file_size_in_mb(app.configuration()["logstor-file-size-in-mb"].as<unsigned>());
+                cfg.db_config->logstor_format_on_startup(app.configuration()["logstor-format-on-startup"].as<bool>());
+                cfg.db_config->logstor_sparse_files(app.configuration()["logstor-sparse-files"].as<bool>());
+                std::cout << "logstor-disk-size-in-mb=" << cfg.db_config->logstor_disk_size_in_mb() << '\n';
+            }
+            if (!experimental_features.empty()) {
+                cfg.db_config->experimental_features(std::move(experimental_features), db::config::config_source::CommandLine);
             }
             set_from_cli("audit", app, cfg.db_config->audit);
             set_from_cli("audit-keyspaces", app, cfg.db_config->audit_keyspaces);
@@ -491,10 +611,14 @@ int scylla_simple_query_main(int argc, char** argv) {
             cfg.counters = app.configuration().contains("counters");
             cfg.flush_memtables = app.configuration().contains("flush");
             cfg.collection = app.configuration()["collection"].as<unsigned>();
+            cfg.logstor = app.configuration().contains("logstor");
             if (cfg.counters && cfg.collection > 0) {
                 throw std::invalid_argument("--collection and --counters are mutually exclusive");
             }
-            if (app.configuration().contains("tablets")) {
+            if (cfg.counters && cfg.logstor) {
+                throw std::invalid_argument("--counters and --logstor are mutually exclusive: logstor does not store counters");
+            }
+            if (app.configuration().contains("tablets") || cfg.logstor) {
                 cfg.initial_tablets = app.configuration()["initial-tablets"].as<unsigned>();
             }
             if (app.configuration().contains("write")) {
@@ -514,6 +638,9 @@ int scylla_simple_query_main(int argc, char** argv) {
             cfg.timeout = app.configuration()["timeout"].as<std::string>();
             cfg.bypass_cache = app.configuration().contains("bypass-cache");
             cfg.shard_aware = app.configuration()["shard-aware"].as<bool>();
+            cfg.auto_compaction = app.configuration().contains("auto-compaction")
+                    ? app.configuration()["auto-compaction"].as<bool>()
+                    : cfg.logstor;
             cfg.consistency_level = db::consistency_level_from_string(app.configuration()["consistency-level"].as<std::string>());
             audit::audit::start_audit(env.local_db().get_config(), env.shared_token_metadata(), env.qp(), env.migration_manager()).handle_exception([&] (auto&& e) {
                 fmt::print("audit start failed: {}", e);
@@ -529,10 +656,16 @@ int scylla_simple_query_main(int argc, char** argv) {
                 a.on_role_created("tester");
             }).get();
             auto results = do_cql_test(env, cfg);
-            aggregated_perf_results agg(results);
+            std::vector<perf_result> throughput_results(results.begin(), results.end());
+            aggregated_perf_results agg(throughput_results);
             std::cout << agg << std::endl;
+            // The same median as aggregated_perf_results reports, with the IO and cache counters of
+            // that iteration, which are not part of the aggregation.
+            std::ranges::sort(results, std::less<>{}, &perf_result::throughput);
+            const auto& median = results[results.size() / 2];
+            fmt::print("median: {}\n", median);
             if (app.configuration().contains("json-result")) {
-                write_json_result(app.configuration()["json-result"].as<std::string>(), cfg, agg);
+                write_json_result(app.configuration()["json-result"].as<std::string>(), cfg, agg, median);
             }
           }, std::move(cfg));
         });
