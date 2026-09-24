@@ -130,6 +130,10 @@ SEASTAR_TEST_CASE(test_non_primary_key_restrictions_ttl_vk) {
     });
 }
 
+// Unlike everything else which used to be in this file, this is not a test of
+// CQL behavior but a unit test of the db::view::node_update_backlog class, so
+// it was not moved to Python along with the rest in issue #16134 - there is no
+// way to reach this class from CQL, and no reason to want to.
 SEASTAR_THREAD_TEST_CASE(node_view_update_backlog) {
     // This test was originally written assuming we have (at least) two
     // shards and the test doesn't run on shard 1...
