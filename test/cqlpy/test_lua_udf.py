@@ -214,3 +214,34 @@ def test_lua_tinyint_return(cql, test_keyspace, scylla_only):
             assert call("val2") == -1
             assert call("val3") == -128
             assert call("val4") == 0
+
+def test_lua_int_return(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val int") as table:
+        cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 3)")
+        with new_function(cql, test_keyspace, "(val int) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return 2 * val'") as f:
+            assert cql.execute(f"SELECT {test_keyspace}.{f}(val) FROM {table}").one()[0] == 6
+            cql.execute(f"CREATE OR REPLACE FUNCTION {test_keyspace}.{f}(val int) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return val'")
+            assert cql.execute(f"SELECT {test_keyspace}.{f}(val) FROM {table}").one()[0] == 3
+    with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val tinyint") as table:
+        cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 4)")
+        assert call_lua(cql, test_keyspace, table, "(val tinyint) CALLED ON NULL INPUT RETURNS int", "return val") == [4]
+    with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val varint") as table:
+        cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 4)")
+        cql.execute(f"INSERT INTO {table} (key, val) VALUES ('bar', 2147483648)")
+        assert sorted(call_lua(cql, test_keyspace, table, "(val varint) CALLED ON NULL INPUT RETURNS int", "return val")) == [
+            -2147483648, 4]
+    with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val double") as table:
+        sig = "(val double) CALLED ON NULL INPUT RETURNS int"
+        cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 4)")
+        assert call_lua(cql, test_keyspace, table, sig, "return val") == [4]
+        cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 4.2)")
+        with pytest.raises(InvalidRequest, match="value is not an integer"):
+            call_lua(cql, test_keyspace, table, sig, "return val")
+        with pytest.raises(InvalidRequest, match="value is not a number"):
+            call_lua(cql, test_keyspace, table, sig, 'return "foo"')
+        assert call_lua(cql, test_keyspace, table, sig, 'return "123"') == [123]
+        assert call_lua(cql, test_keyspace, table, sig, 'return "0x123p+1"') == [0x246]
+        with pytest.raises(InvalidRequest, match="unexpected value"):
+            call_lua(cql, test_keyspace, table, sig, "return false")
+        with pytest.raises(InvalidRequest, match="value is not a number"):
+            call_lua(cql, test_keyspace, table, sig, 'return ""')
