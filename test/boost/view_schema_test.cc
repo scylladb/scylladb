@@ -87,24 +87,6 @@ SEASTAR_TEST_CASE(test_ttl) {
     });
 }
 
-SEASTAR_TEST_CASE(test_conflicting_timestamp) {
-    return do_with_cql_env_thread([] (auto& e) {
-        e.execute_cql("create table cf (p int, c int, v int, primary key (p, c));").get();
-        e.execute_cql("create materialized view mv as select * from cf "
-                      "where p is not null and c is not null and v is not null primary key (v, c, p)").get();
-
-        for (auto i = 0; i < 50; ++i) {
-            e.execute_cql(format("insert into cf (p, c, v) values (1, 1, {:d})", i)).get();
-        }
-        eventually([&] {
-        auto msg = e.execute_cql("select * from mv").get();
-        assert_that(msg).is_rows()
-            .with_size(1)
-            .with_row({ {int32_type->decompose(49)}, {int32_type->decompose(1)}, {int32_type->decompose(1)} });
-        });
-    });
-}
-
 SEASTAR_TEST_CASE(test_clustering_order) {
     return do_with_cql_env_thread([] (auto& e) {
         e.execute_cql("create table cf (a int, b int, c int, d int, primary key (a, b, c)) with clustering order by (b asc, c desc)").get();

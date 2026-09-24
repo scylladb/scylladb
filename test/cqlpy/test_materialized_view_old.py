@@ -791,3 +791,13 @@ def test_row_deletion(cql, test_keyspace):
             cql.execute(f"insert into {table} (p, c, v1, v2) values (1, 1, 1, 1) using timestamp 3")
             assert [] == list(cql.execute(f"select * from {mv}"))
 
+# When many writes give the same base row different values for the view's
+# partition key, the view ends up with exactly one row - the one for the
+# value that won.
+def test_conflicting_timestamp(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int, c int, v int, primary key (p, c)') as table:
+        with new_materialized_view(cql, table, '*', 'v, c, p',
+                'p is not null and c is not null and v is not null') as mv:
+            for i in range(50):
+                cql.execute(f"insert into {table} (p, c, v) values (1, 1, {i})")
+            assert [(49, 1, 1)] == list(cql.execute(f"select * from {mv}"))
