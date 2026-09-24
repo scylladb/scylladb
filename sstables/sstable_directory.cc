@@ -460,6 +460,12 @@ future<> sstable_directory::sstables_registry_components_lister::process(sstable
         if (state != directory._state) {
             return make_ready_future<>();
         }
+        if (status == "snapshot_owned") {
+            // The live sstable is gone; only snapshot references pin its data
+            // and the entry is kept for whoever clears the last snapshot reference. Nothing to load.
+            dirlog.debug("Skip processing snapshot_owned {} entry from {}", desc.generation, _table_id);
+            return make_ready_future<>();
+        }
         if (status != "sealed") {
             dirlog.warn("Skip processing {} {} entry from {} (must have been picked up by garbage collector)", status, desc.generation, _table_id);
             return make_ready_future<>();
@@ -480,7 +486,14 @@ future<> sstable_directory::restore_components_lister::scan(sstable_directory& d
 }
 
 future<> sstable_directory::restore_components_lister::process(sstable_directory& directory, process_flags flags) {
-    co_await coroutine::parallel_for_each(_toc_filenames, [flags, &directory] (sstring toc_filename) -> future<> {
+    // A backup which left the components where a live table keeps them is addressed by
+    // the sstable identifier, not by the component file names, so its entries name the
+    // identifier as the directory of the TOC: "{sstable_id}/{toc_name}". The name still
+    // carries the generation, version and format, which the identifier does not.
+    auto* os = std::get_if<data_dictionary::storage_options::object_storage>(&directory._storage_opts->value);
+    bool live_layout = os && os->layout == data_dictionary::storage_options::object_storage_layout::live;
+
+    co_await coroutine::parallel_for_each(_toc_filenames, [flags, live_layout, &directory] (sstring toc_filename) -> future<> {
         std::filesystem::path sst_path{toc_filename};
         auto result = sstables::parse_path(sst_path, "", "");
         if (!result) {
@@ -488,6 +501,18 @@ future<> sstable_directory::restore_components_lister::process(sstable_directory
         }
         entry_descriptor desc = std::move(*result);
         if (!sstable_generation_generator::maybe_owned_by_this_shard(desc.generation)) {
+            co_return;
+        }
+        if (live_layout) {
+            auto dir = sst_path.parent_path().filename().native();
+            try {
+                desc.sid = sstable_id(utils::UUID(std::string_view(dir)));
+            } catch (...) {
+                throw_malformed_sstable_exception(seastar::format("{}: '{}' is not an sstable identifier", toc_filename, dir));
+            }
+            dirlog.debug("Processing {} entry from {} under sstable_id={}", desc.generation, toc_filename, desc.sid);
+            co_await directory.process_descriptor(std::move(desc), flags,
+                    [&directory] { return *directory._storage_opts; });
             co_return;
         }
         dirlog.debug("Processing {} entry from {}", desc.generation, toc_filename);
@@ -521,18 +546,46 @@ future<> sstable_directory::restore_components_lister::commit() {
 
 future<> sstable_directory::sstables_registry_components_lister::garbage_collect(storage& st) {
     std::set<generation_type> gens_to_remove;
-    co_await _sstables_registry.sstables_registry_list(_table_id, _node_owner, coroutine::lambda([this, &st, &gens_to_remove] (sstring status, sstable_state state, entry_descriptor desc) -> future<> {
+    std::vector<entry_descriptor> descs_to_retain;
+    std::vector<entry_descriptor> owned_entries;
+    co_await _sstables_registry.sstables_registry_list(_table_id, _node_owner,
+            coroutine::lambda([this, &st, &gens_to_remove, &descs_to_retain, &owned_entries] (sstring status, sstable_state state, entry_descriptor desc) -> future<> {
+        desc.state = state;
         if (status == "sealed") {
             co_return;
         }
-
+        if (status == "snapshot_owned") {
+            owned_entries.push_back(std::move(desc));
+            co_return;
+        }
         dirlog.info("Removing dangling {} {} entry", desc.generation, status);
-        gens_to_remove.insert(desc.generation);
-        co_await st.remove_by_registry_entry(std::move(desc), _node_owner);
+        auto gen = desc.generation;
+        if (co_await st.remove_by_registry_entry(entry_descriptor(desc), _node_owner)) {
+            // Still pinned by this node's snapshot references. Keep the entry until the last one is cleared.
+            descs_to_retain.push_back(std::move(desc));
+        } else {
+            gens_to_remove.insert(gen);
+        }
     }));
     co_await coroutine::parallel_for_each(gens_to_remove, [this] (auto gen) -> future<> {
         co_await _sstables_registry.delete_entry(_table_id, _node_owner, gen);
     });
+    co_await coroutine::parallel_for_each(descs_to_retain, [this] (entry_descriptor& desc) -> future<> {
+        dirlog.debug("Retaining {} entry as snapshot_owned (snapshot references remain)", desc.generation);
+        // Write the whole row, not only the status cell: a cell-only UPDATE
+        // racing a concurrent entry deletion resurrects the row,
+        // a full row comes back complete and is re-evaluated and deleted on the next boot.
+        auto state = *desc.state;
+        co_await _sstables_registry.create_entry(_table_id, _node_owner, "snapshot_owned", state, std::move(desc));
+    });
+
+    for (auto& desc : owned_entries) {
+        dirlog.debug("Re-evaluating snapshot_owned {} entry", desc.generation);
+        auto gen = desc.generation;
+        if (!co_await st.remove_by_registry_entry(std::move(desc), _node_owner, false)) {
+            co_await _sstables_registry.delete_entry(_table_id, _node_owner, gen);
+        }
+    }
 }
 
 future<>

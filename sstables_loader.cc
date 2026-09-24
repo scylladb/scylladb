@@ -37,6 +37,7 @@
 #include "utils/error_injection.hh"
 #include "sstables_loader_helpers.hh"
 #include "db/system_distributed_keyspace.hh"
+#include "db/snapshot/cluster_backup.hh"
 #include "idl/sstables_loader.dist.hh"
 
 #include "sstables/object_storage_client.hh"
@@ -225,7 +226,7 @@ private:
         auto& table = db.find_column_family(ks, cf);
         auto& sst_manager = table.get_sstables_manager();
         auto sst = sst_manager.make_sstable(
-            table.schema(), table.get_storage_options(), min_info.generation, sstables::sstable_state::normal, min_info.version, min_info.format);
+            table.schema(), table.get_storage_options(), min_info.generation, min_info.sid, sstables::sstable_state::normal, min_info.version, min_info.format);
         sst->set_sstable_level(0);
         auto units = co_await sst_manager.dir_semaphore().get_units(1);
         sstables::sstable_open_config cfg {
@@ -675,6 +676,13 @@ future<> sstables_loader::load_and_stream(sstring ks_name, sstring cf_name,
 // in there.
 future<> sstables_loader::load_new_sstables(sstring ks_name, sstring cf_name,
     bool load_and_stream, bool primary, bool skip_cleanup, bool skip_reshape, stream_scope scope) {
+    // With scope=node the sstables of the upload directory are loaded into the table
+    // directly, which for a table on object storage would mean cloning them from a
+    // filesystem. Only streaming can carry them there.
+    if (scope == stream_scope::node && _db.local().find_column_family(ks_name, cf_name).get_storage_options().is_object_storage_type()) {
+        throw std::invalid_argument(format("Cannot load new sstables into {}.{} with scope=node: the table keeps its sstables on object storage",
+                ks_name, cf_name));
+    }
     if (_loading_new_sstables) {
         throw std::runtime_error("Already loading SSTables. Try again later");
     } else {
@@ -926,6 +934,15 @@ future<tasks::task_id> sstables_loader::download_new_sstables(sstring ks_name, s
     if (!_storage_manager.is_known_endpoint(endpoint)) {
         throw std::invalid_argument(format("endpoint {} not found", endpoint));
     }
+    // With scope=node the sstables are cloned into the table instead of being
+    // streamed to it, and an object storage clones within one endpoint only.
+    if (scope == stream_scope::node) {
+        const auto& dst_opts = _db.local().find_column_family(ks_name, cf_name).get_storage_options();
+        if (auto* os = std::get_if<data_dictionary::storage_options::object_storage>(&dst_opts.value); os && os->endpoint != endpoint) {
+            throw std::invalid_argument(format("Cannot restore {}.{} from endpoint {} with scope=node: the table keeps its sstables on endpoint {}, and an object storage cannot copy across endpoints",
+                    ks_name, cf_name, endpoint, os->endpoint));
+        }
+    }
     llog.info("Restore sstables from {}({}) to {}.{} using scope={}, primary_replica={}", endpoint, prefix, ks_name, cf_name, scope, primary_replica);
 
     auto task = co_await _task_manager_module->make_and_start_task<download_task_impl>(tasks::make_empty_task_info(), container(), std::move(endpoint), std::move(bucket), std::move(ks_name), std::move(cf_name),
@@ -939,7 +956,7 @@ future<sstables::shared_sstable> sstables_loader::attach_sstable(table_id tid, c
     llog.debug("Adding downloaded SSTable gen={} to the table {}.{} on shard {}", min_info.generation, table.schema()->ks_name(), table.schema()->cf_name(), this_shard_id());
     auto& sst_manager = table.get_sstables_manager();
     auto sst = sst_manager.make_sstable(
-        table.schema(), table.get_storage_options(), min_info.generation, sstables::sstable_state::normal, min_info.version, min_info.format);
+        table.schema(), table.get_storage_options(), min_info.generation, min_info.sid, sstables::sstable_state::normal, min_info.version, min_info.format);
     sst->set_sstable_level(0);
     auto erm = table.get_effective_replication_map();
     sstables::sstable_open_config cfg {
@@ -956,6 +973,12 @@ future<sstables::shared_sstable> sstables_loader::attach_sstable(table_id tid, c
         }
     });
     co_return sst;
+}
+
+// The prefix an object-storage table keeps its sstables under. Mirrors what
+// sstables::object_storage_base::prefix() resolves to.
+static std::string_view managed_sstables_prefix(const data_dictionary::storage_options::object_storage& os) {
+    return os.location ? std::string_view(*os.location) : "sstables";
 }
 
 // Joins a backup location's prefix with a path that is relative to it, the same
@@ -1009,9 +1032,11 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
         co_return;
     }
 
-    // Skip sstables a previous restore attempt already fetched so a re-entered
-    // or retried restore doesn't re-download what's already in place.
-    auto pending = sst_infos | std::views::filter([] (const auto& si) { return si.downloaded == db::is_downloaded::no; });
+    // Skip sstables either not uploaded (de-duplicated by backup) or a previous restore attempt 
+    // already fetched so a re-entered or retried restore doesn't re-download what's already in place.
+    auto pending = sst_infos | std::views::filter([] (const auto& si) { 
+        return si.state >= db::snapshot_state::remote_and_local && si.downloaded == db::is_downloaded::no; 
+    });
     auto [ fully, partially ] = co_await get_sstables_for_tablet(pending, tablet_range, [] (const auto& si) { return si.first_token; }, [] (const auto& si) { return si.last_token; });
     if (!partially.empty()) {
         llog.debug("Sstable {} is partially contained", partially.front().sstable_id);
@@ -1025,8 +1050,27 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
         co_return;
     }
 
+    // A backup of a table which already keeps its sstables in this bucket copies
+    // nothing: the components stay where the table wrote them, under the location of
+    // the table itself, and the references of the snapshot hold them there. Such a
+    // backup is addressed by the sstable identifier, so name its entries
+    // "{sstable_id}/{toc_name}" and read them with the layout of a live table. Any
+    // other backup keeps the components under a prefix of its own, named after the
+    // generation. Being in the location of the table is what tells the two apart,
+    // because it is the only case in which a backup has nothing to copy; a backup
+    // which was uploaded into that location instead would not be found.
+    const auto* dst_os = std::get_if<data_dictionary::storage_options::object_storage>(&_db.local().find_column_family(tid.table).get_storage_options().value);
+    const bool in_place = dst_os
+            && snapshot_info.endpoint == dst_os->endpoint
+            && snapshot_info.bucket == dst_os->bucket
+            && snapshot_info.prefix == managed_sstables_prefix(*dst_os);
+
     std::unordered_map<sstring, std::vector<sstring>> toc_names_by_prefix;
     for (const auto& e : fully) {
+        if (in_place) {
+            toc_names_by_prefix[snapshot_info.prefix].emplace_back(seastar::format("{}/{}", e.sstable_id, e.toc_name));
+            continue;
+        }
         // e.prefix is relative to the backup location's own prefix (snapshot_remote_locations.prefix).
         toc_names_by_prefix[join_path(snapshot_info.prefix, e.prefix)].emplace_back(e.toc_name);
     }
@@ -1047,7 +1091,8 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
         return replica::distributed_loader::get_sstables_from_object_store(_db, s->ks_name(), s->cf_name(),
                 std::move(ent.second), snapshot_info.endpoint, ep_type, snapshot_info.bucket, std::move(ent.first), cfg, [&] {
                     return &shard_aborts[this_shard_id()];
-                }).then_unpack([] (table_id, auto sstables) {
+                }, in_place ? data_dictionary::storage_options::object_storage_layout::live
+                            : data_dictionary::storage_options::object_storage_layout::foreign).then_unpack([] (table_id, auto sstables) {
                     return make_ready_future<std::vector<sstables_col>>(std::move(sstables));
                 });
     }, std::vector<prefix_sstables>(this_smp_shard_count()), [&] (std::vector<prefix_sstables> a, std::vector<sstables_col> b) {
@@ -1110,12 +1155,15 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
             db::snapshot_table_helper sth(loader._sys_dist_ks.qp());
             co_await max_concurrent_for_each(shard_ssts, 16, [&sth, &loader, tid, snap_name, keyspace_name, table_name, datacenter, rack](const auto& min_info) -> future<> {
                 sstables::shared_sstable attached_sst = co_await loader.attach_sstable(tid.table, min_info);
+                // The row is keyed by the identifier of the backup sstable, not of
+                // the copy, so that a retried restore finds what the previous
+                // attempt already fetched.
                 co_await sth.update_sstable_download_status(snap_name,
                                                             keyspace_name,
                                                             table_name,
                                                             datacenter,
                                                             rack,
-                                                            *attached_sst->sstable_identifier(),
+                                                            min_info.source_sid,
                                                             attached_sst->get_first_decorated_key().token(),
                                                             db::is_downloaded::yes);
             });
@@ -1174,12 +1222,36 @@ static future<manifest_summary> process_manifest(input_stream<char>& is, sstring
     if (table.empty()) {
         table = rjson::get<std::string>(table_obj, "table_name");
     }
-    auto& node_obj = rjson::get(parsed, "node");
-    auto datacenter = rjson::get<std::string>(node_obj, "datacenter");
-    auto rack = rjson::get<std::string>(node_obj, "rack");
-    if (datacenter != expected_datacenter) {
-        throw std::runtime_error(fmt::format("Manifest {} belongs to datacenter '{}', expected '{}'",
-            manifest_prefix, datacenter, expected_datacenter));
+
+    std::unordered_map<std::string, db::snapshot_node_entry> nodemap;
+    std::string datacenter, rack;
+
+    if (auto node_obj = rjson::find(parsed, "node")) {
+        datacenter = rjson::get<std::string>(*node_obj, "datacenter");
+        rack = rjson::get<std::string>(*node_obj, "rack");
+
+        if (datacenter != expected_datacenter) {
+            throw std::runtime_error(fmt::format("Manifest {} belongs to datacenter '{}', expected '{}'",
+                        manifest_prefix, datacenter, expected_datacenter));            
+        }
+    } else if (auto nodes_obj = rjson::find(parsed, "nodes")) {
+        if (!nodes_obj->IsArray()) {
+            throw std::runtime_error("Malformed manifest, 'nodes' is not array");
+        }
+        for (auto& n : nodes_obj->GetArray()) {
+            if (!n.IsObject()) {
+                throw std::runtime_error("Malformed manifest, the entry in the 'nodes' array is not an object");
+            }
+            db::snapshot_node_entry sn;
+
+            auto id = rjson::get<std::string>(n, "host_id");
+
+            sn.datacenter = rjson::get<std::string>(n, "datacenter");
+            sn.node = locator::host_id { utils::UUID{std::string_view(id)} };
+            sn.rack = rjson::get<std::string>(n, "rack");
+
+            nodemap.emplace(id, sn);
+        }
     }
 
     // Process each sstable entry in the manifest
@@ -1194,6 +1266,9 @@ static future<manifest_summary> process_manifest(input_stream<char>& is, sstring
 
     db::snapshot_table_helper sth(sys_dist_ks.qp());
 
+    auto legacy_prefix = sstring(std::filesystem::path(manifest_prefix).parent_path().string());
+    std::string global_snapshot_prefix;
+
     for (auto& sstable_entry : sstables->GetArray()) {
         // rjson::get functions assert if the passed value is not an object
         if (!sstable_entry.IsObject()) {
@@ -1203,18 +1278,74 @@ static future<manifest_summary> process_manifest(input_stream<char>& is, sstring
         auto first_token = rjson::to_token(rjson::get(sstable_entry, "first_token"));
         auto last_token = rjson::to_token(rjson::get(sstable_entry, "last_token"));
         auto toc_name = rjson::to_sstring(rjson::get(sstable_entry, "toc_name"));
-        auto tablet_id = rjson::get<size_t>(sstable_entry, "tablet_id");
+        auto tablet_id = rjson::get<uint64_t>(sstable_entry, "tablet_id");
         // The fields below are not needed to restore the sstable, they are only recorded
         // in system_distributed.snapshot_sstables for informational purposes.
         auto repaired_at = rjson::get_opt<int64_t>(sstable_entry, "repaired_at").value_or(0);
         auto data_size = rjson::get_opt<int64_t>(sstable_entry, "data_size").value_or(0);
         auto index_size = rjson::get_opt<int64_t>(sstable_entry, "index_size").value_or(0);
-        auto prefix = sstring(std::filesystem::path(manifest_prefix).parent_path().string());
-        // Insert the snapshot sstable metadata into system_distributed.snapshot_sstables with a TTL of 3 days, that should be enough
-        // for any snapshot restore operation to complete, and after that the metadata will be automatically cleaned up from the table
-        co_await sth.insert_snapshot_sstable(snapshot_name, keyspace, table, datacenter, rack, id, first_token, last_token,
-                                             toc_name, prefix, locator::host_id::create_null_id(), tablet_id, db::snapshot_state::remote,
-                                             repaired_at, data_size, index_size, cl);
+        auto prefix = legacy_prefix;
+        auto node = rjson::get_opt<std::string>(sstable_entry, "node");
+
+        std::string_view tdc, trc;
+        auto host = locator::host_id::create_null_id();
+
+        if (node) {
+            if (!nodemap.contains(*node)) {
+                throw std::runtime_error(fmt::format("Malformed manifest: node attribute {} of sstable {} not in node list", *node, id));
+            }
+            auto& sn = nodemap.at(*node);
+            host = sn.node;
+            tdc = sn.datacenter;
+            trc = sn.rack;
+
+            if (global_snapshot_prefix.empty()) {
+                global_snapshot_prefix = db::snapshot::sstables_location(db::snapshot::snapshot_prefix_from_manifest(manifest_prefix));
+            }
+
+            prefix = fmt::format("{}/{}", global_snapshot_prefix, id);
+        } else {
+            tdc = datacenter;
+            trc = rack;
+        }
+        if (tdc.empty() || trc.empty()) {
+            throw std::runtime_error(fmt::format("Malformed manifest: Could not resolve datacenter and rack for table {}", id));
+        }
+
+        // only insert sstable to main rack if this is the expected datacenter
+        if (tdc == expected_datacenter) {
+            // Insert the snapshot sstable metadata into system_distributed.snapshot_sstables with a TTL of 3 days, that should be enough
+            // for any snapshot restore operation to complete, and after that the metadata will be automatically cleaned up from the table
+            co_await sth.insert_snapshot_sstable(snapshot_name, keyspace, table, sstring(tdc), sstring(trc), id, first_token, last_token,
+                                                 toc_name, prefix, host, tablet_id, db::snapshot_state::remote,
+                                                 repaired_at, data_size, index_size, cl);
+        }
+
+        if (auto additional_nodes = rjson::find(sstable_entry, "additional_nodes")) {
+            if (!additional_nodes->IsArray()) {
+                throw std::runtime_error("Malformed manifest, 'additional_nodes' is not array");
+            }
+
+            for (auto& t : additional_nodes->GetArray()) {
+                if (!t.IsString()) {
+                    throw std::runtime_error("Malformed manifest, the entry in the 'additional_nodes' array is not a string");
+                }
+                auto redup_node = t.Get<std::string>();
+                if (!nodemap.contains(redup_node)) {
+                    throw std::runtime_error(fmt::format("Malformed manifest: additional node {} of sstable {} not in node list", redup_node, id));
+                }
+
+                auto& sn = nodemap.at(redup_node);
+                if (sn.datacenter != expected_datacenter) {
+                    continue; // skip re-dup. wrong dc
+                }
+
+                llog.debug("Re-duplicating sstable {} to {}:{}", id, sn.datacenter, sn.rack);
+                co_await sth.insert_snapshot_sstable(snapshot_name, keyspace, table, sn.datacenter, sn.rack, id, first_token, last_token,
+                                                    toc_name, prefix, sn.node, tablet_id, db::snapshot_state::remote,
+                                                    repaired_at, data_size, index_size, cl);
+            }
+        }
     }
 
     co_return manifest_summary{tablet_count, sstables->Size()};
@@ -1412,12 +1543,29 @@ static void check_datacenter_coverage(const replica::table& t, const std::vector
     }
 }
 
+
+// Restore into a table on object storage copies the backup sstables inside the
+// object storage, and such a copy cannot cross endpoints. So every location has
+// to use the endpoint of the table.
+static void check_endpoints(const replica::table& t, const std::vector<tablet_restore_location>& locations) {
+    auto* os = std::get_if<data_dictionary::storage_options::object_storage>(&t.get_storage_options().value);
+    if (!os) {
+        return;
+    }
+    for (const auto& loc : locations) {
+        if (loc.endpoint != os->endpoint) {
+            throw std::invalid_argument(fmt::format("Backup location of datacenter '{}' uses endpoint {}, but table {}.{} keeps its sstables on endpoint {}. An object storage cannot copy across endpoints",
+                loc.datacenter, loc.endpoint, t.schema()->ks_name(), t.schema()->cf_name(), os->endpoint));
+        }
+    }
+}
 future<tasks::task_id> sstables_loader::restore_tablets(table_id tid, sstring keyspace, sstring table, sstring snap_name, std::vector<tablet_restore_location> locations) {
     if (!_db.local().find_column_family(tid).uses_tablets()) {
         throw std::invalid_argument(fmt::format("Table {}.{} does not use tablets", keyspace, table));
     }
 
     check_datacenter_coverage(_db.local().find_column_family(tid), locations);
+    check_endpoints(_db.local().find_column_family(tid), locations);
 
     db::snapshot_table_helper sth(_sys_dist_ks.qp());
     manifest_summary summary = { .tablet_count = 0, .nr_sstables = 0 };

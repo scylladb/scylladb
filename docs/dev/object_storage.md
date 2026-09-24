@@ -317,6 +317,73 @@ The `sstables` member is a list containing metadata about the SSTables in the sn
 The optional `files` member may contain a list of non-SSTable files included in the snapshot directory, not including the manifest.json file and schema.cql.
 ```
 
+#### Cluster level manifest
+
+A manifest for a cluster level snapshot backup differs from the per-node ones on a few points:
+
+```
+{
+  "manifest": {
+    "version": "1.0",
+    "scope": "dc"
+  },
+  "nodes" : [
+      {
+        "host_id": "<UUID>",
+        "datacenter": "mydc",
+        "rack": "myrack"
+      },
+      ...
+  ],
+  "snapshot": {
+    "name": "snapshot name",
+    "created_at": seconds_since_epoch,
+    "expires_at": seconds_since_epoch | null,
+  },
+  "table": {
+    "keyspace_name": "my_keyspace",
+    "table_name": "my_table",
+    "table_id": "<UUID>",
+    "tablets_type": "none|powof2",
+    "tablet_count": N
+  },
+  "tablets" : [
+    {
+        "id": <tablet id>
+        "first_token": <token>,
+        "last_token": <token>,
+        "repair_time": <int64_t>,
+        "repaired_at": <int64_t>
+    }, 
+    ...
+  ]
+  "sstables": [
+    {
+      "id": "67e35000-d8c6-11f0-9599-060de9f3bd1b",
+      "toc_name": "me-3gw7_0ndy_3wlq829wcsddgwha1n-big-TOC.txt",
+      "data_size": 75,
+      "index_size": 8,
+      "first_token": -8629266958227979430,
+      "last_token": 9168982884335614769,
+      "tablet_id": <tablet id>,
+      "node": <node id>,
+      "additional_nodes" : [ <other node id>, ... ]
+    },
+    ...
+  ],
+  "files": [ ... ]
+}
+```
+
+The `scope` of the manifest is "dc" (note: technically, it can span multiple dcs), and instead of a top-level `node` attribute it has an array called `nodes` containing each node present in the backup.
+
+The manifest also contains the set of tablets at the point of snapshot.
+
+Note: cluster level backups utilize sstable de-duplication of the repair set. Thus, any sstables which fall into the repaired set of data will only be included from one of the replicas in the snapshot.
+
+Each sstable entry points out owning node and tablet. A sstable can also optionally point to an array of additional nodes. These are nodes for which the
+data in this sstable was de-duplicated, and to which it should be restored as well.
+
 3. `CREATE KEYSPACE` with S3/GS storage
 
 When creating a keyspace with S3/GS storage, the data is stored under the bucket passed as argument to the `CREATE KEYSPACE` statement.
@@ -389,6 +456,17 @@ Object-storage SSTable lifecycle:
 - Final cleanup: component objects are deleted only after no reference objects remain for the `sstable_id`. This prevents one node from deleting shared data still referenced by another node.
 
 The `status` and `state` fields in `system.sstables` describe the local SSTable entry lifecycle. They do not describe a global lifecycle state for the object-storage component set identified by `sstable_id`.
+
+### Restore into object-storage tables
+
+Tablet-aware restore, the `/storage_service/tablets/restore` API, can restore into a table which keeps its SSTables on object storage. The component objects are not downloaded and uploaded again by the node: they stay in the object storage. An object storage copies an object within one endpoint only, so the backup and the table have to use the same endpoint. A restore which names another endpoint is rejected right away.
+
+There are two ways to restore a backup SSTable, and which one is used depends on where its components are:
+
+- If the components of the backup SSTable already are the objects the table names for them - same bucket, same object names - nothing is copied. That is what a backup which copies nothing leaves behind, and the restore only creates the `system.sstables` entry and the `refs/nodes/{host_id}/{generation}` reference object of the receiving replica. That reference keeps the components alive for as long as the restored table needs them, whatever happens to the table or the backup they came from. Sharing needs the `SSTABLE_REFERENCE_SHARING` cluster feature. The backup can be dropped while the restore runs, so the restore checks that a reference which is not a node reference still holds the components after adding its own, and fails instead of leaving a table whose components nobody keeps alive. Such a backup is addressed by `sstable_id`, not by the component file names, so the restore reads it with the layout of a live table: it recognizes it by the backup living in the very location the destination table keeps its SSTables in, and takes the `sstable_id` from `system_distributed.snapshot_sstables`. The generation, version and format keep coming from the `toc_name` of the manifest, which the component names of a live table do not carry. No backup writes that layout yet - `/storage_service/backup` uploads the components flat under its own prefix and cluster backup uploads them to `{prefix}/{sstable_id}/`, both keeping the generation in the component names - so today every restore takes the second way.
+- Otherwise the components are copied inside the object storage, into the managed layout of the bucket, under a new `sstable_id` derived from the new generation, the same way a newly written SSTable gets one. A copy cannot keep the `sstable_id` of the backup SSTable, because `sstable_id` is the prefix of the component object names: copies which different replicas make of the same backup SSTable would overwrite each other, and would overwrite the objects of the table the backup was taken from, if it still uses the bucket. The `Scylla.db` component holds the `sstable_id`, so it is written again with the new one instead of being copied.
+
+In both cases the entry is created with the `creating` status, before any object is written, and gets the `sealed` status once the restored SSTable is attached to the table. So a restore which fails or is aborted leaves entries which are not `sealed`. Boot time garbage collection removes them together with the objects they own: a shared reference is dropped, and the components it pointed at stay as long as another reference remains.
 
 ## Downloading, deleting, uploading SSTables
 
