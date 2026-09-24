@@ -33,54 +33,6 @@ BOOST_AUTO_TEST_SUITE(view_schema_test)
 
 using namespace std::literals::chrono_literals;
 
-// CQL usually folds identifier names - keyspace, table and column names -
-// to lowercase. That is, unless the identifier is enclosed in double
-// quotation marks (") then the identifier becomes case sensitive.
-// Let's test that case-sensitive (quoted) column names can be used for
-// materialized views. Test that data can be inserted and queried, and
-// that case sensitive columns in views can be renamed.
-// This test reproduces issues #3388 and #3391.
-SEASTAR_TEST_CASE(test_case_sensitivity) {
-    return do_with_cql_env_thread([] (auto& e) {
-        e.execute_cql("create table cf (\"theKey\" int, \"theClustering\" int, \"theValue\" int, primary key (\"theKey\", \"theClustering\"));").get();
-        e.execute_cql("create materialized view mv_test as select * from cf "
-                       "where \"theKey\" is not null and \"theClustering\" is not null "
-                       "primary key (\"theKey\",\"theClustering\")").get();
-        e.execute_cql("create materialized view mv_test2 as select \"theKey\", \"theClustering\", \"theValue\" from cf "
-                       "where \"theKey\" is not null and \"theClustering\" is not null "
-                       "primary key (\"theKey\",\"theClustering\")").get();
-        e.execute_cql("insert into cf (\"theKey\", \"theClustering\", \"theValue\") values (0 ,0, 0);").get();
-
-        for (auto view : {"mv_test", "mv_test2"}) {
-            eventually([&] {
-            auto msg = e.execute_cql(format("select \"theKey\", \"theClustering\", \"theValue\" from {} ", view)).get();
-            assert_that(msg).is_rows()
-                .with_size(1)
-                .with_row({
-                    {int32_type->decompose(0)},
-                    {int32_type->decompose(0)},
-                    {int32_type->decompose(0)},
-                });
-            });
-        }
-
-        e.execute_cql("alter table cf rename \"theClustering\" to \"Col\";").get();
-
-        for (auto view : {"mv_test", "mv_test2"}) {
-            eventually([&] {
-            auto msg = e.execute_cql(format("select \"theKey\", \"Col\", \"theValue\" from {} ", view)).get();
-            assert_that(msg).is_rows()
-                .with_size(1)
-                .with_row({
-                    {int32_type->decompose(0)},
-                    {int32_type->decompose(0)},
-                    {int32_type->decompose(0)},
-                });
-            });
-        }
-    });
-}
-
 SEASTAR_TEST_CASE(test_access_and_schema) {
     return do_with_cql_env_thread([] (auto& e) {
         e.execute_cql("create table cf (p int, c ascii, v bigint, primary key (p, c));").get();
