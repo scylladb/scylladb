@@ -124,3 +124,9 @@ def test_lua_tuple_argument(cql, test_keyspace, scylla_only):
         cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', (1, 2, 3))")
         assert call_lua(cql, test_keyspace, table, "(val tuple<int, bigint, int>) CALLED ON NULL INPUT RETURNS bigint",
                         "return val[1] + val[2] + val[3]") == [6]
+
+def test_lua_udt_argument(cql, test_keyspace, scylla_only):
+    with new_type(cql, test_keyspace, "(my_int int)") as udt:
+        with new_test_table(cql, test_keyspace, f"key text PRIMARY KEY, val frozen<{udt}>") as table:
+            cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', {{my_int : 42}})")
+            assert call_lua(cql, test_keyspace, table, f"(val {udt}) CALLED ON NULL INPUT RETURNS int", "return val.my_int") == [42]
