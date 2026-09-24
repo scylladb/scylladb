@@ -28,6 +28,13 @@ BOOST_AUTO_TEST_SUITE(view_schema_test)
 
 using namespace std::literals::chrono_literals;
 
+// This test was deliberately *not* moved to Python in issue #16134, and is
+// one of the few left here. It uses forward_jump_clocks() to make TTLs expire
+// instantly, and we have no equivalent of that in the Python (cqlpy) tests -
+// there, the test would have to really sleep for the TTLs to pass, which for
+// this test means over 10 seconds of sleeping. That is far too slow for
+// cqlpy, where the entire file of materialized-view tests runs in seconds, so
+// this test earns its keep by staying in C++.
 SEASTAR_TEST_CASE(test_ttl) {
     return do_with_cql_env_thread([] (auto& e) {
         e.execute_cql("create table cf (p int, c int, v1 int, v2 int, v3 int, primary key (p, c));").get();
