@@ -66,31 +66,6 @@ static future<> with_udf_enabled(Func&& func) {
     return do_with_cql_env_thread(std::forward<Func>(func), db_cfg_ptr);
 }
 
-SEASTAR_TEST_CASE(test_user_function_vector_return) {
-    return with_udf_enabled([] (cql_test_env& e) {
-        e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val int);").get();
-        e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', 3);").get();
-        e.execute_cql("CREATE FUNCTION my_func(val int) CALLED ON NULL INPUT RETURNS vector<int, 3> LANGUAGE Lua AS 'return {1,2,3}';").get();
-        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get();
-        auto vector_type = vector_type_impl::get_instance(int32_type, 3);
-        assert_that(res).is_rows().with_rows({
-            {make_vector_value(vector_type, {1, 2, 3}).serialize()}
-        });
-
-        e.execute_cql("CREATE FUNCTION my_func2(val int) CALLED ON NULL INPUT RETURNS vector<int, 3> LANGUAGE Lua AS 'return {1, 2.1, 3}';").get();
-        auto fut = e.execute_cql("SELECT my_func2(val) FROM my_table;");
-        BOOST_REQUIRE_EXCEPTION(fut.get(), ire, message_equals("value is not an integer"));
-
-        e.execute_cql("CREATE FUNCTION my_func3(val int) CALLED ON NULL INPUT RETURNS vector<int, 3> LANGUAGE Lua AS 'return {1, 2, 3, 4}';").get();
-        fut = e.execute_cql("SELECT my_func3(val) FROM my_table;");
-        BOOST_REQUIRE_EXCEPTION(fut.get(), ire, message_equals("key 4 is not valid for a sequence of size 3"));
-
-        e.execute_cql("CREATE FUNCTION my_func4(val int) CALLED ON NULL INPUT RETURNS vector<int, 3> LANGUAGE Lua AS 'return {[1] = 1, [3] = 3}';").get();
-        fut = e.execute_cql("SELECT my_func4(val) FROM my_table;");
-        BOOST_REQUIRE_EXCEPTION(fut.get(), ire, message_equals("key 2 missing in sequence of size 3"));
-    });
-}
-
 SEASTAR_TEST_CASE(test_user_function_list_return) {
     return with_udf_enabled([] (cql_test_env& e) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val int);").get();
