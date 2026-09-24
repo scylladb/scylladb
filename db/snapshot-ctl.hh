@@ -47,8 +47,6 @@ public:
     task_manager_module(tasks::task_manager& tm) noexcept : tasks::task_manager::module(tm, "snapshot") {}
 };
 
-class backup_task_impl;
-
 } // snapshot namespace
 
 struct snapshot_options {
@@ -192,8 +190,6 @@ private:
             });
         });
     }
-
-    friend class snapshot::backup_task_impl;
 
     future<> do_take_snapshot(sstring tag, std::vector<sstring> keyspace_names, snapshot_options opts = {}  );
     future<> do_take_column_family_snapshot(sstring ks_name, std::vector<sstring> tables, sstring tag, snapshot_options opts = {});
