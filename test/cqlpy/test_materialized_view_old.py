@@ -2365,3 +2365,18 @@ def test_clustering_key_filtering_restrictions(cql, test_keyspace, pk):
             # Deleting both base partitions empties the view
             cql.execute(f"delete from {table} where a in (0, 1)")
             check([])
+
+# This test reproduces issue #4340 - creating a materialized view without
+# any clustering key used to fail. In this trivial example, we have a base
+# table with no clustering key, and the view just keeps the same primary key.
+# This should work.
+def test_no_clustering_key_1(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'a int, b int, c int, primary key (a)') as table:
+        # Before #4340 was fixed, we couldn't even create the following view:
+        with new_materialized_view(cql, table, 'a, b', 'a', 'a is not null') as mv:
+            # Let's check that after fixing #4340, we can not only create the
+            # view, it also works as expected:
+            cql.execute(f"insert into {table} (a, b, c) values (1, 2, 3)")
+            assert [(1, 2, 3)] == list(cql.execute(f"select * from {table}"))
+            assert [(1, 2)] == list(cql.execute(f"select * from {mv}"))
+
