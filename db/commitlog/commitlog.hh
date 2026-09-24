@@ -399,8 +399,8 @@ public:
     gc_clock::time_point min_gc_time(const cf_id_type&, const db::replay_position& rp_filter = {}) const;
 
     // The lowest replay position this instance's segments can still produce on the
-    // next reboot: the ones it holds, plus the ones it dropped whose file is not
-    // yet removed or recycled. A record for a position below it can be dropped.
+    // next reboot: the ones it holds, plus the ones it dropped whose file is not yet
+    // durably removed or recycled. A record for a position below it can be dropped.
     replay_position min_position() const;
 
     // For testing only. Returns the active segments current position
