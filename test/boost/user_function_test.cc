@@ -66,30 +66,6 @@ static future<> with_udf_enabled(Func&& func) {
     return do_with_cql_env_thread(std::forward<Func>(func), db_cfg_ptr);
 }
 
-SEASTAR_TEST_CASE(test_user_function_utf8_return) {
-    return with_udf_enabled([] (cql_test_env& e) {
-        e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val varint);").get();
-        e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', 3);").get();
-        e.execute_cql("CREATE FUNCTION my_func(val varint) CALLED ON NULL INPUT RETURNS text LANGUAGE Lua AS 'return \"foó\"';").get();
-        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get();
-        assert_that(res).is_rows().with_rows({{serialized("foó")}});
-
-        e.execute_cql("CREATE FUNCTION my_func2(val varint) CALLED ON NULL INPUT RETURNS text LANGUAGE Lua AS 'return val';").get();
-        res = e.execute_cql("SELECT my_func2(val) FROM my_table;").get();
-        assert_that(res).is_rows().with_rows({{serialized("3")}});
-
-        e.execute_cql("CREATE FUNCTION my_func3(val varint) CALLED ON NULL INPUT RETURNS text LANGUAGE Lua AS 'return \"\\xFF\"';").get();
-        auto fut = e.execute_cql("SELECT my_func3(val) FROM my_table;");
-        BOOST_REQUIRE_EXCEPTION(fut.get(), ire, message_equals("value is not valid utf8, invalid character at byte offset 0"));
-
-        e.execute_cql("CREATE TABLE my_table2 (key text PRIMARY KEY, val decimal);").get();
-        e.execute_cql("INSERT INTO my_table2 (key, val) VALUES ('foo', 4.2);").get();
-        e.execute_cql("CREATE FUNCTION my_func4(val decimal) CALLED ON NULL INPUT RETURNS text LANGUAGE Lua AS 'return val';").get();
-        res = e.execute_cql("SELECT my_func4(val) FROM my_table2;").get();
-        assert_that(res).is_rows().with_rows({{serialized("4.2")}});
-    });
-}
-
 SEASTAR_TEST_CASE(test_user_function_blob_return) {
     return with_udf_enabled([] (cql_test_env& e) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val int);").get();

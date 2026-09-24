@@ -296,3 +296,15 @@ def test_lua_ascii_return(cql, test_keyspace, scylla_only):
         assert call_lua(cql, test_keyspace, table, sig, 'return "foo"') == ["foo"]
         with pytest.raises(InvalidRequest, match="value is not valid ascii"):
             call_lua(cql, test_keyspace, table, sig, 'return "foó"')
+
+def test_lua_utf8_return(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val varint") as table:
+        cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 3)")
+        sig = "(val varint) CALLED ON NULL INPUT RETURNS text"
+        assert call_lua(cql, test_keyspace, table, sig, 'return "foó"') == ["foó"]
+        assert call_lua(cql, test_keyspace, table, sig, "return val") == ["3"]
+        with pytest.raises(InvalidRequest, match="value is not valid utf8, invalid character at byte offset 0"):
+            call_lua(cql, test_keyspace, table, sig, r'return "\xFF"')
+    with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val decimal") as table:
+        cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 4.2)")
+        assert call_lua(cql, test_keyspace, table, "(val decimal) CALLED ON NULL INPUT RETURNS text", "return val") == ["4.2"]
