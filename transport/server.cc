@@ -437,7 +437,7 @@ void cql_server::init_messaging_service() {
 
             co_await utils::get_local_injector().inject("wait_before_handling_forwarded_request", utils::wait_for_message(60s));
 
-            co_return co_await container().invoke_on(shard, [src_host, req = std::move(req)] (cql_server& shard_svc) mutable -> future<forward_cql_execute_response> {
+            auto response = co_await container().invoke_on(shard, [src_host, req = std::move(req)] (cql_server& shard_svc) mutable -> future<forward_cql_execute_response> {
                 service::client_state cs(shard_svc._auth_service,
                     &shard_svc._sl_controller,
                     std::move(req.client_state),
@@ -476,6 +476,8 @@ void cql_server::init_messaging_service() {
                 }
                 co_return f.get();
             });
+            co_await utils::get_local_injector().inject("wait_after_handling_forwarded_request", utils::wait_for_message(60s));
+            co_return response;
         });
 
     ser::forward_cql_rpc_verbs::register_forward_cql_prepare(&_ms,
