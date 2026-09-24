@@ -454,3 +454,9 @@ def test_lua_duration_return(cql, test_keyspace, scylla_only):
             call_lua(cql, test_keyspace, table, sig, "return 42.2")
         with pytest.raises(InvalidRequest, match="invalid duration field: 'foo'"):
             call_lua(cql, test_keyspace, table, sig, "return {foo = 42}")
+
+def test_lua_map_return(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val int") as table:
+        cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 3)")
+        assert call_lua(cql, test_keyspace, table, "(val int) CALLED ON NULL INPUT RETURNS map<text, int>",
+                        "return {foo = 1, bar = 2}") == [{"bar": 2, "foo": 1}]
