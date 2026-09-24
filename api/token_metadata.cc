@@ -6,10 +6,15 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
+#include <seastar/coroutine/maybe_yield.hh>
 #include "api/api.hh"
+#include "api/storage_service.hh"
 #include "api/api-doc/storage_service.json.hh"
 #include "api/api-doc/endpoint_snitch_info.json.hh"
 #include "locator/token_metadata.hh"
+#include "locator/tablets.hh"
+#include "replica/database.hh"
+#include "utils/chunked_vector.hh"
 #include "gms/gossiper.hh"
 
 using namespace seastar::httpd;
@@ -18,6 +23,41 @@ namespace api {
 
 namespace ss = httpd::storage_service_json;
 using namespace json;
+
+static json::json_return_type tokens_to_json(auto tokens) {
+    return stream_range_as_array(std::move(tokens), [](const dht::token& i) {
+        return fmt::to_string(i);
+    });
+}
+
+static future<json::json_return_type> get_tokens_of(
+        http_context& ctx, locator::token_metadata_ptr tmptr, std::optional<locator::host_id> host_id, std::unique_ptr<http::request> req) {
+    const auto keyspace = req->get_query_param("keyspace");
+    const auto table = req->get_query_param("cf");
+    if (keyspace.empty() != table.empty()) {
+        throw bad_param_exception("Either provide both keyspace and table (for tablet table) or neither (for vnodes)");
+    }
+    std::optional<table_id> tid;
+    if (!keyspace.empty()) {
+        tid = validate_table(ctx.db.local(), keyspace, table);
+    }
+    if (!host_id) {
+        co_return tokens_to_json(std::vector<dht::token>{});
+    }
+    if (!tid || !ctx.db.local().find_column_family(*tid).uses_tablets()) {
+        co_return tokens_to_json(tmptr->get_tokens(*host_id));
+    }
+    const auto& tmap = tmptr->tablets().get_tablet_map(*tid);
+    // Any replica, not only primary: the node holds data for all of these ranges.
+    utils::chunked_vector<dht::token> tokens;
+    for (std::optional<locator::tablet_id> t = tmap.first_tablet(); t; t = tmap.next_tablet(*t)) {
+        if (locator::contains(tmap.get_tablet_info(*t).replicas, *host_id)) {
+            tokens.push_back(tmap.get_last_token(*t));
+        }
+        co_await coroutine::maybe_yield();
+    }
+    co_return tokens_to_json(std::move(tokens));
+}
 
 void set_token_metadata(http_context& ctx, routes& r, sharded<locator::shared_token_metadata>& tm, sharded<gms::gossiper>& g) {
     ss::local_hostid.set(r, [&tm](std::unique_ptr<http::request> req) {
@@ -28,23 +68,19 @@ void set_token_metadata(http_context& ctx, routes& r, sharded<locator::shared_to
         return make_ready_future<json::json_return_type>(id.to_sstring());
     });
 
-    ss::get_tokens.set(r, [&tm] (std::unique_ptr<http::request> req) {
-        const auto& local_tm = *tm.local().get();
-        return make_ready_future<json::json_return_type>(stream_range_as_array(local_tm.get_tokens(local_tm.get_my_id()), [](const dht::token& i) {
-           return fmt::to_string(i);
-        }));
+    ss::get_tokens.set(r, [&ctx, &tm] (std::unique_ptr<http::request> req) {
+        auto tmptr = tm.local().get();
+        auto id = tmptr->get_my_id();
+        return get_tokens_of(ctx, std::move(tmptr), id, std::move(req));
     });
 
-    ss::get_node_tokens.set(r, [&tm, &g] (std::unique_ptr<http::request> req) {
+    ss::get_node_tokens.set(r, [&ctx, &tm, &g] (std::unique_ptr<http::request> req) {
         gms::inet_address addr(req->get_path_param("endpoint"));
-        auto& local_tm = *tm.local().get();
         std::optional<locator::host_id> host_id;
         try {
             host_id = g.local().get_host_id(addr);
         } catch (...) {}
-        return make_ready_future<json::json_return_type>(stream_range_as_array(host_id ? local_tm.get_tokens(*host_id): std::vector<dht::token>{}, [](const dht::token& i) {
-            return fmt::to_string(i);
-        }));
+        return get_tokens_of(ctx, tm.local().get(), host_id, std::move(req));
     });
 
     ss::get_leaving_nodes.set(r, [&tm, &g](const_req req) {
