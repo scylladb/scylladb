@@ -1861,22 +1861,22 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     .build());
     }
 
+    // The request is removed from paused_rf_change_requests by the caller, together with
+    // any other request leaving the set in this pass, so that there is a single overwrite.
     void generate_rf_change_resume_update(group0_update_collector& out, const group0_guard& guard, utils::UUID request_to_resume) {
         rtlogger.debug("Generating RF change resume for request id {}", request_to_resume);
         out.emplace_back(topology_mutation_builder(guard.write_timestamp())
                 .queue_global_topology_request_id(request_to_resume)
-                .resume_rf_change_request(_topo_sm._topology.paused_rf_change_requests, request_to_resume)
                 .build());
     }
 
     // Drops the request paused for rack_list colocation without queueing it again
     // and reports the error to the client.
     // The keyspace metadata is not touched, as it is not modified before the colocation is done.
+    // As in generate_rf_change_resume_update(), the caller removes the request from
+    // paused_rf_change_requests.
     void generate_rack_list_colocation_failure_update(group0_update_collector& out, const group0_guard& guard, const rack_list_colocation_failure& failure) {
         rtlogger.warn("Failing request {} paused for rack_list colocation: {}", failure.request_id, failure.error);
-        out.emplace_back(topology_mutation_builder(guard.write_timestamp())
-                .resume_rf_change_request(_topo_sm._topology.paused_rf_change_requests, failure.request_id)
-                .build());
         out.emplace_back(topology_request_tracking_mutation_builder(failure.request_id)
                 .done(failure.error)
                 .build());
@@ -1980,12 +1980,27 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 }
             }
 
+            // A plan can carry both a resume and a failure, and each used to overwrite
+            // paused_rf_change_requests on its own. Several overwrites of one set at the
+            // same write timestamp merge into their union, so both removals are collected
+            // here and applied as one.
+            const auto& paused = _topo_sm._topology.paused_rf_change_requests;
+            std::unordered_set<utils::UUID> unpaused;
+
             if (auto request_to_resume = plan.rack_list_colocation_plan().request_to_resume(); request_to_resume) {
                 generate_rf_change_resume_update(out, guard, request_to_resume);
+                unpaused.insert(request_to_resume);
             }
 
             if (const auto& request_to_fail = plan.rack_list_colocation_plan().request_to_fail(); request_to_fail) {
                 generate_rack_list_colocation_failure_update(out, guard, *request_to_fail);
+                unpaused.insert(request_to_fail->request_id);
+            }
+
+            if (!unpaused.empty()) {
+                out.emplace_back(topology_mutation_builder(guard.write_timestamp())
+                        .resume_rf_change_requests(paused, unpaused)
+                        .build());
             }
 
             co_await generate_rf_change_updates(out, guard, plan.rf_change_plan());
