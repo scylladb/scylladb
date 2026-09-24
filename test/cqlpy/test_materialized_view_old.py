@@ -2970,3 +2970,54 @@ def test_3362_no_ttls_with_collections(cql, test_keyspace, kind, cassandra_bug):
 
             cql.execute(f"update {table} using timestamp 12 set a = a + {item(2)} where p = 1 and c = 1")
             check([(1, 1)])
+
+# Tests that after the fixes for issue #3362, various miscellaneous
+# combinations of appearance and disappearance of unselected base cells
+# and row markers which happen to cause view_updates::do_delete_old_entry()
+# (i.e., deletion of the view row), work as expected.
+#
+# The C++ original had to sleep before its last check, because it wanted to
+# confirm that a view row does *not* disappear and had no way to know when the
+# view updates were done. Here that isn't needed: on a single node the view
+# update is applied before the write is acknowledged - see the comment at the
+# top of this file - so by the time the write returns, anything that was going
+# to happen to the view already has.
+#
+# cassandra_bug for the same reason as test_3362_no_ttls above: Cassandra
+# doesn't track the liveness of unselected base columns separately, so it
+# doesn't notice when the last one of them dies. Concretely, it fails on step 2
+# below - after the only live cell a is deleted the base row is gone, but
+# Cassandra leaves the view row in place. This is the still-open
+# CASSANDRA-13826.
+def test_3362_row_deletion_1(cql, test_keyspace, cassandra_bug):
+    with new_test_table(cql, test_keyspace, 'p int, c int, a int, b int, primary key (p, c)') as table:
+        with new_materialized_view(cql, table, 'p, c', 'p, c',
+                'p is not null and c is not null') as mv:
+            def check(expected):
+                assert expected == list(cql.execute(f"select * from {mv} where p = 1 and c = 1"))
+            # In row p=1 c=1:
+            #  1. Insert a cell a=1, at timestamp 2
+            #  2. Delete the cell a=1, at timestamp 10. The base row is now gone
+            #     and so should the view row, and do_delete_old_entry() is called.
+            #  3. Insert a full row for p=1 c=1 at timestamp 1. This is an
+            #     "insert" so it also inserts a row marker. We already have
+            #     a newer (ts=10) deletion of the cell a, but cell b is still
+            #     alive and so is the row marker.
+            #  4. Delete cell b at timestamp 3. Now both cells are dead, but
+            #     the row should still alive and the view row should still exist.
+            cql.execute(f"update {table} using timestamp 2 set a = 1 where p = 1 and c = 1")
+            check([(1, 1)])
+
+            cql.execute(f"delete a from {table} using timestamp 10 where p = 1 and c = 1")
+            check([])
+
+            cql.execute(f"insert into {table} (p, c) values (1, 1) using timestamp 1")
+            check([(1, 1)])
+
+            cql.execute(f"delete b from {table} using timestamp 3 where p = 1 and c = 1")
+            # the base row should now be empty but still exist (there's still the row marker)
+            assert [(1, 1, None, None)] == list(cql.execute(f"select * from {table} where p = 1 and c = 1"))
+            # The row should still exists, because the row marker is still
+            # alive. It was a bug that the row marker was deleted too,
+            # because of a wrong row marker deletion set for timestamp 10.
+            check([(1, 1)])
