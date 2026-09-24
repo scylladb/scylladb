@@ -87,33 +87,6 @@ SEASTAR_TEST_CASE(test_ttl) {
     });
 }
 
-SEASTAR_TEST_CASE(test_null_in_clustering_columns) {
-    return do_with_cql_env_thread([] (auto& e) {
-        e.execute_cql("create table cf (p int, c int, v1 int, v2 int, primary key (p, c))").get();
-        e.execute_cql("create materialized view vcf as select * from cf "
-                      "where p is not null and c is not null and v1 is not null "
-                      "primary key (p, v1, c)").get();
-
-        e.execute_cql("insert into cf (p, c, v1, v2) values (0, 1, 2, 3)").get();
-        eventually([&] {
-        auto msg = e.execute_cql("select p, c, v1, v2 from vcf").get();
-        assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(0)}, {int32_type->decompose(1)}, {int32_type->decompose(2)}, {int32_type->decompose(3)} }});
-        });
-
-        e.execute_cql("update cf set v1 = null where p = 0 and c = 1").get();
-        eventually([&] {
-        auto msg = e.execute_cql("select p, c, v1, v2 from vcf").get();
-        assert_that(msg).is_rows().with_size(0);
-        });
-
-        e.execute_cql("update cf set v2 = 9 where p = 0 and c = 1").get();
-        eventually([&] {
-        auto msg = e.execute_cql("select p, c, v1, v2 from vcf").get();
-        assert_that(msg).is_rows().with_size(0);
-        });
-    });
-}
-
 SEASTAR_TEST_CASE(test_create_and_alter_mv_with_ttl) {
     return do_with_cql_env_thread([] (auto& e) {
         e.execute_cql("create table cf (p int primary key, v int) with default_time_to_live = 60").get();

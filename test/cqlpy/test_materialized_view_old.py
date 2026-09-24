@@ -850,3 +850,19 @@ def test_multiple_non_primary_keys_in_view(cql, test_keyspace):
             with pytest.raises(InvalidRequest, match='Cannot include more than one non-primary key column'):
                 with new_materialized_view(cql, table, '*', pk, where):
                     pass
+
+# Setting to null a base column which is one of the view's clustering key
+# columns removes the view row - and a later update of an unrelated column
+# doesn't bring it back.
+def test_null_in_clustering_columns(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int, c int, v1 int, v2 int, primary key (p, c)') as table:
+        with new_materialized_view(cql, table, '*', 'p, v1, c',
+                'p is not null and c is not null and v1 is not null') as mv:
+            cql.execute(f"insert into {table} (p, c, v1, v2) values (0, 1, 2, 3)")
+            assert [(0, 1, 2, 3)] == list(cql.execute(f"select p, c, v1, v2 from {mv}"))
+
+            cql.execute(f"update {table} set v1 = null where p = 0 and c = 1")
+            assert [] == list(cql.execute(f"select p, c, v1, v2 from {mv}"))
+
+            cql.execute(f"update {table} set v2 = 9 where p = 0 and c = 1")
+            assert [] == list(cql.execute(f"select p, c, v1, v2 from {mv}"))
