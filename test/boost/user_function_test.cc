@@ -108,6 +108,8 @@ SEASTAR_THREAD_TEST_CASE(test_user_function_db_init) {
     }, db_cfg_ptr).get();
 }
 
+// The rest of this test was ported to test/cqlpy/test_lua_udf.py. The result
+// message types checked here aren't visible through the Python driver.
 SEASTAR_TEST_CASE(test_user_function_errors) {
     return with_udf_enabled([] (cql_test_env& e) {
         e.execute_cql("CREATE FUNCTION my_func(a int, b float) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return 2 * a';").get();
@@ -120,23 +122,8 @@ SEASTAR_TEST_CASE(test_user_function_errors) {
         BOOST_REQUIRE(change->change == sc::change_type::CREATED);
         BOOST_REQUIRE(change->target == sc::target_type::FUNCTION);
 
-        BOOST_REQUIRE_EXCEPTION(e.execute_cql("CREATE OR REPLACE FUNCTION IF NOT EXISTS my_func(a int, b float) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return 2 * a';").get(),
-                                exceptions::syntax_exception, message_equals("line 1:27 no viable alternative at input 'IF'"));
-        BOOST_REQUIRE_EXCEPTION(e.execute_cql("CREATE FUNCTION my_func(a int, b float) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return 2 * a';").get(),
-                                ire, message_equals("The function 'ks.my_func : (int, float) -> int' already exists"));
-
         msg = e.execute_cql("DROP FUNCTION IF EXISTS no_such_func(int);").get();
         BOOST_REQUIRE(dynamic_pointer_cast<cql_transport::messages::result_message::void_message>(msg));
-
-        BOOST_REQUIRE_EXCEPTION(e.execute_cql("DROP FUNCTION no_such_func(int);").get(), ire, message_equals("User function ks.no_such_func(int) doesn't exist"));
-
-        e.execute_cql("DROP FUNCTION IF EXISTS no_such_func;").get();
-
-        BOOST_REQUIRE_EXCEPTION(e.execute_cql("DROP FUNCTION no_such_func;").get(), ire, message_equals("No function named ks.no_such_func found"));
-
-        e.execute_cql("CREATE FUNCTION my_func(a int, b double) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return 2 * a';").get();
-
-        BOOST_REQUIRE_EXCEPTION(e.execute_cql("DROP FUNCTION my_func").get(), ire, message_equals("There are multiple functions named ks.my_func"));
     });
 }
 

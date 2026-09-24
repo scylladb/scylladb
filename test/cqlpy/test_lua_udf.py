@@ -565,3 +565,25 @@ def test_udf_mixups(cql, test_keyspace, scylla_only):
         pass
     with new_function(cql, test_keyspace, "() CALLED ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return 2'"):
         pass
+
+def test_udf_errors(cql, test_keyspace, scylla_only):
+    body = "RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return 2 * a'"
+    with new_function(cql, test_keyspace, f"(a int, b float) {body}", args="int, float") as f:
+        cql.execute(f"CREATE FUNCTION IF NOT EXISTS {test_keyspace}.{f}(a int, b float) {body}")
+        cql.execute(f"CREATE OR REPLACE FUNCTION {test_keyspace}.{f}(a int, b float) {body}")
+        with pytest.raises(SyntaxException, match="no viable alternative at input 'IF'"):
+            cql.execute(f"CREATE OR REPLACE FUNCTION IF NOT EXISTS {test_keyspace}.{f}(a int, b float) {body}")
+        with pytest.raises(InvalidRequest, match=re.escape(f"The function '{test_keyspace}.{f} : (int, float) -> int' already exists")):
+            cql.execute(f"CREATE FUNCTION {test_keyspace}.{f}(a int, b float) {body}")
+
+        no_such_func = unique_name()
+        cql.execute(f"DROP FUNCTION IF EXISTS {test_keyspace}.{no_such_func}(int)")
+        with pytest.raises(InvalidRequest, match=re.escape(f"User function {test_keyspace}.{no_such_func}(int) doesn't exist")):
+            cql.execute(f"DROP FUNCTION {test_keyspace}.{no_such_func}(int)")
+        cql.execute(f"DROP FUNCTION IF EXISTS {test_keyspace}.{no_such_func}")
+        with pytest.raises(InvalidRequest, match=f"No function named {test_keyspace}.{no_such_func} found"):
+            cql.execute(f"DROP FUNCTION {test_keyspace}.{no_such_func}")
+
+        with new_function(cql, test_keyspace, f"(a int, b double) {body}", name=f, args="int, double"):
+            with pytest.raises(InvalidRequest, match=f"There are multiple functions named {test_keyspace}.{f}"):
+                cql.execute(f"DROP FUNCTION {test_keyspace}.{f}")
