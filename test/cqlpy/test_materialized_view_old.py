@@ -96,3 +96,19 @@ def test_column_dropped_from_base(cql, test_keyspace, scylla_only):
             cql.execute(f"alter table {table} drop a")
             cql.execute(f"insert into {table} (p, c, v) values (0, 'foo', 1)")
             assert [(1,)] == list(cql.execute(f"select v from {mv}"))
+
+# Test that a view row follows the base row it was generated from: when the
+# base row is updated so that the view's partition key changes, the old view
+# row goes away and a new one appears in its place.
+def test_updates(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'k int, v int, primary key (k)') as table:
+        with new_materialized_view(cql, table, '*', 'v, k',
+                'k is not null and v is not null') as mv:
+            cql.execute(f"insert into {table} (k, v) values (0, 0)")
+            assert [(0, 0)] == list(cql.execute(f"select k, v from {table} where k = 0"))
+            assert [(0, 0)] == list(cql.execute(f"select k, v from {mv} where v = 0"))
+
+            cql.execute(f"insert into {table} (k, v) values (0, 1)")
+            assert [(0, 1)] == list(cql.execute(f"select k, v from {table} where k = 0"))
+            assert [] == list(cql.execute(f"select k, v from {mv} where v = 0"))
+            assert [(0, 1)] == list(cql.execute(f"select k, v from {mv} where v = 1"))

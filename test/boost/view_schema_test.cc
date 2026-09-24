@@ -33,40 +33,6 @@ BOOST_AUTO_TEST_SUITE(view_schema_test)
 
 using namespace std::literals::chrono_literals;
 
-SEASTAR_TEST_CASE(test_updates) {
-    return do_with_cql_env_thread([] (auto& e) {
-        e.execute_cql("create table base (k int, v int, primary key (k));").get();
-        e.execute_cql("create materialized view mv as select * from base "
-                       "where k is not null and v is not null primary key (v, k)").get();
-
-        e.execute_cql("insert into base (k, v) values (0, 0);").get();
-        auto msg = e.execute_cql("select k, v from base where k = 0").get();
-        assert_that(msg).is_rows()
-            .with_size(1)
-            .with_row({ {int32_type->decompose(0)}, {int32_type->decompose(0)} });
-        eventually([&] {
-        auto msg = e.execute_cql("select k, v from mv where v = 0").get();
-        assert_that(msg).is_rows()
-            .with_size(1)
-            .with_row({ {int32_type->decompose(0)}, {int32_type->decompose(0)} });
-        });
-
-        e.execute_cql("insert into base (k, v) values (0, 1);").get();
-        msg = e.execute_cql("select k, v from base where k = 0").get();
-        assert_that(msg).is_rows()
-                .with_size(1)
-                .with_row({ {int32_type->decompose(0)}, {int32_type->decompose(1)} });
-        eventually([&] {
-        auto msg = e.execute_cql("select k, v from mv where v = 0").get();
-        assert_that(msg).is_rows().with_size(0);
-        msg = e.execute_cql("select k, v from mv where v = 1").get();
-        assert_that(msg).is_rows()
-                .with_size(1)
-                .with_row({ {int32_type->decompose(0)}, {int32_type->decompose(1)} });
-        });
-    });
-}
-
 SEASTAR_TEST_CASE(test_updates_no_read_before_update) {
     return do_with_cql_env_thread([] (auto& e) {
         e.execute_cql("create table base (k int, c int, v int, primary key (k));").get();
