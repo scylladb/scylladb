@@ -474,24 +474,7 @@ auto coordinator::create_operation_ctx(const schema& schema, const dht::token& t
     replica_selector replicas(std::move(erm), schema.id(), token, needs_leader);
 
     if (!replicas.may_serve_here()) {
-        const auto group_id = replicas.group_id();
-        // For writes, check the leader cache to avoid an extra roundtrip.
-        // For now, reads skip the cache because any replica holding the data can serve them.
-        if (needs_leader) {
-            if (const auto cached = _groups_manager.leader_cache().get(group_id)) {
-                if (const auto* target = replicas.find_replica(*cached); target && _gossiper.is_alive(target->host)) {
-                    return make_ready_future<value_or_redirect<operation_ctx>>(
-                        redirect_to_leader(*target, _groups_manager, group_id));
-                }
-                // Cached leader is no longer a replica/alive, evict it.
-                _groups_manager.leader_cache().erase(group_id);
-            }
-            return make_ready_future<value_or_redirect<operation_ctx>>(
-                redirect_to_leader(replicas.closest_replica(_gossiper), _groups_manager, group_id));
-        }
-        // Bounced to a replica that holds the data, never merely to one that could be
-        // the leader - the target serves the read itself, so it has to be able to.
-        return make_ready_future<value_or_redirect<operation_ctx>>(redirect_to_replica(replicas.closest_replica(_gossiper)));
+        return make_ready_future<value_or_redirect<operation_ctx>>(redirect_elsewhere(replicas, needs_leader));
     }
 
     return utils::get_local_injector().inject(
@@ -504,6 +487,25 @@ auto coordinator::create_operation_ctx(const schema& schema, const dht::token& t
             .raft_server = std::move(server),
         });
     });
+}
+
+need_redirect coordinator::redirect_elsewhere(const replica_selector& replicas, bool needs_leader) {
+    const auto group_id = replicas.group_id();
+    // For writes, check the leader cache to avoid an extra roundtrip.
+    // For now, reads skip the cache because any replica holding the data can serve them.
+    if (needs_leader) {
+        if (const auto cached = _groups_manager.leader_cache().get(group_id)) {
+            if (const auto* target = replicas.find_replica(*cached); target && _gossiper.is_alive(target->host)) {
+                return redirect_to_leader(*target, _groups_manager, group_id);
+            }
+            // Cached leader is no longer a replica/alive, evict it.
+            _groups_manager.leader_cache().erase(group_id);
+        }
+        return redirect_to_leader(replicas.closest_replica(_gossiper), _groups_manager, group_id);
+    }
+    // Bounced to a replica that holds the data, never merely to one that could be
+    // the leader - the target serves the read itself, so it has to be able to.
+    return redirect_to_replica(replicas.closest_replica(_gossiper));
 }
 
 coordinator::coordinator(groups_manager& groups_manager, replica::database& db, gms::gossiper& gossiper)

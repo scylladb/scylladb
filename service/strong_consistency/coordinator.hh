@@ -88,6 +88,8 @@ private:
         const dht::token& token,
         abort_source& as,
         bool needs_leader);
+    // Where to send a request that `replicas` doesn't allow this shard to serve.
+    need_redirect redirect_elsewhere(const replica_selector& replicas, bool needs_leader);
 public:
     coordinator(groups_manager& groups_manager, replica::database& db, gms::gossiper& gossiper);
 
