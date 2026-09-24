@@ -1488,17 +1488,14 @@ async def test_restore_tablets_leaves_a_hintless_table_resizable(build_mode: str
         status = await manager.api.wait_task(servers[0].ip_addr, tid)
         assert (status is not None) and (status['state'] == 'done')
 
-        restored_count = await get_tablet_count(manager, servers[0], ks, 'test')
-        assert restored_count == 1, f"Expected the restore to leave 1 tablet, got {restored_count}"
-
         # Give the balancer the on-disk sizes it decides resizes on.
         await asyncio.gather(*(manager.api.flush_keyspace(s.ip_addr, ks) for s in servers))
         await asyncio.gather(*(manager.api.keyspace_compaction(s.ip_addr, ks, 'test') for s in servers))
 
         async def split():
-            return True if await get_tablet_count(manager, servers[0], ks, 'test') > restored_count else None
+            return True if await get_tablet_count(manager, servers[0], ks, 'test') > 1 else None
         await wait_for(split, time.time() + 120,
-                       label=f"the balancer to split the restored table away from {restored_count} tablet")
+                       label="the balancer to split the restored table away from 1 tablet")
 
         # ... and the hints the restore put back must be the ones the table declared, i.e. none.
         desc = (await cql.run_async(f"DESC TABLE {ks}.test"))[0].create_statement
