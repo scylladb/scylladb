@@ -490,3 +490,8 @@ def test_lua_called_on_null(cql, test_keyspace, scylla_only):
     with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val int") as table:
         cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', null)")
         assert call_lua(cql, test_keyspace, table, "(val int) CALLED ON NULL INPUT RETURNS int", "return 2") == [2]
+
+def test_lua_return_null_on_null(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val int") as table:
+        cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', null)")
+        assert call_lua(cql, test_keyspace, table, "(val int) RETURNS NULL ON NULL INPUT RETURNS int", "return 2") == [None]
