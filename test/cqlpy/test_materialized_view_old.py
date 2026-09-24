@@ -2641,3 +2641,35 @@ def test_partial_update_with_unselected_udt(cql, test_keyspace, flush):
                 # The view needs to know whether u is alive, so u can't be dropped
                 with pytest.raises(InvalidRequest, match='Cannot drop.*column u'):
                     cql.execute(f"alter table {table} drop u")
+
+# A view keyed on a regular base column: the view row follows that column
+# appearing, being set to null, being deleted with the whole base partition,
+# and being written again.
+@pytest.mark.parametrize("flush", [False, True], ids=["noflush", "flush"])
+def test_partition_deletion(cql, test_keyspace, flush):
+    no_cache = "with caching = {'enabled': 'false'}" if flush and is_scylla(cql) else ""
+    def maybe_flush():
+        if flush:
+            nodetool.flush_all(cql)
+    with new_test_table(cql, test_keyspace, 'p int, a int, b int, c int, primary key (p)',
+            extra=no_cache) as table:
+        with new_materialized_view(cql, table, '*', 'p, a',
+                'p is not null and a is not null', extra=no_cache) as mv:
+            def check(expected):
+                assert expected == list(cql.execute(f"select * from {mv}"))
+
+            cql.execute(f"insert into {table} (p, a, b, c) values (1, 1, 1, 1) using timestamp 0")
+            maybe_flush()
+            check([(1, 1, 1, 1)])
+
+            cql.execute(f"update {table} using timestamp 1 set a = null where p = 1")
+            maybe_flush()
+            check([])
+
+            cql.execute(f"delete from {table} using timestamp 2 where p = 1")
+            maybe_flush()
+            check([])
+
+            cql.execute(f"update {table} using timestamp 3 set a = 1, b = 1 where p = 1")
+            maybe_flush()
+            check([(1, 1, 1, None)])

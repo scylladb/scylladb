@@ -371,67 +371,6 @@ SEASTAR_TEST_CASE(test_unselected_columns_ttl_with_flush) {
     }, cfg);
 }
 
-void test_partition_deletion(cql_test_env& e, std::function<void()>&& maybe_flush) {
-    e.execute_cql("create table cf (p int, a int, b int, c int, primary key (p))").get();
-    e.execute_cql("create materialized view vcf as select * from cf "
-                  "where p is not null and a is not null "
-                  "primary key (p, a)").get();
-
-    e.execute_cql("insert into cf (p, a, b, c) values (1, 1, 1, 1) using timestamp 0").get();
-    maybe_flush();
-    eventually([&] {
-        auto msg = e.execute_cql("select * from vcf").get();
-        assert_that(msg).is_rows().with_rows({{
-            {int32_type->decompose(1)},
-            {int32_type->decompose(1)},
-            {int32_type->decompose(1)},
-            {int32_type->decompose(1)}
-        }});
-    });
-
-    e.execute_cql("update cf using timestamp 1 set a = null where p = 1").get();
-    maybe_flush();
-    eventually([&] {
-        auto msg = e.execute_cql("select * from vcf").get();
-        assert_that(msg).is_rows().is_empty();
-    });
-
-    e.execute_cql("delete from cf using timestamp 2 where p = 1").get();
-    maybe_flush();
-    eventually([&] {
-        auto msg = e.execute_cql("select * from vcf").get();
-        assert_that(msg).is_rows().is_empty();
-    });
-
-    e.execute_cql("update cf using timestamp 3 set a = 1, b = 1 where p = 1").get();
-    maybe_flush();
-    eventually([&] {
-        auto msg = e.execute_cql("select * from vcf").get();
-        assert_that(msg).is_rows().with_rows({{
-            {int32_type->decompose(1)},
-            {int32_type->decompose(1)},
-            {int32_type->decompose(1)},
-            { }
-        }});
-    });
-}
-
-SEASTAR_TEST_CASE(test_partition_deletion_without_flush) {
-    return do_with_cql_env_thread([] (auto& e) {
-        test_partition_deletion(e, [] { });
-    });
-}
-
-SEASTAR_TEST_CASE(test_partition_deletion_with_flush) {
-    auto cfg = make_shared<db::config>();
-    cfg->enable_cache(false);
-    return do_with_cql_env_thread([] (auto& e) {
-        test_partition_deletion(e, [&] {
-            e.local_db().flush_all_memtables().get();
-        });
-    }, cfg);
-}
-
 void assert_msg_rows(auto&& msg, std::vector<std::vector<bytes_opt>>&& rows = {}) {
     if (rows.empty()) {
         assert_that(msg).is_rows().is_empty();
