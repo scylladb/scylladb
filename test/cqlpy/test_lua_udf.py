@@ -68,3 +68,9 @@ def test_lua_boolean_argument(cql, test_keyspace, scylla_only):
     with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val boolean") as table:
         cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', true)")
         assert call_lua(cql, test_keyspace, table, "(val boolean) CALLED ON NULL INPUT RETURNS int", "return val and 1 or 0") == [1]
+
+def test_lua_time_argument(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val time") as table:
+        cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', '01:23:45.6789')")
+        assert call_lua(cql, test_keyspace, table, "(val time) CALLED ON NULL INPUT RETURNS bigint", "return val") == [
+            (((60 + 23)*60 + 45)*10000 + 6789)*100000]
