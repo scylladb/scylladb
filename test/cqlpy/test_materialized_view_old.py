@@ -2006,3 +2006,18 @@ def test_partition_key_only_table(cql, test_keyspace):
             cql.execute(f"insert into {table} (p1, p2) values (1, 1)")
             assert [(1, 1)] == list(cql.execute(f"select * from {mv}"))
 
+# Deleting a single column of the base row removes it from the view row too -
+# and when that column is one the view's partition key is built from, the view
+# row goes away entirely.
+def test_delete_single_column_in_view_partition_key(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'a int, b int, c int, d int, primary key (a, b)') as table:
+        with new_materialized_view(cql, table, '*', 'd, a, b',
+                'a is not null and b is not null and d is not null') as mv:
+            cql.execute(f"insert into {table} (a, b, c, d) values (0, 0, 0, 0)")
+            assert [(0, 0, 0, 0)] == list(cql.execute(f"select a, d, b, c from {mv}"))
+
+            cql.execute(f"delete c from {table} where a = 0 and b = 0")
+            assert [(0, 0, 0, None)] == list(cql.execute(f"select a, d, b, c from {mv}"))
+
+            cql.execute(f"delete d from {table} where a = 0 and b = 0")
+            assert [] == list(cql.execute(f"select a, d, b from {mv}"))
