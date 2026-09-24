@@ -509,3 +509,8 @@ def test_lua_timeout(cql, test_keyspace, scylla_only):
         cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 42)")
         with pytest.raises(InvalidRequest, match="lua execution timeout: "):
             call_lua(cql, test_keyspace, table, "(val int) RETURNS NULL ON NULL INPUT RETURNS int", "while true do end")
+
+def test_lua_compilation_error(cql, test_keyspace, scylla_only):
+    with pytest.raises(InvalidRequest, match=re.escape("""could not compile: [string "<internal>"]:2: <eof> expected near '@'""")):
+        with new_function(cql, test_keyspace, "(val int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE lua AS 'return 2 @ val'"):
+            pass
