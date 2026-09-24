@@ -2673,3 +2673,48 @@ def test_partition_deletion(cql, test_keyspace, flush):
             cql.execute(f"update {table} using timestamp 3 set a = 1, b = 1 where p = 1")
             maybe_flush()
             check([(1, 1, 1, None)])
+
+# CASSANDRA-13409: deleted columns must not reappear when the view key changes.
+@pytest.mark.parametrize("flush", [False, True], ids=["noflush", "flush"])
+def test_commutative_row_deletion(cql, test_keyspace, flush):
+    no_cache = "with caching = {'enabled': 'false'}" if flush and is_scylla(cql) else ""
+    def maybe_flush():
+        if flush:
+            nodetool.flush_all(cql)
+    with new_test_table(cql, test_keyspace, 'p int, v1 int, v2 int, primary key (p)',
+            extra=no_cache) as table:
+        with new_materialized_view(cql, table, '*', 'v1, p',
+                'p is not null and v1 is not null', extra=no_cache) as mv:
+            def check(base, view, view_select='v1, p, v2, writetime(v2)'):
+                assert base == list(cql.execute(f"select p, v1, v2 from {table}"))
+                assert view == list(cql.execute(f"select {view_select} from {mv}"))
+
+            cql.execute(f"insert into {table} (p, v1, v2) values (3, 1, 3) using timestamp 1")
+            maybe_flush()
+            check([(3, 1, 3)], [(3, 1)], view_select='v2, writetime(v2)')
+
+            cql.execute(f"delete from {table} using timestamp 2 where p = 3")
+            maybe_flush()
+            check([], [], view_select='v2, writetime(v2)')
+
+            cql.execute(f"insert into {table} (p, v1) values (3, 1) using timestamp 3")
+            maybe_flush()
+            check([(3, 1, None)], [(1, 3, None, None)])
+
+            cql.execute(f"update {table} using timestamp 4 set v1 = 2 where p = 3")
+            maybe_flush()
+            check([(3, 2, None)], [(2, 3, None, None)])
+
+            cql.execute(f"update {table} using timestamp 5 set v1 = 1 where p = 3")
+            maybe_flush()
+            check([(3, 1, None)], [(1, 3, None, None)])
+
+            # Compacting must not bring the deleted v2 back
+            nodetool.compact(cql, table)
+            nodetool.compact(cql, mv)
+            check([(3, 1, None)], [(1, 3, None, None)])
+
+            # The deletion must win over the preceding write at the same timestamp.
+            cql.execute(f"update {table} using timestamp 5 set v1 = null where p = 3")
+            maybe_flush()
+            check([(3, None, None)], [])
