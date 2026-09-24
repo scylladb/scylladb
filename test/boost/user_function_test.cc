@@ -66,17 +66,6 @@ static future<> with_udf_enabled(Func&& func) {
     return do_with_cql_env_thread(std::forward<Func>(func), db_cfg_ptr);
 }
 
-SEASTAR_TEST_CASE(test_user_function_map_argument) {
-    return with_udf_enabled([] (cql_test_env& e) {
-        e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val map<int, int>);").get();
-        e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', {1 : 2, 3 : 4, 5: 6});").get();
-        e.execute_cql("CREATE FUNCTION sum_keys(val map<int, int>) CALLED ON NULL INPUT RETURNS int LANGUAGE Lua AS 'local ret = 0; for k, v in pairs(val) do ret = ret + k; end return ret';").get();
-        e.execute_cql("CREATE FUNCTION sum_values(val map<int, int>) CALLED ON NULL INPUT RETURNS int LANGUAGE Lua AS 'local ret = 0; for k, v in pairs(val) do ret = ret + v; end return ret';").get();
-        auto res = e.execute_cql("SELECT sum_keys(val), sum_values(val) FROM my_table;").get();
-        assert_that(res).is_rows().with_rows({{serialized(9), serialized(12)}});
-    });
-}
-
 SEASTAR_TEST_CASE(test_user_function_decimal_argument) {
     return with_udf_enabled([] (cql_test_env& e) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val decimal);").get();

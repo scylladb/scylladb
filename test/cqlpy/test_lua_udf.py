@@ -136,3 +136,13 @@ def test_lua_set_argument(cql, test_keyspace, scylla_only):
         cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', {{1, 2, 3}})")
         assert call_lua(cql, test_keyspace, table, "(val set<int>) CALLED ON NULL INPUT RETURNS int",
                         "local ret = 0; for k in pairs(val) do ret = ret + k; end return ret") == [6]
+
+def test_lua_map_argument(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val map<int, int>") as table:
+        cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', {{1 : 2, 3 : 4, 5: 6}})")
+        sig = "(val map<int, int>) CALLED ON NULL INPUT RETURNS int"
+        sum_keys = "local ret = 0; for k, v in pairs(val) do ret = ret + k; end return ret"
+        sum_values = "local ret = 0; for k, v in pairs(val) do ret = ret + v; end return ret"
+        with new_function(cql, test_keyspace, f"{sig} LANGUAGE lua AS '{sum_keys}'") as f1, \
+             new_function(cql, test_keyspace, f"{sig} LANGUAGE lua AS '{sum_values}'") as f2:
+            assert list(cql.execute(f"SELECT {test_keyspace}.{f1}(val), {test_keyspace}.{f2}(val) FROM {table}").one()) == [9, 12]
