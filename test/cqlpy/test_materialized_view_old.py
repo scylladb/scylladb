@@ -2604,3 +2604,40 @@ def test_partial_update_with_unselected_collections(cql, test_keyspace, flush):
             # The view needs to know whether m is alive, so m can't be dropped
             with pytest.raises(InvalidRequest, match='Cannot drop column m'):
                 cql.execute(f"alter table {table} drop m")
+
+# The same as test_partial_update_with_unselected_collections above, for an
+# unselected user-defined type column - including updating just one of its
+# fields.
+@pytest.mark.parametrize("flush", [False, True], ids=["noflush", "flush"])
+def test_partial_update_with_unselected_udt(cql, test_keyspace, flush):
+    no_cache = "with caching = {'enabled': 'false'}" if flush and is_scylla(cql) else ""
+    def maybe_flush():
+        if flush:
+            nodetool.flush_all(cql)
+    with new_type(cql, test_keyspace, '(a int, b int)') as ut:
+        with new_test_table(cql, test_keyspace,
+                f'p int, c int, a int, b int, u {ut}, primary key (p, c)', extra=no_cache) as table:
+            with new_materialized_view(cql, table, 'p, c, a, b', 'c, p',
+                    'p is not null and c is not null', extra=no_cache) as mv:
+                def check(expected):
+                    assert expected == list(cql.execute(f"select * from {mv}"))
+
+                cql.execute(f"update {table} set u.a = 1 where p = 1 and c = 1")
+                maybe_flush()
+                check([(1, 1, None, None)])
+
+                cql.execute(f"update {table} set b = 3 where p = 1 and c = 1")
+                maybe_flush()
+                check([(1, 1, None, 3)])
+
+                cql.execute(f"update {table} set b=null, u.a = null where p = 1 and c = 1")
+                maybe_flush()
+                check([])
+
+                cql.execute(f"update {table} set u = {{a: 1, b: 1}} where p = 1 and c = 1")
+                maybe_flush()
+                check([(1, 1, None, None)])
+
+                # The view needs to know whether u is alive, so u can't be dropped
+                with pytest.raises(InvalidRequest, match='Cannot drop.*column u'):
+                    cql.execute(f"alter table {table} drop u")
