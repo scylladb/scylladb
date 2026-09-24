@@ -2871,3 +2871,58 @@ def test_no_regular_base_column_in_view_pk(cql, test_keyspace, flush):
             cql.execute(f"update {table} using timestamp 5 set v2 = 1 where p = 1 and c = 1")
             maybe_flush()
             check([(1, 1, None, 1)])
+
+# A reproducer for issue #3362, not involving TTLs.
+# The test involves a view that selects no column except the base's primary
+# key, so view rows contain no cells besides a row marker, so as a base
+# row appears and disappears as we update and delete individual cells in
+# that row, we need to insert and delete the row marker with varying
+# timestamps to make sure the view row appears and disappears as needed.
+# But as we shall see, after enough trickery, we run out of timestamps
+# to use to revive the row marker, and fail to revive it. So to fix
+# issue #3362, we needed to remember all cells separately ("virtual
+# cells").
+#
+# cassandra_bug: the last step below leaves Cassandra's view empty while the
+# base row is alive. Remembering the unselected cells separately is exactly
+# what Scylla did for #3362 and what Cassandra has not done - see the comment
+# on test_partial_delete_unselected_column above, and the still-open
+# CASSANDRA-13826 which proposes it.
+def test_3362_no_ttls(cql, test_keyspace, cassandra_bug):
+    with new_test_table(cql, test_keyspace, 'p int, c int, a int, b int, primary key (p, c)') as table:
+        with new_materialized_view(cql, table, 'p, c', 'p, c',
+                'p is not null and c is not null') as mv:
+            def check(expected):
+                assert expected == list(cql.execute(f"select * from {mv} where p = 1 and c = 1"))
+
+            # In row p=1 c=1, insert two cells - b=1 at timestamp 10, a=1 at timestamp 20:
+            cql.execute(f"update {table} using timestamp 10 set b = 1 where p = 1 and c = 1")
+            check([(1, 1)])
+
+            cql.execute(f"update {table} using timestamp 20 set a = 1 where p = 1 and c = 1")
+            check([(1, 1)])
+
+            # Delete just a=1 (with timestamp 21). The base row will still exist (with b=1),
+            # and accordingly the view row too:
+            cql.execute(f"delete a from {table} using timestamp 21 where p = 1 and c = 1")
+            check([(1, 1)])
+
+            # At this point, we still have the base row with b=1 at timestamp 10
+            # (and a=1 was deleted at timestamp 21). If we delete the b=1 at
+            # timestamp 11, nothing will remain in the base row, and the view
+            # row should disappear as well:
+            cql.execute(f"delete b from {table} using timestamp 11 where p = 1 and c = 1")
+            check([])
+
+            # Now we finally reproduce #3362: We now add b=1 again, at timestamp
+            # 12 (it was earlier deleted in timestamp 11). The base row is live
+            # again, and so should the view row.
+            # With issue #3362, the view row failed to become alive. The reason
+            # is that to make the above is_empty() succeed, the implementation
+            # deletes the row marker with timestamp 21 (the maximal timestamp
+            # seen in the row). But now, we add a row marker again with the same
+            # timestamp 21, but the deletion wins so the row marker is still
+            # missing. (note that had data won over deletions, the is_empty()
+            # test above would have failed instead).
+            cql.execute(f"update {table} using timestamp 12 set b = 1 where p = 1 and c = 1")
+            check([(1, 1)])
