@@ -44,6 +44,7 @@ SEASTAR_TEST_CASE(test_http_error_classification_system_errors) {
     BOOST_REQUIRE_EQUAL(utils::http::from_system_error(std::system_error(ECONNABORTED, std::system_category())), utils::http::retryable::yes);
     BOOST_REQUIRE_EQUAL(utils::http::from_system_error(std::system_error(static_cast<int>(std::errc::broken_pipe), std::system_category())), utils::http::retryable::yes);
     BOOST_REQUIRE_EQUAL(utils::http::from_system_error(std::system_error(ENETDOWN, std::system_category())), utils::http::retryable::yes);
+    BOOST_REQUIRE_EQUAL(utils::http::from_system_error(std::system_error(static_cast<int>(std::errc::protocol_error), std::system_category())), utils::http::retryable::yes);
 
     BOOST_REQUIRE_EQUAL(utils::http::from_system_error(std::system_error(EACCES, std::system_category())), utils::http::retryable::no);
     BOOST_REQUIRE_EQUAL(utils::http::from_system_error(std::system_error(EPERM, std::system_category())), utils::http::retryable::no);
