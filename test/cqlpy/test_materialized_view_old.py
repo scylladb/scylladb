@@ -3021,3 +3021,36 @@ def test_3362_row_deletion_1(cql, test_keyspace, cassandra_bug):
             # alive. It was a bug that the row marker was deleted too,
             # because of a wrong row marker deletion set for timestamp 10.
             check([(1, 1)])
+
+# Verify that do_delete_old_entry()'s r.apply(update.tomb()) works as expected.
+# As in the test above, the original's sleeps are not needed here.
+def test_3362_row_deletion_2(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int, c int, a int, b int, primary key (p, c)') as table:
+        with new_materialized_view(cql, table, 'p, c', 'p, c',
+                'p is not null and c is not null') as mv:
+            def check(expected):
+                assert expected == list(cql.execute(f"select * from {mv} where p = 1 and c = 1"))
+            # In row p=1 c=1, insert two cells - b=1 at timestamp 1, a=1 at timestamp 2.
+            # We use "update", not "insert", so there will not be a row marker.
+            cql.execute(f"update {table} using timestamp 1 set b = 1 where p = 1 and c = 1")
+            check([(1, 1)])
+
+            cql.execute(f"update {table} using timestamp 2 set a = 1 where p = 1 and c = 1")
+            check([(1, 1)])
+
+            # Delete the entire base row, with timestamp 10. The view row should
+            # also disappear.
+            cql.execute(f"delete from {table} using timestamp 10 where p = 1 and c = 1")
+            check([])
+
+            # Reinsert an (unselected) cell in row p=1 c=1 at timestamp 3.
+            # This is *before* the timestamp of the row's deletion (which was 10)
+            # so the row should NOT reappear. For this to work, it is important
+            # that view_updates::do_delete_old_entry() call r.apply(update.tomb()).
+            cql.execute(f"update {table} using timestamp 3 set b = 1 where p = 1 and c = 1")
+            check([])
+
+            # If we reinsert the cell at timestamp 11, after the deletion, the base
+            # row will re-emerge, and so should the view row
+            cql.execute(f"update {table} using timestamp 11 set b = 1 where p = 1 and c = 1")
+            check([(1, 1)])
