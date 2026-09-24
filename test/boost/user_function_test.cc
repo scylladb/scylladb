@@ -66,31 +66,6 @@ static future<> with_udf_enabled(Func&& func) {
     return do_with_cql_env_thread(std::forward<Func>(func), db_cfg_ptr);
 }
 
-SEASTAR_TEST_CASE(test_user_function_nested_types) {
-    return with_udf_enabled([] (cql_test_env& e) {
-        e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val int);").get();
-        e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', 3);").get();
-        e.execute_cql("CREATE FUNCTION my_func(val int) CALLED ON NULL INPUT RETURNS map<int, frozen<set<frozen<list<frozen<tuple<text, vector<bigint, 2>>>>>>>> LANGUAGE Lua AS  \
-                      'return {[42] = {[{{\"foo\", {41, 43}}, {\"bar\", {40, 44}}}] = true, [{{\"bar\", {40, 44}}}] = true}, [39] = {}}';").get();
-        auto res = e.execute_cql("SELECT my_func(val) FROM my_table;").get();
-        auto vector_type = vector_type_impl::get_instance(long_type, 2);
-        auto vector_value1 = make_vector_value(vector_type, {int64_t(41), int64_t(43)});
-        auto vector_value2 = make_vector_value(vector_type, {int64_t(40), int64_t(44)});
-        auto tuple_type = tuple_type_impl::get_instance({utf8_type, vector_type});
-        auto tuple_value1 = make_tuple_value(tuple_type, {"foo", vector_value1});
-        auto tuple_value2 = make_tuple_value(tuple_type, {"bar", vector_value2});
-        auto list_type = list_type_impl::get_instance(tuple_type, false);
-        data_value list_value1 = make_list_value(list_type, {tuple_value1, tuple_value2});
-        data_value list_value2 = make_list_value(list_type, {tuple_value2});
-        auto set_type = set_type_impl::get_instance(list_type, false);
-        data_value set_value1 = make_set_value(set_type, {list_value2, list_value1});
-        data_value set_value2 = make_set_value(set_type, {});
-        auto map_type = map_type_impl::get_instance(int32_type, set_type, false);
-        data_value map_value = make_map_value(map_type, {{39, set_value2}, {42, set_value1}});
-        assert_that(res).is_rows().with_rows({{map_value.serialize()}});
-    });
-}
-
 SEASTAR_TEST_CASE(test_user_function_duration_return) {
     return with_udf_enabled([] (cql_test_env& e) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val int);").get();

@@ -425,3 +425,14 @@ def test_lua_set_return(cql, test_keyspace, scylla_only):
         assert call_lua(cql, test_keyspace, table, sig, "return {[1] = true, [42] = true}") == [{1, 42}]
         with pytest.raises(InvalidRequest, match="sets are represented with tables with true values"):
             call_lua(cql, test_keyspace, table, sig, "return {[1] = false}")
+
+# The Python driver's representation of nested collections is awkward
+# to compare, so we compare the JSON representation of the result.
+def test_lua_nested_types(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val int") as table:
+        cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 3)")
+        sig = "(val int) CALLED ON NULL INPUT RETURNS map<int, frozen<set<frozen<list<frozen<tuple<text, vector<bigint, 2>>>>>>>>"
+        body = 'return {[42] = {[{{"foo", {41, 43}}, {"bar", {40, 44}}}] = true, [{{"bar", {40, 44}}}] = true}, [39] = {}}'
+        with new_function(cql, test_keyspace, f"{sig} LANGUAGE lua AS '{body}'") as f:
+            res = cql.execute(f"SELECT toJson({test_keyspace}.{f}(val)) FROM {table}").one()[0]
+            assert res == '{"39": [], "42": [[["bar", [40, 44]]], [["foo", [41, 43]], ["bar", [40, 44]]]]}'
