@@ -2718,3 +2718,38 @@ def test_commutative_row_deletion(cql, test_keyspace, flush):
             cql.execute(f"update {table} using timestamp 5 set v1 = null where p = 3")
             maybe_flush()
             check([(3, None, None)], [])
+
+# The view's key column v1 can be rewritten at timestamps below that of the
+# base row's marker, and the view follows it - while v2, written earlier
+# still, keeps the write time it had all along.
+@pytest.mark.parametrize("flush", [False, True], ids=["noflush", "flush"])
+def test_update_with_column_timestamp_smaller_than_pk(cql, test_keyspace, flush):
+    no_cache = "with caching = {'enabled': 'false'}" if flush and is_scylla(cql) else ""
+    def maybe_flush():
+        if flush:
+            nodetool.flush_all(cql)
+    with new_test_table(cql, test_keyspace, 'p int, v1 int, v2 int, primary key (p)',
+            extra=no_cache) as table:
+        with new_materialized_view(cql, table, '*', 'v1, p',
+                'p is not null and v1 is not null', extra=no_cache) as mv:
+            def check(expected):
+                assert expected == list(cql.execute(
+                    f"select v1, p, v2, writetime(v2) from {mv}"))
+
+            cql.execute(f"insert into {table} (p, v1, v2) values (3, 1, 3) using timestamp 6")
+            maybe_flush()
+            check([(1, 3, 3, 6)])
+
+            # A row marker written at a much later timestamp doesn't disturb
+            # the columns written before it
+            cql.execute(f"insert into {table} (p) values (3) using timestamp 20")
+            maybe_flush()
+            check([(1, 3, 3, 6)])
+
+            cql.execute(f"update {table} using timestamp 7 set v1 = 2 where p = 3")
+            maybe_flush()
+            check([(2, 3, 3, 6)])
+
+            cql.execute(f"update {table} using timestamp 8 set v1 = 1 where p = 3")
+            maybe_flush()
+            check([(1, 3, 3, 6)])
