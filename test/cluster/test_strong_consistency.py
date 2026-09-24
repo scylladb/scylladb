@@ -2148,6 +2148,62 @@ async def test_rf_decrease(manager: ScyllaClusterManager):
                 await check_new_replica_serves_data(manager, server, host, group_id, cql, table, range(20))
 
 
+async def test_removenode(manager: ScyllaClusterManager):
+    """removenode of a replica rebuilds the tablet on another node of the same rack.
+
+    The removed node is down, so the rebuild has only the remaining two voters to
+    commit the raft config change with, and the new replica gets the data from the
+    snapshot transfer.
+    """
+    cmdline = DEFAULT_CMDLINE + ['--logger-log-level', 'raft_topology=debug']
+    servers = await manager.servers_add(4, config=DEFAULT_CONFIG, cmdline=cmdline, property_file=[
+        {'dc': 'dc1', 'rack': 'rack1'},
+        {'dc': 'dc1', 'rack': 'rack1'},
+        {'dc': 'dc1', 'rack': 'rack2'},
+        {'dc': 'dc1', 'rack': 'rack3'},
+    ])
+    cql, _ = await manager.get_ready_cql(servers)
+    host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
+
+    await manager.disable_tablet_balancing()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1', 'rack2', 'rack3']} "
+                                         "AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, c int") as table:
+            table_name = table.split('.')[-1]
+            group_id = await get_table_raft_group_id(manager, ks, table_name)
+
+            await insert_rows(cql, table, range(10))
+
+            tablets = await get_all_tablet_replicas(manager, servers[0], ks, table_name)
+            assert len(tablets) == 1
+            # Both nodes of rack1 can hold the replica without changing the rack
+            # distribution, so the replica can be rebuilt on the other one.
+            rack1 = host_ids[:2]
+            removed_host_id = next(host_id for host_id, _ in tablets[0].replicas if host_id in rack1)
+            new_host_id = next(host_id for host_id in rack1 if host_id != removed_host_id)
+            removed_server = servers[host_ids.index(removed_host_id)]
+            new_server = servers[host_ids.index(new_host_id)]
+            live_servers = [s for s in servers if s != removed_server]
+
+            logger.info(f"Stopping and removing the rack1 replica {removed_host_id}")
+            await manager.server_stop_gracefully(removed_server.server_id)
+            await manager.remove_node(servers[2].server_id, removed_server.server_id)
+            await manager.api.quiesce_topology(servers[2].ip_addr)
+
+            tablets = await get_all_tablet_replicas(manager, servers[2], ks, table_name)
+            assert len(tablets) == 1
+            replica_hosts = {host_id for host_id, _ in tablets[0].replicas}
+            assert replica_hosts == {new_host_id, host_ids[2], host_ids[3]}, \
+                f"Expected the rack1 replica to be rebuilt on {new_host_id}, got {tablets[0].replicas}"
+
+            cql, hosts = await manager.get_ready_cql(live_servers)
+            await check_new_replica_serves_data(manager, new_server, hosts[live_servers.index(new_server)],
+                                                group_id, cql, table, range(10))
+            await insert_rows(cql, table, range(10, 20))
+            await check_rows(cql, table, range(20))
+
+
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
 async def test_tablet_migration_config_change_retried(manager: ScyllaClusterManager):
     """A raft configuration change that fails once must be re-driven.
