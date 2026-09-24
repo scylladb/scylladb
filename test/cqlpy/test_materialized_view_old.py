@@ -2516,3 +2516,51 @@ def test_partial_delete_selected_column(cql, test_keyspace, flush):
 
             cql.execute(f"insert into {table} (p, c) values (1, 1) using timestamp 15")
             check([(1, 1, None, None)])
+
+# A view selecting nothing but the base's key columns still has to know
+# whether the base row is alive, which depends on the liveness of columns the
+# view doesn't select - here v1 and v2.
+#
+# The C++ original continued with a few TTL steps, which need to make a TTL
+# expire instantly; those stayed behind in view_complex_test.cc, as
+# test_update_column_not_in_view_ttl.
+@pytest.mark.parametrize("flush", [False, True], ids=["noflush", "flush"])
+def test_update_column_not_in_view(cql, test_keyspace, flush):
+    no_cache = "with caching = {'enabled': 'false'}" if flush and is_scylla(cql) else ""
+    def maybe_flush():
+        if flush:
+            nodetool.flush_all(cql)
+    with new_test_table(cql, test_keyspace, 'p int, c int, v1 int, v2 int, primary key (p, c)',
+            extra=no_cache) as table:
+        with new_materialized_view(cql, table, 'p, c', 'c, p',
+                'p is not null and c is not null', extra=no_cache) as mv:
+            def check(expected):
+                assert expected == list(cql.execute(f"select * from {mv}"))
+
+            cql.execute(f"update {table} using timestamp 0 set v1 = 1 where p = 0 and c = 0")
+            maybe_flush()
+            check([(0, 0)])
+
+            cql.execute(f"delete v1 from {table} using timestamp 1 where p = 0 and c = 0")
+            maybe_flush()
+            check([])
+
+            # Written at the same timestamp as the deletion above, so the
+            # deletion still wins and the row stays dead.
+            cql.execute(f"update {table} using timestamp 1 set v1 = 1 where p = 0 and c = 0")
+            maybe_flush()
+            check([])
+
+            cql.execute(f"update {table} using timestamp 2 set v2 = 1 where p = 0 and c = 0")
+            maybe_flush()
+            check([(0, 0)])
+
+            # v2 is still alive, so deleting v1 leaves the base row - and the
+            # view row - in place.
+            cql.execute(f"delete v1 from {table} using timestamp 3 where p = 0 and c = 0")
+            maybe_flush()
+            check([(0, 0)])
+
+            cql.execute(f"delete v2 from {table} using timestamp 4 where p = 0 and c = 0")
+            maybe_flush()
+            check([])

@@ -237,62 +237,18 @@ SEASTAR_TEST_CASE(test_unselected_column_can_preserve_ttld_row_maker) {
     });
 }
 
-void test_update_column_not_in_view(cql_test_env& e, std::function<void()>&& maybe_flush) {
+// The first steps of this test - the writes and deletions at assorted
+// timestamps - were moved to Python in issue #16134, as
+// test_update_column_not_in_view in
+// test/cqlpy/test_materialized_view_old.py. These last steps stayed behind,
+// because they need forward_jump_clocks() to expire a TTL instantly and cqlpy
+// has no equivalent of that. They stand alone: the moved part ends with the
+// base row dead, which is also where a fresh table starts.
+void test_update_column_not_in_view_ttl(cql_test_env& e, std::function<void()>&& maybe_flush) {
     e.execute_cql("create table cf (p int, c int, v1 int, v2 int, primary key (p, c))").get();
     e.execute_cql("create materialized view vcf as select p, c from cf "
                   "where p is not null and c is not null "
                   "primary key (c, p)").get();
-
-    e.execute_cql("update cf using timestamp 0 set v1 = 1 where p = 0 and c = 0").get();
-    maybe_flush();
-    eventually([&] {
-        auto msg = e.execute_cql("select * from vcf").get();
-        assert_that(msg).is_rows().with_rows({{
-            {int32_type->decompose(0)},
-            {int32_type->decompose(0)}
-        }});
-    });
-
-    e.execute_cql("delete v1 from cf using timestamp 1 where p = 0 and c = 0").get();
-    maybe_flush();
-    eventually([&] {
-        auto msg = e.execute_cql("select * from vcf").get();
-        assert_that(msg).is_rows().is_empty();
-    });
-
-    e.execute_cql("update cf using timestamp 1 set v1 = 1 where p = 0 and c = 0").get();
-    maybe_flush();
-    eventually([&] {
-        auto msg = e.execute_cql("select * from vcf").get();
-        assert_that(msg).is_rows().is_empty();
-    });
-
-    e.execute_cql("update cf using timestamp 2 set v2 = 1 where p = 0 and c = 0").get();
-    maybe_flush();
-    eventually([&] {
-        auto msg = e.execute_cql("select * from vcf").get();
-        assert_that(msg).is_rows().with_rows({{
-            {int32_type->decompose(0)},
-            {int32_type->decompose(0)}
-        }});
-    });
-
-    e.execute_cql("delete v1 from cf using timestamp 3 where p = 0 and c = 0").get();
-    maybe_flush();
-    eventually([&] {
-        auto msg = e.execute_cql("select * from vcf").get();
-        assert_that(msg).is_rows().with_rows({{
-            {int32_type->decompose(0)},
-            {int32_type->decompose(0)}
-        }});
-    });
-
-    e.execute_cql("delete v2 from cf using timestamp 4 where p = 0 and c = 0").get();
-    maybe_flush();
-    eventually([&] {
-        auto msg = e.execute_cql("select * from vcf").get();
-        assert_that(msg).is_rows().is_empty();
-    });
 
     e.execute_cql("update cf using ttl 100 set v2 = 1 where p = 0 and c = 0").get();
     maybe_flush();
@@ -324,17 +280,17 @@ void test_update_column_not_in_view(cql_test_env& e, std::function<void()>&& may
     assert_that_failed(e.execute_cql("alter table cf drop v2;"));
 }
 
-SEASTAR_TEST_CASE(test_update_column_not_in_view_without_flush) {
+SEASTAR_TEST_CASE(test_update_column_not_in_view_ttl_without_flush) {
     return do_with_cql_env_thread([] (auto& e) {
-        test_update_column_not_in_view(e, [] { });
+        test_update_column_not_in_view_ttl(e, [] { });
     });
 }
 
-SEASTAR_TEST_CASE(test_update_column_not_in_view_with_flush) {
+SEASTAR_TEST_CASE(test_update_column_not_in_view_ttl_with_flush) {
     auto cfg = make_shared<db::config>();
     cfg->enable_cache(false);
     return do_with_cql_env_thread([] (auto& e) {
-        test_update_column_not_in_view(e, [&] {
+        test_update_column_not_in_view_ttl(e, [&] {
             e.local_db().flush_all_memtables().get();
         });
     }, cfg);
