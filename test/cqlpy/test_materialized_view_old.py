@@ -643,3 +643,10 @@ def test_regular_column_timestamp_updates(cql, test_keyspace):
             cql.execute(f"update {table} using timestamp 7 set v2 = 2 where p = 0")
             assert [(0, 2, 2)] == list(cql.execute(f"select * from {mv}"))
 
+# A counter table cannot have a materialized view.
+def test_counters_table(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int primary key, count counter') as table:
+        with pytest.raises(InvalidRequest, match='Materialized views are not supported on counter tables'):
+            with new_materialized_view(cql, table, '*', 'count, p',
+                    'p is not null and count is not null'):
+                pass

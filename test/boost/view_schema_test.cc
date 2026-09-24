@@ -29,16 +29,6 @@ BOOST_AUTO_TEST_SUITE(view_schema_test)
 
 using namespace std::literals::chrono_literals;
 
-SEASTAR_TEST_CASE(test_counters_table) {
-    return do_with_cql_env_thread([] (auto& e) {
-        e.execute_cql("create table cf (p int primary key, count counter)").get();
-        assert_that_failed(e.execute_cql(
-                "create materialized view vcf_static as select * from cf "
-                "where p is not null and count is not null "
-                "primary key (count, p)"));
-    });
-}
-
 void do_test_complex_timestamp_updates(cql_test_env& e, std::function<void()>&& maybe_flush) {
     e.execute_cql("create table cf (p int, c int, v1 int, v2 int, v3 int, primary key (p, c))").get();
     e.execute_cql("create materialized view vcf as select * from cf "
