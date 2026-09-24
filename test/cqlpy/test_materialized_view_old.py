@@ -38,6 +38,8 @@ from uuid import UUID
 from cassandra.protocol import ConfigurationException, InvalidRequest
 from cassandra.util import Time
 
+from test.pylib.skip_types import skip_env
+
 from . import nodetool
 from .test_materialized_view import wait_for_view_built
 from .util import new_test_table, new_type, new_materialized_view, unique_name, is_scylla, ScyllaMetrics
@@ -107,8 +109,8 @@ class Clock:
             return
         row = cql.execute(f"SELECT value FROM system.config WHERE name = '{OFFSET_CONFIG}'").one()
         if row is None:
-            pytest.skip(f"Scylla is missing the {OFFSET_CONFIG} option - "
-                        "try compiling in dev/debug/sanitize mode")
+            skip_env(f"Scylla is missing the {OFFSET_CONFIG} option - "
+                     "try compiling in dev/debug/sanitize mode")
         self._original = int(row.value)
 
     # Move the server's clock "seconds" seconds forward, cumulatively.
