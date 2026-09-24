@@ -296,70 +296,6 @@ SEASTAR_TEST_CASE(test_update_column_not_in_view_ttl_with_flush) {
     }, cfg);
 }
 
-void test_partial_update_with_unselected_collections(cql_test_env& e, std::function<void()>&& maybe_flush) {
-e.execute_cql("create table cf (p int, c int, a int, b int, l list<int>, s set<int>, m map<int,text>, primary key (p, c))").get();
-    e.execute_cql("create materialized view vcf as select a, b from cf "
-                  "where p is not null and c is not null "
-                  "primary key (c, p)").get();
-
-    e.execute_cql("update cf set l=l+[1,2,3] where p = 1 and c = 1").get();
-    maybe_flush();
-    eventually([&] {
-        auto msg = e.execute_cql("select * from vcf").get();
-        assert_that(msg).is_rows().with_rows({{
-            {int32_type->decompose(1)},
-            {int32_type->decompose(1)},
-            { },
-            { }
-        }});
-    });
-
-    e.execute_cql("update cf set l=l-[1,2] where p = 1 and c = 1").get();
-    maybe_flush();
-    eventually([&] {
-        auto msg = e.execute_cql("select * from vcf").get();
-        assert_that(msg).is_rows().with_rows({{
-            {int32_type->decompose(1)},
-            {int32_type->decompose(1)},
-            { },
-            { }
-        }});
-    });
-
-    e.execute_cql("update cf set b = 3 where p = 1 and c = 1").get();
-    maybe_flush();
-    eventually([&] {
-        auto msg = e.execute_cql("select * from vcf").get();
-        assert_that(msg).is_rows().with_rows({{
-            {int32_type->decompose(1)},
-            {int32_type->decompose(1)},
-            { },
-            {int32_type->decompose(3)}
-        }});
-    });
-
-    e.execute_cql("update cf set b=null, l=l-[3], s=s-{3} where p = 1 and c = 1").get();
-    maybe_flush();
-    eventually([&] {
-        auto msg = e.execute_cql("select * from vcf").get();
-        assert_that(msg).is_rows().is_empty();
-    });
-
-    e.execute_cql("update cf set m=m+{3:'text'}, l=l-[1], s=s-{2} where p = 1 and c = 1").get();
-    maybe_flush();
-    eventually([&] {
-        auto msg = e.execute_cql("select * from vcf").get();
-        assert_that(msg).is_rows().with_rows({{
-            {int32_type->decompose(1)},
-            {int32_type->decompose(1)},
-            { },
-            { }
-        }});
-    });
-
-    assert_that_failed(e.execute_cql("alter table cf drop m;"));
-}
-
 void test_partial_update_with_unselected_udt(cql_test_env& e, std::function<void()>&& maybe_flush) {
     e.execute_cql("create type ut (a int, b int)").get();
     e.execute_cql("create table cf (p int, c int, a int, b int, u ut, primary key (p, c))").get();
@@ -424,22 +360,6 @@ SEASTAR_TEST_CASE(test_partial_update_with_unselected_udt_with_flush) {
     cfg->enable_cache(false);
     return do_with_cql_env_thread([] (auto& e) {
         test_partial_update_with_unselected_udt(e, [&] {
-            e.local_db().flush_all_memtables().get();
-        });
-    }, cfg);
-}
-
-SEASTAR_TEST_CASE(test_partial_update_with_unselected_collections_without_flush) {
-    return do_with_cql_env_thread([] (auto& e) {
-        test_partial_update_with_unselected_collections(e, [] { });
-    });
-}
-
-SEASTAR_TEST_CASE(test_partial_update_with_unselected_collections_with_flush) {
-    auto cfg = make_shared<db::config>();
-    cfg->enable_cache(false);
-    return do_with_cql_env_thread([] (auto& e) {
-        test_partial_update_with_unselected_collections(e, [&] {
             e.local_db().flush_all_memtables().get();
         });
     }, cfg);

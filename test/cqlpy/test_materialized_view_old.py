@@ -2564,3 +2564,43 @@ def test_update_column_not_in_view(cql, test_keyspace, flush):
             cql.execute(f"delete v2 from {table} using timestamp 4 where p = 0 and c = 0")
             maybe_flush()
             check([])
+
+# Modifying a collection which the view doesn't select still decides whether
+# the base row - and so the view row - is alive, just as a plain column would.
+@pytest.mark.parametrize("flush", [False, True], ids=["noflush", "flush"])
+def test_partial_update_with_unselected_collections(cql, test_keyspace, flush):
+    no_cache = "with caching = {'enabled': 'false'}" if flush and is_scylla(cql) else ""
+    def maybe_flush():
+        if flush:
+            nodetool.flush_all(cql)
+    with new_test_table(cql, test_keyspace,
+            'p int, c int, a int, b int, l list<int>, s set<int>, m map<int,text>, primary key (p, c)',
+            extra=no_cache) as table:
+        with new_materialized_view(cql, table, 'p, c, a, b', 'c, p',
+                'p is not null and c is not null', extra=no_cache) as mv:
+            def check(expected):
+                assert expected == list(cql.execute(f"select * from {mv}"))
+
+            cql.execute(f"update {table} set l=l+[1,2,3] where p = 1 and c = 1")
+            maybe_flush()
+            check([(1, 1, None, None)])
+
+            cql.execute(f"update {table} set l=l-[1,2] where p = 1 and c = 1")
+            maybe_flush()
+            check([(1, 1, None, None)])
+
+            cql.execute(f"update {table} set b = 3 where p = 1 and c = 1")
+            maybe_flush()
+            check([(1, 1, None, 3)])
+
+            cql.execute(f"update {table} set b=null, l=l-[3], s=s-{{3}} where p = 1 and c = 1")
+            maybe_flush()
+            check([])
+
+            cql.execute(f"update {table} set m=m+{{3:'text'}}, l=l-[1], s=s-{{2}} where p = 1 and c = 1")
+            maybe_flush()
+            check([(1, 1, None, None)])
+
+            # The view needs to know whether m is alive, so m can't be dropped
+            with pytest.raises(InvalidRequest, match='Cannot drop column m'):
+                cql.execute(f"alter table {table} drop m")
