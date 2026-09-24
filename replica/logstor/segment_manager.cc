@@ -2217,7 +2217,7 @@ struct compaction_buffer {
     // to ensure all pending updates complete.
     future<> rewrite_record(primary_index& index, log_location read_location, const log_record_header& record_header, log_record_bytes_view record_bytes) {
         auto* index_ptr = &index;
-        auto key = record_header.key;
+        auto key = record_header.index_key();
 
         auto writer = log_record_bytes_writer(record_header, record_bytes);
 
@@ -2286,7 +2286,7 @@ future<> compaction_manager_impl::do_compaction(logstor_group& cg, abort_source&
             [this, &index, &nonempty_segments] (compaction_buffer& cb) -> future<compaction_buffer_stats> {
         co_await _sm.for_each_record(nonempty_segments,
             [&index, &cb] (log_location read_location, const log_record_header& record_header) -> want_data {
-                if (!index.is_record_alive(record_header.key, read_location)) {
+                if (!index.is_record_alive(record_header.index_key(), read_location)) {
                     cb.stats.records_skipped++;
                     return want_data::no;
                 }
@@ -2400,13 +2400,13 @@ future<> compaction_manager_impl::do_split_compaction(logstor_group& src, mutati
                 [this, &index, &classifier, &nonempty_segments] (split_buffer_pair& bufs) -> future<compaction_buffer_stats> {
             co_await _sm.for_each_record(nonempty_segments,
                 [&index] (log_location read_location, const log_record_header& record_header) -> want_data {
-                    if (!index.is_record_alive(record_header.key, read_location)) {
+                    if (!index.is_record_alive(record_header.index_key(), read_location)) {
                         return want_data::no;
                     }
                     return want_data::yes;
                 },
                 [&index, &bufs, &classifier] (log_location read_location, const log_record_header& record_header, log_record_bytes_view record_bytes) -> future<> {
-                    auto& cb = bufs.bufs[classifier(record_header.key.dk.token())];
+                    auto& cb = bufs.bufs[classifier(record_header.key.token())];
                     co_await cb.rewrite_record(index, read_location, record_header, record_bytes);
                 }
             );
@@ -2475,7 +2475,7 @@ future<> segment_manager_impl::write_to_separator(std::vector<write_buffer::reco
         for (auto* record : group.records) {
             separator_index_update update {
                 .index = &group.cg->logstor_index(),
-                .key = record->writer.record().header.key,
+                .key = record->writer.record().header.index_key(),
                 .prev_location = record->location(buffer_location),
             };
 
@@ -2612,8 +2612,11 @@ future<> segment_manager_impl::do_recovery(replica::database& db) {
             co_return;
         }
         logstor_logger.info("Table {}.{} has {} entries in logstor index", tp->schema()->ks_name(), tp->schema()->cf_name(), tp->logstor_index().get_key_count());
-        for (const auto& entry : tp->logstor_index()) {
-            used_segments.set(entry.entry().location.segment.value);
+        auto scan = tp->logstor_index().scan();
+        while (auto batch = scan.next_batch(1024)) {
+            for (const auto& entry : batch->entries) {
+                used_segments.set(entry.get().entry().location.segment.value);
+            }
             co_await coroutine::maybe_yield();
         }
     });
@@ -2699,7 +2702,7 @@ future<> segment_manager_impl::recover_segment(replica::database& db, log_segmen
                 if (!t.uses_logstor()) {
                     return want_data::no;
                 }
-                t.logstor_index().insert(header.key, new_entry, cmp);
+                t.logstor_index().insert(header.index_key(), new_entry, cmp);
             } catch (const replica::no_such_column_family&) {
                 // ignore record
             }
@@ -2756,7 +2759,7 @@ future<> segment_manager_impl::add_segment_to_compaction_group(replica::database
             [&db] (log_location prev_loc, const log_record_header& record_header) -> want_data {
                 try {
                     auto& t = db.find_column_family(record_header.table);
-                    return t.uses_logstor() && t.logstor_index().is_record_alive(record_header.key, prev_loc)
+                    return t.uses_logstor() && t.logstor_index().is_record_alive(record_header.index_key(), prev_loc)
                             ? want_data::yes : want_data::no;
                 } catch (const replica::no_such_column_family&) {
                     return want_data::no;
@@ -2765,13 +2768,14 @@ future<> segment_manager_impl::add_segment_to_compaction_group(replica::database
             [seg_ref, &db] (log_location prev_loc, const log_record_header& record_header, log_record_bytes_view record_bytes) -> future<> {
                 try {
                     auto& t = db.find_column_family(record_header.table);
-                    auto& cg = t.get_logstor_group(record_header.key.dk.token());
+                    auto key = record_header.index_key();
+                    auto& cg = t.get_logstor_group(key.token());
                     auto writer = log_record_bytes_writer(record_header, record_bytes);
 
                     co_await cg.write_to_separator(std::move(writer), seg_ref, std::nullopt,
                         separator_index_update {
                             .index = &cg.logstor_index(),
-                            .key = record_header.key,
+                            .key = key,
                             .prev_location = prev_loc,
                         }
                     );

@@ -12,9 +12,10 @@
 #include <seastar/core/align.hh>
 #include <seastar/core/simple-stream.hh>
 
-#include "idl/logstor.dist.hh"
-#include "idl/logstor.dist.impl.hh"
+#include "replica/logstor/write_buffer.hh"
 #include "serializer_impl.hh"
+#include "idl/frozen_schema.dist.hh"
+#include "idl/frozen_schema.dist.impl.hh"
 
 namespace replica::logstor {
 
@@ -70,11 +71,11 @@ future<std::optional<segment_header>> read_segment_header(seastar::input_stream<
 log_record deserialize_log_record(simple_memory_input_stream buf_stream) {
     auto rh_stream = buf_stream.read_substream(ondisk::record_header_size);
     auto rh = ser::deserialize(rh_stream, std::type_identity<ondisk::record_header>{});
-    auto header_stream = buf_stream.read_substream(rh.header_size);
+    auto header_stream = buf_stream.read_substream(ondisk::log_record_header_size(rh.key_size));
     auto data_stream = buf_stream.read_substream(rh.data_size);
 
     return log_record {
-        .header = ser::deserialize(header_stream, std::type_identity<log_record_header>{}),
+        .header = ondisk::read_log_record_header(header_stream, rh.key_size),
         .mut = ser::deserialize(data_stream, std::type_identity<canonical_mutation>{})
     };
 }
@@ -146,35 +147,49 @@ future<> scan_segment(seastar::input_stream<char>& in,
         // TODO crc, torn writes
 
         const auto buffer_data_end_position = current_position + bh.data_size;
+        // The smallest record: a record_header and a log_record_header with an empty key.
+        constexpr size_t min_record_size = ondisk::record_header_size + ondisk::log_record_header_fixed_size;
+
         while (current_position < buffer_data_end_position) {
             // Read record header
             const auto record_offset = current_position;
+            // What is left of this buffer's records. The stream spans the whole segment and is not
+            // bounded per buffer, so each size is checked against this before its bytes are read;
+            // otherwise a short tail or a record claiming more than the buffer holds would consume
+            // the next buffer's bytes. The loop condition keeps this at 1 or more, so the
+            // subtraction below cannot wrap.
+            const size_t buffer_bytes_left = buffer_data_end_position - current_position;
+            if (buffer_bytes_left < min_record_size) {
+                break;
+            }
             auto size_buf = co_await in.read_exactly(ondisk::record_header_size);
             current_position += ondisk::record_header_size;
             if (size_buf.size() < ondisk::record_header_size) {
                 break;
             }
             auto rh = ser::deserialize_from_buffer(size_buf, std::type_identity<ondisk::record_header>{});
-            if (rh.header_size == 0 || rh.header_size + rh.data_size > buffer_data_end_position - current_position) {
+            if (!ondisk::validate_record_header(rh) || size_t(rh.key_size) + rh.data_size > buffer_bytes_left - min_record_size) {
                 // invalid record size
                 break;
             }
+            const size_t header_size = ondisk::log_record_header_size(rh.key_size);
 
             logstor_logger.trace("Found record of size {} bytes in segment {}",
-                                rh.header_size + rh.data_size, segment_id);
+                                header_size + rh.data_size, segment_id);
 
             // Read the log_record_header bytes
-            auto header_buf = co_await in.read_exactly(rh.header_size);
-            current_position += rh.header_size;
-            if (header_buf.size() < rh.header_size) {
+            auto header_buf = co_await in.read_exactly(header_size);
+            current_position += header_size;
+            if (header_buf.size() < header_size) {
                 break;
             }
-            auto record_header = ser::deserialize_from_buffer(header_buf, std::type_identity<log_record_header>{});
+            auto header_stream = simple_memory_input_stream(header_buf.get(), header_buf.size());
+            auto record_header = ondisk::read_log_record_header(header_stream, rh.key_size);
 
             log_location loc {
                 .segment = segment_id,
                 .offset = static_cast<uint32_t>(record_offset),
-                .size = static_cast<uint32_t>(ondisk::record_header_size + rh.header_size + rh.data_size)
+                .size = static_cast<uint32_t>(ondisk::record_header_size + header_size + rh.data_size)
             };
 
             if (on_record_header(loc, record_header) == want_data::yes) {
