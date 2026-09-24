@@ -1391,7 +1391,8 @@ static double get_cache_count(scylla_rest_client& client,
 
 void info_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     auto gossip_running = client.get("/storage_service/gossiping").GetBool();
-    fmt::print("{:<23}: {}\n", "ID", rjson::to_string_view(client.get("/storage_service/hostid/local")));
+    const auto host_id = client.get("/storage_service/hostid/local");
+    fmt::print("{:<23}: {}\n", "ID", rjson::to_string_view(host_id));
     fmt::print("{:<23}: {}\n", "Gossip active", gossip_running);
     fmt::print("{:<23}: {}\n", "Thrift active", client.get("/storage_service/rpc_server").GetBool());
     fmt::print("{:<23}: {}\n", "Native Transport active", client.get("/storage_service/native_transport").GetBool());
@@ -1430,11 +1431,17 @@ void info_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     // this is a dummy value, to be compatible with cassandra nodetool.
     fmt::print("{:<23}: {:.1f}%\n", "Percent Repaired", 0.0);
     const bool display_all_tokens = vm.contains("tokens");
-    if (client.get("/storage_service/join_ring").GetBool()) {
-        auto res = client.get("/storage_service/tokens");
+    if (!client.get("/storage_service/join_ring").GetBool()) {
+        fmt::print("{:<23}: (node is not joined to the cluster)\n", "Token");
+    } else {
+        // /storage_service/tokens is ring-wide; ask for this node's tokens, by host ID so that gossip is not needed.
+        auto res = client.get(fmt::format("/storage_service/tokens/{}", rjson::to_string_view(host_id)));
         auto tokens = res.GetArray();
         const auto nr_tokens = tokens.Size();
-        if (nr_tokens == 1 || display_all_tokens) {
+        if (nr_tokens == 0) {
+            // A bootstrapping or replacing node before its tokens are normal, or a zero-token node.
+            fmt::print("{:<23}: (node has no tokens)\n", "Token");
+        } else if (nr_tokens == 1 || display_all_tokens) {
             for (auto& token : tokens) {
                 fmt::print("{:<23}: {}\n", "Token", rjson::to_string_view(token));
             }
@@ -1442,8 +1449,6 @@ void info_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
             fmt::print("{:<23}: (invoke with -T/--tokens to see all {} tokens)\n",
                        "Token", nr_tokens);
         }
-    } else {
-        fmt::print("{:<23}: (node is not joined to the cluster)\n", "Token");
     }
 }
 

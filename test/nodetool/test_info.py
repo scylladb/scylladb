@@ -62,15 +62,17 @@ def normalize_output(output):
                              False,
                          ]
                          )
-def test_info(nodetool, display_all_tokens):
-    host_id = 'hostid0'
+@pytest.mark.parametrize("gossip_running", [True, False])
+# joined with tokens; joined without tokens (bootstrapping, zero-token); not joined
+@pytest.mark.parametrize("join_ring,has_tokens", [(True, True), (True, False), (False, False)])
+def test_info(nodetool, display_all_tokens, gossip_running, join_ring, has_tokens):
+    host_id = '8b2f1c1e-0000-4000-8000-000000000001'
     generation_number = 42
     load = 42424242
     uptime = 12345
     datacenter = 'dc0'
     rack = 'rack0'
     nr_exceptions = 0
-    join_ring = True
 
     caches = {
         'key':     cache_metrics(98, 123, 1220, moving_average.make(), moving_average.make(), 0.42, 20),
@@ -89,16 +91,18 @@ def test_info(nodetool, display_all_tokens):
 
     tokens = ['-9217327499541836964',
               '9066719992055809912',
-              '50927788561116407']
+              '50927788561116407'] if has_tokens else []
 
     expected_requests = [
-        expected_request('GET', '/storage_service/gossiping', response=True),
+        expected_request('GET', '/storage_service/gossiping', response=gossip_running),
         expected_request('GET', '/storage_service/hostid/local', response=host_id),
         expected_request('GET', '/storage_service/rpc_server', response=False),
         expected_request('GET', '/storage_service/native_transport', response=True),
         expected_request('GET', '/storage_service/load', response=load),
-        expected_request('GET', '/storage_service/generation_number', response=generation_number),
     ]
+    if gossip_running:
+        expected_requests.append(
+            expected_request('GET', '/storage_service/generation_number', response=generation_number))
 
     expected_requests.append(
         expected_request('GET', '/system/uptime_ms', response=uptime))
@@ -143,20 +147,20 @@ def test_info(nodetool, display_all_tokens):
                          response=join_ring))
 
     if join_ring:
+        # Asked by host ID, so it does not depend on gossip.
         expected_requests.append(
-            expected_request('GET', '/storage_service/tokens',
-                             response=tokens))
+            expected_request('GET', f'/storage_service/tokens/{host_id}', response=tokens))
 
     mem_used = 0.0
     mem_max = 0.0
     off_heap_mem_used_in_mib = off_heap_mem_used / 1024 / 1024
     expected_output = f'''\
 {'ID':<23}: {host_id}
-{'Gossip active':<23}: true
+{'Gossip active':<23}: {str(gossip_running).lower()}
 {'Thrift active':<23}: false
 {'Native Transport active':<23}: true
 {'Load':<23}: {format_size(load)}
-{'Generation No':<23}: {generation_number}
+{'Generation No':<23}: {generation_number if gossip_running else 0}
 {'Uptime (seconds)':<23}: {uptime}
 {'Heap Memory (MiB)':<23}: {mem_used:.2f} / {mem_max:.2f}
 {'Off Heap Memory (MiB)':<23}: {off_heap_mem_used_in_mib:.2f}
@@ -176,16 +180,16 @@ def test_info(nodetool, display_all_tokens):
 
     percent_repaired = 0.0
     expected_output += f"{'Percent Repaired':<23}: {percent_repaired:.1f}%\n"
-    if join_ring:
-        name = 'Token'
-        if display_all_tokens:
-            for token in tokens:
-                expected_output += f'{name:<23}: {token}\n'
-        else:
-            nr_tokens = len(tokens)
-            expected_output += f'{name:<23}: (invoke with -T/--tokens to see all {nr_tokens} tokens)\n'
+    name = 'Token'
+    if not join_ring:
+        expected_output += f'{name:<23}: (node is not joined to the cluster)\n'
+    elif not tokens:
+        expected_output += f'{name:<23}: (node has no tokens)\n'
+    elif display_all_tokens:
+        for token in tokens:
+            expected_output += f'{name:<23}: {token}\n'
     else:
-        expected_output += f'{name:<23}: (invoke with -T/--tokens to see all {nr_tokens} tokens)\n'
+        expected_output += f'{name:<23}: (invoke with -T/--tokens to see all {len(tokens)} tokens)\n'
 
     args = []
     if display_all_tokens:
