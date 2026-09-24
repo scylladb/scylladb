@@ -31,10 +31,16 @@
 #include "test/lib/mutation_source_test.hh"
 #include "service/strong_consistency/raft_commitlog.hh"
 #include "service/strong_consistency/raft_groups_storage.hh"
+#include "service/strong_consistency/raft_resize_tracker.hh"
 #include "locator/tablets.hh"
 #include "locator/token_metadata.hh"
 #include "idl/raft_storage.dist.hh"
 #include "idl/raft_storage.dist.impl.hh"
+#include "service/strong_consistency/state_machine.hh"
+#include "db/system_keyspace.hh"
+#include "serializer_impl.hh"
+#include "idl/strong_consistency/state_machine.dist.hh"
+#include "idl/strong_consistency/state_machine.dist.impl.hh"
 
 BOOST_AUTO_TEST_SUITE(commitlog_raft_replay_test)
 
@@ -102,10 +108,10 @@ future<> cl_test(noncopyable_function<future<>(commitlog&)> f) {
 
 // Write a raft log entry to the commitlog and return the rp_handle.
 future<rp_handle> write_raft_entry_to_commitlog(commitlog& cl, table_id tid, raft::group_id gid, raft::log_entry_ptr entry) {
-    commitlog_raft_log_entry_writer writer(raft_commitlog_entry{.group_id = gid, .entry = entry});
+    commitlog_raft_log_entry_writer writer(raft_commitlog_entry{.group_id = gid, .entry = entry}, tid);
     const auto target_size = writer.size();
-    co_return co_await cl.add(tid, target_size, db::no_timeout, db::commitlog_force_sync::yes, [entry, gid](auto& out) {
-        commitlog_raft_log_entry_writer w(raft_commitlog_entry{.group_id = gid, .entry = entry});
+    co_return co_await cl.add(tid, target_size, db::no_timeout, db::commitlog_force_sync::yes, [entry, gid, tid](auto& out) {
+        commitlog_raft_log_entry_writer w(raft_commitlog_entry{.group_id = gid, .entry = entry}, tid);
         w.write(out);
     });
 }
@@ -139,7 +145,7 @@ SEASTAR_TEST_CASE(test_commitlog_raft_log_entry_writer) {
         // Verify size() and accessor for each entry type, then write to commitlog.
         std::vector<replay_position> rps;
         for (const auto& entry : entries) {
-            commitlog_raft_log_entry_writer writer(raft_commitlog_entry{.group_id = gid, .entry = entry});
+            commitlog_raft_log_entry_writer writer(raft_commitlog_entry{.group_id = gid, .entry = entry}, tid);
             // size() must exceed the bare raft::log_entry serialization because
             // the writer wraps it in a commitlog_entry + raft_commitlog_entry envelope.
             BOOST_REQUIRE_GT(writer.size(), 0u);
@@ -195,6 +201,39 @@ SEASTAR_TEST_CASE(test_commitlog_raft_log_entry_writer) {
                     });
         }
         BOOST_REQUIRE_EQUAL(found, entries.size());
+    });
+}
+
+// add_raft_entries() accounts each entry to the table its own writer names, so a segment holding
+// a batch is kept alive by every table which has data in it, not just by the first one.
+SEASTAR_TEST_CASE(test_commitlog_raft_entries_are_accounted_per_table) {
+    return cl_test([](commitlog& log) -> future<> {
+        auto gid = make_group_id();
+        auto first = make_table_id();
+        auto second = make_table_id();
+
+        utils::chunked_vector<commitlog_raft_log_entry_writer> writers;
+        writers.emplace_back(raft_commitlog_entry{.group_id = gid, .entry = make_command_entry(raft::term_t(1), raft::index_t(1))}, first);
+        writers.emplace_back(raft_commitlog_entry{.group_id = gid, .entry = make_command_entry(raft::term_t(1), raft::index_t(2))}, second);
+
+        auto handles = co_await log.add_raft_entries(std::move(writers));
+        BOOST_REQUIRE_EQUAL(handles.size(), 2);
+
+        rp_set first_set, second_set;
+        first_set.put(std::move(handles[0]));
+        second_set.put(std::move(handles[1]));
+
+        // Only a segment which is no longer allocating can be counted as dirty.
+        co_await log.force_new_active_segment();
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 1);
+
+        // The second entry's count was taken for the second table, so releasing the first one
+        // leaves the segment dirty...
+        log.discard_completed_segments(first, first_set);
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 1);
+        // ... and it goes clean only once the table the second entry names releases it too.
+        log.discard_completed_segments(second, second_set);
+        BOOST_REQUIRE_EQUAL(log.get_num_dirty_segments(), 0);
     });
 }
 
@@ -378,7 +417,9 @@ SEASTAR_TEST_CASE(test_raft_replay_buffer_process_discards_unknown_groups) {
                 BOOST_CHECK_EQUAL(buffer.total_entries(), 2);
 
                 // Process — group_id has no matching tablet metadata, so entries should be discarded.
-                co_await buffer.process_raft_replayed_items(env.local_db(), env.local_qp(), env.get_system_keyspace().local());
+                service::strong_consistency::raft_resize_tracker resize_tracker(env.get_system_keyspace().local());
+                co_await buffer.process_raft_replayed_items(env.local_db(), env.local_qp(), env.get_system_keyspace().local(), resize_tracker);
+                co_await resize_tracker.stop();
 
                 // After processing, old entries are cleared.
                 BOOST_CHECK_EQUAL(buffer.remaining_groups(), 0);
@@ -440,7 +481,8 @@ SEASTAR_TEST_CASE(test_raft_replay_buffer_process_discards_groups_without_local_
                 buffer.add(gid, make_command_entry(raft::term_t(1), raft::index_t(2)));
                 BOOST_CHECK_EQUAL(buffer.remaining_groups(), 1);
 
-                co_await buffer.process_raft_replayed_items(env.local_db(), env.local_qp(), env.get_system_keyspace().local());
+                service::strong_consistency::raft_resize_tracker resize_tracker(env.get_system_keyspace().local());
+                co_await buffer.process_raft_replayed_items(env.local_db(), env.local_qp(), env.get_system_keyspace().local(), resize_tracker);
 
                 auto data = buffer.take_replayed_group_entries(gid);
                 BOOST_CHECK(data.entries.empty());
@@ -454,7 +496,7 @@ SEASTAR_TEST_CASE(test_raft_replay_buffer_process_discards_groups_without_local_
                 owned_buffer.add(gid, make_command_entry(raft::term_t(1), raft::index_t(1)));
                 owned_buffer.add(gid, make_command_entry(raft::term_t(1), raft::index_t(2)));
 
-                co_await owned_buffer.process_raft_replayed_items(env.local_db(), env.local_qp(), env.get_system_keyspace().local());
+                co_await owned_buffer.process_raft_replayed_items(env.local_db(), env.local_qp(), env.get_system_keyspace().local(), resize_tracker);
 
                 // Nothing is committed - the group has a snapshot descriptor but no
                 // commit index - so both entries are kept for the group's log. What
@@ -490,7 +532,8 @@ SEASTAR_TEST_CASE(test_raft_replay_buffer_process_discards_groups_without_persis
                 buffer.add(gid, make_command_entry(raft::term_t(1), raft::index_t(2)));
                 BOOST_CHECK_EQUAL(buffer.remaining_groups(), 1);
 
-                co_await buffer.process_raft_replayed_items(env.local_db(), env.local_qp(), env.get_system_keyspace().local());
+                service::strong_consistency::raft_resize_tracker resize_tracker(env.get_system_keyspace().local());
+                co_await buffer.process_raft_replayed_items(env.local_db(), env.local_qp(), env.get_system_keyspace().local(), resize_tracker);
 
                 auto data = buffer.take_replayed_group_entries(gid);
                 BOOST_CHECK(data.entries.empty());
@@ -754,7 +797,9 @@ SEASTAR_TEST_CASE(test_raft_replay_buffer_out_of_order_same_term_stops_processin
                 // Process — group_id has no matching tablet metadata, so entries are discarded
                 // before the ordering check. The filter_entries logic is tested directly
                 // in the simulation tests below.
-                co_await buffer.process_raft_replayed_items(env.local_db(), env.local_qp(), env.get_system_keyspace().local());
+                service::strong_consistency::raft_resize_tracker resize_tracker(env.get_system_keyspace().local());
+                co_await buffer.process_raft_replayed_items(env.local_db(), env.local_qp(), env.get_system_keyspace().local(), resize_tracker);
+                co_await resize_tracker.stop();
 
                 BOOST_CHECK_EQUAL(buffer.remaining_groups(), 0);
             },
@@ -1998,6 +2043,49 @@ BOOST_AUTO_TEST_CASE(test_log_entry_lease_time_round_trip) {
     auto bv2 = buf2.linearize();
     auto in2 = ser::as_input_stream(bv2);
     BOOST_REQUIRE(!ser::deserialize(in2, std::type_identity<raft::log_entry_ptr>())->lease_time);
+}
+
+// command_target_table() peeks at the variant tag in the serialized command rather than
+// deserializing it, so it depends on how raft_command is encoded. This test pins that dependency.
+// It fails if the encoding changes underneath - raft_command becoming final, or gaining a member
+// ahead of `change` - which would otherwise surface only as a segment accounting assert on a
+// running node, far from the cause.
+SEASTAR_TEST_CASE(test_command_target_table_classifies_every_alternative) {
+    // The schema of system.raft_groups, which the classifier names for a marker, only exists when
+    // strongly consistent tables are enabled.
+    auto db_cfg_ptr = make_shared<db::config>();
+    db_cfg_ptr->experimental_features({db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES});
+    return do_with_cql_env([] (cql_test_env&) -> future<> {
+        using namespace service::strong_consistency;
+
+        const auto tablet_table = make_table_id();
+        const auto raft_groups = db::system_keyspace::raft_groups()->id();
+
+        auto command_entry_for = [] (raft_command cmd, raft::index_t idx) {
+            raft::command raft_cmd;
+            ser::serialize(raft_cmd, cmd);
+            return make_lw_shared<raft::log_entry>(
+                    raft::log_entry{.term = raft::term_t(1), .idx = idx, .data = std::move(raft_cmd)});
+        };
+
+        // Applying a marker writes a row to system.raft_groups, so that is the table whose flush
+        // has to release the entry's commitlog position.
+        for (const auto kind : {resize_marker_kind::start_resize, resize_marker_kind::end_resize}) {
+            BOOST_REQUIRE_EQUAL(service::strong_consistency::detail::command_target_table(
+                    command_entry_for(raft_command{.change = resize_marker{.kind = kind, .timestamp = 1}}, raft::index_t(1)),
+                    tablet_table), raft_groups);
+        }
+        // Raft's own entries carry no command at all.
+        BOOST_REQUIRE_EQUAL(service::strong_consistency::detail::command_target_table(
+                make_dummy_entry(raft::term_t(1), raft::index_t(3)), tablet_table), tablet_table);
+        BOOST_REQUIRE_EQUAL(service::strong_consistency::detail::command_target_table(
+                make_config_entry(raft::term_t(1), raft::index_t(4)), tablet_table), tablet_table);
+        // A command too short to be a raft_command, which no entry this state machine produced can be.
+        BOOST_REQUIRE_EQUAL(service::strong_consistency::detail::command_target_table(
+                make_command_entry(raft::term_t(1), raft::index_t(5)), tablet_table), tablet_table);
+
+        co_return;
+    }, std::move(db_cfg_ptr));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

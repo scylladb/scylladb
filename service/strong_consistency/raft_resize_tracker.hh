@@ -1,0 +1,140 @@
+/*
+ * Copyright (C) 2026-present ScyllaDB
+ */
+
+/*
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
+ */
+
+#pragma once
+
+#include <unordered_map>
+#include "raft/raft.hh"
+#include "schema/schema_fwd.hh"
+#include "service/strong_consistency/state_machine.hh"
+
+namespace db {
+class system_keyspace;
+}
+
+namespace service::strong_consistency {
+
+// Per-parent state tracking the progress of a strongly consistent tablet resize. Rebuilt from the
+// markers persisted in the parent's own system.raft_groups row, and advanced as those markers are
+// applied from the parent's Raft log. See resize_marker_kind for the terminology.
+//
+// The state exists on a replica from the moment it learns that the parent is being resized. It
+// learns either by observing the resize in the tablet metadata, or by reloading the markers after
+// a restart. Both create the state on demand; applying a marker does not. The finalization publishes
+// the metadata in a barrier of its own before committing any marker, so update() has always
+// recorded the resize by the time a marker arrives. A marker for a group with no state here is
+// therefore one left over from a resize which is already over.
+//
+// It is dropped by the teardown of the parent's raft server, which the tablet map replacement
+// ending the resize brings about. A child's own mapping goes earlier, dropped by
+// groups_manager::update() once the group serves a tablet of its own.
+struct raft_resize_state {
+    // Set once the start_resize marker has been applied on this replica, i.e. once the parent's
+    // writes are handed off to its children. Never cleared.
+    bool start_resize = false;
+
+    // Set once the end_resize marker has been applied on this replica, i.e. once the parent's
+    // log is final and applied here. Never cleared.
+    bool end_resize = false;
+    // The timestamp end_resize was stamped with, taken from the parent leader's clock (see
+    // resize_marker::timestamp), so it is above every write in the parent's log. Set with
+    // end_resize.
+    api::timestamp_type end_resize_timestamp = api::min_timestamp;
+
+    // The state machines of the children parked on this parent, enabled by end_resize or when
+    // the state goes. Empty once end_resize is set. Each pointer is owned by the child's raft
+    // server; groups_manager registers it for the time the server exists.
+    std::vector<tablet_state_machine*> children;
+};
+
+// Owns the state of every tablet resize the groups hosted on this shard take part in (see
+// raft_resize_state).
+//
+// A sharded service, one instance per shard, started before groups_manager and stopped after it.
+// Anything needing the resize state - the state machines, the commitlog replay - can therefore
+// reach it without depending on the raft servers being up.
+class raft_resize_tracker {
+    // Maps every child recorded on this replica to its parent. Each entry is owned by the child
+    // group alone. It is dropped by the child's own teardown, or by update() observing that the
+    // group now serves a tablet of its own, i.e. that the resize was finalized. Erasing a parent's
+    // state leaves the mappings of its children to their owners.
+    std::unordered_map<raft::group_id, raft::group_id> _child_to_parent;
+    std::unordered_map<raft::group_id, raft_resize_state> _resize_states;
+    db::system_keyspace& _sys_ks;
+
+    void erase_resize_state(raft::group_id parent_gid);
+
+public:
+    raft_resize_tracker(db::system_keyspace& sys_ks)
+        : _sys_ks(sys_ks)
+    {}
+
+    future<> stop();
+
+    // Records the children which replace `parent_gid` on this replica, as read from the tablet
+    // metadata. Creates the state if this is the first time we hear about the resize.
+    void set_replacement_groups(raft::group_id parent_gid, const utils::small_vector<raft::group_id, 2>& new_gids);
+
+    // Restores which markers the parent has already applied from its system.raft_groups row,
+    // which a replica restarting mid-resize needs. Creates the state if this is the first we hear
+    // of the resize. It is, for the commitlog replay: that runs before the tablet metadata records
+    // the resize at all.
+    future<> restore_applied_markers(raft::group_id parent_gid);
+
+    // Records that the parent `parent_gid` reached the resize phase `marker.kind`, stamped with
+    // `marker.timestamp`. A marker of a resize
+    // with no state here is ignored rather than creating one. The state is absent only once the
+    // resize has ended on this replica, and resurrecting it would leave an entry nothing removes.
+    //
+    // Called by the applier fiber once the marker has been applied, and by groups_manager to
+    // fast-forward start_resize ahead of that apply. The fast-forward is safe: the marker is
+    // already committed in the parent's log, so it is certain to be applied - all committed entries
+    // are applied on restart, and no operation removes a marker from the log.
+    void mark_resize_phase(raft::group_id parent_gid, const resize_marker& marker);
+
+    // Drops the record that `gid` - a parent, or a child of one - has in the resize it took part
+    // in: the parent's whole state, or just the child's own mapping.
+    // Called by groups_manager while the group's raft server is being torn down, and from update()
+    // for the one ending no teardown covers - a finalization, which the children's mappings must
+    // not outlive.
+    void erase_group(raft::group_id gid);
+
+    // Returns true once the parent has been sealed on this replica, i.e. once it applied
+    // end_resize. False if the group is not being resized at all.
+    bool has_applied_end_resize(raft::group_id parent_gid) const;
+
+    // Returns true if this replica knows that the given group is being resized. False either
+    // because the group is not being resized, or because this replica has not learnt of the resize
+    // yet. The caller cannot tell the two apart and must treat both as "not ready".
+    bool is_resizing(raft::group_id parent_gid) const;
+
+    // Returns the parent of `child_gid`, or nullopt if it is not a child of a resize.
+    std::optional<raft::group_id> get_parent_group(raft::group_id child_gid) const;
+
+    // Returns true once the parent's writes are handed off to its children. False if the group
+    // is not being resized at all.
+    bool should_handoff_writes(raft::group_id parent_gid) const;
+
+    // Returns the timestamp the parent of `child_gid` stamped its end_resize with, once that
+    // marker has been applied here (see raft_resize_state::end_resize_timestamp). Nullopt if the
+    // group is not a child of a resize, if its parent has not applied end_resize here yet, or if
+    // the parent's state is already gone.
+    std::optional<api::timestamp_type> parent_end_resize_timestamp(raft::group_id child_gid) const;
+
+    // Parks `child` on `parent_gid`: it is enabled (tablet_state_machine::enable()) once the
+    // parent applies end_resize here. If there is nothing to wait for - the parent has applied
+    // end_resize already, or its state is gone because the resize is over on this replica - it is
+    // enabled before this returns and nothing is parked. The child must be unregistered before
+    // its raft server is destroyed.
+    // FIXME: a tablet merge gives a child several parents, each of which will have to enable it
+    // before it may apply.
+    void register_child(raft::group_id parent_gid, tablet_state_machine& child);
+    void unregister_child(raft::group_id parent_gid, tablet_state_machine& child);
+};
+
+} // namespace service::strong_consistency

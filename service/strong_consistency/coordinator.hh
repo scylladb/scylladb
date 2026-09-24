@@ -10,6 +10,7 @@
 
 #include "mutation/mutation.hh"
 #include "query/query-result.hh"
+#include "raft/raft.hh"
 #include "utils/histogram.hh"
 #include <seastar/core/metrics.hh>
 #include <seastar/util/noncopyable_function.hh>
@@ -82,10 +83,13 @@ private:
     // it may not run here, which replica it is redirected to: a request needing the
     // leader can go to any replica that could be the leader, a local read only to one
     // that holds the tablet's data.
+    // `handoff_group` overrides the group the token resolves to in the tablet map, which is how
+    // a request is handed off to one of the children of a parent being resized.
     future<value_or_redirect<operation_ctx>> create_operation_ctx(const schema& schema,
         const dht::token& token,
         abort_source& as,
-        bool needs_leader);
+        bool needs_leader,
+        std::optional<raft::group_id> handoff_group = std::nullopt);
 public:
     coordinator(groups_manager& groups_manager, replica::database& db, gms::gossiper& gossiper);
 
