@@ -9,6 +9,7 @@
 
 import cassandra.protocol
 import cassandra.query
+import collections
 import glob
 import json
 import os
@@ -191,6 +192,129 @@ def test_count(cql, test_table, scylla_only):
     check_count('range tombstone change', 11)
     check_count('partition end', 1)
 
+
+def write_two_partitions(cql, test_table):
+    """ Writes two partitions of a fresh pk1, one of them in three mutation sources.
+
+    Returns pk1.
+    """
+    pk1 = util.unique_key_int()
+    for pk2 in range(2):
+        for ck in range(2):
+            cql.execute(f"INSERT INTO {test_table} (pk1, pk2, ck1, ck2, v) VALUES ({pk1}, {pk2}, 0, {ck}, 'vv')")
+    # Puts both partitions in an sstable and the row cache, then one of them in the memtable too.
+    nodetool.flush(cql, f"{test_table}")
+    cql.execute(f"INSERT INTO {test_table} (pk1, pk2, ck1, ck2, v) VALUES ({pk1}, 1, 0, 2, 'vv')")
+    return pk1
+
+
+def fragment_count(cql, test_table, pk1, pk2):
+    """ The number of fragments the dump has for one partition. """
+    return len(list(cql.execute(f"SELECT pk2 FROM MUTATION_FRAGMENTS({test_table}) WHERE pk1 = {pk1} AND pk2 = {pk2}")))
+
+
+@pytest.mark.parametrize("test_keyspace", ["tablets", "vnodes"], indirect=True)
+def test_group_by(cql, test_table, scylla_only):
+    """ GROUP BY groups a dump by a prefix of its primary key, like on any table.
+
+    The output primary key is the table's partition key, then mutation_source,
+    partition_region, the table's clustering key and position_weight. Without
+    an aggregate function a group returns its first row, so grouping by the
+    partition key returns the partition start of each partition, and adding
+    mutation_source returns the partition start of each source. Regression
+    test for SCYLLADB-4509.
+    """
+    pk1 = write_two_partitions(cql, test_table)
+    where = f"WHERE pk1 = {pk1} AND pk2 = 1"
+
+    # Per partition. The table is shared with other tests, so the scan is filtered to pk1.
+    rows = [r for r in cql.execute(f"SELECT pk1, pk2, mutation_fragment_kind FROM MUTATION_FRAGMENTS({test_table}) GROUP BY pk1, pk2") if r.pk1 == pk1]
+    assert sorted(r.pk2 for r in rows) == [0, 1]
+    assert {r.mutation_fragment_kind for r in rows} == {'partition start'}
+
+    # Per source within a partition.
+    expected = sorted({r.mutation_source for r in cql.execute(f"SELECT mutation_source FROM MUTATION_FRAGMENTS({test_table}) {where}")})
+    assert len(expected) >= 2
+    rows = list(cql.execute(f"SELECT mutation_source, mutation_fragment_kind FROM MUTATION_FRAGMENTS({test_table}) {where} GROUP BY pk1, pk2, mutation_source"))
+    assert sorted(r.mutation_source for r in rows) == expected
+    assert {r.mutation_fragment_kind for r in rows} == {'partition start'}
+
+
+@pytest.mark.parametrize("test_keyspace", ["tablets", "vnodes"], indirect=True)
+def test_group_by_count(cql, test_table, scylla_only):
+    """ COUNT() over a GROUP BY counts the fragments of each group.
+
+    Grouping by the partition key counts the fragments of each partition,
+    adding mutation_source counts them per source. Regression test for
+    SCYLLADB-4509.
+    """
+    pk1 = write_two_partitions(cql, test_table)
+    where = f"WHERE pk1 = {pk1} AND pk2 = 1"
+
+    # Per partition. The table is shared with other tests, so the scan is filtered to pk1.
+    expected = sorted((pk2, fragment_count(cql, test_table, pk1, pk2)) for pk2 in range(2))
+    rows = list(cql.execute(f"SELECT pk1, pk2, COUNT(*) FROM MUTATION_FRAGMENTS({test_table}) GROUP BY pk1, pk2"))
+    assert sorted((r.pk2, r.count) for r in rows if r.pk1 == pk1) == expected
+
+    # Per source within a partition.
+    expected = sorted(collections.Counter(r.mutation_source for r in cql.execute(f"SELECT mutation_source FROM MUTATION_FRAGMENTS({test_table}) {where}")).items())
+    assert len(expected) >= 2
+    rows = list(cql.execute(f"SELECT mutation_source, COUNT(*) FROM MUTATION_FRAGMENTS({test_table}) {where} GROUP BY pk1, pk2, mutation_source"))
+    assert sorted((r.mutation_source, r.count) for r in rows) == expected
+
+
+@pytest.mark.parametrize("test_keyspace", ["tablets", "vnodes"], indirect=True)
+def test_aggregate_paging(cql, test_table, scylla_only):
+    """ An aggregate is read in internal pages, the client gets a single page.
+
+    The read is paged internally, in pages of select_internal_page_size
+    fragments, lowered here so that the partition spans several pages. The
+    client has to get the whole result in one page, with no paging state,
+    whatever page size it asked for. Regression test for SCYLLADB-4509.
+    """
+    pk1 = util.unique_key_int()
+    pk2 = util.unique_key_int()
+    for ck in range(10):
+        cql.execute(f"INSERT INTO {test_table} (pk1, pk2, ck1, ck2, v) VALUES ({pk1}, {pk2}, 0, {ck}, 'vv')")
+    where = f"WHERE pk1 = {pk1} AND pk2 = {pk2}"
+    expected = len(list(cql.execute(f"SELECT * FROM MUTATION_FRAGMENTS({test_table}) {where}")))
+    assert expected >= 12  # partition start, 10 rows, partition end, from one source at least
+
+    with util.config_value_context(cql, 'select_internal_page_size', '5'):
+        for fetch_size in (0, 1, 5, expected, 1000):
+            query = f"SELECT COUNT(*) FROM MUTATION_FRAGMENTS({test_table}) {where}"
+            res = cql.execute(cassandra.query.SimpleStatement(query, fetch_size=fetch_size))
+            assert [r.count for r in res.current_rows] == [expected], f"fetch_size={fetch_size}"
+            assert not res.has_more_pages
+
+
+@pytest.mark.parametrize("test_keyspace", ["tablets", "vnodes"], indirect=True)
+def test_group_by_paging(cql, test_table, scylla_only):
+    """ A group spanning internal pages comes back as a single row.
+
+    Internal paging as in test_aggregate_paging, with GROUP BY: the count has
+    to carry from one internal page to the next, and a group ending in the
+    middle of a page must not be cut in two rows. The scan is a range scan, so
+    that one group follows another inside a page. Regression test for
+    SCYLLADB-4509.
+    """
+    pk1 = util.unique_key_int()
+    pk2s = [util.unique_key_int() for _ in range(3)]
+    for pk2 in pk2s:
+        for ck in range(10):
+            cql.execute(f"INSERT INTO {test_table} (pk1, pk2, ck1, ck2, v) VALUES ({pk1}, {pk2}, 0, {ck}, 'vv')")
+
+    expected = sorted((pk2, fragment_count(cql, test_table, pk1, pk2)) for pk2 in pk2s)
+    # partition start, 10 rows, partition end, from one source at least
+    assert min(count for _, count in expected) >= 12
+
+    with util.config_value_context(cql, 'select_internal_page_size', '5'):
+        # The table is shared with the other tests, so only our own partitions
+        # are compared. The small fetch size must not split the result either.
+        query = f"SELECT pk1, pk2, COUNT(*) FROM MUTATION_FRAGMENTS({test_table}) GROUP BY pk1, pk2"
+        res = cql.execute(cassandra.query.SimpleStatement(query, fetch_size=1))
+        assert sorted((r.pk2, r.count) for r in res.current_rows if r.pk1 == pk1) == expected
+        assert not res.has_more_pages
 
 @pytest.mark.parametrize("test_keyspace", ["tablets", "vnodes"], indirect=True)
 def test_many_partition_scan(cql, test_keyspace, scylla_only):
