@@ -22,51 +22,6 @@ BOOST_AUTO_TEST_SUITE(view_schema_test)
 
 using namespace std::literals::chrono_literals;
 
-// Like test_ttl above, this test was deliberately not moved to Python in
-// issue #16134, while its twin test_non_primary_key_restrictions_update_vk
-// was. It uses forward_jump_clocks() to expire a TTL instantly, and cqlpy has
-// no equivalent - a Python version has to really sleep out the TTL, which
-// measured at 1.8 seconds, more than a quarter of the run time of the whole
-// materialized-view test file. So this one earns its keep by staying in C++.
-SEASTAR_TEST_CASE(test_non_primary_key_restrictions_ttl_vk) {
-    return do_with_cql_env_thread([] (auto& e) {
-        e.execute_cql("create table cf (a int, c int, primary key (a))").get();
-        e.execute_cql("create materialized view vcf as select * from cf "
-                      "where a is not null and c is not null and c = 1"
-                      "primary key (a, c)").get();
-        // Insert a base row without c, and set c=1 (matching the filter)
-        // with a TTL. The view will then have a row, but it should disappear
-        // when the TTL expires.
-        // We later re-add c=1, and expect to see the view row appear again.
-        BOOST_TEST_PASSPOINT();
-        e.execute_cql("insert into cf (a, c) values (1, 0)").get();
-        eventually([&] {
-            auto msg = e.execute_cql("select a, c from vcf").get();
-            assert_that(msg).is_rows().is_empty();
-        });
-        BOOST_TEST_PASSPOINT();
-        e.execute_cql("update cf using ttl 5 set c = 1 where a = 1").get();
-        eventually([&] {
-            auto msg = e.execute_cql("select a, c from vcf").get();
-            assert_that(msg).is_rows().with_rows_ignore_order({
-                { {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
-        });
-        BOOST_TEST_PASSPOINT();
-        forward_jump_clocks(6s);
-        eventually([&] {
-            auto msg = e.execute_cql("select a, c from vcf").get();
-            assert_that(msg).is_rows().is_empty();
-        });
-        BOOST_TEST_PASSPOINT();
-        e.execute_cql("update cf set c = 1 where a = 1").get();
-        eventually([&] {
-            auto msg = e.execute_cql("select a, c from vcf").get();
-            assert_that(msg).is_rows().with_rows_ignore_order({
-                { {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
-        });
-    });
-}
-
 // Unlike everything else which used to be in this file, this is not a test of
 // CQL behavior but a unit test of the db::view::node_update_backlog class, so
 // it was not moved to Python along with the rest in issue #16134 - there is no

@@ -1296,9 +1296,6 @@ def test_non_primary_key_restrictions_ttl(cql, test_keyspace):
 # to deal with that (properly timestamped shadowable tombstones). The
 # following two tests with the "vk" (view key) suffix worked. Let's make sure
 # it continues to work.
-# Only the first of the two is here; its twin,
-# test_non_primary_key_restrictions_ttl_vk, needs to expire a TTL and so
-# stayed in view_schema_test.cc - see the comment there.
 # This test is scylla_only for the same reason as
 # test_non_primary_key_restrictions above - Cassandra doesn't allow
 # restricting c, which isn't a base key column.
@@ -1315,6 +1312,26 @@ def test_non_primary_key_restrictions_update_vk(cql, test_keyspace, scylla_only)
             cql.execute(f"update {table} set c = 1 where a = 1")
             assert [(1, 1)] == list(cql.execute(f"select a, c from {mv}"))
             cql.execute(f"update {table} set c = 0 where a = 1")
+            assert [] == list(cql.execute(f"select a, c from {mv}"))
+            cql.execute(f"update {table} set c = 1 where a = 1")
+            assert [(1, 1)] == list(cql.execute(f"select a, c from {mv}"))
+
+# The twin of the test above: instead of changing c away from the value the
+# view filters on, let c expire.
+# This test is scylla_only for the same reason as the test above.
+def test_non_primary_key_restrictions_ttl_vk(cql, test_keyspace, scylla_only, clock):
+    with new_test_table(cql, test_keyspace, 'a int, c int, primary key (a)') as table:
+        with new_materialized_view(cql, table, '*', 'a, c',
+                'a is not null and c is not null and c = 1') as mv:
+            # Insert a base row without c, and set c=1 (matching the filter)
+            # with a TTL. The view will then have a row, but it should disappear
+            # when the TTL expires.
+            # We later re-add c=1, and expect to see the view row appear again.
+            cql.execute(f"insert into {table} (a, c) values (1, 0)")
+            assert [] == list(cql.execute(f"select a, c from {mv}"))
+            cql.execute(f"update {table} using ttl 5 set c = 1 where a = 1")
+            assert [(1, 1)] == list(cql.execute(f"select a, c from {mv}"))
+            clock.jump(6)
             assert [] == list(cql.execute(f"select a, c from {mv}"))
             cql.execute(f"update {table} set c = 1 where a = 1")
             assert [(1, 1)] == list(cql.execute(f"select a, c from {mv}"))
