@@ -1824,7 +1824,7 @@ def test_view_update_builder_does_not_lose_fragments_across_batches(cql, test_ke
 # cache must not skip the remaining checks on the second run. The same for
 # ALTER TABLE is in test_alter_table.py.
 def test_prepared_view_options_validated_on_every_execute(cql, test_keyspace):
-    bad_options = " WITH compaction = {'class': 'SizeTieredCompactionStrategy'} AND min_index_interval = 0"
+    bad_options = " WITH compaction = {'class': 'LeveledCompactionStrategy'} AND min_index_interval = 0"
 
     def rejected_twice(prepared):
         for _ in range(2):
