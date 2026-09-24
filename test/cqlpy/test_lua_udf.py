@@ -338,3 +338,29 @@ def test_lua_time_return(cql, test_keyspace, scylla_only):
                 cql.execute(query)
         with pytest.raises(InvalidRequest, match="time must be a string or an integer"):
             call_lua(cql, test_keyspace, table, sig, "return 42.2")
+
+# The Python driver can't represent all timestamp values, so we convert
+# the function's result to a bigint on the server.
+def test_lua_timestamp_return(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val varint") as table:
+        cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 9223372036854775807)")
+        sig = "(val varint) CALLED ON NULL INPUT RETURNS timestamp"
+        def call(body):
+            with new_function(cql, test_keyspace, f"{sig} LANGUAGE lua AS '{body}'") as f:
+                return cql.execute(f"SELECT blobasbigint(timestampasblob({test_keyspace}.{f}(val))) FROM {table}").one()[0]
+        with new_function(cql, test_keyspace, f"{sig} LANGUAGE lua AS 'return val'") as f:
+            query = f"SELECT blobasbigint(timestampasblob({test_keyspace}.{f}(val))) FROM {table}"
+            assert cql.execute(query).one()[0] == 9223372036854775807
+            assert call('return "2011-02-03 04:05:06+0000"') == 0x12de9b1e550
+            assert call("return {year = 2011, month = 2, day = 3, hour = 4, min = 5, sec = 6 }") == 0x12de9b1e550
+            # Different boost versions support different year ranges, but no version supports year 10001.
+            with pytest.raises(NoHostAvailable, match="Year is out of valid range:"):
+                call("return {year = 10001, month = 2, day = 3, hour = 4, min = 5, sec = 6 }")
+            # FIXME: the exception message is redundant.
+            with pytest.raises(NoHostAvailable, match="marshaling error: unable to parse date 'abc': marshaling error: Unable to parse timestamp from 'abc'"):
+                call('return "abc"')
+            cql.execute(f"INSERT INTO {table} (key, val) VALUES ('bar', 9223372036854775808)")
+            with pytest.raises(InvalidRequest, match="timestamp value must fit in signed 64 bits"):
+                cql.execute(query)
+        with pytest.raises(InvalidRequest, match="timestamp must be a string, integer or date table"):
+            call("return 42.2")
