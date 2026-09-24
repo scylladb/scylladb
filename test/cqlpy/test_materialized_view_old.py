@@ -1190,3 +1190,26 @@ def test_non_primary_key_restrictions_update_vk(cql, test_keyspace, scylla_only)
             cql.execute(f"update {table} set c = 1 where a = 1")
             assert [(1, 1)] == list(cql.execute(f"select a, c from {mv}"))
 
+
+# Test reproducing https://issues.apache.org/jira/browse/CASSANDRA-10910
+#
+# Cassandra has two regression tests for that issue, differing only in whether
+# the view filters on c: ViewTimesTest.testRegularColumnTimestampUpdates,
+# which test_regular_column_timestamp_updates above corresponds to, and
+# ViewFiltering2Test.testRestrictedRegularColumnTimestampUpdates, which this
+# one does. So it may look odd that a test for a Cassandra bug is scylla_only.
+# The reason is that restricting c, which isn't a base key column, needs
+# Cassandra's unsafe cassandra.mv_allow_filtering_nonkey_columns_unsafe
+# property, which its own ViewFiltering tests switch on for themselves and
+# which we don't set - see test_non_primary_key_restrictions above.
+def test_restricted_regular_column_timestamp_updates(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, 'k int primary key, c int, val int') as table:
+        with new_materialized_view(cql, table, '*', 'k, c',
+                'k is not null and c is not null and c = 1') as mv:
+            cql.execute(f"update {table} using timestamp 1 set c = 0, val = 0 where k = 0")
+            cql.execute(f"update {table} using timestamp 3 set c = 1 where k = 0")
+            cql.execute(f"update {table} using timestamp 2 set val = 1 where k = 0")
+            cql.execute(f"update {table} using timestamp 4 set c = 1 where k = 0")
+            cql.execute(f"update {table} using timestamp 3 set val = 2 where k = 0")
+            assert [(1, 0, 2)] == list(cql.execute(f"select c, k, val from {mv}"))
+

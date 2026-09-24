@@ -132,26 +132,6 @@ SEASTAR_TEST_CASE(test_non_primary_key_restrictions_ttl_vk) {
     });
 }
 
-// Test reproducing https://issues.apache.org/jira/browse/CASSANDRA-10910
-SEASTAR_TEST_CASE(test_restricted_regular_column_timestamp_updates) {
-    return do_with_cql_env_thread([] (auto& e) {
-        e.execute_cql("create table cf (k int primary key, c int, val int)").get();
-        e.execute_cql("create materialized view vcf as select * from cf "
-                      "where k is not null and c is not null and c = 1"
-                      "primary key (k ,c)").get();
-
-        e.execute_cql("update cf using timestamp 1 set c = 0, val = 0 where k = 0").get();
-        e.execute_cql("update cf using timestamp 3 set c = 1 where k = 0").get();
-        e.execute_cql("update cf using timestamp 2 set val = 1 where k = 0").get();
-        e.execute_cql("update cf using timestamp 4 set c = 1 where k = 0").get();
-        e.execute_cql("update cf using timestamp 3 set val = 2 where k = 0").get();
-        eventually([&] {
-        auto msg = e.execute_cql("select c, k, val from vcf").get();
-        assert_that(msg).is_rows().with_rows_ignore_order({{ {int32_type->decompose(1)}, {int32_type->decompose(0)}, {int32_type->decompose(2)} }});
-        });
-    });
-}
-
 SEASTAR_TEST_CASE(test_old_timestamps_with_restrictions) {
     return do_with_cql_env_thread([] (auto& e) {
         e.execute_cql("create table cf (k int, c int, val text, primary key (k, c))").get();
