@@ -813,6 +813,11 @@ class ScyllaNode:
             # ccm ran every node with SCYLLA_HOME set to the node's directory.
             scylla_env.setdefault("SCYLLA_HOME", self.get_path())
 
+        # The cluster-wide default has to be applied before the marks are taken:
+        # left to after them, a start() that names no wait_other_notice took no
+        # marks and then waited for nobody.
+        if wait_other_notice is None:
+            wait_other_notice = self.cluster.force_wait_for_cluster_start and not no_wait
         marks = []
         if wait_other_notice:
             marks = [(node, node.mark_log()) for node in self.cluster.nodelist() if node.is_live()]
@@ -869,8 +874,6 @@ class ScyllaNode:
 
         if wait_for_binary_proto is None:
             wait_for_binary_proto = self.cluster.force_wait_for_cluster_start and not no_wait
-        if wait_other_notice is None:
-            wait_other_notice = self.cluster.force_wait_for_cluster_start and not no_wait
         if wait_normal_token_owner is None and wait_other_notice:
             wait_normal_token_owner = True
 
