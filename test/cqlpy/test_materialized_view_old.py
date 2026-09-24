@@ -2111,3 +2111,34 @@ def test_partition_key_filtering_with_slice(cql, test_keyspace, pk):
 
             cql.execute(f"delete from {table} where a = 3 and b = 10 and c = 4")
             check([(1, 10, 2, 2), (2, 10, 3, 2)])
+
+# A view may restrict both of the base's partition key columns to values, and
+# then holds only the rows of that one base partition.
+@pytest.mark.parametrize("pk", ['(a, b), c', '(b, a), c', 'a, b, c', 'c, b, a', '(c, a), b'])
+def test_partition_key_compound_restrictions(cql, test_keyspace, pk):
+    with new_test_table(cql, test_keyspace, 'a int, b int, c int, d int, primary key ((a, b), c)') as table:
+        with new_materialized_view(cql, table, '*', pk,
+                'a = 1 and b = 1 and c is not null') as mv:
+            def check(expected):
+                assert sorted(expected) == sorted(cql.execute(f"select a, b, c, d from {mv}"))
+            for a in [0, 1]:
+                for b in [0, 1]:
+                    for c in [0, 1]:
+                        cql.execute(f"insert into {table} (a, b, c, d) values ({a}, {b}, {c}, 0)")
+            check([(1, 1, 0, 0), (1, 1, 1, 0)])
+
+            # A row which the view filters out stays filtered out
+            cql.execute(f"update {table} set d = 1 where a = 1 and b = 0 and c = 0")
+            check([(1, 1, 0, 0), (1, 1, 1, 0)])
+
+            cql.execute(f"update {table} set d = 1 where a = 1 and b = 1 and c = 0")
+            check([(1, 1, 0, 1), (1, 1, 1, 0)])
+
+            cql.execute(f"delete from {table} where a = 1 and b = 0 and c = 0")
+            check([(1, 1, 0, 1), (1, 1, 1, 0)])
+
+            cql.execute(f"delete from {table} where a = 1 and b = 1 and c = 0")
+            check([(1, 1, 1, 0)])
+
+            cql.execute(f"delete from {table} where a = 1 and b = 1")
+            check([])
