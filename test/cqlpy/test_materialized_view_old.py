@@ -185,9 +185,9 @@ def test_access_and_schema(cql, test_keyspace):
 # materialized view at all ("Cannot drop column a on base table ... with
 # materialized views", AlterTableStatement.java:516), while Scylla refuses
 # only if one of the views actually needs the dropped column - i.e., selects
-# it, or depends on its liveness. See issue #4448 and the C++ test
-# test_mv_allow_some_column_drops, which is still in view_schema_test.cc and
-# covers the rule in more detail.
+# it, or depends on its liveness. See issue #4448 and
+# test_mv_allow_some_column_drops below, which covers the rule in more
+# detail.
 def test_column_dropped_from_base(cql, test_keyspace, scylla_only):
     with new_test_table(cql, test_keyspace, 'p int, c ascii, a int, v int, primary key (p, c)') as table:
         with new_materialized_view(cql, table, 'p, c, v', 'v, p, c',
