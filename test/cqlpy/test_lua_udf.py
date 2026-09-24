@@ -379,3 +379,15 @@ def test_lua_timeuuid_return(cql, test_keyspace, scylla_only):
             UUID("d18648bc-cf83-11e9-9820-107b4493b787")]
         with pytest.raises(NoHostAvailable, match=re.escape("marshaling error: Unsupported UUID version (2)")):
             call_lua(cql, test_keyspace, table, sig, 'return "d18648bc-cf83-21e9-9820-107b4493b787"')
+
+def test_lua_tuple_return(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val int") as table:
+        cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 3)")
+        sig = "(val int) CALLED ON NULL INPUT RETURNS tuple<int, double, text>"
+        assert call_lua(cql, test_keyspace, table, sig, 'return {1,2.4,"foo"}') == [(1, 2.4, "foo")]
+        with pytest.raises(InvalidRequest, match="value is not an integer"):
+            call_lua(cql, test_keyspace, table, sig, 'return {1.2, 1.2, "foo"}')
+        with pytest.raises(InvalidRequest, match="key 4 is not valid for a sequence of size 3"):
+            call_lua(cql, test_keyspace, table, sig, 'return {1,2.4,"foo", 42}')
+        with pytest.raises(InvalidRequest, match="key 2 missing in sequence of size 3"):
+            call_lua(cql, test_keyspace, table, sig, 'return {[1] = 1, [3] = "foo"}')
