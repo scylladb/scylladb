@@ -1506,3 +1506,14 @@ def test_view_key_must_include_base_key(cql, test_keyspace):
                     'c is not null and b is not null'):
                 pass
 
+# Adding columns to the base table must not disturb an existing view, and a
+# later update must still reach it.
+def test_alter_table_with_updates(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int, c int, v1 int, v2 int, primary key (p, c)') as table:
+        with new_materialized_view(cql, table, 'p, c, v1, v2', 'v1, p, c',
+                'p is not null and c is not null and v1 is not null') as mv:
+            cql.execute(f"update {table} set v1 = 4, v2 = 5 where p = 1 and c = 1")
+            for column in ['f', 'o', 't', 'x', 'z']:
+                cql.execute(f"alter table {table} add {column} int")
+            cql.execute(f"update {table} set v2 = 7 where p = 1 and c = 1")
+            assert [(1, 1, 4, 7)] == list(cql.execute(f"select p, c, v1, v2 from {mv}"))
