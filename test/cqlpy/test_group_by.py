@@ -192,7 +192,6 @@ def test_group_by_count_with_limit(cql, table1):
 # filtered_rows_read_total. The metric is node wide, so the check leaves
 # room for reads by other clients.
 # Regression test for SCYLLADB-4585.
-@pytest.mark.xfail(reason="SCYLLADB-4585")
 def test_group_by_count_with_limit_stops_reading(cql, test_keyspace, scylla_only):
     partitions = 100
     rows_per_partition = 10
