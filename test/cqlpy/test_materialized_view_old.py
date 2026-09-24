@@ -1369,3 +1369,39 @@ def test_complex_timestamp_with_base_pk_columns_in_view_pk_deletion(cql, test_ke
             maybe_flush()
             assert [(None, 5, 20)] == list(cql.execute(f"select v1, v2, WRITETIME(v2) from {mv}"))
 
+@pytest.mark.parametrize("flush", [False, True], ids=["noflush", "flush"])
+def test_complex_timestamp_with_base_non_pk_columns_in_view_pk_deletion(cql, test_keyspace, flush):
+    no_cache = "with caching = {'enabled': 'false'}" if flush and is_scylla(cql) else ""
+    def maybe_flush():
+        if flush:
+            nodetool.flush_all(cql)
+    with new_test_table(cql, test_keyspace, 'p int primary key, v1 int, v2 int',
+            extra=no_cache) as table:
+        with new_materialized_view(cql, table, '*', 'v1, p',
+                'p is not null and v1 is not null', extra=no_cache) as mv:
+            # Set initial values TS=1
+            cql.execute(f"insert into {table} (p, v1, v2) values (3, 1, 5) using timestamp 1")
+            maybe_flush()
+            assert [(5, 1)] == list(cql.execute(
+                f"select v2, WRITETIME(v2) from {mv} where v1 = 1 and p = 3"))
+
+            # Delete row TS=2
+            cql.execute(f"delete from {table} using timestamp 2 where p = 3")
+            maybe_flush()
+            assert [] == list(cql.execute(f"select * from {mv}"))
+
+            # Add PK @ TS=3
+            cql.execute(f"insert into {table} (p, v1) values (3, 1) using timestamp 3")
+            maybe_flush()
+            assert [(1, 3, None)] == list(cql.execute(f"select * from {mv}"))
+
+            # Insert v2 @ TS=2
+            cql.execute(f"insert into {table} (p, v1, v2) values (3, 1, 4) using timestamp 2")
+            maybe_flush()
+            assert [(1, 3, None)] == list(cql.execute(f"select * from {mv}"))
+
+            # Insert v2 @ TS=3
+            cql.execute(f"update {table} using timestamp 3 set v2 = 4 where p = 3")
+            maybe_flush()
+            assert [(1, 3, 4, 3)] == list(cql.execute(
+                f"select v1, p, v2, WRITETIME(v2) from {mv}"))

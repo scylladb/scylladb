@@ -21,7 +21,6 @@
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/eventually.hh"
 #include "exceptions/unrecognized_entity_exception.hh"
-#include "db/config.hh"
 #include "utils/chunked_string.hh"
 
 BOOST_AUTO_TEST_SUITE(view_schema_test)
@@ -130,72 +129,6 @@ SEASTAR_TEST_CASE(test_non_primary_key_restrictions_ttl_vk) {
                 { {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
         });
     });
-}
-
-void complex_timestamp_with_base_non_pk_columns_in_view_pk_deletion_test(cql_test_env& e, std::function<void()>&& maybe_flush) {
-    e.execute_cql("create table cf (p int primary key, v1 int, v2 int)").get();
-    e.execute_cql("create materialized view vcf as select * from cf "
-                  "where p is not null and v1 is not null "
-                  "primary key (v1, p)").get();
-
-    // Set initial values TS=1
-    e.execute_cql("insert into cf (p, v1, v2) values (3, 1, 5) using timestamp 1").get();
-    maybe_flush();
-    eventually([&] {
-    auto msg = e.execute_cql("select v2, WRITETIME(v2) from vcf where v1 = 1 and p = 3").get();
-    assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(5)}, {long_type->decompose(1L)} }});
-    });
-
-    // Delete row TS=2
-    e.execute_cql("delete from cf using timestamp 2 where p = 3").get();
-    maybe_flush();
-    eventually([&] {
-    auto msg = e.execute_cql("select * from vcf").get();
-    assert_that(msg).is_rows().with_size(0);
-    });
-
-    // Add PK @ TS=3
-    e.execute_cql("insert into cf (p, v1) values (3, 1) using timestamp 3").get();
-    maybe_flush();
-    eventually([&] {
-    auto msg = e.execute_cql("select * from vcf").get();
-    assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)}, {int32_type->decompose(3)}, {} }});
-    });
-
-    // Insert v2 @ TS=2
-    e.execute_cql("insert into cf (p, v1, v2) values (3, 1, 4) using timestamp 2").get();
-    maybe_flush();
-    eventually([&] {
-    auto msg = e.execute_cql("select * from vcf").get();
-    assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)}, {int32_type->decompose(3)}, {} }});
-    });
-
-    // Insert v2 @ TS=3
-    e.execute_cql("update cf using timestamp 3 set v2 = 4 where p = 3").get();
-    maybe_flush();
-    eventually([&] {
-    auto msg = e.execute_cql("select v1, p, v2, WRITETIME(v2) from vcf").get();
-    assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)}, {int32_type->decompose(3)}, {int32_type->decompose(4)}, {long_type->decompose(3L)} }});
-    });
-
-   e.execute_cql("drop materialized view vcf").get();
-   e.execute_cql("drop table cf").get();
-}
-
-SEASTAR_TEST_CASE(complex_timestamp_deletion_test) {
-    return do_with_cql_env_thread([] (auto& e) {
-        complex_timestamp_with_base_non_pk_columns_in_view_pk_deletion_test(e, [] { });
-    });
-}
-
-SEASTAR_TEST_CASE(complex_timestamp_deletion_test_with_flush) {
-    auto cfg = make_shared<db::config>();
-    cfg->enable_cache(false);
-    return do_with_cql_env_thread([] (auto& e) {
-        complex_timestamp_with_base_non_pk_columns_in_view_pk_deletion_test(e, [&] {
-            e.local_db().flush_all_memtables().get();
-        });
-    }, cfg);
 }
 
 // Test that we are not allowed to create a view without the "is not null"
