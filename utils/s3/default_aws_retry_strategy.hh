@@ -9,11 +9,15 @@
 #pragma once
 #include <seastar/http/retry_strategy.hh>
 
+#include "utils/s3/aws_error_definitions.hh"
 #include "utils/s3/noop_throttling_controller.hh"
 
 namespace aws {
 
 class aws_error;
+
+// Whether the endpoint is asking us to slow down, as reported to the send brake.
+bool is_throttling_error(aws_error_type type);
 
 class default_aws_retry_strategy : public seastar::http::retry_strategy {
 protected:

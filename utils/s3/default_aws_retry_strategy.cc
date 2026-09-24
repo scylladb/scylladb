@@ -64,7 +64,7 @@ default_aws_retry_strategy::default_aws_retry_strategy(unsigned max_retries, s3:
 
 // Errors that indicate the S3 endpoint is throttling us (429/503-class).
 // These are reported to the send brake and pick the longer backoff base below.
-static bool is_throttling_error(aws::aws_error_type type) {
+bool is_throttling_error(aws::aws_error_type type) {
     using enum aws::aws_error_type;
     switch (type) {
     case SLOW_DOWN:

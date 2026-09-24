@@ -1561,12 +1561,19 @@ class client::chunked_download_source final : public seastar::data_source_impl {
     condition_variable _bg_fiber_cv;
     condition_variable _get_cv;
     future<> _filling_fiber = make_ready_future<>();
+    // make_request() below runs with no_retry (a streamed body can't be replayed),
+    // so this loop does the retrying.
+    unsigned _retry_attempts = 0;
+    static constexpr std::chrono::milliseconds _backoff_abort_poll_interval{20};
 
     future<> make_filling_fiber() {
         seastar::http::no_retry_strategy no_retry;
+        // Static: an abandoned backoff can outlive this source.
+        static const aws::default_aws_retry_strategy retry_strategy;
         s3l.trace("Fiber starts cycle for object '{}'", _object_name);
         auto units = try_get_units(_client->_buffered_dl_sem, 1);
         while (!_is_finished) {
+            std::exception_ptr retry_ex;
             try {
                 if (!_is_finished && _buffers_size >= _max_buffers_size * _buffers_low_watermark) {
                     co_await _bg_fiber_cv.when([this] { return _is_finished || (_buffers_size < _max_buffers_size * _buffers_low_watermark); });
@@ -1675,6 +1682,8 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                             s3l.trace("Fiber for object '{}' pushes {} bytes buffer", _object_name, buff_size);
                             _buffers.emplace_back(std::move(buf));
                             _get_cv.signal();
+                            // Progress resets the budget, so unrelated earlier blips don't add up.
+                            _retry_attempts = 0;
                             utils::get_local_injector().inject("break_s3_inflight_req", [] {
                                 // Inject a non-`aws_error` after partial data download to verify proper
                                 // handling and that the fiber retries missing chunks
@@ -1691,11 +1700,44 @@ class client::chunked_download_source final : public seastar::data_source_impl {
             } catch (...) {
                 auto ex = std::current_exception();
                 auto aws_ex = aws::aws_error::from_exception_ptr(ex);
+                // no_retry bypasses the strategy, which normally reports failures to the brake.
+                if (aws::is_throttling_error(aws_ex.get_error_type())) {
+                    _client->_request_limiter->on_throttled();
+                } else {
+                    _client->_request_limiter->on_not_throttled();
+                }
                 if (!aws_ex.is_retryable()) {
                     s3l.info("Fiber for object '{}' failed: {}, exiting", _object_name, ex);
                     _get_cv.broken(ex);
                     co_return;
                 }
+                // Can't co_await in a catch handler; back off below.
+                retry_ex = std::move(ex);
+                // Don't hold a download slot through the backoff.
+                units.reset();
+            }
+            if (retry_ex) {
+                // should_retry()'s sleep isn't abortable; poll so close() and abort don't wait it out.
+                auto retry_fut = retry_strategy.should_retry(retry_ex, _retry_attempts);
+                auto aborted = [this] { return _as && _as->abort_requested(); };
+                while (!retry_fut.available() && !_is_finished && !aborted()) {
+                    co_await seastar::sleep(_backoff_abort_poll_interval);
+                }
+                if (_is_finished || aborted()) {
+                    s3l.trace("Fiber for object '{}' abandoned mid-backoff", _object_name);
+                    // Park it: awaiting stalls close(), dropping it reports an ignored failure.
+                    (void)retry_fut.discard_result().handle_exception([](std::exception_ptr) {});
+                    if (!_is_finished) {
+                        _get_cv.broken(_as->abort_requested_exception_ptr());
+                    }
+                    co_return;
+                }
+                if (!co_await std::move(retry_fut)) {
+                    s3l.info("Fiber for object '{}' exhausted retries: {}, exiting", _object_name, retry_ex);
+                    _get_cv.broken(retry_ex);
+                    co_return;
+                }
+                ++_retry_attempts;
             }
         }
         s3l.trace("Fiber for object '{}' completed", _object_name);
