@@ -285,16 +285,6 @@ topology_mutation_builder& topology_mutation_builder::pause_rf_change_request(co
     return apply_set("paused_rf_change_requests", collection_apply_mode::update, std::vector<data_value>{id});
 }
 
-topology_mutation_builder& topology_mutation_builder::resume_rf_change_request(const std::unordered_set<utils::UUID>& values, const utils::UUID& id) {
-    if (values.contains(id)) {
-        auto new_values = values;
-        new_values.erase(id);
-        return apply_set("paused_rf_change_requests", collection_apply_mode::overwrite, new_values | std::views::transform([] (const auto& id) { return data_value{id}; }));
-    } else {
-        return *this;
-    }
-}
-
 topology_mutation_builder& topology_mutation_builder::start_rf_change_migrations(const utils::UUID& id) {
     return apply_set("ongoing_rf_changes", collection_apply_mode::update, std::vector<data_value>{id});
 }
@@ -325,6 +315,20 @@ topology_mutation_builder& topology_mutation_builder::finish_restore_requests(co
         }
     }
     return apply_set("ongoing_restore_requests", collection_apply_mode::overwrite, new_values | std::views::transform([] (const auto& id) { return data_value{id}; }));
+}
+
+topology_mutation_builder& topology_mutation_builder::resume_rf_change_requests(const std::unordered_set<utils::UUID>& current, const std::unordered_set<utils::UUID>& ids) {
+    if (ids.empty()) {
+        return *this;
+    }
+    auto new_values = current;
+    for (const auto& id : ids) {
+        if (!new_values.erase(id)) {
+            on_internal_error(rtlogger, fmt::format("paused rf change requests [{}] do not contain the request {} being resumed",
+                    fmt::join(current, ", "), id));
+        }
+    }
+    return apply_set("paused_rf_change_requests", collection_apply_mode::overwrite, new_values | std::views::transform([] (const auto& id) { return data_value{id}; }));
 }
 
 topology_mutation_builder& topology_mutation_builder::set_upgrade_state_done() {
