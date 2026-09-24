@@ -273,3 +273,13 @@ def test_lua_date_return(cql, test_keyspace, scylla_only):
             call_lua(cql, test_keyspace, table, sig, "return 42.2")
         with pytest.raises(InvalidRequest, match="date type has no hour, minute or second"):
             call_lua(cql, test_keyspace, table, sig, "return {year = 2019, month = 10, day = 1, hour = 4}")
+
+def test_lua_inet_return(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val int") as table:
+        cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 3)")
+        sig = "(val int) CALLED ON NULL INPUT RETURNS inet"
+        assert call_lua(cql, test_keyspace, table, sig, 'return "1.2.3.4"') == ["1.2.3.4"]
+        with pytest.raises(NoHostAvailable, match="marshaling error: Failed to parse inet_addr from 'abc'"):
+            call_lua(cql, test_keyspace, table, sig, 'return "abc"')
+        with pytest.raises(NoHostAvailable, match="marshaling error: Failed to parse inet_addr from ''"):
+            call_lua(cql, test_keyspace, table, sig, 'return ""')
