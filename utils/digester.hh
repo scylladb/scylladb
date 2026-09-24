@@ -39,8 +39,7 @@ public:
 
     template<typename T, typename... Args>
     void feed_hash(const T& value, Args&&... args) {
-        // FIXME uncomment the noexcept marking once clang bug 50994 is fixed or gcc compilation is turned on
-        std::visit([&] (auto& hasher) /* noexcept(noexcept(::feed_hash(hasher, value, args...))) */ -> void {
+        std::visit([&] (auto& hasher) noexcept(noexcept(::feed_hash(hasher, value, std::forward<Args>(args)...))) -> void {
             ::feed_hash(hasher, value, std::forward<Args>(args)...);
         }, _impl);
     };
