@@ -677,6 +677,60 @@ following:
 
    Run both if the cluster has keyspaces of both kinds.
 
+Recovering a node that fails to start
+-------------------------------------
+
+Resharding is an offline operation and it temporarily needs additional disk space.
+If it cannot complete - most commonly because the node ran out of disk space - the
+node fails to start, and it fails again on every subsequent start.
+
+If you can free disk space or extend the volume, do that and restart the node: it
+completes the upgrade, and you do not need the procedure below. Use the procedure
+only to abort the migration on such a node. The node cannot be rolled back with the
+:ref:`vnodes-migration-rollback` above, because that procedure requires the node to
+be UP.
+
+.. caution::
+
+   Use the ``force_vnodes_for_migrating_tables`` option to recover a node that will
+   not start, not as a way to control the migration. A node that has already
+   completed its upgrade refuses to start with this option; roll it back with the
+   :ref:`vnodes-migration-rollback` instead. Remove the option once the node is up:
+   a node that starts with it marks itself for downgrade, so a leftover option undoes
+   any later upgrade of the node.
+
+#. Add the following to the node's ``scylla.yaml`` and start the node:
+
+   .. code-block:: yaml
+
+      force_vnodes_for_migrating_tables: true
+
+   The node starts with vnodes, reshards any data it had already upgraded back to
+   vnodes, and logs the following warning:
+
+   .. code-block:: none
+
+      force_vnodes_for_migrating_tables is set, overriding the intended storage mode recorded in system.topology ('tablets')
+
+#. Wait until the node is UP using :doc:`nodetool status </operating-scylla/nodetool-commands/status/>`.
+   To monitor resharding progress, open a shell on the node and run:
+
+   .. code-block:: console
+
+      nodetool tasks list compaction --keyspace <keyspace>
+
+   Once it is up, the node marks itself for downgrade. Verify that the node's status
+   is ``uses vnodes``:
+
+   .. code-block:: console
+
+      nodetool migrate-to-tablets status <keyspace>
+
+#. Remove ``force_vnodes_for_migrating_tables`` from the node's ``scylla.yaml``.
+
+#. Continue with the :ref:`vnodes-migration-rollback` for the remaining upgraded nodes, then
+   finalize the rollback.
+
 Migrating multiple keyspaces
 ----------------------------
 
