@@ -1143,7 +1143,7 @@ void server_impl::send_message(server_id id, Message m) {
             _snapshot_application_done[id].set_value(std::move(m));
             _snapshot_application_done.erase(id);
         } else {
-            static_assert(!sizeof(T*), "not all message types are handled");
+            static_assert(false, "not all message types are handled");
         }
     }, std::move(m));
 }

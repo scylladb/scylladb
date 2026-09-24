@@ -8,6 +8,7 @@
 
 #include "api/api-doc/error_injection.json.hh"
 #include "api/api_init.hh"
+#include "api/utils.hh"
 #include <seastar/http/exception.hh>
 #include "utils/error_injection.hh"
 #include "utils/rjson.hh"
@@ -23,7 +24,7 @@ void set_error_injection(http_context& ctx, routes& r) {
 
     hf::enable_injection.set(r, [](std::unique_ptr<request> req) -> future<json::json_return_type> {
         sstring injection = req->get_path_param("injection");
-        bool one_shot = strcasecmp(req->get_query_param("one_shot").c_str(), "true") == 0;
+        bool one_shot = get_query_param<bool>(*req, "one_shot");
         auto params = co_await util::read_entire_stream_contiguous(*req->content_stream);
 
         const size_t max_params_size = 1024 * 1024;
