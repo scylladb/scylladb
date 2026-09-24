@@ -492,3 +492,20 @@ def test_alter_incompatible_type(cql, test_keyspace, scylla_only):
             # error rather than an invalid request.
             with pytest.raises(ConfigurationException, match='Cannot change c from type int to type blob'):
                 cql.execute(f"alter table {table} alter c type blob")
+
+# Dropping a materialized view which doesn't exist is an error - whether it
+# is the view or its whole keyspace which is missing - unless IF EXISTS is
+# used, and then it silently does nothing.
+#
+# The original C++ test only checked that the failing cases fail, and we do
+# the same here rather than matching a specific error, because the two
+# databases disagree on both the message and the error type: Scylla says
+# "Cannot drop non existing materialized view '...' in keyspace '...'." as a
+# ConfigurationException, Cassandra says "Materialized view '...' doesn't
+# exist" as an InvalidRequest.
+def test_drop_non_existing(cql, test_keyspace):
+    for name in [f'{test_keyspace}.view_does_not_exist',
+                 'keyspace_does_not_exist.view_does_not_exist']:
+        with pytest.raises((ConfigurationException, InvalidRequest)):
+            cql.execute(f"drop materialized view {name}")
+        cql.execute(f"drop materialized view if exists {name}")

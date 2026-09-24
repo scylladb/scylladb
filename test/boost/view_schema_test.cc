@@ -29,15 +29,6 @@ BOOST_AUTO_TEST_SUITE(view_schema_test)
 
 using namespace std::literals::chrono_literals;
 
-SEASTAR_TEST_CASE(test_drop_non_existing) {
-    return do_with_cql_env_thread([] (auto& e) {
-        assert_that_failed(e.execute_cql("drop materialized view view_doees_not_exist;"));
-        assert_that_failed(e.execute_cql("drop materialized view keyspace_does_not_exist.view_doees_not_exist;"));
-        e.execute_cql("drop materialized view if exists view_doees_not_exist;").get();
-        e.execute_cql("drop materialized view if exists keyspace_does_not_exist.view_doees_not_exist;").get();
-    });
-}
-
 SEASTAR_TEST_CASE(test_create_mv_with_unrestricted_pk_parts) {
     return do_with_cql_env_thread([] (auto& e) {
         e.execute_cql("create table cf (p int, c ascii, v bigint, primary key (p, c));").get();
