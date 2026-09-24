@@ -87,55 +87,6 @@ SEASTAR_TEST_CASE(test_ttl) {
     });
 }
 
-SEASTAR_TEST_CASE(test_clustering_order) {
-    return do_with_cql_env_thread([] (auto& e) {
-        e.execute_cql("create table cf (a int, b int, c int, d int, primary key (a, b, c)) with clustering order by (b asc, c desc)").get();
-        e.execute_cql("create materialized view mv1 as select * from cf "
-                      "where b is not null and c is not null primary key (a, b, c) with clustering order by (b desc)").get();
-        e.execute_cql("create materialized view mv2 as select * from cf "
-                      "where b is not null and c is not null primary key (a, c, b) with clustering order by (c asc)").get();
-        e.execute_cql("create materialized view mv3 as select * from cf "
-                      "where b is not null and c is not null primary key (a, b, c)").get();
-        e.execute_cql("create materialized view mv4 as select * from cf "
-                      "where b is not null and c is not null primary key (a, c, b) with clustering order by (c desc)").get();
-
-        e.execute_cql("insert into cf (a, b, c, d) values (1, 1, 1, 1)").get();
-        e.execute_cql("insert into cf (a, b, c, d) values (1, 2, 2, 2)").get();
-
-        eventually([&] {
-        auto msg = e.execute_cql("select b from mv1").get();
-        assert_that(msg).is_rows()
-            .with_size(2)
-            .with_rows({{ {int32_type->decompose(2)} },
-                        { {int32_type->decompose(1)} }});
-        });
-
-        eventually([&] {
-        auto msg = e.execute_cql("select c from mv2").get();
-        assert_that(msg).is_rows()
-            .with_size(2)
-            .with_rows({{ {int32_type->decompose(1)} },
-                        { {int32_type->decompose(2)} }});
-        });
-
-        eventually([&] {
-        auto msg = e.execute_cql("select b from mv3").get();
-        assert_that(msg).is_rows()
-            .with_size(2)
-            .with_rows({{ {int32_type->decompose(1)} },
-                        { {int32_type->decompose(2)} }});
-        });
-
-        eventually([&] {
-        auto msg = e.execute_cql("select c from mv4").get();
-        assert_that(msg).is_rows()
-            .with_size(2)
-            .with_rows({{ {int32_type->decompose(2)} },
-                        { {int32_type->decompose(1)} }});
-        });
-    });
-}
-
 SEASTAR_TEST_CASE(test_multiple_deletes) {
     return do_with_cql_env_thread([] (auto& e) {
         e.execute_cql("create table cf (p int, c int, primary key (p, c));").get();

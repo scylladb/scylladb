@@ -801,3 +801,24 @@ def test_conflicting_timestamp(cql, test_keyspace):
             for i in range(50):
                 cql.execute(f"insert into {table} (p, c, v) values (1, 1, {i})")
             assert [(49, 1, 1)] == list(cql.execute(f"select * from {mv}"))
+
+# A view's clustering order is its own: it may reverse the base table's, or
+# order by a different column altogether, and defaults to ascending when the
+# view doesn't ask for an order.
+def test_clustering_order(cql, test_keyspace):
+    # Each view below is given as its primary key, its CLUSTERING ORDER BY
+    # clause, and the column we read back with the order we expect it in.
+    views = [('a, b, c', 'with clustering order by (b desc, c asc)', 'b', [(2,), (1,)]),
+             ('a, c, b', 'with clustering order by (c asc, b asc)', 'c', [(1,), (2,)]),
+             ('a, b, c', '', 'b', [(1,), (2,)]),
+             ('a, c, b', 'with clustering order by (c desc, b asc)', 'c', [(2,), (1,)])]
+    with new_test_table(cql, test_keyspace, 'a int, b int, c int, d int, primary key (a, b, c)',
+            extra='with clustering order by (b asc, c desc)') as table:
+        with contextlib.ExitStack() as stack:
+            mvs = [stack.enter_context(new_materialized_view(cql, table, '*', pk,
+                        'a is not null and b is not null and c is not null', extra=extra))
+                   for pk, extra, _, _ in views]
+            cql.execute(f"insert into {table} (a, b, c, d) values (1, 1, 1, 1)")
+            cql.execute(f"insert into {table} (a, b, c, d) values (1, 2, 2, 2)")
+            for mv, (_, _, column, expected) in zip(mvs, views):
+                assert expected == list(cql.execute(f"select {column} from {mv}"))
