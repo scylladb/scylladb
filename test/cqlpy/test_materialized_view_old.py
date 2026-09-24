@@ -1213,3 +1213,25 @@ def test_restricted_regular_column_timestamp_updates(cql, test_keyspace, scylla_
             cql.execute(f"update {table} using timestamp 3 set val = 2 where k = 0")
             assert [(1, 0, 2)] == list(cql.execute(f"select c, k, val from {mv}"))
 
+# A write with a timestamp older than the base row's is ignored, and so must
+# leave the view alone - while a newer one moves the view row to the partition
+# of its new value. Same as test_old_timestamps above, but here the view's
+# partition key is a regular column of the base table rather than a key one.
+def test_old_timestamps_with_restrictions(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'k int, c int, val text, primary key (k, c)') as table:
+        with new_materialized_view(cql, table, '*', 'val, k, c',
+                'k is not null and c is not null and val is not null') as mv:
+            for i in range(100):
+                cql.execute(f"insert into {table} (k, c, val) values (0, {i % 2}, 'baz') using timestamp 300")
+            assert 2 == len(list(cql.execute(f"select * from {mv}")))
+            assert [(0,), (1,)] == list(cql.execute(f"select c from {mv} where val = 'baz'"))
+
+            # Make sure an old TS does nothing
+            cql.execute(f"update {table} using timestamp 100 set val = 'bar' where k = 0 and c = 1")
+            assert [(0,), (1,)] == list(cql.execute(f"select c from {mv} where val = 'baz'"))
+            assert [] == list(cql.execute(f"select c from {mv} where val = 'bar'"))
+
+            # Latest TS
+            cql.execute(f"update {table} using timestamp 500 set val = 'bar' where k = 0 and c = 1")
+            assert [(0,)] == list(cql.execute(f"select c from {mv} where val = 'baz'"))
+            assert [(1,)] == list(cql.execute(f"select c from {mv} where val = 'bar'"))

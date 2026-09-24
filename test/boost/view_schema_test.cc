@@ -132,44 +132,6 @@ SEASTAR_TEST_CASE(test_non_primary_key_restrictions_ttl_vk) {
     });
 }
 
-SEASTAR_TEST_CASE(test_old_timestamps_with_restrictions) {
-    return do_with_cql_env_thread([] (auto& e) {
-        e.execute_cql("create table cf (k int, c int, val text, primary key (k, c))").get();
-        e.execute_cql("create materialized view vcf as select * from cf "
-                      "where k is not null and c is not null and val is not null "
-                      "primary key (val, k ,c)").get();
-
-        for (auto i = 0; i < 100; ++i) {
-            e.execute_cql(format("insert into cf (k, c, val) values (0, {:d}, 'baz') using timestamp 300", i % 2)).get();
-        }
-
-        eventually([&] {
-        auto msg = e.execute_cql("select * from vcf").get();
-        assert_that(msg).is_rows().with_size(2);
-        msg = e.execute_cql("select c from vcf where val = 'baz'").get();
-        assert_that(msg).is_rows().with_rows({ {{int32_type->decompose(0)}}, {{int32_type->decompose(1)}} });
-        });
-
-        // Make sure an old TS does nothing
-        e.execute_cql("update cf using timestamp 100 set val = 'bar' where k = 0 and c = 1").get();
-        eventually([&] {
-        auto msg = e.execute_cql("select c from vcf where val = 'baz'").get();
-        assert_that(msg).is_rows().with_rows({ {{int32_type->decompose(0)}}, {{int32_type->decompose(1)}} });
-        msg = e.execute_cql("select c from vcf where val = 'bar'").get();
-        assert_that(msg).is_rows().with_size(0);
-        });
-
-        // Latest TS
-        e.execute_cql("update cf using timestamp 500 set val = 'bar' where k = 0 and c = 1").get();
-        eventually([&] {
-        auto msg = e.execute_cql("select c from vcf where val = 'baz'").get();
-        assert_that(msg).is_rows().with_rows({ {{int32_type->decompose(0)}} });
-        msg = e.execute_cql("select c from vcf where val = 'bar'").get();
-        assert_that(msg).is_rows().with_rows({ {{int32_type->decompose(1)}} });
-        });
-    });
-}
-
 void do_complex_restricted_timestamp_update_test(cql_test_env& e, std::function<void()>&& maybe_flush) {
     e.execute_cql("create table cf (p int, c int, v1 int, v2 int, v3 int, primary key (p, c))").get();
     e.execute_cql("create materialized view vcf as select * from cf "
