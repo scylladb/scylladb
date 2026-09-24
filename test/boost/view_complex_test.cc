@@ -25,40 +25,6 @@ BOOST_AUTO_TEST_SUITE(view_complex_test)
 
 using namespace std::literals::chrono_literals;
 
-// This is a version of test_3362_with_ttls with frozen collection fields
-// instead of integer fields in test_3362_with_ttls. The intention is to
-// verify that we properly fixed #3362 in this case - by replacing the
-// frozen collection by a single virtual cell, not a collection.
-//
-// Not moved to Python in issue #16134, for the same reason as the tests above
-// it: it needs forward_jump_clocks() to expire its TTL.
-SEASTAR_TEST_CASE(test_3362_with_ttls_frozen) {
-    return do_with_cql_env_thread([] (auto& e) {
-        e.execute_cql("create table cf (p int, c int, a frozen<set<int>>, b frozen<set<int>>, primary key (p, c))").get();
-        e.execute_cql("create materialized view vcf as select p, c from cf "
-                      "where p is not null and c is not null "
-                      "primary key (p, c)").get();
-        BOOST_TEST_PASSPOINT();
-        e.execute_cql("update cf using timestamp 2 and ttl 100 set a = {1,2} where p = 1 and c = 1").get();
-        eventually([&] {
-            auto msg = e.execute_cql("select * from vcf where p = 1 and c = 1").get();
-            assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
-        });
-        BOOST_TEST_PASSPOINT();
-        e.execute_cql("update cf using timestamp 1 set b = {3,4} where p = 1 and c = 1").get();
-        eventually([&] {
-            auto msg = e.execute_cql("select * from vcf where p = 1 and c = 1").get();
-            assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
-        });
-        forward_jump_clocks(101s);
-        BOOST_TEST_PASSPOINT();
-        eventually([&] {
-            auto msg = e.execute_cql("select * from vcf where p = 1 and c = 1").get();
-            assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
-        });
-    });
-}
-
 // This is a version of test_3362_with_ttls with the added twist that the
 // unselected column involved did not exist when the base table and view
 // were originally created, but only added later with an "alter table".

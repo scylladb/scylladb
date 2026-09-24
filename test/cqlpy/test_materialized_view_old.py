@@ -3411,6 +3411,30 @@ def test_3362_with_ttls_with_collections(cql, test_keyspace, kind, clock, cassan
             clock.jump(clock.ttl + 1)
             check([(1, 1)])
 
+# This is a version of test_3362_with_ttls with frozen collection fields
+# instead of integer fields in test_3362_with_ttls. The intention is to
+# verify that we properly fixed #3362 in this case - by replacing the
+# frozen collection by a single virtual cell, not a collection.
+#
+# cassandra_bug for the same reason as the rest of the #3362 family.
+def test_3362_with_ttls_frozen(cql, test_keyspace, clock, cassandra_bug):
+    with new_test_table(cql, test_keyspace,
+            'p int, c int, a frozen<set<int>>, b frozen<set<int>>, primary key (p, c)') as table:
+        with new_materialized_view(cql, table, 'p, c', 'p, c',
+                'p is not null and c is not null') as mv:
+            def check(expected):
+                assert expected == list(cql.execute(f"select * from {mv} where p = 1 and c = 1"))
+
+            cql.execute(f"update {table} using timestamp 2 and ttl {clock.ttl} "
+                        "set a = {1,2} where p = 1 and c = 1")
+            check([(1, 1)])
+
+            cql.execute(f"update {table} using timestamp 1 set b = {{3,4}} where p = 1 and c = 1")
+            check([(1, 1)])
+
+            clock.jump(clock.ttl + 1)
+            check([(1, 1)])
+
 # Tests that after the fixes for issue #3362, various miscellaneous
 # combinations of appearance and disappearance of unselected base cells
 # and row markers which happen to cause view_updates::do_delete_old_entry()
