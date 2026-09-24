@@ -29,41 +29,6 @@ BOOST_AUTO_TEST_SUITE(view_schema_test)
 
 using namespace std::literals::chrono_literals;
 
-SEASTAR_TEST_CASE(test_static_table) {
-    return do_with_cql_env_thread([] (auto& e) {
-        e.execute_cql("create table cf (p int, c int, sv int static, v int, primary key (p, c))").get();
-        assert_that_failed(e.execute_cql(
-                        "create materialized view vcf_static as select * from cf "
-                        "where p is not null and c is not null and sv is not null "
-                        "primary key (sv, p, c)"));
-        assert_that_failed(e.execute_cql(
-                        "create materialized view vcf_static as select v, sv from cf "
-                        "where p is not null and c is not null and v is not null "
-                        "primary key (v, p, c)"));
-        assert_that_failed(e.execute_cql(
-                        "create materialized view vcf_static as select * from cf "
-                        "where p is not null and c is not null and v is not null "
-                        "primary key (v, p, c)"));
-
-        e.execute_cql("create materialized view vcf as select v, p, c from cf "
-                      "where p is not null and c is not null and v is not null "
-                      "primary key (v, p, c)").get();
-
-        for (auto i = 0; i < 100; ++i) {
-            e.execute_cql(format("insert into cf (p, c, sv, v) values (0, {:d}, {:d}, {:d})", i % 2, i * 100, i)).get();
-        }
-
-        eventually([&] {
-        auto msg = e.execute_cql("select * from vcf").get();
-        assert_that(msg).is_rows().with_size(2);
-        });
-        try {
-            e.execute_cql("select sv from vcf").get();
-            BOOST_ASSERT(false);
-        } catch (...) { }
-    });
-}
-
 
 SEASTAR_TEST_CASE(test_static_data) {
     return do_with_cql_env_thread([] (auto& e) {

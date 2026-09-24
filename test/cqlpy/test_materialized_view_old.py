@@ -560,3 +560,25 @@ def test_ck_tombstone(cql, test_keyspace, cassandra_bug):
             assert 2 == len(list(cql.execute(f"select * from {mv}")))
             cql.execute(f"delete from {table} where p = 1 and c = 3")
             assert 1 == len(list(cql.execute(f"select * from {mv}")))
+
+# A materialized view cannot have a static column - not as one of its key
+# columns, and not even as an ordinary column of the view, whether it is
+# named explicitly in the SELECT or picked up implicitly by "select *".
+# Only a view which leaves the base table's static columns out altogether
+# can be created.
+def test_static_table(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int, c int, sv int static, v int, primary key (p, c)') as table:
+        for select, pk in [('*', 'sv, p, c'), ('v, sv', 'v, p, c'), ('*', 'v, p, c')]:
+            where = ('p is not null and c is not null and '
+                     + ('sv is not null' if 'sv' in pk else 'v is not null'))
+            with pytest.raises(InvalidRequest, match="[Ss]tatic column 'sv'"):
+                with new_materialized_view(cql, table, select, pk, where):
+                    pass
+        with new_materialized_view(cql, table, 'v, p, c', 'v, p, c',
+                'p is not null and c is not null and v is not null') as mv:
+            for i in range(100):
+                cql.execute(f"insert into {table} (p, c, sv, v) values (0, {i % 2}, {i * 100}, {i})")
+            assert 2 == len(list(cql.execute(f"select * from {mv}")))
+            # The view has no sv column, so it can't be selected from the view
+            with pytest.raises(InvalidRequest, match='Unrecognized name sv|Undefined column name sv'):
+                cql.execute(f"select sv from {mv}")
