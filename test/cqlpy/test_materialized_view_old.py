@@ -2753,3 +2753,32 @@ def test_update_with_column_timestamp_smaller_than_pk(cql, test_keyspace, flush)
             cql.execute(f"update {table} using timestamp 8 set v1 = 1 where p = 3")
             maybe_flush()
             check([(1, 3, 3, 6)])
+
+# When most of a view's rows have gone away - here because the base column
+# their key is built from was deleted - a SELECT with a LIMIT must still
+# return as many live rows as the limit asks for, not stop early at the dead
+# ones. Checked against two views which arrange their key differently.
+@pytest.mark.parametrize("flush", [False, True], ids=["noflush", "flush"])
+def test_expired_marker_with_limit(cql, test_keyspace, flush):
+    no_cache = "with caching = {'enabled': 'false'}" if flush and is_scylla(cql) else ""
+    with new_test_table(cql, test_keyspace, 'p int, a int, b int, primary key (p)',
+            extra=no_cache) as table:
+        with new_materialized_view(cql, table, '*', 'p, a',
+                'p is not null and a is not null', extra=no_cache) as vcf1, \
+             new_materialized_view(cql, table, '*', 'a, p',
+                'p is not null and a is not null', extra=no_cache) as vcf2:
+            for i in range(1, 101):
+                cql.execute(f"insert into {table} (p, a, b) values ({i}, {i}, {i})")
+            # Deleting a, which both views use as a key column, removes the
+            # view row - leaving only the two rows where i is a multiple of 50.
+            for i in range(1, 101):
+                if i % 50 != 0:
+                    cql.execute(f"delete a from {table} where p = {i}")
+            if flush:
+                nodetool.flush_all(cql)
+
+            for view in [vcf1, vcf2]:
+                assert 1 == len(list(cql.execute(f"select * from {view} limit 1")))
+                assert 2 == len(list(cql.execute(f"select * from {view} limit 2")))
+                assert [(50, 50, 50), (100, 100, 100)] == sorted(
+                    cql.execute(f"select p, a, b from {view}"))

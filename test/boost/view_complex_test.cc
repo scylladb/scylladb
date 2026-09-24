@@ -426,58 +426,6 @@ SEASTAR_TEST_CASE(test_unselected_column_with_expired_marker) {
     });
 }
 
-void test_expired_marker_with_limit(cql_test_env& e, std::function<void()>&& maybe_flush) {
-    e.execute_cql("create table cf (p int, a int, b int, primary key (p))").get();
-    e.execute_cql("create materialized view vcf1 as select * from cf "
-                  "where p is not null and a is not null "
-                  "primary key (p, a)").get();
-    e.execute_cql("create materialized view vcf2 as select * from cf "
-                  "where p is not null and a is not null "
-                  "primary key (a, p)").get();
-
-    for (int i = 1; i <= 100; i++) {
-        e.execute_cql(format("insert into cf (p, a, b) values ({:d}, {:d}, {:d})", i, i, i)).get();
-    }
-    for (int i = 1; i <= 100; i++) {
-        if (i % 50 != 0) {
-            e.execute_cql(format("delete a from cf where p = {:d}", i)).get();
-        }
-    }
-
-    maybe_flush();
-
-    for (auto view : {"vcf1", "vcf2"}) {
-        eventually([&] {
-            auto msg = e.execute_cql(format("select * from {} limit 1", view)).get();
-            assert_that(msg).is_rows().with_size(1);
-            msg = e.execute_cql(format("select * from {} limit 2", view)).get();
-            assert_that(msg).is_rows().with_size(2);
-            msg = e.execute_cql(format("select * from {}", view)).get();
-            assert_that(msg).is_rows().with_rows({
-                {{int32_type->decompose(50)}, {int32_type->decompose(50)}, {int32_type->decompose(50)}},
-                {{int32_type->decompose(100)}, {int32_type->decompose(100)}, {int32_type->decompose(100)}},
-            });
-
-        });
-    }
-}
-
-SEASTAR_TEST_CASE(test_expired_marker_with_limit_without_flush) {
-    return do_with_cql_env_thread([] (auto& e) {
-        test_expired_marker_with_limit(e, [] { });
-    });
-}
-
-SEASTAR_TEST_CASE(test_expired_marker_with_limit_with_flush) {
-    auto cfg = make_shared<db::config>();
-    cfg->enable_cache(false);
-    return do_with_cql_env_thread([] (auto& e) {
-        test_expired_marker_with_limit(e, [&] {
-            e.local_db().flush_all_memtables().get();
-        });
-    }, cfg);
-}
-
 void test_update_with_column_timestamp_bigger_than_pk(cql_test_env& e, std::function<void()>&& maybe_flush) {
     e.execute_cql("create table cf (p int, a int, b int, primary key (p))").get();
     e.execute_cql("create materialized view vcf as select * from cf "
