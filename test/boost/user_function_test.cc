@@ -66,35 +66,6 @@ static future<> with_udf_enabled(Func&& func) {
     return do_with_cql_env_thread(std::forward<Func>(func), db_cfg_ptr);
 }
 
-SEASTAR_TEST_CASE(test_user_function_decimal_return) {
-    return with_udf_enabled([](cql_test_env& e) {
-        e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val1 varint, val2 decimal);").get();
-        e.execute_cql("INSERT INTO my_table (key, val1, val2) VALUES ('foo', 42, 42.2);").get();
-
-        e.execute_cql("CREATE FUNCTION my_func1(a varint) CALLED ON NULL INPUT RETURNS decimal LANGUAGE Lua AS 'return a';").get();
-        auto res = e.execute_cql("SELECT my_func1(val1) FROM my_table;").get();
-        assert_that(res).is_rows().with_rows_ignore_order({
-            {serialized(big_decimal(0, 42))}
-        });
-
-        e.execute_cql("CREATE FUNCTION my_func2(a decimal) CALLED ON NULL INPUT RETURNS decimal LANGUAGE Lua AS 'return a';").get();
-        res = e.execute_cql("SELECT my_func2(val2) FROM my_table;").get();
-        assert_that(res).is_rows().with_rows_ignore_order({
-            {serialized(big_decimal(1, 422))}
-        });
-
-        e.execute_cql("CREATE FUNCTION my_func3(a varint) CALLED ON NULL INPUT RETURNS decimal LANGUAGE Lua AS 'return 4.2';").get();
-        auto fut = e.execute_cql("SELECT my_func3(val1) FROM my_table;");
-        BOOST_REQUIRE_EXCEPTION(fut.get(), ire, message_equals("value is not a decimal"));
-
-        e.execute_cql("CREATE FUNCTION my_func4(a varint) CALLED ON NULL INPUT RETURNS decimal LANGUAGE Lua AS 'return \"18446744073709551616.1\"';").get();
-        res = e.execute_cql("SELECT my_func4(val1) FROM my_table;").get();
-        assert_that(res).is_rows().with_rows_ignore_order({
-            {serialized(big_decimal(1, boost::multiprecision::cpp_int("184467440737095516161")))}
-        });
-    });
-}
-
 SEASTAR_TEST_CASE(test_user_function_varint_return) {
     return with_udf_enabled([](cql_test_env& e) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val int);").get();

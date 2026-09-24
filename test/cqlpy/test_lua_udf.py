@@ -165,3 +165,16 @@ def test_lua_decimal_sub(cql, test_keyspace, scylla_only):
         cql.execute(f"INSERT INTO {table} (key, val1, val2) VALUES ('foo', 4, 1)")
         assert call_lua(cql, test_keyspace, table, "(a decimal, b decimal) CALLED ON NULL INPUT RETURNS decimal",
                         "return a - b", args="val1, val2") == [Decimal(3)]
+
+def test_lua_decimal_return(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val1 varint, val2 decimal") as table:
+        cql.execute(f"INSERT INTO {table} (key, val1, val2) VALUES ('foo', 42, 42.2)")
+        assert call_lua(cql, test_keyspace, table, "(a varint) CALLED ON NULL INPUT RETURNS decimal",
+                        "return a", args="val1") == [Decimal(42)]
+        assert call_lua(cql, test_keyspace, table, "(a decimal) CALLED ON NULL INPUT RETURNS decimal",
+                        "return a", args="val2") == [Decimal("42.2")]
+        with pytest.raises(InvalidRequest, match="value is not a decimal"):
+            call_lua(cql, test_keyspace, table, "(a varint) CALLED ON NULL INPUT RETURNS decimal",
+                     "return 4.2", args="val1")
+        assert call_lua(cql, test_keyspace, table, "(a varint) CALLED ON NULL INPUT RETURNS decimal",
+                        'return "18446744073709551616.1"', args="val1") == [Decimal("18446744073709551616.1")]
