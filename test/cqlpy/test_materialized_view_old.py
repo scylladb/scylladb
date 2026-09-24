@@ -42,6 +42,97 @@ from . import nodetool
 from .test_materialized_view import wait_for_view_built
 from .util import new_test_table, new_type, new_materialized_view, unique_name, is_scylla, ScyllaMetrics
 
+# The "clock" fixture lets a test move the server's clock forward, instead of
+# really waiting - so a test can make a TTL expire, or data become expired,
+# without taking seconds to run. It is the Python counterpart of the C++
+# tests' forward_jump_clocks(), and like it, clock.jump(n) is cumulative and
+# stays in effect until the end of the test.
+#
+# How it does it depends on what we are testing:
+#  * On Scylla, it sets the test-only "test_clocks_offset_seconds"
+#    configuration option through the system.config virtual table. This is
+#    instantaneous.
+#  * On a Scylla release build the option doesn't exist - it is only compiled
+#    in builds which enable error injection - so the test is skipped.
+#  * On Cassandra, which has no such knob, it really sleeps. The test is then
+#    slow, but still tests the same thing, which is what lets us keep running
+#    these tests on Cassandra.
+#
+# The offset is reset when the test ends, so a test run against a shared or
+# pre-existing server leaves that server's clock as it found it. Two things
+# are worth knowing about that reset:
+#
+#  1. Moving the offset back makes the timestamps which the *server* generates
+#     go backwards for as long as the jump was, so anything the server wrote
+#     while the clock was forward has a future timestamp and can shadow a
+#     later write to the same row. The writes a test itself makes are not a
+#     problem - the Python driver timestamps them on the client side, so the
+#     server's offset doesn't reach them - but schema changes are written by
+#     the server. Creating or dropping a table while the clock is moved
+#     forward is still safe here, because each test uses its own unique table
+#     name and so its own schema rows, but a test which repeatedly recreates
+#     the *same* name should not use this fixture.
+#  2. Updating system.config only affects the node we are connected to, so
+#     this only works on a single-node cluster - which is what cqlpy tests.
+#
+# TODO: This fixture is useful beyond materialized views, so it should
+# eventually move to util.py.
+OFFSET_CONFIG = 'test_clocks_offset_seconds'
+
+class Clock:
+    # A TTL which is long enough that nothing expires until the test jumps the
+    # clock past it on purpose. Many of the tests below just need "a long TTL"
+    # and then jump ttl+1 seconds to expire it - the actual number is
+    # meaningless to them. On Scylla we can afford to keep the original number
+    # from the C++ tests, because jumping the clock is free.
+    ttl = 100
+
+    # On Cassandra the jump is a real sleep, so the number has to be small -
+    # but not too small, because the test has to get from the write to the
+    # check before the TTL runs out on its own. What makes that slow is
+    # nodetool: against Cassandra it is an external Java program, and each
+    # flush spends about a second starting a JVM (measured: 0.96-1.21s). The
+    # tightest tests here flush twice between the TTL'd write and the check
+    # that the row is still alive, so roughly 2.3 seconds pass before it runs.
+    # A TTL of 3 left too little room for that and made those tests flaky;
+    # 8 leaves a margin of well over 5 seconds.
+    ttl_cassandra = 8
+
+    def __init__(self, cql):
+        self._cql = cql
+        self._jumped = 0
+        self._original = None
+        if not is_scylla(cql):
+            self.ttl = self.ttl_cassandra
+            return
+        row = cql.execute(f"SELECT value FROM system.config WHERE name = '{OFFSET_CONFIG}'").one()
+        if row is None:
+            pytest.skip(f"Scylla is missing the {OFFSET_CONFIG} option - "
+                        "try compiling in dev/debug/sanitize mode")
+        self._original = int(row.value)
+
+    # Move the server's clock "seconds" seconds forward, cumulatively.
+    def jump(self, seconds):
+        self._jumped += seconds
+        if self._original is None:
+            time.sleep(seconds)
+        else:
+            self._set(self._original + self._jumped)
+
+    def _set(self, offset):
+        self._cql.execute("UPDATE system.config SET value = %s WHERE name = %s",
+                          (str(offset), OFFSET_CONFIG))
+
+    def _restore(self):
+        if self._original is not None and self._jumped:
+            self._set(self._original)
+
+@pytest.fixture(scope="function")
+def clock(cql):
+    c = Clock(cql)
+    yield c
+    c._restore()
+
 # CQL usually folds identifier names - keyspace, table and column names -
 # to lowercase. That is, unless the identifier is enclosed in double
 # quotation marks (") then the identifier becomes case sensitive.
