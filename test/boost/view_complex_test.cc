@@ -426,6 +426,9 @@ SEASTAR_TEST_CASE(test_unselected_column_with_expired_marker) {
     });
 }
 
+// Not moved to Python in issue #16134: the point of this test is a view row
+// which a TTL makes expire, and expiring one needs forward_jump_clocks(),
+// which cqlpy has no equivalent of.
 SEASTAR_TEST_CASE(test_shadowing_row_marker) {
     return do_with_cql_env_thread([] (auto& e) {
         e.execute_cql("create table cf (p int, v1 int, v2 int, primary key (p))").get();
