@@ -370,3 +370,12 @@ def test_lua_uuid_return(cql, test_keyspace, scylla_only):
         cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 3)")
         assert call_lua(cql, test_keyspace, table, "(val int) CALLED ON NULL INPUT RETURNS uuid",
                         'return "982e9b0f-1df7-4425-ba04-e99d808b8940"') == [UUID("982e9b0f-1df7-4425-ba04-e99d808b8940")]
+
+def test_lua_timeuuid_return(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val int") as table:
+        cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 3)")
+        sig = "(val int) CALLED ON NULL INPUT RETURNS timeuuid"
+        assert call_lua(cql, test_keyspace, table, sig, 'return "d18648bc-cf83-11e9-9820-107b4493b787"') == [
+            UUID("d18648bc-cf83-11e9-9820-107b4493b787")]
+        with pytest.raises(NoHostAvailable, match=re.escape("marshaling error: Unsupported UUID version (2)")):
+            call_lua(cql, test_keyspace, table, sig, 'return "d18648bc-cf83-21e9-9820-107b4493b787"')
