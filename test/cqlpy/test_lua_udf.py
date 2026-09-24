@@ -113,3 +113,8 @@ def test_lua_utf8_argument(cql, test_keyspace, scylla_only):
     with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val text") as table:
         cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 'bár')")
         assert call_lua(cql, test_keyspace, table, "(val text) CALLED ON NULL INPUT RETURNS int", "return val:byte(2)") == [0xc3]
+
+def test_lua_blob_argument(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val blob") as table:
+        cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 0x123456)")
+        assert call_lua(cql, test_keyspace, table, "(val blob) CALLED ON NULL INPUT RETURNS int", "return val:byte(2)") == [0x34]
