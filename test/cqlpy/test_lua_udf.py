@@ -130,3 +130,9 @@ def test_lua_udt_argument(cql, test_keyspace, scylla_only):
         with new_test_table(cql, test_keyspace, f"key text PRIMARY KEY, val frozen<{udt}>") as table:
             cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', {{my_int : 42}})")
             assert call_lua(cql, test_keyspace, table, f"(val {udt}) CALLED ON NULL INPUT RETURNS int", "return val.my_int") == [42]
+
+def test_lua_set_argument(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val set<int>") as table:
+        cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', {{1, 2, 3}})")
+        assert call_lua(cql, test_keyspace, table, "(val set<int>) CALLED ON NULL INPUT RETURNS int",
+                        "local ret = 0; for k in pairs(val) do ret = ret + k; end return ret") == [6]
