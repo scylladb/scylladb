@@ -436,3 +436,21 @@ def test_lua_nested_types(cql, test_keyspace, scylla_only):
         with new_function(cql, test_keyspace, f"{sig} LANGUAGE lua AS '{body}'") as f:
             res = cql.execute(f"SELECT toJson({test_keyspace}.{f}(val)) FROM {table}").one()[0]
             assert res == '{"39": [], "42": [[["bar", [40, 44]]], [["foo", [41, 43]], ["bar", [40, 44]]]]}'
+
+def test_lua_duration_return(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val int") as table:
+        cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 3)")
+        sig = "(val int) CALLED ON NULL INPUT RETURNS duration"
+        assert call_lua(cql, test_keyspace, table, sig, "return {months = 1, days = 2147483647, nanoseconds = 3}") == [
+            Duration(1, 2147483647, 3)]
+        with pytest.raises(InvalidRequest, match="2147483648 days doesn't fit in a 32 bit integer"):
+            call_lua(cql, test_keyspace, table, sig, "return {months = 1, days = 2147483648, nanoseconds = 3}")
+        with pytest.raises(InvalidRequest, match="2147483648 months doesn't fit in a 32 bit integer"):
+            call_lua(cql, test_keyspace, table, sig, "return {months = 2147483648, days = 2, nanoseconds = 3}")
+        with pytest.raises(InvalidRequest, match="9223372036854775808 nanoseconds doesn't fit in a 64 bit integer"):
+            call_lua(cql, test_keyspace, table, sig, 'return {months = 1, days = 2, nanoseconds = "9223372036854775808"}')
+        assert call_lua(cql, test_keyspace, table, sig, 'return "1mo2d3ns"') == [Duration(1, 2, 3)]
+        with pytest.raises(InvalidRequest, match=re.escape("a duration must be of the form { months = v1, days = v2, nanoseconds = v3 }")):
+            call_lua(cql, test_keyspace, table, sig, "return 42.2")
+        with pytest.raises(InvalidRequest, match="invalid duration field: 'foo'"):
+            call_lua(cql, test_keyspace, table, sig, "return {foo = 42}")
