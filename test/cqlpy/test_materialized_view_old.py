@@ -885,3 +885,38 @@ def test_create_and_alter_mv_with_ttl(cql, test_keyspace):
                 'p is not null and v is not null') as mv:
             with pytest.raises(InvalidRequest, match=ttl_error):
                 cql.execute(f"alter materialized view {mv} with default_time_to_live = 30")
+
+# Which restrictions a view's SELECT may and may not have. Every one of the
+# base table's key columns has to be restricted somehow, but beyond the usual
+# IS NOT NULL a key column may also be pinned to a value or a range, with all
+# the usual forms of restriction - including on a tuple of columns, and with
+# the value given by a cast or a function call.
+def test_create_with_select_restrictions(cql, test_keyspace):
+    pk = '(a, b), c, d'
+    with new_test_table(cql, test_keyspace, 'a int, b int, c int, d int, e int, primary key ((a, b), c, d)') as table:
+        # Leaving any one of the base key columns unrestricted is an error
+        for where in ['b is not null and c is not null and d is not null',
+                      'a is not null and c is not null and d is not null',
+                      'a is not null and b is not null and d is not null',
+                      'a is not null and b is not null and c is not null']:
+            with pytest.raises(InvalidRequest, match='Primary key column.*IS NOT NULL'):
+                with new_materialized_view(cql, table, '*', pk, where):
+                    pass
+        # And so is having no WHERE clause at all
+        with pytest.raises(InvalidRequest, match='Primary key column.*IS NOT NULL'):
+            cql.execute(f"create materialized view {test_keyspace}.{unique_name()} as "
+                        f"select * from {table} primary key (a, b, c, d)")
+        # All of these, on the other hand, are allowed
+        for where in ['a = 1 and b = 1 and c is not null and d is not null',
+                      'a is not null and b is not null and c = 1 and d is not null',
+                      'a is not null and b is not null and c = 1 and d = 1',
+                      'a = 1 and b = 1 and c = 1 and d = 1',
+                      'a = 1 and b = 1 and c > 1 and d is not null',
+                      'a = 1 and b = 1 and c = 1 and d in (1, 2, 3)',
+                      'a = 1 and b = 1 and (c, d) = (1, 1)',
+                      'a = 1 and b = 1 and (c, d) > (1, 1)',
+                      'a = 1 and b = 1 and (c, d) in ((1, 1), (2, 2))',
+                      'a = (int) 1 and b = 1 and c = 1 and d = 1',
+                      'a = blobasint(intasblob(1)) and b = 1 and c = 1 and d = 1']:
+            with new_materialized_view(cql, table, '*', pk, where):
+                pass

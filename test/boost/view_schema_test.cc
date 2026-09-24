@@ -87,34 +87,6 @@ SEASTAR_TEST_CASE(test_ttl) {
     });
 }
 
-SEASTAR_TEST_CASE(test_create_with_select_restrictions) {
-    return do_with_cql_env_thread([] (auto& e) {
-        e.execute_cql("create table cf (a int, b int, c int, d int, e int, primary key ((a, b), c, d))").get();
-        assert_that_failed(e.execute_cql(
-                "create materialized view mv as select * from cf where b is not null and c is not null and d is not null primary key ((a, b), c, d)"));
-        assert_that_failed(e.execute_cql(
-                "create materialized view mv as select * from cf where a is not null and c is not null and d is not null primary key ((a, b), c, d)"));
-        assert_that_failed(e.execute_cql(
-                "create materialized view mv as select * from cf where a is not null and b is not null and d is not null primary key ((a, b), c, d)"));
-        assert_that_failed(e.execute_cql(
-                "create materialized view mv as select * from cf where a is not null and b is not null and c is not null primary key ((a, b), c, d)"));
-        assert_that_failed(e.execute_cql(
-                "create materialized view mv as select * from cf primary key (a, b, c, d)"));
-
-        e.execute_cql("create materialized view mv1 as select * from cf where a = 1 and b = 1 and c is not null and d is not null primary key ((a, b), c, d)").get();
-        e.execute_cql("create materialized view mv2 as select * from cf where a is not null and b is not null and c = 1 and d is not null primary key ((a, b), c, d)").get();
-        e.execute_cql("create materialized view mv3 as select * from cf where a is not null and b is not null and c = 1 and d = 1 primary key ((a, b), c, d)").get();
-        e.execute_cql("create materialized view mv4 as select * from cf where a = 1 and b = 1 and c = 1 and d = 1 primary key ((a, b), c, d)").get();
-        e.execute_cql("create materialized view mv5 as select * from cf where a = 1 and b = 1 and c > 1 and d is not null primary key ((a, b), c, d)").get();
-        e.execute_cql("create materialized view mv6 as select * from cf where a = 1 and b = 1 and c = 1 and d in (1, 2, 3) primary key ((a, b), c, d)").get();
-        e.execute_cql("create materialized view mv7 as select * from cf where a = 1 and b = 1 and (c, d) = (1, 1) primary key ((a, b), c, d)").get();
-        e.execute_cql("create materialized view mv8 as select * from cf where a = 1 and b = 1 and (c, d) > (1, 1) primary key ((a, b), c, d)").get();
-        e.execute_cql("create materialized view mv9 as select * from cf where a = 1 and b = 1 and (c, d) in ((1, 1), (2, 2)) primary key ((a, b), c, d)").get();
-        e.execute_cql("create materialized view mv10 as select * from cf where a = (int) 1 and b = 1 and c = 1 and d = 1 primary key ((a, b), c, d)").get();
-        e.execute_cql("create materialized view mv11 as select * from cf where a = blobasint(intasblob(1)) and b = 1 and c = 1 and d = 1 primary key ((a, b), c, d)").get();
-    });
-}
-
 SEASTAR_TEST_CASE(test_filter_with_function) {
     return do_with_cql_env_thread([] (auto& e) {
         e.execute_cql("create table cf (p int, c int, v int, primary key (p, c))").get();
