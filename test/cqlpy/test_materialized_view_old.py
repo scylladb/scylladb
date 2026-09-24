@@ -463,3 +463,11 @@ def test_alter_reversed_type_base_table(cql, test_keyspace, scylla_only):
         with new_materialized_view(cql, table, '*', 'p, c', 'p is not null and c is not null',
                 extra='with clustering order by (c asc)'):
             cql.execute(f"alter table {table} alter c type blob")
+
+# The same, the other way around: the view's clustering column is in reversed
+# (descending) order, and the base table's is not.
+def test_alter_reversed_type_view_table(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, 'p int, c text, primary key (p, c)') as table:
+        with new_materialized_view(cql, table, '*', 'p, c', 'p is not null and c is not null',
+                extra='with clustering order by (c desc)'):
+            cql.execute(f"alter table {table} alter c type blob")
