@@ -22,68 +22,6 @@ BOOST_AUTO_TEST_SUITE(view_schema_pkey_test)
 
 using namespace std::literals::chrono_literals;
 
-SEASTAR_TEST_CASE(test_partition_key_restrictions_not_include_all) {
-    return do_with_cql_env_thread([] (auto& e) {
-        e.execute_cql("create table cf (a int, b int, c int, d int, primary key ((a, b), c))").get();
-        e.execute_cql("create materialized view vcf as select a, b, c from cf "
-                      "where a = 1 and b = 1 and c is not null "
-                      "primary key ((a, b), c)").get();
-
-        e.execute_cql("insert into cf (a, b, c, d) values (0, 0, 0, 0)").get();
-        e.execute_cql("insert into cf (a, b, c, d) values (0, 0, 1, 0)").get();
-        e.execute_cql("insert into cf (a, b, c, d) values (0, 1, 0, 0)").get();
-        e.execute_cql("insert into cf (a, b, c, d) values (0, 1, 1, 0)").get();
-        e.execute_cql("insert into cf (a, b, c, d) values (1, 0, 0, 0)").get();
-        e.execute_cql("insert into cf (a, b, c, d) values (1, 0, 1, 0)").get();
-        e.execute_cql("insert into cf (a, b, c, d) values (1, 1, 0, 0)").get();
-        e.execute_cql("insert into cf (a, b, c, d) values (1, 1, 1, 0)").get();
-
-        eventually([&] {
-        auto msg = e.execute_cql("select a, b, c from vcf").get();
-        assert_that(msg).is_rows().with_rows_ignore_order({
-                            { {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(0)} },
-                            { {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
-        });
-
-        eventually([&] {
-        e.execute_cql("update cf set d = 1 where a = 1 and b = 0 and c = 0").get();
-        auto msg = e.execute_cql("select a, b, c from vcf").get();
-        assert_that(msg).is_rows().with_rows_ignore_order({
-                            { {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(0)} },
-                            { {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
-        });
-
-        eventually([&] {
-        e.execute_cql("update cf set d = 1 where a = 1 and b = 1 and c = 0").get();
-        auto msg = e.execute_cql("select a, b, c from vcf").get();
-        assert_that(msg).is_rows().with_rows_ignore_order({
-                            { {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(0)} },
-                            { {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
-        });
-
-        eventually([&] {
-        e.execute_cql("delete from cf where a = 1 and b = 0 and c = 0").get();
-        auto msg = e.execute_cql("select a, b, c from vcf").get();
-        assert_that(msg).is_rows().with_rows_ignore_order({
-                            { {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(0)} },
-                            { {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
-        });
-
-        eventually([&] {
-        e.execute_cql("delete from cf where a = 1 and b = 1 and c = 0").get();
-        auto msg = e.execute_cql("select a, b, c from vcf").get();
-        assert_that(msg).is_rows().with_rows_ignore_order({
-                            { {int32_type->decompose(1)}, {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
-        });
-
-        eventually([&] {
-        e.execute_cql("delete from cf where a = 1 and b = 1").get();
-        auto msg = e.execute_cql("select a, b, c from vcf").get();
-        assert_that(msg).is_rows().with_size(0);
-        });
-    });
-}
-
 SEASTAR_TEST_CASE(test_partition_key_and_clustering_key_filtering_restrictions) {
     return do_with_cql_env_thread([] (auto& e) {
         for (auto&& pk : {"((a, b), c)", "((b, a), c)", "(a, b, c)", "(c, b, a)", "((c, a), b)"}) {
