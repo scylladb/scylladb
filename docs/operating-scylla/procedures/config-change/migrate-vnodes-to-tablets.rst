@@ -324,7 +324,7 @@ Procedure
          Keyspace: ks
          Status: tablets
 
-   #. Optionally, wait for tablet layout normalization to complete:
+   #. Wait for tablet layout normalization to complete:
 
       After finalization, a tablet normalization process takes place in the
       background which transforms the tablets of all migrated tables into a
