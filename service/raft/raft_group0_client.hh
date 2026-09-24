@@ -24,6 +24,7 @@
 #include "gc_clock.hh"
 #include "service/raft/group0_state_machine.hh"
 #include "service/maintenance_mode.hh"
+#include "locator/host_id.hh"
 
 class mutation;
 
@@ -158,6 +159,11 @@ public:
     size_t max_command_size() const;
 
     future<semaphore_units<>> hold_read_apply_mutex(abort_source&);
+
+    // Host id of the group 0 leader, waiting until one is elected and alive
+    // according to the raft failure detector and gossip. Nullopt when group 0 is not running.
+    // Call only on shard 0.
+    future<std::optional<locator::host_id>> wait_for_group0_leader(seastar::abort_source& as, std::optional<raft_timeout> timeout = std::nullopt);
 
     gc_clock::duration get_history_gc_duration() const;
     // for test only
