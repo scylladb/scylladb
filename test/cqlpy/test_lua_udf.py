@@ -196,3 +196,10 @@ def test_lua_double_return(cql, test_keyspace, scylla_only):
     with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val decimal") as table:
         cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 5.1)")
         assert call_lua(cql, test_keyspace, table, "(val decimal) CALLED ON NULL INPUT RETURNS double", "return val") == [5.1]
+
+def test_lua_sum_of_udf(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "val int PRIMARY KEY") as table:
+        cql.execute(f"INSERT INTO {table} (val) VALUES (1)")
+        cql.execute(f"INSERT INTO {table} (val) VALUES (2)")
+        with new_function(cql, test_keyspace, "(val int) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return val'") as f:
+            assert cql.execute(f"SELECT sum({test_keyspace}.{f}(val)) FROM {table}").one()[0] == 3
