@@ -24,6 +24,7 @@
 #include "gc_clock.hh"
 #include "service/raft/group0_state_machine.hh"
 #include "service/maintenance_mode.hh"
+#include "locator/host_id.hh"
 
 class mutation;
 
@@ -158,6 +159,11 @@ public:
     size_t max_command_size() const;
 
     future<semaphore_units<>> hold_read_apply_mutex(abort_source&);
+
+    // Host id of the current group 0 leader as seen by the local raft server,
+    // or nullopt when group 0 is not running or the leader is unknown.
+    // Call only on shard 0.
+    std::optional<locator::host_id> group0_leader();
 
     gc_clock::duration get_history_gc_duration() const;
     // for test only
