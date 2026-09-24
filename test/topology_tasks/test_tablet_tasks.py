@@ -126,7 +126,7 @@ async def test_tablet_repair_wait_with_table_drop(manager: ManagerClient):
         assert status_wait.state == "done"
 
     async def drop_table():
-        await log.wait_for(f'"{injection}"', from_mark=mark)
+        await log.wait_for(f'{injection}: waiting for message', from_mark=mark)
         await disable_injection(manager, servers, "repair_tablet_fail_on_rpc_call")
         await manager.get_cql().run_async(f"DROP TABLE {ks}.test")
         await manager.api.message_injection(servers[0].ip_addr, injection)
