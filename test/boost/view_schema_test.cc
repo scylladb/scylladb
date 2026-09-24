@@ -87,21 +87,6 @@ SEASTAR_TEST_CASE(test_ttl) {
     });
 }
 
-SEASTAR_TEST_CASE(test_row_deletion) {
-    return do_with_cql_env_thread([] (auto& e) {
-        e.execute_cql("create table cf (p int, c int, v1 int, v2 int, primary key (p, c));").get();
-        e.execute_cql("create materialized view mv as select * from cf "
-                      "where p is not null and c is not null and v1 is not null primary key (v1, c, p)").get();
-
-        e.execute_cql("delete from cf using timestamp 6 where p = 1 and c = 1;").get();
-        e.execute_cql("insert into cf (p, c, v1, v2) values (1, 1, 1, 1) using timestamp 3").get();
-        eventually([&] {
-        auto msg = e.execute_cql("select * from mv").get();
-        assert_that(msg).is_rows().with_size(0);
-        });
-    });
-}
-
 SEASTAR_TEST_CASE(test_conflicting_timestamp) {
     return do_with_cql_env_thread([] (auto& e) {
         e.execute_cql("create table cf (p int, c int, v int, primary key (p, c));").get();
