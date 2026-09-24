@@ -19,6 +19,7 @@ from cassandra.protocol import InvalidRequest
 from cassandra.query import SimpleStatement, BoundStatement
 from test.pylib.tablets import get_all_tablet_replicas, get_tablet_info, get_tablet_replicas
 from test.pylib.rest_client import read_barrier
+from test.pylib.scylla_cluster import ReplaceConfig
 
 import asyncio
 import pytest
@@ -2200,6 +2201,52 @@ async def test_removenode(manager: ScyllaClusterManager):
             cql, hosts = await manager.get_ready_cql(live_servers)
             await check_new_replica_serves_data(manager, new_server, hosts[live_servers.index(new_server)],
                                                 group_id, cql, table, range(10))
+            await insert_rows(cql, table, range(10, 20))
+            await check_rows(cql, table, range(20))
+
+
+async def test_replace(manager: ScyllaClusterManager):
+    """Replacing a dead replica rebuilds the tablet on the replacing node.
+
+    The replacing node takes over the dead node's rack, so it becomes the tablet's
+    replica, and has to get the data from the snapshot transfer.
+    """
+    cmdline = DEFAULT_CMDLINE + ['--logger-log-level', 'raft_topology=debug']
+    servers = await manager.servers_add(3, config=DEFAULT_CONFIG, cmdline=cmdline, property_file=[
+        {'dc': 'dc1', 'rack': 'rack1'},
+        {'dc': 'dc1', 'rack': 'rack2'},
+        {'dc': 'dc1', 'rack': 'rack3'},
+    ])
+    cql, _ = await manager.get_ready_cql(servers)
+    host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
+
+    await manager.disable_tablet_balancing()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1', 'rack2', 'rack3']} "
+                                         "AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, c int") as table:
+            table_name = table.split('.')[-1]
+            group_id = await get_table_raft_group_id(manager, ks, table_name)
+
+            await insert_rows(cql, table, range(10))
+
+            logger.info(f"Stopping and replacing {host_ids[2]}")
+            await manager.server_stop_gracefully(servers[2].server_id)
+            replace_cfg = ReplaceConfig(replaced_id=servers[2].server_id, reuse_ip_addr=False, use_host_id=True)
+            new_server = await manager.server_add(replace_cfg=replace_cfg, config=DEFAULT_CONFIG, cmdline=cmdline,
+                                                  property_file={'dc': 'dc1', 'rack': 'rack3'})
+            await manager.api.quiesce_topology(servers[0].ip_addr)
+            new_host_id = await manager.get_host_id(new_server.server_id)
+
+            tablets = await get_all_tablet_replicas(manager, servers[0], ks, table_name)
+            assert len(tablets) == 1
+            replica_hosts = {host_id for host_id, _ in tablets[0].replicas}
+            assert replica_hosts == {host_ids[0], host_ids[1], new_host_id}, \
+                f"Expected the rack3 replica to be rebuilt on {new_host_id}, got {tablets[0].replicas}"
+
+            live_servers = [servers[0], servers[1], new_server]
+            cql, hosts = await manager.get_ready_cql(live_servers)
+            await check_new_replica_serves_data(manager, new_server, hosts[2], group_id, cql, table, range(10))
             await insert_rows(cql, table, range(10, 20))
             await check_rows(cql, table, range(20))
 
