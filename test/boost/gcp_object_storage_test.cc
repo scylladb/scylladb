@@ -270,6 +270,29 @@ SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_create_large_object, local_gcs_wrappe
     co_await test_read_write_helper(*this, 32*1024*1024 + 357 + 1022*67);
 }
 
+// make_readable_file() is how the sstable layer opens every component it does
+// not stream -- TOC, Statistics, Summary, Filter, Scylla metadata -- and had no
+// coverage at all.
+SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_readable_file, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
+    auto& c = client();
+    auto name = make_name();
+    constexpr size_t object_size = 8192;
+
+    objects_to_delete.emplace_back(name);
+    co_await create_object_of_size(c, bucket, name, object_size);
+
+    auto f = c.make_readable_file(bucket, name);
+    BOOST_REQUIRE_EQUAL(co_await f.size(), object_size);
+
+    auto buf = temporary_buffer<char>::aligned(f.memory_dma_alignment(), 4096);
+    BOOST_REQUIRE_EQUAL(co_await f.dma_read(0, buf.get_write(), buf.size()), buf.size());
+
+    // A range running past the end of the object is answered short by design.
+    BOOST_REQUIRE_EQUAL(co_await f.dma_read(object_size - 100, buf.get_write(), buf.size()), 100);
+
+    co_await f.close();
+}
+
 // SCYLLADB-3889: a zero-length object must finalize the resumable upload with
 // "bytes */0". Emitting "bytes 0-0/0" claims a byte that cannot exist in a
 // zero-byte object and real GCS rejects it with 400. Zero-length objects are
