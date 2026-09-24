@@ -598,3 +598,25 @@ def test_static_data(cql, test_keyspace):
             cql.execute(f"insert into {table} (a, b, c) values (3, 4, 5)")
             assert [(3, 4)] == list(cql.execute(f"select a, b from {table} where a = 3"))
             assert [(3, 4)] == list(cql.execute(f"select a, b from {mv} where b = 4"))
+
+# A base-table write with a timestamp older than the row's current one is
+# ignored, and so must leave the view alone as well - while a write with a
+# newer timestamp must move the view row.
+def test_old_timestamps(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int, c int, v int, primary key (p, c)') as table:
+        with new_materialized_view(cql, table, '*', 'v, p, c',
+                'p is not null and c is not null and v is not null') as mv:
+            for i in range(100):
+                cql.execute(f"insert into {table} (p, c, v) values (0, {i % 2}, 1)")
+            assert 2 == len(list(cql.execute(f"select * from {mv}")))
+            assert [(0,), (1,)] == list(cql.execute(f"select c from {mv} where p = 0 and v = 1"))
+
+            # Make sure an old TS does nothing
+            cql.execute(f"update {table} using timestamp 100 set v = 5 where p = 0 and c = 0")
+            assert [(0,), (1,)] == list(cql.execute(f"select c from {mv} where p = 0 and v = 1"))
+            assert [] == list(cql.execute(f"select c from {mv} where p = 0 and v = 5"))
+
+            # Latest TS
+            cql.execute(f"update {table} set v = 5 where p = 0 and c = 0")
+            assert [(0,)] == list(cql.execute(f"select c from {mv} where p = 0 and v = 5"))
+            assert [(1,)] == list(cql.execute(f"select c from {mv} where p = 0 and v = 1"))

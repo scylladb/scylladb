@@ -29,47 +29,6 @@ BOOST_AUTO_TEST_SUITE(view_schema_test)
 
 using namespace std::literals::chrono_literals;
 
-
-
-
-SEASTAR_TEST_CASE(test_old_timestamps) {
-    return do_with_cql_env_thread([] (auto& e) {
-        e.execute_cql("create table cf (p int, c int, v int, primary key (p, c))").get();
-        e.execute_cql("create materialized view vcf as select * from cf "
-                      "where p is not null and c is not null and v is not null "
-                      "primary key (v, p, c)").get();
-
-        for (auto i = 0; i < 100; ++i) {
-            e.execute_cql(format("insert into cf (p, c, v) values (0, {:d}, 1)", i % 2)).get();
-        }
-
-        eventually([&] {
-        auto msg = e.execute_cql("select * from vcf").get();
-        assert_that(msg).is_rows().with_size(2);
-        msg = e.execute_cql("select c from vcf where p = 0 and v = 1").get();
-        assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(0)} }, { {int32_type->decompose(1)} }});
-        });
-
-        //Make sure an old TS does nothing
-        e.execute_cql("update cf using timestamp 100 set v = 5 where p = 0 and c = 0").get();
-        eventually([&] {
-        auto msg = e.execute_cql("select c from vcf where p = 0 and v = 1").get();
-        assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(0)} }, { {int32_type->decompose(1)} }});
-        msg = e.execute_cql("select c from vcf where p = 0 and v = 5").get();
-        assert_that(msg).is_rows().with_size(0);
-        });
-
-        //Latest TS
-        e.execute_cql("update cf set v = 5 where p = 0 and c = 0").get();
-        eventually([&] {
-        auto msg = e.execute_cql("select c from vcf where p = 0 and v = 5").get();
-        assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(0)} }});
-        msg = e.execute_cql("select c from vcf where p = 0 and v = 1").get();
-        assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)} }});
-        });
-    });
-}
-
 SEASTAR_TEST_CASE(test_regular_column_timestamp_updates) {
     return do_with_cql_env_thread([] (auto& e) {
         e.execute_cql("create table cf (p int primary key, v1 int, v2 int)").get();
