@@ -163,33 +163,6 @@ inline constexpr auto upgrade_sstables_compaction_task_type = "upgrade sstables 
 
 inline constexpr auto scrub_sstables_compaction_task_type = "scrub sstables compaction";
 
-class table_scrub_sstables_compaction_task_impl : public sstables_compaction_task_impl {
-private:
-    replica::database& _db;
-    compaction_type_options::scrub _opts;
-    compaction_stats& _stats;
-public:
-    table_scrub_sstables_compaction_task_impl(tasks::task_manager::module_ptr module,
-            std::string keyspace,
-            std::string table,
-            tasks::task_id parent_id,
-            replica::database& db,
-            compaction_type_options::scrub opts,
-            compaction_stats& stats) noexcept
-        : sstables_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, "table", std::move(keyspace), std::move(table), "", parent_id)
-        , _db(db)
-        , _opts(opts)
-        , _stats(stats)
-    {}
-
-    virtual std::string type() const override {
-        return scrub_sstables_compaction_task_type;
-    }
-protected:
-    virtual future<> run() override;
-    virtual future<std::optional<double>> expected_total_workload() const override;
-};
-
 class reshaping_compaction_task_impl : public compaction_task_impl {
 public:
     reshaping_compaction_task_impl(tasks::task_manager::module_ptr module,
@@ -400,6 +373,10 @@ public:
     // Starts a scrub of the given tables of a keyspace on this shard.
     // stats receives the scrub's result.
     future<tasks::task_manager::task_ptr> start_shard_scrub_sstables_compaction(replica::database& db, std::string keyspace, const std::vector<sstring>& column_families, compaction_type_options::scrub opts, compaction_stats& stats, tasks::task_info parent_info);
+
+    // Starts a scrub of a single table on this shard.
+    // The scrub's result is added to stats.
+    future<tasks::task_manager::task_ptr> start_table_scrub_sstables_compaction(replica::database& db, std::string keyspace, std::string table, compaction_type_options::scrub opts, compaction_stats& stats, tasks::task_info parent_info);
 };
 
 class regular_compaction_task_impl : public compaction_task_impl {

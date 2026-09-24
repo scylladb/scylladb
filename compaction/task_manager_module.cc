@@ -917,7 +917,7 @@ future<tasks::task_manager::task_ptr> task_manager_module::start_scrub_sstables_
 static future<> run_shard_scrub_sstables_compaction(task_manager_module& module, replica::database& db, std::string keyspace, lw_shared_ptr<std::vector<sstring>> column_families, compaction_type_options::scrub opts, compaction_stats& stats, tasks::task_info task_info) {
     stats = co_await map_reduce(*column_families, [&] (sstring cfname) -> future<compaction_stats> {
         compaction_stats table_stats{};
-        auto task = co_await module.make_and_start_task<table_scrub_sstables_compaction_task_impl>(task_info, keyspace, cfname, task_info.get_id(), db, opts, table_stats);
+        auto task = co_await module.start_table_scrub_sstables_compaction(db, keyspace, cfname, opts, table_stats, task_info);
         co_await task->done();
         co_return table_stats;
     }, compaction_stats{}, std::plus<compaction_stats>());
@@ -954,25 +954,28 @@ static future<> run_table_scrub_sstables_compaction(replica::database& db, std::
     });
 }
 
-future<> table_scrub_sstables_compaction_task_impl::run() {
-    return run_table_scrub_sstables_compaction(_db, _status.keyspace, _status.table, _opts, _stats, info());
-}
-
-future<std::optional<double>> table_scrub_sstables_compaction_task_impl::expected_total_workload() const {
-    try {
-        if (!_expected_workload) {
-            auto id = _db.find_uuid(_status.keyspace, _status.table);
-            table_info ti{
-                .name = _status.table,
-                .id = id
-            };
-            _expected_workload = co_await get_table_task_workload(_db, _status.keyspace, ti);
-        }
-        co_return _expected_workload;
-    } catch (...) {
-        // Expected total workload cannot be found.
-    }
-    co_return std::nullopt;
+future<tasks::task_manager::task_ptr> task_manager_module::start_table_scrub_sstables_compaction(replica::database& db, std::string keyspace, std::string table, compaction_type_options::scrub opts, compaction_stats& stats, tasks::task_info parent_info) {
+    tasks::task_manager::task_builder task_builder{shared_from_this(), scrub_sstables_compaction_task_type};
+    task_builder.set_scope("table")
+                .set_keyspace(keyspace)
+                .set_table(table)
+                .set_progress_units("bytes")
+                .set_parent_info(parent_info)
+                .set_workload_fn([&db, keyspace, table] () -> future<std::optional<double>> {
+                    try {
+                        table_info ti{
+                            .name = table,
+                            .id = db.find_uuid(keyspace, table)
+                        };
+                        co_return co_await get_table_task_workload(db, keyspace, ti);
+                    } catch (...) {
+                        // The workload is unknown, e.g. if a table was dropped since the task was created.
+                    }
+                    co_return std::nullopt;
+                });
+    return std::move(task_builder).build([&db, keyspace = std::move(keyspace), table = std::move(table), opts, &stats] (tasks::task_manager::task::impl& self) {
+        return run_table_scrub_sstables_compaction(db, keyspace, table, opts, stats, self.info());
+    });
 }
 
 future<> table_reshaping_compaction_task_impl::run() {
