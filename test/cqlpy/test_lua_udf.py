@@ -146,3 +146,8 @@ def test_lua_map_argument(cql, test_keyspace, scylla_only):
         with new_function(cql, test_keyspace, f"{sig} LANGUAGE lua AS '{sum_keys}'") as f1, \
              new_function(cql, test_keyspace, f"{sig} LANGUAGE lua AS '{sum_values}'") as f2:
             assert list(cql.execute(f"SELECT {test_keyspace}.{f1}(val), {test_keyspace}.{f2}(val) FROM {table}").one()) == [9, 12]
+
+def test_lua_decimal_argument(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val decimal") as table:
+        cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 3)")
+        assert call_lua(cql, test_keyspace, table, "(val decimal) CALLED ON NULL INPUT RETURNS bigint", "return 42") == [42]

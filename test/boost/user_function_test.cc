@@ -66,15 +66,6 @@ static future<> with_udf_enabled(Func&& func) {
     return do_with_cql_env_thread(std::forward<Func>(func), db_cfg_ptr);
 }
 
-SEASTAR_TEST_CASE(test_user_function_decimal_argument) {
-    return with_udf_enabled([] (cql_test_env& e) {
-        e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val decimal);").get();
-        e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', 3);").get();
-        e.execute_cql("CREATE FUNCTION my_func(val decimal) CALLED ON NULL INPUT RETURNS bigint LANGUAGE Lua AS 'return 42';").get();
-        e.execute_cql("SELECT my_func(val) FROM my_table;").get();
-    });
-}
-
 SEASTAR_TEST_CASE(test_user_function_decimal_add) {
     return with_udf_enabled([](cql_test_env& e) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val1 decimal);").get();
