@@ -364,3 +364,9 @@ def test_lua_timestamp_return(cql, test_keyspace, scylla_only):
                 cql.execute(query)
         with pytest.raises(InvalidRequest, match="timestamp must be a string, integer or date table"):
             call("return 42.2")
+
+def test_lua_uuid_return(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val int") as table:
+        cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 3)")
+        assert call_lua(cql, test_keyspace, table, "(val int) CALLED ON NULL INPUT RETURNS uuid",
+                        'return "982e9b0f-1df7-4425-ba04-e99d808b8940"') == [UUID("982e9b0f-1df7-4425-ba04-e99d808b8940")]
