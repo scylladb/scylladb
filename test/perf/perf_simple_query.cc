@@ -36,6 +36,8 @@
 #include "replica/database.hh"
 #include <seastar/core/sleep.hh>
 #include <seastar/core/sharded.hh>
+#include <seastar/core/loop.hh>
+#include <ranges>
 
 static const sstring table_name = "cf";
 
@@ -154,6 +156,8 @@ static std::string make_timeout_using(const test_config& cfg) {
     return cfg.timeout.empty() ? std::string() : fmt::format("USING TIMEOUT {} ", std::string_view(cfg.timeout));
 }
 
+static constexpr unsigned populate_concurrency = 100;
+
 static void create_partitions(cql_test_env& env, test_config& cfg) {
     std::cout << "Creating " << cfg.partitions << " partitions..." << std::endl;
     auto id = env.prepare(cfg.counters ? make_counter_update_query() : make_write_query(cfg)).get();
@@ -163,13 +167,20 @@ static void create_partitions(cql_test_env& env, test_config& cfg) {
         return env.execute_prepared(id, {{cql3::raw_value::make_value(make_key(sequence))}},
                 db::consistency_level::QUORUM).discard_result();
     };
-    unsigned next_flush = (cfg.memtable_partitions > 0 ? cfg.memtable_partitions : cfg.partitions);
-    for (unsigned sequence = 0; sequence < cfg.partitions; ++sequence) {
-        write(sequence).get();
-        if (sequence + 1 >= next_flush) {
-            env.db().invoke_on_all(&replica::database::flush_all_memtables).get();
-            next_flush += cfg.memtable_partitions;
+    if (cfg.memtable_partitions > 0) {
+        // Flushing every so many partitions needs the writes to happen in a known order.
+        unsigned next_flush = cfg.memtable_partitions;
+        for (unsigned sequence = 0; sequence < cfg.partitions; ++sequence) {
+            write(sequence).get();
+            if (sequence + 1 >= next_flush) {
+                env.db().invoke_on_all(&replica::database::flush_all_memtables).get();
+                next_flush += cfg.memtable_partitions;
+            }
         }
+    } else {
+        auto sequences = std::views::iota(0u, cfg.partitions);
+        max_concurrent_for_each(sequences.begin(), sequences.end(), populate_concurrency, std::move(write)).get();
+        env.db().invoke_on_all(&replica::database::flush_all_memtables).get();
     }
 
     if (cfg.flush_memtables) {
