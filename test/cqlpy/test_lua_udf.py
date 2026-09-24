@@ -552,3 +552,16 @@ def test_lua_function(cql, test_keyspace, scylla_only):
                     assert count_functions() == 3
                     # Recreate the dropped function so new_function() can drop it
                     cql.execute(f"CREATE FUNCTION {test_keyspace}.{f2}(val bigint) {body}")
+
+def test_udf_mixups(cql, test_keyspace, scylla_only):
+    with pytest.raises(Unauthorized, match="system keyspace is not user-modifiable"):
+        cql.execute("DROP FUNCTION system.now")
+    with pytest.raises(Unauthorized, match="system keyspace is not user-modifiable"):
+        cql.execute("DROP FUNCTION system.now()")
+    with pytest.raises(Unauthorized, match="system keyspace is not user-modifiable"):
+        cql.execute("CREATE OR REPLACE FUNCTION system.now() RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return 2'")
+
+    with new_function(cql, test_keyspace, "(a int) CALLED ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return 2'"):
+        pass
+    with new_function(cql, test_keyspace, "() CALLED ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return 2'"):
+        pass
