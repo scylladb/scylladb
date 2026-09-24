@@ -509,3 +509,27 @@ def test_drop_non_existing(cql, test_keyspace):
         with pytest.raises((ConfigurationException, InvalidRequest)):
             cql.execute(f"drop materialized view {name}")
         cql.execute(f"drop materialized view if exists {name}")
+
+# A view whose SELECT names only some of its primary key columns - here just
+# p, while the view's key is (v, p, c). The unnamed key columns are selected
+# implicitly, so the view still has all three.
+#
+# This, and the two tests after it, are marked cassandra_bug, because
+# Cassandra 4 and 5 reject such a view with "Unknown column 'v' referenced in
+# PRIMARY KEY for materialized view" - they require every one of the view's
+# key columns to be named in the SELECT. The reason we consider Scylla's
+# behavior the correct one, and Cassandra's a bug, is that implicit selection
+# of the view's key columns is the documented behavior ("All primary key
+# columns are automatically included") and is what Cassandra 3 did - so this
+# is an undocumented regression in Cassandra 4, reported as CASSANDRA-20701
+# ("Materialized view should automatically SELECT view's primary key
+# columns"), which at the time of writing is still unresolved. The same
+# reasoning, and the same marker, appear at test_mv_select_key_columns() in
+# test_materialized_view.py.
+def test_create_mv_with_unrestricted_pk_parts(cql, test_keyspace, cassandra_bug):
+    with new_test_table(cql, test_keyspace, 'p int, c ascii, v bigint, primary key (p, c)') as table:
+        with new_materialized_view(cql, table, 'p', 'v, p, c',
+                'v is not null and p is not null and c is not null') as mv:
+            cql.execute(f"insert into {table} (p, c, v) values (0, 'foo', 1)")
+            assert [(1, 0, 'foo')] == list(cql.execute(f"select * from {mv}"))
+
