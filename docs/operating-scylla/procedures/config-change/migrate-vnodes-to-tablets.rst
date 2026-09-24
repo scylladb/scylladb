@@ -429,6 +429,90 @@ following:
 
       scylla nodetool migrate-to-tablets finalize <keyspace>
 
+Recovering a node that fails to start
+-------------------------------------
+
+Resharding is an offline operation and it temporarily needs additional disk space.
+If it cannot complete - most commonly because the node ran out of disk space - the
+node refuses to start, and it will fail again on every subsequent start, because it
+reads its intended storage mode from its own local copy of the cluster state before
+it can serve any request.
+
+This means the node cannot be rolled back with the :ref:`vnodes-migration-rollback` above:
+``migrate-to-tablets downgrade`` is sent to the node being downgraded, and a node
+that will not start cannot serve it. Starting the node in maintenance mode does not
+help either, because the storage upgrade runs before the node reaches maintenance
+mode - the override below is what unblocks both.
+
+To get such a node back up, force it into vnodes storage mode locally with the
+``force_vnodes_storage_mode`` option in its ``scylla.yaml``.
+
+.. caution::
+
+   This option only affects the node it is set on, and it does not change the
+   cluster state. Until you complete step 4 below, the cluster still expects this
+   node in its recorded mode and the migration cannot be finalized in either
+   direction. Use it to recover a node that will not start, not as a way to control
+   the migration.
+
+#. Make sure the node has enough free disk space to reshard. The override lets you
+   abort the migration on this node; it does not reduce the space that resharding
+   needs, and rolling back reshards the data that was already upgraded. Free space
+   or extend the volume before continuing.
+
+#. Add the following to the node's ``scylla.yaml`` and start the node:
+
+   .. code-block:: yaml
+
+      force_vnodes_storage_mode: true
+
+   The node starts as a vnodes node, reshards any data it had already upgraded back
+   to vnodes, and logs a warning naming both the override and the mode recorded in
+   the cluster state:
+
+   .. code-block:: none
+
+      force_vnodes_storage_mode is set, overriding the intended storage mode recorded in system.topology ('tablets')
+
+   If that line is absent and the node fails the same way as before, the value was
+   rejected: check the startup log for a configuration error naming
+   ``force_vnodes_storage_mode``, and for the line
+   ``Using intended storage mode '...' recorded in system.topology``, which names the
+   mode that actually took effect.
+
+#. Wait until the node is UP using :doc:`nodetool status </operating-scylla/nodetool-commands/status/>`.
+   To monitor resharding progress, use the task manager API:
+
+   .. code-block:: console
+
+      scylla nodetool tasks list compaction -h <node-ip> --keyspace <keyspace> | grep -i reshard
+
+   .. note::
+
+      Until you complete the next step, ``migrate-to-tablets status`` keeps reporting
+      this node as ``migrating to tablets``. That status is derived from the cluster
+      state, which still records the node as intended for tablets; it does not mean
+      the node is still upgrading. Only the node's own log shows that the override is
+      in effect.
+
+#. Record the rollback in the cluster state, now that the node can serve requests:
+
+   .. code-block:: console
+
+      scylla nodetool -h <node-ip> migrate-to-tablets downgrade
+
+   Verify that the node's status is ``uses vnodes``:
+
+   .. code-block:: console
+
+      scylla nodetool migrate-to-tablets status <keyspace>
+
+#. Remove ``force_vnodes_storage_mode`` from the node's ``scylla.yaml``, so that
+   a later restart does not keep overriding the cluster state.
+
+#. Continue with the :ref:`vnodes-migration-rollback` for the remaining upgraded nodes, then
+   finalize the rollback.
+
 Migrating multiple keyspaces
 ----------------------------
 
