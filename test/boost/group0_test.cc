@@ -10,11 +10,13 @@
 #include <seastar/testing/test_case.hh>
 #include "test/lib/cql_assertions.hh"
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/shared_future.hh>
 #include <seastar/util/defer.hh>
 
 #include "clocks-impl.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/log.hh"
+#include "test/lib/error_injection.hh"
 
 #include "db/system_keyspace.hh"
 #include "schema/schema_builder.hh"
@@ -24,6 +26,7 @@
 #include "transport/messages/result_message.hh"
 #include "service/migration_manager.hh"
 #include "service/raft/raft_group0_client.hh"
+#include "service/storage_service.hh"
 #include <fmt/ranges.h>
 #include <seastar/core/metrics_api.hh>
 
@@ -567,5 +570,70 @@ SEASTAR_TEST_CASE(test_group0_hard_timeout_history_absent_after_real_gc_is_hard_
                 service::group0_hard_timeout, [] (const service::group0_hard_timeout&) { return true; });
     });
 }
+
+#ifdef SCYLLA_ENABLE_ERROR_INJECTION
+
+// A topology request must not report completion while the group0 command
+// carrying its result is still being applied on the local node.
+//
+// Applying a command writes its mutations to the tables before it rebuilds the
+// in-memory state from them, so the request's done flag becomes true while
+// the node still holds the old state. The waiter reads that flag before it ever
+// sleeps on a topology event, so its very first read can land in that window.
+//
+// This test reproduces the bug via a no-op topology request and injections that
+// synchronize the caller's wait and the group0 command's apply. The request is
+// emitted by disabling tablet balancing.
+//
+// Reproduces https://scylladb.atlassian.net/browse/SCYLLADB-4011.
+SEASTAR_TEST_CASE(test_request_completes_after_local_apply, *boost::unit_test::expected_failures(1)) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        static constexpr std::string_view apply_pause = "group0_pause_before_topology_transition";
+        static constexpr std::string_view request_pause = "topology_request_pause_before_wait";
+        auto& injector = utils::get_local_injector();
+
+        // Hold every group0 command in the window between writing its
+        // mutations and reloading the in-memory state. The test identifies the
+        // commands only by the order in which they arrive, so it assumes no
+        // unrelated group0 command is applied while the topology request is in
+        // flight, which is true for an idle node today.
+        injector.enable(apply_pause, false);
+        // Hold the caller between submitting the topology request and waiting
+        // for its completion.
+        injector.enable(request_pause, true);
+        auto release = defer([&] () noexcept {
+            injector.disable(apply_pause);
+            injector.disable(request_pause);
+        });
+
+        testlog.info("Submitting a no-op topology request");
+        shared_future<> request(env.get_storage_service().local().set_tablet_balancing_enabled(false));
+
+        // The request's own group0 command lands first and carries done=false.
+        // Let it through, so the caller reaches the wait and parks before reading.
+        wait_for_injection_enter(apply_pause, 1).get();
+        injector.receive_message(apply_pause);
+        wait_for_injection_enter(request_pause).get();
+
+        // The topology coordinator handles the topology request and emits a
+        // second group0 command, which sets done=true. Its apply parks in the
+        // same window, turning the flag true while the in-memory topology
+        // state is still the old one.
+        wait_for_injection_enter(apply_pause, 2).get();
+
+        testlog.info("Releasing the caller so that its first read lands in the window");
+        injector.receive_message(request_pause);
+
+        // The wait should never complete as long as apply is blocked, despite
+        // done being true.
+        BOOST_CHECK_THROW(request.get_future(lowres_clock::now() + std::chrono::seconds(10)).get(), timed_out_error);
+
+        testlog.info("Releasing the apply; the request must complete now");
+        injector.receive_message(apply_pause);
+        request.get_future().get();
+    });
+}
+
+#endif // SCYLLA_ENABLE_ERROR_INJECTION
 
 BOOST_AUTO_TEST_SUITE_END()
