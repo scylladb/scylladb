@@ -1874,3 +1874,22 @@ def test_view_update_unmodified_collection(cql, test_keyspace, scylla_only):
             # the collection column), we should generate no view updates.
             cql.execute(f"UPDATE {table} SET g=2 WHERE k=1 AND c=1")
             check(3, 2, 5)
+
+# A batch which deletes a base row and also writes a different one must leave
+# the view consistent with the base table - here everything the batch touches
+# ends up deleted, so both must end up empty.
+def test_conflicting_batch(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int, c int, v int, primary key(p, c)') as table:
+        with new_materialized_view(cql, table, '*', 'v, c, p',
+                'p IS NOT NULL AND c IS NOT NULL AND v IS NOT NULL') as mv:
+            cql.execute(f"INSERT INTO {table} (p, c, v) VALUES (0, 0, 0)")
+            assert [(0, 0, 0)] == list(cql.execute(f"SELECT * FROM {mv}"))
+
+            cql.execute(f"""begin unlogged batch
+                  DELETE FROM {table} WHERE p = 1;
+                  INSERT INTO {table} (p, c, v) VALUES (1, 1, 1);
+                  DELETE FROM {table} WHERE p = 0 AND c = 0;
+                apply batch""")
+
+            assert [] == list(cql.execute(f"SELECT * FROM {table}"))
+            assert [] == list(cql.execute(f"SELECT * FROM {mv}"))
