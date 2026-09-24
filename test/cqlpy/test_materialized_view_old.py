@@ -355,14 +355,20 @@ def test_all_types(cql, test_keyspace):
                         f"where vectorval = {value}"))
 
                 # ================ UDTs ================
-                # A UDT value can be written with positional or named fields,
-                # and either way it is the same value - the same view key.
-                for value in [f"(1, {uuid2}, {{'foo', 'bar'}})",
+                # A UDT value can be written with its fields named, in any
+                # order, and read back by a literal naming them in a different
+                # order, or by a positional literal - all of these denote the
+                # same value, so they are the same view key.
+                # Note that a UDT value can also be *written* with a positional
+                # literal, but that crashes Cassandra, so it is checked in the
+                # separate test test_all_types_udt_positional_write() below.
+                for value in [f"{{a: 1, b: {uuid2}, c: {{'foo', 'bar'}}}}",
                               f"{{b: {uuid2}, a: 1, c: {{'foo', 'bar'}}}}"]:
                     cql.execute(f"insert into {table} (k, udtval) values (0, {value})")
-                    assert [(0, 1, UUID(uuid2), {'bar', 'foo'}, 'ascii text')] == list(cql.execute(
-                        f"select k, udtval.a, udtval.b, udtval.c, asciival from {mv['udtval']} "
-                        f"where udtval = {value}"))
+                    for lookup in [value, f"(1, {uuid2}, {{'foo', 'bar'}})"]:
+                        assert [(0, 1, UUID(uuid2), {'bar', 'foo'}, 'ascii text')] == list(cql.execute(
+                            f"select k, udtval.a, udtval.b, udtval.c, asciival from {mv['udtval']} "
+                            f"where udtval = {lookup}"))
                 # A null field, or a missing field, is part of the UDT's value
                 # and makes a different view key
                 cql.execute(f"insert into {table} (k, udtval) values (0, "
@@ -380,3 +386,35 @@ def test_all_types(cql, test_keyspace):
                 assert [(0, 1, UUID(uuid2), None, 'ascii text')] == list(cql.execute(
                     f"select k, udtval.a, udtval.b, udtval.c, asciival from {mv['udtval']} "
                     f"where udtval = {{a: 1, b: {uuid2}}}"))
+
+# The part of test_all_types() above which the original C++ test had inline,
+# but which can't run on Cassandra: writing a UDT value with a *positional*
+# literal, (1, ...), instead of a named one, {a: 1, ...}.
+#
+# Cassandra accepts a positional literal for a UDT when reading - the WHERE
+# clause in test_all_types() above works there - because in Cassandra a
+# UserType is a subclass of TupleType, so Tuples.Literal.prepare() happily
+# prepares a tuple literal against a UDT receiver. But on the write path,
+# UserTypes.Setter.execute() then does an unchecked cast of the prepared term
+# to UserTypes.Value, and a tuple literal prepares into a Tuples.Value - so
+# the INSERT dies with a server-side
+#   java.lang.ClassCastException: class org.apache.cassandra.cql3.Tuples$Value
+#   cannot be cast to class org.apache.cassandra.cql3.UserTypes$Value
+# (Cassandra 5.0.8, UserTypes.java:342). A ClassCastException is never a
+# correct answer - Cassandra should either accept the write, as Scylla does,
+# or reject it with a proper error - so this is marked cassandra_bug and not
+# scylla_only. I could not find this reported in Cassandra's JIRA; the closest
+# is CASSANDRA-20237, the same kind of unchecked-cast crash for a tuple
+# literal on the *read* path, fixed only in 6.0. In Cassandra trunk the
+# UserTypes.Value class is gone entirely (refactored away by CASSANDRA-18813),
+# so this crash may well have incidentally disappeared in 6.0 too.
+def test_all_types_udt_positional_write(cql, test_keyspace, cassandra_bug):
+    uuid2 = '6bddc89a-5644-11e4-97fc-56847afe9799'
+    with new_type(cql, test_keyspace, '(a int, b uuid, c set<text>)') as udt:
+        with new_test_table(cql, test_keyspace, f'k int PRIMARY KEY, udtval frozen<{udt}>') as table:
+            with new_materialized_view(cql, table, '*', 'udtval, k',
+                    'udtval is not null and k is not null') as mv:
+                cql.execute(f"insert into {table} (k, udtval) values (0, (1, {uuid2}, {{'foo', 'bar'}}))")
+                assert [(0, 1, UUID(uuid2), {'bar', 'foo'})] == list(cql.execute(
+                    f"select k, udtval.a, udtval.b, udtval.c from {mv} "
+                    f"where udtval = {{a: 1, b: {uuid2}, c: {{'foo', 'bar'}}}}"))
