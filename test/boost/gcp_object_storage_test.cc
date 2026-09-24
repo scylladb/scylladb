@@ -295,6 +295,45 @@ SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_readable_file, local_gcs_wrapper, *ch
     co_await f.close();
 }
 
+// The download source is the path Data and Index reads take on a gs cluster:
+// object_storage_base::make_source() ignores the file it is handed and always
+// builds one of these. Sized to need two ranged GETs, so the short range is not
+// the only one the stream has to get through. Only error injection can produce
+// one -- fake-gcs answers the range it was asked for.
+SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_download_source_short_range, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    testlog.debug("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+    co_return;
+#endif
+    auto& c = client();
+    auto name = make_name();
+    std::vector<temporary_buffer<char>> written;
+    constexpr size_t object_size = 8*1024*1024 + 1024;
+
+    objects_to_delete.emplace_back(name);
+    co_await create_object_of_size(c, bucket, name, object_size, &written);
+
+    testlog.info("Every byte arrives when the ranges are answered whole");
+    co_await compare_object_data(*this, name, std::move(written));
+
+    testlog.info("A range answered short fails the read rather than ending the stream");
+    utils::get_local_injector().enable("gcp_source_short_range");
+    auto disable = seastar::defer([] () noexcept {
+        utils::get_local_injector().disable("gcp_source_short_range");
+    });
+    try {
+        auto is = seastar::input_stream<char>(c.create_download_source(bucket, name));
+        while (!(co_await is.read()).empty()) {
+        }
+        BOOST_ERROR("a short range should not have produced a complete stream");
+    } catch (const storage_io_error& e) {
+        // Check which error it is - a bare type check would also pass for a
+        // missing bucket or a refused credential.
+        BOOST_REQUIRE_EQUAL(e.code().value(), EIO);
+        BOOST_REQUIRE(std::string(e.what()).contains("bytes asked for at offset"));
+    }
+}
+
 // A reply that carried the whole object instead of the range delivers the right
 // number of bytes from offset zero, so the length check cannot see it. Only
 // error injection can produce one -- fake-gcs answers the range it was asked for.

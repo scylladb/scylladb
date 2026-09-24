@@ -1116,6 +1116,13 @@ future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::
                     auto got = std::accumulate(bufs.cbegin(), bufs.cend(), 0ul, [](size_t init, auto& buf) {
                         return init + buf.size();
                     });
+                    utils::get_local_injector().inject("gcp_source_short_range", [&got] {
+                        // Drop a byte once the range has been read whole, standing in
+                        // for a reply that described a shorter range than the one asked
+                        // for. That is not a truncation and not retryable, so it has to
+                        // reach the check below.
+                        got -= got > 0 ? 1 : 0;
+                    });
                     // Before the buffers are committed, so a reply this rejects leaves
                     // the shared state untouched whatever the caller does next.
                     // to_read never runs past the end of the object, so a satisfiable
