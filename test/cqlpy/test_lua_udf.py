@@ -37,3 +37,11 @@ def test_lua_out_of_memory(cql, test_keyspace, scylla_only):
         with pytest.raises(InvalidRequest, match="lua execution failed: not enough memory"):
             call_lua(cql, test_keyspace, table, "(val int) CALLED ON NULL INPUT RETURNS int",
                      'a = "foo" while true do a = a .. a end')
+
+def test_lua_use_null(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val int") as table:
+        cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', null)")
+        with pytest.raises(InvalidRequest, match="attempt to perform arithmetic on a nil value"):
+            call_lua(cql, test_keyspace, table, "(val int) CALLED ON NULL INPUT RETURNS int", "return val + 1")
+        assert call_lua(cql, test_keyspace, table, "(val int) CALLED ON NULL INPUT RETURNS int", "return val") == [None]
+        assert [row.val for row in cql.execute(f"SELECT val FROM {table}")] == [None]

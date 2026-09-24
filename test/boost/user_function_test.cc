@@ -66,20 +66,6 @@ static future<> with_udf_enabled(Func&& func) {
     return do_with_cql_env_thread(std::forward<Func>(func), db_cfg_ptr);
 }
 
-SEASTAR_TEST_CASE(test_user_function_use_null) {
-    return with_udf_enabled([] (cql_test_env& e) {
-        e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val int);").get();
-        e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', null);").get();
-        e.execute_cql("CREATE FUNCTION my_func1(val int) CALLED ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return val + 1';").get();
-        e.execute_cql("CREATE FUNCTION my_func2(val int) CALLED ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return val';").get();
-        BOOST_REQUIRE_EXCEPTION(e.execute_cql("SELECT my_func1(val) FROM my_table;").get(), ire, message_contains("attempt to perform arithmetic on a nil value"));
-        auto res = e.execute_cql("SELECT my_func2(val) FROM my_table;").get();
-        assert_that(res).is_rows().with_rows({{std::nullopt}});
-        res = e.execute_cql("SELECT val FROM my_table;").get();
-        assert_that(res).is_rows().with_rows({{std::nullopt}});
-    });
-}
-
 SEASTAR_TEST_CASE(test_user_function_wrong_return_type) {
     return with_udf_enabled([] (cql_test_env& e) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val int);").get();
