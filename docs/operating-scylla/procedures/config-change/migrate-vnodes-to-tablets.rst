@@ -448,6 +448,8 @@ Procedure
 
    Run both if the cluster has keyspaces of both kinds.
 
+.. _vnodes-migration-rollback:
+
 Rollback Procedure
 ------------------
 
