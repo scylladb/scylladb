@@ -34,7 +34,7 @@ import datetime
 import pytest
 from decimal import Decimal
 from uuid import UUID
-from cassandra.protocol import InvalidRequest
+from cassandra.protocol import ConfigurationException, InvalidRequest
 from cassandra.util import Time
 
 from .util import new_test_table, new_type, new_materialized_view, unique_name
@@ -481,3 +481,14 @@ def test_alter_compatible_type(cql, test_keyspace, scylla_only):
                 extra='with clustering order by (c desc)'):
             cql.execute(f"alter table {table} alter c type blob")
 
+# But changing int to blob is not allowed, because the two types sort
+# differently, and c is a clustering key of the view.
+def test_alter_incompatible_type(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, 'p int, c int, primary key (p)') as table:
+        with new_materialized_view(cql, table, '*', 'p, c', 'p is not null and c is not null',
+                extra='with clustering order by (c desc)'):
+            # Note that Scylla reports this particular check - the ordering
+            # compatibility of a view's clustering key - as a configuration
+            # error rather than an invalid request.
+            with pytest.raises(ConfigurationException, match='Cannot change c from type int to type blob'):
+                cql.execute(f"alter table {table} alter c type blob")
