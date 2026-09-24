@@ -11,12 +11,9 @@
 #include "db/view/node_view_update_backlog.hh"
 
 #undef SEASTAR_TESTING_MAIN
-#include <seastar/testing/test_case.hh>
+#include <seastar/core/sleep.hh>
+#include <seastar/core/smp.hh>
 #include <seastar/testing/thread_test_case.hh>
-#include "test/lib/cql_test_env.hh"
-#include "test/lib/cql_assertions.hh"
-#include "test/lib/eventually.hh"
-#include "utils/chunked_string.hh"
 
 BOOST_AUTO_TEST_SUITE(view_schema_test)
 
@@ -61,42 +58,6 @@ SEASTAR_THREAD_TEST_CASE(node_view_update_backlog) {
         b2.fetch();
     }).get();
     BOOST_REQUIRE(b2.load() == backlog(100));
-}
-
-// As with test_no_base_column_in_view_pk_complex_timestamp_ttl above, the
-// bulk of this test - its long series of writes at assorted timestamps - was
-// moved to Python in issue #16134, as
-// test_base_column_in_view_pk_complex_timestamp in
-// test/cqlpy/test_materialized_view_old.py. Only these last steps stayed
-// behind, because they need forward_jump_clocks() to expire a TTL instantly.
-SEASTAR_TEST_CASE(test_base_column_in_view_pk_complex_timestamp_ttl) {
-    return do_with_cql_env_thread([] (cql_test_env& e) {
-
-        e.execute_cql("CREATE TABLE t (k int, c int, a int, b int, e int, f int, primary key(k, c))").get();
-        e.execute_cql("CREATE MATERIALIZED VIEW mv AS SELECT k, c, a, b FROM t "
-                         "WHERE k IS NOT NULL AND c IS NOT NULL AND a IS NOT NULL PRIMARY KEY (k, c, a)").get();
-        ::shared_ptr<cql_transport::messages::result_message> msg;
-
-        // add selected with ttl=1
-        e.execute_cql("UPDATE t USING TTL 30 SET a=1, b=1 WHERE k=1 AND c=1;").get();
-        eventually([&] {
-            msg = e.execute_cql("SELECT * FROM t").get();
-            assert_that(msg).is_rows().with_rows({
-                { int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1), {}, {} },
-            });
-            msg = e.execute_cql("SELECT * FROM mv").get();
-            assert_that(msg).is_rows().with_rows({
-                { int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1), int32_type->decompose(1) },
-            });
-        });
-
-        forward_jump_clocks(31s);
-
-        eventually([&] {
-            msg = e.execute_cql("SELECT * FROM mv").get();
-            assert_that(msg).is_rows().with_size(0);
-        });
-    });
 }
 
 BOOST_AUTO_TEST_SUITE_END()

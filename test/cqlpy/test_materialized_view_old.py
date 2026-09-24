@@ -1802,11 +1802,7 @@ def test_no_base_column_in_view_pk_complex_timestamp(cql, test_keyspace, clock):
 # for a view whose own key includes a base column which is *not* part of the
 # base's key - here a. A view row can then only exist while that column is
 # alive, which is what makes this case different.
-#
-# As with that test, the last few steps of the C++ original use TTLs and so
-# stayed behind in view_schema_test.cc, as
-# test_base_column_in_view_pk_complex_timestamp_ttl.
-def test_base_column_in_view_pk_complex_timestamp(cql, test_keyspace):
+def test_base_column_in_view_pk_complex_timestamp(cql, test_keyspace, clock):
     with new_test_table(cql, test_keyspace,
             'k int, c int, a int, b int, e int, f int, primary key(k, c)') as table:
         with new_materialized_view(cql, table, 'k, c, a, b', 'k, c, a',
@@ -1862,6 +1858,13 @@ def test_base_column_in_view_pk_complex_timestamp(cql, test_keyspace):
             # remove selected with ts=7, view row is dead
             cql.execute(f"UPDATE {table} USING TIMESTAMP 7 SET a=null, b=null WHERE k=1 AND c=1")
             check([], [])
+
+            # add selected with ttl
+            cql.execute(f"UPDATE {table} USING TTL {clock.ttl} SET a=1, b=1 WHERE k=1 AND c=1")
+            check([(1, 1, 1, 1, None, None)], [(1, 1, 1, 1)])
+
+            clock.jump(clock.ttl + 1)
+            assert [] == list(cql.execute(f"SELECT * FROM {mv}"))
 
 # The test revolves around timestamps in materialized views and their relation
 # to timestamps in the base table. Values in an MV should have the same
