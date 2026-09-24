@@ -33,37 +33,6 @@ BOOST_AUTO_TEST_SUITE(view_schema_test)
 
 using namespace std::literals::chrono_literals;
 
-SEASTAR_TEST_CASE(test_access_and_schema) {
-    return do_with_cql_env_thread([] (auto& e) {
-        e.execute_cql("create table cf (p int, c ascii, v bigint, primary key (p, c));").get();
-        e.execute_cql("create materialized view vcf as select * from cf "
-                      "where v is not null and p is not null and c is not null "
-                      "primary key (v, p, c)").get();
-        e.execute_cql("insert into cf (p, c, v) values (0, 'foo', 1);").get();
-        assert_that_failed(e.execute_cql("insert into vcf (p, c, v) values (1, 'foo', 1);"));
-        assert_that_failed(e.execute_cql("alter table vcf add foo text;"));
-        assert_that_failed(e.execute_cql("alter table vcf with compaction = { 'class' : 'LeveledCompactionStrategy' };"));
-        e.execute_cql("alter materialized view vcf with compaction = { 'class' : 'LeveledCompactionStrategy' };").get();
-        e.execute_cql("alter table cf add foo text;").get();
-        e.execute_cql("insert into cf (p, c, v, foo) values (0, 'foo', 1, 'bar');").get();
-        eventually([&] {
-        auto msg = e.execute_cql("select foo from vcf").get();
-        assert_that(msg).is_rows()
-            .with_size(1)
-            .with_row({
-                {utf8_type->decompose(sstring("bar"))},
-            });
-        });
-        e.execute_cql("alter table cf rename c to bar;").get();
-        auto msg = e.execute_cql("select bar from vcf").get();
-        assert_that(msg).is_rows()
-            .with_size(1)
-            .with_row({
-                {utf8_type->decompose(sstring("foo"))},
-            });
-    });
-}
-
 SEASTAR_TEST_CASE(test_column_dropped_from_base) {
     return do_with_cql_env_thread([] (auto& e) {
         e.execute_cql("create table cf (p int, c ascii, a int, v int, primary key (p, c));").get();

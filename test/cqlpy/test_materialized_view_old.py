@@ -29,6 +29,9 @@
 # need this must wait for the build to complete, and can't just read the
 # view immediately after creating it.
 
+import pytest
+from cassandra.protocol import InvalidRequest
+
 from .util import new_test_table, new_materialized_view
 
 # CQL usually folds identifier names - keyspace, table and column names -
@@ -51,3 +54,26 @@ def test_case_sensitivity(cql, test_keyspace):
             cql.execute(f'alter table {table} rename "theClustering" to "Col"')
             for mv in [mv1, mv2]:
                 assert [(0, 0, 0)] == list(cql.execute(f'select "theKey", "Col", "theValue" from {mv}'))
+
+# A materialized view is read-only, and its schema is not its own: it can't
+# be written to directly, and it can't be modified with ALTER TABLE (only
+# with ALTER MATERIALIZED VIEW). Instead, the view's schema follows that of
+# its base table - a column added to or renamed in the base table is added
+# to or renamed in the view as well.
+def test_access_and_schema(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int, c ascii, v bigint, primary key (p, c)') as table:
+        with new_materialized_view(cql, table, '*', 'v, p, c',
+                'v is not null and p is not null and c is not null') as mv:
+            cql.execute(f"insert into {table} (p, c, v) values (0, 'foo', 1)")
+            with pytest.raises(InvalidRequest, match='Cannot directly modify a materialized view'):
+                cql.execute(f"insert into {mv} (p, c, v) values (1, 'foo', 1)")
+            with pytest.raises(InvalidRequest, match='Cannot use ALTER TABLE'):
+                cql.execute(f"alter table {mv} add foo text")
+            with pytest.raises(InvalidRequest, match='Cannot use ALTER TABLE'):
+                cql.execute(f"alter table {mv} with compaction = {{ 'class' : 'LeveledCompactionStrategy' }}")
+            cql.execute(f"alter materialized view {mv} with compaction = {{ 'class' : 'LeveledCompactionStrategy' }}")
+            cql.execute(f"alter table {table} add foo text")
+            cql.execute(f"insert into {table} (p, c, v, foo) values (0, 'foo', 1, 'bar')")
+            assert [('bar',)] == list(cql.execute(f"select foo from {mv}"))
+            cql.execute(f"alter table {table} rename c to bar")
+            assert [('foo',)] == list(cql.execute(f"select bar from {mv}"))
