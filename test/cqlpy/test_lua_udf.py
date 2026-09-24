@@ -183,3 +183,16 @@ def test_lua_varint_return(cql, test_keyspace, scylla_only):
     with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val int") as table:
         cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 42)")
         assert call_lua(cql, test_keyspace, table, "(a int) CALLED ON NULL INPUT RETURNS varint", "return a") == [42]
+
+def test_lua_double_return(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val varint") as table:
+        cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 3)")
+        sig = "(val varint) CALLED ON NULL INPUT RETURNS double"
+        assert call_lua(cql, test_keyspace, table, sig, "return val") == [3.0]
+        assert call_lua(cql, test_keyspace, table, sig, "return 1/0") == [math.inf]
+        assert call_lua(cql, test_keyspace, table, sig, "return -1/0") == [-math.inf]
+        [res] = call_lua(cql, test_keyspace, table, sig, "return 0/0")
+        assert math.isnan(res)
+    with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val decimal") as table:
+        cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 5.1)")
+        assert call_lua(cql, test_keyspace, table, "(val decimal) CALLED ON NULL INPUT RETURNS double", "return val") == [5.1]
