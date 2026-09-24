@@ -121,7 +121,7 @@ class ResourceGatherRecord(ResourceGather):
             TESTS_TABLE)
 
     def get_test_metrics(self, seastar_io: dict[str, int] | None = None) -> Metric:
-        test_metrics = Metric(test_id=self.test_id, host_id=HOST_ID, worker_id=self.worker_id)
+        test_metrics = Metric(test_id=self.test_id, worker_id=self.worker_id)
         if seastar_io:
             test_metrics.seastar_read_bytes = seastar_io.get(SeastarIOMetricName.READ_BYTES, 0)
             test_metrics.seastar_read_ops = seastar_io.get(SeastarIOMetricName.READ_OPS, 0)
@@ -175,7 +175,6 @@ class ResourceGatherOn(ResourceGatherRecord):
                 try:
                     timeline_record = CgroupMetric(
                         test_id=self.test_id,
-                        host_id=HOST_ID,
                         memory=int(memory_current.read_text().strip()),
                         timestamp=datetime.now()
                     )

@@ -20,14 +20,12 @@ class HostInfo:
 class CgroupMetric:
     memory: int
     test_id: int
-    host_id: str
     timestamp: datetime
 
 
 @define
 class Metric:
     test_id: int
-    host_id: str
     memory_peak: int = None
     seastar_read_bytes: int = None
     seastar_read_ops: int = None

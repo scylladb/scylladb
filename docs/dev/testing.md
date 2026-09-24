@@ -344,8 +344,8 @@ For that, SQLite database is used to store the metrics in `testlog/sqlite_{HOST_
 every `test.py` invocation writes its own database file.
 The database is created in the `testlog` directory and contains the following tables:
 
-- `host_info` - one row describing the machine: CPU model, physical core count and total RAM. Referenced by every other
-  table through `host_id`
+- `host_info` - one row describing the machine: CPU model, physical core count and total RAM. Referenced through
+  `host_id` by the tables that are not tied to a single test; for the others the host is reached through `tests`
 - `tests` - contains the list of tests that were executed with information about the test name, directory, architecture,
   and mode
 - `test_metrics` - contains the metrics for each test: memory peak usage, CPU usage, duration, outcome, and the IO the
