@@ -29,7 +29,8 @@ void set_token_metadata(http_context& ctx, routes& r, sharded<locator::shared_to
     });
 
     ss::get_tokens.set(r, [&tm] (std::unique_ptr<http::request> req) {
-        return make_ready_future<json::json_return_type>(stream_range_as_array(tm.local().get()->sorted_tokens(), [](const dht::token& i) {
+        const auto& local_tm = *tm.local().get();
+        return make_ready_future<json::json_return_type>(stream_range_as_array(local_tm.get_tokens(local_tm.get_my_id()), [](const dht::token& i) {
            return fmt::to_string(i);
         }));
     });
