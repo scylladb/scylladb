@@ -28,6 +28,7 @@
 #include <seastar/core/metrics_api.hh>
 #include <seastar/core/file.hh>
 #include <seastar/core/seastar.hh>
+#include <seastar/core/sleep.hh>
 #include <seastar/util/noncopyable_function.hh>
 #include <seastar/util/closeable.hh>
 
@@ -3023,6 +3024,178 @@ SEASTAR_TEST_CASE(test_descriptor_roundtrip) {
     }
 
     return make_ready_future<>();
+}
+
+static future<rp_handle> add_small(commitlog& log, table_id id) {
+    sstring tmp = "hej bubba cow";
+    return log.add_mutation(id, tmp.size(), db::commitlog::force_sync::no, [tmp](db::commitlog::output& dst) {
+        dst.write(tmp.data(), tmp.size());
+    });
+}
+
+// min_gc_time must stay exact across new (segment, table) entries, segment deletion and the rp filter.
+SEASTAR_TEST_CASE(test_commitlog_min_gc_time) {
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 1;
+    return cl_test(cfg, [](commitlog& log) -> future<> {
+        auto a = make_table_id();
+        auto b = make_table_id();
+        constexpr auto none = gc_clock::time_point::max();
+
+        rp_set a1;
+        a1.put(co_await add_small(log, a));
+        auto seg1 = a1.usage().begin()->first;
+        auto t1 = log.min_gc_time(a);
+        BOOST_REQUIRE(t1 != none);
+        BOOST_REQUIRE_EQUAL(log.min_gc_time(b), none);
+
+        // gc_clock has second resolution.
+        co_await seastar::sleep(1100ms);
+        co_await log.force_new_active_segment();
+        rp_set a2, b2;
+        a2.put(co_await add_small(log, a));
+        b2.put(co_await add_small(log, b));
+        BOOST_REQUIRE_NE(a2.usage().begin()->first, seg1);
+        auto t2 = log.min_gc_time(b);
+        BOOST_REQUIRE(t2 > t1 && t2 != none);
+        BOOST_REQUIRE_EQUAL(log.min_gc_time(a), t1);
+        // Skipping seg1 leaves only a's seg2 entry.
+        auto ta2 = log.min_gc_time(a, replay_position(seg1, std::numeric_limits<position_type>::max()));
+        BOOST_REQUIRE(ta2 > t1 && ta2 != none);
+
+        // Clean data keeps its segment's min time while the segment lives.
+        log.discard_completed_segments(a, a2);
+        BOOST_REQUIRE_EQUAL(log.min_gc_time(a), t1);
+
+        co_await log.sync_all_segments();
+        log.discard_completed_segments(a, a1);
+        co_await log.wait_for_pending_deletes();
+        BOOST_REQUIRE_EQUAL(log.min_gc_time(a), ta2);
+        BOOST_REQUIRE_EQUAL(log.min_gc_time(b), t2);
+
+        log.discard_completed_segments(b, b2);
+    });
+}
+
+// A valid rp below every segment filters nothing and bypasses the cache.
+static gc_clock::time_point min_gc_time_scan(const commitlog& log, table_id id) {
+    return log.min_gc_time(id, replay_position(segment_id_type(1), position_type(1)));
+}
+
+SEASTAR_TEST_CASE(test_commitlog_min_gc_time_cache_updates) {
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 1;
+    return cl_test(cfg, [](commitlog& log) -> future<> {
+        auto a = make_table_id();
+        auto b = make_table_id();
+        auto c = make_table_id();
+        constexpr auto none = gc_clock::time_point::max();
+
+        // Segment 1 holds only b, segment 2 only a, segment 3 a and c.
+        rp_set b1, a2, a3, c3;
+        b1.put(co_await add_small(log, b));
+        auto tb = log.min_gc_time(b);
+        co_await seastar::sleep(1100ms);
+        co_await log.force_new_active_segment();
+        a2.put(co_await add_small(log, a));
+        auto t2 = log.min_gc_time(a);
+        BOOST_REQUIRE(t2 > tb && t2 != none);
+
+        // Discarding a to zero keeps its min time for a later write to the same segment.
+        co_await seastar::sleep(1100ms);
+        log.discard_completed_segments(a, std::exchange(a2, {}));
+        a2.put(co_await add_small(log, a));
+        BOOST_REQUIRE_EQUAL(log.min_gc_time(a), t2);
+        BOOST_REQUIRE_EQUAL(min_gc_time_scan(log, a), t2);
+
+        auto seg2 = a2.usage().begin()->first;
+        co_await log.force_new_active_segment();
+        a3.put(co_await add_small(log, a));
+        auto t3 = log.min_gc_time(a, replay_position(seg2, std::numeric_limits<position_type>::max()));
+        BOOST_REQUIRE(t3 > t2 && t3 != none);
+
+        // c is cached as absent, then its first write lands in the active segment.
+        BOOST_REQUIRE_EQUAL(log.min_gc_time(c), none);
+        c3.put(co_await add_small(log, c));
+        auto tc = log.min_gc_time(c);
+        BOOST_REQUIRE(tc != none);
+        BOOST_REQUIRE_EQUAL(tc, min_gc_time_scan(log, c));
+
+        // Freeing a's segment 2 recomputes a and leaves b and c alone.
+        co_await log.sync_all_segments();
+        BOOST_REQUIRE_EQUAL(log.min_gc_time(a), t2);
+        log.discard_completed_segments(a, a2);
+        co_await log.wait_for_pending_deletes();
+        BOOST_REQUIRE_EQUAL(log.min_gc_time(a), t3);
+        BOOST_REQUIRE_EQUAL(log.min_gc_time(b), tb);
+        BOOST_REQUIRE_EQUAL(log.min_gc_time(c), tc);
+
+        log.discard_completed_segments(a, a3);
+        log.discard_completed_segments(b, b1);
+        log.discard_completed_segments(c, c3);
+    });
+}
+
+// Orphaned segments must not keep their min time in the cache.
+SEASTAR_TEST_CASE(test_commitlog_min_gc_time_after_release) {
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 1;
+    return cl_test(cfg, [](commitlog& log) -> future<> {
+        auto a = make_table_id();
+        (co_await add_small(log, a)).release();
+        auto t1 = log.min_gc_time(a);
+        co_await log.sync_all_segments();
+        co_await log.release();
+        BOOST_REQUIRE_EQUAL(log.min_gc_time(a), gc_clock::time_point::max());
+
+        co_await seastar::sleep(1100ms);
+        rp_set a2;
+        a2.put(co_await add_small(log, a));
+        auto t2 = log.min_gc_time(a);
+        BOOST_REQUIRE(t2 > t1);
+        BOOST_REQUIRE_EQUAL(t2, min_gc_time_scan(log, a));
+        log.discard_completed_segments(a, a2);
+    });
+}
+
+// A failed oversized write drops the fresh segments it wrote to; their min time must go too.
+SEASTAR_TEST_CASE(test_commitlog_min_gc_time_oversized_rollback) {
+    commitlog::config cfg;
+    constexpr uint64_t max_size_mb = 2;
+    cfg.commitlog_segment_size_in_mb = max_size_mb;
+    cfg.commitlog_total_space_in_mb = 4 * max_size_mb * this_smp_shard_count();
+    cfg.allow_going_over_size_limit = false;
+    cfg.allow_fragmented_entries = true;
+    cfg.use_o_dsync = false;
+    return cl_test(cfg, [](commitlog& log) -> future<> {
+        auto hold = make_table_id();
+        auto a = make_table_id();
+        auto size = log.max_record_size();
+        auto write = [&log, &size](table_id id, db::timeout_clock::time_point timeout) {
+            return log.add_mutation(id, size, timeout, db::commitlog::force_sync::no, [&size](db::commitlog::output& dst) {
+                for (size_t i = 0; i < size; ++i) {
+                    dst.write("A", 1);
+                }
+            });
+        };
+        // Hold 3 of the 4 segments, so the oversized write can get only one fresh segment.
+        rp_set handles;
+        std::unordered_set<segment_id_type> segs;
+        while (segs.size() < 3) {
+            auto h = co_await write(hold, db::timeout_clock::time_point::max());
+            segs.emplace(h.rp().base_id());
+            handles.put(std::move(h));
+        }
+        co_await log.force_new_active_segment();
+
+        BOOST_REQUIRE_EQUAL(log.min_gc_time(a), gc_clock::time_point::max());
+        size = 2 * max_size_mb * 1024 * 1024;
+        BOOST_REQUIRE_THROW(co_await write(a, db::timeout_clock::now() + 2s), timed_out_error);
+        BOOST_REQUIRE_EQUAL(min_gc_time_scan(log, a), gc_clock::time_point::max());
+        BOOST_REQUIRE_EQUAL(log.min_gc_time(a), gc_clock::time_point::max());
+
+        log.discard_completed_segments(hold, handles);
+    });
 }
 
 BOOST_AUTO_TEST_SUITE_END()
