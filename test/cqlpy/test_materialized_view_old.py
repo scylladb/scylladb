@@ -2394,3 +2394,71 @@ def test_no_clustering_key_2(cql, test_keyspace):
             cql.execute(f"insert into {table} (a, b, c) values (1, 2, 3)")
             assert [(1, 2, 3)] == list(cql.execute(f"select * from {table}"))
             assert [(1, 2)] == list(cql.execute(f"select * from {mv} where a = 1 and b = 2"))
+
+# This test checks various cases where a base table row disappears - or does
+# not disappear - when its last column is deleted (with DELETE or by setting
+# it to null). We want to confirm that the view row disappears - or does not
+# disappear - accordingly. This reproduces
+# https://issues.apache.org/jira/browse/CASSANDRA-14393
+#
+# cassandra_bug: on Cassandra the third step below leaves the view empty while
+# the base table still holds the row - the view disagrees with its own base
+# table, which cannot be right. The reason is that this view selects neither a
+# nor b, and deciding whether the view row should live then means knowing
+# whether any unselected base column is still alive. Scylla tracks that with
+# "virtual columns", added for issue #3362 (see test_unselected_column above
+# and the test_3362_* tests below). Cassandra has no such thing, and adding it
+# is exactly what the still-open CASSANDRA-13826, "Specialize row structure to
+# support complex Materialized Views liveness", proposes.
+@pytest.mark.parametrize("flush", [False, True], ids=["noflush", "flush"])
+def test_partial_delete_unselected_column(cql, test_keyspace, flush, cassandra_bug):
+    no_cache = "with caching = {'enabled': 'false'}" if flush and is_scylla(cql) else ""
+    def maybe_flush():
+        if flush:
+            nodetool.flush_all(cql)
+    with new_test_table(cql, test_keyspace, 'p int, c int, a int, b int, primary key (p, c)',
+            extra=no_cache) as table:
+        with new_materialized_view(cql, table, 'p, c', 'p, c',
+                'p is not null and c is not null', extra=no_cache) as mv:
+            def check(expected):
+                assert expected == list(cql.execute(f"select * from {mv} where p = 1 and c = 1"))
+
+            cql.execute(f"update {table} using timestamp 10 set b = 1 where p = 1 and c = 1")
+            maybe_flush()
+            check([(1, 1)])
+
+            cql.execute(f"delete b from {table} using timestamp 11 where p = 1 and c = 1")
+            # Because above we used "update" to insert the b=1 cell, a so-called
+            # row-marker is not added, and when we delete this cell, all trace of
+            # this row disappears from the base table. Accordingly, it should
+            # disappear from the view as well:
+            maybe_flush()
+            check([])
+
+            cql.execute(f"update {table} using timestamp 1 set a = 1 where p = 1 and c = 1")
+            # Above we deleted only the "b" cell, not the entire row, so when we add
+            # "a" with an earlier timestamp, it is not shadowed by the deletion, and
+            # we have a row in the base table (and accordingly, in the view).
+            maybe_flush()
+            check([(1, 1)])
+
+            cql.execute(f"update {table} using timestamp 18 set a = 1 where p = 1 and c = 1")
+            maybe_flush()
+            check([(1, 1)])
+
+            # This tests the same thing as the "DELETE" test above (deleting the only
+            # cell causes no trace of the row to remain, and the row disappears from
+            # the view as well) - it's just that we delete the cell by setting it to
+            # "null" instead of using the "DELETE" command. See also
+            # https://issues.apache.org/jira/browse/CASSANDRA-11805.
+            cql.execute(f"update {table} using timestamp 20 set a = null where p = 1 and c = 1")
+            maybe_flush()
+            check([])
+
+            # We now insert a row to the base table. It's without values for the
+            # non-key columns, but the row nevertheless exists (this is implemented
+            # via a "row marker"). None of the updates we did above with higher
+            # timestamps delete this row - only its individual cells. So the row now
+            # exists in the base table, so should also exist in the view table.
+            cql.execute(f"insert into {table} (p, c) values (1, 1) using timestamp 15")
+            check([(1, 1)])
