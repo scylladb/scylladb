@@ -920,3 +920,20 @@ def test_create_with_select_restrictions(cql, test_keyspace):
                       'a = blobasint(intasblob(1)) and b = 1 and c = 1 and d = 1']:
             with new_materialized_view(cql, table, '*', pk, where):
                 pass
+
+# A view's WHERE clause may pin a base key column to a value given by a
+# function call or by a type cast, not just by a plain literal. Either way
+# the view holds exactly the base rows matching that value - and renaming the
+# column in the base table doesn't disturb it.
+@pytest.mark.parametrize("restriction", ['blobAsInt(intAsBlob(1))', '(int) 1'],
+                         ids=['function', 'type_cast'])
+def test_filter_with_function_or_type_cast(cql, test_keyspace, restriction):
+    with new_test_table(cql, test_keyspace, 'p int, c int, v int, primary key (p, c)') as table:
+        with new_materialized_view(cql, table, '*', 'p, c',
+                f'p = {restriction} and c is not null') as mv:
+            for p, c, v in [(0, 0, 0), (0, 1, 1), (1, 0, 2), (1, 1, 3)]:
+                cql.execute(f"insert into {table} (p, c, v) values ({p}, {c}, {v})")
+            assert [(1, 0, 2), (1, 1, 3)] == list(cql.execute(f"select p, c, v from {mv}"))
+
+            cql.execute(f"alter table {table} rename p to foo")
+            assert [(1, 0, 2), (1, 1, 3)] == list(cql.execute(f"select foo, c, v from {mv}"))
