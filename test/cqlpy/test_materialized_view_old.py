@@ -2751,11 +2751,8 @@ def test_unselected_column_can_preserve_ttld_row_maker(cql, test_keyspace, clock
 # whether the base row is alive, which depends on the liveness of columns the
 # view doesn't select - here v1 and v2.
 #
-# The C++ original continued with a few TTL steps, which need to make a TTL
-# expire instantly; those stayed behind in view_complex_test.cc, as
-# test_update_column_not_in_view_ttl.
 @pytest.mark.parametrize("flush", [False, True], ids=["noflush", "flush"])
-def test_update_column_not_in_view(cql, test_keyspace, flush):
+def test_update_column_not_in_view(cql, test_keyspace, flush, clock):
     no_cache = "with caching = {'enabled': 'false'}" if flush and is_scylla(cql) else ""
     def maybe_flush():
         if flush:
@@ -2794,6 +2791,23 @@ def test_update_column_not_in_view(cql, test_keyspace, flush):
             cql.execute(f"delete v2 from {table} using timestamp 4 where p = 0 and c = 0")
             maybe_flush()
             check([])
+
+            # The same again, but with v2 given a TTL instead of being deleted:
+            # when it expires the base row dies with it, and so does the view row.
+            cql.execute(f"update {table} using ttl {clock.ttl} set v2 = 1 where p = 0 and c = 0")
+            maybe_flush()
+            check([(0, 0)])
+
+            clock.jump(clock.ttl + 1)
+            check([])
+
+            cql.execute(f"update {table} set v2 = 1 where p = 0 and c = 0")
+            maybe_flush()
+            check([(0, 0)])
+
+            # The view needs to know whether v2 is alive, so v2 can't be dropped
+            with pytest.raises(InvalidRequest, match='Cannot drop column v2'):
+                cql.execute(f"alter table {table} drop v2")
 
 # Modifying a collection which the view doesn't select still decides whether
 # the base row - and so the view row - is alive, just as a plain column would.
