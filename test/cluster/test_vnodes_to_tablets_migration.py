@@ -205,6 +205,22 @@ async def verify_migration_status(manager: ScyllaClusterManager, server: ServerI
         assert status['status'] == expected_status, f"Expected migration status '{expected_status}', got '{status['status']}'"
         assert actual_node_statuses == expected_node_statuses, f"Expected node statuses {expected_node_statuses}, got {actual_node_statuses}"
 
+        # Every node must report its IP address alongside the host ID, so that
+        # `migrate-to-tablets upgrade/downgrade` can be driven off this output.
+        for n in status['nodes']:
+            assert n.get('endpoint'), f"Node {n['host_id']} reported no endpoint: {n}"
+        known_ips = {s.ip_addr for s in await manager.all_servers()}
+        reported_ips = {n['endpoint'] for n in status['nodes']}
+        assert reported_ips <= known_ips, f"Reported unknown endpoints {reported_ips - known_ips}, known: {known_ips}"
+        # Pin the host_id -> endpoint pairing on the node we queried, which is
+        # known to be running and whose address we already have.
+        if status['nodes']:
+            queried_host_id = await manager.get_host_id(server.server_id)
+            queried = [n for n in status['nodes'] if n['host_id'] == queried_host_id]
+            assert len(queried) == 1, f"Expected one entry for host {queried_host_id}, got {queried}"
+            assert queried[0]['endpoint'] == server.ip_addr, \
+                f"Expected endpoint {server.ip_addr} for host {queried_host_id}, got {queried[0]['endpoint']}"
+
         # Verify migration status via the tasks API
         tm = TaskManagerClient(manager.api)
         tasks = await tm.list_tasks(server.ip_addr, "vnodes_to_tablets_migration")

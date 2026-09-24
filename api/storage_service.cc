@@ -1790,6 +1790,7 @@ rest_get_vnode_tablet_migration(http_context& ctx, sharded<service::storage_serv
     for (const auto& node : status.nodes) {
         ss::vnode_tablet_migration_node_status n;
         n.host_id = fmt::to_string(node.host_id);
+        n.endpoint = node.endpoint;
         n.current_mode = node.current_mode;
         n.intended_mode = node.intended_mode;
         result.nodes.push(n);
