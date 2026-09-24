@@ -539,10 +539,12 @@ private:
     size_t max_request_controller_units() const;
     segment_id_type _ids = 0, _low_id = 0;
     // Ids of segments that left _segments while their file is still on disk under
-    // a replayable name. Erased in do_pending_deletes() once the file is gone, so
-    // a file kept for replay or one whose removal failed keeps its id for good.
-    // Unordered: the oldest id is searched for, never read off the front.
+    // a replayable name, erased once the file is gone. Unordered, so the oldest is
+    // searched for; a file kept for replay keeps its id for good.
     std::vector<segment_id_type> _pending_disposal;
+    // Ids whose file is unlinked but whose directory entry is not synced yet.
+    // Kept across passes so a later sync releases what an earlier one could not.
+    std::vector<segment_id_type> _unsynced_removals;
     std::vector<sseg_ptr> _segments;
     queue<sseg_ptr> _reserve_segments;
     queue<named_file> _recycled_segments;
@@ -1923,7 +1925,7 @@ future<> db::commitlog::segment_manager::oversized_allocation(entry_writer& writ
         // The sync above suspends, so a sweep may already have erased and
         // registered one of these. Reserve for the worst case here, where a
         // bad_alloc still propagates, so the loop cannot throw half way.
-        _pending_disposal.reserve(_pending_disposal.size() + maybe_clear.size());
+        _pending_disposal.reserve(_pending_disposal.size() + _segments.size() + maybe_clear.size());
         // reset file positions.
         for (auto [s, fp] : maybe_clear) {
             s->reset_file_position(fp);
@@ -2910,7 +2912,7 @@ struct fmt::formatter<file_to_dispose_t> {
 future<> db::commitlog::segment_manager::do_pending_deletes() {
     auto ftd = std::exchange(_files_to_dispose, {});
 
-    if (ftd.empty()) {
+    if (ftd.empty() && _unsynced_removals.empty()) {
         co_return;
     }
 
@@ -2922,7 +2924,9 @@ future<> db::commitlog::segment_manager::do_pending_deletes() {
     std::exception_ptr recycle_error;
     auto exts = cfg.extensions;
 
-    clogger.debug("Discarding segments {}", ftd);
+    if (!ftd.empty()) {
+        clogger.debug("Discarding segments {}", ftd);
+    }
 
     for (auto& [f, mode, id] : ftd) {
         // `f.remove_file()` resets known_size to 0, so remember the size here,
@@ -2974,8 +2978,11 @@ future<> db::commitlog::segment_manager::do_pending_deletes() {
             clogger.debug("Deleting segment file {}", f.name());
             // last resort.
             co_await f.remove_file();
-            if (id) {
-                std::erase(_pending_disposal, *id);
+            // seastar::remove_file() does not sync the directory, so the removal
+            // is not on disk yet. Registered ids only: a reserve segment carries
+            // an id that was never registered and needs no sync.
+            if (id && std::ranges::find(_pending_disposal, *id) != _pending_disposal.end()) {
+                _unsynced_removals.push_back(*id);
             }
         } catch (...) {
             clogger.error("Could not delete segment {}: {:t}", f.name(), std::current_exception());
@@ -2998,6 +3005,25 @@ future<> db::commitlog::segment_manager::do_pending_deletes() {
     if (recycle_error && _recycled_segments.empty()) {
         abort_recycled_list(recycle_error);
     }
+
+    // An unlink is only on disk once the directory entry is, so sync before
+    // letting min_position() advance past the files removed above. One sync per
+    // batch, not per file.
+    if (!_unsynced_removals.empty()) {
+        try {
+            co_await sync_directory(cfg.commit_log_location);
+            // One successful sync covers every unlink issued before it, including
+            // those a previous pass could not sync.
+            std::erase_if(_pending_disposal, [this] (segment_id_type id) {
+                return std::ranges::find(_unsynced_removals, id) != _unsynced_removals.end();
+            });
+            _unsynced_removals.clear();
+        } catch (...) {
+            // The ids stay, so min_position() holds, and the next pass retries.
+            clogger.error("Could not sync commitlog directory {}: {:t}", cfg.commit_log_location, std::current_exception());
+        }
+    }
+
     deleting_done.set_value();
 }
 
