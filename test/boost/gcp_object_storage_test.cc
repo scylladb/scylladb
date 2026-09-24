@@ -334,6 +334,40 @@ SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_download_source_short_range, local_gc
     }
 }
 
+// A reply carrying the whole object has to be refused before its body is read,
+// so the check has to be tested through what it prevents rather than through the
+// count that follows it. The object is one byte-range chunk plus a little, so the
+// first GET names a strict sub-range.
+SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_download_source_whole_object_reply, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    testlog.debug("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+    co_return;
+#endif
+    auto& c = client();
+    auto name = make_name();
+    constexpr size_t object_size = 8*1024*1024 + 1024;
+
+    objects_to_delete.emplace_back(name);
+    co_await create_object_of_size(c, bucket, name, object_size);
+
+    utils::get_local_injector().enable("gcp_source_whole_object_reply");
+    auto disable = seastar::defer([] () noexcept {
+        utils::get_local_injector().disable("gcp_source_whole_object_reply");
+    });
+    try {
+        auto is = seastar::input_stream<char>(c.create_download_source(bucket, name));
+        while (!(co_await is.read()).empty()) {
+        }
+        BOOST_ERROR("a whole-object reply to a sub-range should not have produced a complete stream");
+    } catch (const storage_io_error& e) {
+        // Check which error it is - a bare type check would also pass for a
+        // missing bucket or a refused credential, and would not distinguish this
+        // from the length check that runs after the body has been read.
+        BOOST_REQUIRE_EQUAL(e.code().value(), EIO);
+        BOOST_REQUIRE(std::string(e.what()).contains("answered the whole object"));
+    }
+}
+
 // A reply that carried the whole object instead of the range delivers the right
 // number of bytes from offset zero, so no byte count can tell it apart. Only
 // error injection can produce one -- fake-gcs answers the range it was asked for.
