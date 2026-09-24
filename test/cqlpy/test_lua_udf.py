@@ -245,3 +245,31 @@ def test_lua_int_return(cql, test_keyspace, scylla_only):
             call_lua(cql, test_keyspace, table, sig, "return false")
         with pytest.raises(InvalidRequest, match="value is not a number"):
             call_lua(cql, test_keyspace, table, sig, 'return ""')
+
+def test_lua_date_return(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val int") as table:
+        cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 3)")
+        sig = "(val int) CALLED ON NULL INPUT RETURNS date"
+        # A date is represented as the number of days since the epoch
+        # plus 2^31, so an integer 3 is a date long before the epoch.
+        assert call_lua(cql, test_keyspace, table, sig, "return val") == [Date(3 - 2**31)]
+        assert call_lua(cql, test_keyspace, table, sig, 'return "2019-10-01"') == [Date("2019-10-01")]
+        with pytest.raises(InvalidRequest, match="date value must fit in 32 bits"):
+            call_lua(cql, test_keyspace, table, sig, "return 4294967296")
+        assert call_lua(cql, test_keyspace, table, sig, "return {year = 2019, month = 10, day = 1}") == [Date("2019-10-01")]
+        with pytest.raises(InvalidRequest, match="year is too large: '2147483648'"):
+            call_lua(cql, test_keyspace, table, sig, "return {year = 2147483648, month = 10, day = 1}")
+        with pytest.raises(InvalidRequest, match="month is too large: '256'"):
+            call_lua(cql, test_keyspace, table, sig, "return {year = 2019, month = 256, day = 1}")
+        with pytest.raises(InvalidRequest, match="day is too large: '256'"):
+            call_lua(cql, test_keyspace, table, sig, "return {year = 2019, month = 10, day = 256}")
+        with pytest.raises(InvalidRequest, match="invalid date table field: 'abc'"):
+            call_lua(cql, test_keyspace, table, sig, "return {year = 2019, month = 10, day = 1, abc = 42}")
+        with pytest.raises(InvalidRequest, match="date table must have year, month and day"):
+            call_lua(cql, test_keyspace, table, sig, "return {year = 2019, month = 10}")
+        with pytest.raises(InvalidRequest, match="date value must fit in 32 bits"):
+            call_lua(cql, test_keyspace, table, sig, "return {year = 2147483647, month = 10, day = 1}")
+        with pytest.raises(InvalidRequest, match="date must be a string, integer or date table"):
+            call_lua(cql, test_keyspace, table, sig, "return 42.2")
+        with pytest.raises(InvalidRequest, match="date type has no hour, minute or second"):
+            call_lua(cql, test_keyspace, table, sig, "return {year = 2019, month = 10, day = 1, hour = 4}")
