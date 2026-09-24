@@ -3214,6 +3214,37 @@ def test_shadowing_row_marker(cql, test_keyspace, clock):
             clock.jump(clock.ttl + 1)
             check([])
 
+# The whole base row is written with a TTL, and then an unselected column is
+# written with a much longer one and deleted again. When the first TTL
+# expires, nothing is left alive, and the longer-lived write which came in
+# between must not shadow the row marker's own expiry and keep the view row.
+#
+# cassandra_bug: this is exactly what Cassandra gets wrong - it keeps the view
+# row, with v1 null, after the row marker has expired. It is the same area as
+# the other #3362 tests here: Cassandra doesn't track the liveness of the
+# unselected column v2 separately from the row marker, so the write to v2
+# shadows the marker's expiry. See the still-open CASSANDRA-13826.
+@pytest.mark.parametrize("flush", [False, True], ids=["noflush", "flush"])
+def test_marker_timestamp_is_not_shadowed_by_previous_update(cql, test_keyspace, flush, clock, cassandra_bug):
+    no_cache = "with caching = {'enabled': 'false'}" if flush and is_scylla(cql) else ""
+    def maybe_flush():
+        if flush:
+            nodetool.flush_all(cql)
+    with new_test_table(cql, test_keyspace, 'p int, c int, v1 int, v2 int, primary key (p, c)',
+            extra=no_cache) as table:
+        with new_materialized_view(cql, table, 'p, c, v1', 'c, p',
+                'p is not null and c is not null', extra=no_cache) as mv:
+            cql.execute(f"insert into {table} (p, c, v1, v2) values (1, 1, 1, 1) using ttl {clock.ttl}")
+            maybe_flush()
+            # 1000 is kept as the original had it - the test never jumps that
+            # far, so it costs nothing even where the fixture really sleeps.
+            cql.execute(f"update {table} using ttl 1000 set v2 = 1 where p = 1 and c = 1")
+            maybe_flush()
+            cql.execute(f"delete v2 from {table} where p = 1 and c = 1")
+            maybe_flush()
+            clock.jump(clock.ttl + 1)
+            assert [] == list(cql.execute(f"select * from {mv}"))
+
 # A reproducer for issue #3362, not involving TTLs.
 # The test involves a view that selects no column except the base's primary
 # key, so view rows contain no cells besides a row marker, so as a base

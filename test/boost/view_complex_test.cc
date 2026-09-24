@@ -25,44 +25,6 @@ BOOST_AUTO_TEST_SUITE(view_complex_test)
 
 using namespace std::literals::chrono_literals;
 
-// Not moved to Python in issue #16134: the test is five statements and a
-// forward_jump_clocks() to expire the TTL they set, which cqlpy has no
-// equivalent of, so there is nothing here to move without it.
-void test_marker_timestamp_is_not_shadowed_by_previous_update(cql_test_env& e, std::function<void()>&& maybe_flush) {
-    e.execute_cql("create table cf (p int, c int, v1 int, v2 int, primary key (p, c))").get();
-    e.execute_cql("create materialized view vcf as select p, c, v1 from cf "
-                  "where p is not null and c is not null "
-                  "primary key (c, p)").get();
-
-    e.execute_cql("insert into cf (p, c, v1, v2) VALUES(1, 1, 1, 1) using ttl 100").get();
-    maybe_flush();
-    e.execute_cql("update cf using ttl 1000 set v2 = 1 where p = 1 and c = 1").get();
-    maybe_flush();
-    e.execute_cql("delete v2 from cf where p = 1 and c = 1").get();
-    maybe_flush();
-    forward_jump_clocks(101s);
-    eventually([&] {
-        auto msg = e.execute_cql("select * from vcf").get();
-        assert_that(msg).is_rows().is_empty();
-    });
-}
-
-SEASTAR_TEST_CASE(test_marker_timestamp_is_not_shadowed_by_previous_update_without_flush) {
-    return do_with_cql_env_thread([] (auto& e) {
-        test_marker_timestamp_is_not_shadowed_by_previous_update(e, [] { });
-    });
-}
-
-SEASTAR_TEST_CASE(test_marker_timestamp_is_not_shadowed_by_previous_updatewith_flush) {
-    auto cfg = make_shared<db::config>();
-    cfg->enable_cache(false);
-    return do_with_cql_env_thread([] (auto& e) {
-        test_marker_timestamp_is_not_shadowed_by_previous_update(e, [&] {
-            e.local_db().flush_all_memtables().get();
-        });
-    }, cfg);
-}
-
 // This is another reproducer for issue #3362, using TTLs instead of
 // numerous back-and-forth additions and deletions.
 //
