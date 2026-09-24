@@ -77,3 +77,13 @@ def test_access_and_schema(cql, test_keyspace):
             assert [('bar',)] == list(cql.execute(f"select foo from {mv}"))
             cql.execute(f"alter table {table} rename c to bar")
             assert [('foo',)] == list(cql.execute(f"select bar from {mv}"))
+
+# A base-table column which the view doesn't select can be dropped from the
+# base table, and the view continues to work normally.
+def test_column_dropped_from_base(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int, c ascii, a int, v int, primary key (p, c)') as table:
+        with new_materialized_view(cql, table, 'p, c, v', 'v, p, c',
+                'v is not null and p is not null and c is not null') as mv:
+            cql.execute(f"alter table {table} drop a")
+            cql.execute(f"insert into {table} (p, c, v) values (0, 'foo', 1)")
+            assert [(1,)] == list(cql.execute(f"select v from {mv}"))
