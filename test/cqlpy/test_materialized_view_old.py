@@ -32,6 +32,7 @@
 import contextlib
 import datetime
 import pytest
+import time
 from decimal import Decimal
 from uuid import UUID
 from cassandra.protocol import ConfigurationException, InvalidRequest
@@ -1079,3 +1080,81 @@ def test_non_primary_key_restrictions(cql, test_keyspace, scylla_only):
             # the view filter c=1, and cause two view rows to also be deleted.
             cql.execute(f"delete from {table} where a = 0")
             check([(1, 0, 1, 0)])
+
+# This is an test of a view filtered by a non-key column (a column which is
+# neither in the base's primary key, nor the view primary key).
+# The unique difficulty with filtering by a non-key column is that the value
+# of such column can be *updated* - and also be expired with TTL - so the
+# question of whether a base row matches or doesn't match the filter can
+# change. That means we may need to remove and re-insert the same view row
+# when one of the columns is modified back and forth.
+# The following two tests, test_non_primary_key_restrictions_update()
+# and test_non_primary_key_restrictions_ttl(), reproduce issue #3430 in two
+# ways, and still don't work today, so they are marked xfail. Until #3430 is
+# fixed they fail already on the CREATE MATERIALIZED VIEW, which this first
+# test checks is refused.
+def test_non_primary_key_restrictions_forbidden(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'a int, b int, c int, primary key (a)') as table:
+        with pytest.raises(InvalidRequest, match='Non-primary key columns'):
+            with new_materialized_view(cql, table, '*', 'a, b',
+                    'a is not null and b is not null and c = 1'):
+                pass
+
+@pytest.mark.xfail(reason="issue #3430")
+def test_non_primary_key_restrictions_update(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'a int, b int, c int, primary key (a)') as table:
+        with new_materialized_view(cql, table, '*', 'a, b',
+                'a is not null and b is not null and c = 1') as mv:
+            # Insert a base row with c=0, which does not match the filter c=1.
+            # The view will have no rows. Then change c from 0 to 1 and see the
+            # row appear in the view, change it back to 0 and see it disappear,
+            # and change it back to 1 to see it reappear.
+            # We have a bug with the last re-appearance (the tombstone continues
+            # to shadow the view row we wanted to re-add).
+            cql.execute(f"insert into {table} (a, b, c) values (1, 11, 0)")
+            assert [] == list(cql.execute(f"select a, b, c from {mv}"))
+            cql.execute(f"update {table} set c = 1 where a = 1")
+            assert [(1, 11, 1)] == list(cql.execute(f"select a, b, c from {mv}"))
+            cql.execute(f"update {table} set c = 0 where a = 1")
+            assert [] == list(cql.execute(f"select a, b, c from {mv}"))
+            # The bug is here - when we set c = 1 again, we expect to see the
+            # view row re-added. And it isn't.
+            cql.execute(f"update {table} set c = 1 where a = 1")
+            assert [(1, 11, 1)] == list(cql.execute(f"select a, b, c from {mv}"))
+    # TODO: when the above tests works, write a similar one just with multiple
+    # columns in the in the filter (e.g., c = 1 and d = 1). These columns could
+    # be modified with different timestamps, we need to make sure the row
+    # deletions and insertions are also timestamped properly.
+
+# This is another reproducer for #3430. While in the above test we updated
+# column "c" to remove make it match and un-match the filter, here we use
+# a TTL to expire c, and have it un-match the filter.
+@pytest.mark.xfail(reason="issue #3430")
+def test_non_primary_key_restrictions_ttl(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'a int, b int, c int, primary key (a)') as table:
+        with new_materialized_view(cql, table, '*', 'a, b',
+                'a is not null and b is not null and c = 1') as mv:
+            # Insert a base row without c, and set c=1 (matching the filter)
+            # with a TTL. The view will then have a row, but it should disappear
+            # when the TTL expires.
+            # We later re-add c=1, and expect to see the view row appear again.
+            cql.execute(f"insert into {table} (a, b, c) values (1, 11, 0)")
+            assert [] == list(cql.execute(f"select a, b, c from {mv}"))
+            # A TTL is counted in whole seconds, from the start of the second
+            # in which the write happened - so a "ttl 1" written late in a
+            # second expires almost at once. Wait for the start of the next
+            # second, so that the row below is sure to still be alive when we
+            # read it, and only expires during the sleep further down.
+            t = time.time()
+            time.sleep(1 - (t - int(t)))
+            cql.execute(f"update {table} using ttl 1 set c = 1 where a = 1")
+            assert [(1, 11, 1)] == list(cql.execute(f"select a, b, c from {mv}"))
+            # The bug was here: When c expires, we expect to see the view row
+            # expire. Instead, the view row remained, and just its c column
+            # expired.
+            time.sleep(1.2)
+            assert [] == list(cql.execute(f"select a, b, c from {mv}"))
+            # After the above passes, we also expect to be able to bring the
+            # view row back to life by setting c = 1.
+            cql.execute(f"update {table} set c = 1 where a = 1")
+            assert [(1, 11, 1)] == list(cql.execute(f"select a, b, c from {mv}"))
