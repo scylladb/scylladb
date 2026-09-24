@@ -866,3 +866,22 @@ def test_null_in_clustering_columns(cql, test_keyspace):
 
             cql.execute(f"update {table} set v2 = 9 where p = 0 and c = 1")
             assert [] == list(cql.execute(f"select p, c, v1, v2 from {mv}"))
+
+# A materialized view may not have a default_time_to_live of its own - not
+# when it is created, and not later with ALTER - because a view row always
+# expires together with the base row it came from.
+def test_create_and_alter_mv_with_ttl(cql, test_keyspace):
+    # Scylla and Cassandra word this differently, and Cassandra words the
+    # CREATE and ALTER cases differently from each other, so match loosely.
+    ttl_error = 'default_time_to_live.*for a materialized view'
+    with new_test_table(cql, test_keyspace, 'p int primary key, v int',
+            extra='with default_time_to_live = 60') as table:
+        with pytest.raises(InvalidRequest, match=ttl_error):
+            with new_materialized_view(cql, table, '*', 'v, p',
+                    'p is not null and v is not null',
+                    extra='with default_time_to_live = 30'):
+                pass
+        with new_materialized_view(cql, table, '*', 'v, p',
+                'p is not null and v is not null') as mv:
+            with pytest.raises(InvalidRequest, match=ttl_error):
+                cql.execute(f"alter materialized view {mv} with default_time_to_live = 30")

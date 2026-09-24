@@ -87,20 +87,6 @@ SEASTAR_TEST_CASE(test_ttl) {
     });
 }
 
-SEASTAR_TEST_CASE(test_create_and_alter_mv_with_ttl) {
-    return do_with_cql_env_thread([] (auto& e) {
-        e.execute_cql("create table cf (p int primary key, v int) with default_time_to_live = 60").get();
-        assert_that_failed(
-                e.execute_cql("create materialized view mv as select * from cf "
-                              "where p is not null and v is not null "
-                              "primary key (v, p) with default_time_to_live = 30"));
-        e.execute_cql("create materialized view vcf as select * from cf "
-                      "where p is not null and v is not null "
-                      "primary key (v, p)").get();
-        assert_that_failed(e.execute_cql("alter materialized view mv with default_time_to_live = 30"));
-    });
-}
-
 SEASTAR_TEST_CASE(test_create_with_select_restrictions) {
     return do_with_cql_env_thread([] (auto& e) {
         e.execute_cql("create table cf (a int, b int, c int, d int, e int, primary key ((a, b), c, d))").get();
