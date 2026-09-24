@@ -56,6 +56,25 @@ class SystemResourceMetric:
 
 
 @define
+class ResourceUtilization:
+    host_id: str
+    architecture: str
+    mode: str
+    samples: int
+    cpu_avg: float
+    cpu_median: float
+    cpu_p95: float
+    cpu_p99: float
+    cpu_score: float
+    memory_avg: float
+    memory_median: float
+    memory_p95: float
+    memory_p99: float
+    memory_score: float
+    timestamp: datetime
+
+
+@define
 class Test:
     host_id: str
     architecture: str

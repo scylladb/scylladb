@@ -11,13 +11,16 @@ import logging
 import os
 import platform
 import shlex
+import sqlite3
 import subprocess
 import time
 from abc import ABC
 from concurrent.futures.thread import ThreadPoolExecutor
+from contextlib import closing
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
+from statistics import fmean, median, quantiles
 from time import sleep
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
@@ -27,12 +30,13 @@ import psutil
 from threading import Event
 from test import HOST_ID, TOP_SRC_DIR
 from test.pylib.internal_types import SeastarIOMetricName
-from test.pylib.db.model import HostInfo, Metric, SystemResourceMetric, CgroupMetric, Test
+from test.pylib.db.model import HostInfo, Metric, ResourceUtilization, SystemResourceMetric, CgroupMetric, Test
 from test.pylib.db.writer import (
     CGROUP_MEMORY_METRICS_TABLE,
     DEFAULT_DB_NAME,
     HOST_INFO_TABLE,
     METRICS_TABLE,
+    RESOURCE_UTILIZATION_TABLE,
     SYSTEM_RESOURCE_METRICS_TABLE,
     TESTS_TABLE,
     SQLiteWriter,
@@ -435,3 +439,96 @@ class SystemResourceMonitor:
                 sqlite_writer.write_row(timeline_record, SYSTEM_RESOURCE_METRICS_TABLE)
         finally:
             sqlite_writer.close()
+
+
+# The utilization a test run is meant to hold the machine at: below it the builder idles
+# and the run takes longer than it has to, above it the tests contend for the machine and
+# begin to time out. The score is the percentage of the run that was spent inside it.
+SCORE_BAND = (80.0, 90.0)
+
+
+def _summary(values: list[float]) -> tuple[float, float, float, float, float]:
+    """Return the average, the median, the p95, the p99 and the score of the samples."""
+    low, high = SCORE_BAND
+    score = sum(low <= value <= high for value in values) * 100 / len(values)
+    if len(values) == 1:
+        p95 = p99 = values[0]
+    else:
+        percentiles = quantiles(values, n=100, method='inclusive')
+        p95, p99 = percentiles[94], percentiles[98]
+    return fmean(values), median(values), p95, p99, score
+
+
+def summarize_resource_utilization(temp_dir: Path) -> ResourceUtilization | None:
+    """Aggregate the run's host-wide CPU/memory samples into a single final record.
+
+    Writes the record to the metrics database and returns it, or None when there is
+    nothing to summarize: a session that ran no test, one too short to be sampled, or
+    a database that was never created.
+    """
+    db_path = temp_dir / DEFAULT_DB_NAME
+    if not db_path.exists():
+        return None
+
+    # The database is this host's own - it is named after its id - so nothing below
+    # filters by host: every row in it was written by this run, on this machine.
+    with closing(sqlite3.connect(db_path)) as connection:
+        host_info = connection.execute(f'SELECT ram_bytes FROM {HOST_INFO_TABLE}').fetchone()
+
+        # Only what was sampled while tests were running counts: the sampler also covers
+        # the build mode preparation before the first test and the cleanup after the last
+        # one, and those idle stretches drag every figure of the run towards zero.
+        first_test, last_test = connection.execute(
+            f'SELECT min(time_start), max(time_end) FROM {METRICS_TABLE}').fetchone()
+        samples = connection.execute(
+            f'SELECT cpu, memory_available FROM {SYSTEM_RESOURCE_METRICS_TABLE} '
+            f'WHERE timestamp BETWEEN ? AND ?',
+            (first_test, last_test)).fetchall() if first_test and last_test else []
+        if not samples and first_test and last_test:
+            # A run so short that no sample fell between its first and its last test:
+            # summarize what there is rather than nothing. A session that ran no test at
+            # all has no window, and gets no record - its samples describe an idle
+            # machine, not a test run.
+            samples = connection.execute(
+                f'SELECT cpu, memory_available FROM {SYSTEM_RESOURCE_METRICS_TABLE}').fetchall()
+
+        # The samples are host-wide, so all modes of the run share one record. On CI a
+        # run covers a single mode (one database per architecture and mode), which is
+        # what makes the figures per-mode there; a local multi-mode run gets them joined.
+        # ponytail: comma-joined modes. Splitting them needs every sample attributed to
+        # the tests running at its timestamp - an indexed join, if it is ever asked for.
+        modes = [row[0] for row in connection.execute(
+            f'SELECT DISTINCT mode FROM {TESTS_TABLE} ORDER BY mode')]
+
+    if not samples or host_info is None:
+        return None
+    ram_bytes = host_info[0]
+
+    cpu_avg, cpu_median, cpu_p95, cpu_p99, cpu_score = _summary([row[0] for row in samples])
+    memory_avg, memory_median, memory_p95, memory_p99, memory_score = _summary(
+        [(ram_bytes - row[1]) * 100 / ram_bytes for row in samples])
+
+    record = ResourceUtilization(
+        host_id=HOST_ID,
+        architecture=platform.machine(),
+        mode=','.join(modes),
+        samples=len(samples),
+        cpu_avg=cpu_avg,
+        cpu_median=cpu_median,
+        cpu_p95=cpu_p95,
+        cpu_p99=cpu_p99,
+        cpu_score=cpu_score,
+        memory_avg=memory_avg,
+        memory_median=memory_median,
+        memory_p95=memory_p95,
+        memory_p99=memory_p99,
+        memory_score=memory_score,
+        timestamp=datetime.now(),
+    )
+
+    sqlite_writer = SQLiteWriter(db_path)
+    try:
+        sqlite_writer.write_row(record, RESOURCE_UTILIZATION_TABLE)
+    finally:
+        sqlite_writer.close()
+    return record

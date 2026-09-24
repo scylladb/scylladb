@@ -337,8 +337,8 @@ destroyed when it ends, so tests never share or reuse a cluster.
 
 ## Test metrics
 
-The parameter `--gather-metrics` is used to gather CPU/RAM usage during tests from the cgroup, system overall CPU/RAM
-usage, and the amount of IO the tested Scylla servers issued.
+The parameter `--gather-metrics` is used to gather CPU/RAM usage during tests from the cgroup and the amount of IO the
+tested Scylla servers issued.
 For that, SQLite database is used to store the metrics in `testlog/sqlite_{HOST_ID}.db`.
 `HOST_ID` is taken from `$SCYLLA_TEST_HOST_ID`, or derived from the hostname and the current time when that is unset, so
 every `test.py` invocation writes its own database file.
@@ -353,15 +353,27 @@ The database is created in the `testlog` directory and contains the following ta
 - `system_resource_metrics` - contains system CPU utilization in percent and memory figures in bytes, sampled during the
   whole run
 - `cgroup_memory_metrics` - contains cgroup memory usage in bytes during the test run
+- `resource_utilization` - contains one final record per run with the average, the median, the p95, the p99 and the
+  score of the system CPU and memory utilization, for the run's architecture and mode. The score is the percentage of
+  the run spent between 80% and 90% utilization, the band a test run should hold the machine at. Only what was sampled
+  between the start of the first test and the end of the last one is summarized, so the preparation and the cleanup
+  around the tests do not drag the figures down; a run too short for a sample to fall in that interval is summarized
+  from everything it sampled instead, and a session that ran no test at all gets no record
 
 `host_info`, `tests` and the timing/outcome columns of `test_metrics` are written even with `--no-gather-metrics`, so
-every test is recorded; the flag only controls the cgroup, system and Scylla IO measurements.
+every test is recorded; the flag only controls the cgroup and Scylla IO measurements. `system_resource_metrics`, and the
+`resource_utilization` summary derived from it, are written either way as well: they come from `psutil` and need no
+cgroup access.
 
 The `seastar_*` columns are the reactor's AIO counters (`scylla_reactor_aio_{reads,writes}` and
 `scylla_reactor_aio_bytes_{read,write}`), summed over every shard of every server still running at the end of the test.
 They count the IO Scylla submitted to its IO queue, which is what has to be measured here: tests run with
 `--kernel-page-cache 1 --unsafe-bypass-fsync 1`, so most of that IO never reaches a disk and does not show up in the
 kernel's own counters. Only tests using the `manager` fixture (`test/cluster`) have them; elsewhere they are NULL.
+
+`test.py` itself reports nowhere: the summary stays in the database, which is part of the test artifacts a build keeps.
+CI collects the row from there, together with the test results it already publishes, and stores it with the identity of
+the build that produced it, so that the utilization of a build can be compared with the builds before it.
 
 ## Automation, CI, and Jenkins
 
