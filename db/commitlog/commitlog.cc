@@ -505,6 +505,13 @@ public:
     future<std::vector<sstring>> get_segments_to_replay() const;
 
     gc_clock::time_point min_gc_time(const cf_id_type&, const db::replay_position&) const;
+    void update_min_gc_time(const cf_id_type& id, gc_clock::time_point t) noexcept {
+        if (auto i = _min_gc_time_cache.find(id); i != _min_gc_time_cache.end()) {
+            i->second = std::min(i->second, t);
+        }
+    }
+    // Only ids whose cached minimum came from s can change once s is gone.
+    void forget_min_gc_time(segment& s) noexcept;
 
     flush_handler_id add_flush_handler(flush_handler h) {
         auto id = ++_flush_ids;
@@ -534,6 +541,8 @@ private:
     size_t max_request_controller_units() const;
     segment_id_type _ids = 0, _low_id = 0;
     std::vector<sseg_ptr> _segments;
+    // min_gc_time(id) over all _segments; invalidated whenever a segment leaves _segments.
+    mutable std::unordered_map<cf_id_type, gc_clock::time_point> _min_gc_time_cache;
     queue<sseg_ptr> _reserve_segments;
     queue<named_file> _recycled_segments;
     std::unordered_map<flush_handler_id, flush_handler> _flush_handlers;
@@ -781,6 +790,8 @@ class db::commitlog::segment : public enable_shared_from_this<segment>, public c
     size_t _buffer_ostream_size = 0;
     std::unordered_map<cf_id_type, uint64_t> _cf_dirty;
     std::unordered_map<cf_id_type, gc_clock::time_point> _cf_min_time;
+    // Set once this segment leaves the segment_manager's _segments.
+    bool _left_segments = false;
     std::unordered_multimap<replay_position, rp_handle> _extended_segments;
     time_point _sync_time;
     utils::flush_queue<replay_position, std::less<replay_position>, clock_type> _pending_ops;
@@ -909,6 +920,10 @@ public:
         auto [it, inserted] = _cf_min_time.emplace(cf, time);
         if (!inserted) {
             it->second = std::min(it->second, time);
+        }
+        // The cache covers _segments only; a segment that left must not lower it.
+        if (!_left_segments) {
+            _segment_manager->update_min_gc_time(cf, it->second);
         }
         ++_cf_dirty[cf];
     }
@@ -1963,6 +1978,7 @@ future<> db::commitlog::segment_manager::oversized_allocation(entry_writer& writ
             if (fp == 0) {
                 s->mark_clean();
                 _segments.erase(std::remove(_segments.begin(), _segments.end(), s), _segments.end());
+                forget_min_gc_time(*s);
             }
         }
     }
@@ -2143,15 +2159,49 @@ future<std::vector<sstring>> db::commitlog::segment_manager::get_segments_to_rep
     co_return segments_to_replay;
 }
 
-gc_clock::time_point db::commitlog::segment_manager::min_gc_time(const cf_id_type& id, const db::replay_position& rp) const {
-    auto res = gc_clock::time_point::max();
-    for (auto& s : _segments) {
-        if (rp.valid() && replay_position(s->_desc.id, s->position()) <= rp) {
-            continue;
+void db::commitlog::segment_manager::forget_min_gc_time(segment& s) noexcept {
+    s._left_segments = true;
+    for (auto& [id, t] : s._cf_min_time) {
+        if (auto i = _min_gc_time_cache.find(id); i != _min_gc_time_cache.end() && i->second == t) {
+            _min_gc_time_cache.erase(i);
         }
-        res = std::min(res, s->min_time(id));
     }
-    return res;
+}
+
+gc_clock::time_point db::commitlog::segment_manager::min_gc_time(const cf_id_type& id, const db::replay_position& rp) const {
+    auto scan = [&] {
+        auto res = gc_clock::time_point::max();
+        for (auto& s : _segments) {
+            if (rp.valid() && replay_position(s->_desc.id, s->position()) <= rp) {
+                continue;
+            }
+            res = std::min(res, s->min_time(id));
+        }
+        return res;
+    };
+    // An rp below every segment filters nothing, so the cached answer holds.
+    if (rp.valid() && !(rp < min_position())) {
+        return scan();
+    }
+    decltype(_min_gc_time_cache)::iterator i;
+    bool inserted;
+    try {
+        std::tie(i, inserted) = _min_gc_time_cache.try_emplace(id);
+    } catch (...) {
+        // Caching is best effort; callers are noexcept.
+        return scan();
+    }
+    if (inserted) {
+        i->second = scan();
+    }
+#ifdef SEASTAR_DEBUG
+    // Catches a segment removal that does not invalidate the cache.
+    if (auto t = scan(); i->second != t) {
+        on_internal_error_noexcept(clogger, format("min_gc_time({}): cached {} != scanned {}", id, i->second.time_since_epoch().count(), t.time_since_epoch().count()));
+        i->second = t;
+    }
+#endif
+    return i->second;
 }
 
 future<> db::commitlog::segment_manager::init() {
@@ -2711,9 +2761,10 @@ void db::commitlog::segment_manager::discard_unused_segments() noexcept {
     // #25709 ensure we don't free any segment until after prune.
     {
         auto tmp = _segments; 
-        std::erase_if(_segments, [=](sseg_ptr s) {
+        auto freed = std::erase_if(_segments, [this](sseg_ptr s) {
             if (s->can_delete()) {
                 clogger.debug("Segment {} is unused", *s);
+                forget_min_gc_time(*s);
                 return true;
             }
             if (s->is_still_allocating()) {
@@ -2725,6 +2776,10 @@ void db::commitlog::segment_manager::discard_unused_segments() noexcept {
             }
             return false;
         });
+        if (freed) {
+            // Ids in no segment (e.g. dropped tables) are never forgotten by a segment; prune them here.
+            std::erase_if(_min_gc_time_cache, [](const auto& e) { return e.second == gc_clock::time_point::max(); });
+        }
     }
 
     // launch in background, but guard with gate so this deletion is
@@ -3018,6 +3073,10 @@ future<> db::commitlog::segment_manager::orphan_all() {
     // might cause a call into discard_unused_segments.
     // ensure the target vector is empty when we get to destructors
     auto tmp = std::exchange(_segments, {});
+    for (auto& s : tmp) {
+        s->_left_segments = true;
+    }
+    _min_gc_time_cache.clear();
     return clear_reserve_segments();
 }
 
