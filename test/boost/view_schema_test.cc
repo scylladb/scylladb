@@ -131,20 +131,6 @@ SEASTAR_TEST_CASE(test_non_primary_key_restrictions_ttl_vk) {
     });
 }
 
-// Test that it is forbidden to add more than one new column to the
-// view's primary key beyond what was in the base's primary key.
-SEASTAR_TEST_CASE(test_only_one_allowed) {
-    return do_with_cql_env_thread([] (auto& e) {
-        e.execute_cql("create table cf (p int PRIMARY KEY, v int, w int)").get();
-        try {
-            e.execute_cql("create materialized view vcf as select * from cf "
-                          "where v is not null and w is not null "
-                          "primary key (v, w, p)").get();
-            BOOST_ASSERT(false);
-        } catch (exceptions::invalid_request_exception&) { }
-    });
-}
-
 // Test that a view cannot be created without its primary key containing all
 // columns of the base's primary key. This reproduces issue #2720.
 SEASTAR_TEST_CASE(test_view_key_must_include_base_key) {

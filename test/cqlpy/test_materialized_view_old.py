@@ -1473,3 +1473,13 @@ def test_is_not_null(cql, test_keyspace):
     # FIXME: we should also test that beyond "IS NOT NULL" being
     # verified on view creation, it also does its job when adding
     # rows - that those with NULL values are properly ignored.
+
+# Test that it is forbidden to add more than one new column to the
+# view's primary key beyond what was in the base's primary key.
+def test_only_one_allowed(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY, v int, w int') as table:
+        with pytest.raises(InvalidRequest, match='Cannot include more than one non-primary key column'):
+            with new_materialized_view(cql, table, '*', 'v, w, p',
+                    'v is not null and w is not null'):
+                pass
+
