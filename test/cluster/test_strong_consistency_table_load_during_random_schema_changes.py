@@ -8,74 +8,61 @@
 Stress test: randomized schema changes concurrent with SC (strongly-consistent)
 table read/write workload, with linearizability checking via Porcupine.
 
-The test performs a mix of reads and writes on a single SC table while a
-background task applies randomized schema changes to it.  Every read and write
-is recorded as a call/return pair and the whole history is handed to Porcupine,
-which checks it against a single-register-per-key model:
+The test performs a mix of reads and writes on a single SC table, while a
+background task performs randomized schema changes.  The cluster/keyspace setup
+and the register workload itself (writers, readers, history recording, the
+Porcupine run) come from ``test.cluster.strong_consistency``; this module
+only defines the schema changer and the assertions specific to it.
+
+The only failures tolerated here are the ones a DROP+RECREATE can cause, which
+is the default exception policy.  A test that also kills nodes or moves tablets
+must widen that explicitly (see ``outcomes.tolerate_timeouts``).
 
   - DROP+RECREATE is modeled as a synthetic write(0) per key in the
     Porcupine history, eliminating the need for generation tracking.
     The entire operation history is checked in a single Porcupine pass.
   - Empty SELECT results are treated as read(0) (the register's default),
     which is correct both for the initial empty table and after a recreate.
+    The table is left empty on purpose, so that a reader takes the same path
+    from the first second of the run as it does after every DROP+RECREATE.
   - InvalidRequest from read/write is classified using actual overlap with the
     DROP+CREATE recreate window, but ONLY for table-absence errors.
   - Unexpected InvalidRequest outside the recreate window fails the test.
 
-Context: scylladb/scylladb#28546
+Context: SCYLLADB-975
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import random
-import sys
 import time
 import uuid as _uuid
 from dataclasses import dataclass, field
 from typing import Awaitable, Optional, Callable
 
 import pytest
-from cassandra.cluster import NoHostAvailable
-from cassandra.protocol import InvalidRequest
-from cassandra.query import PreparedStatement
-from test.cluster.tools.porcupine import run_porcupine_checker
+from test.cluster.strong_consistency.config import boot_sc_cluster, sc_keyspace_opts
+from test.cluster.strong_consistency.workload import (
+    RegisterWorkload,
+    check_linearizable,
+    run_workload,
+)
 from test.cluster.util import new_test_keyspace
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
-from test.pylib.util import wait_for_cql_and_get_hosts
 
 logger = logging.getLogger(__name__)
 
 
-# --- Cluster configuration ---------------------------------------------------
+# --- Cluster and schema configuration ----------------------------------------
 
 NUM_NODES = 6
-DC_NAME = "my_dc"
-CQL_READY_TIMEOUT_S = 60
-
-SERVER_CONFIG = {
-    "experimental_features": ["strongly-consistent-tables"],
-}
-
-SERVER_CMDLINE = [
-    "--logger-log-level", "sc_groups_manager=debug",
-    "--logger-log-level", "sc_coordinator=debug",
-]
-
-# --- Schema configuration ----------------------------------------------------
-
 REPLICATION_FACTOR = 3
 NUM_TABLETS = 10
 
-KEYSPACE_OPTS = (
-    "WITH replication = "
-    "{'class': 'NetworkTopologyStrategy', "
-    f"'replication_factor': {REPLICATION_FACTOR}}} "
-    f"AND tablets = {{'initial': {NUM_TABLETS}}} "
-    "AND consistency = 'global'"
-)
+KEYSPACE_OPTS = sc_keyspace_opts(
+    replication_factor=REPLICATION_FACTOR, initial_tablets=NUM_TABLETS)
 
 TABLE_NAME = "main"
 
@@ -101,6 +88,7 @@ SCHEMA_OP_PAUSE_S = (1.0, 3.0)
 
 # Sanity thresholds: the run is only meaningful if it actually did some work.
 MIN_EXPECTED_WRITES = 100
+MIN_EXPECTED_READS = 100
 MIN_EXPECTED_SCHEMA_OPS = 3
 
 
@@ -121,343 +109,39 @@ COLUMN_TYPES = list(_CQL_LITERAL_GENERATORS.keys())
 
 TABLE_SCHEMA = "(pk int PRIMARY KEY, c int)"
 
-# Dedicated client_id for synthetic reset events emitted by DROP+RECREATE.
-RESET_CLIENT_ID = NUM_WRITERS + NUM_READERS + 1
-
-# Exceptions tolerated during DROP+RECREATE windows.
-_RECREATE_TOLERANT_EXCEPTIONS = (InvalidRequest, NoHostAvailable)
-
-
-class HistoryRecorder:
-    """Records call/return events for the Porcupine linearizability checker.
-
-    Produces JSON-lines output consumable by the Go ``porcupine_checker``.
-    Safe to use from coroutines in a single-threaded asyncio loop.
-
-    .. note:: ``list[dict]`` is not the most efficient representation;
-       if history sizes grow significantly, consider ``msgspec.Struct``
-       with ``msgspec.json.encode`` for lower overhead.
-    """
-
-    def __init__(self) -> None:
-        self._events: list[dict] = []
-        self._next_id = 0
-
-    def record_call(self, client_id: int, op: str, key: int,
-                    value: int = 0) -> tuple[int, int]:
-        """Returns (op_id, absolute_time_ns)."""
-        op_id = self._next_id
-        self._next_id += 1
-        t = time.monotonic_ns()
-        self._events.append({
-            "id": op_id,
-            "client_id": client_id,
-            "kind": "call",
-            "op": op,
-            "key": key,
-            "value": value,
-            "time_ns": t,
-        })
-        return op_id, t
-
-    def record_return(self, op_id: int, client_id: int, op: str,
-                      key: int, value: int, status: str) -> int:
-        """Returns absolute_time_ns."""
-        t = time.monotonic_ns()
-        self._events.append({
-            "id": op_id,
-            "client_id": client_id,
-            "kind": "return",
-            "op": op,
-            "key": key,
-            "value": value,
-            "time_ns": t,
-            "status": status,
-        })
-        return t
-
-    def record_reset(self, client_id: int, keys: range,
-                     t_call_ns: int, t_return_ns: int) -> tuple[int, int]:
-        """Emit synthetic write(0) call/return pairs for every key.
-
-        Models a DROP+RECREATE as resetting all registers to their initial
-        value (0).  Each key gets its own operation with a unique op_id but
-        shares the same call/return timestamps so that Porcupine sees the
-        reset window identically for every key.
-
-        Returns the (first, last) op_id of the emitted operations, so that the
-        caller can point at them from its log line.
-        """
-        first_op_id = self._next_id
-        for key in keys:
-            op_id = self._next_id
-            self._next_id += 1
-            self._events.append({
-                "id": op_id,
-                "client_id": client_id,
-                "kind": "call",
-                "op": "write",
-                "key": key,
-                "value": 0,
-                "time_ns": t_call_ns,
-            })
-            self._events.append({
-                "id": op_id,
-                "client_id": client_id,
-                "kind": "return",
-                "op": "write",
-                "key": key,
-                "value": 0,
-                "time_ns": t_return_ns,
-                "status": "ok",
-            })
-
-        return first_op_id, self._next_id - 1
-
-    def to_jsonl(self) -> str:
-        """Serialize all recorded events to a JSON-lines string."""
-        return "".join(
-            json.dumps(event, separators=(",", ":")) + "\n"
-            for event in self._events
-        )
-
-    @property
-    def event_count(self) -> int:
-        return len(self._events)
-
-    @property
-    def op_count(self) -> int:
-        return self._next_id
-
-
-def _intervals_overlap(a_start: int, a_end: int, b_start: int, b_end: int) -> bool:
-    return a_start <= b_end and b_start <= a_end
-
-# TODO(SCYLLADB-1450): these substring checks have not been validated
-# against all possible server error messages for absent tables.
-def _is_table_absence_invalid_request(exc: InvalidRequest) -> bool:
-    msg = str(exc).lower()
-    return (
-        "unconfigured table" in msg
-        or "does not exist" in msg
-        or "unknown table" in msg
-        or "undefined table" in msg
-        or ("keyspace" in msg and "does not exist" in msg)
-    )
-
-
-# TODO(SCYLLADB-4655): drop this special case once the server reports an
-# unknown table id as a regular InvalidRequest.  Sending a prepared statement
-# tagged with the dropped table's UUID is a legitimate thing for a client to do
-# after a DROP+RECREATE, but instead of a "table does not exist" error the
-# server produces one that the driver surfaces as NoHostAvailable, so the test
-# cannot tell it apart from a real loss of connectivity by exception type
-# alone.  Until that is fixed, recognize it by message and tolerate it inside a
-# recreate window.
-def _is_stale_table_uuid(exc: NoHostAvailable) -> bool:
-    """Detect NoHostAvailable caused by a prepared statement referencing a
-    dropped table's UUID.  After DROP+RECREATE the new table gets a new UUID,
-    but the driver may still send requests tagged with the old one."""
-    for inner in exc.errors.values():
-        msg = str(inner).lower()
-        if "can't find a column family" in msg:
-            return True
-    return False
-
-
-def _is_table_absence_error(exc: Exception) -> bool:
-    """Return True if the exception indicates the table is absent (dropped/recreated)."""
-    if isinstance(exc, InvalidRequest):
-        return _is_table_absence_invalid_request(exc)
-    if isinstance(exc, NoHostAvailable):
-        return _is_stale_table_uuid(exc)
-    return False
-
 
 @dataclass
-class SCSchemaTestState:
-    ks: str
-    seed: int = 0
-    ks_opts: str = KEYSPACE_OPTS
-    table_name: str = TABLE_NAME
-    history: HistoryRecorder = field(default_factory=HistoryRecorder)
-    stop_event: asyncio.Event = field(default_factory=asyncio.Event)
+class SchemaChangerState:
+    """State owned by the schema changer.
 
-    _next_value: int = 1
+    The register workload it runs against (history, prepared statements,
+    reset windows, counters) lives in :attr:`workload`.
+    """
+
+    workload: RegisterWorkload
+    # Kept so that the keyspace can be recreated with the same options.
+    ks_opts: str = KEYSPACE_OPTS
 
     added_columns: list[str] = field(default_factory=list)
     current_c_type: str = "int"
     col_counter: int = 0
-
-    write_stmt: Optional[PreparedStatement] = field(default=None, repr=False)
-    read_stmt: Optional[PreparedStatement] = field(default=None, repr=False)
-
-    write_success: int = 0
-    writer_table_absent: int = 0
-
-    read_success: int = 0
-    read_empty: int = 0
-    reader_table_absent: int = 0
     schema_ops: int = 0
-    recreate_count: int = 0
 
-    # Closed windows for completed DROP+CREATE sequences.  Written by the
-    # schema changer's recreate operations, read by the readers and writers.
-    recreate_intervals: list[tuple[int, int]] = field(default_factory=list, init=False)
-    # Non-zero while DROP+CREATE is in progress; interpreted as [start, +inf).
-    recreate_start_ns: int = field(default=0, init=False)
+    @property
+    def ks(self) -> str:
+        return self.workload.ks
 
     @property
     def fqtn(self) -> str:
-        return f"{self.ks}.{self.table_name}"
-
-    def next_write_value(self) -> int:
-        v = self._next_value
-        self._next_value += 1
-        return v
+        return self.workload.fqtn
 
     def next_col_name(self) -> str:
         self.col_counter += 1
         return f"col_{self.col_counter}"
 
-    def rng_for(self, stream: str) -> random.Random:
-        """A generator for one task, derived from the run's master seed."""
-        return random.Random(f"{self.seed}/{stream}")
-
-    def overlaps_recreate(self, t_call_ns: int, t_return_ns: int) -> bool:
-        for iv_start, iv_end in self.recreate_intervals:
-            if _intervals_overlap(t_call_ns, t_return_ns, iv_start, iv_end):
-                return True
-
-        if self.recreate_start_ns:
-            return t_return_ns >= self.recreate_start_ns
-
-        return False
-
-
-def prepare_rw_statements(state: SCSchemaTestState, cql) -> None:
-    state.write_stmt = cql.prepare(
-        f"UPDATE {state.fqtn} SET c = ? WHERE pk = ?"
-    )
-    state.read_stmt = cql.prepare(
-        f"SELECT c FROM {state.fqtn} WHERE pk = ?"
-    )
-    logger.debug("Prepared read/write statements for %s", state.fqtn)
-
-
-async def writer_task(state: SCSchemaTestState, cql, writer_id: int) -> None:
-    rng = state.rng_for(f"writer/{writer_id}")
-    logger.info("Writer %d started", writer_id)
-
-    local_writes = 0
-    local_indeterminate = 0
-    while not state.stop_event.is_set():
-        pk = rng.randint(0, NUM_KEYS - 1)
-        value = state.next_write_value()
-
-        op_id, t_call_ns = state.history.record_call(writer_id, "write", pk, value)
-
-        try:
-            bound = state.write_stmt.bind([value, pk])
-            await cql.run_async(bound)
-
-            state.history.record_return(
-                op_id, writer_id, "write", pk, value, "ok")
-            state.write_success += 1
-            local_writes += 1
-
-        except _RECREATE_TOLERANT_EXCEPTIONS as exc:
-            t_return_ns = state.history.record_return(
-                op_id, writer_id, "write", pk, value, "fail")
-            if (
-                _is_table_absence_error(exc)
-                and state.overlaps_recreate(t_call_ns, t_return_ns)
-            ):
-                state.writer_table_absent += 1
-                local_indeterminate += 1
-                continue
-
-            raise AssertionError(
-                f"Writer {writer_id}: unexpected {type(exc).__name__} for pk={pk}, "
-                f"overlaps_recreate="
-                f"{state.overlaps_recreate(t_call_ns, t_return_ns)}: {exc!r}"
-            ) from exc
-
-        await asyncio.sleep(rng.uniform(*DML_PAUSE_S))
-
-    logger.info(
-        "Writer %d finished: writes=%d indeterminate=%d",
-        writer_id, local_writes, local_indeterminate,
-    )
-
-
-async def reader_task(state: SCSchemaTestState, cql, reader_id: int) -> None:
-    rng = state.rng_for(f"reader/{reader_id}")
-    client_id = NUM_WRITERS + reader_id
-    logger.info("Reader %d started (client_id=%d)", reader_id, client_id)
-
-    local_reads = 0
-    local_indeterminate = 0
-
-    while not state.stop_event.is_set():
-        pk = rng.randint(0, NUM_KEYS - 1)
-
-        op_id, t_call_ns = state.history.record_call(client_id, "read", pk)
-
-        try:
-            bound = state.read_stmt.bind([pk])
-            rows = await cql.run_async(bound)
-
-            if not rows:
-                # Empty result = register has default value 0.
-                # This is correct both for never-written keys and after
-                # DROP+RECREATE (the synthetic write(0) resets the model).
-                state.history.record_return(
-                    op_id, client_id, "read", pk, 0, "ok")
-                state.read_empty += 1
-                local_reads += 1
-                continue
-
-            # A row can exist with c = NULL: the ADD COLUMN sanity check
-            # (see op_add_column_and_sanity_check) writes only the newly added
-            # column for a random key, which creates the row without touching
-            # c.  Nothing was written to the register in that case either, so
-            # it means the same as an absent row: the default value 0.
-            row = rows[0]
-            value = 0 if row.c is None else row.c
-
-            state.history.record_return(
-                op_id, client_id, "read", pk, value, "ok")
-            state.read_success += 1
-            local_reads += 1
-
-        except _RECREATE_TOLERANT_EXCEPTIONS as exc:
-            t_return_ns = state.history.record_return(
-                op_id, client_id, "read", pk, 0, "fail")
-            if (
-                _is_table_absence_error(exc)
-                and state.overlaps_recreate(t_call_ns, t_return_ns)
-            ):
-                state.reader_table_absent += 1
-                local_indeterminate += 1
-                continue
-
-            raise AssertionError(
-                f"Reader {reader_id}: unexpected {type(exc).__name__} for pk={pk}, "
-                f"overlaps_recreate="
-                f"{state.overlaps_recreate(t_call_ns, t_return_ns)}: {exc!r}"
-            ) from exc
-
-        await asyncio.sleep(rng.uniform(*DML_PAUSE_S))
-
-    logger.info(
-        "Reader %d finished: reads=%d indeterminate=%d",
-        reader_id, local_reads, local_indeterminate,
-    )
-
 
 SchemaOpHandler = Callable[
-    ["SCSchemaTestState", object, random.Random],
+    ["SchemaChangerState", object, random.Random],
     Awaitable[Optional[str]],
 ]
 
@@ -467,7 +151,7 @@ def _random_cql_literal(col_type: str, rng: random.Random) -> str:
 
 
 async def op_add_column_and_sanity_check(
-    state: SCSchemaTestState, cql, rng: random.Random,
+    state: SchemaChangerState, cql, rng: random.Random,
 ) -> Optional[str]:
     col_name = state.next_col_name()
     col_type = rng.choice(COLUMN_TYPES)
@@ -476,7 +160,7 @@ async def op_add_column_and_sanity_check(
     logger.info("DDL: ADD COLUMN %s %s", col_name, col_type)
 
     # Sanity: write a value to the new column, read it back.
-    pk = rng.randint(0, NUM_KEYS - 1)
+    pk = rng.randint(0, state.workload.num_keys - 1)
     literal = _random_cql_literal(col_type, rng)
     await cql.run_async(
         f"UPDATE {state.fqtn} SET {col_name} = {literal} WHERE pk = {pk}")
@@ -496,7 +180,7 @@ async def op_add_column_and_sanity_check(
 
 
 async def op_drop_column(
-    state: SCSchemaTestState, cql, rng: random.Random,
+    state: SchemaChangerState, cql, rng: random.Random,
 ) -> Optional[str]:
     if not state.added_columns:
         return None
@@ -516,12 +200,12 @@ async def op_drop_column(
 # and the asymmetric type compatibility check in the schema upgrader silently
 # drops such cells.
 #
-# See scylladb/scylladb#28546.  The whole `alter_type` schema operation is
+# See SCYLLADB-1563.  The whole `alter_type` schema operation is
 # commented out below so that the rest of the stress test stays usable; once the
 # bug is fixed, uncomment everything marked with BUG_ALTER_TYPE.
 #
 # async def op_alter_type_c(
-#     state: SCSchemaTestState, cql, rng: random.Random,
+#     state: SchemaChangerState, cql, rng: random.Random,
 # ) -> Optional[str]:
 #     await cql.run_async(
 #         f"ALTER TABLE {state.fqtn} ALTER c TYPE {ALTER_TYPE_TARGET}")
@@ -531,7 +215,7 @@ async def op_drop_column(
 
 
 async def op_alter_properties(
-    state: SCSchemaTestState, cql, rng: random.Random,
+    state: SchemaChangerState, cql, rng: random.Random,
 ) -> Optional[str]:
     # Only properties that cannot make an already-written value disappear
     # during the run — see DEFAULT_TTL_RANGE_S.
@@ -546,40 +230,26 @@ async def op_alter_properties(
 
 
 async def op_drop_recreate(
-    state: SCSchemaTestState, cql, rng: random.Random,
+    state: SchemaChangerState, cql, rng: random.Random,
 ) -> Optional[str]:
-    # Open recreate window BEFORE any DDL.
-    # While open, all DML errors for table absence → "fail".
-    window_start_ns = time.monotonic_ns()
-    state.recreate_start_ns = window_start_ns
-
-    try:
+    # reset_window() opens the window before any DDL is issued, closes it once
+    # the table is back, and emits the synthetic write(0) per key.
+    async with state.workload.reset_window() as reset:
         await cql.run_async(f"DROP TABLE {state.fqtn}")
         logger.info("DDL: DROP TABLE done")
 
         await cql.run_async(f"CREATE TABLE {state.fqtn} {TABLE_SCHEMA}")
         state.added_columns.clear()
         state.current_c_type = "int"
-        prepare_rw_statements(state, cql)
-    finally:
-        window_end_ns = time.monotonic_ns()
-        state.recreate_intervals.append((window_start_ns, window_end_ns))
-        state.recreate_start_ns = 0
+        state.workload.prepare(cql)
 
-    # Emit synthetic write(0) for every key.  The [call, return] interval
-    # spans the entire DROP+CREATE window so Porcupine knows the reset
-    # could have happened at any point within.
-    first_op_id, last_op_id = state.history.record_reset(
-        RESET_CLIENT_ID, range(NUM_KEYS), window_start_ns, window_end_ns)
-
-    state.recreate_count += 1
-    logger.info("DDL: DROP+RECREATE done (recreate #%d), reset ops #%d-#%d",
-                state.recreate_count, first_op_id, last_op_id)
+    logger.info("DDL: DROP+RECREATE done (reset #%d), reset ops %s",
+                state.workload.reset_count, reset)
     return "drop_recreate"
 
 
 async def op_drop_recreate_keyspace(
-    state: SCSchemaTestState, cql, rng: random.Random,
+    state: SchemaChangerState, cql, rng: random.Random,
 ) -> Optional[str]:
     """DROP KEYSPACE + CREATE KEYSPACE + CREATE TABLE.
 
@@ -588,10 +258,7 @@ async def op_drop_recreate_keyspace(
     From the Porcupine model perspective this is identical to drop_recreate:
     all registers reset to 0.
     """
-    window_start_ns = time.monotonic_ns()
-    state.recreate_start_ns = window_start_ns
-
-    try:
+    async with state.workload.reset_window() as reset:
         await cql.run_async(f"DROP KEYSPACE {state.ks}")
         logger.info("DDL: DROP KEYSPACE done")
 
@@ -601,19 +268,11 @@ async def op_drop_recreate_keyspace(
         await cql.run_async(f"CREATE TABLE {state.fqtn} {TABLE_SCHEMA}")
         state.added_columns.clear()
         state.current_c_type = "int"
-        prepare_rw_statements(state, cql)
-    finally:
-        window_end_ns = time.monotonic_ns()
-        state.recreate_intervals.append((window_start_ns, window_end_ns))
-        state.recreate_start_ns = 0
+        state.workload.prepare(cql)
 
-    first_op_id, last_op_id = state.history.record_reset(
-        RESET_CLIENT_ID, range(NUM_KEYS), window_start_ns, window_end_ns)
-
-    state.recreate_count += 1
     logger.info(
-        "DDL: DROP+RECREATE KEYSPACE done (recreate #%d), reset ops #%d-#%d",
-        state.recreate_count, first_op_id, last_op_id)
+        "DDL: DROP+RECREATE KEYSPACE done (reset #%d), reset ops %s",
+        state.workload.reset_count, reset)
     return "drop_recreate_ks"
 
 
@@ -637,15 +296,15 @@ SCHEMA_OP_HANDLERS: dict[str, SchemaOpHandler] = {
 }
 
 
-async def schema_changer_task(state: SCSchemaTestState, cql) -> None:
-    rng = state.rng_for("schema-changer")
+async def schema_changer_task(state: SchemaChangerState, cql) -> None:
+    rng = state.workload.rng_for("schema-changer")
     logger.info("Schema changer started")
     # Keep picking until we either execute a real schema change
     # or the test is asked to stop.
-    while not state.stop_event.is_set():
+    while not state.workload.stop_event.is_set():
         result = None
 
-        while result is None and not state.stop_event.is_set():
+        while result is None and not state.workload.stop_event.is_set():
             available_ops = [
                 (name, weight) for name, weight in SCHEMA_OPS
                 # BUG_ALTER_TYPE:
@@ -683,33 +342,22 @@ async def schema_changer_task(state: SCSchemaTestState, cql) -> None:
 async def test_sc_linearizability_with_schema_changes(
     manager: ScyllaClusterManager, tmp_path,
 ):
-    # Logged so that a failing run can be replayed.  Only the choice of schema
-    # operations is reproducible: the interleaving of the concurrent readers,
-    # writers and DDL is not.
-    seed = random.randrange(sys.maxsize)
-    logger.info("Random seed: %s", seed)
-
-    logger.info("Bootstrapping cluster of %d nodes", NUM_NODES)
-    servers = await manager.servers_add(
-        NUM_NODES,
-        config=SERVER_CONFIG,
-        cmdline=SERVER_CMDLINE,
-        auto_rack_dc=DC_NAME,
-    )
-
-    cql = manager.get_cql()
-    await wait_for_cql_and_get_hosts(
-        cql, servers, time.time() + CQL_READY_TIMEOUT_S)
+    _servers, cql = await boot_sc_cluster(manager, NUM_NODES)
 
     async with new_test_keyspace(manager, KEYSPACE_OPTS) as ks:
-        state = SCSchemaTestState(ks=ks, seed=seed)
+        workload = RegisterWorkload(
+            ks=ks,
+            table_name=TABLE_NAME,
+            num_keys=NUM_KEYS,
+            num_writers=NUM_WRITERS,
+            num_readers=NUM_READERS,
+            dml_pause_s=DML_PAUSE_S,
+        )
+        state = SchemaChangerState(workload=workload)
 
-        await cql.run_async(f"CREATE TABLE {state.fqtn} {TABLE_SCHEMA}")
-        prepare_rw_statements(state, cql)
+        await cql.run_async(f"CREATE TABLE {workload.fqtn} {TABLE_SCHEMA}")
+        workload.prepare(cql)
 
-        # The table is left empty on purpose: a key that was never written
-        # reads as the register's default value 0, which is the same path the
-        # readers take after every DROP+RECREATE.
         logger.info(
             "Starting stress phase (%ds): writers=%d readers=%d "
             "keys=%d tablets=%d + schema changer",
@@ -717,84 +365,26 @@ async def test_sc_linearizability_with_schema_changes(
             NUM_KEYS, NUM_TABLETS,
         )
 
-        task_errors = []
-        try:
-            async with asyncio.TaskGroup() as tg:
-                async def stop_timer():
-                    try:
-                        await asyncio.sleep(STRESS_DURATION_S)
-                    finally:
-                        state.stop_event.set()
-
-                tg.create_task(stop_timer(), name="stop-timer")
-                for i in range(NUM_WRITERS):
-                    tg.create_task(
-                        writer_task(state, cql, i), name=f"writer-{i}")
-                for i in range(NUM_READERS):
-                    tg.create_task(
-                        reader_task(state, cql, i), name=f"reader-{i}")
-                tg.create_task(
-                    schema_changer_task(state, cql), name="schema-changer")
-        except* Exception as eg:
-            task_errors = list(eg.exceptions)
-            logger.error("Task(s) failed: %s", task_errors)
-
-        logger.info("Stress phase complete")
-        logger.info(
-            "Stats: writes ok=%d table_absent=%d | "
-            "reads ok=%d empty=%d table_absent=%d | "
-            "schema_ops=%d recreates=%d | "
-            "ops=%d events=%d",
-            state.write_success,
-            state.writer_table_absent,
-            state.read_success, state.read_empty,
-            state.reader_table_absent,
-            state.schema_ops, state.recreate_count,
-            state.history.op_count, state.history.event_count,
+        task_errors = await run_workload(
+            workload, cql, STRESS_DURATION_S,
+            disruptors=[("schema-changer", lambda: schema_changer_task(state, cql))],
         )
 
+        logger.info("Stress phase complete")
+        logger.info("Stats: %s | schema_ops=%d",
+                    workload.stats_line(), state.schema_ops)
+
         assert not task_errors, (
-            f"Task(s) failed with unexpected exceptions (seed={seed}): "
+            f"Task(s) failed with unexpected exceptions (seed={workload.seed}): "
             f"{task_errors}"
         )
 
-        assert state.write_success >= MIN_EXPECTED_WRITES, (
-            f"Too few successful writes ({state.write_success}), "
-            f"expected >= {MIN_EXPECTED_WRITES}"
-        )
+        workload.assert_progress(
+            min_writes=MIN_EXPECTED_WRITES, min_reads=MIN_EXPECTED_READS)
         assert state.schema_ops >= MIN_EXPECTED_SCHEMA_OPS, (
             f"Too few schema operations ({state.schema_ops}), "
             f"expected >= {MIN_EXPECTED_SCHEMA_OPS}"
         )
 
-        checker_output_dir = tmp_path / "porcupine-checker-output"
-        logger.info(
-            "Running Porcupine linearizability check: %d ops, %d events; artifacts_dir=%s",
-            state.history.op_count,
-            state.history.event_count,
-            checker_output_dir,
-        )
-
-        result = await run_porcupine_checker(
-            state.history.to_jsonl(),
-            output_dir=checker_output_dir,
-        )
-
-        if result.get("visualization"):
-            logger.info("Visualization: %s", result["visualization"])
-
-        assert result["valid"], (
-            f"Linearizability violation: {result.get('error')}\n"
-            f"seed={seed}\n"
-            f"keys_checked={result.get('keys_checked')}, "
-            f"total_ops={result.get('total_ops')}\n"
-            f"artifacts_dir={result.get('artifacts_dir')}\n"
-            f"visualization={result.get('visualization')}\n"
-            f"full_result={result}"
-        )
-
-        logger.info(
-            "Test passed — linearizable (keys_checked=%d, total_ops=%d)",
-            result.get("keys_checked", 0),
-            result.get("total_ops", 0),
-        )
+        await check_linearizable(
+            workload, output_dir=tmp_path / "porcupine-checker-output")
