@@ -296,6 +296,11 @@ SEASTAR_TEST_CASE(test_update_column_not_in_view_ttl_with_flush) {
     }, cfg);
 }
 
+// Not moved to Python in issue #16134: this test is TTL from beginning to
+// end - its very first statement writes with a TTL, and both of its
+// forward_jump_clocks() calls are what it is checking - so unlike some of the
+// other tests here there is no part of it which could be moved without the
+// clock, which cqlpy cannot wind forward.
 void test_unselected_columns_ttl(cql_test_env& e, std::function<void()>&& maybe_flush) {
     e.execute_cql("create table cf (p int, c int, v int, primary key (p, c))").get();
     e.execute_cql("create materialized view vcf as select p, c from cf "
