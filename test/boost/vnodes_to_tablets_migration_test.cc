@@ -400,12 +400,12 @@ table_id create_vnode_table(cql_test_env& e) {
 // Fakes the table's per-shard on-disk size and returns the total across all shards.
 //
 // Note: This must not be followed by a flush or compaction: table::rebuild_statistics()
-//       recomputes live_disk_space_used from the real compaction groups, which
+//       recomputes sstables_live_disk_space_used from the real compaction groups, which
 //       would discard these values.
 uint64_t set_local_table_size(cql_test_env& e, uint64_t size_per_shard) {
     e.db().invoke_on_all([size_per_shard] (replica::database& db) {
         auto& cf = db.find_column_family(estimate_ks, estimate_cf);
-        cf.get_stats().live_disk_space_used.on_disk = int64_t(size_per_shard);
+        cf.get_stats().sstables_live_disk_space_used.on_disk = int64_t(size_per_shard);
     }).get();
 
     return size_per_shard * this_smp_shard_count();
