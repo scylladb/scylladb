@@ -167,21 +167,6 @@ SEASTAR_THREAD_TEST_CASE(node_view_update_backlog) {
     BOOST_REQUIRE(b2.load() == backlog(100));
 }
 
-SEASTAR_TEST_CASE(hide_ttl_and_writetime_for_virtual_columns) {
-    return do_with_cql_env_thread([] (cql_test_env& e) {
-        e.execute_cql("CREATE TABLE t (k int, c int, a int, b int, e int, f int, g int, primary key(k, c))").get();
-        e.execute_cql("CREATE MATERIALIZED VIEW mv1 AS SELECT k,c,a,b FROM t "
-                "WHERE k IS NOT NULL AND c IS NOT NULL PRIMARY KEY (c, k)").get();
-        e.execute_cql("CREATE MATERIALIZED VIEW mv2 AS SELECT k,c,a,b FROM t "
-                "WHERE k IS NOT NULL AND c IS NOT NULL AND a IS NOT NULL PRIMARY KEY (c, k, a)").get();
-
-        BOOST_REQUIRE_THROW(e.execute_cql("SELECT WRITETIME(e) FROM mv1").get(), exceptions::invalid_request_exception);
-        BOOST_REQUIRE_THROW(e.execute_cql("SELECT WRITETIME(e) FROM mv2").get(), exceptions::invalid_request_exception);
-        BOOST_REQUIRE_THROW(e.execute_cql("SELECT TTL(e) FROM mv1").get(), exceptions::invalid_request_exception);
-        BOOST_REQUIRE_THROW(e.execute_cql("SELECT TTL(e) FROM mv2").get(), exceptions::invalid_request_exception);
-    });
-}
-
 SEASTAR_TEST_CASE(test_no_base_column_in_view_pk_complex_timestamp) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
 

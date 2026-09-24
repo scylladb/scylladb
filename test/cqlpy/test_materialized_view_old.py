@@ -1555,3 +1555,19 @@ def test_unselected_column(cql, test_keyspace):
                 cql.execute(f"select * from {mv} where nonexistent = 0")
             with pytest.raises(InvalidRequest, match=no_such_column('x')):
                 cql.execute(f"select * from {mv} where x = 0")
+
+# A column of the base table which the view didn't select exists in the view
+# as a "virtual column" (see issue #3362), but must stay invisible to the
+# user - including to WRITETIME() and TTL(), which must refuse it just as
+# they would a name that doesn't exist at all.
+def test_hide_ttl_and_writetime_for_virtual_columns(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace,
+            'k int, c int, a int, b int, e int, f int, g int, primary key(k, c)') as table:
+        with new_materialized_view(cql, table, 'k,c,a,b', 'c, k',
+                'k IS NOT NULL AND c IS NOT NULL') as mv1, \
+             new_materialized_view(cql, table, 'k,c,a,b', 'c, k, a',
+                'k IS NOT NULL AND c IS NOT NULL AND a IS NOT NULL') as mv2:
+            for mv in [mv1, mv2]:
+                for function in ['WRITETIME', 'TTL']:
+                    with pytest.raises(InvalidRequest, match=no_such_column('e')):
+                        cql.execute(f"SELECT {function}(e) FROM {mv}")
