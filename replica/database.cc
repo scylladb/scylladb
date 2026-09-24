@@ -392,6 +392,15 @@ static auto configure_sstables_manager(const db::config& cfg, const database_con
     };
 }
 
+// How much of the shard's memory the memtables get. This is the whole budget, not the point where
+// writes start to throttle - see the "Hard Limit" note on dirty_memory_manager. It cannot be
+// configured: the old memtable_total_space_in_mb is still parsed, but ignored.
+static constexpr double dirty_memory_threshold_fraction = 0.50;
+
+// The least the memtables get, however much memory is reserved elsewhere on the shard.
+// See update_dirty_memory_threshold().
+static constexpr double min_dirty_memory_threshold_fraction = 0.10;
+
 database::database(const db::config& cfg, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, locator::shared_token_metadata& stm,
         compaction::compaction_manager& cm, sstables::storage_manager& sstm, lang::manager& langm, sstables::directory_semaphore& sst_dir_sem, sstable_compressor_factory& scf, const abort_source& abort, utils::cross_shard_barrier barrier)
     : _stats(make_lw_shared<db_stats>())
@@ -400,17 +409,19 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     , _cfg(cfg)
     // Allow system tables a pool of 10 MB memory to write, but never block on other regions.
     , _system_dirty_memory_manager(*this, 10 << 20, cfg.unspooled_dirty_soft_limit(), default_scheduling_group())
-    , _dirty_memory_manager(*this, dbcfg.available_memory * 0.50, cfg.unspooled_dirty_soft_limit(), dbcfg.statement_scheduling_group)
+    , _dirty_memory_manager(*this, dbcfg.available_memory * dirty_memory_threshold_fraction, cfg.unspooled_dirty_soft_limit(), dbcfg.statement_scheduling_group)
     , _dirty_memory_threshold_controller([this] {
         if (_logstor) {
-            size_t logstor_memory_usage = get_logstor_memory_usage();
-            size_t available_memory = _dbcfg.available_memory > logstor_memory_usage ? _dbcfg.available_memory - logstor_memory_usage : 0;
-            _dirty_memory_manager.update_threshold(available_memory * 0.50);
+            update_dirty_memory_threshold(get_logstor_memory_usage());
         }
     })
     , _dbcfg(dbcfg)
-    , _memtable_controller(make_flush_controller(_cfg, _dbcfg, [this, limit = float(_dirty_memory_manager.throttle_threshold())] {
-        auto backlog = (_dirty_memory_manager.unspooled_dirty_memory()) / limit;
+    , _memtable_controller(make_flush_controller(_cfg, _dbcfg, [this] {
+        // The threshold moves with the memory reserved elsewhere, so read it every time.
+        auto limit = float(_dirty_memory_manager.throttle_threshold());
+        auto dirty = _dirty_memory_manager.unspooled_dirty_memory();
+        // No threshold means no room, so anything still held is already over the limit.
+        auto backlog = limit > 0 ? dirty / limit : (dirty > 0 ? 1.0f : 0.0f);
         if (_dirty_memory_manager.has_extraneous_flushes_requested()) {
             backlog = std::max(backlog, _memtable_controller.backlog_of_shares(200));
         }
@@ -615,6 +626,9 @@ database::setup_metrics() {
 
         sm::make_gauge("logstor_bytes", [this] { return get_logstor_memory_usage(); },
                        sm::description("Holds the current size of memory used by logstor in bytes.")),
+
+        sm::make_gauge("logstor_index_entry_bytes", [this] { return get_logstor_index_entries_bytes(); },
+                       sm::description("Holds the size of the logstor primary index entries in bytes.")),
     });
 
     _metrics.add_group("memtables", {
@@ -2841,6 +2855,7 @@ future<> database::start(sharded<qos::service_level_controller>& sl_controller, 
 
 future<> database::shutdown() {
     _shutdown = true;
+    _dirty_memory_threshold_controller.cancel();
     auto b = defer([this] noexcept { _stop_barrier.abort(); });
     co_await _stop_barrier.arrive_and_wait();
     b.cancel();
@@ -3049,6 +3064,39 @@ future<logstor::table_segment_stats> database::get_logstor_table_segment_stats(t
     return find_column_family(table).get_logstor_segment_stats();
 }
 
+// Memory reserved elsewhere on the shard is taken off the memtables' share of it. The threshold
+// goes down, which makes the dirty memory manager flush, and goes back up when the memory is
+// released.
+//
+// The threshold stops at a floor, because flushing cannot free reserved memory. Logstor is what
+// reserves it today, and logstor tables do not write through the dirty memory manager, so the
+// tables being squeezed are not the ones holding the memory. A threshold of zero is the worst
+// case: the region group only clears at exactly zero dirty memory, which costs one full flush per
+// write for as long as the reservation lasts.
+void database::update_dirty_memory_threshold(size_t reserved_memory) {
+    size_t available_memory = _dbcfg.available_memory > reserved_memory ? _dbcfg.available_memory - reserved_memory : 0;
+    size_t threshold = available_memory * dirty_memory_threshold_fraction;
+    const size_t floor = _dbcfg.available_memory * min_dirty_memory_threshold_fraction;
+
+    const bool at_floor = threshold < floor;
+    if (at_floor) {
+        threshold = floor;
+    }
+    if (at_floor != _dirty_memory_threshold_at_floor) {
+        _dirty_memory_threshold_at_floor = at_floor;
+        if (at_floor) {
+            dblog.warn("Memory reserved outside the memtables ({}) leaves them less than their minimum of {}; "
+                       "holding their threshold there. Flushing cannot recover this memory.",
+                       utils::to_hr_size(reserved_memory), utils::to_hr_size(floor));
+        } else {
+            dblog.info("Memory reserved outside the memtables ({}) no longer holds their threshold at its minimum.",
+                       utils::to_hr_size(reserved_memory));
+        }
+    }
+
+    _dirty_memory_manager.update_threshold(threshold);
+}
+
 size_t database::get_logstor_memory_usage() const {
     if (!_logstor) {
         return 0;
@@ -3060,6 +3108,21 @@ size_t database::get_logstor_memory_usage() const {
     get_tables_metadata().for_each_table([&m] (table_id, lw_shared_ptr<replica::table> table) {
         if (table->uses_logstor()) {
             m += table->get_logstor_memory_usage();
+        }
+    });
+
+    return m;
+}
+
+size_t database::get_logstor_index_entries_bytes() const {
+    if (!_logstor) {
+        return 0;
+    }
+    size_t m = 0;
+
+    get_tables_metadata().for_each_table([&m] (table_id, lw_shared_ptr<replica::table> table) {
+        if (table->uses_logstor()) {
+            m += table->get_logstor_index_entries_bytes();
         }
     });
 

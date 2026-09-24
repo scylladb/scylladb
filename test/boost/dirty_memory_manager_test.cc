@@ -292,6 +292,51 @@ SEASTAR_TEST_CASE(test_region_groups_basic_throttling) {
     });
 }
 
+// The limits now move under a group that is not allocating, so update_limits() has to re-check
+// pressure itself - no allocation will come along to notice a budget that shrank.
+SEASTAR_TEST_CASE(test_region_groups_update_limits_rechecks_pressure) {
+    return seastar::async([] {
+        unsigned reclaim_started = 0;
+        unsigned reclaim_stopped = 0;
+        const size_t roomy = 16 * logalloc::segment_size;
+
+        raii_region_group rg({
+            .unspooled_hard_limit = roomy,
+            .unspooled_soft_limit = roomy,
+            .real_hard_limit = roomy,
+            .start_reclaiming = [&reclaim_started] () noexcept { ++reclaim_started; },
+            .stop_reclaiming = [&reclaim_stopped] () noexcept { ++reclaim_stopped; },
+        });
+        auto rg_listener = listener_for_region_group(rg);
+        auto region = std::make_unique<test_region>();
+        region->listen(&rg_listener);
+        region->alloc();
+
+        const size_t used = rg.unspooled_memory_used();
+        BOOST_REQUIRE_GT(used, 0);
+        BOOST_REQUIRE(!rg.over_unspooled_soft_limit());
+        BOOST_REQUIRE(!rg.under_unspooled_pressure());
+        BOOST_REQUIRE_EQUAL(reclaim_started, 0);
+
+        // Now over both limits, with no allocation to notice it.
+        rg.update_limits(used / 2, used / 2, used / 2);
+        BOOST_REQUIRE(rg.over_unspooled_soft_limit());
+        BOOST_REQUIRE(rg.under_unspooled_pressure());
+        BOOST_REQUIRE_EQUAL(reclaim_started, 1);
+
+        auto fut = rg.run_when_memory_available([&region] { region->alloc_small(); }, db::no_timeout);
+        BOOST_REQUIRE_EQUAL(fut.available(), false);
+
+        // Given back: pressure relieved, the blocked request goes through.
+        rg.update_limits(roomy, roomy, roomy);
+        BOOST_REQUIRE(!rg.over_unspooled_soft_limit());
+        BOOST_REQUIRE(!rg.under_unspooled_pressure());
+        BOOST_REQUIRE_EQUAL(reclaim_stopped, 1);
+
+        quiesce(std::move(fut));
+    });
+}
+
 SEASTAR_TEST_CASE(test_region_groups_fifo_order) {
     // tests that requests that are queued for later execution execute in FIFO order
     return seastar::async([] {

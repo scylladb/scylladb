@@ -472,6 +472,8 @@ public:
 
     size_t capacity() const noexcept { return _capacity; }
 
+    size_t memory_usage() const noexcept { return allocated_buffer_count() * _buffer_size; }
+
     // Buffers that are currently out with an owner.
     size_t used_buffer_count() const noexcept { return _in_use; }
 
@@ -678,6 +680,8 @@ public:
     future<buffered_write_result> write_to_buffer(log_record_writer, db::timeout_clock::time_point timeout, write_target target = {}) noexcept;
 
     size_t queued_write_count() const noexcept { return _queued_writes.size(); }
+
+    size_t memory_usage() const noexcept { return _ring_size * _buffer_size + _queued_write_bytes; }
 
 };
 
