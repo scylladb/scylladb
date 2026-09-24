@@ -944,15 +944,18 @@ future<tasks::task_manager::task_ptr> task_manager_module::start_shard_scrub_sst
     });
 }
 
-future<> table_scrub_sstables_compaction_task_impl::run() {
-    auto& cm = _db.get_compaction_manager();
-    auto& cf = _db.find_column_family(_status.keyspace, _status.table);
-    auto info = this->info();
+static future<> run_table_scrub_sstables_compaction(replica::database& db, std::string keyspace, std::string table, compaction_type_options::scrub opts, compaction_stats& stats, tasks::task_info task_info) {
+    auto& cm = db.get_compaction_manager();
+    auto& cf = db.find_column_family(keyspace, table);
     co_await cf.parallel_foreach_compaction_group_view([&] (compaction::compaction_group_view& ts) mutable -> future<> {
         auto lock_holder = co_await cm.get_incremental_repair_read_lock(ts, "scrub_sstables_compaction");
-        auto r = co_await cm.perform_sstable_scrub(ts, _opts, info);
-        _stats += r.value_or(compaction_stats{});
+        auto r = co_await cm.perform_sstable_scrub(ts, opts, task_info);
+        stats += r.value_or(compaction_stats{});
     });
+}
+
+future<> table_scrub_sstables_compaction_task_impl::run() {
+    return run_table_scrub_sstables_compaction(_db, _status.keyspace, _status.table, _opts, _stats, info());
 }
 
 future<std::optional<double>> table_scrub_sstables_compaction_task_impl::expected_total_workload() const {
