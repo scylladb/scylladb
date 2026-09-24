@@ -88,10 +88,8 @@ def test_partitions_estimate_simple_large(cql, test_keyspace):
 # if the partition estimate, it should *not* return double the accurate count
 # just because it naively sums up the estimates for the different sstables.
 # Rather it should use the cardinality estimator to estimate the overlap.
-# Currently both Cassandra and Scylla fail this test. They are simply not
-# meant to provide accurate partition-count estimates when faced with high
-# space amplification.
-@pytest.mark.xfail(reason="partition count estimator does not use cardinality estimator")
+# Cassandra fails this test.
+@pytest.mark.parametrize("test_keyspace", ["tablets", "vnodes"], indirect=True)
 def test_partitions_estimate_full_overlap(cassandra_bug, cql, test_keyspace):
     N = 500
     with new_test_table(cql, test_keyspace, 'k int PRIMARY KEY') as table:

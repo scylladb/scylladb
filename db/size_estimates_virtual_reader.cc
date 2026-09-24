@@ -19,6 +19,7 @@
 #include "partition_range_compat.hh"
 #include "utils/interval.hh"
 #include "mutation/mutation_fragment.hh"
+#include "sstables/hyperloglog.hh"
 #include "sstables/sstables.hh"
 #include "replica/database.hh"
 
@@ -129,11 +130,32 @@ static future<system_keyspace::range_estimates> estimate(replica::database& db, 
         auto& cf = *table_ptr;
         shard_estimate result;
         for (auto&& r : ranges) {
-            auto rp_range = as_ring_position_range(r);
-            for (auto&& sstable : cf.select_sstables(rp_range)) {
-                result.count += co_await sstable->estimated_keys_for_range(r);
+            auto sstables = cf.select_sstables(as_ring_position_range(r));
+            int64_t count = 0;
+            uint64_t total_keys = 0;
+            std::optional<hll::HyperLogLog> merged;
+            bool use_sketches = sstables.size() > 1;
+            for (auto&& sstable : sstables) {
+                count += co_await sstable->estimated_keys_for_range(r);
                 result.hist.merge(sstable->get_stats_metadata().estimated_partition_size);
+                if (use_sketches) {
+                    auto sketch = sstable->get_cardinality_estimator();
+                    // Legacy b=4 sketches are too coarse, and merge() rejects mixed precisions.
+                    if (!sketch || sketch->registerSize() != 1024) {
+                        use_sketches = false;
+                    } else if (merged) {
+                        merged->merge(*sketch);
+                    } else {
+                        merged = std::move(sketch);
+                    }
+                    total_keys += sstable->get_estimated_key_count();
+                }
             }
+            // The per-sstable sum counts keys present in several overlapping sstables more than once.
+            if (use_sketches && total_keys > 0) {
+                count = static_cast<int64_t>(count * std::min(1.0, merged->estimate() / total_keys));
+            }
+            result.count += count;
         }
         co_return result;
     };
