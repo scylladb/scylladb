@@ -727,50 +727,44 @@ inline void write(sstable_version_types v, file_writer& out, const std::unique_p
 }
 
 future<> parse(const schema& schema, sstable_version_types v, random_access_reader& in, statistics& s) {
-    try {
-        co_await parse(schema, v, in, s.offsets);
-        // Old versions of Scylla do not respect the order.
-        // See https://github.com/scylladb/scylla/issues/3937
-        std::ranges::sort(s.offsets.elements, std::ranges::less(), std::mem_fn(&std::pair<metadata_type, unsigned int>::first));
-        for (auto val : s.offsets.elements) {
-            auto type = val.first;
-            co_await in.seek(val.second);
-            switch (type) {
-            case metadata_type::Validation:
-                co_await parse<validation_metadata>(schema, v, in, s.contents[type]);
-                break;
-            case metadata_type::Compaction:
-                co_await parse<compaction_metadata>(schema, v, in, s.contents[type]);
-                break;
-            case metadata_type::Stats:
-                co_await parse<stats_metadata>(schema, v, in, s.contents[type]);
-                break;
-            case metadata_type::Serialization:
-                if (v < sstable_version_types::mc) {
-                    throw_malformed_sstable_exception(
-                        "Statistics is malformed: SSTable is in 2.x format but contains serialization header.");
-                } else {
-                    co_await parse<serialization_header>(schema, v, in, s.contents[type]);
-                }
-                break;
-            default:
-                throw_malformed_sstable_exception(fmt::format("Invalid metadata type at Statistics file: {} ", int(type)));
+    co_await parse(schema, v, in, s.offsets);
+    // Old versions of Scylla do not respect the order.
+    // See https://github.com/scylladb/scylla/issues/3937
+    std::ranges::sort(s.offsets.elements, std::ranges::less(), std::mem_fn(&std::pair<metadata_type, unsigned int>::first));
+    for (auto val : s.offsets.elements) {
+        auto type = val.first;
+        co_await in.seek(val.second);
+        switch (type) {
+        case metadata_type::Validation:
+            co_await parse<validation_metadata>(schema, v, in, s.contents[type]);
+            break;
+        case metadata_type::Compaction:
+            co_await parse<compaction_metadata>(schema, v, in, s.contents[type]);
+            break;
+        case metadata_type::Stats:
+            co_await parse<stats_metadata>(schema, v, in, s.contents[type]);
+            break;
+        case metadata_type::Serialization:
+            if (v < sstable_version_types::mc) {
+                throw_malformed_sstable_exception(
+                    "Statistics is malformed: SSTable is in 2.x format but contains serialization header.");
+            } else {
+                co_await parse<serialization_header>(schema, v, in, s.contents[type]);
             }
+            break;
+        default:
+            throw_malformed_sstable_exception(fmt::format("Invalid metadata type at Statistics file: {} ", int(type)));
         }
-        // Every writer we read from (Cassandra 2.x/3.x, Scylla) emits all of
-        // these; the accessors assume their presence.
-        for (auto type : {metadata_type::Validation, metadata_type::Compaction, metadata_type::Stats}) {
-            if (!s.contents.contains(type)) {
-                throw_malformed_sstable_exception(fmt::format("Statistics is malformed: missing metadata type {}", int(type)));
-            }
+    }
+    // Every writer we read from (Cassandra 2.x/3.x, Scylla) emits all of
+    // these; the accessors assume their presence.
+    for (auto type : {metadata_type::Validation, metadata_type::Compaction, metadata_type::Stats}) {
+        if (!s.contents.contains(type)) {
+            throw_malformed_sstable_exception(fmt::format("Statistics is malformed: missing metadata type {}", int(type)));
         }
-        if (v >= sstable_version_types::mc && !s.contents.contains(metadata_type::Serialization)) {
-            throw_malformed_sstable_exception("Statistics is malformed: missing Serialization header");
-        }
-    } catch (const malformed_sstable_exception&) {
-        throw;
-    } catch (...) {
-        throw_malformed_sstable_exception(fmt::format("Statistics file is malformed: {:t}", std::current_exception()));
+    }
+    if (v >= sstable_version_types::mc && !s.contents.contains(metadata_type::Serialization)) {
+        throw_malformed_sstable_exception("Statistics is malformed: missing Serialization header");
     }
 }
 
