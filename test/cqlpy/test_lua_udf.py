@@ -417,3 +417,11 @@ def test_lua_list_return(cql, test_keyspace, scylla_only):
             call_lua(cql, test_keyspace, table, sig, "return {foo = 42}")
         with pytest.raises(InvalidRequest, match="table is not a sequence"):
             call_lua(cql, test_keyspace, table, sig, "return {[1] = 42, [3] = 43}")
+
+def test_lua_set_return(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val int") as table:
+        cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 3)")
+        sig = "(val int) CALLED ON NULL INPUT RETURNS set<int>"
+        assert call_lua(cql, test_keyspace, table, sig, "return {[1] = true, [42] = true}") == [{1, 42}]
+        with pytest.raises(InvalidRequest, match="sets are represented with tables with true values"):
+            call_lua(cql, test_keyspace, table, sig, "return {[1] = false}")
