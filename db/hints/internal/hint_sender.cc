@@ -54,6 +54,15 @@ public:
 future<> hint_sender::flush_maybe() noexcept {
     auto current_time = clock::now();
     if (current_time >= _next_flush_tp) {
+        // Nothing written since the last replayed position and the store holds at most its reserve segment:
+        // re-creating the store would only churn the reserve segment file.
+        const auto& store = _ep_manager._hints_store_anchor;
+        const bool idle = store && !have_segments() && _ep_manager.last_written_replay_position() < _sent_upper_bound_rp &&
+                          store->disk_footprint() <= store->active_config().commitlog_segment_size_in_mb * 1024 * 1024;
+        if (idle) {
+            _next_flush_tp = current_time + manager::hints_flush_period;
+            return make_ready_future<>();
+        }
         return _ep_manager.flush_current_hints().then([this, current_time] {
             _next_flush_tp = current_time + manager::hints_flush_period;
         }).handle_exception([this] (auto eptr) {
