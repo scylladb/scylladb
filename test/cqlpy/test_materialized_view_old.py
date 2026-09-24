@@ -80,7 +80,16 @@ def test_access_and_schema(cql, test_keyspace):
 
 # A base-table column which the view doesn't select can be dropped from the
 # base table, and the view continues to work normally.
-def test_column_dropped_from_base(cql, test_keyspace):
+#
+# This is scylla_only, because it is a deliberate Scylla extension: Cassandra
+# refuses to drop *any* regular column from a base table that has any
+# materialized view at all ("Cannot drop column a on base table ... with
+# materialized views", AlterTableStatement.java:516), while Scylla refuses
+# only if one of the views actually needs the dropped column - i.e., selects
+# it, or depends on its liveness. See issue #4448 and the C++ test
+# test_mv_allow_some_column_drops, which is still in view_schema_test.cc and
+# covers the rule in more detail.
+def test_column_dropped_from_base(cql, test_keyspace, scylla_only):
     with new_test_table(cql, test_keyspace, 'p int, c ascii, a int, v int, primary key (p, c)') as table:
         with new_materialized_view(cql, table, 'p, c, v', 'v, p, c',
                 'v is not null and p is not null and c is not null') as mv:
