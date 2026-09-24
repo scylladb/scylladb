@@ -1076,6 +1076,8 @@ future<> groups_manager::sync_raft_group_config(global_tablet_id tablet, raft::g
     abort_on_expiry aoe(deadline);
     auto sub = utils::chain_abort_source(aoe.abort_source(), guard.get_abort_source());
     co_await converge_group_config(tablet, gid, guard, deadline, aoe.abort_source());
+
+    co_await utils::get_local_injector().inject("sc_pause_after_config_sync", utils::wait_for_message(5min));
 }
 
 future<> groups_manager::drain_group_deletion(global_tablet_id tablet, raft::group_id gid,
