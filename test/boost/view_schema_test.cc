@@ -87,42 +87,6 @@ SEASTAR_TEST_CASE(test_ttl) {
     });
 }
 
-SEASTAR_TEST_CASE(test_multiple_deletes) {
-    return do_with_cql_env_thread([] (auto& e) {
-        e.execute_cql("create table cf (p int, c int, primary key (p, c));").get();
-        e.execute_cql("create materialized view mv as select * from cf "
-                      "where c is not null primary key (c, p)").get();
-
-        e.execute_cql("insert into cf (p, c) values (1, 1)").get();
-        e.execute_cql("insert into cf (p, c) values (1, 2)").get();
-        e.execute_cql("insert into cf (p, c) values (1, 3)").get();
-
-        eventually([&] {
-        auto msg = e.execute_cql("select p, c from mv").get();
-        assert_that(msg).is_rows()
-            .with_size(3)
-            .with_rows({ { {int32_type->decompose(1)}, {int32_type->decompose(1)} },
-                         { {int32_type->decompose(1)}, {int32_type->decompose(2)} },
-                         { {int32_type->decompose(1)}, {int32_type->decompose(3)} }});
-        });
-
-        e.execute_cql("delete from cf where p = 1 and c > 1 and c < 3").get();
-        eventually([&] {
-        auto msg = e.execute_cql("select p, c from mv").get();
-        assert_that(msg).is_rows()
-            .with_size(2)
-            .with_rows({ { {int32_type->decompose(1)}, {int32_type->decompose(1)} },
-                         { {int32_type->decompose(1)}, {int32_type->decompose(3)} }});
-        });
-
-        e.execute_cql("delete from cf where p = 1").get();
-        eventually([&] {
-        auto msg = e.execute_cql("select p, c from mv").get();
-        assert_that(msg).is_rows().with_size(0);
-        });
-    });
-}
-
 SEASTAR_TEST_CASE(test_multiple_non_primary_keys_in_view) {
     return do_with_cql_env_thread([] (auto& e) {
         e.execute_cql("create table cf (a int, b int, c int, d int, e int, primary key ((a, b), c))").get();

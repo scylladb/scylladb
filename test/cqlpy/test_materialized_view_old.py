@@ -822,3 +822,21 @@ def test_clustering_order(cql, test_keyspace):
             cql.execute(f"insert into {table} (a, b, c, d) values (1, 2, 2, 2)")
             for mv, (_, _, column, expected) in zip(mvs, views):
                 assert expected == list(cql.execute(f"select {column} from {mv}"))
+
+# Both kinds of multi-row deletion in the base table - a clustering range and
+# a whole partition - reach the view, even though the deleted base rows end
+# up in different view partitions.
+def test_multiple_deletes(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int, c int, primary key (p, c)') as table:
+        with new_materialized_view(cql, table, '*', 'c, p',
+                'p is not null and c is not null') as mv:
+            for c in [1, 2, 3]:
+                cql.execute(f"insert into {table} (p, c) values (1, {c})")
+            assert [(1, 1), (1, 2), (1, 3)] == sorted(cql.execute(f"select p, c from {mv}"))
+
+            cql.execute(f"delete from {table} where p = 1 and c > 1 and c < 3")
+            assert [(1, 1), (1, 3)] == sorted(cql.execute(f"select p, c from {mv}"))
+
+            cql.execute(f"delete from {table} where p = 1")
+            assert [] == list(cql.execute(f"select p, c from {mv}"))
+
