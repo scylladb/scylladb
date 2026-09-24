@@ -330,7 +330,6 @@ async def test_bootstrap_starts_while_tablet_migration_is_blocked(manager: Scyll
 @pytest.mark.parametrize("fail_replica", ["source", "destination"])
 @pytest.mark.parametrize("fail_stage", ["streaming", "allow_write_both_read_old", "write_both_read_old", "write_both_read_new", "use_new", "cleanup", "cleanup_target", "end_migration", "revert_migration"])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-@pytest.mark.skip_storage('gs', reason='GCS flavor of this test gets stuck, deeper investigation is needed')
 async def test_node_failure_during_tablet_migration(manager: ScyllaClusterManager, fail_replica, fail_stage, build_mode,
                                                     feature_config: FeatureConfig,
                                                     storage_config: FeatureConfig):
