@@ -283,3 +283,8 @@ def test_lua_inet_return(cql, test_keyspace, scylla_only):
             call_lua(cql, test_keyspace, table, sig, 'return "abc"')
         with pytest.raises(NoHostAvailable, match="marshaling error: Failed to parse inet_addr from ''"):
             call_lua(cql, test_keyspace, table, sig, 'return ""')
+
+def test_lua_boolean_return(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val int") as table:
+        cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 3)")
+        assert call_lua(cql, test_keyspace, table, "(val int) CALLED ON NULL INPUT RETURNS boolean", "return val > 4") == [False]
