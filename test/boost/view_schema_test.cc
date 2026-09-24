@@ -33,18 +33,6 @@ BOOST_AUTO_TEST_SUITE(view_schema_test)
 
 using namespace std::literals::chrono_literals;
 
-SEASTAR_TEST_CASE(test_reuse_name) {
-    return do_with_cql_env_thread([] (auto& e) {
-        e.execute_cql("create table cf (p int primary key, v int);").get();
-        e.execute_cql("create materialized view vcf as select * from cf "
-                      "where v is not null and p is not null primary key (v, p)").get();
-        e.execute_cql("drop materialized view vcf").get();
-        e.execute_cql("create materialized view vcf as select * from cf "
-                      "where v is not null and p is not null "
-                      "primary key (v, p)").get();
-    });
-}
-
 SEASTAR_TEST_CASE(test_all_types) {
     logging::logger_registry().set_all_loggers_level(logging::log_level::error);
     return do_with_cql_env_thread([] (auto& e) {

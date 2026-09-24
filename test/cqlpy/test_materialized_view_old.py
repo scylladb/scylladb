@@ -32,7 +32,7 @@
 import pytest
 from cassandra.protocol import InvalidRequest
 
-from .util import new_test_table, new_materialized_view
+from .util import new_test_table, new_materialized_view, unique_name
 
 # CQL usually folds identifier names - keyspace, table and column names -
 # to lowercase. That is, unless the identifier is enclosed in double
@@ -129,3 +129,17 @@ def test_updates_no_read_before_update(cql, test_keyspace):
             cql.execute(f"insert into {table} (k, c, v) values (0, 0, 1)")
             assert [(0, 1)] == list(cql.execute(f"select k, v from {table} where k = 0"))
             assert [(0, 1)] == list(cql.execute(f"select k, v from {mv} where k = 0"))
+
+# Test that after a materialized view is dropped, its name can be reused for
+# a new view.
+def test_reuse_name(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int primary key, v int') as table:
+        mv = test_keyspace + '.' + unique_name()
+        create = (f"create materialized view {mv} as select * from {table} "
+                  "where v is not null and p is not null primary key (v, p)")
+        try:
+            cql.execute(create)
+            cql.execute(f"drop materialized view {mv}")
+            cql.execute(create)
+        finally:
+            cql.execute(f"drop materialized view if exists {mv}")
