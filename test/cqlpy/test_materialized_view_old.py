@@ -29,10 +29,15 @@
 # need this must wait for the build to complete, and can't just read the
 # view immediately after creating it.
 
+import contextlib
+import datetime
 import pytest
+from decimal import Decimal
+from uuid import UUID
 from cassandra.protocol import InvalidRequest
+from cassandra.util import Time
 
-from .util import new_test_table, new_materialized_view, unique_name
+from .util import new_test_table, new_type, new_materialized_view, unique_name
 
 # CQL usually folds identifier names - keyspace, table and column names -
 # to lowercase. That is, unless the identifier is enclosed in double
@@ -143,3 +148,235 @@ def test_reuse_name(cql, test_keyspace):
             cql.execute(create)
         finally:
             cql.execute(f"drop materialized view if exists {mv}")
+
+# The list of all the base-table columns of test_all_types()'s table below,
+# and for the ones which have a simple "insert a value and read it back"
+# check, also the CQL literal to write and the Python value we expect to read
+# back. The columns with a None here need a more elaborate check, and are
+# checked separately in the test.
+ALL_TYPES_COLUMNS = [
+    ('asciival', 'ascii', None),
+    ('bigintval', 'bigint', ('12121212', 12121212)),
+    ('blobval', 'blob', ('0x000001', b'\x00\x00\x01')),
+    ('booleanval', 'boolean', ('true', True)),
+    ('dateval', 'date', ("'1986-01-19'", datetime.date(1986, 1, 19))),
+    ('decimalval', 'decimal', ('123123.123123', Decimal('123123.123123'))),
+    ('doubleval', 'double', ('123123.123123', 123123.123123)),
+    # A float is only 32-bit, so 123123.123123 is rounded to 123123.125
+    ('floatval', 'float', ('123123.123123', 123123.125)),
+    ('inetval', 'inet', ("'127.0.0.1'", '127.0.0.1')),
+    ('intval', 'int', ('456', 456)),
+    ('textval', 'text', ('\'"some " text\'', '"some " text')),
+    ('timeval', 'time', ("'07:35:07.000111222'", Time('07:35:07.000111222'))),
+    # A timestamp given as a number is milliseconds since the epoch
+    ('timestampval', 'timestamp', ("'123123123123'", datetime.datetime(1973, 11, 26, 0, 52, 3, 123000))),
+    ('timeuuidval', 'timeuuid', ('D2177dD0-EAa2-11de-a572-001B779C76e3', UUID('d2177dd0-eaa2-11de-a572-001b779c76e3'))),
+    ('uuidval', 'uuid', ('6bddc89a-5644-11e4-97fc-56847afe9799', UUID('6bddc89a-5644-11e4-97fc-56847afe9799'))),
+    ('varcharval', 'varchar', None),
+    ('varintval', 'varint', ('1234567890123456789012345678901234567890', 1234567890123456789012345678901234567890)),
+    ('listval', 'list<int>', None),
+    ('frozenlistval', 'frozen<list<int>>', None),
+    ('setval', 'set<uuid>', None),
+    ('frozensetval', 'frozen<set<uuid>>', None),
+    ('mapval', 'map<ascii, int>', None),
+    ('frozenmapval', 'frozen<map<ascii, int>>', None),
+    ('tupleval', 'frozen<tuple<int, ascii, uuid>>', None),
+    ('vectorval', 'vector<int, 3>', None),
+    ('udtval', None, None),  # the UDT's name is only known at run time
+]
+
+# A view's key column may not be a multi-cell column - a non-frozen
+# collection - because such a column has no single value to key the view by.
+# The base table's partition key k is also not usable here, but for a
+# different reason: the view we try to create below would have "k" twice in
+# its primary key.
+ALL_TYPES_UNUSABLE_AS_VIEW_KEY = ['k', 'listval', 'setval', 'mapval']
+
+# Test that a materialized view can be keyed by a column of any CQL type -
+# and that when it is, the rest of the base row, of all types, is correctly
+# copied into the view. We create one view per base-table column, keyed by
+# that column, and then for each type write a value to the base table and
+# read it back through that type's view.
+def test_all_types(cql, test_keyspace):
+    with new_type(cql, test_keyspace, '(a int, b uuid, c set<text>)') as udt:
+        columns = [(name, typ if typ else f'frozen<{udt}>', check)
+                   for (name, typ, check) in ALL_TYPES_COLUMNS]
+        schema = 'k int PRIMARY KEY, ' + ', '.join(f'{name} {typ}' for (name, typ, _) in columns)
+        with new_test_table(cql, test_keyspace, schema) as table:
+            for col in ALL_TYPES_UNUSABLE_AS_VIEW_KEY:
+                # k would appear twice in the view's key below; the other three
+                # are multi-cell. The two databases word both errors quite
+                # differently, so match loosely.
+                error = ('Duplicate.*PRIMARY KEY' if col == 'k'
+                         else "MultiCell column|non-frozen collection type")
+                with pytest.raises(InvalidRequest, match=error):
+                    cql.execute(f'create materialized view {test_keyspace}.{unique_name()} as '
+                                f'select * from {table} where {col} is not null and k is not null '
+                                f'primary key ({col}, k)')
+            with contextlib.ExitStack() as stack:
+                mv = {name: stack.enter_context(new_materialized_view(cql, table, '*', f'{name}, k',
+                            f'{name} is not null and k is not null'))
+                      for (name, _, _) in columns if name not in ALL_TYPES_UNUSABLE_AS_VIEW_KEY}
+
+                # ================ ascii ================
+                # This is the first value written to the base row, so at this
+                # point the view row's other columns are still null.
+                cql.execute(f"insert into {table} (k, asciival) values (0, 'ascii text')")
+                assert [(0, 'ascii text', None)] == list(cql.execute(
+                    f"select k, asciival, udtval from {mv['asciival']} where asciival = 'ascii text'"))
+
+                # All the other simple types are checked the same way: write
+                # the value to the base table, and read it back through the
+                # view keyed by that column - together with asciival, to check
+                # that the view row also carries the rest of the base row.
+                for name, _, check in columns:
+                    if check is None:
+                        continue
+                    literal, expected = check
+                    cql.execute(f"insert into {table} (k, {name}) values (0, {literal})")
+                    assert [(0, expected, 'ascii text')] == list(cql.execute(
+                        f"select k, {name}, asciival from {mv[name]} where {name} = {literal}"))
+
+                # Overwriting a value which is the view's partition key moves
+                # the view row from one view partition to another.
+                cql.execute(f"insert into {table} (k, booleanval) values (0, false)")
+                assert [] == list(cql.execute(
+                    f"select k, booleanval, asciival from {mv['booleanval']} where booleanval = true"))
+                assert [(0, False, 'ascii text')] == list(cql.execute(
+                    f"select k, booleanval, asciival from {mv['booleanval']} where booleanval = false"))
+
+                # ================ lists ================
+                # A non-frozen list can't be a view key, so we read it through
+                # the view keyed by intval, whose value was set in the loop
+                # above. Every kind of list modification must reach the view.
+                def check_listval(expected):
+                    assert [(0, expected)] == list(cql.execute(
+                        f"select k, listval from {mv['intval']} where intval = 456"))
+                cql.execute(f"insert into {table} (k, listval) values (0, [1, 2, 3])")
+                check_listval([1, 2, 3])
+                cql.execute(f"insert into {table} (k, listval) values (0, [1])")
+                check_listval([1])
+                cql.execute(f"update {table} set listval = listval + [2] where k = 0")
+                check_listval([1, 2])
+                cql.execute(f"update {table} set listval = [0] + listval where k = 0")
+                check_listval([0, 1, 2])
+                cql.execute(f"update {table} set listval[1] = 10 where k = 0")
+                check_listval([0, 10, 2])
+                cql.execute(f"delete listval[1] from {table} where k = 0")
+                check_listval([0, 2])
+                # An empty list is not stored at all - it reads back as null,
+                # in the base table and in the view alike.
+                cql.execute(f"insert into {table} (k, listval) values (0, [])")
+                assert [(0, None)] == list(cql.execute(f"select k, listval from {table} where k = 0"))
+                check_listval(None)
+
+                # frozen
+                # A frozen list is a single value, so it can be a view key.
+                for value, expected in [('[1, 2, 3]', [1, 2, 3]), ('[3, 2, 1]', [3, 2, 1]), ('[]', [])]:
+                    cql.execute(f"insert into {table} (k, frozenlistval) values (0, {value})")
+                    assert [(0, expected, 'ascii text')] == list(cql.execute(
+                        f"select k, frozenlistval, asciival from {mv['frozenlistval']} "
+                        f"where frozenlistval = {value}"))
+
+                # ================ sets ================
+                uuid1 = '6bddc89a-5644-11e4-97fc-56847afe9798'
+                uuid2 = '6bddc89a-5644-11e4-97fc-56847afe9799'
+                uuid3 = '6bddc89a-5644-0000-97fc-56847afe9799'
+                def check_setval(expected):
+                    assert [(0, expected)] == list(cql.execute(
+                        f"select k, setval from {mv['intval']} where intval = 456"))
+                cql.execute(f"insert into {table} (k, setval) values (0, {{{uuid1}, {uuid2}}})")
+                check_setval({UUID(uuid1), UUID(uuid2)})
+                # A duplicate element in the inserted set changes nothing
+                cql.execute(f"insert into {table} (k, setval) values (0, {{{uuid1}, {uuid1}, {uuid2}}})")
+                check_setval({UUID(uuid1), UUID(uuid2)})
+                cql.execute(f"update {table} set setval = setval + {{{uuid3}}} where k = 0")
+                check_setval({UUID(uuid1), UUID(uuid2), UUID(uuid3)})
+                cql.execute(f"update {table} set setval = setval - {{{uuid3}}} where k = 0")
+                check_setval({UUID(uuid1), UUID(uuid2)})
+                # As with a list, an empty set reads back as null
+                cql.execute(f"insert into {table} (k, setval) values (0, {{}})")
+                check_setval(None)
+
+                # frozen
+                for value, expected in [('{}', set()),
+                                        (f'{{{uuid1}, {uuid2}}}', {UUID(uuid1), UUID(uuid2)}),
+                                        (f'{{6bddc89a-0000-11e4-97fc-56847afe9799, {uuid1}}}',
+                                         {UUID('6bddc89a-0000-11e4-97fc-56847afe9799'), UUID(uuid1)})]:
+                    cql.execute(f"insert into {table} (k, frozensetval) values (0, {value})")
+                    assert [(0, expected, 'ascii text')] == list(cql.execute(
+                        f"select k, frozensetval, asciival from {mv['frozensetval']} "
+                        f"where frozensetval = {value}"))
+
+                # ================ maps ================
+                def check_mapval(expected):
+                    assert [(0, expected)] == list(cql.execute(
+                        f"select k, mapval from {mv['intval']} where intval = 456"))
+                cql.execute(f"insert into {table} (k, mapval) values (0, {{'a': 1, 'b': 2}})")
+                check_mapval({'a': 1, 'b': 2})
+                cql.execute(f"update {table} set mapval['c'] = 3 where k = 0")
+                check_mapval({'a': 1, 'b': 2, 'c': 3})
+                cql.execute(f"update {table} set mapval['b'] = 10 where k = 0")
+                check_mapval({'a': 1, 'b': 10, 'c': 3})
+                cql.execute(f"delete mapval['b'] from {table} where k = 0")
+                check_mapval({'a': 1, 'c': 3})
+                # As with a list or a set, an empty map reads back as null
+                cql.execute(f"insert into {table} (k, mapval) values (0, {{}})")
+                check_mapval(None)
+
+                # frozen
+                for value, expected in [("{'a': 1, 'b': 2}", {'a': 1, 'b': 2}),
+                                        ("{'a': 1, 'b': 2, 'c': 3}", {'a': 1, 'b': 2, 'c': 3})]:
+                    cql.execute(f"insert into {table} (k, frozenmapval) values (0, {value})")
+                    assert [(0, expected, 'ascii text')] == list(cql.execute(
+                        f"select k, frozenmapval, asciival from {mv['frozenmapval']} "
+                        f"where frozenmapval = {value}"))
+
+                # ================ tuples ================
+                cql.execute(f"insert into {table} (k, tupleval) values (0, (1, 'foobar', {uuid2}))")
+                assert [(0, (1, 'foobar', UUID(uuid2)), 'ascii text')] == list(cql.execute(
+                    f"select k, tupleval, asciival from {mv['tupleval']} "
+                    f"where tupleval = (1, 'foobar', {uuid2})"))
+                # A null inside the tuple is part of the tuple's value, so it
+                # makes a different view key
+                cql.execute(f"insert into {table} (k, tupleval) values (0, (1, null, {uuid2}))")
+                assert [] == list(cql.execute(
+                    f"select k, tupleval, asciival from {mv['tupleval']} "
+                    f"where tupleval = (1, 'foobar', {uuid2})"))
+                assert [(0, (1, None, UUID(uuid2)), 'ascii text')] == list(cql.execute(
+                    f"select k, tupleval, asciival from {mv['tupleval']} "
+                    f"where tupleval = (1, null, {uuid2})"))
+
+                # ================ vectors ================
+                for value, expected in [('[1, 2, 3]', [1, 2, 3]), ('[3, 2, 1]', [3, 2, 1])]:
+                    cql.execute(f"insert into {table} (k, vectorval) values (0, {value})")
+                    assert [(0, expected, 'ascii text')] == list(cql.execute(
+                        f"select k, vectorval, asciival from {mv['vectorval']} "
+                        f"where vectorval = {value}"))
+
+                # ================ UDTs ================
+                # A UDT value can be written with positional or named fields,
+                # and either way it is the same value - the same view key.
+                for value in [f"(1, {uuid2}, {{'foo', 'bar'}})",
+                              f"{{b: {uuid2}, a: 1, c: {{'foo', 'bar'}}}}"]:
+                    cql.execute(f"insert into {table} (k, udtval) values (0, {value})")
+                    assert [(0, 1, UUID(uuid2), {'bar', 'foo'}, 'ascii text')] == list(cql.execute(
+                        f"select k, udtval.a, udtval.b, udtval.c, asciival from {mv['udtval']} "
+                        f"where udtval = {value}"))
+                # A null field, or a missing field, is part of the UDT's value
+                # and makes a different view key
+                cql.execute(f"insert into {table} (k, udtval) values (0, "
+                            f"{{a: null, b: {uuid2}, c: {{'foo', 'bar'}}}})")
+                assert [] == list(cql.execute(
+                    f"select k, udtval.a, udtval.b, udtval.c, asciival from {mv['udtval']} "
+                    f"where udtval = {{a: 1, b: {uuid2}, c: {{'foo', 'bar'}}}}"))
+                assert [(0, None, UUID(uuid2), {'bar', 'foo'}, 'ascii text')] == list(cql.execute(
+                    f"select k, udtval.a, udtval.b, udtval.c, asciival from {mv['udtval']} "
+                    f"where udtval = {{a: null, b: {uuid2}, c: {{'foo', 'bar'}}}}"))
+                cql.execute(f"insert into {table} (k, udtval) values (0, {{a: 1, b: {uuid2}}})")
+                assert [] == list(cql.execute(
+                    f"select k, udtval.a, udtval.b, udtval.c, asciival from {mv['udtval']} "
+                    f"where udtval = {{a: 1, b: {uuid2}, c: {{'foo', 'bar'}}}}"))
+                assert [(0, 1, UUID(uuid2), None, 'ascii text')] == list(cql.execute(
+                    f"select k, udtval.a, udtval.b, udtval.c, asciival from {mv['udtval']} "
+                    f"where udtval = {{a: 1, b: {uuid2}}}"))
