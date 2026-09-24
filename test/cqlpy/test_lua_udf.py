@@ -74,3 +74,8 @@ def test_lua_time_argument(cql, test_keyspace, scylla_only):
         cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', '01:23:45.6789')")
         assert call_lua(cql, test_keyspace, table, "(val time) CALLED ON NULL INPUT RETURNS bigint", "return val") == [
             (((60 + 23)*60 + 45)*10000 + 6789)*100000]
+
+def test_lua_timestamp_argument(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val timestamp") as table:
+        cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', '2011-03-02 04:05+0000')")
+        assert call_lua(cql, test_keyspace, table, "(val timestamp) CALLED ON NULL INPUT RETURNS bigint", "return val") == [1299038700000]
