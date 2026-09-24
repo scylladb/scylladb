@@ -1235,3 +1235,88 @@ def test_old_timestamps_with_restrictions(cql, test_keyspace):
             cql.execute(f"update {table} using timestamp 500 set val = 'bar' where k = 0 and c = 1")
             assert [(0,)] == list(cql.execute(f"select c from {mv} where val = 'baz'"))
             assert [(1,)] == list(cql.execute(f"select c from {mv} where val = 'bar'"))
+
+# Like test_complex_timestamp_updates above - a long sequence of writes with
+# explicit, out-of-order timestamps, checking after each step that the view
+# agrees with the base table - but exercising a different set of steps, and
+# again run both with and without a flush after each one.
+#
+# As in that test, the flush only pushes the following reads down to the
+# sstables if the row cache is off, which on Scylla means saying so per table.
+#
+# Despite the "restricted" in its name, this test's view restricts nothing
+# beyond IS NOT NULL, so unlike the other "restricted" tests above it runs on
+# Cassandra too and needs no scylla_only.
+@pytest.mark.parametrize("flush", [False, True], ids=["noflush", "flush"])
+def test_complex_restricted_timestamp_update(cql, test_keyspace, flush):
+    no_cache = "with caching = {'enabled': 'false'}" if flush and is_scylla(cql) else ""
+    def maybe_flush():
+        if flush:
+            nodetool.flush_all(cql)
+    with new_test_table(cql, test_keyspace, 'p int, c int, v1 int, v2 int, v3 int, primary key (p, c)',
+            extra=no_cache) as table:
+        with new_materialized_view(cql, table, '*', 'v1, p, c',
+                'p is not null and c is not null and v1 is not null', extra=no_cache) as mv:
+            # Set initial values TS=0, matching the restriction and verify view
+            cql.execute(f"insert into {table} (p, c, v1, v2) values (0, 0, 1, 0) using timestamp 0")
+            assert [(1, 0, 0, 0, None)] == list(cql.execute(f"select * from {mv}"))
+
+            # Update v1's timestamp TS=2
+            cql.execute(f"update {table} using timestamp 2 set v1 = 1 where p = 0 and c = 0")
+            maybe_flush()
+            assert [(0,)] == list(cql.execute(f"select v2 from {mv} where v1 = 1 and p = 0 and c = 0"))
+
+            # Update v1 @ TS=3, tombstones v1=1 and tries to add v1=0 partition
+            cql.execute(f"update {table} using timestamp 3 set v1 = 0 where p = 0 and c = 0")
+            maybe_flush()
+            assert 1 == len(list(cql.execute(f"select v2 from {mv} where v1 = 0 and p = 0 and c = 0")))
+
+            # Update v1 back to 1 with TS=4
+            cql.execute(f"update {table} using timestamp 4 set v1 = 1 where p = 0 and c = 0")
+            maybe_flush()
+            assert [(0, None)] == list(cql.execute(f"select v2, v3 from {mv} where v1 = 1 and p = 0 and c = 0"))
+
+            # Add v3 @ TS=1
+            cql.execute(f"update {table} using timestamp 1 set v3 = 1 where p = 0 and c = 0")
+            maybe_flush()
+            assert [(0, 1)] == list(cql.execute(f"select v2, v3 from {mv} where v1 = 1 and p = 0 and c = 0"))
+
+            # Update v2 @ TS=2
+            cql.execute(f"update {table} using timestamp 2 set v2 = 2 where p = 0 and c = 0")
+            maybe_flush()
+            assert [(2,)] == list(cql.execute(f"select v2 from {mv} where v1 = 1 and p = 0 and c = 0"))
+
+            # Update v2 @ TS=3
+            cql.execute(f"update {table} using timestamp 3 set v2 = 1 where p = 0 and c = 0")
+            maybe_flush()
+            assert [(1,)] == list(cql.execute(f"select v2 from {mv} where v1 = 1 and p = 0 and c = 0"))
+
+            # Tombstone v1
+            cql.execute(f"delete from {table} using timestamp 5 where p = 0 and c = 0")
+            assert [] == list(cql.execute(f"select v2 from {mv}"))
+
+            # Add the row back without v2
+            cql.execute(f"insert into {table} (p, c, v1) values (0, 0, 1) using timestamp 6")
+            # Make sure v2 doesn't pop back in.
+            assert [(None,)] == list(cql.execute(f"select v2 from {mv} where v1 = 1 and p = 0 and c = 0"))
+
+            # New partition
+            # Insert a row @ TS=0
+            cql.execute(f"insert into {table} (p, c, v1, v2, v3) values (1, 0, 1, 0, 0) using timestamp 0")
+
+            # Overwrite PK, v1 and v3 @ TS=1, but don't overwrite v2
+            cql.execute(f"insert into {table} (p, c, v1, v3) values (1, 0, 1, 0) using timestamp 1")
+
+            # Delete @ TS=0 (which should only delete v2)
+            cql.execute(f"delete from {table} using timestamp 0 where p = 1 and c = 0")
+            assert [(1, 1, 0, None, 0)] == list(cql.execute(f"select * from {mv} where v1 = 1 and p = 1 and c = 0"))
+
+            cql.execute(f"update {table} using timestamp 2 set v1 = 1 where p = 1 and c = 1")
+            maybe_flush()
+            cql.execute(f"update {table} using timestamp 3 set v1 = 1 where p = 1 and c = 0")
+            maybe_flush()
+            assert [(1, 1, 0, None, 0)] == list(cql.execute(f"select * from {mv} where v1 = 1 and p = 1 and c = 0"))
+
+            cql.execute(f"update {table} using timestamp 3 set v2 = 0 where p = 1 and c = 0")
+            maybe_flush()
+            assert [(1, 1, 0, 0, 0)] == list(cql.execute(f"select * from {mv} where v1 = 1 and p = 1 and c = 0"))
