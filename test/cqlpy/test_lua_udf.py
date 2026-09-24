@@ -460,3 +460,28 @@ def test_lua_map_return(cql, test_keyspace, scylla_only):
         cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 3)")
         assert call_lua(cql, test_keyspace, table, "(val int) CALLED ON NULL INPUT RETURNS map<text, int>",
                         "return {foo = 1, bar = 2}") == [{"bar": 2, "foo": 1}]
+
+def test_lua_udt_return(cql, test_keyspace, scylla_only):
+    with new_type(cql, test_keyspace, "(my_int int, my_double double)") as udt:
+        with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val int") as table:
+            cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 3)")
+            sig = f"(val int) CALLED ON NULL INPUT RETURNS {udt}"
+
+            # FIXME: Maybe instead of coercing tables to UDTs we should
+            # require that the user constructs a corresponding usertype
+            # explicitly:
+            #   v = my_type:new()
+            #   v.field1 = val1
+            #   v.field2 = val2
+            #   return v
+            # or:
+            #  return my_type:new({field1 = val1, field2 = val2})
+
+            [res] = call_lua(cql, test_keyspace, table, sig, "return {my_int = 1, my_double = 2.5}")
+            assert (res.my_int, res.my_double) == (1, 2.5)
+            with pytest.raises(InvalidRequest, match="invalid UDT field 'my_float'"):
+                call_lua(cql, test_keyspace, table, sig, "return {my_int = 1, my_float = 2.5}")
+            with pytest.raises(InvalidRequest, match="unexpected value"):
+                call_lua(cql, test_keyspace, table, sig, "return {[true] = 2.5}")
+            with pytest.raises(InvalidRequest, match=f"key my_double missing in udt {udt.split('.')[1]}"):
+                call_lua(cql, test_keyspace, table, sig, "return {my_int = 1}")
