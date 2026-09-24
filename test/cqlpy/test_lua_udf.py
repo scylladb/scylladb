@@ -403,3 +403,17 @@ def test_lua_vector_return(cql, test_keyspace, scylla_only):
             call_lua(cql, test_keyspace, table, sig, "return {1, 2, 3, 4}")
         with pytest.raises(InvalidRequest, match="key 2 missing in sequence of size 3"):
             call_lua(cql, test_keyspace, table, sig, "return {[1] = 1, [3] = 3}")
+
+def test_lua_list_return(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val int") as table:
+        cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 3)")
+        sig = "(val int) CALLED ON NULL INPUT RETURNS list<int>"
+        assert call_lua(cql, test_keyspace, table, sig, "return {1,2,3}") == [[1, 2, 3]]
+        with pytest.raises(InvalidRequest, match="value is not an integer"):
+            call_lua(cql, test_keyspace, table, sig, "return {1.2}")
+        with pytest.raises(InvalidRequest, match="value is not a table"):
+            call_lua(cql, test_keyspace, table, sig, 'return "foo"')
+        with pytest.raises(InvalidRequest, match="value is not a number"):
+            call_lua(cql, test_keyspace, table, sig, "return {foo = 42}")
+        with pytest.raises(InvalidRequest, match="table is not a sequence"):
+            call_lua(cql, test_keyspace, table, sig, "return {[1] = 42, [3] = 43}")
