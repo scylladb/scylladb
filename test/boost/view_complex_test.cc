@@ -135,6 +135,12 @@ SEASTAR_TEST_CASE(test_partial_delete_selected_column_ttl_with_flush) {
     }, cfg);
 }
 
+// This test was deliberately not moved to Python in issue #16134. It needs
+// forward_jump_clocks() to expire a TTL instantly, which cqlpy has no
+// equivalent of, and unlike some of the other tests here there is no useful
+// part to split off: the TTL is what the test is about - it is in its name -
+// and the three steps which precede the TTL are only setting the stage, and
+// check nothing which the tests moved to Python don't already check.
 void test_update_column_in_view_pk_with_ttl(cql_test_env& e, std::function<void()>&& maybe_flush) {
     e.execute_cql("create table cf (p int primary key, a int, b int)").get();
     e.execute_cql("create materialized view vcf as select * from cf "
@@ -211,6 +217,9 @@ SEASTAR_TEST_CASE(test_update_column_in_view_pk_with_ttl_with_flush) {
     }, cfg);
 }
 
+// Also not moved to Python in issue #16134, and for the same reason as the
+// test above: it is entirely about a TTL expiring, which cqlpy cannot make
+// happen without really sleeping for it.
 SEASTAR_TEST_CASE(test_unselected_column_can_preserve_ttld_row_maker) {
     return do_with_cql_env_thread([] (auto& e) {
         e.execute_cql("create table cf (p int, c int, v int, primary key (p, c))").get();
