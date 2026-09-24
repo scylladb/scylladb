@@ -505,6 +505,11 @@ SEASTAR_TEST_CASE(test_marker_timestamp_is_not_shadowed_by_previous_updatewith_f
 
 // This is another reproducer for issue #3362, using TTLs instead of
 // numerous back-and-forth additions and deletions.
+//
+// Not moved to Python in issue #16134: using a TTL instead of the
+// back-and-forth is the whole difference between this test and
+// test_3362_no_ttls, which did move, and expiring one needs
+// forward_jump_clocks(), which cqlpy has no equivalent of.
 SEASTAR_TEST_CASE(test_3362_with_ttls) {
     return do_with_cql_env_thread([] (auto& e) {
         e.execute_cql("create table cf (p int, c int, a int, b int, primary key (p, c))").get();
