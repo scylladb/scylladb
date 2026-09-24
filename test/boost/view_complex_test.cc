@@ -465,6 +465,9 @@ SEASTAR_TEST_CASE(test_shadowing_row_marker) {
     });
 }
 
+// Not moved to Python in issue #16134: the test is five statements and a
+// forward_jump_clocks() to expire the TTL they set, which cqlpy has no
+// equivalent of, so there is nothing here to move without it.
 void test_marker_timestamp_is_not_shadowed_by_previous_update(cql_test_env& e, std::function<void()>&& maybe_flush) {
     e.execute_cql("create table cf (p int, c int, v1 int, v2 int, primary key (p, c))").get();
     e.execute_cql("create materialized view vcf as select p, c, v1 from cf "
