@@ -3435,6 +3435,52 @@ def test_3362_with_ttls_frozen(cql, test_keyspace, clock, cassandra_bug):
             clock.jump(clock.ttl + 1)
             check([(1, 1)])
 
+# This is a version of test_3362_with_ttls with the added twist that the
+# unselected column involved did not exist when the base table and view
+# were originally created, but only added later with an "alter table".
+# For this test to work, "alter table" will need to add the virtual
+# columns in the view table for the newly created unselected column in
+# the base table.
+#
+# This test is about handling changes to virtual columns as the base table
+# columns change, but only for the "add" case. Theoretically we could have had
+# problems in the "drop" and "rename" cases as well, but today, those are not
+# supported:
+# 1. Today we do not allow "alter table drop" to drop any column from a base
+#    table with views - even unselected columns.
+#    If we every do allow this, we need to also check that we drop the
+#    virtual column from the view.
+# 2. Today we do not allow "alter table rename" to rename any non-pk
+#    column, so unselected columns also cannot be renamed. If this
+#    limitation is ever lifted, we will need to check that if we
+#    rename an unselected base column, the virtual column in the view is
+#    also renamed.
+#
+# cassandra_bug for the same reason as the rest of the #3362 family.
+def test_3362_with_ttls_alter_add(cql, test_keyspace, clock, cassandra_bug):
+    with new_test_table(cql, test_keyspace, 'p int, c int, primary key (p, c)') as table:
+        with new_materialized_view(cql, table, 'p, c', 'p, c',
+                'p is not null and c is not null') as mv:
+            def check(expected):
+                assert expected == list(cql.execute(f"select * from {mv} where p = 1 and c = 1"))
+
+            # Add with "alter table" two additional columns to the base table -
+            # a and b. These are not selected in the materialized view, and we
+            # want to check that they are treated like unselected columns
+            # (namely, virtual columns are added to the view).
+            cql.execute(f"alter table {table} add a int")
+            cql.execute(f"alter table {table} add b int")
+
+            cql.execute(f"update {table} using timestamp 2 and ttl {clock.ttl} set a = 1 where p = 1 and c = 1")
+            check([(1, 1)])
+
+            cql.execute(f"update {table} using timestamp 1 set b = 1 where p = 1 and c = 1")
+            check([(1, 1)])
+
+            clock.jump(clock.ttl + 1)
+            assert [(1, 1, None, 1)] == list(cql.execute(f"select * from {table} where p = 1 and c = 1"))
+            check([(1, 1)])
+
 # Tests that after the fixes for issue #3362, various miscellaneous
 # combinations of appearance and disappearance of unselected base cells
 # and row markers which happen to cause view_updates::do_delete_old_entry()
