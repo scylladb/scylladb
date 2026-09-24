@@ -485,3 +485,8 @@ def test_lua_udt_return(cql, test_keyspace, scylla_only):
                 call_lua(cql, test_keyspace, table, sig, "return {[true] = 2.5}")
             with pytest.raises(InvalidRequest, match=f"key my_double missing in udt {udt.split('.')[1]}"):
                 call_lua(cql, test_keyspace, table, sig, "return {my_int = 1}")
+
+def test_lua_called_on_null(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val int") as table:
+        cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', null)")
+        assert call_lua(cql, test_keyspace, table, "(val int) CALLED ON NULL INPUT RETURNS int", "return 2") == [2]
