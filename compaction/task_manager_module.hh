@@ -163,35 +163,6 @@ inline constexpr auto upgrade_sstables_compaction_task_type = "upgrade sstables 
 
 inline constexpr auto scrub_sstables_compaction_task_type = "scrub sstables compaction";
 
-class shard_scrub_sstables_compaction_task_impl : public sstables_compaction_task_impl {
-private:
-    replica::database& _db;
-    std::vector<sstring> _column_families;
-    compaction_type_options::scrub _opts;
-    compaction_stats& _stats;
-public:
-    shard_scrub_sstables_compaction_task_impl(tasks::task_manager::module_ptr module,
-            std::string keyspace,
-            tasks::task_id parent_id,
-            replica::database& db,
-            std::vector<sstring> column_families,
-            compaction_type_options::scrub opts,
-            compaction_stats& stats) noexcept
-        : sstables_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, "shard", std::move(keyspace), "", "", parent_id)
-        , _db(db)
-        , _column_families(std::move(column_families))
-        , _opts(opts)
-        , _stats(stats)
-    {}
-
-    virtual std::string type() const override {
-        return scrub_sstables_compaction_task_type;
-    }
-protected:
-    virtual future<> run() override;
-    virtual future<std::optional<double>> expected_total_workload() const override;
-};
-
 class table_scrub_sstables_compaction_task_impl : public sstables_compaction_task_impl {
 private:
     replica::database& _db;
@@ -425,6 +396,10 @@ public:
     // Starts a scrub of the given tables of a keyspace on all the shards.
     // If stats is set, it receives the scrub's result.
     future<tasks::task_manager::task_ptr> start_scrub_sstables_keyspace_compaction(sharded<replica::database>& db, std::string keyspace, std::vector<sstring> column_families, compaction_type_options::scrub opts, compaction_stats* stats);
+
+    // Starts a scrub of the given tables of a keyspace on this shard.
+    // stats receives the scrub's result.
+    future<tasks::task_manager::task_ptr> start_shard_scrub_sstables_compaction(replica::database& db, std::string keyspace, const std::vector<sstring>& column_families, compaction_type_options::scrub opts, compaction_stats& stats, tasks::task_info parent_info);
 };
 
 class regular_compaction_task_impl : public compaction_task_impl {

@@ -881,7 +881,7 @@ static future<> run_scrub_sstables_keyspace_compaction(sharded<replica::database
     auto res = co_await db.map_reduce0([&] (replica::database& local_db) -> future<compaction_stats> {
         compaction_stats shard_stats;
         auto& module = local_db.get_compaction_manager().get_task_manager_module();
-        auto task = co_await module.make_and_start_task<shard_scrub_sstables_compaction_task_impl>(task_info, keyspace, task_info.get_id(), local_db, *column_families, opts, shard_stats);
+        auto task = co_await module.start_shard_scrub_sstables_compaction(local_db, keyspace, *column_families, opts, shard_stats, task_info);
         co_await task->done();
         co_return shard_stats;
     }, compaction_stats{}, std::plus<compaction_stats>());
@@ -914,8 +914,8 @@ future<tasks::task_manager::task_ptr> task_manager_module::start_scrub_sstables_
     });
 }
 
-static future<> run_shard_scrub_sstables_compaction(task_manager_module& module, replica::database& db, std::string keyspace, const std::vector<sstring>& column_families, compaction_type_options::scrub opts, compaction_stats& stats, tasks::task_info task_info) {
-    stats = co_await map_reduce(column_families, [&] (sstring cfname) -> future<compaction_stats> {
+static future<> run_shard_scrub_sstables_compaction(task_manager_module& module, replica::database& db, std::string keyspace, lw_shared_ptr<std::vector<sstring>> column_families, compaction_type_options::scrub opts, compaction_stats& stats, tasks::task_info task_info) {
+    stats = co_await map_reduce(*column_families, [&] (sstring cfname) -> future<compaction_stats> {
         compaction_stats table_stats{};
         auto task = co_await module.make_and_start_task<table_scrub_sstables_compaction_task_impl>(task_info, keyspace, cfname, task_info.get_id(), db, opts, table_stats);
         co_await task->done();
@@ -923,26 +923,25 @@ static future<> run_shard_scrub_sstables_compaction(task_manager_module& module,
     }, compaction_stats{}, std::plus<compaction_stats>());
 }
 
-future<> shard_scrub_sstables_compaction_task_impl::run() {
-    return run_shard_scrub_sstables_compaction(_db.get_compaction_manager().get_task_manager_module(), _db, _status.keyspace, _column_families, _opts, _stats, info());
-}
-
-future<std::optional<double>> shard_scrub_sstables_compaction_task_impl::expected_total_workload() const {
-    try {
-        std::vector<table_info> table_infos;
-        table_infos.reserve(_column_families.size());
-        for (auto& cf : _column_families) {
-            auto id = _db.find_uuid(_status.keyspace, cf);
-            table_infos.push_back(table_info{
-                .name = cf,
-                .id = id
-            });
-        }
-        co_return _expected_workload = _expected_workload ? _expected_workload : co_await get_shard_task_workload(_db, _status.keyspace, std::move(table_infos));
-    } catch (...) {
-        // Expected total workload cannot be found.
-    }
-    co_return std::nullopt;
+future<tasks::task_manager::task_ptr> task_manager_module::start_shard_scrub_sstables_compaction(replica::database& db, std::string keyspace, const std::vector<sstring>& column_families, compaction_type_options::scrub opts, compaction_stats& stats, tasks::task_info parent_info) {
+    auto cfs = make_lw_shared<std::vector<sstring>>(column_families);
+    tasks::task_manager::task_builder task_builder{shared_from_this(), scrub_sstables_compaction_task_type};
+    task_builder.set_scope("shard")
+                .set_keyspace(keyspace)
+                .set_progress_units("bytes")
+                .set_parent_info(parent_info)
+                .set_workload_fn([&db, keyspace, cfs] () -> future<std::optional<double>> {
+                    try {
+                        auto table_infos = get_table_infos(db, keyspace, *cfs);
+                        co_return co_await get_shard_task_workload(db, keyspace, table_infos);
+                    } catch (...) {
+                        // The workload is unknown, e.g. if a table was dropped since the task was created.
+                    }
+                    co_return std::nullopt;
+                });
+    return std::move(task_builder).build([this, &db, keyspace = std::move(keyspace), cfs, opts, &stats] (tasks::task_manager::task::impl& self) {
+        return run_shard_scrub_sstables_compaction(*this, db, keyspace, cfs, opts, stats, self.info());
+    });
 }
 
 future<> table_scrub_sstables_compaction_task_impl::run() {
