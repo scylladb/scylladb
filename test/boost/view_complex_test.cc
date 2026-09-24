@@ -25,26 +25,6 @@ BOOST_AUTO_TEST_SUITE(view_complex_test)
 
 using namespace std::literals::chrono_literals;
 
-// Also not moved to Python in issue #16134, and for the same reason as the
-// test above: it is entirely about a TTL expiring, which cqlpy cannot make
-// happen without really sleeping for it.
-SEASTAR_TEST_CASE(test_unselected_column_can_preserve_ttld_row_maker) {
-    return do_with_cql_env_thread([] (auto& e) {
-        e.execute_cql("create table cf (p int, c int, v int, primary key (p, c))").get();
-        e.execute_cql("create materialized view vcf as select p, c from cf "
-                      "where p is not null and c is not null "
-                      "primary key (c, p)").get();
-
-        e.execute_cql("insert into cf (p, c) values (0, 0) using ttl 100").get();
-        e.execute_cql("update cf using ttl 0 set v = 0 where p = 0 and c = 0").get();
-        forward_jump_clocks(101s);
-        eventually([&] {
-            auto msg = e.execute_cql("select * from vcf").get();
-            assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(0)}, {int32_type->decompose(0)}, }});
-        });
-    });
-}
-
 // The first steps of this test - the writes and deletions at assorted
 // timestamps - were moved to Python in issue #16134, as
 // test_update_column_not_in_view in

@@ -2734,6 +2734,19 @@ def test_update_column_in_view_pk_with_ttl(cql, test_keyspace, flush, clock):
             clock.jump(clock.ttl + 1)
             check([])
 
+# The base row is inserted with a TTL, so its row marker expires - but an
+# unselected column, v, is then written without one (ttl 0 means no TTL at
+# all). That keeps the base row alive after the marker is gone, and so the
+# view row has to survive too.
+def test_unselected_column_can_preserve_ttld_row_maker(cql, test_keyspace, clock):
+    with new_test_table(cql, test_keyspace, 'p int, c int, v int, primary key (p, c)') as table:
+        with new_materialized_view(cql, table, 'p, c', 'c, p',
+                'p is not null and c is not null') as mv:
+            cql.execute(f"insert into {table} (p, c) values (0, 0) using ttl {clock.ttl}")
+            cql.execute(f"update {table} using ttl 0 set v = 0 where p = 0 and c = 0")
+            clock.jump(clock.ttl + 1)
+            assert [(0, 0)] == list(cql.execute(f"select * from {mv}"))
+
 # A view selecting nothing but the base's key columns still has to know
 # whether the base row is alive, which depends on the liveness of columns the
 # view doesn't select - here v1 and v2.
