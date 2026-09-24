@@ -2926,3 +2926,47 @@ def test_3362_no_ttls(cql, test_keyspace, cassandra_bug):
             # test above would have failed instead).
             cql.execute(f"update {table} using timestamp 12 set b = 1 where p = 1 and c = 1")
             check([(1, 1)])
+
+# The following are more test for issue #3362, same as test_3362_no_ttls
+# and test_3362_with_ttls, just with a collection with items "1" and "2"
+# instead of separate columns a and b. For brevity, comments were removed,
+# so refer to the comments in the original code above.
+#
+# cassandra_bug for the same reason as test_3362_no_ttls: Cassandra doesn't
+# track the liveness of the unselected column separately, so the last step
+# leaves its view empty although the base row is alive.
+@pytest.mark.parametrize("kind", ['set', 'list', 'map'])
+def test_3362_no_ttls_with_collections(cql, test_keyspace, kind, cassandra_bug):
+    column_type = {'set': 'set<int>', 'list': 'list<int>', 'map': 'map<int, int>'}[kind]
+    # The literal for a collection holding just the element n. A map needs a
+    # value for it, and 17 will do.
+    def item(n):
+        return {'set': f'{{{n}}}', 'list': f'[{n}]', 'map': f'{{{n} : 17}}'}[kind]
+    with new_test_table(cql, test_keyspace, f'p int, c int, a {column_type}, primary key (p, c)') as table:
+        with new_materialized_view(cql, table, 'p, c', 'p, c',
+                'p is not null and c is not null') as mv:
+            def check(expected):
+                assert expected == list(cql.execute(f"select * from {mv} where p = 1 and c = 1"))
+            def remove(n, timestamp):
+                # A map element is removed by its key, the others by value
+                if kind == 'map':
+                    cql.execute(f"delete a[{n}] from {table} using timestamp {timestamp} "
+                                "where p = 1 and c = 1")
+                else:
+                    cql.execute(f"update {table} using timestamp {timestamp} "
+                                f"set a = a - {item(n)} where p = 1 and c = 1")
+
+            cql.execute(f"update {table} using timestamp 10 set a = a + {item(2)} where p = 1 and c = 1")
+            check([(1, 1)])
+
+            cql.execute(f"update {table} using timestamp 20 set a = a + {item(1)} where p = 1 and c = 1")
+            check([(1, 1)])
+
+            remove(1, 21)
+            check([(1, 1)])
+
+            remove(2, 11)
+            check([])
+
+            cql.execute(f"update {table} using timestamp 12 set a = a + {item(2)} where p = 1 and c = 1")
+            check([(1, 1)])
