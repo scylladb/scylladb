@@ -2462,3 +2462,57 @@ def test_partial_delete_unselected_column(cql, test_keyspace, flush, cassandra_b
             # exists in the base table, so should also exist in the view table.
             cql.execute(f"insert into {table} (p, c) values (1, 1) using timestamp 15")
             check([(1, 1)])
+
+# Like test_partial_delete_unselected_column above, but here the view selects
+# a and b, so the question of whether the view row lives is about the base
+# row's own liveness and that of the selected columns.
+#
+# The C++ original continued with a few more steps using a TTL, which need to
+# make it expire instantly; those stayed behind in view_complex_test.cc, as
+# test_partial_delete_selected_column_ttl.
+@pytest.mark.parametrize("flush", [False, True], ids=["noflush", "flush"])
+def test_partial_delete_selected_column(cql, test_keyspace, flush):
+    no_cache = "with caching = {'enabled': 'false'}" if flush and is_scylla(cql) else ""
+    def maybe_flush():
+        if flush:
+            nodetool.flush_all(cql)
+    with new_test_table(cql, test_keyspace,
+            'p int, c int, a int, b int, e int, f int, primary key (p, c)', extra=no_cache) as table:
+        with new_materialized_view(cql, table, 'p, c, a, b', 'p, c',
+                'p is not null and c is not null', extra=no_cache) as mv:
+            def check(expected):
+                assert expected == list(cql.execute(f"select * from {mv} where p = 1 and c = 1"))
+
+            cql.execute(f"update {table} using timestamp 10 set b = 1 where p = 1 and c = 1")
+            maybe_flush()
+            check([(1, 1, None, 1)])
+
+            cql.execute(f"delete b from {table} using timestamp 11 where p = 1 and c = 1")
+            maybe_flush()
+            check([])
+
+            cql.execute(f"update {table} using timestamp 1 set a = 1 where p = 1 and c = 1")
+            maybe_flush()
+            check([(1, 1, 1, None)])
+
+            cql.execute(f"delete a from {table} using timestamp 1 where p = 1 and c = 1")
+            maybe_flush()
+            check([])
+
+            cql.execute(f"insert into {table} (p, c) values (1, 1) using timestamp 0")
+            check([(1, 1, None, None)])
+
+            cql.execute(f"update {table} using timestamp 12 set b = 1 where p = 1 and c = 1")
+            maybe_flush()
+            check([(1, 1, None, 1)])
+
+            cql.execute(f"delete b from {table} using timestamp 13 where p = 1 and c = 1")
+            maybe_flush()
+            check([(1, 1, None, None)])
+
+            cql.execute(f"delete from {table} using timestamp 14 where p = 1 and c = 1")
+            maybe_flush()
+            check([])
+
+            cql.execute(f"insert into {table} (p, c) values (1, 1) using timestamp 15")
+            check([(1, 1, None, None)])
