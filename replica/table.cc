@@ -2884,7 +2884,8 @@ future<bool> table::perform_offstrategy_compaction(tasks::task_info info) {
 
 future<> table::perform_cleanup_compaction(compaction::owned_ranges_ptr sorted_owned_ranges,
                                            tasks::task_info info,
-                                           do_flush do_flush) {
+                                           do_flush do_flush,
+                                           compaction::is_topology_cleanup topology_cleanup) {
     auto* cg = try_get_compaction_group_with_static_sharding();
     if (!cg) {
         co_return;
@@ -2895,7 +2896,7 @@ future<> table::perform_cleanup_compaction(compaction::owned_ranges_ptr sorted_o
     }
 
     auto lock_holder = co_await get_compaction_manager().get_incremental_repair_read_lock(cg->as_view_for_static_sharding(), "perform_cleanup_compaction");
-    co_return co_await get_compaction_manager().perform_cleanup(std::move(sorted_owned_ranges), cg->as_view_for_static_sharding(), info);
+    co_return co_await get_compaction_manager().perform_cleanup(std::move(sorted_owned_ranges), cg->as_view_for_static_sharding(), info, topology_cleanup);
 }
 
 future<unsigned> compaction_group::estimate_pending_compactions() const {

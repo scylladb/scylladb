@@ -142,6 +142,10 @@ private:
     // If the operation must be serialized with regular, then the per-table write lock must be taken.
     seastar::named_semaphore _maintenance_ops_sem = {1, named_semaphore_exception_factory{"maintenance operation"}};
 
+    // Purpose is to serialize topology-driven cleanups among themselves only, so they are
+    // never queued behind a user maintenance operation holding _maintenance_ops_sem.
+    seastar::named_semaphore _topology_cleanup_sem = {1, named_semaphore_exception_factory{"topology cleanup"}};
+
     // This semaphore ensures that off-strategy compaction will be serialized for
     // all tables, to limit space requirement and protect against candidates
     // being picked more than once.
@@ -355,9 +359,11 @@ public:
     // Cleanup is about discarding keys that are no longer relevant for a
     // given sstable, e.g. after node loses part of its token range because
     // of a newly added node.
-    future<> perform_cleanup(owned_ranges_ptr sorted_owned_ranges, compaction::compaction_group_view& t, tasks::task_info info);
+    future<> perform_cleanup(owned_ranges_ptr sorted_owned_ranges, compaction::compaction_group_view& t, tasks::task_info info,
+                             compaction::is_topology_cleanup topology_cleanup = compaction::is_topology_cleanup::no);
 private:
-    future<> try_perform_cleanup(owned_ranges_ptr sorted_owned_ranges, compaction::compaction_group_view& t, tasks::task_info info);
+    future<> try_perform_cleanup(owned_ranges_ptr sorted_owned_ranges, compaction::compaction_group_view& t, tasks::task_info info,
+                                 compaction::is_topology_cleanup topology_cleanup);
 
     // Add sst to or remove it from the respective compaction_state.sstables_requiring_cleanup set.
     bool update_sstable_cleanup_state(compaction_group_view& t, const sstables::shared_sstable& sst, const dht::token_range_vector& sorted_owned_ranges);
@@ -585,7 +591,7 @@ protected:
 
     state switch_state(state new_state);
 
-    future<semaphore_units<named_semaphore_exception_factory>> acquire_semaphore(named_semaphore& sem, size_t units = 1);
+    future<semaphore_units<named_semaphore_exception_factory>> acquire_semaphore(named_semaphore& sem, std::string_view sem_name, size_t units = 1);
 
     // Return true if the task isn't stopped
     // and the compaction manager allows proceeding.
