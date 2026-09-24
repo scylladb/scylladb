@@ -1946,3 +1946,54 @@ def test_mv_allow_some_column_drops(cql, test_keyspace, scylla_only):
             for column in ['p', 'c']:
                 with pytest.raises(InvalidRequest, match=f'Cannot drop PRIMARY KEY part {column}'):
                     cql.execute(f"alter table {table} drop {column}")
+
+# A base table with a compound partition key, and views keyed by each of its
+# columns in turn, in each position. A view may reorder the base's partition
+# key columns, or move one of them into the view's clustering key, or add a
+# regular column in front of them - but it may not name the same column twice.
+def test_compound_partition_key(cql, test_keyspace):
+    # Each view below is the primary key it asks for, the IS NOT NULL
+    # restrictions it needs, and whether creating it should be accepted. The
+    # rejected ones are exactly those naming a column twice.
+    p12 = 'p1 is not null and p2 is not null'
+    v12 = 'v is not null and ' + p12
+    views = {
+        'mv1_p1': ('p1, p1, p2', p12, False),
+        'mv1_p2': ('p2, p1', p12, True),
+        'mv1_v': ('v, p1, p2', v12, True),
+        'mv2_p1': ('p1, p2', p12, True),
+        'mv2_p2': ('p2, p2, p1', p12, False),
+        'mv2_v': ('v, p2, p1', v12, True),
+        'mv3_p1': ('(p1, p1), p2', p12, False),
+        'mv3_p2': ('(p2, p1), p2', p12, False),
+        'mv3_v': ('(v, p1), p2', v12, True),
+    }
+    with new_test_table(cql, test_keyspace, 'p1 int, p2 int, v int, primary key ((p1, p2))') as table:
+        with contextlib.ExitStack() as stack:
+            mv = {}
+            for name, (pk, where, accepted) in views.items():
+                if accepted:
+                    mv[name] = stack.enter_context(
+                        new_materialized_view(cql, table, '*', pk, where))
+                else:
+                    with pytest.raises(InvalidRequest, match='Duplicate.*PRIMARY KEY'):
+                        with new_materialized_view(cql, table, '*', pk, where):
+                            pass
+
+            cql.execute(f"insert into {table} (p1, p2, v) values (0, 2, 5)")
+            assert [(0, 5)] == list(cql.execute(f"select p1, v from {mv['mv1_p2']} where p2 = 2"))
+            assert [(0, 5)] == list(cql.execute(
+                f"select p1, v from {mv['mv2_p1']} where p2 = 2 and p1 = 0"))
+            assert [(0,)] == list(cql.execute(f"select p1 from {mv['mv1_v']} where v = 5"))
+            assert [(2,)] == list(cql.execute(
+                f"select p2 from {mv['mv3_v']} where v = 5 and p1 = 0"))
+
+            # Overwriting v moves the view row of every view keyed by it
+            cql.execute(f"insert into {table} (p1, p2, v) values (0, 2, 8)")
+            assert [(0, 8)] == list(cql.execute(f"select p1, v from {mv['mv1_p2']} where p2 = 2"))
+            assert [(0, 8)] == list(cql.execute(
+                f"select p1, v from {mv['mv2_p1']} where p2 = 2 and p1 = 0"))
+            assert [] == list(cql.execute(f"select p1 from {mv['mv1_v']} where v = 5"))
+            assert [] == list(cql.execute(f"select p2 from {mv['mv3_v']} where v = 5 and p1 = 0"))
+            assert [(2,)] == list(cql.execute(
+                f"select p2 from {mv['mv3_v']} where v = 8 and p1 = 0"))
