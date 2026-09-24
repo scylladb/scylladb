@@ -127,20 +127,13 @@ SEASTAR_TEST_CASE(test_user_function_errors) {
     });
 }
 
+// The rest of this test was ported to test/cqlpy/test_lua_udf.py. This part
+// triggers an internal error, which would abort a server run by cqlpy.
 SEASTAR_TEST_CASE(test_user_function_filtering) {
     return with_udf_enabled([] (cql_test_env& e) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val int, t timestamp);").get();
         e.execute_cql("INSERT INTO my_table (key, val, t) VALUES ('foo', 7, toTimestamp(now()) );").get();
         e.execute_cql("INSERT INTO my_table (key, val, t) VALUES ('bar', 10, toTimestamp(now()) );").get();
-        e.execute_cql("CREATE FUNCTION my_func(val int) \
-                RETURNS NULL ON NULL INPUT \
-                RETURNS int \
-                LANGUAGE Lua \
-                AS 'return 2 * val';").get();
-        // Expect error until UDFs can be used for filtering.
-        // See #5607
-        BOOST_REQUIRE_EXCEPTION(e.execute_cql("SELECT val FROM my_table WHERE my_func(val) > 10;").get(),
-                                ire, message_contains("Only the token function and scoring functions are supported in function-call restrictions"));
 
         // Reproduce #7977 and verify the internal error exception
         e.execute_cql("CREATE FUNCTION minutesAgo(ago int, now bigint) \

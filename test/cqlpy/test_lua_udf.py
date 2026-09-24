@@ -610,3 +610,13 @@ def test_udf_invalid_type(cql, test_keyspace, scylla_only):
             assert row.called_on_null_input == False
             assert row.language == "lua"
             assert row.return_type == "int"
+
+def test_udf_filtering(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val int, t timestamp") as table:
+        cql.execute(f"INSERT INTO {table} (key, val, t) VALUES ('foo', 7, toTimestamp(now()))")
+        cql.execute(f"INSERT INTO {table} (key, val, t) VALUES ('bar', 10, toTimestamp(now()))")
+        with new_function(cql, test_keyspace, "(val int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return 2 * val'") as f:
+            # Expect error until UDFs can be used for filtering.
+            # See #5607
+            with pytest.raises(InvalidRequest, match="Only the token function and scoring functions are supported in function-call restrictions"):
+                cql.execute(f"SELECT val FROM {table} WHERE {test_keyspace}.{f}(val) > 10")
