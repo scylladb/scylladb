@@ -556,6 +556,12 @@ SEASTAR_TEST_CASE(test_3362_with_ttls) {
     });
 }
 
+// Not moved to Python in issue #16134: these are the TTL versions of the
+// collection tests whose non-TTL versions did move (as
+// test_3362_no_ttls_with_collections in
+// test/cqlpy/test_materialized_view_old.py). Using a TTL is the whole
+// difference, and expiring one needs forward_jump_clocks(), which cqlpy has
+// no equivalent of.
 enum class collection_kind { set, list, map };
 void do_test_3362_with_ttls_with_collections(cql_test_env& e, collection_kind t) {
     sstring type, pref, suf;
@@ -616,6 +622,9 @@ SEASTAR_TEST_CASE(test_3362_with_ttls_with_map) {
 // instead of integer fields in test_3362_with_ttls. The intention is to
 // verify that we properly fixed #3362 in this case - by replacing the
 // frozen collection by a single virtual cell, not a collection.
+//
+// Not moved to Python in issue #16134, for the same reason as the tests above
+// it: it needs forward_jump_clocks() to expire its TTL.
 SEASTAR_TEST_CASE(test_3362_with_ttls_frozen) {
     return do_with_cql_env_thread([] (auto& e) {
         e.execute_cql("create table cf (p int, c int, a frozen<set<int>>, b frozen<set<int>>, primary key (p, c))").get();
@@ -649,6 +658,9 @@ SEASTAR_TEST_CASE(test_3362_with_ttls_frozen) {
 // For this test to work, "alter table" will need to add the virtual
 // columns in the view table for the newly created unselected column in
 // the base table.
+//
+// Not moved to Python in issue #16134, for the same reason as the tests above
+// it: it needs forward_jump_clocks() to expire its TTL.
 SEASTAR_TEST_CASE(test_3362_with_ttls_alter_add) {
     return do_with_cql_env_thread([] (auto& e) {
         e.execute_cql("create table cf (p int, c int, primary key (p, c))").get();
