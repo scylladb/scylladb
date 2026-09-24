@@ -65,7 +65,7 @@ class Outcome(StrEnum):
     UNKNOWN = "unknown"
 
     #: ``UNKNOWN`` is what a policy *returns*; it is never written into the
-    #: history as a status.  See :meth:`HistoryRecorder.leave_pending` for how
+    #: history as a status.  See :meth:`RegisterWorkload.record_failure` for how
     #: the workload expresses it instead, and why it must not be a status.
 
 
@@ -202,8 +202,8 @@ def tolerate_timeouts(
 
     Every ``unknown`` write costs the checker a branch (its register model is
     nondeterministic for them) against a 10s-per-key budget, so keep their
-    number in check — see :meth:`HistoryRecorder.leave_pending` for the
-    measured limits.
+    number in check — :meth:`RegisterWorkload.record_failure` has the measured
+    limits, and ``Stats.pending`` says how close a run came to them.
     """
     if isinstance(exc, NEVER_APPLIED):
         return Outcome.FAIL
