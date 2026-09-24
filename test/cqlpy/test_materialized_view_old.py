@@ -3300,6 +3300,44 @@ def test_3362_no_ttls(cql, test_keyspace, cassandra_bug):
             cql.execute(f"update {table} using timestamp 12 set b = 1 where p = 1 and c = 1")
             check([(1, 1)])
 
+# This is another reproducer for issue #3362, using TTLs instead of
+# numerous back-and-forth additions and deletions.
+#
+# cassandra_bug for the same reason as test_3362_no_ttls above: Cassandra
+# doesn't track the liveness of the unselected cells separately, so once a
+# expires it loses the view row even though b is still alive. See the
+# still-open CASSANDRA-13826.
+def test_3362_with_ttls(cql, test_keyspace, clock, cassandra_bug):
+    with new_test_table(cql, test_keyspace, 'p int, c int, a int, b int, primary key (p, c)') as table:
+        with new_materialized_view(cql, table, 'p, c', 'p, c',
+                'p is not null and c is not null') as mv:
+            def check(expected):
+                assert expected == list(cql.execute(f"select * from {mv} where p = 1 and c = 1"))
+            # In row p=1 c=1, insert two cells - a=1 with ttl, and b=1 without
+            # ttl. The ttl'ed cell is inserted first, with a newer timestamp.
+            # The problem is that the view row's marker gets, with a new
+            # timestamp, a ttl. Then, when we go to add another column with an
+            # older timestamp, and try to set the row marker without a
+            # ttl - the older timestamp of this update looses, and we wrongly
+            # remain with a ttl on the view row marker.
+            cql.execute(f"update {table} using timestamp 2 and ttl {clock.ttl} set a = 1 where p = 1 and c = 1")
+            check([(1, 1)])
+
+            cql.execute(f"update {table} using timestamp 1 set b = 1 where p = 1 and c = 1")
+            check([(1, 1)])
+
+            # Pass the time forward. Cell 'a' will have expired, but
+            # cell 'b' will still exist, so the base row still exists and the
+            # corresponding view row should also exist too.
+            clock.jump(clock.ttl + 1)
+
+            # verify that the base row still exists (cell b didn't expire)
+            assert [(1, 1, None, 1)] == list(cql.execute(f"select * from {table} where p = 1 and c = 1"))
+
+            # verify that the view row still exists too.
+            # This check failing is issue #3362.
+            check([(1, 1)])
+
 # The following are more test for issue #3362, same as test_3362_no_ttls
 # and test_3362_with_ttls, just with a collection with items "1" and "2"
 # instead of separate columns a and b. For brevity, comments were removed,

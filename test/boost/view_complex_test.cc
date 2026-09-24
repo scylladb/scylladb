@@ -25,59 +25,6 @@ BOOST_AUTO_TEST_SUITE(view_complex_test)
 
 using namespace std::literals::chrono_literals;
 
-// This is another reproducer for issue #3362, using TTLs instead of
-// numerous back-and-forth additions and deletions.
-//
-// Not moved to Python in issue #16134: using a TTL instead of the
-// back-and-forth is the whole difference between this test and
-// test_3362_no_ttls, which did move, and expiring one needs
-// forward_jump_clocks(), which cqlpy has no equivalent of.
-SEASTAR_TEST_CASE(test_3362_with_ttls) {
-    return do_with_cql_env_thread([] (auto& e) {
-        e.execute_cql("create table cf (p int, c int, a int, b int, primary key (p, c))").get();
-        e.execute_cql("create materialized view vcf as select p, c from cf "
-                      "where p is not null and c is not null "
-                      "primary key (p, c)").get();
-
-        // In row p=1 c=1, insert two cells - a=1 with ttl, and b=1 without
-        // ttl. The ttl'ed cell is inserted first, with a newer timestamp.
-        // The problem is that the view row's marker gets, with a new
-        // timestamp, a ttl. Then, when we go to add another column with an
-        // older timestamp, and try to set the row marker without a
-        // ttl - the older timestamp of this update looses, and we wrongly
-        // remain with a ttl on the view row marker.
-        BOOST_TEST_PASSPOINT();
-        e.execute_cql("update cf using timestamp 2 and ttl 100 set a = 1 where p = 1 and c = 1").get();
-        eventually([&] {
-            auto msg = e.execute_cql("select * from vcf where p = 1 and c = 1").get();
-            assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
-        });
-        BOOST_TEST_PASSPOINT();
-        e.execute_cql("update cf using timestamp 1 set b = 1 where p = 1 and c = 1").get();
-        eventually([&] {
-            auto msg = e.execute_cql("select * from vcf where p = 1 and c = 1").get();
-            assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
-        });
-        // Pass the time 101 seconds forward. Cell 'a' will have expired, but
-        // cell 'b' will still exist, so the base row still exists and the
-        // corresponding view row should also exist too.
-        forward_jump_clocks(101s);
-        BOOST_TEST_PASSPOINT();
-        // verify that the base row still exists (cell b didn't expire)
-        eventually([&] {
-            auto msg = e.execute_cql("select * from cf where p = 1 and c = 1").get();
-            assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)}, {int32_type->decompose(1)}, {}, {{int32_type->decompose(1)}} }});
-        });
-        BOOST_TEST_PASSPOINT();
-        // verify that the view row still exists too.
-        // This check failing is issue #3362.
-        eventually([&] {
-            auto msg = e.execute_cql("select * from vcf where p = 1 and c = 1").get();
-            assert_that(msg).is_rows().with_rows({{ {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
-        });
-    });
-}
-
 // Not moved to Python in issue #16134: these are the TTL versions of the
 // collection tests whose non-TTL versions did move (as
 // test_3362_no_ttls_with_collections in
