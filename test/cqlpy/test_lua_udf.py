@@ -84,3 +84,8 @@ def test_lua_date_argument(cql, test_keyspace, scylla_only):
     with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val date") as table:
         cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', '2019-08-26')")
         assert call_lua(cql, test_keyspace, table, "(val date) CALLED ON NULL INPUT RETURNS int", "return val - 2^31") == [18134]
+
+def test_lua_counter_argument(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val counter") as table:
+        cql.execute(f"UPDATE {table} SET val = val + 1 WHERE key = 'foo'")
+        assert call_lua(cql, test_keyspace, table, "(val counter) CALLED ON NULL INPUT RETURNS int", "return val * 2") == [2]
