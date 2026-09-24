@@ -319,3 +319,22 @@ def test_lua_counter_return(cql, test_keyspace, scylla_only):
     with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val int") as table:
         cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 3)")
         assert call_lua(cql, test_keyspace, table, "(val int) CALLED ON NULL INPUT RETURNS counter", "return 42") == [42]
+
+# The Python driver can't represent time values outside a single day, so
+# we convert the function's result to a bigint on the server.
+def test_lua_time_return(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val varint") as table:
+        cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 9223372036854775807)")
+        sig = "(val varint) CALLED ON NULL INPUT RETURNS time"
+        with new_function(cql, test_keyspace, f"{sig} LANGUAGE lua AS 'return val'") as f:
+            query = f"SELECT blobasbigint(timeasblob({test_keyspace}.{f}(val))) FROM {table}"
+            assert cql.execute(query).one()[0] == 9223372036854775807
+            with new_function(cql, test_keyspace, f"""{sig} LANGUAGE lua AS 'return "08:12:54.123"'""") as f2:
+                assert cql.execute(f"SELECT blobasbigint(timeasblob({test_keyspace}.{f2}(val))) FROM {table}").one()[0] == 29574123000000
+            with pytest.raises(NoHostAvailable, match=re.escape("marshaling error: Timestamp format must be hh:mm:ss[.fffffffff]")):
+                call_lua(cql, test_keyspace, table, sig, 'return "abc"')
+            cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 9223372036854775808)")
+            with pytest.raises(InvalidRequest, match="time value must fit in signed 64 bits"):
+                cql.execute(query)
+        with pytest.raises(InvalidRequest, match="time must be a string or an integer"):
+            call_lua(cql, test_keyspace, table, sig, "return 42.2")
