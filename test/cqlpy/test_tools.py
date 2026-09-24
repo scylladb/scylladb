@@ -1793,7 +1793,7 @@ class sstable_query_tester:
         self._table = table
         self._temp_workdir = temp_workdir
 
-    def test_json(self, query_template):
+    def check_json(self, query_template):
         cql_query_result = self._cql.execute(query_template.replace("SELECT", "SELECT JSON").format(f"{self._keyspace}.{self._table}"))
         cql_query_result = list(map(lambda row: json.loads(row[0]), cql_query_result))
 
@@ -1811,7 +1811,7 @@ class sstable_query_tester:
 
         assert sstable_query_result == cql_query_result
 
-    def test_text(self, query_template=None):
+    def check_text(self, query_template=None):
         if query_template is None:
             cql_query_result = self._cql.execute("SELECT JSON * FROM {}".format(f"{self._keyspace}.{self._table}"))
         else:
@@ -2022,7 +2022,7 @@ def test_scylla_sstable_query_data_types(request, cql, test_keyspace, test_table
     with nodetool.no_autocompaction_context(cql, "system_schema"):
         tester = sstable_query_tester(cql, scylla_path, sstables, test_keyspace, table, temp_workdir)
 
-        tester.test_json("SELECT * FROM {}")
+        tester.check_json("SELECT * FROM {}")
 
     cql.execute(f"DROP TABLE {test_keyspace}.{table}")
 
@@ -2062,12 +2062,12 @@ def test_scylla_sstable_query_advanced_queries(cql, test_keyspace, scylla_path, 
     with nodetool.no_autocompaction_context(cql, "system_schema"):
         tester = sstable_query_tester(cql, scylla_path, sstables, test_keyspace, table, temp_workdir)
 
-        tester.test_text()
-        tester.test_json("SELECT count(*) FROM {} WHERE pk = 0")
-        tester.test_json("SELECT ck, v FROM {} WHERE pk = 0 and ck = 0")
-        tester.test_text("SELECT ck, v FROM {} WHERE pk=0")
-        tester.test_json("SELECT * FROM {} WHERE pk = 0 AND v = 0 ALLOW FILTERING")
-        tester.test_text("SELECT pk, v FROM {} WHERE pk=0 AND v=0 ALLOW FILTERING")
+        tester.check_text()
+        tester.check_json("SELECT count(*) FROM {} WHERE pk = 0")
+        tester.check_json("SELECT ck, v FROM {} WHERE pk = 0 and ck = 0")
+        tester.check_text("SELECT ck, v FROM {} WHERE pk=0")
+        tester.check_json("SELECT * FROM {} WHERE pk = 0 AND v = 0 ALLOW FILTERING")
+        tester.check_text("SELECT pk, v FROM {} WHERE pk=0 AND v=0 ALLOW FILTERING")
 
     cql.execute(f"DROP TABLE {test_keyspace}.{table}")
 
