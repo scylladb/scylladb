@@ -2782,3 +2782,50 @@ def test_expired_marker_with_limit(cql, test_keyspace, flush):
                 assert 2 == len(list(cql.execute(f"select * from {view} limit 2")))
                 assert [(50, 50, 50), (100, 100, 100)] == sorted(
                     cql.execute(f"select p, a, b from {view}"))
+
+# The view's key column a is rewritten at timestamps above and below that of
+# the base row's other columns, and set to null and back. The view row must
+# follow it each time - including right after a compaction of the view.
+@pytest.mark.parametrize("flush", [False, True], ids=["noflush", "flush"])
+def test_update_with_column_timestamp_bigger_than_pk(cql, test_keyspace, flush):
+    no_cache = "with caching = {'enabled': 'false'}" if flush and is_scylla(cql) else ""
+    def maybe_flush():
+        if flush:
+            nodetool.flush_all(cql)
+    with new_test_table(cql, test_keyspace, 'p int, a int, b int, primary key (p)',
+            extra=no_cache) as table:
+        with new_materialized_view(cql, table, '*', 'p, a',
+                'p is not null and a is not null', extra=no_cache) as mv:
+            def check(expected, limit=''):
+                assert expected == list(cql.execute(f"select * from {mv} {limit}"))
+
+            cql.execute(f"delete from {table} using timestamp 0 where p = 1")
+            maybe_flush()
+
+            cql.execute(f"insert into {table} (p, a, b) values (1, 1, 1) using timestamp 1")
+            maybe_flush()
+            check([(1, 1, 1)])
+
+            cql.execute(f"update {table} using timestamp 10 set b = 2 where p = 1")
+            maybe_flush()
+            check([(1, 1, 2)])
+
+            cql.execute(f"update {table} using timestamp 2 set a = 2 where p = 1")
+            maybe_flush()
+            check([(1, 2, 2)])
+
+            # Compacting the view must not disturb the row
+            nodetool.compact(cql, mv)
+            check([(1, 2, 2)], limit='limit 1')
+
+            cql.execute(f"update {table} using timestamp 11 set a = 1 where p = 1")
+            maybe_flush()
+            check([(1, 1, 2)], limit='limit 1')
+
+            cql.execute(f"update {table} using timestamp 12 set a = null where p = 1")
+            maybe_flush()
+            check([], limit='limit 1')
+
+            cql.execute(f"update {table} using timestamp 13 set a = 1 where p = 1")
+            maybe_flush()
+            check([(1, 1, 2)], limit='limit 1')
