@@ -94,6 +94,9 @@ public:
     future<> modify_config(std::vector<raft::config_member> add, std::vector<raft::server_id> del, seastar::abort_source* as, std::optional<raft_timeout> timeout);
     future<bool> trigger_snapshot(seastar::abort_source* as, std::optional<raft_timeout> timeout);
     future<> read_barrier(seastar::abort_source* as, std::optional<raft_timeout> timeout);
+    // The group's leader, once one is elected and alive according to the failure
+    // detector: a follower keeps a dead leader until the election timeout.
+    future<raft::server_id> wait_for_leader(seastar::abort_source* as, std::optional<raft_timeout> timeout);
 };
 
 class direct_fd_pinger;
