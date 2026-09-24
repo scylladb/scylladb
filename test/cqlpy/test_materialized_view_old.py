@@ -112,3 +112,20 @@ def test_updates(cql, test_keyspace):
             assert [(0, 1)] == list(cql.execute(f"select k, v from {table} where k = 0"))
             assert [] == list(cql.execute(f"select k, v from {mv} where v = 0"))
             assert [(0, 1)] == list(cql.execute(f"select k, v from {mv} where v = 1"))
+
+# Like test_updates above, except that here the update leaves the view's key
+# columns (k and c) unchanged and modifies only v, which is a regular column
+# in both the base table and the view. So the view row is not moved - it is
+# just updated in place - which is a different code path, and we check that
+# it produces the right result too.
+def test_updates_no_read_before_update(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'k int, c int, v int, primary key (k)') as table:
+        with new_materialized_view(cql, table, '*', 'k, c',
+                'k is not null and c is not null') as mv:
+            cql.execute(f"insert into {table} (k, c, v) values (0, 0, 0)")
+            assert [(0, 0)] == list(cql.execute(f"select k, v from {table} where k = 0"))
+            assert [(0, 0)] == list(cql.execute(f"select k, v from {mv} where k = 0"))
+
+            cql.execute(f"insert into {table} (k, c, v) values (0, 0, 1)")
+            assert [(0, 1)] == list(cql.execute(f"select k, v from {table} where k = 0"))
+            assert [(0, 1)] == list(cql.execute(f"select k, v from {mv} where k = 0"))
