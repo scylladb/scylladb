@@ -519,3 +519,36 @@ def test_udf_bad_language(cql, test_keyspace, scylla_only):
     with pytest.raises(InvalidRequest, match="Language 'java' is not supported"):
         with new_function(cql, test_keyspace, "(val int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE Java AS 'return 2 * val'"):
             pass
+
+def test_lua_function(cql, test_keyspace, scylla_only):
+    def count_functions():
+        return len(list(cql.execute(f"SELECT * FROM system_schema.functions WHERE keyspace_name = '{test_keyspace}'")))
+    with new_function(cql, test_keyspace, "(val int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return 2 * val'") as f:
+        rows = list(cql.execute(f"SELECT * FROM system_schema.functions WHERE keyspace_name = '{test_keyspace}'"))
+        assert len(rows) == 1
+        row = rows[0]
+        assert row.function_name == f
+        assert row.argument_types == ["int"]
+        assert row.argument_names == ["val"]
+        assert row.body == "return 2 * val"
+        assert row.called_on_null_input == False
+        assert row.language == "lua"
+        assert row.return_type == "int"
+
+        with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val int") as table:
+            cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 10)")
+            cql.execute(f"INSERT INTO {table} (key, val) VALUES ('bar', 10)")
+            assert len(list(cql.execute(f"SELECT {test_keyspace}.{f}(val) FROM {table}"))) == 2
+
+        f2 = unique_name()
+        body = "RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return 2 * val'"
+        with new_function(cql, test_keyspace, f"(val int) {body}", name=f2, args="int"):
+            assert count_functions() == 2
+            with new_function(cql, test_keyspace, f"(val bigint) {body}", name=f2, args="bigint"):
+                assert count_functions() == 3
+                with new_function(cql, test_keyspace, f"(val double) {body}", name=f2, args="double"):
+                    assert count_functions() == 4
+                    cql.execute(f"DROP FUNCTION {test_keyspace}.{f2}(bigint)")
+                    assert count_functions() == 3
+                    # Recreate the dropped function so new_function() can drop it
+                    cql.execute(f"CREATE FUNCTION {test_keyspace}.{f2}(val bigint) {body}")

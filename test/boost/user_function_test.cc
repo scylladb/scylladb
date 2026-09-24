@@ -66,6 +66,8 @@ static future<> with_udf_enabled(Func&& func) {
     return do_with_cql_env_thread(std::forward<Func>(func), db_cfg_ptr);
 }
 
+// The rest of this test was ported to test/cqlpy/test_lua_udf.py. The schema
+// change events checked here aren't visible through the Python driver.
 SEASTAR_TEST_CASE(test_user_function) {
     return with_udf_enabled([] (cql_test_env& e) {
         auto create = e.execute_cql("CREATE FUNCTION my_func(val int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return 2 * val';").get();
@@ -76,54 +78,15 @@ SEASTAR_TEST_CASE(test_user_function) {
         BOOST_REQUIRE_EQUAL(change->keyspace, "ks");
         std::vector<sstring> args{"my_func", "int"};
         BOOST_REQUIRE_EQUAL(change->arguments, args);
-        auto msg = e.execute_cql("SELECT * FROM system_schema.functions;").get();
-        auto str_list = list_type_impl::get_instance(utf8_type, false);
-        assert_that(msg).is_rows()
-            .with_rows({
-                {
-                  serialized("ks"),
-                  serialized("my_func"),
-                  make_list_value(str_list, {"int"}).serialize(),
-                  make_list_value(str_list, {"val"}).serialize(),
-                  serialized("return 2 * val"),
-                  serialized(false),
-                  serialized("lua"),
-                  serialized("int"),
-                }
-             });
-
-        e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val int);").get();
-        e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', 10 );").get();
-        e.execute_cql("INSERT INTO my_table (key, val) VALUES ('bar', 10 );").get();
-
-        assert_that(e.execute_cql("SELECT my_func(val) FROM my_table;").get()).is_rows().with_size(2);
-
-        e.execute_cql("CREATE FUNCTION my_func2(val int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return 2 * val';").get();
-        assert_that(e.execute_cql("SELECT * FROM system_schema.functions;").get())
-            .is_rows()
-            .with_size(2);
 
         e.execute_cql("CREATE FUNCTION my_func2(val bigint) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return 2 * val';").get();
-        assert_that(e.execute_cql("SELECT * FROM system_schema.functions;").get())
-            .is_rows()
-            .with_size(3);
-
-        e.execute_cql("CREATE FUNCTION my_func2(val double) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return 2 * val';").get();
-        assert_that(e.execute_cql("SELECT * FROM system_schema.functions;").get())
-            .is_rows()
-            .with_size(4);
-
-        msg = e.execute_cql("DROP FUNCTION my_func2(bigint);").get();
+        auto msg = e.execute_cql("DROP FUNCTION my_func2(bigint);").get();
         change = get_schema_change(msg);
         BOOST_REQUIRE(change->change == sc::change_type::DROPPED);
         BOOST_REQUIRE(change->target == sc::target_type::FUNCTION);
         BOOST_REQUIRE_EQUAL(change->keyspace, "ks");
         std::vector<sstring> drop_args{"my_func2", "bigint"};
         BOOST_REQUIRE_EQUAL(change->arguments, drop_args);
-
-        assert_that(e.execute_cql("SELECT * FROM system_schema.functions;").get())
-            .is_rows()
-            .with_size(3);
     });
 }
 
