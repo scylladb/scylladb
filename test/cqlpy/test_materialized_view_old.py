@@ -2886,6 +2886,48 @@ def test_partial_update_with_unselected_udt(cql, test_keyspace, flush):
                 with pytest.raises(InvalidRequest, match='Cannot drop.*column u'):
                     cql.execute(f"alter table {table} drop u")
 
+# The view selects only the base's key columns, so whether a view row exists
+# is decided entirely by the liveness of the row marker and of the unselected
+# column v - and here both of them are given TTLs, at different times, so that
+# each in turn is the thing keeping the base row alive.
+@pytest.mark.parametrize("flush", [False, True], ids=["noflush", "flush"])
+def test_unselected_columns_ttl(cql, test_keyspace, flush, clock):
+    no_cache = "with caching = {'enabled': 'false'}" if flush and is_scylla(cql) else ""
+    def maybe_flush():
+        if flush:
+            nodetool.flush_all(cql)
+    with new_test_table(cql, test_keyspace, 'p int, c int, v int, primary key (p, c)',
+            extra=no_cache) as table:
+        with new_materialized_view(cql, table, 'p, c', 'c, p',
+                'p is not null and c is not null', extra=no_cache) as mv:
+            # The row marker expires, but v outlives it - 1000 is kept as the
+            # C++ original had it, because the test never jumps that far, so
+            # it costs nothing even where the clock fixture really sleeps.
+            cql.execute(f"insert into {table} (p, c) values (1, 1) using ttl {clock.ttl}")
+            cql.execute(f"update {table} using ttl 1000 set v = 0 where p = 1 and c = 1")
+            maybe_flush()
+
+            clock.jump(clock.ttl + 1)
+            assert [(1, 1)] == list(cql.execute(f"select * from {mv}"))
+
+            cql.execute(f"delete v from {table} where p = 1 and c = 1")
+            maybe_flush()
+            assert [] == list(cql.execute(f"select * from {mv}"))
+
+            # Now the other way round: p=1 gets a marker which never expires
+            # and a v which does, while p=3 gets only an expiring marker.
+            cql.execute(f"insert into {table} (p, c) values (1, 1)")
+            cql.execute(f"update {table} using ttl {clock.ttl} set v = 0 where p = 1 and c = 1")
+            cql.execute(f"insert into {table} (p, c) values (3, 3) using ttl {clock.ttl}")
+
+            clock.jump(clock.ttl + 1)
+            assert [(1, 1)] == list(cql.execute(f"select * from {mv} where p = 1 and c = 1"))
+            assert [] == list(cql.execute(f"select * from {mv} where p = 3 and c = 3"))
+
+            cql.execute(f"update {table} set v = 0 where p = 3 and c = 3")
+            maybe_flush()
+            assert [(3, 3)] == list(cql.execute(f"select * from {mv} where p = 3 and c = 3"))
+
 # A view keyed on a regular base column: the view row follows that column
 # appearing, being set to null, being deleted with the whole base partition,
 # and being written again.
