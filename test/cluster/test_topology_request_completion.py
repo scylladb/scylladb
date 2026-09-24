@@ -30,7 +30,6 @@ async def wait_for_injection(manager: ScyllaClusterManager, server: ServerInfo, 
     await wait_for(entered, time.time() + 60, label=f"injection {injection} entered {count} time(s)")
 
 
-@pytest.mark.xfail(reason="SCYLLADB-4011: a topology request reports completion before the local apply finishes")
 async def test_request_completes_after_local_apply(manager: ScyllaClusterManager):
     """A topology request must not report completion while the group0 command
     carrying its result is still being applied on the local node.

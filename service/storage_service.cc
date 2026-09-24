@@ -3177,7 +3177,8 @@ future<sstring> storage_service::wait_for_topology_request_completion(utils::UUI
     // read of system.topology_requests.
     co_await utils::get_local_injector().inject("topology_request_pause_before_wait",
             utils::wait_for_message(std::chrono::minutes(5)));
-    co_return co_await _topology_state_machine.wait_for_request_completion(_sys_ks.local(), id, require_entry);
+    co_return co_await _topology_state_machine.wait_for_request_completion(_sys_ks.local(),
+            _group0->client(), _group0_as, id, require_entry);
 }
 
 future<> storage_service::abort_topology_request(utils::UUID request_id) {
