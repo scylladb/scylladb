@@ -35,6 +35,7 @@
 #include <seastar/core/queue.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/switch_to.hh>
 #include <seastar/net/byteorder.hh>
@@ -48,6 +49,7 @@
 #include "db/extensions.hh"
 #include "utils/assert.hh"
 #include "utils/crc.hh"
+#include "utils/div_ceil.hh"
 #include "utils/runtime.hh"
 #include "utils/flush_queue.hh"
 #include "utils/log.hh"
@@ -3596,82 +3598,125 @@ db::commitlog::read_log_file(const replay_state& state, sstring filename, sstrin
                 }
 
                 auto block_size = alignment - initial_size;
-                // using a stream is perhaps not 100% effective, but we need to 
-                // potentially address data in pages smaller than the current 
-                // disk/fs we are reading from can handle (but please no). 
-                auto tmp = co_await frag_reader.read_exactly(fin, block_size);
-
-                if (tmp.size_bytes() == 0) {
-                    eof = true;
-                    auto reason = fmt::format("read 0 bytes, while tried to read {} bytes. "
-                            "pos={}, rem={}, size={}, alignment={}, initial_size={}",
-                            block_size, pos, rem, size, alignment, initial_size);
-                    throw segment_truncation(std::move(reason), block_boundry);
-                }
-
-                crc32_nbo crc;
-                // crc all but the final crc
-                size_t n = block_size - sizeof(uint32_t);
-
-                const bool has_initial = !initial.empty();
-
-                if (has_initial) {
-                    for (auto& bv : initial) {
-                        crc.process_bytes(bv.get(), bv.size());
+                // Read all sectors this call needs at once. The header sector has a different size, so it is read alone.
+                auto nsectors = initial_size ? 1 : div_ceil(size - rem, alignment - detail::sector_overhead_size);
+                std::vector<temporary_buffer<char>> frags;
+                size_t avail = 0;
+                // Sectors read before an error or eof are still verified first, as when reading one at a time.
+                std::exception_ptr read_error;
+                try {
+                    while (avail < nsectors * block_size) {
+                        auto b = co_await fin.read_up_to(nsectors * block_size - avail);
+                        if (b.empty()) {
+                            break;
+                        }
+                        avail += b.size();
+                        frags.emplace_back(std::move(b));
                     }
-                    initial = {};
+                } catch (...) {
+                    read_error = std::current_exception();
                 }
 
-                for (auto& bv : tmp) {
-                    auto np = std::min(bv.size(), n);
-                    crc.process_bytes(bv.get(), np);
-                    n -= np;
-                }
-
-                block_boundry += alignment;
-
-                auto valid = [&] {
-                    auto in = tmp.get_istream();
-                    in.skip(block_size - detail::sector_overhead_size);
-                    auto id = read<uint64_t>(in);
-                    return read<uint32_t>(in) == crc.checksum() && id == this->id;
+                // cursor to the start of the current sector in frags
+                size_t fi = 0, foff = 0;
+                auto visit = [&](size_t start, size_t len, auto&& fn) {
+                    auto i = fi;
+                    auto o = foff + start;
+                    while (o >= frags[i].size()) {
+                        o -= frags[i].size();
+                        ++i;
+                    }
+                    while (len) {
+                        auto n = std::min(len, frags[i].size() - o);
+                        fn(frags[i], o, n);
+                        len -= n;
+                        o = 0;
+                        ++i;
+                    }
                 };
-                auto all_zero = [&] {
-                    return !has_initial && std::all_of(tmp.begin(), tmp.end(), [](const temporary_buffer<char>& bv) {
-                        return std::all_of(bv.begin(), bv.end(), [](char c) {
-                            return c == 0;
-                        });
+
+                buf_vec.reserve(buf_vec.size() + nsectors);
+
+                for (size_t s = 0; s < nsectors; ++s) {
+                    // A 32 MiB entry is ~66K sectors; keep the replay preemptible as when reading one sector at a time.
+                    if ((s & 255) == 0 && s) {
+                        co_await coroutine::maybe_yield();
+                    }
+                    if (avail < block_size) {
+                        if (read_error) {
+                            std::rethrow_exception(read_error);
+                        }
+                        eof = true;
+                        auto reason = fmt::format("read 0 bytes, while tried to read {} bytes. "
+                                "pos={}, rem={}, size={}, alignment={}, initial_size={}",
+                                block_size, pos, rem, size, alignment, initial_size);
+                        throw segment_truncation(std::move(reason), block_boundry);
+                    }
+
+                    crc32_nbo crc;
+
+                    if (initial_size) {
+                        for (auto& bv : initial) {
+                            crc.process_bytes(bv.get(), bv.size());
+                        }
+                        initial = {};
+                    }
+
+                    // crc all but the final crc
+                    visit(0, block_size - sizeof(uint32_t), [&](const temporary_buffer<char>& b, size_t o, size_t n) {
+                        crc.process_bytes(b.get() + o, n);
                     });
-                };
 
-                // Scan for an all-zero (pre-allocated) sector only if validation fails,
-                // so a valid sector is not read a second time.
-                if (!valid() && !all_zero()) {
-                    auto in = tmp.get_istream();
-                    in.skip(block_size - detail::sector_overhead_size);
+                    block_boundry += alignment;
 
-                    auto id = read<uint64_t>(in);
-                    auto check = read<uint32_t>(in);
+                    char trailer[detail::sector_overhead_size];
+                    auto* tp = trailer;
+                    visit(block_size - sizeof(trailer), sizeof(trailer), [&](const temporary_buffer<char>& b, size_t o, size_t n) {
+                        tp = std::copy_n(b.get() + o, n, tp);
+                    });
+                    auto id = read_be<segment_id_type>(trailer);
+                    auto check = read_be<uint32_t>(trailer + sizeof(segment_id_type));
                     auto checksum = crc.checksum();
 
-                    if (check != checksum) {
-                        auto reason = fmt::format("checksums do not match: {:x} vs. {:x}. pos={}, rem={}, size={}, alignment={}, initial_size={}",
-                                check, checksum, pos, rem, size, alignment, initial_size);
-                        throw segment_data_corruption_error(std::move(reason), alignment);
-                    }
-                    if (id != this->id) {
-                        auto reason = fmt::format("IDs do not match: {} vs. {}. pos={}, rem={}, size={}, alignment={}, initial_size={}",
-                                id, this->id, pos, rem, size, alignment, initial_size);
-                        throw segment_truncation(std::move(reason), pos + rem);
-                    }
-                }
-                tmp.remove_suffix(detail::sector_overhead_size);
+                    auto all_zero = [&] {
+                        if (initial_size) {
+                            return false;
+                        }
+                        bool zero = true;
+                        visit(0, block_size, [&](const temporary_buffer<char>& b, size_t o, size_t n) {
+                            zero = zero && std::all_of(b.get() + o, b.get() + o + n, [](char c) {
+                                return c == 0;
+                            });
+                        });
+                        return zero;
+                    };
 
-                rem += tmp.size_bytes();
+                    // Scan for an all-zero (pre-allocated) sector only if validation fails,
+                    // so a valid sector is not read a second time.
+                    if ((check != checksum || id != this->id) && !all_zero()) {
+                        if (check != checksum) {
+                            auto reason = fmt::format("checksums do not match: {:x} vs. {:x}. pos={}, rem={}, size={}, alignment={}, initial_size={}",
+                                    check, checksum, pos, rem, size, alignment, initial_size);
+                            throw segment_data_corruption_error(std::move(reason), alignment);
+                        }
+                        if (id != this->id) {
+                            auto reason = fmt::format("IDs do not match: {} vs. {}. pos={}, rem={}, size={}, alignment={}, initial_size={}",
+                                    id, this->id, pos, rem, size, alignment, initial_size);
+                            throw segment_truncation(std::move(reason), pos + rem);
+                        }
+                    }
 
-                auto vec2 = std::move(tmp).release();
-                for (auto&& v : vec2) {
-                    buf_vec.emplace_back(std::move(v));
+                    visit(0, block_size - detail::sector_overhead_size, [&](temporary_buffer<char>& b, size_t o, size_t n) {
+                        buf_vec.emplace_back(b.share(o, n));
+                    });
+                    rem += block_size - detail::sector_overhead_size;
+
+                    avail -= block_size;
+                    foff += block_size;
+                    while (fi < frags.size() && foff >= frags[fi].size()) {
+                        foff -= frags[fi].size();
+                        ++fi;
+                    }
                 }
             }
 
