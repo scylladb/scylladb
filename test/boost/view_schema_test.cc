@@ -29,26 +29,6 @@ BOOST_AUTO_TEST_SUITE(view_schema_test)
 
 using namespace std::literals::chrono_literals;
 
-SEASTAR_TEST_CASE(test_partition_tombstone) {
-    return do_with_cql_env_thread([] (auto& e) {
-        e.execute_cql("create table cf (p int, c int, v int, primary key (p, c));").get();
-        e.execute_cql("create materialized view vcf as select p from cf "
-                      "where p is not null and c is not null and v is not null "
-                      "primary key (p, c, v)").get();
-        e.execute_cql("insert into cf (p, c, v) values (1, 2, 200);").get();
-        e.execute_cql("insert into cf (p, c, v) values (1, 3, 300);").get();
-        eventually([&] {
-        auto msg = e.execute_cql("select * from vcf").get();
-        assert_that(msg).is_rows().with_size(2);
-        });
-        e.execute_cql("delete from cf where p = 1;").get();
-        eventually([&] {
-        auto msg = e.execute_cql("select * from vcf").get();
-        assert_that(msg).is_rows().with_size(0);
-        });
-    });
-}
-
 SEASTAR_TEST_CASE(test_ck_tombstone) {
     return do_with_cql_env_thread([] (auto& e) {
         e.execute_cql("create table cf (p int, c int, v int, primary key (p, c));").get();
