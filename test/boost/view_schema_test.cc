@@ -87,56 +87,12 @@ SEASTAR_TEST_CASE(test_ttl) {
     });
 }
 
-// In the above two reproducers for #3430, the column c was not part of the
-// base table's key (as we explained, this is important) but also wasn't in
-// the view's key. In this test, we make c part of the view's key. This makes
-// things easier for Scylla, because anyway modifying c (which is part of the
-// view key) is expected to add or remove entire rows and we have mechanisms
-// to deal with that (properly timestamped shadowable tombstones). The
-// following two tests with the "vk" (view key) suffix worked. Let's make sure
-// it continues to work.
-SEASTAR_TEST_CASE(test_non_primary_key_restrictions_update_vk) {
-    return do_with_cql_env_thread([] (auto& e) {
-        e.execute_cql("create table cf (a int, c int, primary key (a))").get();
-        e.execute_cql("create materialized view vcf as select * from cf "
-                      "where a is not null and c is not null and c = 1"
-                      "primary key (a, c)").get();
-        // Insert a base row with c=0, which does not match the filter c=1.
-        // The view will have no rows. Then change c from 0 to 1 and see the
-        // row appear in the view, change it back to 0 and see it disappear,
-        // and change it back to 1 to see it reappear.
-        // We have a bug with the last re-appearance (the tombstone continues
-        // to shadow the view row we wanted to re-add).
-        BOOST_TEST_PASSPOINT();
-        e.execute_cql("insert into cf (a, c) values (1, 0)").get();
-        eventually([&] {
-            auto msg = e.execute_cql("select a, c from vcf").get();
-            assert_that(msg).is_rows().is_empty();
-        });
-        BOOST_TEST_PASSPOINT();
-        e.execute_cql("update cf set c = 1 where a = 1").get();
-        eventually([&] {
-            auto msg = e.execute_cql("select a, c from vcf").get();
-            assert_that(msg).is_rows().with_rows_ignore_order({
-                { {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
-        });
-        BOOST_TEST_PASSPOINT();
-        e.execute_cql("update cf set c = 0 where a = 1").get();
-        eventually([&] {
-            auto msg = e.execute_cql("select a, c from vcf").get();
-            assert_that(msg).is_rows().is_empty();
-        });
-        BOOST_TEST_PASSPOINT();
-        // The bug is here - when we set c = 1 again, we expect to see the
-        // view row re-added. And it isn't.
-        e.execute_cql("update cf set c = 1 where a = 1").get();
-        eventually([&] {
-            auto msg = e.execute_cql("select a, c from vcf").get();
-            assert_that(msg).is_rows().with_rows_ignore_order({
-                { {int32_type->decompose(1)}, {int32_type->decompose(1)} }});
-        });
-    });
-}
+// Like test_ttl above, this test was deliberately not moved to Python in
+// issue #16134, while its twin test_non_primary_key_restrictions_update_vk
+// was. It uses forward_jump_clocks() to expire a TTL instantly, and cqlpy has
+// no equivalent - a Python version has to really sleep out the TTL, which
+// measured at 1.8 seconds, more than a quarter of the run time of the whole
+// materialized-view test file. So this one earns its keep by staying in C++.
 SEASTAR_TEST_CASE(test_non_primary_key_restrictions_ttl_vk) {
     return do_with_cql_env_thread([] (auto& e) {
         e.execute_cql("create table cf (a int, c int, primary key (a))").get();

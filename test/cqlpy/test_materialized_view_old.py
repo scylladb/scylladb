@@ -1158,3 +1158,35 @@ def test_non_primary_key_restrictions_ttl(cql, test_keyspace):
             # view row back to life by setting c = 1.
             cql.execute(f"update {table} set c = 1 where a = 1")
             assert [(1, 11, 1)] == list(cql.execute(f"select a, b, c from {mv}"))
+
+# In the above two reproducers for #3430, the column c was not part of the
+# base table's key (as we explained, this is important) but also wasn't in
+# the view's key. In this test, we make c part of the view's key. This makes
+# things easier for Scylla, because anyway modifying c (which is part of the
+# view key) is expected to add or remove entire rows and we have mechanisms
+# to deal with that (properly timestamped shadowable tombstones). The
+# following two tests with the "vk" (view key) suffix worked. Let's make sure
+# it continues to work.
+# Only the first of the two is here; its twin,
+# test_non_primary_key_restrictions_ttl_vk, needs to expire a TTL and so
+# stayed in view_schema_test.cc - see the comment there.
+# This test is scylla_only for the same reason as
+# test_non_primary_key_restrictions above - Cassandra doesn't allow
+# restricting c, which isn't a base key column.
+def test_non_primary_key_restrictions_update_vk(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, 'a int, c int, primary key (a)') as table:
+        with new_materialized_view(cql, table, '*', 'a, c',
+                'a is not null and c is not null and c = 1') as mv:
+            # Insert a base row with c=0, which does not match the filter c=1.
+            # The view will have no rows. Then change c from 0 to 1 and see the
+            # row appear in the view, change it back to 0 and see it disappear,
+            # and change it back to 1 to see it reappear.
+            cql.execute(f"insert into {table} (a, c) values (1, 0)")
+            assert [] == list(cql.execute(f"select a, c from {mv}"))
+            cql.execute(f"update {table} set c = 1 where a = 1")
+            assert [(1, 1)] == list(cql.execute(f"select a, c from {mv}"))
+            cql.execute(f"update {table} set c = 0 where a = 1")
+            assert [] == list(cql.execute(f"select a, c from {mv}"))
+            cql.execute(f"update {table} set c = 1 where a = 1")
+            assert [(1, 1)] == list(cql.execute(f"select a, c from {mv}"))
+
