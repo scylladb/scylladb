@@ -546,3 +546,17 @@ def test_partition_tombstone(cql, test_keyspace, cassandra_bug):
             assert 2 == len(list(cql.execute(f"select * from {mv}")))
             cql.execute(f"delete from {table} where p = 1")
             assert 0 == len(list(cql.execute(f"select * from {mv}")))
+
+# The same, for the deletion of a single base row rather than a whole
+# partition - only that row's view row goes away.
+# cassandra_bug (CASSANDRA-20701) for the same reason as the previous two
+# tests: the view's SELECT doesn't name all of the view's key columns.
+def test_ck_tombstone(cql, test_keyspace, cassandra_bug):
+    with new_test_table(cql, test_keyspace, 'p int, c int, v int, primary key (p, c)') as table:
+        with new_materialized_view(cql, table, 'p', 'p, c, v',
+                'p is not null and c is not null and v is not null') as mv:
+            cql.execute(f"insert into {table} (p, c, v) values (1, 2, 200)")
+            cql.execute(f"insert into {table} (p, c, v) values (1, 3, 300)")
+            assert 2 == len(list(cql.execute(f"select * from {mv}")))
+            cql.execute(f"delete from {table} where p = 1 and c = 3")
+            assert 1 == len(list(cql.execute(f"select * from {mv}")))
