@@ -191,7 +191,6 @@ def test_group_by_count_with_limit(cql, table1):
 # A grouped query with LIMIT should stop reading once LIMIT groups are
 # complete. Each page is one read of the table on its replica.
 # Regression test for SCYLLADB-4585.
-@pytest.mark.xfail(reason="SCYLLADB-4585")
 def test_group_by_count_with_limit_stops_reading(cql, test_keyspace, scylla_only):
     with new_test_table(cql, test_keyspace, "p int, c int, PRIMARY KEY (p, c)") as table:
         insert = cql.prepare(f'INSERT INTO {table} (p, c) VALUES (1, ?)')

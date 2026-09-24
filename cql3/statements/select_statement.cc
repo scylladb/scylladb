@@ -563,7 +563,7 @@ select_statement::execute_aggregate_or_nonpaged_filtering(std::unique_ptr<servic
     auto builder = cql3::selection::result_set_builder(*_selection, now, &options, *_group_by_cell_indices, limit, per_partition_limit);
     coordinator_result<void> result_void = co_await utils::result_do_until(
             [&p, &builder, limit] {
-                return p->is_exhausted() || (limit < builder.result_set_size());
+                return p->is_exhausted() || (limit <= builder.result_set_size());
             },
             [&p, &builder, page_size, now, timeout] {
                 return p->fetch_page_result(builder, page_size, now, timeout);
