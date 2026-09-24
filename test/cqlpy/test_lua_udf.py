@@ -203,3 +203,14 @@ def test_lua_sum_of_udf(cql, test_keyspace, scylla_only):
         cql.execute(f"INSERT INTO {table} (val) VALUES (2)")
         with new_function(cql, test_keyspace, "(val int) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return val'") as f:
             assert cql.execute(f"SELECT sum({test_keyspace}.{f}(val)) FROM {table}").one()[0] == 3
+
+def test_lua_tinyint_return(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val1 int, val2 int, val3 int, val4 varint") as table:
+        cql.execute(f"INSERT INTO {table} (key, val1, val2, val3, val4) VALUES ('foo', 3, -1, 128, 9223372036854775808)")
+        with new_function(cql, test_keyspace, "(val varint) CALLED ON NULL INPUT RETURNS tinyint LANGUAGE lua AS 'return val'") as f:
+            def call(col):
+                return cql.execute(f"SELECT {test_keyspace}.{f}({col}) FROM {table}").one()[0]
+            assert call("val1") == 3
+            assert call("val2") == -1
+            assert call("val3") == -128
+            assert call("val4") == 0
