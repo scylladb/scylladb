@@ -1283,10 +1283,9 @@ public:
 
     future<> consider_scheduled_load() {
         const locator::topology& topo = _tm->get_topology();
+        // Tables migrating from vnodes to tablets are not balanced, but the caps limit a physical
+        // shard, so whatever they stream still has to be charged.
         for (auto&& [table, tables] : _tm->tablets().all_table_groups()) {
-            if (is_migrating_table(table)) {
-                continue;
-            }
             const auto& tmap = _tm->tablets().get_tablet_map(table);
             for (auto&& [tid, trinfo]: tmap.transitions()) {
                 co_await coroutine::maybe_yield();
