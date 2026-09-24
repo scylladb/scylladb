@@ -501,3 +501,11 @@ def test_lua_error(cql, test_keyspace, scylla_only):
         cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 42)")
         with pytest.raises(InvalidRequest, match=re.escape("attempt to perform arithmetic on a nil value (field 'bar')")):
             call_lua(cql, test_keyspace, table, "(val int) RETURNS NULL ON NULL INPUT RETURNS int", "return 2 * bar")
+
+# This test relies on the server being configured with a UDF time limit
+# (user_defined_function_time_limit_ms) that isn't too long.
+def test_lua_timeout(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val int") as table:
+        cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 42)")
+        with pytest.raises(InvalidRequest, match="lua execution timeout: "):
+            call_lua(cql, test_keyspace, table, "(val int) RETURNS NULL ON NULL INPUT RETURNS int", "while true do end")
