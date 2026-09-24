@@ -737,3 +737,20 @@ def test_complex_timestamp_updates(cql, test_keyspace, flush):
             cql.execute(f"update {table} using timestamp 3 set v2 = 0 where p = 1 and c = 0")
             maybe_flush()
             assert [(0, 1, 0, 0, 0)] == list(cql.execute(f"select * from {mv} where v1 = 0 and p = 1 and c = 0"))
+
+# Deleting a range of base rows - a whole clustering prefix, or a slice of
+# one - removes exactly those rows from the view, even though in the view
+# they are spread over many different partitions.
+def test_range_tombstone(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int, c1 int, c2 int, v int, primary key (p, c1, c2)') as table:
+        with new_materialized_view(cql, table, '*', '(v, p), c1, c2',
+                'p is not null and c1 is not null and c2 is not null and v is not null') as mv:
+            for i in range(100):
+                cql.execute(f"insert into {table} (p, c1, c2, v) values (0, {i % 2}, {i}, 1)")
+            assert 100 == len(list(cql.execute(f"select * from {mv}")))
+
+            cql.execute(f"delete from {table} where p = 0 and c1 = 0")
+            assert 50 == len(list(cql.execute(f"select * from {mv}")))
+
+            cql.execute(f"delete from {table} where p = 0 and c1 = 1 and c2 >= 50 and c2 < 101")
+            assert 25 == len(list(cql.execute(f"select * from {mv}")))
