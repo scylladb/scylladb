@@ -1097,6 +1097,20 @@ future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::
                     if (rep._status != status_type::ok && rep._status != status_type::partial_content) {
                         throw failed_operation(fmt::format("Could not read object {}: {} ({}-{}/{} - {})", _bucket, _object_name, s.position, s.position+to_read, _size, int(rep._status)));
                     }
+                    auto status = rep._status;
+                    utils::get_local_injector().inject("gcp_source_whole_object_reply", [&status] {
+                        status = status_type::ok;
+                    });
+                    // Before reading, because read_entire_stream() below accumulates
+                    // whatever arrives into the shared buffers, past the memory lease
+                    // taken for to_read. 200 means the reply carries the whole object,
+                    // which for a Data file is gigabytes, starting at offset zero rather
+                    // than at s.position. A request that already covers the whole
+                    // object is answered this way legitimately.
+                    if (status == status_type::ok && (s.position != 0 || to_read != _size)) {
+                        throw storage_io_error(EIO, fmt::format("Read of {}:{} answered the whole object for the {} bytes asked for at offset {} of {}",
+                                _bucket, _object_name, to_read, s.position, _size));
+                    }
                     // send_with_retry() re-runs this handler on every attempt.
                     // Nothing is appended before read_entire_stream() returns, so an
                     // attempt that fails leaves the shared state as it found it.
