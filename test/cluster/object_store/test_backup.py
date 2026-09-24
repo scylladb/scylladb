@@ -2215,42 +2215,29 @@ async def test_backup_after_schema_dropped(manager: ScyllaClusterManager, object
 
 # cluster backup/snapshot
 
-async def prepare_write_workload(cql, table_name, flush=True, n: int = None):
-    """write some data"""
-    keys = list(range(n if n else 100))
-    c1_values = ['value1']
-    c2_values = ['value2']
-
-    statement = cql.prepare(f"INSERT INTO {table_name} (key, c1, c2) VALUES (?, ?, ?)")
-    statement.consistency_level = ConsistencyLevel.ALL
-
-    await asyncio.gather(*[cql.run_async(statement, params) for params in
-                           list(map(lambda x, y, z: [x, y, z], keys,
-                                    itertools.cycle(c1_values),
-                                    itertools.cycle(c2_values)))]
-                                    )
-
-    if flush:
-        await nodetool.flush(cql, table_name)
-
 async def do_test_snapshot_on_all_nodes(manager: ScyllaClusterManager,
                                         handle_snapshot: Callable[[ScyllaClusterManager, str, str, str, list[ServerInfo]], Awaitable[None]],
                                         object_storage = None, 
                                         do_snapshot: bool = True,
-                                        do_repair: bool = False):
+                                        do_repair: bool = False,
+                                        topology = None):
     """
     Helper for tests of topology operation snapshot.
     """
-    topology = topo(rf = 3, nodes = 3, racks = 3, dcs = 1)
+    if topology is None:
+        topology = topo(rf = 3, nodes = 3, racks = 3, dcs = 1)
 
     servers, _ = await create_cluster(topology, manager, logger, object_storage)
 
     snapshot_name = unique_name('snap_')
 
     async with new_test_keyspace(manager, f"WITH REPLICATION = {{ 'replication_factor' : {topology.rf} }} AND tablets = {{'initial': 20 }}") as ks:
-        async with new_test_table(manager, ks, "key int, c1 text, c2 text, PRIMARY KEY (key)", "") as tbl:
+        async with new_test_table(manager, ks, "pk text primary key, value int", "") as tbl:
             cf = tbl.split('.')[1]
-            await prepare_write_workload(manager.get_cql(), tbl, flush=False)
+            cql = manager.get_cql()
+            insert_stmt = cql.prepare(f"INSERT INTO {ks}.{cf} (pk, value) VALUES (?, ?)")
+            insert_stmt.consistency_level = ConsistencyLevel.ALL
+            await asyncio.gather(*(cql.run_async(insert_stmt, (str(i), i)) for i in range(100)))
             if do_repair:
                 await manager.api.repair(servers[0].ip_addr, ks, cf)
             if do_snapshot:
@@ -2284,10 +2271,14 @@ async def run_cluster_backup(object_storage, prefix: str, manager: ScyllaCluster
                   object_storage.get_resource().Bucket(object_storage.bucket_name).
                   objects.filter(Prefix=f"{prefix}/sstables"))
 
-    manifest_obj = object_storage.get_resource().Bucket(object_storage.bucket_name).Object(f"{prefix}/snapshots/{snapshot_name}/manifest.json").get()
+    manifest_obj = object_storage.get_resource().Bucket(object_storage.bucket_name).Object(f"{prefix}/snapshots/{ks}/{cf}/{snapshot_name}/manifest.json").get()
     manifest = json.load(manifest_obj['Body'])
 
     manifest_sstables = [sst['toc_name'] for sst in manifest['sstables']]
+
+    # every sstable the manifest names must have made it into the bucket
+    missing = [sst for sst in manifest['sstables'] if sst['toc_name'] not in objects]
+    assert not missing, f"manifest references sstables that were not uploaded: {[(sst['node'], sst['toc_name']) for sst in missing]}"
 
     for ss in servers:
         locations = list(cql.execute(f"SELECT * FROM system_distributed.snapshot_remote_locations WHERE snapshot_name = '{snapshot_name}' AND datacenter = '{s.datacenter}'"))
@@ -2305,7 +2296,8 @@ async def run_cluster_backup(object_storage, prefix: str, manager: ScyllaCluster
                     """))
 
         for sstable in sstables:
-            assert (not sstable.toc_name in manifest_sstables) or sstable.state >= 3
+            assert (not sstable.toc_name in manifest_sstables) or sstable.state >= 3, \
+                    f"{sstable.toc_name} of node {sstable.node} is in the manifest, but was not backed up (state {sstable.state})"
 
         for sstable in sstables:
             assert sstable.state < 3 or sstable.toc_name in objects
@@ -2424,3 +2416,62 @@ async def test_queued_backup_task_is_abortable(manager: ScyllaClusterManager, ob
         # release the lock holder so the keyspace can be dropped
         await manager.api.message_injection(server.ip_addr, "backup_task_pre_upload")
         await manager.api.wait_task(server.ip_addr, holder)
+
+
+@pytest.mark.asyncio
+async def test_cluster_snapshot_backup_several_nodes_per_rack(manager: ScyllaClusterManager, object_storage):
+    """
+    Tests a cluster snapshot is backed up in full when a rack holds more than one node.
+
+    The snapshot_sstables table is partitioned by (snapshot, keyspace, table, datacenter,
+    rack), so a per-rack query returns the sstables of every node in that rack. The
+    repair-set de-duplication must thus claim a tablet for the node that owns the sstable,
+    not for the node the backup loop happens to be visiting, or else the first node of a
+    rack claims all of the rack's tablets and its peers upload nothing.
+    """
+    topology = topo(rf = 2, nodes = 4, racks = 2, dcs = 1)
+    await do_test_snapshot_on_all_nodes(manager, partial(run_cluster_backup, object_storage, 'gothel'),
+                                        object_storage, True, True, topology)
+
+
+async def run_cluster_backup_clear_and_restore(object_storage, topology, manager: ScyllaClusterManager, snapshot_name: str, ks: str, cf:str, servers: list[ServerInfo]):
+    """
+    Helper
+    """
+    manifest = await run_cluster_backup(object_storage, 'ninjax', manager, snapshot_name, ks, cf, servers)
+    # get current row count
+    cql = manager.get_cql()
+
+    # drop everything
+    await cql.run_async(f"TRUNCATE {ks}.{cf}")
+
+    manifests = [f'ninjax/snapshots/{ks}/{cf}/{snapshot_name}/manifest.json']
+    tid = await manager.api.restore_tablets(servers[0].ip_addr, ks, cf, snapshot_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests)
+    status = await manager.api.wait_task(servers[0].ip_addr, tid)
+    assert (status is not None) and (status['state'] == 'done'), f"Restore of {cf} via {servers[0].ip_addr} failed: {status}"
+    assert status['progress_total'] > 0
+    assert status['progress_completed'] == status['progress_total']
+
+    await check_mutation_replicas(cql, manager, servers, range(100), topology, logger, ks, cf)
+
+
+@pytest.mark.asyncio
+async def test_cluster_snapshot_backup_and_restore(manager: ScyllaClusterManager, object_storage):
+    """
+    Tests a cluster snapshot reducing the snapshot sstable set by the current repair set for each tablet
+    can be (fully) restored
+    """
+    topology = topo(rf = 3, nodes = 3, racks = 3, dcs = 1)
+    await do_test_snapshot_on_all_nodes(manager, partial(run_cluster_backup_clear_and_restore, object_storage, topology)
+                                        , object_storage, True, True, topology)
+
+
+@pytest.mark.asyncio
+async def test_cluster_snapshot_backup_and_restore_several_nodes_per_rack(manager: ScyllaClusterManager, object_storage):
+    """
+    Tests a cluster snapshot reducing the snapshot sstable set by the current repair set for each tablet
+    can be (fully) restored
+    """
+    topology = topo(rf = 2, nodes = 4, racks = 2, dcs = 1)
+    await do_test_snapshot_on_all_nodes(manager, partial(run_cluster_backup_clear_and_restore, object_storage, topology)
+                                        , object_storage, True, True, topology)
