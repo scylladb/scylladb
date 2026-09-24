@@ -151,3 +151,11 @@ def test_lua_decimal_argument(cql, test_keyspace, scylla_only):
     with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val decimal") as table:
         cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 3)")
         assert call_lua(cql, test_keyspace, table, "(val decimal) CALLED ON NULL INPUT RETURNS bigint", "return 42") == [42]
+
+def test_lua_decimal_add(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val1 decimal") as table:
+        cql.execute(f"INSERT INTO {table} (key, val1) VALUES ('foo', 1.5)")
+        assert call_lua(cql, test_keyspace, table, "(a decimal) CALLED ON NULL INPUT RETURNS decimal",
+                        "return a + 1", args="val1") == [Decimal("2.5")]
+        assert call_lua(cql, test_keyspace, table, "(a decimal) CALLED ON NULL INPUT RETURNS double",
+                        "return 42.2 + a", args="val1") == [43.7]

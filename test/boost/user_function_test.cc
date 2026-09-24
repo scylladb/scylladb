@@ -66,25 +66,6 @@ static future<> with_udf_enabled(Func&& func) {
     return do_with_cql_env_thread(std::forward<Func>(func), db_cfg_ptr);
 }
 
-SEASTAR_TEST_CASE(test_user_function_decimal_add) {
-    return with_udf_enabled([](cql_test_env& e) {
-        e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val1 decimal);").get();
-        e.execute_cql("INSERT INTO my_table (key, val1) VALUES ('foo', 1.5);").get();
-
-        e.execute_cql("CREATE FUNCTION my_func(a decimal) CALLED ON NULL INPUT RETURNS decimal LANGUAGE Lua AS 'return a + 1';").get();
-        auto res = e.execute_cql("SELECT my_func(val1) FROM my_table;").get();
-        assert_that(res).is_rows().with_rows_ignore_order({
-            {serialized(big_decimal(1, 25))}
-        });
-
-        e.execute_cql("CREATE FUNCTION my_func2(a decimal) CALLED ON NULL INPUT RETURNS double LANGUAGE Lua AS 'return 42.2 + a';").get();
-        res = e.execute_cql("SELECT my_func2(val1) FROM my_table;").get();
-        assert_that(res).is_rows().with_rows_ignore_order({
-            {serialized(43.7)}
-        });
-    });
-}
-
 SEASTAR_TEST_CASE(test_user_function_decimal_sub) {
     return with_udf_enabled([](cql_test_env& e) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val1 decimal, val2 decimal);").get();
