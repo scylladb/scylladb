@@ -1483,3 +1483,26 @@ def test_only_one_allowed(cql, test_keyspace):
                     'v is not null and w is not null'):
                 pass
 
+# Test that a view cannot be created without its primary key containing all
+# columns of the base's primary key. This reproduces issue #2720.
+def test_view_key_must_include_base_key(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'a int, b int, c int, primary key (a)') as table:
+        # Adding a column (b) to cf's primary key (a) is fine:
+        with new_materialized_view(cql, table, '*', 'b, a',
+                'a is not null and b is not null'):
+            pass
+        # But missing any of cf's primary columns in the view, is not.
+        with pytest.raises(InvalidRequest, match='Cannot create [Mm]aterialized [Vv]iew.*without primary key columns'):
+            with new_materialized_view(cql, table, '*', 'b', 'b is not null'):
+                pass
+
+    # A slightly more elaborate case, which actually reproduces the
+    # problem we had issue #2720 - in this case we didn't detect the
+    # error of the missing key column.
+    with new_test_table(cql, test_keyspace, 'a int, b int, c int, primary key (a, b)') as table:
+        with pytest.raises(InvalidRequest, match='Cannot create [Mm]aterialized [Vv]iew.*without primary key columns'):
+            # error: "a" is missing in this key.
+            with new_materialized_view(cql, table, '*', 'c, b',
+                    'c is not null and b is not null'):
+                pass
+
