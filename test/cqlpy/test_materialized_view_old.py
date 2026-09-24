@@ -2334,3 +2334,34 @@ def test_clustering_key_multi_column_restrictions(cql, test_keyspace, pk):
             # Deleting both base partitions empties the view
             cql.execute(f"delete from {table} where a in (0, 1)")
             check([])
+
+# The same, for a view restricting the *last* of the base's clustering key
+# columns, leaving the one before it unrestricted.
+@pytest.mark.parametrize("pk", ['(a, b), c', '(b, a), c', 'a, b, c', 'c, b, a', '(c, a), b'])
+def test_clustering_key_filtering_restrictions(cql, test_keyspace, pk):
+    with new_test_table(cql, test_keyspace, 'a int, b int, c int, d int, primary key (a, b, c)') as table:
+        with new_materialized_view(cql, table, '*', pk,
+                'a is not null and b is not null and c = 1') as mv:
+            def check(expected):
+                assert sorted(expected) == sorted(cql.execute(f"select a, b, c, d from {mv}"))
+            for a, b, c in [(0, 0, 0), (0, 0, 1), (0, 1, 0), (0, 1, 1), (1, 0, 0),
+                            (1, 0, 1), (1, 1, -1), (1, 1, 0), (1, 1, 1)]:
+                cql.execute(f"insert into {table} (a, b, c, d) values ({a}, {b}, {c}, 0)")
+            check([(0, 0, 1, 0), (0, 1, 1, 0), (1, 0, 1, 0), (1, 1, 1, 0)])
+
+            # A row which the view filters out stays filtered out
+            cql.execute(f"update {table} set d = 1 where a = 1 and b = 0 and c = 0")
+            check([(0, 0, 1, 0), (0, 1, 1, 0), (1, 0, 1, 0), (1, 1, 1, 0)])
+
+            cql.execute(f"update {table} set d = 1 where a = 0 and b = 1 and c = 1")
+            check([(0, 0, 1, 0), (0, 1, 1, 1), (1, 0, 1, 0), (1, 1, 1, 0)])
+
+            cql.execute(f"delete from {table} where a = 0 and b = 0 and c = 0")
+            check([(0, 0, 1, 0), (0, 1, 1, 1), (1, 0, 1, 0), (1, 1, 1, 0)])
+
+            cql.execute(f"delete from {table} where a = 1 and b = 1 and c = 1")
+            check([(0, 0, 1, 0), (0, 1, 1, 1), (1, 0, 1, 0)])
+
+            # Deleting both base partitions empties the view
+            cql.execute(f"delete from {table} where a in (0, 1)")
+            check([])
