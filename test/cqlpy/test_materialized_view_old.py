@@ -2219,3 +2219,20 @@ def test_base_non_pk_columns_in_view_partition_key_are_non_empty(cql, test_keysp
                 'p1 is not null and p2 is not null and c is not null and v is not null') as mv:
             wait_for_view_built(cql, mv)
             assert [(1, '', '', '')] == list(cql.execute(f"select p1, p2, c, v from {mv}"))
+
+# The clustering-key counterpart of
+# test_delete_single_column_in_view_partition_key above: deleting the base
+# column which the view's clustering key is built from removes the view row.
+def test_delete_single_column_in_view_clustering_key(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'a int, b int, c int, d int, primary key (a, b)') as table:
+        with new_materialized_view(cql, table, '*', 'a, d, b',
+                'a is not null and b is not null and d is not null') as mv:
+            cql.execute(f"insert into {table} (a, b, c, d) values (0, 0, 0, 0)")
+            assert [(0, 0, 0, 0)] == list(cql.execute(f"select a, d, b, c from {mv}"))
+
+            cql.execute(f"delete c from {table} where a = 0 and b = 0")
+            assert [(0, 0, 0, None)] == list(cql.execute(f"select a, d, b, c from {mv}"))
+
+            cql.execute(f"delete d from {table} where a = 0 and b = 0")
+            assert [] == list(cql.execute(f"select a, d, b from {mv}"))
+
