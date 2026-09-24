@@ -1445,6 +1445,9 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , enable_cache(this, "enable_cache", value_status::Used, true, "Enable cache.")
     , enable_commitlog(this, "enable_commitlog", value_status::Used, true, "Enable commitlog.")
     , volatile_system_keyspace_for_testing(this, "volatile_system_keyspace_for_testing", value_status::Used, false, "Don't persist system keyspace - testing only!")
+#ifdef SCYLLA_ENABLE_ERROR_INJECTION
+    , test_clocks_offset_seconds(this, "test_clocks_offset_seconds", liveness::LiveUpdate, value_status::Used, 0, "Number of seconds to add to this node's clocks - db_clock, gc_clock, and the timestamps generated for writes. For tests only! It lets a test make a TTL expire, or data become expired or collectable, without really waiting for that long. Because it is live-updatable, a test can set it and then reset it back to 0 when it is done. This option only exists in builds which enable error injection (dev, debug, sanitize), not in release builds - so a test which needs it should check whether it exists, and skip itself if it doesn't.")
+#endif
     , api_port(this, "api_port", value_status::Used, 10000, "Http Rest API port.")
     , api_address(this, "api_address", value_status::Used, "", "Http Rest API address.")
     , api_ui_dir(this, "api_ui_dir", value_status::Used, "swagger-ui/dist/", "The directory location of the API GUI.")
