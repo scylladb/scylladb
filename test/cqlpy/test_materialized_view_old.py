@@ -471,3 +471,13 @@ def test_alter_reversed_type_view_table(cql, test_keyspace, scylla_only):
         with new_materialized_view(cql, table, '*', 'p, c', 'p is not null and c is not null',
                 extra='with clustering order by (c desc)'):
             cql.execute(f"alter table {table} alter c type blob")
+
+# Here the altered column c is only a regular column in the base table, and
+# becomes a clustering key in the view. Changing text to blob is allowed,
+# because the two types have the same representation and sort the same way.
+def test_alter_compatible_type(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, 'p int, c text, primary key (p)') as table:
+        with new_materialized_view(cql, table, '*', 'p, c', 'p is not null and c is not null',
+                extra='with clustering order by (c desc)'):
+            cql.execute(f"alter table {table} alter c type blob")
+
