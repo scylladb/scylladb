@@ -441,3 +441,16 @@ def test_drop_table_with_active_mv(cql, test_keyspace):
             cql.execute(f"drop materialized view {mv}")
         # Now that the view is gone, the base table can be dropped. We let
         # new_test_table() above do that when it exits.
+
+# Changing the type of a base-table column to a compatible type is allowed
+# even when that column is also a key column of a materialized view - the
+# view's copy of the column changes type as well.
+#
+# Note that this test, and the four ALTER ... TYPE tests below it, are
+# scylla_only: Cassandra removed support for changing a column's type, and
+# now fails any such request with "Altering column types is no longer
+# supported".
+def test_alter_table(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, 'p int, c text, primary key (p, c)') as table:
+        with new_materialized_view(cql, table, '*', 'p, c', 'p is not null and c is not null'):
+            cql.execute(f"alter table {table} alter c type blob")

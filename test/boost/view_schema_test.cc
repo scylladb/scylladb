@@ -29,16 +29,6 @@ BOOST_AUTO_TEST_SUITE(view_schema_test)
 
 using namespace std::literals::chrono_literals;
 
-SEASTAR_TEST_CASE(test_alter_table) {
-    return do_with_cql_env_thread([] (auto& e) {
-        e.execute_cql("create table cf (p int, c text, primary key (p, c));").get();
-        e.execute_cql("create materialized view vcf as select * from cf "
-                      "where p is not null and c is not null "
-                      "primary key (p, c)").get();
-        e.execute_cql("alter table cf alter c type blob").get();
-    });
-}
-
 SEASTAR_TEST_CASE(test_alter_reversed_type_base_table) {
     return do_with_cql_env_thread([] (auto& e) {
         e.execute_cql("create table cf (p int, c text, primary key (p, c)) with clustering order by (c desc);").get();
