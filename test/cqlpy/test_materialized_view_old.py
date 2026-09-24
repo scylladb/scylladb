@@ -937,3 +937,51 @@ def test_filter_with_function_or_type_cast(cql, test_keyspace, restriction):
 
             cql.execute(f"alter table {table} rename p to foo")
             assert [(1, 0, 2), (1, 1, 3)] == list(cql.execute(f"select foo, c, v from {mv}"))
+
+# A view's WHERE clause may restrict a column of any type to a value. Here
+# the base table's primary key is made of one column of each type, the view
+# restricts every one of them, and a row matching all of those restrictions
+# must show up in the view.
+#
+# Each entry below is a column's name, its type, and the value the view
+# restricts it to and which we then write to the base table. The UDT column's
+# type is only known at run time, so it is left as None here.
+RESTRICTIONS_ON_ALL_TYPES = [
+    ('asciival', 'ascii', "'abc'"),
+    ('bigintval', 'bigint', '123'),
+    ('blobval', 'blob', '0xfeed'),
+    ('booleanval', 'boolean', 'true'),
+    ('dateval', 'date', "'1987-03-23'"),
+    ('decimalval', 'decimal', '123.123'),
+    ('doubleval', 'double', '123.123'),
+    ('floatval', 'float', '123.123'),
+    ('inetval', 'inet', "'127.0.0.1'"),
+    ('intval', 'int', '123'),
+    ('textval', 'text', "'abc'"),
+    ('timeval', 'time', "'07:35:07.000111222'"),
+    ('timestampval', 'timestamp', '123123123'),
+    ('timeuuidval', 'timeuuid', '6BDDC89A-5644-11E4-97FC-56847AFE9799'),
+    ('uuidval', 'uuid', '6BDDC89A-5644-11E4-97FC-56847AFE9799'),
+    ('varcharval', 'varchar', "'abc'"),
+    ('varintval', 'varint', '123123123'),
+    ('frozenlistval', 'frozen<list<int>>', '[1, 2, 3]'),
+    ('frozensetval', 'frozen<set<uuid>>', '{6BDDC89A-5644-11E4-97FC-56847AFE9799}'),
+    ('frozenmapval', 'frozen<map<ascii, int>>', "{'a': 1, 'b': 2}"),
+    ('tupleval', 'frozen<tuple<int, ascii, uuid>>', "(1, 'foobar', 6BDDC89A-5644-11E4-97FC-56847AFE9799)"),
+    ('vectorval', 'vector<int, 3>', '[1, 2, 3]'),
+    ('udtval', None, "{a: 1, b: 6BDDC89A-5644-11E4-97FC-56847AFE9799, c: {'foo', 'bar'}}"),
+]
+
+def test_restrictions_on_all_types(cql, test_keyspace):
+    with new_type(cql, test_keyspace, '(a int, b uuid, c set<text>)') as udt:
+        columns = [(name, typ if typ else f'frozen<{udt}>', value)
+                   for (name, typ, value) in RESTRICTIONS_ON_ALL_TYPES]
+        names = ', '.join(name for (name, _, _) in columns)
+        schema = (', '.join(f'{name} {typ}' for (name, typ, _) in columns)
+                  + f', primary key ({names})')
+        where = ' and '.join(f'{name} = {value}' for (name, _, value) in columns)
+        values = ', '.join(value for (_, _, value) in columns)
+        with new_test_table(cql, test_keyspace, schema) as table:
+            with new_materialized_view(cql, table, '*', names, where) as mv:
+                cql.execute(f"insert into {table} ({names}) values ({values})")
+                assert 1 == len(list(cql.execute(f"select * from {mv}")))
