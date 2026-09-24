@@ -2462,6 +2462,206 @@ SEASTAR_TEST_CASE(test_commitlog_release_large_mutation_segments) {
     });
 }
 
+<<<<<<< HEAD
+||||||| parent of d71f3d25b2 (commitlog: Fix possible ordering issue when handling abandoned future in new_segment)
+// Test SCYLLADB-4443
+SEASTAR_TEST_CASE(test_commitlog_large_mutation_timeout) {
+    commitlog::config cfg;
+
+    constexpr uint64_t max_size_mb = 2;
+
+    cfg.commitlog_segment_size_in_mb = max_size_mb;
+    cfg.commitlog_total_space_in_mb = 4 * max_size_mb * this_smp_shard_count();
+    cfg.allow_going_over_size_limit = false;
+    cfg.allow_fragmented_entries = true;
+    cfg.use_o_dsync = false; 
+
+    return cl_test(cfg, [](commitlog& log) -> future<> {
+        auto uuid = make_table_id();
+        {
+            db::rp_set handles;
+            auto size = log.max_record_size();
+            size_t tot = 0;
+
+            // Fill commitlog (partially) with normal allocations.
+            for (;;) {
+                auto h = co_await log.add_mutation(uuid, size, db::commitlog::force_sync::no, [&](db::commitlog::output& dst) {
+                    for (size_t i = 0; i < size; ++i) {
+                        dst.write("A", 1);
+                    }
+                });
+                tot += size;
+                handles.put(std::move(h));
+                if (tot > (max_size_mb * 1024 * 1024)) {
+                    break;
+                }
+                BOOST_TEST_MESSAGE(fmt::format("Wrote {} bytes", tot));
+            }
+
+            BOOST_TEST_MESSAGE("Provoke timeout failure");
+
+            // Now make a large allocation that is legal, but which cannot 
+            // finish due to us holding available space.
+            // This will time out. (Regardless, so use very low timeout)
+            BOOST_REQUIRE_THROW(
+                size = 2 * max_size_mb * 1024 * 1024;
+                auto h = co_await log.add_mutation(uuid, size, db::timeout_clock::now() + 100ms, db::commitlog::force_sync::no, [&](db::commitlog::output& dst) {
+                    for (size_t i = 0; i < size; ++i) {
+                        dst.write("A", 1);
+                    }
+                });
+            , timed_out_error);
+
+            BOOST_TEST_MESSAGE("Release allocated space");
+
+            utils::get_local_injector().enable("commitlog_new_segment");
+
+            // Now clear out data we previously allocated
+            log.discard_completed_segments(uuid, std::exchange(handles, {}));
+            co_await log.delete_segments({}); // will sync the recycling
+            // Get the segments we held deleted
+            co_await log.wait_for_pending_deletes();
+
+            // wait for whitebox message.
+            co_await utils::get_local_injector().inject("commitlog_new_segment", utils::wait_for_message{1s});
+
+            BOOST_TEST_MESSAGE("Do large allocation with space available");
+            // should work now. will time out otherwise.
+            auto h = co_await log.add_mutation(uuid, size, db::timeout_clock::now() + 10s, db::commitlog::force_sync::no, [&](db::commitlog::output& dst) {
+                for (size_t i = 0; i < size; ++i) {
+                    dst.write("A", 1);
+                }
+            });
+
+            log.discard_completed_segments(uuid);
+
+            co_await log.force_new_active_segment();
+            co_await log.wait_for_pending_deletes();
+            auto n = log.get_num_active_segments();
+
+            BOOST_REQUIRE_LE(n, 1);
+
+
+        }
+    });
+}
+
+=======
+// Test SCYLLADB-4443
+SEASTAR_TEST_CASE(test_commitlog_large_mutation_timeout) {
+    commitlog::config cfg;
+
+    constexpr uint64_t max_size_mb = 2;
+
+    cfg.commitlog_segment_size_in_mb = max_size_mb;
+    cfg.commitlog_total_space_in_mb = 4 * max_size_mb * this_smp_shard_count();
+    cfg.allow_going_over_size_limit = false;
+    cfg.allow_fragmented_entries = true;
+    cfg.use_o_dsync = false; 
+
+    return cl_test(cfg, [](commitlog& log) -> future<> {
+        // How long the provoking allocation below is allowed to run before it
+        // is abandoned. See its use site for why this cannot be tiny.
+        constexpr auto provoke_timeout = 2s;
+
+        auto uuid = make_table_id();
+        {
+            db::rp_set handles;
+            auto size = log.max_record_size();
+            size_t tot = 0;
+            std::unordered_set<db::segment_id_type> segs;
+
+            // Fill commitlog (partially) with normal allocations.
+            for (;;) {
+                auto h = co_await log.add_mutation(uuid, size, db::commitlog::force_sync::no, [&](db::commitlog::output& dst) {
+                    for (size_t i = 0; i < size; ++i) {
+                        dst.write("A", 1);
+                    }
+                });
+                tot += size + log.sector_overhead(h.rp().base_id(), size);
+                // count actual segments used, this deals with chunks etc.
+                segs.emplace(h.rp().base_id());
+                handles.put(std::move(h));
+                if (segs.size() >= 3) { // we now hold to much/enough of space hostage
+                    break;
+                }
+                BOOST_TEST_MESSAGE(fmt::format("Wrote {} ({}: {}) bytes", tot, size, segs));
+            }
+
+            BOOST_TEST_MESSAGE("Provoke timeout failure");
+
+            // Now make a large allocation that is legal, but which cannot 
+            // finish due to us holding available space. This will time out
+            // regardless of how long we wait, since nothing frees space until
+            // we drop the handles below.
+            //
+            // The timeout must however be comfortably longer than the setup an
+            // oversized allocation does before it can block on a new segment:
+            // it first waits for _all_ request controller units, which takes
+            // ~100ms here (syncing the segments we just filled). If the timeout
+            // expires during that wait, we never reach new_segment(), there is
+            // no abandoned call to abandon, and the whitebox wait below can
+            // never be satisfied. That is what made this test flaky in debug.
+            BOOST_REQUIRE_THROW(
+                size = 2 * max_size_mb * 1024 * 1024;
+                auto h = co_await log.add_mutation(uuid, size, db::timeout_clock::now() + provoke_timeout, db::commitlog::force_sync::no, [&](db::commitlog::output& dst) {
+                    for (size_t i = 0; i < size; ++i) {
+                        dst.write("A", 1);
+                    }
+                });
+            , timed_out_error);
+
+            BOOST_TEST_MESSAGE("Release allocated space");
+
+            utils::get_local_injector().enable("commitlog_new_segment");
+
+            // Now clear out data we previously allocated
+            log.discard_completed_segments(uuid, std::exchange(handles, {}));
+            co_await log.delete_segments({}); // will sync the recycling
+            // Get the segments we held deleted
+            co_await log.wait_for_pending_deletes();
+
+            // wait for whitebox message. Generous timeout: on success this
+            // returns as soon as the abandoned new_segment() finishes.
+            co_await utils::get_local_injector().inject("commitlog_new_segment", utils::wait_for_message{60s});
+
+            BOOST_TEST_MESSAGE("Do large allocation with space available");
+            // should work now. will time out otherwise.
+            auto h = co_await log.add_mutation(uuid, size, db::timeout_clock::now() + 10s, db::commitlog::force_sync::no, [&](db::commitlog::output& dst) {
+                for (size_t i = 0; i < size; ++i) {
+                    dst.write("A", 1);
+                }
+            });
+
+            // We release more than one segment. Ensure that timeouted new_segment et all maintain segment order.
+            BOOST_TEST_MESSAGE("Ensure segment order");
+            auto segments = log.get_active_segment_names() | std::views::transform([](auto& name) {
+                return commitlog::descriptor(name);
+            }) | std::ranges::to<std::vector>();
+
+            BOOST_REQUIRE_GT(segments.size(), 1); 
+
+            auto id = segments.front().id;
+            for (auto& dd : segments | std::views::drop(1)) {
+                BOOST_REQUIRE_GT(dd.id, id);
+                id = dd.id;
+            }
+
+            BOOST_TEST_MESSAGE("Clean up");
+            log.discard_completed_segments(uuid);
+
+            co_await log.force_new_active_segment();
+            co_await log.wait_for_pending_deletes();
+            auto n = log.get_num_active_segments();
+
+            BOOST_REQUIRE_LE(n, 1);
+
+
+        }
+    });
+}
+
+>>>>>>> d71f3d25b2 (commitlog: Fix possible ordering issue when handling abandoned future in new_segment)
 // Test for #24346. Writing last entry, of last chunk at exactly segment EOF boundary
 SEASTAR_TEST_CASE(test_segment_end_on_entry_end) {
     static auto replay_segment = [] (sstring path) -> future<> {
