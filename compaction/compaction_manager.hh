@@ -393,7 +393,10 @@ public:
             sstables::update_sstable_id update_id = sstables::update_sstable_id::yes);
 
     // Submit a table for major compaction.
-    future<> perform_major_compaction(compaction::compaction_group_view& t, tasks::task_info info, bool consider_only_existing_data = false);
+    // memtables_flushed says whether the caller flushed the table's memtables before calling. It is
+    // a precondition for narrowing tombstone GC to skip the memtable check, so a major that did not
+    // flush keeps consulting the memtables. See tombstone_gc_scope.
+    future<> perform_major_compaction(compaction::compaction_group_view& t, tasks::task_info info, bool consider_only_existing_data = false, bool memtables_flushed = false);
 
     // Splits a compaction group by segregating all its sstable according to the classifier[1].
     // [1]: See compaction_type_options::splitting::classifier.

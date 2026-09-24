@@ -552,11 +552,13 @@ class ScyllaRESTAPIClient:
         """Compact all keyspaces on the node"""
         await self.client.post("/storage_service/compact", host=node_ip)
 
-    async def keyspace_compaction(self, node_ip: str, keyspace: str, table: Optional[str] = None, consider_only_existing_data: bool = False) -> None:
+    async def keyspace_compaction(self, node_ip: str, keyspace: str, table: Optional[str] = None, consider_only_existing_data: bool = False,
+                                  flush_memtables: bool = True) -> None:
         """Compact the specified or all tables in the keyspace"""
         url = f"/storage_service/keyspace_compaction/{keyspace}"
         params = {
             "consider_only_existing_data": str(consider_only_existing_data),
+            "flush_memtables": str(flush_memtables),
         }
         if table is not None:
             params["cf"] = table
