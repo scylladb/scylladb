@@ -985,3 +985,97 @@ def test_restrictions_on_all_types(cql, test_keyspace):
             with new_materialized_view(cql, table, '*', names, where) as mv:
                 cql.execute(f"insert into {table} ({names}) values ({values})")
                 assert 1 == len(list(cql.execute(f"select * from {mv}")))
+
+# Test a view defined by a SELECT which filters by a non-primary key column
+# which also happens to be a new primary key column in the view.
+# This used to cause problems (see issue #3430), but no longer does.
+# We still have problems in issue #3430 when one non-PK column is filtered,
+# and a different one is added to the view's PK (see other tests below).
+#
+# This is scylla_only. Cassandra refuses to restrict a non-primary-key column
+# at all - "Non-primary key columns can only be restricted with 'IS NOT NULL'"
+# - unless the unsafe system property cassandra.mv_allow_filtering_nonkey_
+# columns_unsafe is set. Scylla deliberately allows the one case this test
+# uses: the filtered column is exactly the column added to the view's primary
+# key. As explained by CASSANDRA-13798, the danger of filtering a non-key
+# column is that the view row's liveness then depends on several base columns
+# at once, which does not happen when the filtered column *is* the one added
+# to the view's key.
+def test_non_primary_key_restrictions(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, 'a int, b int, c int, d int, primary key (a, b)') as table:
+        with new_materialized_view(cql, table, '*', 'a, b, c',
+                'a is not null and b is not null and c is not null and c = 1') as mv:
+            def check(expected):
+                assert sorted(expected) == sorted(cql.execute(f"select a, b, c, d from {mv}"))
+            for a in [0, 1]:
+                for b in [0, 1]:
+                    for c in [0, 1]:
+                        cql.execute(f"insert into {table} (a, b, c, d) values ({a}, {b}, {c}, 0)")
+            # Only the last write to each of the four base rows survives, and
+            # all four of those have c=1, so all four are in the view.
+            matching = [(0, 0, 1, 0), (0, 1, 1, 0), (1, 0, 1, 0), (1, 1, 1, 0)]
+            check(matching)
+
+            # Insert new rows that do not match the filter c=1, so will cause no
+            # change to the view table:
+            cql.execute(f"insert into {table} (a, b, c, d) values (2, 0, 0, 0)")
+            cql.execute(f"insert into {table} (a, b, c, d) values (2, 1, 2, 0)")
+            check(matching)
+
+            # Insert two new base rows that do match the filter c=1, so will
+            # add new view rows as well. This test is superfluous, as above
+            # we already added 4 rows in the same fashion.
+            cql.execute(f"insert into {table} (a, b, c, d) values (1, 2, 1, 0)")
+            cql.execute(f"insert into {table} (a, b, c, d) values (1, 3, 1, 0)")
+            check(matching + [(1, 2, 1, 0), (1, 3, 1, 0)])
+
+            # Delete one of the rows we just added which matches the filter,
+            # so a view row will also be removed.
+            cql.execute(f"delete from {table} where a = 1 and b = 2")
+            check(matching + [(1, 3, 1, 0)])
+
+            # Change the c on one of the rows we just added from 1 to 0.
+            # Because it previously had c=1, it had a matching view row, but
+            # now that it has c=0 this view row will have to be deleted.
+            # A row with a=1,b=3 will still exist in the base table, but not
+            # in the view table.
+            cql.execute(f"update {table} set c = 0 where a = 1 and b = 3")
+            check(matching)
+
+            # Change the c on the row which now has c=0 back to c=1, should
+            # cause the view row to be added again.
+            cql.execute(f"update {table} set c = 1 where a = 1 and b = 3")
+            check(matching + [(1, 3, 1, 0)])
+
+            # Finally delete this row that now has c=1. The view row should also
+            # get deleted (as we've already tested above).
+            cql.execute(f"delete from {table} where a = 1 and b = 3")
+            check(matching)
+
+            # The following update creates a new base row, which doesn't have c=1
+            # (it has an empty c) so it will not create a new view row or change
+            # any existing view row.
+            cql.execute(f"update {table} set d = 1 where a = 0 and b = 2")
+            check(matching)
+
+            # This sets d=1 on a base row which already exists and has c=1,
+            # matching the view's filter, so the data also appears in the view
+            # row:
+            cql.execute(f"update {table} set d = 1 where a = 1 and b = 1")
+            check([(0, 0, 1, 0), (0, 1, 1, 0), (1, 0, 1, 0), (1, 1, 1, 1)])
+
+            # This deletes a base row we created above which didn't have c=1
+            # so a view row was not created for it, c is still not 1 and now
+            # now we don't need to delete any view row.
+            cql.execute(f"delete from {table} where a = 0 and b = 2")
+            check([(0, 0, 1, 0), (0, 1, 1, 0), (1, 0, 1, 0), (1, 1, 1, 1)])
+
+            # This deletes a row which does have c=1, so it matches the view
+            # filter and has a corresponding view row which should be deleted
+            cql.execute(f"delete from {table} where a = 1 and b = 1")
+            check([(0, 0, 1, 0), (0, 1, 1, 0), (1, 0, 1, 0)])
+
+            # Delete an entire partition. This partition has two rows, both match
+            # the view filter c=1, and cause two view rows to also be deleted.
+            cql.execute(f"delete from {table} where a = 0")
+            check([(1, 0, 1, 0)])
