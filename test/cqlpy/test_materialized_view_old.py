@@ -2380,3 +2380,17 @@ def test_no_clustering_key_1(cql, test_keyspace):
             assert [(1, 2, 3)] == list(cql.execute(f"select * from {table}"))
             assert [(1, 2)] == list(cql.execute(f"select * from {mv}"))
 
+# This is a second reproducer for issue #4340. Here we create a more useful
+# materialized view than the trivial one in the previous test, but in the
+# view, put all key columns as partition keys, none of them in clustering
+# keys. There is no reason why this shouldn't be allowed.
+def test_no_clustering_key_2(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'a int, b int, c int, primary key (a)') as table:
+        # Before #4340 was fixed, we couldn't even create the following view:
+        with new_materialized_view(cql, table, 'a, b', '(a, b)',
+                'a is not null and b is not null') as mv:
+            # Let's check that after fixing #4340, we can not only create the
+            # view, it also works as expected:
+            cql.execute(f"insert into {table} (a, b, c) values (1, 2, 3)")
+            assert [(1, 2, 3)] == list(cql.execute(f"select * from {table}"))
+            assert [(1, 2)] == list(cql.execute(f"select * from {mv} where a = 1 and b = 2"))

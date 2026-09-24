@@ -424,7 +424,6 @@ add_scylla_test(combined_tests
     vector_index_test.cc
     view_build_test.cc
     view_complex_test.cc
-    view_schema_ckey_test.cc
     view_schema_test.cc
     virtual_reader_test.cc
     virtual_table_test.cc
