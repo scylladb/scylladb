@@ -39,7 +39,7 @@ from cassandra.protocol import ConfigurationException, InvalidRequest
 from cassandra.util import Time
 
 from . import nodetool
-from .util import new_test_table, new_type, new_materialized_view, unique_name, is_scylla
+from .util import new_test_table, new_type, new_materialized_view, unique_name, is_scylla, ScyllaMetrics
 
 # CQL usually folds identifier names - keyspace, table and column names -
 # to lowercase. That is, unless the identifier is enclosed in double
@@ -1706,3 +1706,121 @@ def test_base_column_in_view_pk_complex_timestamp(cql, test_keyspace):
             # remove selected with ts=7, view row is dead
             cql.execute(f"UPDATE {table} USING TIMESTAMP 7 SET a=null, b=null WHERE k=1 AND c=1")
             check([], [])
+
+# The test revolves around timestamps in materialized views and their relation
+# to timestamps in the base table. Values in an MV should have the same
+# timestamp as the corresponding ones in the base table. However, that only
+# applies to values that are readable with `WRITETIME`. Those that are not
+# readable encompass unselected columns, even if a view has virtual columns that
+# correspond to them. Because of that, Scylla employs an optimization that
+# prevents emitting redundant view updates -- that's what this test verifies.
+# For that end, we use two MVs:
+#
+# * mv1: its primary key is a permutation of the base table's primary key.
+#        Because of that, it will have virtual columns corresponding to
+#        unselected columns from the base table. Creating a value in such a
+#        column (in the base table) will generate a view update to the MV.
+#        However, updating it will not generate an update UNLESS it changes the
+#        cell's TTL.
+# * mv2: its primary key consists of the columns from the base table's primary
+#        key and one regular column. Because of that, the MV will NOT have any
+#        virtual columns corresponding to the unselected columns from the base
+#        table. As a result, no view updates will be generated for unselected
+#        columns as a result.
+#
+# scylla_only: the optimization is Scylla's own, and counting the view updates
+# it did or didn't emit means reading Scylla's metrics - see writes_to() and
+# view_updates_generated() below. Nothing else runs while this test does, so the
+# node-wide counter's delta counts only what this test caused.
+# How many writes a table has taken, from Scylla's per-table metrics.
+def writes_to(cql, table):
+    ks, cf = table.split('.')
+    return int(ScyllaMetrics.query(cql).get(
+        'scylla_column_family_write_latency_count', {'ks': ks, 'cf': cf}) or 0)
+
+# How many view updates this node has generated, from Scylla's metrics. This
+# counter is node-wide - Scylla does keep a per-table one, but doesn't export
+# it - so callers compare it against a baseline of their own.
+def view_updates_generated(cql):
+    m = ScyllaMetrics.query(cql)
+    return sum(int(m.get(f'scylla_database_total_view_updates_pushed_{where}') or 0)
+               for where in ['local', 'remote'])
+
+def test_view_update_generating_writetime(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace,
+            'k int, c int, a int, b int, e int, f int, g int, primary key(k, c)') as table:
+        with new_materialized_view(cql, table, 'k,c,a,b', 'c, k',
+                'k IS NOT NULL AND c IS NOT NULL') as mv1, \
+             new_materialized_view(cql, table, 'k,c,a,b', 'c, k, a',
+                'k IS NOT NULL AND c IS NOT NULL AND a IS NOT NULL') as mv2:
+            # Wait for both views to finish being built before counting
+            # anything. The base table is empty at this point, so it may look
+            # as if there is nothing to build - but the build runs in the
+            # background, and if it only gets going once the test has started
+            # writing, it copies those rows into the view itself and the counts
+            # below come out too high. wait_for_view_built() is how the other
+            # cqlpy tests avoid this same race.
+            for mv in [mv1, mv2]:
+                wait_for_view_built(cql, mv)
+            before = view_updates_generated(cql)
+            def check(writetime_of, writetime, mv1_updates, mv2_updates, total_updates):
+                assert [(writetime,)] == list(cql.execute(f"SELECT WRITETIME({writetime_of}) FROM {table}"))
+                assert (mv1_updates, mv2_updates, total_updates) == (
+                    writes_to(cql, mv1), writes_to(cql, mv2),
+                    view_updates_generated(cql) - before)
+
+            # A view update is generated for mv1 because the row has a complete
+            # primary key in that view and we need to mark that the value in the
+            # corresponding virtual column is present.
+            #
+            # A view update is NOT generated for mv2 because the row still has
+            # an incomplete primary key in that view (it lacks `a`).
+            cql.execute(f"UPDATE {table} USING TIMESTAMP 1 SET e=1 WHERE k=1 AND c=1")
+            check('e', 1, 1, 0, 1)
+
+            # The row still doesn't have a complete PK for mv2.
+            #
+            # Updating an unselected column will NOT produce a view update, so
+            # no update for mv1 either.
+            cql.execute(f"UPDATE {table} USING TIMESTAMP 2 SET e=1 WHERE k=1 AND c=1")
+            check('e', 2, 1, 0, 1)
+
+            # A view update is generated for mv1 because the `b` column is part
+            # of the view.
+            #
+            # A view update is NOT generated for mv2 because the row still has
+            # an incomplete primary key in that view.
+            cql.execute(f"UPDATE {table} USING TIMESTAMP 3 SET b=1 WHERE k=1 AND c=1")
+            check('b', 3, 2, 0, 2)
+
+            # A view update is generated for mv1 because `a` is part of the
+            # view.
+            #
+            # A view update is generated for mv2 because `a` is part of the view
+            # AND the row has finally a complete primary key.
+            #
+            # The timestamp from the previous CQL statement is preserved for
+            # `b`.
+            cql.execute(f"UPDATE {table} USING TIMESTAMP 4 SET a=1 WHERE k=1 AND c=1")
+            check('b', 3, 3, 1, 4)
+
+            # `f` is an unselected column for both MVs, so a view update will
+            # only be generated to mv1 (to the corresponding virtual column)
+            # because the value in the cell is only created now.
+            cql.execute(f"UPDATE {table} USING TIMESTAMP 5 SET f=40 WHERE k=1 AND c=1")
+            check('f', 5, 4, 1, 5)
+
+            # Updating an unselected column will not produce view updates.
+            cql.execute(f"UPDATE {table} USING TIMESTAMP 6 SET f=40 WHERE k=1 AND c=1")
+            check('f', 6, 4, 1, 5)
+
+            # `g` is an unselected column for both MVs, so a view update will
+            # only be generated to mv1 (to the corresponding virtual column)
+            # because the value in the cell is only created now.
+            cql.execute(f"UPDATE {table} USING TIMESTAMP 7 SET g=40 WHERE k=1 AND c=1")
+            check('g', 7, 5, 1, 6)
+
+            # Updating the TTL of an unselected column will produce a view
+            # update to the virtual column.
+            cql.execute(f"UPDATE {table} USING TTL 300 AND TIMESTAMP 8 SET g=40 WHERE k=1 AND c=1")
+            check('g', 8, 6, 1, 7)
