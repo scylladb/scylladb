@@ -299,6 +299,8 @@ Procedure
          t2      converging   2176      2048
          t3      converged    2048      -
 
+.. _vnodes-migration-rollback:
+
 Rollback Procedure
 ------------------
 
