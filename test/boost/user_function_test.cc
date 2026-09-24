@@ -127,35 +127,6 @@ SEASTAR_TEST_CASE(test_user_function_errors) {
     });
 }
 
-SEASTAR_TEST_CASE(test_user_function_invalid_type) {
-    return with_udf_enabled([] (cql_test_env& e) {
-        BOOST_REQUIRE_EXCEPTION(e.execute_cql("CREATE FUNCTION my_func(val int) RETURNS NULL ON NULL INPUT RETURNS not_a_type LANGUAGE Lua AS 'return 2 * val';").get(), ire, message_equals("Unknown type ks.not_a_type"));
-        BOOST_REQUIRE_EXCEPTION(e.execute_cql("CREATE FUNCTION my_func(val not_a_type) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return 2 * val';").get(), ire, message_equals("Unknown type ks.not_a_type"));
-
-        e.execute_cql("CREATE TYPE my_type (my_int int);").get();
-
-        auto fut = e.execute_cql("CREATE FUNCTION my_func(val frozen<my_type>) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return 2 * val';");
-        BOOST_REQUIRE_EXCEPTION(fut.get(), ire, message_equals("User defined argument and return types should not be frozen"));
-
-        e.execute_cql("CREATE FUNCTION my_func(val my_type) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return 2 * val';").get();
-        auto msg = e.execute_cql("SELECT * FROM system_schema.functions;").get();
-        auto str_list = list_type_impl::get_instance(utf8_type, false);
-        assert_that(msg).is_rows()
-            .with_rows({
-                {
-                  serialized("ks"),
-                  serialized("my_func"),
-                  make_list_value(str_list, {"frozen<my_type>"}).serialize(),
-                  make_list_value(str_list, {"val"}).serialize(),
-                  serialized("return 2 * val"),
-                  serialized(false),
-                  serialized("lua"),
-                  serialized("int"),
-                }
-             });
-   });
-}
-
 SEASTAR_TEST_CASE(test_user_function_filtering) {
     return with_udf_enabled([] (cql_test_env& e) {
         e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val int, t timestamp);").get();

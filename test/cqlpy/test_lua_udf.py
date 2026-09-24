@@ -587,3 +587,26 @@ def test_udf_errors(cql, test_keyspace, scylla_only):
         with new_function(cql, test_keyspace, f"(a int, b double) {body}", name=f, args="int, double"):
             with pytest.raises(InvalidRequest, match=f"There are multiple functions named {test_keyspace}.{f}"):
                 cql.execute(f"DROP FUNCTION {test_keyspace}.{f}")
+
+def test_udf_invalid_type(cql, test_keyspace, scylla_only):
+    body = "RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return 2 * val'"
+    with pytest.raises(InvalidRequest, match=f"Unknown type {test_keyspace}.not_a_type"):
+        cql.execute(f"CREATE FUNCTION {test_keyspace}.{unique_name()}(val int) RETURNS NULL ON NULL INPUT RETURNS not_a_type LANGUAGE Lua AS 'return 2 * val'")
+    with pytest.raises(InvalidRequest, match=f"Unknown type {test_keyspace}.not_a_type"):
+        cql.execute(f"CREATE FUNCTION {test_keyspace}.{unique_name()}(val not_a_type) {body}")
+
+    with new_type(cql, test_keyspace, "(my_int int)") as udt:
+        udt_name = udt.split('.')[1]
+        with pytest.raises(InvalidRequest, match="User defined argument and return types should not be frozen"):
+            cql.execute(f"CREATE FUNCTION {test_keyspace}.{unique_name()}(val frozen<{udt_name}>) {body}")
+        with new_function(cql, test_keyspace, f"(val {udt_name}) {body}") as f:
+            rows = list(cql.execute(f"SELECT * FROM system_schema.functions WHERE keyspace_name = '{test_keyspace}'"))
+            assert len(rows) == 1
+            row = rows[0]
+            assert row.function_name == f
+            assert row.argument_types == [f"frozen<{udt_name}>"]
+            assert row.argument_names == ["val"]
+            assert row.body == "return 2 * val"
+            assert row.called_on_null_input == False
+            assert row.language == "lua"
+            assert row.return_type == "int"
