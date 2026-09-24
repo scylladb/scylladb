@@ -102,7 +102,7 @@ table_id validate_table(const replica::database& db, sstring ks_name, sstring ta
     }
 }
 
-static void ensure_tablets_disabled(const http_context& ctx, const sstring& ks_name, const sstring& api_endpoint_path) {
+void ensure_tablets_disabled(const http_context& ctx, const sstring& ks_name, const sstring& api_endpoint_path) {
     if (ctx.db.local().find_keyspace(ks_name).uses_tablets()) {
         throw bad_param_exception{fmt::format("{} is per-table in keyspace '{}'. Please provide table name using 'cf' parameter.", api_endpoint_path, ks_name)};
     }
