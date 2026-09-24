@@ -914,15 +914,17 @@ future<tasks::task_manager::task_ptr> task_manager_module::start_scrub_sstables_
     });
 }
 
-future<> shard_scrub_sstables_compaction_task_impl::run() {
-    auto parent_info = info();
-    _stats = co_await map_reduce(_column_families, [&] (sstring cfname) -> future<compaction_stats> {
-        compaction_stats stats{};
-        auto& compaction_module = _db.get_compaction_manager().get_task_manager_module();
-        auto task = co_await compaction_module.make_and_start_task<table_scrub_sstables_compaction_task_impl>(parent_info, _status.keyspace, cfname, _status.id, _db, _opts, stats);
+static future<> run_shard_scrub_sstables_compaction(task_manager_module& module, replica::database& db, std::string keyspace, const std::vector<sstring>& column_families, compaction_type_options::scrub opts, compaction_stats& stats, tasks::task_info task_info) {
+    stats = co_await map_reduce(column_families, [&] (sstring cfname) -> future<compaction_stats> {
+        compaction_stats table_stats{};
+        auto task = co_await module.make_and_start_task<table_scrub_sstables_compaction_task_impl>(task_info, keyspace, cfname, task_info.get_id(), db, opts, table_stats);
         co_await task->done();
-        co_return stats;
+        co_return table_stats;
     }, compaction_stats{}, std::plus<compaction_stats>());
+}
+
+future<> shard_scrub_sstables_compaction_task_impl::run() {
+    return run_shard_scrub_sstables_compaction(_db.get_compaction_manager().get_task_manager_module(), _db, _status.keyspace, _column_families, _opts, _stats, info());
 }
 
 future<std::optional<double>> shard_scrub_sstables_compaction_task_impl::expected_total_workload() const {
