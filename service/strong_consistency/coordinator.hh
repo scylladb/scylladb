@@ -90,6 +90,11 @@ private:
         bool needs_leader);
     // Where to send a request that `replicas` doesn't allow this shard to serve.
     need_redirect redirect_elsewhere(const replica_selector& replicas, bool needs_leader);
+    // Where to send a request whose wait for a leader (or read barrier) failed with `ex`
+    // because a migration removed this replica from the group and tore its raft server
+    // down. nullopt for any other failure, and the request fails as before.
+    std::optional<need_redirect> reroute_after_teardown(std::exception_ptr ex, const schema& schema,
+        const dht::token& token, bool needs_leader);
 public:
     coordinator(groups_manager& groups_manager, replica::database& db, gms::gossiper& gossiper);
 

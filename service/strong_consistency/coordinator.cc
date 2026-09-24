@@ -508,6 +508,21 @@ need_redirect coordinator::redirect_elsewhere(const replica_selector& replicas, 
     return redirect_to_replica(replicas.closest_replica(_gossiper));
 }
 
+std::optional<need_redirect> coordinator::reroute_after_teardown(std::exception_ptr ex, const schema& schema,
+        const dht::token& token, bool needs_leader) {
+    if (!try_catch<raft::stopped_error>(ex) || !_db.column_family_exists(schema.id())) {
+        return std::nullopt;
+    }
+    replica_selector replicas(schema.table().get_effective_replication_map(), schema.id(), token, needs_leader);
+    if (replicas.may_serve_here()) {
+        return std::nullopt;
+    }
+    logger.debug("table {}.{}, tablet {}: the raft server was torn down while waiting for a leader, "
+            "rerouting the request, transition stage {}",
+            schema.ks_name(), schema.cf_name(), replicas.tablet_id(), replicas.transition_stage());
+    return redirect_elsewhere(replicas, needs_leader);
+}
+
 coordinator::coordinator(groups_manager& groups_manager, replica::database& db, gms::gossiper& gossiper)
     : _groups_manager(groups_manager)
     , _db(db)
@@ -652,7 +667,11 @@ auto coordinator::mutate(schema_ptr schema,
                 auto f = co_await coroutine::as_future(
                         op->raft_server.server().wait_for_leader(&aoe.abort_source(), true));
                 if (f.failed()) {
-                    co_await coroutine::return_exception_ptr(filter_error(std::move(f).get_exception()));
+                    auto ex = std::move(f).get_exception();
+                    if (auto redirect = reroute_after_teardown(ex, *schema, token, true)) {
+                        co_return std::move(*redirect);
+                    }
+                    co_await coroutine::return_exception_ptr(filter_error(std::move(ex)));
                 }
                 continue;
             }
@@ -662,7 +681,11 @@ auto coordinator::mutate(schema_ptr schema,
             logger.debug("mutate(): table {}.{}, {}: waiting for a leader", schema->ks_name(), schema->cf_name(), state_fmt);
             auto f = co_await coroutine::as_future(std::move(wait_for_leader->future));
             if (f.failed()) {
-                co_await coroutine::return_exception_ptr(filter_error(std::move(f).get_exception()));
+                auto ex = std::move(f).get_exception();
+                if (auto redirect = reroute_after_teardown(ex, *schema, token, true)) {
+                    co_return std::move(*redirect);
+                }
+                co_await coroutine::return_exception_ptr(filter_error(std::move(ex)));
             }
             continue;
         }
@@ -768,9 +791,10 @@ auto coordinator::query(schema_ptr schema,
         }
     };
 
+    const auto& token = ranges[0].start()->value().token();
     auto op_result_future = co_await coroutine::as_future(create_operation_ctx(
         *schema,
-        ranges[0].start()->value().token(),
+        token,
         aoe.abort_source(),
         rtype == read_type::linearizable));
 
@@ -812,7 +836,11 @@ auto coordinator::query(schema_ptr schema,
                     future<> f = co_await coroutine::as_future(
                             op.raft_server.server().wait_for_leader(&aoe.abort_source(), true));
                     if (f.failed()) {
-                        co_await coroutine::return_exception_ptr(filter_error(std::move(f).get_exception()));
+                        auto ex = std::move(f).get_exception();
+                        if (auto redirect = reroute_after_teardown(ex, *schema, token, true)) {
+                            co_return std::move(*redirect);
+                        }
+                        co_await coroutine::return_exception_ptr(filter_error(std::move(ex)));
                     }
                     continue;
                 }
@@ -823,7 +851,11 @@ auto coordinator::query(schema_ptr schema,
                     schema->ks_name(), schema->cf_name(), op.replicas.tablet_id());
                 future<> f = co_await coroutine::as_future(std::move(wait_for_leader->future));
                 if (f.failed()) {
-                    co_await coroutine::return_exception_ptr(filter_error(std::move(f).get_exception()));
+                    auto ex = std::move(f).get_exception();
+                    if (auto redirect = reroute_after_teardown(ex, *schema, token, true)) {
+                        co_return std::move(*redirect);
+                    }
+                    co_await coroutine::return_exception_ptr(filter_error(std::move(ex)));
                 }
                 continue;
             }
@@ -835,7 +867,14 @@ auto coordinator::query(schema_ptr schema,
 
         future<> f = co_await coroutine::as_future(op.raft_server.server().read_barrier(&aoe.abort_source()));
         if (f.failed()) {
-            co_await coroutine::return_exception_ptr(filter_error(std::move(f).get_exception()));
+            // read_barrier() finds the leader on its own, so it also waits for one when
+            // the leader is unknown, e.g. after this replica, the leader, removed itself
+            // from the group.
+            auto ex = std::move(f).get_exception();
+            if (auto redirect = reroute_after_teardown(ex, *schema, token, true)) {
+                co_return std::move(*redirect);
+            }
+            co_await coroutine::return_exception_ptr(filter_error(std::move(ex)));
         }
     }
 
