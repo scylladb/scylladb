@@ -22,65 +22,6 @@ BOOST_AUTO_TEST_SUITE(view_schema_test)
 
 using namespace std::literals::chrono_literals;
 
-// This test was deliberately *not* moved to Python in issue #16134, and is
-// one of the few left here. It uses forward_jump_clocks() to make TTLs expire
-// instantly, and we have no equivalent of that in the Python (cqlpy) tests -
-// there, the test would have to really sleep for the TTLs to pass, which for
-// this test means over 10 seconds of sleeping. That is far too slow for
-// cqlpy, where the entire file of materialized-view tests runs in seconds, so
-// this test earns its keep by staying in C++.
-SEASTAR_TEST_CASE(test_ttl) {
-    return do_with_cql_env_thread([] (auto& e) {
-        e.execute_cql("create table cf (p int, c int, v1 int, v2 int, v3 int, primary key (p, c));").get();
-        e.execute_cql("create materialized view mv as select p, c, v1, v2 from cf "
-                      "where p is not null and c is not null and v1 is not null primary key (v1, c, p)").get();
-
-        e.execute_cql("insert into cf (p, c, v1, v2, v3) values (0, 0, 0, 0, 0) using ttl 3").get();
-        eventually([&] {
-        auto msg = e.execute_cql("select * from mv").get();
-        assert_that(msg).is_rows().with_size(1);
-        forward_jump_clocks(4s);
-        msg = e.execute_cql("select * from mv").get();
-        assert_that(msg).is_rows().with_size(0);
-        });
-
-        e.execute_cql("insert into cf (p, c, v1, v2, v3) values (1, 1, 1, 1, 1) using ttl 3").get();
-        forward_jump_clocks(1s);
-        eventually([&] {
-        auto msg = e.execute_cql("select v2 from mv").get();
-        assert_that(msg).is_rows()
-                .with_size(1)
-                .with_row({ {int32_type->decompose(1)} });
-        });
-
-        e.execute_cql("insert into cf (p, c, v1) values (1, 1, 1)").get();
-        forward_jump_clocks(4s);
-        eventually([&] {
-        auto msg = e.execute_cql("select v2 from mv").get();
-        assert_that(msg).is_rows()
-                .with_size(1)
-                .with_row({ { } });
-        });
-
-        e.execute_cql("insert into cf (p, c, v1, v2, v3) values (2, 2, 2, 2, 2) using ttl 3").get();
-        eventually([&] {
-        auto msg = e.execute_cql("select * from mv where v1 = 2").get();
-        assert_that(msg).is_rows().with_size(1);
-        });
-        forward_jump_clocks(2s);
-        e.execute_cql("update cf using ttl 8 set v3 = 4 where p = 2 and c = 2").get();
-        forward_jump_clocks(2s);
-        eventually([&] {
-        auto msg = e.execute_cql("select * from mv where v1 = 2").get();
-        assert_that(msg).is_rows().with_size(0);
-        msg = e.execute_cql("select * from cf where p = 2 and c = 2").get();
-        assert_that(msg).is_rows()
-            .with_size(1)
-            .with_row({ {int32_type->decompose(2)}, {int32_type->decompose(2)}, { }, { }, {int32_type->decompose(4)} });
-        });
-    });
-}
-
 // Like test_ttl above, this test was deliberately not moved to Python in
 // issue #16134, while its twin test_non_primary_key_restrictions_update_vk
 // was. It uses forward_jump_clocks() to expire a TTL instantly, and cqlpy has

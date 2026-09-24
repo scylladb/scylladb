@@ -874,6 +874,43 @@ def test_update(cql, test_keyspace):
             cql.execute(f"insert into {table} (p, v) values (0, 1)")
             assert [(1, 0)] == list(cql.execute(f"select * from {mv} where v = 1"))
 
+# A TTL on a base row is carried over to the view row, and when it expires
+# the view row goes away with it. A TTL on an individual column only takes
+# that column's value away, and if the row itself is still alive - because
+# some other column, or the row marker, is - the view row stays, with a null
+# in place of the expired column.
+def test_ttl(cql, test_keyspace, clock):
+    schema = 'p int, c int, v1 int, v2 int, v3 int, primary key (p, c)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        with new_materialized_view(cql, table, 'p, c, v1, v2', 'v1, c, p',
+                'p is not null and c is not null and v1 is not null') as mv:
+            cql.execute(f"insert into {table} (p, c, v1, v2, v3) values (0, 0, 0, 0, 0) using ttl 3")
+            assert 1 == len(list(cql.execute(f"select * from {mv}")))
+            clock.jump(4)
+            assert 0 == len(list(cql.execute(f"select * from {mv}")))
+
+            cql.execute(f"insert into {table} (p, c, v1, v2, v3) values (1, 1, 1, 1, 1) using ttl 3")
+            clock.jump(1)
+            assert [(1,)] == list(cql.execute(f"select v2 from {mv}"))
+
+            # Rewrite the row without a TTL. This resurrects the row - it now
+            # has a row marker which never expires - but doesn't rewrite v2,
+            # which keeps the TTL it was given above and expires on schedule.
+            cql.execute(f"insert into {table} (p, c, v1) values (1, 1, 1)")
+            clock.jump(4)
+            assert [(None,)] == list(cql.execute(f"select v2 from {mv}"))
+
+            cql.execute(f"insert into {table} (p, c, v1, v2, v3) values (2, 2, 2, 2, 2) using ttl 3")
+            assert 1 == len(list(cql.execute(f"select * from {mv} where v1 = 2")))
+            clock.jump(2)
+            # v3 is not selected by the view, so giving it a longer TTL keeps
+            # the *base* row alive past the expiry of everything else - but
+            # the view row, whose columns have all expired, still goes away.
+            cql.execute(f"update {table} using ttl 8 set v3 = 4 where p = 2 and c = 2")
+            clock.jump(2)
+            assert [] == list(cql.execute(f"select * from {mv} where v1 = 2"))
+            assert [(2, 2, None, None, 4)] == list(cql.execute(f"select * from {table} where p = 2 and c = 2"))
+
 # A base row written with a timestamp older than an existing row tombstone
 # is dead on arrival, and must not produce a view row either.
 def test_row_deletion(cql, test_keyspace):
