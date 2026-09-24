@@ -1438,7 +1438,7 @@ CREATE TABLE system.size_estimates (
 - `range_start`: Start of the token range
 - `range_end`: End of the token range
 - `mean_partition_size`: Average partition size in bytes for this range (bigint)
-- `partitions_count`: Estimated number of partitions in this range (bigint)
+- `partitions_count`: Estimated number of distinct partitions in this range (bigint). Partitions present in several sstables are discounted using the sstables' cardinality sketches when the sketches show a clear overlap; otherwise the per-sstable estimates are summed.
 
 Implemented by `size_estimates_mutation_reader` in `db/size_estimates_virtual_reader.{hh,cc}`.
 
