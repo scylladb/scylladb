@@ -2060,3 +2060,54 @@ def test_partition_key_filtering_unrestricted_part(cql, test_keyspace, base_pk, 
 
             cql.execute(f"delete from {table} where a = 1 and b = 1")
             check([])
+
+# Ordinary SELECT queries limit the ability to query for slices (ranges) of
+# partition keys, because there is no way to implement such queries
+# efficiently. Nor may a clustering column be restricted once an earlier one
+# was restricted by a non-EQ relation. This test verifies those limits, which
+# the test below it contrasts with what a view's SELECT is allowed to do.
+def test_partition_key_slice_not_allowed_in_select(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'a int, b int, primary key (a)') as table:
+        # The two databases explain this differently, but both end by
+        # suggesting ALLOW FILTERING.
+        with pytest.raises(InvalidRequest, match='ALLOW FILTERING'):
+            cql.execute(f"select * from {table} where a > 0")
+    with new_test_table(cql, test_keyspace, 'a int, b int, c int, primary key (a, b, c)') as table:
+        with pytest.raises(InvalidRequest, match='cannot be restricted'):
+            cql.execute(f"select * from {table} where a = 1 and b > 0 and c > 0")
+        with pytest.raises(InvalidRequest, match='cannot be restricted'):
+            cql.execute(f"select * from {table} where a = 1 and c = 1 and b > 0")
+
+# Test that although normal SELECT queries limit the ability to query
+# for slices (ranges) of partition keys, because there is no way to implement
+# such queries efficiently, the same slices *do* work for the SELECT statement
+# defining a materialized view - there the condition is tested for each
+# partition separately, so the performance concerns do not hold.
+# This verifies part of issue #2367. See also test_clustering_key_in_restrictions.
+@pytest.mark.parametrize("pk", ['(a, b), c', '(b, a), c', 'a, b, c', 'c, b, a', '(c, a), b'])
+def test_partition_key_filtering_with_slice(cql, test_keyspace, pk):
+    with new_test_table(cql, test_keyspace, 'a int, b int, c int, d int, primary key ((a, b), c)') as table:
+        with new_materialized_view(cql, table, '*', pk,
+                'a > 0 and b > 5 and c is not null') as mv:
+            def check(expected):
+                assert sorted(expected) == sorted(cql.execute(f"select a, b, c, d from {mv}"))
+            for a, b, c, d in [(0, 0, 1, 1), (0, 10, 1, 2), (1, 0, 2, 1),
+                               (1, 10, 2, 2), (2, 1, 3, 1), (2, 10, 3, 2)]:
+                cql.execute(f"insert into {table} (a, b, c, d) values ({a}, {b}, {c}, {d})")
+            check([(1, 10, 2, 2), (2, 10, 3, 2)])
+
+            cql.execute(f"insert into {table} (a, b, c, d) values (3, 10, 4, 2)")
+            check([(1, 10, 2, 2), (2, 10, 3, 2), (3, 10, 4, 2)])
+
+            # A row which the slices filter out stays filtered out
+            cql.execute(f"update {table} set d = 1 where a = 0 and b = 0 and c = 0")
+            check([(1, 10, 2, 2), (2, 10, 3, 2), (3, 10, 4, 2)])
+
+            cql.execute(f"update {table} set d = 100 where a = 3 and b = 10 and c = 4")
+            check([(1, 10, 2, 2), (2, 10, 3, 2), (3, 10, 4, 100)])
+
+            cql.execute(f"delete from {table} where a = 0 and b = 0 and c = 0")
+            check([(1, 10, 2, 2), (2, 10, 3, 2), (3, 10, 4, 100)])
+
+            cql.execute(f"delete from {table} where a = 3 and b = 10 and c = 4")
+            check([(1, 10, 2, 2), (2, 10, 3, 2)])
