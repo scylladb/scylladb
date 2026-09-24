@@ -7,8 +7,9 @@
 #############################################################################
 
 import pytest
-from .util import new_test_table
+from .util import new_test_table, ScyllaMetrics
 from cassandra.protocol import InvalidRequest
+from cassandra.concurrent import execute_concurrent_with_args
 
 # table1 has some pre-set data which the tests below SELECT on (the tests
 # shouldn't write to it).
@@ -185,6 +186,28 @@ def test_group_by_count_with_limit(cql, table1):
     assert len(results) == 4
     for i in range(1,4):
         assert results[:i] == list(cql.execute(f'SELECT p,c1,count(*) FROM {table1} GROUP BY p,c1 LIMIT {i}'))
+
+# A grouped query with LIMIT should stop reading once LIMIT groups are
+# complete. ALLOW FILTERING is there so the rows read are counted in
+# filtered_rows_read_total. The metric is node wide, so the check leaves
+# room for reads by other clients.
+# Regression test for SCYLLADB-4585.
+@pytest.mark.xfail(reason="SCYLLADB-4585")
+def test_group_by_count_with_limit_stops_reading(cql, test_keyspace, scylla_only):
+    partitions = 100
+    rows_per_partition = 10
+    with new_test_table(cql, test_keyspace, "p int, c int, v int, PRIMARY KEY (p, c)") as table:
+        insert = cql.prepare(f'INSERT INTO {table} (p, c, v) VALUES (?, ?, 0)')
+        execute_concurrent_with_args(cql, insert,
+            [(p, c) for p in range(partitions) for c in range(rows_per_partition)], concurrency=32)
+        stmt = cql.prepare(f'SELECT p, count(*) FROM {table} WHERE v = 0 GROUP BY p LIMIT 1 ALLOW FILTERING')
+        stmt.fetch_size = rows_per_partition
+        rows_read_before = ScyllaMetrics.query(cql).get('scylla_cql_filtered_rows_read_total') or 0
+        result = list(cql.execute(stmt))
+        rows_read_after = ScyllaMetrics.query(cql).get('scylla_cql_filtered_rows_read_total')
+        rows_read = rows_read_after - rows_read_before
+        assert len(result) == 1 and result[0][1] == rows_per_partition
+        assert rows_read < partitions * rows_per_partition / 2
 
 # Adding a PER PARTITION LIMIT should be honored
 # Reproduces #5363 - more results than the limit were generated
