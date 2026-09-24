@@ -51,3 +51,9 @@ def test_lua_wrong_return_type(cql, test_keyspace, scylla_only):
         cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', null)")
         with pytest.raises(InvalidRequest, match="value is not an integer"):
             call_lua(cql, test_keyspace, table, "(val int) CALLED ON NULL INPUT RETURNS int", "return 1.2")
+
+def test_lua_too_many_return_values(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val int") as table:
+        cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', null)")
+        with pytest.raises(InvalidRequest, match="2 values returned, expected 1"):
+            call_lua(cql, test_keyspace, table, "(val int) CALLED ON NULL INPUT RETURNS int", "return 1,2")

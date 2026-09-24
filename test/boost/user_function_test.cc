@@ -66,15 +66,6 @@ static future<> with_udf_enabled(Func&& func) {
     return do_with_cql_env_thread(std::forward<Func>(func), db_cfg_ptr);
 }
 
-SEASTAR_TEST_CASE(test_user_function_too_many_return_values) {
-    return with_udf_enabled([] (cql_test_env& e) {
-        e.execute_cql("CREATE TABLE my_table (key text PRIMARY KEY, val int);").get();
-        e.execute_cql("INSERT INTO my_table (key, val) VALUES ('foo', null);").get();
-        e.execute_cql("CREATE FUNCTION my_func(val int) CALLED ON NULL INPUT RETURNS int LANGUAGE Lua AS 'return 1,2';").get();
-        BOOST_REQUIRE_EXCEPTION(e.execute_cql("SELECT my_func(val) FROM my_table;").get(), ire, message_equals("2 values returned, expected 1"));
-    });
-}
-
 SEASTAR_TEST_CASE(test_user_function_reversed_argument) {
     return with_udf_enabled([] (cql_test_env& e) {
         e.execute_cql("CREATE TABLE my_table (key text, val int, PRIMARY KEY ((key), val)) WITH CLUSTERING ORDER BY (val DESC);").get();
