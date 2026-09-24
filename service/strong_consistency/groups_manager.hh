@@ -374,7 +374,10 @@ public:
     // Possible results:
     //   timestamp_with_term - timestamp to use for a new mutation request
     //   raft::not_a_leader - this node is not a leader
-    //   need_wait_for_leader - the caller needs to wait on the specified future and then retry `begin_mutate`
+    //   need_wait_for_leader - the caller needs to wait on the specified future and then retry `begin_mutate`;
+    //       also when the leader this node knows of is no longer in the configuration
+    //   not_a_member - the leader is unknown, and this server is not in the group's
+    //       configuration, so no leader will contact it: waiting for one is pointless
     struct timestamp_with_term {
         api::timestamp_type timestamp;
         raft::term_t term;
@@ -382,16 +385,23 @@ public:
     struct need_wait_for_leader {
         future<> future;
     };
-    using begin_mutate_result = std::variant<timestamp_with_term, raft::not_a_leader, need_wait_for_leader>;
+    struct not_a_member {};
+    using begin_mutate_result = std::variant<timestamp_with_term, raft::not_a_leader, need_wait_for_leader, not_a_member>;
     begin_mutate_result begin_mutate(abort_source&);
 
     // Possible results:
     //   ok - this node is the leader, proceed with read_barrier() locally
     //   raft::not_a_leader - this node is not a leader, redirect to the leader
     //   need_wait_for_leader - the leader is unknown, the caller needs to wait and retry
+    //   not_a_member - the leader is unknown, and this server is not in the group's
+    //       configuration, so no leader will contact it: redirect to another replica
     struct ok {};
-    using begin_read_result = std::variant<ok, raft::not_a_leader, need_wait_for_leader>;
+    using begin_read_result = std::variant<ok, raft::not_a_leader, need_wait_for_leader, not_a_member>;
     begin_read_result begin_read(abort_source&);
+
+private:
+    bool is_member(std::optional<raft::server_id> id = std::nullopt) const;
+    need_wait_for_leader need_wait_for_stale_leader(abort_source& as);
 };
 
 } // namespace service::strong_consistency

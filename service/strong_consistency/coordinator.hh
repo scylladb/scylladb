@@ -88,8 +88,13 @@ private:
         const dht::token& token,
         abort_source& as,
         bool needs_leader);
-    // Where to send a request that `replicas` doesn't allow this shard to serve.
-    need_redirect redirect_elsewhere(const replica_selector& replicas, bool needs_leader);
+    // Where to send a request that `replicas` doesn't allow this shard to serve, or that
+    // this shard can't serve after all. A replica on `exclude` is never chosen.
+    need_redirect redirect_elsewhere(const replica_selector& replicas, bool needs_leader,
+        std::optional<locator::host_id> exclude = std::nullopt);
+    // Where to send a request that needs the leader, when the local raft server knows no
+    // leader and isn't a member of the group.
+    need_redirect redirect_from_non_member(const schema& schema, const replica_selector& replicas);
     // Where to send a request whose wait for a leader (or read barrier) failed with `ex`
     // because a migration removed this replica from the group and tore its raft server
     // down. nullopt for any other failure, and the request fails as before.
