@@ -87,20 +87,6 @@ SEASTAR_TEST_CASE(test_ttl) {
     });
 }
 
-SEASTAR_TEST_CASE(test_multiple_non_primary_keys_in_view) {
-    return do_with_cql_env_thread([] (auto& e) {
-        e.execute_cql("create table cf (a int, b int, c int, d int, e int, primary key ((a, b), c))").get();
-        assert_that_failed(
-                e.execute_cql("create materialized view mv as select * from cf "
-                              "where a is not null and b is not null and c is not null and d is not null and e is not null "
-                              "primary key ((d, a), b, e, c)"));
-        assert_that_failed(
-                e.execute_cql("create materialized view mv as select * from cf "
-                              "where a is not null and b is not null and c is not null and d is not null and e is not null "
-                              "primary key ((a, b), c, d, e)"));
-    });
-}
-
 SEASTAR_TEST_CASE(test_null_in_clustering_columns) {
     return do_with_cql_env_thread([] (auto& e) {
         e.execute_cql("create table cf (p int, c int, v1 int, v2 int, primary key (p, c))").get();

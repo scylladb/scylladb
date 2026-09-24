@@ -840,3 +840,13 @@ def test_multiple_deletes(cql, test_keyspace):
             cql.execute(f"delete from {table} where p = 1")
             assert [] == list(cql.execute(f"select p, c from {mv}"))
 
+# A view's primary key may contain at most one column which is not part of
+# the base table's primary key.
+def test_multiple_non_primary_keys_in_view(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'a int, b int, c int, d int, e int, primary key ((a, b), c)') as table:
+        where = ('a is not null and b is not null and c is not null and '
+                 'd is not null and e is not null')
+        for pk in ['(d, a), b, e, c', '(a, b), c, d, e']:
+            with pytest.raises(InvalidRequest, match='Cannot include more than one non-primary key column'):
+                with new_materialized_view(cql, table, '*', pk, where):
+                    pass
