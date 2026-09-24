@@ -2267,3 +2267,37 @@ def test_clustering_key_eq_restrictions(cql, test_keyspace, pk):
             # A deletion of a clustering prefix, in several base partitions
             cql.execute(f"delete from {table} where a in (0, 1) and b = 1")
             check([])
+
+# The same, for a view restricting a base clustering key column to several
+# values - either as a range, or as a list of the values themselves. For this
+# data the two pick out the same rows, so both are checked the same way.
+# The "IN" case is another test for issue #2367.
+@pytest.mark.parametrize("restriction", ['b >= 1', 'b IN (1, 2)'], ids=['slice', 'in'])
+@pytest.mark.parametrize("pk", ['(a, b), c', '(b, a), c', 'a, b, c', 'c, b, a', '(c, a), b'])
+def test_clustering_key_slice_or_in_restrictions(cql, test_keyspace, pk, restriction):
+    with new_test_table(cql, test_keyspace, 'a int, b int, c int, d int, primary key (a, b, c)') as table:
+        with new_materialized_view(cql, table, '*', pk,
+                f'a is not null and {restriction} and c is not null') as mv:
+            def check(expected):
+                assert sorted(expected) == sorted(cql.execute(f"select a, b, c, d from {mv}"))
+            for a, b, c in [(0, 0, 0), (0, 0, 1), (0, 1, 0), (0, 1, 1),
+                            (1, 0, 0), (1, 0, 1), (1, 1, 0), (1, 2, 1)]:
+                cql.execute(f"insert into {table} (a, b, c, d) values ({a}, {b}, {c}, 0)")
+            check([(0, 1, 0, 0), (0, 1, 1, 0), (1, 1, 0, 0), (1, 2, 1, 0)])
+
+            # A row which the view filters out stays filtered out
+            cql.execute(f"update {table} set d = 1 where a = 1 and b = 0 and c = 0")
+            check([(0, 1, 0, 0), (0, 1, 1, 0), (1, 1, 0, 0), (1, 2, 1, 0)])
+
+            cql.execute(f"update {table} set d = 1 where a = 0 and b = 1 and c = 0")
+            check([(0, 1, 0, 1), (0, 1, 1, 0), (1, 1, 0, 0), (1, 2, 1, 0)])
+
+            cql.execute(f"delete from {table} where a = 0 and b = 0 and c = 0")
+            check([(0, 1, 0, 1), (0, 1, 1, 0), (1, 1, 0, 0), (1, 2, 1, 0)])
+
+            cql.execute(f"delete from {table} where a = 1 and b = 1 and c = 0")
+            check([(0, 1, 0, 1), (0, 1, 1, 0), (1, 2, 1, 0)])
+
+            # A deletion of a clustering range, in several base partitions
+            cql.execute(f"delete from {table} where a in (0, 1) and b >= 1 and b <= 4")
+            check([])
