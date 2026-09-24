@@ -657,6 +657,7 @@ auto coordinator::mutate(schema_ptr schema,
             co_return redirect_to_leader(*target, _groups_manager, op->replicas.group_id());
         }
         if (auto* wait_for_leader = get_if<raft_server::need_wait_for_leader>(&disposition)) {
+            logger.debug("mutate(): table {}.{}, {}: waiting for a leader", schema->ks_name(), schema->cf_name(), state_fmt);
             auto f = co_await coroutine::as_future(std::move(wait_for_leader->future));
             if (f.failed()) {
                 co_await coroutine::return_exception_ptr(filter_error(std::move(f).get_exception()));
@@ -816,6 +817,8 @@ auto coordinator::query(schema_ptr schema,
                 co_return redirect_to_leader(*target, _groups_manager, op.replicas.group_id());
             }
             if (auto* wait_for_leader = get_if<raft_server::need_wait_for_leader>(&disposition)) {
+                logger.debug("query(): table {}.{}, tablet {}: waiting for a leader",
+                    schema->ks_name(), schema->cf_name(), op.replicas.tablet_id());
                 future<> f = co_await coroutine::as_future(std::move(wait_for_leader->future));
                 if (f.failed()) {
                     co_await coroutine::return_exception_ptr(filter_error(std::move(f).get_exception()));
