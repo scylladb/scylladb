@@ -25,45 +25,6 @@ BOOST_AUTO_TEST_SUITE(view_complex_test)
 
 using namespace std::literals::chrono_literals;
 
-// Not moved to Python in issue #16134: the point of this test is a view row
-// which a TTL makes expire, and expiring one needs forward_jump_clocks(),
-// which cqlpy has no equivalent of.
-SEASTAR_TEST_CASE(test_shadowing_row_marker) {
-    return do_with_cql_env_thread([] (auto& e) {
-        e.execute_cql("create table cf (p int, v1 int, v2 int, primary key (p))").get();
-        e.execute_cql("create materialized view vcf as select * from cf "
-                      "where p is not null and v1 is not null "
-                      "primary key (v1, p)").get();
-
-        e.execute_cql("insert into cf (p, v1, v2) values (1, 1, 1)").get();
-
-        e.execute_cql("update cf set v1 = null where p = 1").get();
-        e.local_db().flush_all_memtables().get();
-        eventually([&] {
-            auto msg = e.execute_cql("select * from vcf").get();
-            assert_that(msg).is_rows().is_empty();
-        });
-
-        e.execute_cql("update cf using ttl 100 set v1 = 1 where p = 1").get();
-        e.local_db().flush_all_memtables().get();
-        eventually([&] {
-            auto msg = e.execute_cql("select * from vcf").get();
-            assert_that(msg).is_rows().with_rows({{
-                {int32_type->decompose(1)},
-                {int32_type->decompose(1)},
-                {int32_type->decompose(1)}
-            }});
-        });
-
-        forward_jump_clocks(101s);
-
-        eventually([&] {
-            auto msg = e.execute_cql("select * from vcf").get();
-            assert_that(msg).is_rows().is_empty();
-        });
-    });
-}
-
 // Not moved to Python in issue #16134: the test is five statements and a
 // forward_jump_clocks() to expire the TTL they set, which cqlpy has no
 // equivalent of, so there is nothing here to move without it.

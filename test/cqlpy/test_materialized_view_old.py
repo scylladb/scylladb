@@ -3188,6 +3188,32 @@ def test_no_regular_base_column_in_view_pk(cql, test_keyspace, flush):
             maybe_flush()
             check([(1, 1, None, 1)])
 
+# v1 is the view's partition key, so setting it to null removes the view row.
+# Writing it again with a TTL brings the view row back - but only until the
+# TTL expires, and the base row's older, never-expiring row marker must not
+# shadow that expiry and keep the view row alive.
+# As in the test above, the C++ original flushed unconditionally rather than
+# as a parametrized variant.
+def test_shadowing_row_marker(cql, test_keyspace, clock):
+    with new_test_table(cql, test_keyspace, 'p int, v1 int, v2 int, primary key (p)') as table:
+        with new_materialized_view(cql, table, '*', 'v1, p',
+                'p is not null and v1 is not null') as mv:
+            def check(expected):
+                assert expected == list(cql.execute(f"select * from {mv}"))
+
+            cql.execute(f"insert into {table} (p, v1, v2) values (1, 1, 1)")
+
+            cql.execute(f"update {table} set v1 = null where p = 1")
+            nodetool.flush_all(cql)
+            check([])
+
+            cql.execute(f"update {table} using ttl {clock.ttl} set v1 = 1 where p = 1")
+            nodetool.flush_all(cql)
+            check([(1, 1, 1)])
+
+            clock.jump(clock.ttl + 1)
+            check([])
+
 # A reproducer for issue #3362, not involving TTLs.
 # The test involves a view that selects no column except the base's primary
 # key, so view rows contain no cells besides a row marker, so as a base
