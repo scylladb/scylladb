@@ -57,8 +57,8 @@
 //   --value-size                 bytes of the value of one column
 //   --select-columns             how many of the value columns a read asks for, the first ones of
 //                                the table; 0, the default, asks for all of them. The slice is
-//                                given to the whole reads - `read-cached` and `read-disk` - and to
-//                                none of the single steps
+//                                given to the whole reads - `read-cached`, `query-cached` and
+//                                `read-disk` - and to none of the single steps
 //   --concurrency                operations in flight per shard, for the tests that wait for the disk
 //   --duration                   one second iterations per test
 //   --operations-per-shard       a fixed number of operations per shard instead, for comparing builds
@@ -129,7 +129,12 @@
 //                    the lookup of that entry
 //   raw-read         one DMA read of the size of a record, straight to the data file, with no
 //                    logstor in it
-//   read-cached      a whole read the cache serves. Draws from the same keys as `cache-lookup`
+//   read-cached      a whole read the cache serves, up to the mutation it returns. Draws from the
+//                    same keys as `cache-lookup`
+//   query-cached     a whole read the cache serves, as a query pays for it: the reader for the key
+//                    is made, its fragments are drained and it is closed. Draws from the same keys
+//                    as `cache-lookup`. What it costs beyond `read-cached` is the reader that turns
+//                    the mutation into fragments, which a query pays and `read-cached` does not
 //   read-disk        a whole read that goes to a segment: index lookup, DMA read, deserialization,
 //                    materialization
 //   segment-read     the read of the record from its segment and its deserialization, without
@@ -137,10 +142,11 @@
 //                    starts from a key
 //   write            a whole write, up to and including the flush of the buffer its record went into
 //
-// Everything above `read-cached` touches no disk - the two cache tests touch the cache, the rest
-// touch neither it nor the disk. They run `cpu_test_batch` operations per invocation of the
-// measurement loop, since one of them costs of the order of what the loop itself costs, and they
-// run without concurrency, since they never wait for anything.
+// Everything above `raw-read` touches no disk - the two cache tests touch the cache, the rest touch
+// neither it nor the disk. They run `cpu_test_batch` operations per invocation of the measurement
+// loop, since one of them costs of the order of what the loop itself costs, and they run without
+// concurrency, since they never wait for anything. `read-cached` and `query-cached` touch no disk
+// either, but go through the read path's futures, so they run as the IO tests do.
 //
 //
 // Reading the numbers
@@ -153,6 +159,7 @@
 //
 //   read-disk      ~  segment-read + materialize
 //   read-cached    ~  cache-lookup
+//   query-cached   ~  read-cached + the reader that fragments the mutation
 //   segment-read   ~  index-lookup + raw-read + deserialize + what the segment manager puts between
 //                     them
 //   serialize      ~  freeze + record-sizes + append
@@ -274,6 +281,7 @@
 #include <seastar/core/thread.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/testing/test_runner.hh>
+#include <seastar/util/closeable.hh>
 
 #include "dht/i_partitioner.hh"
 #include "keys/keys.hh"
@@ -281,6 +289,7 @@
 #include "mutation/mutation.hh"
 #include "mutation/mutation_partition_serializer.hh"
 #include "partition_slice_builder.hh"
+#include "reader_concurrency_semaphore.hh"
 #include "replica/logstor/index.hh"
 #include "replica/logstor/logstor.hh"
 #include "replica/logstor/segment_io.hh"
@@ -321,6 +330,7 @@ enum class test_kind {
     cache_populate,
     raw_read,
     read_cached,
+    query_cached,
     read_disk,
     segment_read,
     write,
@@ -341,6 +351,7 @@ const std::vector<std::pair<std::string_view, test_kind>> test_kinds = {
     {"cache-populate", test_kind::cache_populate},
     {"raw-read", test_kind::raw_read},
     {"read-cached", test_kind::read_cached},
+    {"query-cached", test_kind::query_cached},
     {"read-disk", test_kind::read_disk},
     {"segment-read", test_kind::segment_read},
     {"write", test_kind::write},
@@ -550,6 +561,11 @@ class logstor_bench {
     bytes _value;
     query::partition_slice _slice;
     query::partition_slice _slice_bypassing_cache;
+    // The permit the query-cached test makes its readers with. A query is handed one by the layer
+    // above logstor, so one is made up front and every reader of the test shares it. Released, and
+    // its semaphore stopped, in stop().
+    reader_concurrency_semaphore _semaphore;
+    std::optional<reader_permit> _permit;
     // One record of the dataset in the forms the steps of the read and the write path work on, for
     // the tests that measure a single step.
     std::unique_ptr<raw_write_buffer> _serialization_buffer;
@@ -576,6 +592,8 @@ public:
         , _value(bytes::initialized_later(), cfg.value_size)
         , _slice(make_read_slice(*_schema, cfg.select_columns, false))
         , _slice_bypassing_cache(make_read_slice(*_schema, cfg.select_columns, true))
+        , _semaphore(reader_concurrency_semaphore::no_limits{}, "perf_logstor", reader_concurrency_semaphore::register_metrics::no)
+        , _permit(_semaphore.make_tracking_only_permit(nullptr, "perf_logstor", db::no_timeout, {}))
         , _serialization_buffer(std::make_unique<raw_write_buffer>(cfg.segment_size, segment_kind::mixed))
         , _dir(dir) {
         std::ranges::fill(_value, int8_t('v'));
@@ -623,6 +641,8 @@ public:
             });
         }
         co_await _logstor->stop();
+        _permit.reset();
+        co_await _semaphore.stop();
     }
 
     future<> do_write() {
@@ -643,6 +663,20 @@ public:
 
     future<> do_read_bypassing_cache() {
         return do_read(random_key(), _slice_bypassing_cache);
+    }
+
+    // A whole read as a query pays for it: the reader a table hands the querier for one key is
+    // made, drained to the end of its stream and closed. The fragments are counted and dropped,
+    // which is the least a consumer of the reader does with them.
+    future<> do_query_cached() {
+        auto reader = _logstor->make_reader(_schema, index(), *_permit,
+                dht::partition_range::make_singular(random_cached_key()), _slice);
+        auto close_reader = deferred_close(reader);
+        while (!reader.is_end_of_stream()) {
+            co_await reader.fill_buffer();
+            _sink += reader.buffer().size();
+            reader.detach_buffer();
+        }
     }
 
     // The read of the record from its segment and its deserialization, without materializing the
@@ -1011,6 +1045,8 @@ std::vector<perf_result_with_io> run_test(sharded<logstor_bench>& bench, test_ki
         return io_test(&logstor_bench::do_raw_read);
     case test_kind::read_cached:
         return cache_hit_test([&] { return io_test(&logstor_bench::do_read_cached); });
+    case test_kind::query_cached:
+        return cache_hit_test([&] { return io_test(&logstor_bench::do_query_cached); });
     case test_kind::read_disk:
         return io_test(&logstor_bench::do_read_bypassing_cache);
     case test_kind::segment_read:
