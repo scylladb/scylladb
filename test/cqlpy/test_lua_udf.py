@@ -63,3 +63,8 @@ def test_lua_reversed_argument(cql, test_keyspace, scylla_only):
                         "WITH CLUSTERING ORDER BY (val DESC)") as table:
         cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 1)")
         assert call_lua(cql, test_keyspace, table, "(val int) CALLED ON NULL INPUT RETURNS int", "return 2 * val") == [2]
+
+def test_lua_boolean_argument(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val boolean") as table:
+        cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', true)")
+        assert call_lua(cql, test_keyspace, table, "(val boolean) CALLED ON NULL INPUT RETURNS int", "return val and 1 or 0") == [1]
