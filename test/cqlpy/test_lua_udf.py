@@ -178,3 +178,8 @@ def test_lua_decimal_return(cql, test_keyspace, scylla_only):
                      "return 4.2", args="val1")
         assert call_lua(cql, test_keyspace, table, "(a varint) CALLED ON NULL INPUT RETURNS decimal",
                         'return "18446744073709551616.1"', args="val1") == [Decimal("18446744073709551616.1")]
+
+def test_lua_varint_return(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val int") as table:
+        cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 42)")
+        assert call_lua(cql, test_keyspace, table, "(a int) CALLED ON NULL INPUT RETURNS varint", "return a") == [42]
