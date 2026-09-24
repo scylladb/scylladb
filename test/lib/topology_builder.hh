@@ -341,7 +341,7 @@ public:
         while (true) {
             auto guard = client.start_operation(as).get();
             service::topology_mutation_builder builder(guard.write_timestamp());
-            builder.resume_rf_change_request(current_queue, elem_to_remove);
+            builder.resume_rf_change_requests(current_queue, {elem_to_remove});
             service::topology_change change({builder.build()});
             service::group0_command g0_cmd = client.prepare_command(std::move(change), guard,
                                                                     "setting ongoing RF change data");
