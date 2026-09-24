@@ -288,3 +288,11 @@ def test_lua_boolean_return(cql, test_keyspace, scylla_only):
     with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val int") as table:
         cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 3)")
         assert call_lua(cql, test_keyspace, table, "(val int) CALLED ON NULL INPUT RETURNS boolean", "return val > 4") == [False]
+
+def test_lua_ascii_return(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "key text PRIMARY KEY, val int") as table:
+        cql.execute(f"INSERT INTO {table} (key, val) VALUES ('foo', 3)")
+        sig = "(val int) CALLED ON NULL INPUT RETURNS ascii"
+        assert call_lua(cql, test_keyspace, table, sig, 'return "foo"') == ["foo"]
+        with pytest.raises(InvalidRequest, match="value is not valid ascii"):
+            call_lua(cql, test_keyspace, table, sig, 'return "foó"')
