@@ -19,6 +19,7 @@
 #include "enum_set.hh"
 #include "mutation_writer/token_group_based_splitting_writer.hh"
 #include "utils/chunked_vector.hh"
+#include "tombstone_gc.hh"
 
 namespace compaction {
 
@@ -242,6 +243,11 @@ struct compaction_descriptor {
     // log, there is currently no way to check if the key exists; only the minimum
     // timestamp comparison, similar to memtables, is performed.
     bool gc_check_only_compacting_sstables = false;
+
+    // The gc state the compaction decides tombstone collection with. It is up to the caller to
+    // provide it, usually the table's (compaction_group_view::get_tombstone_gc_state()); the
+    // default collects no tombstones.
+    tombstone_gc_state gc_state = tombstone_gc_state::no_gc();
 
     compaction_descriptor() = default;
 
