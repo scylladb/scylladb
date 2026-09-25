@@ -1980,6 +1980,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                     .enable_small_table_optimization_for_rbno = cfg->enable_small_table_optimization_for_rbno,
                     .small_table_optimization_for_rbno_max_table_size = cfg->small_table_optimization_for_rbno_max_table_size,
                     .repair_hints_batchlog_flush_cache_time_in_ms = cfg->repair_hints_batchlog_flush_cache_time_in_ms,
+                    .repair_hints_batchlog_flush_timeout_in_seconds = cfg->repair_hints_batchlog_flush_timeout_in_seconds,
                     .repair_partition_count_estimation_ratio = cfg->repair_partition_count_estimation_ratio,
                     .critical_disk_utilization_level = cfg->critical_disk_utilization_level,
                     .repair_multishard_reader_buffer_hint_size = cfg->repair_multishard_reader_buffer_hint_size,

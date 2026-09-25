@@ -106,7 +106,7 @@ struct repair_flush_hints_batchlog_response {
 };
 
 verb [[with_client_info]] repair_update_system_table (repair_update_system_table_request req [[ref]]) -> repair_update_system_table_response;
-verb [[with_client_info]] repair_flush_hints_batchlog (repair_flush_hints_batchlog_request req [[ref]]) -> repair_flush_hints_batchlog_response;
+verb [[with_client_info, cancellable]] repair_flush_hints_batchlog (repair_flush_hints_batchlog_request req [[ref]]) -> repair_flush_hints_batchlog_response;
 verb [[with_client_info]] repair_get_full_row_hashes (uint32_t repair_meta_id, shard_id dst_shard_id [[version 5.2]]) -> repair_hash_set;
 verb [[with_client_info]] repair_get_combined_row_hash (uint32_t repair_meta_id, std::optional<repair_sync_boundary> common_sync_boundary, shard_id dst_shard_id [[version 5.2]]) -> get_combined_row_hash_response;
 verb [[with_client_info]] repair_get_sync_boundary (uint32_t repair_meta_id, std::optional<repair_sync_boundary> skipped_sync_boundary, shard_id dst_shard_id [[version 5.2]]) -> get_sync_boundary_response;

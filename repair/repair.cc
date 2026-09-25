@@ -25,6 +25,7 @@
 #include "sstables/sstables.hh"
 #include "partition_range_compat.hh"
 #include "utils/assert.hh"
+#include "utils/chain_abort_source.hh"
 #include "utils/error_injection.hh"
 #include "utils/from_chars_exactly.hh"
 
@@ -40,6 +41,7 @@
 #include <seastar/core/gate.hh>
 #include <seastar/util/defer.hh>
 #include <seastar/core/metrics_registration.hh>
+#include <seastar/core/abort_on_expiry.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/coroutine/as_future.hh>
@@ -455,20 +457,44 @@ static future<std::list<locator::host_id>> get_hosts_participating_in_repair(
 }
 
 
+future<gc_clock::time_point> flush_hints_batchlog_on_node(netw::messaging_service& ms, locator::host_id node, const repair_flush_hints_batchlog_request& req, abort_source& as) {
+    auto start_time = gc_clock::now();
+    std::chrono::milliseconds margin = std::chrono::seconds(30);
+    if (auto injected = utils::get_local_injector().inject_parameter<uint32_t>("repair_flush_hints_batchlog_rpc_margin_in_ms")) {
+        margin = std::chrono::milliseconds(*injected);
+    }
+    abort_on_expiry expiry(lowres_clock::now() + std::max(req.hints_timeout, req.batchlog_timeout) + margin);
+    auto sub = utils::chain_abort_source(expiry.abort_source(), as);
+    repair_flush_hints_batchlog_response resp;
+    try {
+        resp = co_await ser::repair_rpc_verbs::send_repair_flush_hints_batchlog(&ms, node, expiry.abort_source(), req);
+    } catch (const abort_requested_exception&) {
+        // The rpc layer reports every abort the same way; the expiry knows why.
+        std::rethrow_exception(expiry.abort_source().abort_requested_exception_ptr());
+    }
+    // A node too old to report its flush time returns epoch. The time the
+    // flush was asked for is earlier than the flush, so it is safe to use.
+    if (resp.flush_time == gc_clock::time_point()) {
+        rlogger.debug("Got empty flush_time from node={}. Please upgrade the node.", node);
+        co_return start_time;
+    }
+    co_return resp.flush_time;
+}
+
+bool repair_needs_hints_batchlog_flush(const schema& s) {
+    return s.tombstone_gc_options().mode() == tombstone_gc_mode::repair;
+}
+
 future<std::tuple<bool, bool, gc_clock::time_point>> repair_service::flush_hints(repair_uniq_id id,
         sstring keyspace, std::vector<sstring> cfs,
-        std::unordered_set<locator::host_id> ignore_nodes) {
+        std::unordered_set<locator::host_id> ignore_nodes, abort_source& as) {
     auto& db = get_db().local();
     auto uuid = id.uuid();
     bool needs_flush_before_repair = false;
     if (db.features().tombstone_gc_options) {
         for (auto& table: cfs) {
             if (const auto* cf = find_column_family_if_exists(db, keyspace, table)) {
-                auto s = cf->schema();
-                const auto& options = s->tombstone_gc_options();
-                if (options.mode() == tombstone_gc_mode::repair) {
-                    needs_flush_before_repair = true;
-                }
+                needs_flush_before_repair |= repair_needs_hints_batchlog_flush(*cf->schema());
             }
         }
     }
@@ -480,9 +506,8 @@ future<std::tuple<bool, bool, gc_clock::time_point>> repair_service::flush_hints
         std::erase_if(waiting_nodes, [&] (const auto& addr) {
             return ignore_nodes.contains(addr);
         });
-        auto hints_timeout = std::chrono::seconds(300);
-        auto batchlog_timeout = std::chrono::seconds(300);
-        repair_flush_hints_batchlog_request req{id.uuid(), {}, hints_timeout, batchlog_timeout};
+        auto timeout = std::chrono::seconds(_config.repair_hints_batchlog_flush_timeout_in_seconds());
+        repair_flush_hints_batchlog_request req{id.uuid(), {}, timeout, timeout};
         auto start_time = gc_clock::now();
         std::vector<gc_clock::time_point> times;
         try {
@@ -498,19 +523,12 @@ future<std::tuple<bool, bool, gc_clock::time_point>> repair_service::flush_hints
                         uuid, nodes_down);
                 co_return std::make_tuple(needs_flush_before_repair, hints_batchlog_flushed, flush_time);
             }
-            co_await parallel_for_each(waiting_nodes, [this, uuid, start_time, &times, &req] (locator::host_id node) -> future<> {
+            co_await parallel_for_each(waiting_nodes, [this, uuid, &times, &req, &as] (locator::host_id node) -> future<> {
                 rlogger.debug("repair[{}]: Sending repair_flush_hints_batchlog to node={}, started",
                         uuid, node);
                 try {
                     auto& ms = get_messaging();
-                    auto resp = co_await ser::repair_rpc_verbs::send_repair_flush_hints_batchlog(&ms, node, req);
-                    if (resp.flush_time == gc_clock::time_point()) {
-                        // This means the node does not support sending flush_time back. Use the time when the flush is requested for flush_time.
-                        rlogger.debug("repair[{}]: Got empty flush_time from node={}. Please upgrade the node={}.", uuid, node, node);
-                        times.push_back(start_time);
-                    } else {
-                        times.push_back(resp.flush_time);
-                    }
+                    times.push_back(co_await flush_hints_batchlog_on_node(ms, node, req, as));
                 } catch (...) {
                     rlogger.warn("repair[{}]: Sending repair_flush_hints_batchlog to node={}, failed: {}",
                             uuid, node, std::current_exception());
@@ -525,6 +543,7 @@ future<std::tuple<bool, bool, gc_clock::time_point>> repair_service::flush_hints
             auto duration = std::chrono::duration<float>(gc_clock::now() - start_time);
             rlogger.debug("repair[{}]: Finished repair_flush_hints_batchlog flush_times={} flush_time={} flush_duration={}", uuid, times, flush_time, duration);
         } catch (...) {
+            as.check();
             rlogger.warn("repair[{}]: Sending repair_flush_hints_batchlog failed, continue to run repair", uuid);
         }
     } else {
@@ -1540,7 +1559,7 @@ future<> repair_service::run_user_requested_repair(
         } else {
             participants = get_hosts_participating_in_repair(_gossiper.local(), germs->get(), keyspace, ranges, data_centers, hosts, ignore_nodes).get();
         }
-        auto [_, hints_batchlog_flushed, flush_time] = flush_hints(id, keyspace, cfs, ignore_nodes).get();
+        auto [_, hints_batchlog_flushed, flush_time] = flush_hints(id, keyspace, cfs, ignore_nodes, task_as).get();
 
         std::vector<future<>> repair_results;
         repair_results.reserve(this_smp_shard_count());
@@ -2512,7 +2531,7 @@ future<> repair_service::replace_with_repair(std::unordered_map<sstring, locator
 }
 
 // It is called by the repair_tablet rpc verb to repair the given tablet
-future<gc_clock::time_point> repair_service::repair_tablet(gms::gossip_address_map& addr_map, locator::tablet_metadata_guard& guard, locator::global_tablet_id gid, tasks::task_info global_tablet_repair_task_info, service::frozen_topology_guard topo_guard, std::optional<locator::tablet_replica_set> rebuild_replicas, locator::tablet_transition_stage stage) {
+future<gc_clock::time_point> repair_service::repair_tablet(gms::gossip_address_map& addr_map, locator::tablet_metadata_guard& guard, locator::global_tablet_id gid, tasks::task_info global_tablet_repair_task_info, service::frozen_topology_guard topo_guard, std::optional<locator::tablet_replica_set> rebuild_replicas, locator::tablet_transition_stage stage, service::tablet_repair_flush_info flush) {
     if (is_disabled()) {
         co_return coroutine::return_exception(std::runtime_error("Repair service is disabled. No repairs will be started until it's re-enabled"));
     }
@@ -2590,9 +2609,9 @@ future<gc_clock::time_point> repair_service::repair_tablet(gms::gossip_address_m
                 .set_is_abortable(tasks::is_abortable::yes)
                 .set_is_user_task(tasks::is_user_task::yes)
                 .set_workload_fn([metas_size = task_metas.size()] () { return make_ready_future<std::optional<double>>(metas_size); });
-    auto task = co_await std::move(task_builder).build([module = _repair_module, id, keyspace_name, table_names, metas = std::move(task_metas), ranges_parallelism, &flush_time, &should_flush_and_flush_failed, &topo_guard, sched_info = std::move(sched_info), skip_flush = rebuild_replicas.has_value()] (tasks::task_manager::task::impl& self) mutable -> future<> {
+    auto task = co_await std::move(task_builder).build([module = _repair_module, id, keyspace_name, table_names, metas = std::move(task_metas), ranges_parallelism, &flush_time, &should_flush_and_flush_failed, &topo_guard, sched_info = std::move(sched_info), flush] (tasks::task_manager::task::impl& self) mutable -> future<> {
         auto& rs = module->get_repair_service();
-        auto res = co_await rs.run_tablet_repair(std::move(keyspace_name), std::move(table_names), std::move(metas), std::move(ranges_parallelism), topo_guard, skip_flush, std::move(sched_info), streaming::stream_reason::repair, self.info(), id);
+        auto res = co_await rs.run_tablet_repair(std::move(keyspace_name), std::move(table_names), std::move(metas), std::move(ranges_parallelism), topo_guard, flush, std::move(sched_info), streaming::stream_reason::repair, self.info(), id);
         flush_time = res.flush_time;
         should_flush_and_flush_failed = res.should_flush_and_flush_failed;
     });
@@ -2619,7 +2638,7 @@ future<repair_service::tablet_repair_result> repair_service::run_tablet_repair(
         std::vector<tablet_repair_task_meta> metas,
         std::optional<int> ranges_parallelism,
         service::frozen_topology_guard topo_guard,
-        bool skip_flush,
+        service::tablet_repair_flush_info flush,
         tablet_repair_sched_info sched_info,
         streaming::stream_reason reason,
         tasks::task_info parent_data,
@@ -2627,7 +2646,7 @@ future<repair_service::tablet_repair_result> repair_service::run_tablet_repair(
     gc_clock::time_point flush_time = gc_clock::time_point();
     bool should_flush_and_flush_failed = false;
     rlogger.debug("repair[{}]: Repair tablet for keyspace={} tables={} status=started", id.uuid(), keyspace, tables);
-    auto f = co_await coroutine::as_future(_repair_module->run(id, [this, id, keyspace, &tables, &metas,  &ranges_parallelism, &flush_time, &should_flush_and_flush_failed, &topo_guard, &skip_flush, &parent_data, &reason, &sched_info] () mutable {
+    auto f = co_await coroutine::as_future(_repair_module->run(id, [this, id, keyspace, &tables, &metas,  &ranges_parallelism, &flush_time, &should_flush_and_flush_failed, &topo_guard, &flush, &parent_data, &reason, &sched_info] () mutable {
         // This runs inside a seastar thread
         auto start_time = std::chrono::steady_clock::now();
         std::atomic<int> idx{1};
@@ -2680,7 +2699,7 @@ future<repair_service::tablet_repair_result> repair_service::run_tablet_repair(
 
         auto parent_shard = this_shard_id();
         auto flush_time_tmp = flush_time;
-        auto res = container().map_reduce0([&idx, id, metas = metas, parent_data, reason = reason, tables = tables, sched_info = sched_info, ranges_parallelism = ranges_parallelism, parent_shard, topo_guard = topo_guard, skip_flush = skip_flush] (repair_service& rs) -> future<std::pair<gc_clock::time_point, bool>> {
+        auto res = container().map_reduce0([&idx, id, metas = metas, parent_data, reason = reason, tables = tables, sched_info = sched_info, ranges_parallelism = ranges_parallelism, parent_shard, topo_guard = topo_guard, flush] (repair_service& rs) -> future<std::pair<gc_clock::time_point, bool>> {
             std::exception_ptr error;
             gc_clock::time_point shard_flush_time;
             bool flush_failed = false;
@@ -2719,8 +2738,19 @@ future<repair_service::tablet_repair_result> repair_service::run_tablet_repair(
                     rlogger.info("Execute repair_tablet_repair_task_delay={}", *delay);
                     co_await seastar::sleep(std::chrono::milliseconds(*delay));
                 }
-                if (!skip_flush) {
-                    std::tie(needs_flush_before_repair, hints_batchlog_flushed, flush_time) = co_await rs.flush_hints(id, m.keyspace_name, tables, ignore_nodes);
+                switch (flush.mode) {
+                case service::tablet_repair_flush_mode::flush:
+                    std::tie(needs_flush_before_repair, hints_batchlog_flushed, flush_time) = co_await rs.flush_hints(id, m.keyspace_name, tables, ignore_nodes, rs.get_repair_module().abort_source());
+                    break;
+                case service::tablet_repair_flush_mode::skip:
+                    break;
+                case service::tablet_repair_flush_mode::supplied:
+                    needs_flush_before_repair = true;
+                    hints_batchlog_flushed = flush.time.has_value();
+                    flush_time = flush.time.value_or(gc_clock::time_point());
+                    break;
+                default:
+                    on_internal_error(rlogger, fmt::format("Unknown tablet repair flush mode {}", static_cast<int>(flush.mode)));
                 }
                 bool small_table_optimization = false;
 

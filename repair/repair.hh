@@ -17,6 +17,7 @@
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/sharded.hh>
+#include <seastar/core/abort_source.hh>
 #include <seastar/core/future.hh>
 
 #include "gms/inet_address.hh"
@@ -24,6 +25,7 @@
 #include "streaming/stream_reason.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "replica/database_fwd.hh"
+#include "schema/schema_fwd.hh"
 #include "mutation/frozen_mutation.hh"
 #include "utils/hash.hh"
 #include "repair/hash.hh"
@@ -284,6 +286,15 @@ struct repair_flush_hints_batchlog_response {
     gc_clock::time_point flush_time;
 };
 
+// Asks node to flush its hints and batchlog and returns the time of that
+// flush. Waits for the longer of the request's timeouts plus a margin, then
+// fails with timed_out_error. The replica bounds itself by the timeouts in
+// the request and logs its failure, so with the margin that failure wins
+// over the caller's, and the caller times out only on a replica that is
+// stuck or unreachable. Aborting as stops the wait early with the exception
+// as carries.
+future<gc_clock::time_point> flush_hints_batchlog_on_node(netw::messaging_service& ms, locator::host_id node, const repair_flush_hints_batchlog_request& req, abort_source& as);
+
 struct tablet_repair_task_meta {
     sstring keyspace_name;
     sstring table_name;
@@ -294,6 +305,13 @@ struct tablet_repair_task_meta {
     locator::tablet_replica_set replicas;
     locator::effective_replication_map_ptr erm;
 };
+
+// Repair mode tombstone GC lets compaction drop tombstones older than the
+// last repair of a range, on the ground that the repair made all replicas
+// agree on the data written before its time. Writes still waiting in hints
+// or batchlog at that time are not covered by that, so they are flushed on
+// all nodes before the repair starts.
+bool repair_needs_hints_batchlog_flush(const schema& s);
 
 struct tablet_repair_sched_info {
     bool sched_by_scheduler = false;

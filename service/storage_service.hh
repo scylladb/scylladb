@@ -233,7 +233,7 @@ private:
     shared_ptr<service::topo::task_manager_module> _global_topology_requests_module;
     shared_ptr<service::vnodes_to_tablets::task_manager_module> _vnodes_to_tablets_migration_module;
     gms::gossip_address_map& _address_map;
-    future<service::tablet_operation_repair_result> repair_tablet(locator::global_tablet_id, service::session_id);
+    future<service::tablet_operation_repair_result> repair_tablet(locator::global_tablet_id, service::session_id, std::optional<tablet_repair_flush_info> flush);
     future<> stream_tablet(locator::global_tablet_id);
     // Clones storage of leaving tablet into pending one. Done in the context of intra-node migration,
     // when both of which sit on the same node. So all the movement is local.
