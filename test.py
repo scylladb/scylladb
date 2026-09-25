@@ -242,6 +242,9 @@ def parse_cmd_line() -> argparse.Namespace:
     parser.add_argument("--select-tests-as-mode", action="store", default=None, metavar="MODE",
                         help="Choose tests by MODE's run_in_*/skip_in_* lists, whatever mode runs them "
                              "(e.g. --mode coverage --select-tests-as-mode dev).")
+    parser.add_argument("--coverage-per-test", action="store", default=None, metavar="DIR",
+                        help="Write an LLVM coverage profile of every test (all scylla processes it ran) to "
+                             "DIR/<test>.profdata.zst, with its outcome in DIR/<test>.json.  Needs --mode coverage.")
     parser.add_argument("--artifacts_dir_url", action='store', type=str, default=None, dest="artifacts_dir_url",
                         help="Provide the URL to artifacts directory to generate the link to failed tests directory "
                              "with logs")
@@ -308,6 +311,9 @@ def parse_cmd_line() -> argparse.Namespace:
         if len(missing_coverage_modes) > 0:
             raise RuntimeError(f"The following modes weren't built or ran (using the '--mode' option): {missing_coverage_modes}")
         args.coverage = True
+
+    if args.coverage_per_test and set(args.modes) != {"coverage"}:
+        raise RuntimeError("--coverage-per-test needs an instrumented build: run it with --mode coverage alone")
 
     args.tmpdir = os.path.abspath(args.tmpdir)
 
@@ -426,6 +432,8 @@ def run_pytest(options: argparse.Namespace) -> int:
         args.append('--gather-metrics')
     if options.select_tests_as_mode:
         args.append(f'--select-tests-as-mode={options.select_tests_as_mode}')
+    if options.coverage_per_test:
+        args.append(f'--coverage-per-test={os.path.abspath(options.coverage_per_test)}')
     if options.coverage:
         args.append('--coverage')
         args.extend(f'--coverage-mode={mode}' for mode in options.coverage_modes)
