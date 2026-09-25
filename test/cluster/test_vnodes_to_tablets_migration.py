@@ -507,7 +507,7 @@ async def test_migration_multinode(manager: ScyllaClusterManager):
     logger.info(f"Starting {num_nodes} nodes with {num_shards} shards each, {tokens_per_node} random tokens per node")
 
     servers = []
-    cfg = {'tablet_load_stats_refresh_interval_in_seconds': 1, 'num_tokens': tokens_per_node}
+    cfg = {'num_tokens': tokens_per_node}
     for i in range(1, num_nodes + 1):
         cmdline = [
             '--smp', str(num_shards),
@@ -660,7 +660,7 @@ async def test_migration_multidc(manager: ScyllaClusterManager):
     logger.info("Starting 3 nodes: 1 in dc1 (rack1), 2 in dc2 (rack1, rack2)")
 
     servers = []
-    cfg = {'tablet_load_stats_refresh_interval_in_seconds': 1, 'num_tokens': tokens_per_node}
+    cfg = {'num_tokens': tokens_per_node}
     cmdline = ['--smp', str(num_shards), '--logger-log-level', 'compaction=debug']
 
     # DC1: 1 node, 1 rack
@@ -1389,7 +1389,7 @@ async def test_migration_with_zero_token_node(manager: ScyllaClusterManager):
     tokens_per_node = 16
 
     logger.info("Starting a token-owning node in dc1")
-    cfg = {'tablet_load_stats_refresh_interval_in_seconds': 1, 'num_tokens': tokens_per_node}
+    cfg = {'num_tokens': tokens_per_node}
     server_dc1 = await manager.server_add(cmdline=['--smp', '2'], config=cfg, property_file={"dc": "dc1", "rack": "rack1"})
 
     logger.info("Starting a zero-token node in dc2 (arbiter DC)")
@@ -1514,7 +1514,7 @@ async def test_migration_status_api_with_rf_zero_dc(manager: ScyllaClusterManage
     tokens_per_node = 16
 
     logger.info("Starting one token-owning node in each of dc1 and dc2")
-    cfg = {'tablet_load_stats_refresh_interval_in_seconds': 1, 'num_tokens': tokens_per_node}
+    cfg = {'num_tokens': tokens_per_node}
     server_dc1 = await manager.server_add(cmdline=['--smp', '2'], config=cfg, property_file={"dc": "dc1", "rack": "rack1"})
     server_dc2 = await manager.server_add(cmdline=['--smp', '2'], config=cfg, property_file={"dc": "dc2", "rack": "rack1"})
     servers = [server_dc1, server_dc2]
@@ -1615,7 +1615,7 @@ async def test_migration_status_reset_between_migrations(manager: ScyllaClusterM
     num_keys = 100
 
     logger.info("Starting a single node")
-    cfg = {'tablet_load_stats_refresh_interval_in_seconds': 1, 'num_tokens': 16}
+    cfg = {'num_tokens': 16}
     servers = await manager.servers_add(1, cmdline=['--smp', '2'], config=cfg)
     server = servers[0]
     host_id = await manager.get_host_id(server.server_id)
