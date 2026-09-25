@@ -16,6 +16,7 @@ from cassandra.query import SimpleStatement, ConsistencyLevel
 from test.pylib.tablets import get_tablet_count, get_all_tablet_replicas
 from test.pylib.rest_client import HTTPError, read_barrier
 from test.pylib.internal_types import ServerInfo
+from test.pylib.util import get_enabled_features, wait_for_feature, wait_for_cql_and_get_hosts
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.cluster.util import new_test_keyspace, reconnect_driver
 from test.cluster.tasks.task_manager_client import TaskManagerClient
@@ -1825,3 +1826,139 @@ async def test_migration_status_reset_between_migrations(manager: ScyllaClusterM
                 res = await cql.run_async(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{ks}'")
                 assert len(res) == 1 and res[0].initial_tablets is not None, \
                     f"Keyspace {ks} is still using vnodes after migration finalization"
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_migration_in_mixed_cluster(manager: ScyllaClusterManager):
+    """Verify a migration started on a cluster that has not finished upgrading runs to the end.
+
+    TOPOLOGY_CURRENT_STORAGE_MODE is only enabled once every node advertises it, so a
+    cluster part-way through a version upgrade has it off, and a migration can still be
+    started there. Prepare then records no mode and no node publishes one, so every node
+    reads as null and both readers have to cope: the status API answers from
+    system.tablet_sizes, the way the release that could start such a migration did, and
+    finalization decides from load stats.
+
+    The framework runs one binary, so the old node is modelled by suppressing the feature
+    on it alone - which is what keeps the feature off cluster-wide, exactly as an older
+    node would. Lifting the suppression later stands in for that node being upgraded.
+
+    Steps:
+    1. Start two nodes, one with the feature suppressed, and prepare a migration from the
+       other - it is allowed, and no node records a mode.
+    2. Mark and restart both; they switch while still publishing nothing, and the status
+       reports tablets for both, which only the tablet sizes can answer.
+    3. Restart the suppressed node without the suppression, so the feature turns on
+       mid-migration. The nodes stay null, since neither restarts again.
+    4. Finalize, which must not be blocked by the absent modes.
+    """
+    num_keys = 100
+    FEATURE = 'TOPOLOGY_CURRENT_STORAGE_MODE'
+
+    # The fallback reads system.tablet_sizes, which the coordinator refreshes on its own
+    # schedule, so this test does depend on that interval where the others no longer do.
+    cfg = {'tablet_load_stats_refresh_interval_in_seconds': 1, 'num_tokens': 16}
+    suppressed = cfg | {'error_injections_at_startup': [
+        {'name': 'suppress_features', 'value': 'TOPOLOGY_CURRENT_STORAGE_MODE'}]}
+
+    logger.info("Starting one node that does not support the feature and one that does")
+    old_node = await manager.server_add(cmdline=['--smp', '2'], config=suppressed)
+    new_node = await manager.server_add(cmdline=['--smp', '2'], config=cfg)
+    servers = [old_node, new_node]
+    host_ids = {s.server_id: await manager.get_host_id(s.server_id) for s in servers}
+    cql, _ = await manager.get_ready_cql(servers)
+
+    async def recorded_modes() -> dict:
+        """The published modes, read behind a barrier from the node we barriered.
+
+        system.topology is applied asynchronously on each node, so a driver-chosen
+        coordinator that lags would report null for a mode another node has already
+        published, and the assertions below would pass on a broken publication guard.
+        """
+        await read_barrier(manager.api, new_node.ip_addr)
+        host = cql.cluster.metadata.get_host(new_node.ip_addr)
+        rows = await cql.run_async(
+            "SELECT host_id, current_storage_mode FROM system.topology WHERE key = 'topology'", host=host)
+        return {r.host_id: r.current_storage_mode for r in rows}
+
+    ks_opts = "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'enabled': false}"
+    async with new_test_keyspace(manager, ks_opts) as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+        stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, c) VALUES (?, ?)")
+        stmt.consistency_level = ConsistencyLevel.QUORUM
+        await asyncio.gather(*(cql.run_async(stmt, [k, k]) for k in range(num_keys)))
+
+        # The point of the setup: one node withholding support keeps the feature off for
+        # the whole cluster, so the node that does support it still cannot use the column.
+        hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+        for host in hosts:
+            assert FEATURE not in await get_enabled_features(cql, host), \
+                f"{FEATURE} is enabled on {host}, so this is not a mixed cluster"
+
+        # The upgraded node issues the request; the feature is off because of the other one.
+        logger.info("Preparing a migration from the node that does support the feature")
+        await manager.api.create_vnode_tablet_migration(new_node.ip_addr, ks)
+
+        logger.info("Verifying that no node recorded a mode")
+        modes = await recorded_modes()
+        assert len(modes) == 2 and all(m is None for m in modes.values()), \
+            f"Expected no recorded modes, got {modes}"
+
+        await verify_migration_status(manager, new_node, ks,
+            expected_status='migrating_to_tablets',
+            expected_node_statuses={h: ('vnodes', 'vnodes') for h in host_ids.values()})
+
+        logger.info("Marking and restarting both nodes, neither of which publishes a mode")
+        for s in servers:
+            await manager.api.upgrade_node_to_tablets(s.ip_addr)
+            await manager.server_restart(s.server_id)
+            await reconnect_driver(manager)
+            cql, _ = await manager.get_ready_cql(servers)
+
+        modes = await recorded_modes()
+        assert all(m is None for m in modes.values()), \
+            f"Expected no mode to be published, got {modes}"
+
+        # Only the tablet sizes can answer this: the column is empty and both nodes switched.
+        # Poll, because they come from load stats, which are refreshed periodically.
+        logger.info("Verifying the status reports tablets for both nodes from the tablet sizes")
+        expected = {h: ('tablets', 'tablets') for h in host_ids.values()}
+        deadline = time.time() + 60
+        while True:
+            status = await manager.api.get_vnode_tablet_migration_status(new_node.ip_addr, ks)
+            modes = {n['host_id']: (n['current_mode'], n['intended_mode']) for n in status['nodes']}
+            if modes == expected:
+                break
+            assert time.time() < deadline, f"Status never reported tablets from tablet sizes, last: {modes}"
+            await asyncio.sleep(0.5)
+
+        # The upgrade finishes mid-migration. Neither node restarts again, so neither
+        # publishes, and the status must keep answering from the tablet sizes.
+        logger.info("Upgrading the remaining node, so the feature turns on mid-migration")
+        await manager.server_stop_gracefully(old_node.server_id)
+        await manager.server_remove_config_option(old_node.server_id, 'error_injections_at_startup')
+        await manager.server_start(old_node.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+        for host in hosts:
+            await wait_for_feature(FEATURE, cql, host, time.time() + 60)
+
+        # Still null, so the status below is answered from the tablet sizes rather than
+        # the column: the restart above could not publish, the feature being enabled only
+        # after the node had already written its metadata.
+        modes = await recorded_modes()
+        assert all(m is None for m in modes.values()), \
+            f"A node published a mode once the feature turned on, got {modes}"
+
+        await verify_migration_status(manager, new_node, ks,
+            expected_status='migrating_to_tablets', expected_node_statuses=expected)
+
+        logger.info("Finalizing, which must not be blocked by the absent modes")
+        await manager.api.finalize_vnode_tablet_migration(new_node.ip_addr, ks)
+        await read_barrier(manager.api, new_node.ip_addr)
+
+        res = await cql.run_async(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{ks}'")
+        assert len(res) == 1 and res[0].initial_tablets is not None, \
+            "Keyspace is still using vnodes after migration finalization"
+        await verify_data_integrity(cql, ks, "test", num_keys)
