@@ -883,6 +883,88 @@ async def test_drop_table_during_insert(manager: ScyllaClusterManager):
 
 
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+async def test_tablet_migration_during_insert(manager: ScyllaClusterManager):
+    """An INSERT which resolved its raft group before a tablet migration took the
+    group away from this replica is retried instead of aborting the node in
+    acquire_server()."""
+    cmdline = DEFAULT_CMDLINE + [
+        '--logger-log-level', 'raft_topology=debug',
+        '--logger-log-level', 'debug_error_injection=debug',
+    ]
+    servers = await manager.servers_add(2, config=DEFAULT_CONFIG, cmdline=cmdline)
+    cql, hosts = await manager.get_ready_cql(servers)
+    host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
+
+    await manager.disable_tablet_balancing()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} "
+                                          "AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, v int") as table:
+            table_name = table.split('.')[-1]
+            group_id = await get_table_raft_group_id(manager, ks, table_name)
+
+            tablets = await get_all_tablet_replicas(manager, servers[0], ks, table_name)
+            assert len(tablets) == 1
+            tablet_token = tablets[0].last_token
+            [(src_host_id, src_shard)] = tablets[0].replicas
+            src_idx = host_ids.index(src_host_id)
+            src_server, src_host = servers[src_idx], hosts[src_idx]
+            dst_server, dst_host_id = servers[1 - src_idx], host_ids[1 - src_idx]
+
+            await cql.run_async(f"INSERT INTO {table} (pk, v) VALUES (0, 0)")
+
+            # Park the migration in sc_snapshot_transfer, by which point the pending replica has
+            # been added to the group as a non-voter. Mark the log before arming the injection: a
+            # message it emits in between would be invisible to the wait below.
+            dst_log = await manager.server_open_log(dst_server.server_id)
+            mark = await dst_log.mark()
+            await manager.api.enable_injection(dst_server.ip_addr, "sc_wait_for_snapshot_transfer", one_shot=True)
+            logger.info(f"Migrating the tablet from {src_host_id}:{src_shard} to {dst_host_id}:0")
+            move_task = asyncio.create_task(
+                manager.api.move_tablet(servers[0].ip_addr, ks, table_name,
+                                        src_host_id, src_shard, dst_host_id, 0, tablet_token))
+            await dst_log.wait_for("sc_wait_for_snapshot_transfer: waiting for message", from_mark=mark, timeout=60)
+
+            # From now on every configuration change attempt fails, so the migration parks in
+            # sc_become_voter, where the leaving replica still hosts the group.
+            for server in servers:
+                await manager.api.enable_injection(server.ip_addr, "sc_config_sync_fail", one_shot=False)
+            await manager.api.message_injection(dst_server.ip_addr, "sc_wait_for_snapshot_transfer")
+
+            async def stage_is(stage):
+                tablet_info = await get_tablet_info(manager, src_server, ks, table_name, tablet_token)
+                return True if tablet_info is not None and tablet_info.stage == stage else None
+            logger.info("Waiting for the migration to reach sc_become_voter")
+            await wait_for(lambda: stage_is("write_both_read_new"), time.time() + 120)
+
+            # The INSERT resolves the group from the tablet map of sc_become_voter and stops right
+            # before acquiring it.
+            await manager.api.enable_injection(src_server.ip_addr, "sc_coordinator_wait_before_acquire_server", one_shot=True)
+            insert_fut = cql.run_async(SimpleStatement(f"INSERT INTO {table} (pk, v) VALUES (1, 1)",
+                                                       retry_policy=FallthroughRetryPolicy()), host=src_host)
+            await manager.api.wait_for_injection_enter(src_server.ip_addr, "sc_coordinator_wait_before_acquire_server")
+
+            # Let the migration move on to use_new, which takes the group away from the leaving
+            # replica.
+            src_log = await manager.server_open_log(src_server.server_id)
+            mark = await src_log.mark()
+            for server in servers:
+                await manager.api.disable_injection(server.ip_addr, "sc_config_sync_fail")
+            await src_log.wait_for(f"raft server for group id {group_id} is destroyed", from_mark=mark, timeout=60)
+
+            await manager.api.message_injection(src_server.ip_addr, "sc_coordinator_wait_before_acquire_server")
+            await insert_fut
+            await move_task
+            # The INSERT did find the group gone, rather than slip past the window.
+            assert await src_log.grep("the group serving the token is no longer served here, retrying", from_mark=mark)
+
+            tablets = await get_all_tablet_replicas(manager, servers[0], ks, table_name)
+            assert [host for host, _ in tablets[0].replicas] == [dst_host_id]
+            rows = await cql.run_async(f"SELECT * FROM {table} WHERE pk = 1")
+            assert len(rows) == 1 and rows[0].v == 1
+
+
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
 async def test_timed_out_queries(manager: ScyllaClusterManager):
     """
     A simple test verifying that we don't get stuck for an indefinite amount

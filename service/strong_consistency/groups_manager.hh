@@ -41,6 +41,14 @@ class raft_server;
 // migration stage implies. Defined in groups_manager.cc.
 struct config_sync_work;
 
+/// Thrown by acquire_server() when this replica no longer serves the group, e.g. because its
+/// tablet migrated away. The caller retries against the current tablet map.
+struct group_not_served : public std::exception {
+    const char* what() const noexcept override {
+        return "The raft group is no longer served by this replica";
+    }
+};
+
 /// A cache of leader locations for raft groups where this node is not a replica.
 /// Populated by the CQL transport layer after a redirect reveals the actual leader.
 ///
