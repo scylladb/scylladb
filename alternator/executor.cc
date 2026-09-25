@@ -5264,6 +5264,14 @@ future<executor::request_return_type> executor::update_item(client_state& client
             });
         });
     }
+    if (cas_shard) {
+        static constexpr std::string_view injection_name = "alternator_update_item_before_lwt";
+        auto& injector = utils::get_local_injector();
+        const auto table = injector.inject_parameter<std::string_view>(injection_name, "table");
+        if (table && *table == op->schema()->cf_name()) {
+            co_await injector.inject(injection_name, utils::wait_for_message(5min));
+        }
+    }
     uint64_t wcu_total = 0;
     auto res = co_await op->execute(_proxy, std::move(cas_shard), client_state, trace_state, std::move(permit), needs_read_before_write, _stats, *per_table_stats, wcu_total);
     per_table_stats->operation_sizes.update_item_op_size_kb.add(bytes_to_kb_ceil(op->consumed_capacity()._total_bytes));
