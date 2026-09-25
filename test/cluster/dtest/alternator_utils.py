@@ -1280,13 +1280,14 @@ def full_query(table, consistent_read=True, **kwargs):
     """
     A dynamodb table query that can also be extended with parameters like 'KeyConditions'
     :param table:  the dynamodb table object to run query on
-    :param consistent_read: Strongly consistent reads
+    :param consistent_read: Strongly consistent reads. Must be False when querying a GSI,
+                            as DynamoDB (and Alternator) reject ConsistentRead on GSIs.
     :param kwargs: for adding any other optional dynamodb params
     :return: A list of query result items.
     """
+    kwargs["ConsistentRead"] = consistent_read
     response = table.query(**kwargs)
     items = response["Items"]
-    kwargs["ConsistentRead"] = consistent_read
 
     while "LastEvaluatedKey" in response:
         response = table.query(ExclusiveStartKey=response["LastEvaluatedKey"], **kwargs)

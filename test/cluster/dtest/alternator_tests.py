@@ -143,7 +143,7 @@ class TesterAlternator(BaseAlternator):
         gsi_filtered_val = items[random.randint(0, NUM_OF_ITEMS - 1)][Gsi.ATTRIBUTE_NAME]
         expected_items = [item for item in items if item[Gsi.ATTRIBUTE_NAME] == gsi_filtered_val]
         key_condition = {Gsi.ATTRIBUTE_NAME: {"AttributeValueList": [gsi_filtered_val], "ComparisonOperator": "EQ"}}
-        result_items = full_query(node_resource_table, IndexName=Gsi.NAME, KeyConditions=key_condition)
+        result_items = full_query(node_resource_table, consistent_read=False, IndexName=Gsi.NAME, KeyConditions=key_condition)
         diff_result = DeepDiff(t1=result_items, t2=expected_items, ignore_order=True)
         assert not diff_result, f"The following items differs:\n{pformat(diff_result)}"
 
