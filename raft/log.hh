@@ -189,8 +189,23 @@ public:
     const configuration* get_prev_configuration() const;
 
     // Called on a follower to append entries from a leader.
-    // @retval return an index of last appended entry
-    index_t maybe_append(log_entry_ptr_list&& entries);
+    //
+    // Appends only the prefix of `entries` whose new entries fit into
+    // `max_memory_usage` bytes of memory_usage(); zero means unlimited. Entries
+    // which are already present in the log are always processed regardless of
+    // the limit, since they either duplicate an existing entry for free or
+    // release memory by truncating a conflicting suffix.
+    //
+    // If `force_at_least_one` is set, the first new entry is appended even if it
+    // does not fit. The caller uses this to guarantee forward progress when the
+    // log cannot shrink on its own: refusing everything in that case would
+    // deadlock the group, since a leader needs this follower to accept entries
+    // in order to commit anything at all.
+    //
+    // @retval index of the last entry that was appended or was already present,
+    //         or index_t{0} if none of the entries were processed
+    index_t maybe_append(log_entry_ptr_list&& entries, size_t max_memory_usage,
+            bool force_at_least_one);
 
     friend fmt::formatter<log>;
 
