@@ -19,7 +19,6 @@ import socket
 import subprocess
 import time
 import uuid
-from collections import namedtuple
 from enum import Enum
 from functools import cached_property
 from itertools import chain
@@ -1138,55 +1137,17 @@ class ScyllaNode:
         self.start_scylla_manager_agent(create_config=recreate_config)
 
     def stress(self, stress_options: list[str], **kwargs):
+        """Run `cassandra-stress` against this node, without parsing its output.
+
+        As scylla-dtest's conftest did to ccm's ScyllaNode.stress: the tool runs
+        in a container of the image pinned in tools/values_docker_versions.yaml
+        (tools.stress.run_stress), not whatever cassandra-stress the host has.
+        `kwargs` go to CassandraStressDocker (env, volumes, timeout, ...).
+
+        :return: `stdout`, `stderr` and `rc` of the run; a non-zero exit raises ToolError.
         """
-        Run `cassandra-stress` against this node.
-        This method does not do any result parsing.
-
-        :param stress_options: List of options to pass to `cassandra-stress`.
-        :param kwargs: Additional arguments to pass to `subprocess.Popen()`.
-        :return: Named tuple with `stdout`, `stderr`, and `rc` (return code).
-        """
-
-        # Tests build the options by splitting a string on single spaces, which
-        # leaves empty arguments wherever it had runs of them.
-        cmd_args = ["cassandra-stress"] + [opt for opt in stress_options if opt]
-
-        if not any(opt in cmd_args for opt in ("-d", "-node", "-cloudconf")):
-            cmd_args.extend(["-node", self.address()])
-
-        # cassandra-stress logs to $CASSANDRA_STRESS_STORAGE_DIR/logs, by default
-        # under its install dir, which is not writable here.  logback then dumps
-        # a FileNotFoundException stack trace into stdout, which tests that grep
-        # the output for "Exception" take for a stress failure.
-        env = kwargs.pop("env", None) or os.environ.copy()
-        if "CASSANDRA_STRESS_STORAGE_DIR" not in env:
-            storage_dir = os.path.join(self.get_path(), "cassandra-stress")
-            os.makedirs(os.path.join(storage_dir, "logs"), exist_ok=True)
-            env["CASSANDRA_STRESS_STORAGE_DIR"] = storage_dir
-
-        # Popen() has no `timeout`; it bounds the wait for cassandra-stress.
-        timeout = kwargs.pop("timeout", None)
-        p = subprocess.Popen(
-            cmd_args,
-            stdout=kwargs.pop("stdout", subprocess.PIPE),
-            stderr=kwargs.pop("stderr", subprocess.PIPE),
-            universal_newlines=True,
-            env=env,
-            **kwargs,
-        )
-        try:
-            try:
-                stdout, stderr = p.communicate(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                p.kill()
-                p.communicate()
-                raise
-            if rc := p.returncode:
-                raise ToolError(cmd_args, rc, stdout, stderr)
-            ret = namedtuple("Subprocess_Return", "stdout stderr rc")
-            return ret(stdout=stdout, stderr=stderr, rc=rc)
-        except KeyboardInterrupt:
-            pass
+        from tools.stress import run_stress  # noqa: PLC0415 -- the dtest tools package, as tests import it
+        return run_stress(self, stress_options, **kwargs)
 
     def stress_object(self, stress_options: list[str], ignore_errors: bool | None = None, **kwargs) -> dict[str, float]:
         """Run `cassandra-stress` and return its "Results:" section as a dict.
