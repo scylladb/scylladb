@@ -32,6 +32,7 @@
 #include <seastar/util/closeable.hh>
 
 #include "utils/assert.hh"
+#include "utils/crc.hh"
 #include "utils/UUID_gen.hh"
 #include "test/lib/tmpdir.hh"
 #include "db/commitlog/commitlog.hh"
@@ -833,6 +834,189 @@ SEASTAR_TEST_CASE(test_commitlog_chunk_truncation) {
             }
         }
         BOOST_FAIL("Should not reach");
+    });
+}
+
+namespace {
+
+// A segment of multi-sector entries, for sector damage tests.
+struct multi_sector_segment {
+    static constexpr size_t entry_size = 20 * 1024;
+    static constexpr size_t sector_overhead = detail::sector_overhead_size;
+    static constexpr size_t entry_header = 2 * sizeof(uint32_t);
+    sstring seg;
+    uint32_t alignment = 0;
+    std::vector<db::replay_position> rps;
+    std::vector<db::replay_position> got;
+
+    future<> replay() {
+        got.clear();
+        return db::commitlog::read_log_file(seg, db::commitlog::descriptor::FILENAME_PREFIX, [this](db::commitlog::buffer_and_replay_position buf_rp) {
+            got.push_back(buf_rp.position);
+            return make_ready_future<>();
+        });
+    }
+    std::vector<db::replay_position> before(size_t i) const {
+        return {rps.begin(), rps.begin() + i};
+    }
+    uint64_t sector_start(size_t i) const {
+        return align_down<uint64_t>(rps[i].pos, alignment);
+    }
+    // index of the first entry (after the first one) matching pred
+    size_t find_entry(std::function<bool(size_t)> pred) const {
+        for (size_t i = 1; i < rps.size(); ++i) {
+            if (pred(i)) {
+                return i;
+            }
+        }
+        BOOST_FAIL("no entry with the wanted layout");
+        return 0;
+    }
+};
+
+} // namespace
+
+static future<> fill_multi_sector_segment(commitlog& log, noncopyable_function<future<>(multi_sector_segment&)> fn) {
+    multi_sector_segment m;
+    auto uuid = make_table_id();
+    for (int i = 0; i < 20; ++i) {
+        auto h = co_await log.add_mutation(uuid, m.entry_size, db::commitlog::force_sync::no, [&](db::commitlog::output& dst) {
+            dst.fill('a' + i, m.entry_size);
+        });
+        m.rps.push_back(h.release());
+    }
+    co_await log.sync_all_segments();
+    BOOST_REQUIRE_EQUAL(m.rps.front().id, m.rps.back().id);
+
+    auto segments = log.get_active_segment_names();
+    auto it = std::ranges::find_if(segments, [&](const sstring& s) {
+        return commitlog::descriptor(s).id == m.rps.front().id;
+    });
+    BOOST_REQUIRE(it != segments.end());
+    m.seg = *it;
+
+    auto f = co_await open_file_dma(m.seg, open_flags::ro);
+    auto hdr = co_await f.dma_read_exactly<char>(0, f.disk_read_dma_alignment());
+    co_await f.close();
+    // magic, version, id, then the sector size
+    m.alignment = read_be<uint32_t>(hdr.get() + 16);
+    co_await fn(m);
+}
+
+static future<> with_multi_sector_segment(noncopyable_function<future<>(multi_sector_segment&)> fn) {
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 1;
+    // a capturing coroutine lambda could outlive its closure
+    return cl_test(cfg, [fn = std::move(fn)](commitlog& log) mutable {
+        return fill_multi_sector_segment(log, std::move(fn));
+    });
+}
+
+static future<> truncate_segment(sstring seg, uint64_t size) {
+    auto f = co_await open_file_dma(seg, open_flags::rw);
+    co_await f.truncate(size);
+    co_await f.close();
+}
+
+// Gives the sector at off another segment id with a valid crc, like a recycled segment.
+static future<> rewrite_sector_id(sstring seg, uint64_t off, uint32_t alignment, db::segment_id_type id) {
+    auto f = co_await open_file_dma(seg, open_flags::rw);
+    auto buf = co_await f.dma_read_exactly<char>(0, align_up<uint64_t>(off + alignment, 4096));
+    auto sector = buf.get_write() + off;
+    auto trailer = sector + alignment - multi_sector_segment::sector_overhead;
+    write_be(trailer, id);
+    utils::crc32 crc;
+    crc.process(reinterpret_cast<const uint8_t*>(sector), alignment - sizeof(uint32_t));
+    write_be(trailer + sizeof(id), crc.get());
+    co_await f.dma_write(0, buf.get(), buf.size());
+    co_await f.close();
+}
+
+static auto truncated_at(uint64_t pos) {
+    return [pos](const commitlog::segment_truncation& e) {
+        BOOST_CHECK_EQUAL(e.position(), pos);
+        return e.position() == pos;
+    };
+}
+
+// Damage a sector in the middle of a multi-sector entry: the reader must
+// stop exactly there, delivering only the entries before it.
+SEASTAR_TEST_CASE(test_commitlog_multi_sector_entry_damage) {
+    return with_multi_sector_segment([](multi_sector_segment& m) -> future<> {
+        const auto victim = m.rps[5];
+        // a sector boundary strictly inside the victim entry
+        const uint64_t damaged = align_up<uint64_t>(victim.pos, m.alignment) + m.alignment;
+        BOOST_REQUIRE_LT(damaged + m.alignment, victim.pos + m.entry_size);
+
+        co_await corrupt_segment(m.seg, damaged + 100, 0x451234ab);
+        BOOST_REQUIRE_THROW(co_await m.replay(), commitlog::segment_data_corruption_error);
+        BOOST_REQUIRE(m.got == m.before(5));
+
+        co_await truncate_segment(m.seg, damaged);
+        BOOST_REQUIRE_EXCEPTION(co_await m.replay(), commitlog::segment_truncation, truncated_at(damaged));
+        BOOST_REQUIRE(m.got == m.before(5));
+    });
+}
+
+// A foreign segment id in a sector inside an entry is reported as truncation
+// at pos + rem of the read (a data stream offset past pos), not at the sector.
+SEASTAR_TEST_CASE(test_commitlog_multi_sector_entry_id_mismatch) {
+    return with_multi_sector_segment([](multi_sector_segment& m) -> future<> {
+        const auto payload = m.alignment - m.sector_overhead;
+        // the entry header fits in the entry's first sector, and its third sector is inside the entry
+        const auto i = m.find_entry([&](size_t i) {
+            auto s0 = m.sector_start(i);
+            return m.rps[i].pos + m.entry_header <= s0 + payload && s0 + 3 * m.alignment < m.rps[i].pos + m.entry_size;
+        });
+        const auto s0 = m.sector_start(i);
+
+        co_await rewrite_sector_id(m.seg, s0 + 2 * m.alignment, m.alignment, m.rps[i].id + 1);
+        BOOST_REQUIRE_EXCEPTION(co_await m.replay(), commitlog::segment_truncation, truncated_at(s0 + 2 * payload));
+        BOOST_REQUIRE(m.got == m.before(i));
+    });
+}
+
+// Truncation inside a sector is reported at the start of that sector.
+SEASTAR_TEST_CASE(test_commitlog_multi_sector_entry_partial_sector) {
+    return with_multi_sector_segment([](multi_sector_segment& m) -> future<> {
+        const auto victim = m.rps[5];
+        const uint64_t damaged = align_up<uint64_t>(victim.pos, m.alignment) + 2 * m.alignment;
+        BOOST_REQUIRE_LT(damaged + m.alignment, victim.pos + m.entry_size);
+
+        co_await truncate_segment(m.seg, damaged + m.alignment / 2);
+        BOOST_REQUIRE_EXCEPTION(co_await m.replay(), commitlog::segment_truncation, truncated_at(damaged));
+        BOOST_REQUIRE(m.got == m.before(5));
+    });
+}
+
+// Corruption in a later sector of an entry is found after the earlier ones verify.
+SEASTAR_TEST_CASE(test_commitlog_multi_sector_entry_late_corruption) {
+    return with_multi_sector_segment([](multi_sector_segment& m) -> future<> {
+        const auto victim = m.rps[5];
+        const uint64_t damaged = m.sector_start(5) + 4 * m.alignment;
+        BOOST_REQUIRE_LT(damaged + 104, victim.pos + m.entry_size);
+
+        co_await corrupt_segment(m.seg, damaged + 100, 0x451234ab);
+        BOOST_REQUIRE_THROW(co_await m.replay(), commitlog::segment_data_corruption_error);
+        BOOST_REQUIRE(m.got == m.before(5));
+    });
+}
+
+// An entry read across a reader stream buffer (128 KiB) boundary, damaged
+// right after the boundary.
+SEASTAR_TEST_CASE(test_commitlog_multi_sector_entry_stream_buffer_boundary) {
+    return with_multi_sector_segment([](multi_sector_segment& m) -> future<> {
+        constexpr uint64_t stream_buffer = 128 * 1024;
+        uint64_t boundary = 0;
+        // an entry whose sector reads start before a boundary and whose data continues past it
+        const auto i = m.find_entry([&](size_t i) {
+            boundary = align_up<uint64_t>(m.rps[i].pos, stream_buffer);
+            return m.sector_start(i) + 2 * m.alignment < boundary && boundary + 104 < m.rps[i].pos + m.entry_size;
+        });
+
+        co_await corrupt_segment(m.seg, boundary + 100, 0x451234ab);
+        BOOST_REQUIRE_THROW(co_await m.replay(), commitlog::segment_data_corruption_error);
+        BOOST_REQUIRE(m.got == m.before(i));
     });
 }
 
