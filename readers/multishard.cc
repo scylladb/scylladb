@@ -1180,8 +1180,11 @@ future<> multishard_combining_reader::fill_buffer() {
         }
 
         while (!reader.is_buffer_empty() && !is_buffer_full()) {
-            if (const auto& mf = reader.peek_buffer(); mf.is_partition_start() && maybe_move_to_next_shard(&mf.as_partition_start().key().token())) {
-                return make_ready_future<>();
+            if (const auto& mf = reader.peek_buffer(); mf.is_partition_start()) {
+                const auto tok = mf.as_partition_start().key().token();
+                if (maybe_move_to_next_shard(&tok)) {
+                    return make_ready_future<>();
+                }
             }
             push_mutation_fragment(reader.pop_mutation_fragment());
         }
