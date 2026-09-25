@@ -10,6 +10,7 @@
 #define BOOST_TEST_MODULE raft
 
 #include <boost/test/unit_test.hpp>
+#include <stdexcept>
 
 using namespace raft;
 
@@ -131,6 +132,182 @@ BOOST_AUTO_TEST_CASE(test_for_each_mutates_values) {
 
     BOOST_CHECK_EQUAL(*c.find(index_t{2}), 21);
     BOOST_CHECK_EQUAL(*c.find(index_t{4}), 41);
+}
+
+BOOST_AUTO_TEST_CASE(test_erase_if_in_range) {
+    log_indexed_container<int> c;
+    for (uint64_t i = 2; i <= 6; ++i) {
+        c.emplace(index_t{i}, int(i * 10));
+    }
+
+    // Only the slots within the range are visited, and only those the
+    // callback rejects are erased.
+    std::vector<uint64_t> visited;
+    c.erase_if_in_range(index_t{3}, index_t{5}, [&](index_t idx, int& val) {
+        visited.push_back(idx.value());
+        return val != 40;
+    });
+
+    BOOST_REQUIRE_EQUAL(visited.size(), 3);
+    BOOST_CHECK_EQUAL(visited[0], 3);
+    BOOST_CHECK_EQUAL(visited[1], 4);
+    BOOST_CHECK_EQUAL(visited[2], 5);
+
+    BOOST_CHECK_EQUAL(c.base_index(), index_t{2});
+    BOOST_CHECK(c.find(index_t{4}) == nullptr);
+    for (uint64_t i : {2, 3, 5, 6}) {
+        BOOST_REQUIRE(c.find(index_t{i}) != nullptr);
+        BOOST_CHECK_EQUAL(*c.find(index_t{i}), int(i * 10));
+    }
+}
+
+BOOST_AUTO_TEST_CASE(test_erase_if_in_range_skips_empty_slots) {
+    log_indexed_container<int> c;
+    for (uint64_t i : {2, 4, 7}) {
+        c.emplace(index_t{i}, int(i * 10));
+    }
+
+    // The gaps between the occupied slots are stepped over, not visited,
+    // which is the shape every caller has: the range covers indexes that
+    // never had a value.
+    std::vector<uint64_t> visited;
+    c.erase_if_in_range(index_t{2}, index_t{7}, [&](index_t idx, int&) {
+        visited.push_back(idx.value());
+        return idx != index_t{4};
+    });
+
+    BOOST_REQUIRE_EQUAL(visited.size(), 3);
+    BOOST_CHECK_EQUAL(visited[0], 2);
+    BOOST_CHECK_EQUAL(visited[1], 4);
+    BOOST_CHECK_EQUAL(visited[2], 7);
+    BOOST_CHECK(c.find(index_t{4}) == nullptr);
+    BOOST_CHECK(c.find(index_t{2}) != nullptr);
+    BOOST_CHECK(c.find(index_t{7}) != nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(test_erase_if_in_range_trims_front_when_callback_throws) {
+    log_indexed_container<int> c;
+    for (uint64_t i : {2, 3, 4}) {
+        c.emplace(index_t{i}, int(i * 10));
+    }
+
+    // The callback erases the front element and then throws. The trim still
+    // runs, so invariant (1) holds and peek_front() stays safe to call.
+    BOOST_CHECK_THROW(c.erase_if_in_range(index_t{2}, index_t{4},
+            [](index_t idx, int&) -> bool {
+        if (idx == index_t{3}) {
+            throw std::runtime_error("from the callback");
+        }
+        return false;
+    }), std::runtime_error);
+
+    BOOST_CHECK_EQUAL(c.base_index(), index_t{3});
+    BOOST_REQUIRE(c.peek_front() != nullptr);
+    BOOST_CHECK_EQUAL(*c.peek_front(), 30);
+    BOOST_CHECK(c.find(index_t{2}) == nullptr);
+    BOOST_CHECK(c.find(index_t{4}) != nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(test_erase_if_in_range_trims_front) {
+    log_indexed_container<int> c;
+    c.emplace(index_t{2}, 20);
+    c.emplace(index_t{3}, 30);
+    c.emplace(index_t{7}, 70);
+
+    // Erasing the front elements moves the base index up to the next
+    // occupied slot, preserving invariant (1).
+    c.erase_if_in_range(index_t{0}, index_t{3}, [](index_t, int&) { return false; });
+
+    BOOST_CHECK_EQUAL(c.base_index(), index_t{7});
+    BOOST_REQUIRE(c.peek_front() != nullptr);
+    BOOST_CHECK_EQUAL(*c.peek_front(), 70);
+
+    c.erase_if_in_range(index_t{7}, index_t{7}, [](index_t, int&) { return false; });
+    BOOST_CHECK(c.empty());
+}
+
+BOOST_AUTO_TEST_CASE(test_erase_if_in_range_out_of_bounds) {
+    log_indexed_container<int> c;
+    c.emplace(index_t{5}, 50);
+
+    size_t visits = 0;
+    auto count = [&](index_t, int&) { ++visits; return true; };
+
+    // Ranges entirely below or above the container are no-ops, and a range
+    // that only overlaps it visits just the overlap.
+    c.erase_if_in_range(index_t{0}, index_t{4}, count);
+    c.erase_if_in_range(index_t{6}, index_t{100}, count);
+    BOOST_CHECK_EQUAL(visits, 0);
+
+    c.erase_if_in_range(index_t{0}, index_t{100}, count);
+    BOOST_CHECK_EQUAL(visits, 1);
+
+    log_indexed_container<int> empty;
+    empty.erase_if_in_range(index_t{0}, index_t{10}, count);
+    BOOST_CHECK_EQUAL(visits, 1);
+}
+
+BOOST_AUTO_TEST_CASE(test_erase_leading_above) {
+    log_indexed_container<int> c;
+    for (uint64_t i = 2; i <= 5; ++i) {
+        c.emplace(index_t{i}, int(i * 10));
+    }
+
+    // Erases from `first` upward and stops at the first slot it keeps, so the
+    // one it stopped on and everything above it survive.
+    std::vector<uint64_t> visited;
+    c.erase_leading_above(index_t{3}, [&](index_t idx, int& val) {
+        visited.push_back(idx.value());
+        return val == 40;
+    });
+
+    BOOST_REQUIRE_EQUAL(visited.size(), 2);
+    BOOST_CHECK_EQUAL(visited[0], 3);
+    BOOST_CHECK_EQUAL(visited[1], 4);
+    BOOST_CHECK(c.find(index_t{3}) == nullptr);
+    BOOST_CHECK(c.find(index_t{4}) != nullptr);
+    BOOST_CHECK(c.find(index_t{5}) != nullptr);
+    // Below `first` is never touched.
+    BOOST_CHECK(c.find(index_t{2}) != nullptr);
+
+    // Keeping the very first slot visited leaves everything in place.
+    size_t visits = 0;
+    c.erase_leading_above(index_t{0}, [&](index_t, int&) { ++visits; return true; });
+    BOOST_CHECK_EQUAL(visits, 1);
+    BOOST_CHECK(c.find(index_t{2}) != nullptr);
+    BOOST_CHECK(c.find(index_t{4}) != nullptr);
+    BOOST_CHECK(c.find(index_t{5}) != nullptr);
+
+    // A first index below the base index still starts at the front, and
+    // erasing everything trims the container away.
+    c.erase_leading_above(index_t{0}, [](index_t, int&) { return false; });
+    BOOST_CHECK(c.empty());
+
+    // And on an empty container it is a no-op.
+    c.erase_leading_above(index_t{0}, [](index_t, int&) {
+        BOOST_FAIL("callback must not be called on an empty container");
+        return true;
+    });
+}
+
+BOOST_AUTO_TEST_CASE(test_erase_if_in_range_moves_value_out) {
+    log_indexed_container<std::unique_ptr<int>> c;
+    c.emplace(index_t{1}, std::make_unique<int>(11));
+    c.emplace(index_t{2}, std::make_unique<int>(22));
+
+    std::vector<std::unique_ptr<int>> taken;
+    c.erase_if_in_range(index_t{1}, index_t{2}, [&](index_t idx, std::unique_ptr<int>& val) {
+        if (idx == index_t{1}) {
+            taken.push_back(std::move(val));
+            return false;
+        }
+        return true;
+    });
+
+    BOOST_REQUIRE_EQUAL(taken.size(), 1);
+    BOOST_CHECK_EQUAL(*taken[0], 11);
+    BOOST_CHECK_EQUAL(c.base_index(), index_t{2});
+    BOOST_CHECK_EQUAL(**c.peek_front(), 22);
 }
 
 BOOST_AUTO_TEST_CASE(test_peek_front_and_consume) {

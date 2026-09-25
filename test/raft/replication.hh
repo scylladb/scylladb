@@ -13,6 +13,7 @@
 #include <bit>
 #include <fmt/std.h>
 #include <seastar/core/app-template.hh>
+#include <seastar/core/condition-variable.hh>
 #include <seastar/core/gate.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/coroutine.hh>
@@ -298,6 +299,44 @@ extern raft::snapshot_id delay_apply_snapshot;
 // sending of a snapshot with that id will be delayed until snapshot_sync is signaled
 extern raft::snapshot_id delay_send_snapshot;
 
+// When set to a server id, the first apply() on that server signals
+// apply_entered and then waits for apply_release, holding its applier fiber
+// in the middle of a batch. It is cleared once that happens, so only one
+// batch is held; a test that never releases the fiber must still signal
+// apply_release, or stopping the cluster will hang.
+extern std::optional<raft::server_id> delay_apply;
+extern seastar::semaphore apply_entered;
+extern seastar::semaphore apply_release;
+
+// When set to a server id, the first load_snapshot() on that server signals
+// load_snapshot_entered and then waits for load_snapshot_release, holding its
+// applier fiber inside the load. Keyed by server rather than by snapshot id,
+// so it catches a snapshot received from the leader, whose id is random. It
+// is cleared once that happens, so only one load is held; a test that never
+// releases the fiber must still signal load_snapshot_release, or stopping the
+// cluster will hang.
+extern std::optional<raft::server_id> delay_load_snapshot;
+extern seastar::semaphore load_snapshot_entered;
+extern seastar::semaphore load_snapshot_release;
+
+// When set to a server id, snapshot_received is signaled once that server
+// replied to an install_snapshot: by then its io_fiber has stored the
+// snapshot, so its raft log no longer holds the entries below the snapshot
+// index and the snapshot is waiting for its applier fiber.
+extern std::optional<raft::server_id> notify_snapshot_received;
+extern seastar::semaphore snapshot_received;
+
+// When set to a server id, stored_commit_idx follows the index that server's
+// io_fiber passes to store_commit_idx(), and stored_commit_idx_changed is
+// signaled on every such call. io_fiber awaits that store immediately before
+// it hands the commit to the applier fiber, so a test that is holding the
+// applier fiber can still tell how far io_fiber has got. The store resolves
+// without suspending, so by the time a waiter here runs, io_fiber has already
+// published the commit.
+extern std::optional<raft::server_id> track_stored_commit_idx;
+extern raft::index_t stored_commit_idx;
+extern seastar::condition_variable stored_commit_idx_changed;
+
 // Test connectivity configuration
 struct rpc_config {
     bool drops = false;
@@ -415,6 +454,15 @@ public:
         _id(id), _apply(std::move(apply)), _apply_entries(apply_entries), _snapshots(snapshots),
         hasher(make_lw_shared<hasher_int>()) {}
     future<> apply(raft::log_entry_ptr_list commands) override {
+        if (delay_apply == _id) {
+            // Hold this server's applier fiber here, so that its io_fiber
+            // goes on committing entries it cannot apply yet. Cleared before
+            // waiting, so the batches after this one are applied normally.
+            delay_apply.reset();
+            tlogger.debug("sm::apply[{}] held before applying {} entries", _id, commands.size());
+            apply_entered.signal();
+            co_await apply_release.wait();
+        }
         auto n = _apply(_id, commands, hasher);
         _seen += n;
         if (n && _seen >= _apply_entries) {
@@ -425,7 +473,6 @@ public:
             _done.set_value();
         }
         tlogger.debug("sm::apply[{}] got {}/{} entries", _id, _seen, _apply_entries);
-        return make_ready_future<>();
     }
 
     future<raft::snapshot_id> take_snapshot() override {
@@ -439,6 +486,15 @@ public:
         (*_snapshots)[_id].erase(snp_id);
     }
     future<> load_snapshot(raft::snapshot_id snp_id) override {
+        if (delay_load_snapshot == _id) {
+            // Hold this server's applier fiber inside the load, so that its
+            // io_fiber goes on publishing commits and snapshots the fiber
+            // cannot look at until it comes back out here.
+            delay_load_snapshot.reset();
+            tlogger.debug("sm[{}] held before loading snapshot {}", _id, snp_id);
+            load_snapshot_entered.signal();
+            co_await load_snapshot_release.wait();
+        }
         hasher = make_lw_shared<hasher_int>((*_snapshots)[_id][snp_id].hasher);
         tlogger.debug("sm[{}] loads snapshot {} idx={}", _id, (*_snapshots)[_id][snp_id].hasher.finalize_uint64(), (*_snapshots)[_id][snp_id].idx);
         _seen = (*_snapshots)[_id][snp_id].idx.value();
@@ -475,7 +531,11 @@ public:
         auto term_and_vote = std::make_pair(_conf.term, _conf.vote);
         return make_ready_future<std::pair<raft::term_t, raft::server_id>>(term_and_vote);
     }
-    future<> store_commit_idx(raft::index_t) override {
+    future<> store_commit_idx(raft::index_t idx) override {
+        if (track_stored_commit_idx == _id) {
+            stored_commit_idx = idx;
+            stored_commit_idx_changed.broadcast();
+        }
         co_return;
     }
     future<raft::index_t> load_commit_idx() override {
@@ -638,7 +698,11 @@ public:
             co_await snapshot_sync.wait();
             snapshot_sync.signal();
         }
-        co_return co_await _net[id]->_client->apply_snapshot(_id, std::move(s));
+        auto reply = co_await _net[id]->_client->apply_snapshot(_id, std::move(s));
+        if (notify_snapshot_received == id) {
+            snapshot_received.signal();
+        }
+        co_return reply;
     }
 
     future<> send_append_entries(raft::server_id id, const raft::append_request& append_request) override {
