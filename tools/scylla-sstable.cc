@@ -963,6 +963,7 @@ void scrub_operation(schema_ptr schema, reader_permit permit, const std::vector<
     compaction_descriptor.options = compaction::compaction_type_options::make_scrub(scrub_mode, compaction::compaction_type_options::scrub::quarantine_invalid_sstables::no);
     compaction_descriptor.creator = [&compaction_group_view] (shard_id) { return compaction_group_view.make_sstable(sstables::sstable_state::normal); };
     compaction_descriptor.replacer = [] (compaction::compaction_completion_desc) { };
+    compaction_descriptor.gc_state = compaction_group_view.get_tombstone_gc_state();
 
     auto compaction_data = compaction::compaction_data{};
 

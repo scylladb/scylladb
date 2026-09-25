@@ -114,6 +114,7 @@ future<compaction::compaction_result> compact_sstables(test_env& env, compaction
         return creator();
     };
     descriptor.replacer = std::move(replacer);
+    descriptor.gc_state = table_s.get_tombstone_gc_state();
     if (can_purge) {
         descriptor.enable_garbage_collection(*co_await table_s.main_sstable_set());
     }
