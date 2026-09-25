@@ -90,6 +90,12 @@ raft_group_registry::raft_group_registry(
 {
 }
 
+// True when the error injection `name` is enabled for the raft group `gid`.
+static bool drop_for_group(const char* name, raft::group_id gid) {
+    auto ignore_group_id = utils::get_local_injector().inject_parameter<std::string_view>(name);
+    return ignore_group_id && gid == raft::group_id{utils::UUID(*ignore_group_id)};
+}
+
 void raft_group_registry::init_rpc_verbs() {
     auto handle_raft_rpc = [this] (
             const rpc::client_info& cinfo,
@@ -127,11 +133,9 @@ void raft_group_registry::init_rpc_verbs() {
     ser::raft_rpc_verbs::register_raft_append_entries(&_ms, [handle_raft_rpc] (const rpc::client_info& cinfo, rpc::opt_time_point timeout,
         raft::group_id gid, raft::server_id from, raft::server_id dst, raft::append_request append_request) mutable {
         return handle_raft_rpc(cinfo, gid, from, dst, [from, append_request = std::move(append_request), original_shard_id = this_shard_id(), gid] (raft_rpc& rpc) mutable {
-            if (auto ignore_group_id = utils::get_local_injector().inject_parameter<std::string_view>("raft_drop_incoming_append_entries_for_specified_group"); ignore_group_id) {
-                if (gid == raft::group_id{utils::UUID(*ignore_group_id)}) {
-                    rslog.debug("Dropping append request (size: {}) from {} for group {}", append_request.entries.size(), from, gid);
-                    return;
-                }
+            if (drop_for_group("raft_drop_incoming_append_entries_for_specified_group", gid)) {
+                rslog.debug("Dropping append request (size: {}) from {} for group {}", append_request.entries.size(), from, gid);
+                return;
             }
 
             // lw_shared_ptr (raft::log_entry_ptr) doesn't support cross-shard ref counting (see debug_shared_ptr_counter_type),
@@ -171,7 +175,13 @@ void raft_group_registry::init_rpc_verbs() {
 
     ser::raft_rpc_verbs::register_raft_read_quorum(&_ms, [handle_raft_rpc] (const rpc::client_info& cinfo, rpc::opt_time_point timeout,
             raft::group_id gid, raft::server_id from, raft::server_id dst, raft::read_quorum read_quorum) mutable {
-        return handle_raft_rpc(cinfo, gid, from, dst, [from, read_quorum] (raft_rpc& rpc) mutable {
+        return handle_raft_rpc(cinfo, gid, from, dst, [from, read_quorum, gid] (raft_rpc& rpc) mutable {
+            // A read_quorum names its sender as the leader just like an append_request does, so a
+            // test that isolates a follower from its leader has to drop both.
+            if (drop_for_group("raft_drop_incoming_read_quorum_for_specified_group", gid)) {
+                rslog.debug("Dropping read_quorum from {} for group {}", from, gid);
+                return;
+            }
             rpc.read_quorum_request(std::move(from), std::move(read_quorum));
         });
     });
