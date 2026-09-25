@@ -1330,6 +1330,51 @@ SEASTAR_FIXTURE_TEST_CASE(leveled_stcs_on_L0_gcs, gcs_fixture, *tests::check_run
                                    test_env_config{.storage = make_test_object_storage_options("GS")});
 }
 
+// The estimated pending tasks must not be 0 when L0 is due for promotion to L1.
+// L0 is promoted as soon as it holds a full sstable's worth of data, way before
+// it reaches its max size (4 sstables' worth).
+SEASTAR_TEST_CASE(leveled_estimated_tasks_L0_promotion) {
+    return test_env::do_with_async([] (test_env& env) {
+        BOOST_REQUIRE_EQUAL(this_smp_shard_count(), 1);
+        auto schema = table_for_tests::make_default_schema();
+        auto cf = env.make_table_for_tests(schema);
+        auto stop_cf = deferred_stop(cf);
+
+        const auto keys = tests::generate_partition_keys(2, cf.schema());
+        const auto max_sstable_size_in_mb = 1;
+        const uint64_t max_sstable_size_in_bytes = max_sstable_size_in_mb * 1024 * 1024;
+
+        add_sstable_for_leveled_test(env, cf, max_sstable_size_in_bytes, /*level*/1, keys[0].key(), keys[1].key());
+
+        std::vector<std::optional<dht::decorated_key>> last_compacted_keys(compaction::leveled_manifest::MAX_LEVELS);
+        std::vector<int> compaction_counter(compaction::leveled_manifest::MAX_LEVELS);
+        compaction::size_tiered_compaction_strategy_options stcs_options;
+
+        auto check = [&] (bool expect_compaction) {
+            auto candidates = get_candidates_for_leveled_strategy(*cf);
+            auto manifest = compaction::leveled_manifest::create(cf.as_compaction_group_view(), candidates, max_sstable_size_in_mb, stcs_options);
+            auto candidate = manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
+            auto estimated_tasks = compaction::leveled_manifest::get_estimated_tasks(compaction::leveled_manifest::get_levels(candidates), max_sstable_size_in_bytes);
+            if (expect_compaction) {
+                BOOST_REQUIRE_EQUAL(candidate.level, 1);
+                BOOST_REQUIRE(!candidate.sstables.empty());
+                BOOST_REQUIRE_EQUAL(estimated_tasks, 1);
+            } else {
+                BOOST_REQUIRE(candidate.sstables.empty());
+                BOOST_REQUIRE_EQUAL(estimated_tasks, 0);
+            }
+        };
+
+        // L0 holds less than an sstable's worth of data: nothing to do.
+        add_sstable_for_leveled_test(env, cf, max_sstable_size_in_bytes / 2, /*level*/0, keys[0].key(), keys[1].key());
+        check(false);
+
+        // L0 holds more than an sstable's worth of data, but is still well below its max size.
+        add_sstable_for_leveled_test(env, cf, max_sstable_size_in_bytes, /*level*/0, keys[0].key(), keys[1].key());
+        check(true);
+    });
+}
+
 void overlapping_starved_sstables_fn(test_env& env) {
     auto schema = table_for_tests::make_default_schema();
     auto cf = env.make_table_for_tests(schema);

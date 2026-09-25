@@ -502,6 +502,14 @@ public:
             uint64_t max_bytes_for_this_level = max_bytes_for_level(i, max_sstable_size_in_bytes);
 
             if (total_bytes_for_this_level < max_bytes_for_this_level) {
+                // L0 is compacted well before it reaches its max size: as soon as it holds
+                // a full sstable's worth of data, get_compaction_candidates() promotes it
+                // to L1 (see worth_promoting_L0_candidates()). Account for that task, so
+                // the table isn't reported as having nothing to do while that compaction
+                // is due.
+                if (i == 0 && total_bytes_for_this_level >= max_sstable_size_in_bytes) {
+                    tasks += 1;
+                }
                 continue;
             }
             // If there is 1 byte over TBL - (MBL * 1.001), there is still a task left, so we need to round up.
