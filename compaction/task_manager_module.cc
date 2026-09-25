@@ -978,13 +978,12 @@ future<tasks::task_manager::task_ptr> task_manager_module::start_table_scrub_sst
     });
 }
 
-future<> table_reshaping_compaction_task_impl::run() {
+static future<> run_table_reshaping_compaction(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, std::string keyspace, std::string table, reshape_mode mode, compaction_sstable_creator_fn creator, std::function<bool (const sstables::shared_sstable&)> filter, tasks::task_info task_info) {
     auto start = std::chrono::steady_clock::now();
-    auto parent_info = info();
-    auto total_size = co_await _dir.map_reduce0([&] (sstables::sstable_directory& d) -> future<uint64_t> {
+    auto total_size = co_await dir.map_reduce0([&] (sstables::sstable_directory& d) -> future<uint64_t> {
         uint64_t total_shard_size = 0;
-        auto& compaction_module = _db.local().get_compaction_manager().get_task_manager_module();
-        auto task = co_await compaction_module.make_and_start_task<shard_reshaping_compaction_task_impl>(parent_info, _status.keyspace, _status.table, _status.id, d, _db, _mode, _creator, _filter, total_shard_size);
+        auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
+        auto task = co_await compaction_module.make_and_start_task<shard_reshaping_compaction_task_impl>(task_info, keyspace, table, task_info.get_id(), d, db, mode, creator, filter, total_shard_size);
         co_await task->done();
         co_return total_shard_size;
     }, uint64_t(0), std::plus<uint64_t>());
@@ -993,6 +992,10 @@ future<> table_reshaping_compaction_task_impl::run() {
         auto duration = std::chrono::duration_cast<std::chrono::duration<float>>(std::chrono::steady_clock::now() - start);
         dblog.info("Reshaped {} in {:.2f} seconds, {}", utils::pretty_printed_data_size(total_size), duration.count(), utils::pretty_printed_throughput(total_size, duration));
     }
+}
+
+future<> table_reshaping_compaction_task_impl::run() {
+    return run_table_reshaping_compaction(_dir, _db, _status.keyspace, _status.table, _mode, _creator, _filter, info());
 }
 
 future<> shard_reshaping_compaction_task_impl::run() {
