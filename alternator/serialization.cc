@@ -578,6 +578,15 @@ rjson::value number_subtract(const rjson::value& v1, const rjson::value& v2) {
     return ret;
 }
 
+namespace {
+// Compares by pointee, so set membership can be tracked without owning copies.
+struct rjson_ptr_comp {
+    bool operator()(const rjson::value* p1, const rjson::value* p2) const {
+        return rjson::single_value_comp()(*p1, *p2);
+    }
+};
+}
+
 // Take two JSON-encoded set values (e.g. {"SS": [...the actual set]}) and
 // return the sum of both sets, again as a set value.
 rjson::value set_sum(const rjson::value& v1, const rjson::value& v2) {
@@ -589,13 +598,21 @@ rjson::value set_sum(const rjson::value& v1, const rjson::value& v2) {
     if (!set1 || !set2) {
         throw api_error::validation("UpdateExpression: ADD operation for sets must be given sets as arguments");
     }
-    rjson::value sum = rjson::copy(*set1);
-    std::set<rjson::value, rjson::single_value_comp> set1_raw;
-    for (auto it = sum.Begin(); it != sum.End(); ++it) {
-        set1_raw.insert(rjson::copy(*it));
+    // Dedup by pointer into set1/set2 (never mutated here), not by owned copy,
+    // so a straddling/repeated duplicate is caught without extra copies or resorting.
+    // Built up from empty (not seeded with a copy of set1) so a duplicate
+    // already present within set1 itself - e.g. written by the previous
+    // duplicate-producing implementation - is also caught, not just ones
+    // straddling set1/set2 or repeated within set2.
+    rjson::value sum = rjson::empty_array();
+    std::set<const rjson::value*, rjson_ptr_comp> seen;
+    for (const auto& a : set1->GetArray()) {
+        if (seen.insert(&a).second) {
+            rjson::push_back(sum, rjson::copy(a));
+        }
     }
     for (const auto& a : set2->GetArray()) {
-        if (!set1_raw.contains(a)) {
+        if (seen.insert(&a).second) {
             rjson::push_back(sum, rjson::copy(a));
         }
     }
