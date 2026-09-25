@@ -4659,6 +4659,18 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         _topo_sm.event.broadcast();
     }
 
+    // Creating or dropping a keyspace changes which racks are eligible for auto-RF and
+    // is a plain schema change, which does not wake the coordinator: wake up so that
+    // the auto-RF reconciler re-evaluates them. Altering a tablets keyspace's
+    // replication is a topology request, handled here, so updates need no listener.
+    virtual void on_create_keyspace(const sstring& ks_name) override {
+        _topo_sm.event.broadcast();
+    }
+
+    virtual void on_drop_keyspace(const sstring& ks_name) override {
+        _topo_sm.event.broadcast();
+    }
+
     future<> cancel_all_requests(group0_guard guard, std::unordered_set<raft::server_id> dead_nodes) {
         utils::chunked_vector<canonical_mutation> muts;
         std::vector<raft::server_id> reject_join;
