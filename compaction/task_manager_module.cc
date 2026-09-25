@@ -994,8 +994,19 @@ static future<> run_table_reshaping_compaction(sharded<sstables::sstable_directo
     }
 }
 
-future<> table_reshaping_compaction_task_impl::run() {
-    return run_table_reshaping_compaction(_dir, _db, _status.keyspace, _status.table, _mode, _creator, _filter, info());
+future<tasks::task_manager::task_ptr> task_manager_module::start_table_reshaping_compaction(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, std::string keyspace, std::string table, reshape_mode mode, compaction_sstable_creator_fn creator, std::function<bool (const sstables::shared_sstable&)> filter) {
+    tasks::task_manager::task_builder task_builder{shared_from_this(), reshaping_compaction_task_type};
+    task_builder.set_sequence_number(new_sequence_number())
+                .set_scope("table")
+                .set_keyspace(keyspace)
+                .set_table(table)
+                .set_progress_units("bytes")
+                .set_is_abortable(tasks::is_abortable::yes)
+                .set_is_internal(tasks::is_internal::no)
+                .set_is_user_task(tasks::is_user_task::no);
+    return std::move(task_builder).build([&dir, &db, keyspace = std::move(keyspace), table = std::move(table), mode, creator = std::move(creator), filter = std::move(filter)] (tasks::task_manager::task::impl& self) {
+        return run_table_reshaping_compaction(dir, db, keyspace, table, mode, creator, filter, self.info());
+    });
 }
 
 future<> shard_reshaping_compaction_task_impl::run() {

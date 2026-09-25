@@ -163,6 +163,8 @@ inline constexpr auto upgrade_sstables_compaction_task_type = "upgrade sstables 
 
 inline constexpr auto scrub_sstables_compaction_task_type = "scrub sstables compaction";
 
+inline constexpr auto reshaping_compaction_task_type = "reshaping compaction";
+
 class reshaping_compaction_task_impl : public compaction_task_impl {
 public:
     reshaping_compaction_task_impl(tasks::task_manager::module_ptr module,
@@ -177,37 +179,10 @@ public:
     {}
 
     virtual std::string type() const override {
-        return "reshaping compaction";
+        return reshaping_compaction_task_type;
     }
 protected:
     virtual future<> run() override = 0;
-};
-
-class table_reshaping_compaction_task_impl : public reshaping_compaction_task_impl {
-private:
-    sharded<sstables::sstable_directory>& _dir;
-    sharded<replica::database>& _db;
-    reshape_mode _mode;
-    compaction_sstable_creator_fn _creator;
-    std::function<bool (const sstables::shared_sstable&)> _filter;
-public:
-    table_reshaping_compaction_task_impl(tasks::task_manager::module_ptr module,
-            std::string keyspace,
-            std::string table,
-            sharded<sstables::sstable_directory>& dir,
-            sharded<replica::database>& db,
-            reshape_mode mode,
-            compaction_sstable_creator_fn creator,
-            std::function<bool (const sstables::shared_sstable&)> filter) noexcept
-        : reshaping_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), "table", std::move(keyspace), std::move(table), "", tasks::task_id::create_null_id())
-        , _dir(dir)
-        , _db(db)
-        , _mode(mode)
-        , _creator(std::move(creator))
-        , _filter(std::move(filter))
-    {}
-protected:
-    virtual future<> run() override;
 };
 
 class shard_reshaping_compaction_task_impl : public reshaping_compaction_task_impl {
@@ -377,6 +352,9 @@ public:
     // Starts a scrub of a single table on this shard.
     // The scrub's result is added to stats.
     future<tasks::task_manager::task_ptr> start_table_scrub_sstables_compaction(replica::database& db, std::string keyspace, std::string table, compaction_type_options::scrub opts, compaction_stats& stats, tasks::task_info parent_info);
+
+    // Starts a reshape of a table's sstables collected by the directory, on all the shards.
+    future<tasks::task_manager::task_ptr> start_table_reshaping_compaction(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, std::string keyspace, std::string table, reshape_mode mode, compaction_sstable_creator_fn creator, std::function<bool (const sstables::shared_sstable&)> filter);
 };
 
 class regular_compaction_task_impl : public compaction_task_impl {
