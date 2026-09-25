@@ -3133,6 +3133,21 @@ SEASTAR_TEST_CASE(test_commitlog_reuses_segments_after_restart) {
     BOOST_REQUIRE_EQUAL(kept_after_clear, 0);
 }
 
+// A zero disk limit means unlimited, so it must not stop recycling.
+SEASTAR_TEST_CASE(test_commitlog_recycles_with_unlimited_disk) {
+    o_dsync_env env;
+    env.cfg.commitlog_total_space_in_mb = 0;
+    auto log = co_await commitlog::create_commitlog(env.cfg);
+    log.discard_completed_segments(env.uuid, co_await env.write(log, 24));
+    co_await log.force_new_active_segment();
+    co_await log.delete_segments({}); // sync recycling
+    auto recycled = env.count_files("Recycled-");
+    co_await log.shutdown();
+    co_await log.clear();
+
+    BOOST_REQUIRE_GT(recycled, 1);
+}
+
 // Segments still holding data keep their name and replay; kept files do not.
 SEASTAR_TEST_CASE(test_commitlog_replays_dirty_segment_with_kept_segments) {
     o_dsync_env env;
