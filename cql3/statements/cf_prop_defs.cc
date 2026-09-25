@@ -71,6 +71,7 @@ const sstring cf_prop_defs::KW_TABLETS = "tablets";
 
 const sstring cf_prop_defs::KW_STORAGE_ENGINE = "storage_engine";
 const sstring cf_prop_defs::KW_LARGE_DATA_GUARDRAILS_ENABLED = "large_data_guardrails_enabled";
+const sstring cf_prop_defs::KW_AGGREGATED_METRICS = "aggregated_metrics";
 
 schema::extensions_map cf_prop_defs::make_schema_extensions(const db::extensions& exts) const {
     schema::extensions_map er;
@@ -117,6 +118,7 @@ void cf_prop_defs::validate(const data_dictionary::database db, sstring ks_name,
         KW_SYNCHRONOUS_UPDATES, KW_TABLETS,
         KW_STORAGE_ENGINE,
         KW_LARGE_DATA_GUARDRAILS_ENABLED,
+        KW_AGGREGATED_METRICS,
     });
     static std::set<sstring> obsolete_keywords({
         sstring("index_interval"),
@@ -232,6 +234,10 @@ void cf_prop_defs::validate(const data_dictionary::database db, sstring ks_name,
             throw exceptions::configuration_exception("large_data_guardrails_enabled cannot be used until all nodes in the cluster enable this feature");
         }
     }
+
+    if (has_property(KW_AGGREGATED_METRICS) && !db.features().per_table_aggregated_metrics) {
+        throw exceptions::configuration_exception("aggregated_metrics cannot be used until all nodes in the cluster enable this feature");
+    }
 }
 
 std::map<sstring, sstring> cf_prop_defs::get_compaction_type_options() const {
@@ -332,6 +338,13 @@ std::map<sstring, std::optional<sstring>> cf_prop_defs::get_config_updates(const
         updates.emplace(std::move(name), std::move(value));
     }
     return updates;
+}
+
+std::optional<bool> cf_prop_defs::get_aggregated_metrics() const {
+    if (!has_property(KW_AGGREGATED_METRICS)) {
+        return std::nullopt;
+    }
+    return get_boolean(KW_AGGREGATED_METRICS, true);
 }
 
 void cf_prop_defs::apply_to_builder(schema_builder& builder, schema::extensions_map schema_extensions, const data_dictionary::database& db, sstring ks_name, bool supports_repair) const {
@@ -446,6 +459,9 @@ void cf_prop_defs::apply_to_builder(schema_builder& builder, schema::extensions_
     }
     if (has_property(KW_LARGE_DATA_GUARDRAILS_ENABLED)) {
         builder.set_large_data_guardrails_enabled(get_boolean(KW_LARGE_DATA_GUARDRAILS_ENABLED, false));
+    }
+    if (has_property(KW_AGGREGATED_METRICS)) {
+        builder.set_aggregated_metrics_override(get_aggregated_metrics());
     }
 }
 
