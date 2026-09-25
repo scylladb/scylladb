@@ -469,7 +469,7 @@ public:
 
     void create_counters(const sstring& metrics_category_name);
 
-    future<> orphan_all();
+    future<> orphan_all(bool force_delete = false);
 
     void add_file_to_dispose(named_file, dispose_mode);
 
@@ -502,6 +502,7 @@ public:
 
     future<std::vector<descriptor>> list_descriptors(sstring dir) const;
     future<std::vector<sstring>> get_segments_to_replay() const;
+    bool is_kept_recycled(const descriptor&) const;
 
     gc_clock::time_point min_gc_time(const cf_id_type&, const db::replay_position&) const;
 
@@ -523,7 +524,7 @@ public:
 private:
     class shutdown_marker{};
 
-    future<> clear_reserve_segments();
+    future<> clear_reserve_segments(bool force_delete = false);
     void abort_recycled_list(std::exception_ptr);
 
     size_t max_request_controller_units() const;
@@ -2071,6 +2072,12 @@ db::commitlog::segment_manager::list_descriptors(sstring dirname) const {
     co_return result;
 }
 
+// With O_DSYNC, a clean shutdown keeps Recycled-* files (no data, see do_pending_deletes)
+// and init() reclaims them, so they must not make startup take the replay path.
+bool db::commitlog::segment_manager::is_kept_recycled(const descriptor& d) const {
+    return cfg.use_o_dsync && d.filename().starts_with("Recycled-");
+}
+
 // #11237 - make get_segments_to_replay on-demand. Since we base the time-part of
 // descriptor ids on highest of wall-clock and segments found on disk on init,
 // we can just scan files now and include only those representing generations before
@@ -2084,7 +2091,7 @@ future<std::vector<sstring>> db::commitlog::segment_manager::get_segments_to_rep
     auto descs = co_await list_descriptors(cfg.commit_log_location);
     for (auto& d : descs) {
         auto id = replay_position(d.id).base_id();
-        if (id <= _low_id) {
+        if (id <= _low_id && !is_kept_recycled(d)) {
             segments_to_replay.push_back(cfg.commit_log_location + "/" + d.filename());
         }
     }
@@ -2107,13 +2114,21 @@ future<> db::commitlog::segment_manager::init() {
 
     SCYLLA_ASSERT(_reserve_segments.empty()); // _segments_to_replay must not pick them up
     segment_id_type id = *cfg.base_segment_id;
+    std::vector<sstring> recycled;
     for (auto& d : descs) {
         id = std::max(id, replay_position(d.id).base_id());
+        // each shard reclaims its own (modulo smp, so a smaller smp orphans none)
+        if (is_kept_recycled(d) && replay_position(d.id).shard_id() % this_smp_shard_count() == this_shard_id()) {
+            recycled.push_back(filename(d));
+        }
     }
 
     // base id counter is [ <shard> | <base> ]
     _ids = replay_position(this_shard_id(), id).id;
     _low_id = id;
+
+    // before the replenisher starts, so the first reserve already reuses a file
+    co_await delete_segments(std::move(recycled));
 
     // always run the timer now, since we need to handle segment pre-alloc etc as well.
     _timer.set_callback(std::bind(&segment_manager::on_timer, this));
@@ -2686,9 +2701,14 @@ void db::commitlog::segment_manager::discard_unused_segments() noexcept {
     }
 }
 
-future<> db::commitlog::segment_manager::clear_reserve_segments() {
+future<> db::commitlog::segment_manager::clear_reserve_segments(bool force_delete) {
     while (!_reserve_segments.empty()) {
         _reserve_segments.pop();
+    }
+
+    // O_DSYNC segments are costly to pre-write: keep them (up to the limit) for the next start
+    if (cfg.use_o_dsync && !force_delete) {
+        return do_pending_deletes();
     }
 
     for (auto& [f, mode] : _files_to_dispose) {
@@ -2816,7 +2836,17 @@ future<> db::commitlog::segment_manager::delete_segments(std::vector<sstring> fi
         named_file f(s);
         // #16207 - must make sure the named_file we put up for deletion/recycling
         // has its size updated.
-        auto size = co_await file_size(s);
+        uint64_t size;
+        try {
+            size = co_await file_size(s);
+        } catch (const std::system_error& e) {
+            // a file gone under us has nothing to delete or recycle
+            if (e.code() != std::errc::no_such_file_or_directory) {
+                throw;
+            }
+            clogger.warn("Skipping segment {}: {}", s, e.what());
+            continue;
+        }
         f.maybe_update_size(size);
         totals.total_size_on_disk += size;
         _files_to_dispose.emplace_back(std::move(f), dispose_mode::Delete);
@@ -2961,12 +2991,12 @@ future<> db::commitlog::segment_manager::do_pending_deletes() {
     deleting_done.set_value();
 }
 
-future<> db::commitlog::segment_manager::orphan_all() {
+future<> db::commitlog::segment_manager::orphan_all(bool force_delete) {
     // #25709. the actual process of destroying the elements here
     // might cause a call into discard_unused_segments.
     // ensure the target vector is empty when we get to destructors
     auto tmp = std::exchange(_segments, {});
-    return clear_reserve_segments();
+    return clear_reserve_segments(force_delete);
 }
 
 /*
@@ -2981,7 +3011,8 @@ future<> db::commitlog::segment_manager::clear() {
     for (auto& s : _segments) {
         s->mark_clean();
     }
-    co_await orphan_all();
+    // clear() empties the directory, so kept O_DSYNC segments go too
+    co_await orphan_all(true);
 }
 /**
  * Called by timer in periodic mode.
