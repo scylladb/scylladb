@@ -6,9 +6,20 @@
 
 import hashlib
 import socket
+import sys
 import time
 import os
 from pathlib import Path
+
+# The Cassandra driver imports numpy if it can find it, to offer a numpy protocol
+# handler that nothing in this suite asks for (no test imports numpy).  That costs
+# about 22 MB in every pytest-xdist worker, and there is one worker per half core.
+# There, numpy looks absent: importlib.util.find_spec("numpy") is None and
+# importing it raises ModuleNotFoundError ("import of numpy halted; None in
+# sys.modules"), so the driver takes its ordinary path.  SCYLLA_TEST_ALLOW_NUMPY=1
+# lets workers import it; other processes (test.py itself, tools) always can.
+if os.environ.get("PYTEST_XDIST_WORKER") and os.environ.get("SCYLLA_TEST_ALLOW_NUMPY") != "1":
+    sys.modules.setdefault("numpy", None)
 
 __all__ = ["ALL_MODES", "BUILD_DIR", "DEBUG_MODES", "HOST_ID", "TEST_DIR", "TEST_RUNNER", "TOP_SRC_DIR",
            "asan_options", "path_to", "ubsan_options", "use_traditional_build"]
