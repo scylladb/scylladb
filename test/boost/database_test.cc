@@ -1908,8 +1908,8 @@ SEASTAR_THREAD_TEST_CASE(test_tombstone_gc_state_snapshot) {
 
     shared_state.update_group0_refresh_time(first_repair_time);
 
-    auto snapshot = shared_state.snapshot();
-    BOOST_REQUIRE_LE(gc_clock::now() - snapshot.query_time(), gc_clock::duration(std::chrono::seconds(1)));
+    const auto snapshot_time = gc_clock::now();
+    const auto snapshot = tombstone_gc_state(shared_state).with_commitlog_check_disabled().snapshot(snapshot_time);
 
     // Advance gc clock and change the gc state to simulate a later point in time.
     // Then check that gc-before against the shared-state yields the current
@@ -1927,23 +1927,34 @@ SEASTAR_THREAD_TEST_CASE(test_tombstone_gc_state_snapshot) {
     shared_state.update_group0_refresh_time(second_repair_time);
 
     BOOST_REQUIRE_EQUAL(gc_state.get_gc_before_for_key(table_gc_mode_timeout, dk, now), now - table_gc_mode_timeout->gc_grace_seconds());
-    BOOST_REQUIRE_EQUAL(snapshot.get_gc_before_for_key(table_gc_mode_timeout, dk, false), snapshot.query_time() - table_gc_mode_timeout->gc_grace_seconds());
+    BOOST_REQUIRE_EQUAL(snapshot.get_gc_before_for_key(table_gc_mode_timeout, dk, now), snapshot_time - table_gc_mode_timeout->gc_grace_seconds());
 
     BOOST_REQUIRE_EQUAL(gc_state.get_gc_before_for_key(table_gc_mode_disabled, dk, now), gc_clock::time_point::min());
-    BOOST_REQUIRE_EQUAL(snapshot.get_gc_before_for_key(table_gc_mode_disabled, dk, false), gc_clock::time_point::min());
+    BOOST_REQUIRE_EQUAL(snapshot.get_gc_before_for_key(table_gc_mode_disabled, dk, now), gc_clock::time_point::min());
 
     BOOST_REQUIRE_EQUAL(gc_state.get_gc_before_for_key(table_gc_mode_immediate, dk, now), now);
-    BOOST_REQUIRE_EQUAL(snapshot.get_gc_before_for_key(table_gc_mode_immediate, dk, false), snapshot.query_time());
+    BOOST_REQUIRE_EQUAL(snapshot.get_gc_before_for_key(table_gc_mode_immediate, dk, now), snapshot_time);
 
     BOOST_REQUIRE_EQUAL(gc_state.get_gc_before_for_key(table_gc_mode_repair1, dk, now), second_repair_time - table_gc_mode_repair1->tombstone_gc_options().propagation_delay_in_seconds());
     BOOST_REQUIRE_EQUAL(gc_state.get_gc_before_for_key(table_gc_mode_repair2, dk, now), gc_clock::time_point::min());
     BOOST_REQUIRE_EQUAL(gc_state.get_gc_before_for_key(table_gc_mode_repair3, dk, now), second_repair_time - table_gc_mode_repair3->tombstone_gc_options().propagation_delay_in_seconds());
-    BOOST_REQUIRE_EQUAL(snapshot.get_gc_before_for_key(table_gc_mode_repair1, dk, false), first_repair_time - table_gc_mode_repair1->tombstone_gc_options().propagation_delay_in_seconds());
-    BOOST_REQUIRE_EQUAL(snapshot.get_gc_before_for_key(table_gc_mode_repair2, dk, false), first_repair_time - table_gc_mode_repair2->tombstone_gc_options().propagation_delay_in_seconds());
-    BOOST_REQUIRE_EQUAL(snapshot.get_gc_before_for_key(table_gc_mode_repair3, dk, false), gc_clock::time_point::min());
+    BOOST_REQUIRE_EQUAL(snapshot.get_gc_before_for_key(table_gc_mode_repair1, dk, now), first_repair_time - table_gc_mode_repair1->tombstone_gc_options().propagation_delay_in_seconds());
+    BOOST_REQUIRE_EQUAL(snapshot.get_gc_before_for_key(table_gc_mode_repair2, dk, now), first_repair_time - table_gc_mode_repair2->tombstone_gc_options().propagation_delay_in_seconds());
+    BOOST_REQUIRE_EQUAL(snapshot.get_gc_before_for_key(table_gc_mode_repair3, dk, now), gc_clock::time_point::min());
 
     BOOST_REQUIRE_EQUAL(gc_state.get_gc_before_for_key(table_gc_mode_group0, dk, now), second_repair_time);
-    BOOST_REQUIRE_EQUAL(snapshot.get_gc_before_for_key(table_gc_mode_group0, dk, false), first_repair_time);
+    BOOST_REQUIRE_EQUAL(snapshot.get_gc_before_for_key(table_gc_mode_group0, dk, now), first_repair_time);
+
+    // The range variant is frozen the same way.
+    const auto snapshot_range_result = snapshot.get_gc_before_for_range(table_gc_mode_repair1, repair_range, now);
+    BOOST_REQUIRE_EQUAL(snapshot_range_result.min_gc_before, first_repair_time - table_gc_mode_repair1->tombstone_gc_options().propagation_delay_in_seconds());
+    BOOST_REQUIRE_EQUAL(snapshot_range_result.max_gc_before, first_repair_time - table_gc_mode_repair1->tombstone_gc_options().propagation_delay_in_seconds());
+    BOOST_REQUIRE_EQUAL(snapshot.get_gc_before_for_range(table_gc_mode_immediate, repair_range, now).min_gc_before, snapshot_time);
+
+    // A snapshot of a snapshot answers like the original.
+    const auto snapshot_of_snapshot = snapshot.snapshot(now);
+    BOOST_REQUIRE_EQUAL(snapshot_of_snapshot.get_gc_before_for_key(table_gc_mode_immediate, dk, now), snapshot_time);
+    BOOST_REQUIRE_EQUAL(snapshot_of_snapshot.get_gc_before_for_key(table_gc_mode_repair1, dk, now), first_repair_time - table_gc_mode_repair1->tombstone_gc_options().propagation_delay_in_seconds());
 }
 
 SEASTAR_THREAD_TEST_CASE(test_tombstone_gc_state_snapshot_rf_one_tables) {
@@ -1971,13 +1982,14 @@ SEASTAR_THREAD_TEST_CASE(test_tombstone_gc_state_snapshot_rf_one_tables) {
     BOOST_REQUIRE_EQUAL(gc_state.get_gc_before_for_key(table_gc_mode_repair1, dk, now), now);
     BOOST_REQUIRE_EQUAL(gc_state.get_gc_before_for_key(table_gc_mode_repair2, dk, now), gc_clock::time_point::min());
 
-    auto snapshot = shared_state.snapshot();
+    const auto snapshot_time = now - gc_clock::duration(std::chrono::hours(1));
+    const auto snapshot = gc_state.snapshot(snapshot_time);
 
     BOOST_REQUIRE_EQUAL(gc_state.get_gc_before_for_key(table_gc_mode_repair1, dk, now), now);
     BOOST_REQUIRE_EQUAL(gc_state.get_gc_before_for_key(table_gc_mode_repair2, dk, now), gc_clock::time_point::min());
 
-    BOOST_REQUIRE_EQUAL(snapshot.get_gc_before_for_key(table_gc_mode_repair1, dk, false), snapshot.query_time());
-    BOOST_REQUIRE_EQUAL(snapshot.get_gc_before_for_key(table_gc_mode_repair2, dk, false), gc_clock::time_point::min());
+    BOOST_REQUIRE_EQUAL(snapshot.get_gc_before_for_key(table_gc_mode_repair1, dk, now), snapshot_time);
+    BOOST_REQUIRE_EQUAL(snapshot.get_gc_before_for_key(table_gc_mode_repair2, dk, now), gc_clock::time_point::min());
 
     shared_state.set_table_rf_n(table_gc_mode_repair1->id());
     shared_state.set_table_rf_one(table_gc_mode_repair2->id());
@@ -1985,8 +1997,8 @@ SEASTAR_THREAD_TEST_CASE(test_tombstone_gc_state_snapshot_rf_one_tables) {
     BOOST_REQUIRE_EQUAL(gc_state.get_gc_before_for_key(table_gc_mode_repair1, dk, now), gc_clock::time_point::min());
     BOOST_REQUIRE_EQUAL(gc_state.get_gc_before_for_key(table_gc_mode_repair2, dk, now), now);
 
-    BOOST_REQUIRE_EQUAL(snapshot.get_gc_before_for_key(table_gc_mode_repair1, dk, false), snapshot.query_time());
-    BOOST_REQUIRE_EQUAL(snapshot.get_gc_before_for_key(table_gc_mode_repair2, dk, false), gc_clock::time_point::min());
+    BOOST_REQUIRE_EQUAL(snapshot.get_gc_before_for_key(table_gc_mode_repair1, dk, now), snapshot_time);
+    BOOST_REQUIRE_EQUAL(snapshot.get_gc_before_for_key(table_gc_mode_repair2, dk, now), gc_clock::time_point::min());
 }
 
 SEASTAR_TEST_CASE(test_max_purgeable_combine) {

@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <optional>
 #include <span>
 #include <tuple>
 #include <seastar/core/shared_ptr.hh>
@@ -57,8 +58,6 @@ struct range_repair_time {
     shard_id shard;
 };
 
-class tombstone_gc_state_snapshot;
-
 class shared_tombstone_gc_state {
     gc_time_min_source _gc_min_source;
     lw_shared_ptr<const per_table_history_maps> _reconcile_history_maps;
@@ -75,6 +74,11 @@ class shared_tombstone_gc_state {
 
 private:
     void mutate_repair_history(std::function<void(per_table_history_maps&)>);
+
+    // Copies the state gc_before is derived from, i.e. everything but the pending updates.
+    shared_tombstone_gc_state clone() const;
+
+    friend class tombstone_gc_state;
 
 public:
     shared_tombstone_gc_state();
@@ -126,20 +130,6 @@ public:
 
     void insert_pending_repair_time_update(table_id id, const dht::token_range& range, gc_clock::time_point repair_time, shard_id shard);
     future<> flush_pending_repair_time_update(sharded<replica::database>&, sharded<db::system_keyspace>&);
-
-    tombstone_gc_state_snapshot snapshot() const noexcept;
-};
-
-class tombstone_gc_state_snapshot {
-    shared_tombstone_gc_state _shared_state;
-    gc_clock::time_point _query_time;
-
-public:
-    explicit tombstone_gc_state_snapshot(shared_tombstone_gc_state&&);
-
-    gc_clock::time_point query_time() const noexcept { return _query_time; }
-
-    [[nodiscard]] gc_clock::time_point get_gc_before_for_key(schema_ptr s, const dht::decorated_key& dk, bool check_commitlog) const;
 };
 
 class tombstone_gc_state {
@@ -148,9 +138,17 @@ class tombstone_gc_state {
 private:
     mode _mode{mode::gc_expired};
     const shared_tombstone_gc_state* _shared_state{nullptr};
+    // Set on a snapshot: owns the frozen copy of the shared state, which _shared_state points to.
+    lw_shared_ptr<const shared_tombstone_gc_state> _frozen_shared_state;
+    // Set on a snapshot: the time it was taken, used in place of the query time passed by the caller.
+    std::optional<gc_clock::time_point> _snapshot_time;
     bool _check_commitlog{true};
 
 private:
+    [[nodiscard]] gc_clock::time_point effective_query_time(gc_clock::time_point query_time) const noexcept {
+        return _snapshot_time.value_or(query_time);
+    }
+
     [[nodiscard]] gc_clock::time_point check_min(schema_ptr, gc_clock::time_point, const db::replay_position& = {}) const;
 
     [[nodiscard]] repair_history_map_ptr get_repair_history_for_table(const table_id& id) const;
@@ -195,6 +193,13 @@ public:
     // returns a tombstone_gc_state copy with the commitlog check disabled (i.e.) without _gc_min_source.
     [[nodiscard]] tombstone_gc_state with_commitlog_check_disabled() const { return tombstone_gc_state(_mode, _shared_state, false); }
     bool is_commitlog_check_enabled() const noexcept { return _check_commitlog; }
+
+    // Returns a copy which answers every query the way this one would have at snapshot_time:
+    // later updates to the repair history are not seen, and the query time passed to
+    // get_gc_before_for_key() and get_gc_before_for_range() is ignored in favour of snapshot_time.
+    // The commitlog check, if enabled, is not frozen; it can only lower gc_before.
+    // Taking a snapshot of a snapshot returns a copy of it.
+    [[nodiscard]] tombstone_gc_state snapshot(gc_clock::time_point snapshot_time = gc_clock::now()) const;
 };
 
 std::map<sstring, sstring> get_default_tombstone_gc_mode(const locator::abstract_replication_strategy&, bool supports_repair);
