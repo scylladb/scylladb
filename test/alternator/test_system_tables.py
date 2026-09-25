@@ -5,6 +5,9 @@
 # Tests for accessing Scylla-only system tables. All tests are marked
 # "scylla_only" so are skipped on DynamoDB.
 
+import concurrent.futures
+import time
+
 import pytest
 import requests
 
@@ -12,7 +15,7 @@ from botocore.exceptions import ClientError
 from boto3.dynamodb.conditions import Key
 
 from test.pylib.skip_types import skip_env
-from .util import full_scan, scylla_config_read, scylla_config_temporary
+from .util import full_scan, get_signed_request, random_string, scylla_config_read, scylla_config_temporary, scylla_inject_error
 
 internal_prefix = '.scylla.alternator.'
 
@@ -112,41 +115,49 @@ def test_block_creating_tables_with_reserved_prefix(scylla_only, dynamodb):
                     AttributeDefinitions=[{'AttributeName':'p', 'AttributeType': 'S'}]
             )
 
-# Test that the system.clients virtual table is readable, and lists ongoing
-# Alternator requests, and lists the client SDK's User-Agent (usually
-# containing its language, version, and other information) as "driver_name".
-# Since we are making the Scan request with Boto3, we expect to find in
-# the result of the Scan at least one client using Boto3.
+# Test that the system.clients virtual table is readable and lists ongoing
+# Alternator requests. Pause a ListTables request so we can inspect its row,
+# including the client SDK's User-Agent as "driver_name", and verify that the
+# row disappears after the request completes.
 # Reproduces #24993.
-def test_system_clients(scylla_only, dynamodb):
-    clients = dynamodb.Table(internal_prefix + 'system.clients')
-    success = False
-    clients = full_scan(clients)
-    assert len(clients) > 0
-    for client in clients:
-        if 'Boto3' in client['driver_name']:
-            success = True
-            # Verify that some other fields that we expect to appear in
-            # Alternator's system.clients entry do appear. For most of
-            # them we don't know exactly which value we expect to see,
-            # but we know we expect it to appear.
-            assert client['client_type'] == 'alternator'
-            assert 'address' in client
-            assert 'port' in client
-            assert 'shard_id' in client
-            assert 'connection_stage' in client
-            is_ssl = dynamodb.meta.client._endpoint.host.startswith('https')
-            # Alternator converts the boolean in the table scanned through
-            # the Alternator API to a string 'true' or 'false'. This is
-            # probably a bug (because Alternator does have a boolean type
-            # it could use!), but it's not the intention of this test to
-            # check how scanning CQL tables in Alternator works, so let's
-            # just accept both.
-            is_ssl_string = 'true' if is_ssl else 'false'
-            assert client['ssl_enabled'] == is_ssl or client['ssl_enabled'] == is_ssl_string
-            assert 'username' in client
-            assert 'scheduling_group' in client
-    assert success
+def test_system_clients(scylla_only, dynamodb, rest_api):
+    clients_table = dynamodb.Table(internal_prefix + 'system.clients')
+    marker = f'system-clients-{random_string()}'
+    client = dynamodb.meta.client
+    signed_request = get_signed_request(dynamodb, 'ListTables', '{}', {'User-Agent': f'Boto3 {marker}'})
+
+    def list_tables():
+        response = requests.post(signed_request.url, headers=signed_request.headers,
+            data=signed_request.body, verify=False, cert=signed_request.cert, timeout=60)
+        response.raise_for_status()
+        return response.json()
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        with scylla_inject_error(rest_api, 'alternator_list_tables', one_shot=True) as injection:
+            request = executor.submit(list_tables)
+            try:
+                injection.wait_for_enter(time.monotonic() + 60)
+                assert not request.done()
+                matching_clients = [entry for entry in full_scan(clients_table)
+                                    if marker in entry.get('driver_name', '')]
+                assert len(matching_clients) == 1
+                entry = matching_clients[0]
+                assert entry['client_type'] == 'alternator'
+                assert entry['connection_stage'] == 'ESTABLISHED'
+                assert 'address' in entry
+                assert 'port' in entry
+                assert 'shard_id' in entry
+                is_ssl = client._endpoint.host.startswith('https')
+                # Alternator may expose a system-table boolean as either a
+                # boolean or its string representation.
+                assert entry['ssl_enabled'] in [is_ssl, str(is_ssl).lower()]
+                assert 'username' in entry
+                assert 'scheduling_group' in entry
+            finally:
+                injection.message()
+            assert 'TableNames' in request.result(timeout=60)
+
+    assert not any(marker in entry.get('driver_name', '') for entry in full_scan(clients_table))
 
 # Test writing to a system table, such as the configuration.
 # Since writing to a system table is only optionally allowed in Scylla,
