@@ -116,6 +116,9 @@ def nodetool(nodetool_path, rest_api_mock_server):
                    "-p", str(api_port)] + after
             env = {'UBSAN_OPTIONS': ubsan_options(),
                    'ASAN_OPTIONS': asan_options()}
+            if 'LLVM_PROFILE_FILE' in os.environ:
+                # --coverage-per-test points it at the test's own directory.
+                env['LLVM_PROFILE_FILE'] = os.environ['LLVM_PROFILE_FILE']
             res = subprocess.run(cmd, capture_output=True, text=True, env=env)
             sys.stdout.write(res.stdout)
             sys.stderr.write(res.stderr)
