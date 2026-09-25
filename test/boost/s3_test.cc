@@ -700,7 +700,7 @@ SEASTAR_THREAD_TEST_CASE(test_client_list_objects_incomplete_proxy) {
 // Not using s3_test_fixture here — the test intentionally targets a
 // non-existent bucket, so there is no bucket to create or clean up.
 void client_broken_bucket(const client_maker_function& client_maker) {
-    const sstring name("/NO_BUCKET/testobject");
+    const sstring name("/no-bucket/testobject");
     auto client = client_maker();
 
     auto close_client = deferred_close(*client);

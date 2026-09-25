@@ -73,7 +73,7 @@ run scylla features. In general, these images will be pulled on first usage by t
 Some images used:
     
     * docker.io/fsouza/fake-gcs-server:1.54.0
-    * docker.io/adobe/s3mock:5.2.0
+    * docker.io/versity/versitygw:v1.8.0
     * (add as needed)
 
 ## Usage

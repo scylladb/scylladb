@@ -288,9 +288,9 @@ class InjectingHandler(BaseHTTPRequestHandler):
 
                 if self.command == 'HEAD':
                     # `requests` hands us no body for a HEAD reply, so the length has to
-                    # come from the S3 server. It may not have sent one - S3Mock omits it
-                    # on error replies - and a HEAD body is empty either way, so fall back
-                    # to zero rather than throwing the response away.
+                    # come from the S3 server. It may not have sent one, and a HEAD body
+                    # is empty either way, so fall back to zero rather than throwing the
+                    # response away.
                     self.send_header("Content-Length", response.headers.get('Content-Length', '0'))
                 else:
                     self.send_header("Content-Length", str(len(response.content)))
@@ -351,7 +351,7 @@ class S3ProxyServer:
             self.logger.info('Starting S3 proxy server on %s', self.server.server_address)
             self._set_environ()
             loop = asyncio.get_running_loop()
-            self.server_thread = loop.run_in_executor(None, self.server.serve_forever)
+            self.server_thread = loop.run_in_executor(None, self.server.serve_forever, 0.05)
             self.is_running = True
 
     async def stop(self):
