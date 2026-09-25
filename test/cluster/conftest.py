@@ -111,28 +111,38 @@ async def scylla_cluster(request: pytest.FixtureRequest,
         yield cluster
 
 
+@pytest.fixture(scope="session")
+async def _object_storage_servers() -> AsyncGenerator[dict[StorageKind, Storage]]:
+    """Mock object-storage servers, one per kind, shared for the whole pytest-xdist worker."""
+    servers: dict[StorageKind, Storage] = {}
+    yield servers
+    for server in servers.values():
+        await server.stop()
+
+
 @pytest.fixture
 async def object_storage_factory(request: pytest.FixtureRequest,
                                  suite_log_dir: Path,
+                                 _object_storage_servers: dict[StorageKind, Storage],
                                  scylla_cluster_teardowns: list[TeardownCallback]) -> StorageFactory:
     """A factory of object-storage backends for a test.
 
-    The bucket is destroyed and the server stopped by the scylla_cluster teardowns, that is after the
-    harness has disposed of the cluster.
+    The bucket is destroyed by the scylla_cluster teardowns, that is after the harness
+    has disposed of the cluster; the underlying server outlives the test, see
+    _object_storage_servers above.
     """
     async def make_object_storage(kind: StorageKind) -> Storage:
-        match kind:
-            case "gs":
-                server = create_gs_server(suite_log_dir)
-            case "s3":
-                server = create_s3_server(request.config, request.getfixturevalue("tmpdir"), suite_log_dir)
-            case _:
-                raise RuntimeError(f"Unknown storage kind {kind}")
-
-        await server.start()
-
-        # Appended first so that it runs last: the bucket delete below needs the server.
-        scylla_cluster_teardowns.append(server.stop)
+        server = _object_storage_servers.get(kind)
+        if server is None:
+            match kind:
+                case "gs":
+                    server = create_gs_server(suite_log_dir)
+                case "s3":
+                    server = create_s3_server(request.config, request.getfixturevalue("tmpdir"), suite_log_dir)
+                case _:
+                    raise RuntimeError(f"Unknown storage kind {kind}")
+            await server.start()
+            _object_storage_servers[kind] = server
 
         server.create_test_bucket(request.node.name)
 
