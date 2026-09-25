@@ -15,6 +15,7 @@
 #include "test/lib/sstable_test_env.hh"
 #include "test/lib/sstable_utils.hh"
 #include "test/lib/simple_schema.hh"
+#include "test/lib/error_injection.hh"
 #include "sstable_test.hh"
 #include "sstables/exceptions.hh"
 
@@ -179,4 +180,42 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_clone_preserves_staging_state) {
     // Assert that the cloned sstable preserves the staging state.
     BOOST_REQUIRE(cloned_sst->state() == sstable_state::staging);
     BOOST_REQUIRE(cloned_sst->requires_view_building());
+}
+
+// Reproducer for SCYLLADB-4526: an integrity-checking reader lazily opens Digest/CRC by
+// name while the view update generator moves the sstable out of staging. The read must
+// wait for the move (or the move for the read) instead of failing with "file not found".
+SEASTAR_THREAD_TEST_CASE(test_read_digest_during_change_state) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    return;
+#endif
+    auto scf = make_sstable_compressor_factory_for_tests_in_thread();
+    test_env env({}, *scf);
+    auto stop_env = defer([&env] noexcept { env.stop().get(); });
+
+    simple_schema ss;
+    auto schema = ss.schema();
+    auto sst = make_sstable_containing(env.make_sst_factory(schema), {ss.new_mutation("key1")}).get();
+    sst->change_state(sstable_state::staging).get();
+    BOOST_REQUIRE(sst->has_component(component_type::Digest));
+
+    const auto injection = "sstable_open_component/pause_after_path";
+    const auto move_entered = "filesystem_storage_move/entered";
+    scoped_error_injection pause(injection);
+    scoped_error_injection count_moves(move_entered);
+
+    // Park the digest read after it has resolved the (staging) path, before the open.
+    auto digest_f = sst->read_digest();
+    wait_for_injection_enter(injection).get();
+
+    // The move must not start while the read holds the resolved path. Yield first: without
+    // the lock change_state() may still be preempted before it reaches move().
+    auto move_f = sst->change_state(sstable_state::normal);
+    thread::yield();
+    BOOST_REQUIRE_EQUAL(utils::get_local_injector().enter_count(move_entered), 0);
+
+    utils::get_local_injector().receive_message(injection);
+    BOOST_REQUIRE(digest_f.get().has_value());
+    move_f.get();
+    BOOST_REQUIRE(sst->state() == sstable_state::normal);
 }

@@ -3453,6 +3453,12 @@ future<std::optional<uint32_t>> sstable::read_digest() {
     if (_components->digest) {
         co_return *_components->digest;
     }
+    // Serialize with change_state()/unlink(): the component is opened by name, so a concurrent
+    // move would leave us with a stale path and a file-not-found abort (SCYLLADB-4526).
+    auto lock = co_await get_units(_mutate_sem, 1);
+    if (_components->digest) {
+        co_return *_components->digest;
+    }
     if (!has_component(component_type::Digest) || _unlinked_at) {
         co_return std::nullopt;
     }
@@ -3528,6 +3534,11 @@ future<lw_shared_ptr<checksum>> sstable::read_checksum(file f) {
 }
 
 future<lw_shared_ptr<checksum>> sstable::read_checksum() {
+    if (_components->checksum) {
+        co_return _components->checksum->shared_from_this();
+    }
+    // See read_digest().
+    auto lock = co_await get_units(_mutate_sem, 1);
     if (_components->checksum) {
         co_return _components->checksum->shared_from_this();
     }
