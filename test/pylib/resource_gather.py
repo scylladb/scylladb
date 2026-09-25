@@ -6,12 +6,14 @@
 
 from __future__ import annotations
 
+import atexit
 import getpass
 import logging
 import os
 import platform
 import shlex
 import subprocess
+import threading
 import time
 from abc import ABC
 from concurrent.futures.thread import ThreadPoolExecutor
@@ -69,6 +71,12 @@ CGROUP_INITIAL = get_cgroup()
 CGROUP_TESTS = CGROUP_INITIAL.parent / 'tests'
 
 
+@lru_cache(maxsize=None)
+def get_sqlite_writer(db_path: Path) -> SQLiteWriter:
+    """Return the process-wide telemetry writer, creating it on first use."""
+    return SQLiteWriter(db_path)
+
+
 class ResourceGather(ABC):
 
     def setup_test_tracking(self) -> None:
@@ -103,7 +111,7 @@ class ResourceGatherRecord(ResourceGather):
         self.test = test
         self.worker_id = worker_id or "master"
         self.db_path = temp_dir / DEFAULT_DB_NAME
-        self.sqlite_writer = SQLiteWriter(self.db_path)
+        self.sqlite_writer = get_sqlite_writer(self.db_path)
         self.logger = logging.getLogger(__name__)
 
         directory_path = str(test.suite.suite_path.relative_to(TOP_SRC_DIR))
@@ -138,7 +146,109 @@ class ResourceGatherRecord(ResourceGather):
         self.sqlite_writer.write_row(metrics, METRICS_TABLE)
 
     def teardown_test_tracking(self) -> None:
-        self.sqlite_writer.close()
+        # The SQLite connection is shared for the process lifetime (see
+        # get_sqlite_writer), so nothing is closed per test.
+        pass
+
+
+SAMPLE_INTERVAL = 1.0
+# A test shorter than the sampling interval can only ever produce a stray sample,
+# so nothing is read or stored for it.
+MIN_SAMPLED_TEST_DURATION = SAMPLE_INTERVAL
+
+
+class CgroupMonitor:
+    """Samples the worker's cgroup memory once per second for the worker's lifetime.
+
+    Tests shorter than MIN_SAMPLED_TEST_DURATION are skipped entirely: no cgroup
+    reading is taken and no row is written for them.
+    """
+
+    @classmethod
+    @lru_cache(maxsize=None)
+    def get_shared(cls, cgroup_path: Path, db_path: Path) -> "CgroupMonitor":
+        """Return the monitor for ``cgroup_path``, starting it on first use."""
+        return cls(cgroup_path, db_path)
+
+    def __init__(self, cgroup_path: Path, db_path: Path):
+        self.cgroup_path = cgroup_path
+        self.db_path = db_path
+        self._active_test_id: int | None = None
+        self._active_since: float | None = None
+        self._lock = threading.Lock()
+        self._stop_event = Event()
+        self._thread = threading.Thread(target=self._run, name=f"cgroup-monitor-{cgroup_path.name}", daemon=True)
+        self._thread.start()
+        atexit.register(self.shutdown)
+
+    def start(self, test_id: int) -> None:
+        """Attribute subsequent samples to ``test_id``."""
+        with self._lock:
+            self._active_test_id = test_id
+            self._active_since = time.monotonic()
+
+    def stop(self) -> None:
+        """Stop attributing samples to the current test."""
+        with self._lock:
+            self._active_test_id = None
+            self._active_since = None
+
+    def shutdown(self) -> None:
+        """Stop the sampler thread and wait for it to finish."""
+        self._stop_event.set()
+        if self._thread.is_alive():
+            self._thread.join(timeout=5)
+
+    def _run(self) -> None:
+        # Created lazily inside the loop so the connection is owned by the
+        # sampling thread, and so a transient failure to initialize it does
+        # not permanently kill the thread (it is retried on the next tick).
+        writer: SQLiteWriter | None = None
+        try:
+            while not self._stop_event.wait(SAMPLE_INTERVAL):
+                if writer is None:
+                    try:
+                        writer = SQLiteWriter(self.db_path)
+                    except Exception as e:
+                        logger.warning(
+                            "Could not initialize cgroup metrics writer for %s: %s",
+                            self.db_path,
+                            e,
+                        )
+                        continue
+                # Read under the lock so a stop()/start() can't misattribute the sample.
+                with self._lock:
+                    test_id = self._active_test_id
+                    active_since = self._active_since
+                    if test_id is None or active_since is None:
+                        continue
+                    if time.monotonic() - active_since < MIN_SAMPLED_TEST_DURATION:
+                        continue
+                    memory = self._read_memory()
+                if memory is not None:
+                    self._write_sample(writer, test_id, memory)
+        finally:
+            if writer is not None:
+                writer.close()
+
+    def _read_memory(self) -> int | None:
+        try:
+            return int((self.cgroup_path / 'memory.current').read_text().strip())
+        except Exception as e:
+            logger.debug(f"Could not read cgroup memory for {self.cgroup_path}: {e}")
+            return None
+
+    def _write_sample(self, writer: SQLiteWriter, test_id: int, memory: int) -> None:
+        try:
+            timeline_record = CgroupMetric(
+                test_id=test_id,
+                host_id=HOST_ID,
+                memory=memory,
+                timestamp=datetime.now()
+            )
+            writer.write_row(timeline_record, CGROUP_MEMORY_METRICS_TABLE)
+        except Exception as e:
+            logger.debug(f"Could not write cgroup memory for {self.cgroup_path}: {e}")
 
 
 class ResourceGatherOn(ResourceGatherRecord):
@@ -150,41 +260,16 @@ class ResourceGatherOn(ResourceGatherRecord):
 
     def __init__(self, temp_dir: Path, test: SimpleNamespace, worker_id: str | None = None):
         super().__init__(temp_dir, test, worker_id)
-        self.pool = ThreadPoolExecutor(max_workers=1)
-        self.future = None
-        self.stop_event = Event()
         self.cgroup_path = CGROUP_TESTS / self.worker_id
         self._memory_peak_fd: IO | None = None
         self._cpu_stat_start: dict[str, float] | None = None
+        self._monitor = CgroupMonitor.get_shared(self.cgroup_path, self.db_path)
 
     def stop_monitoring(self) -> None:
-        self.stop_event.set()
-        if self.future is not None:
-            self.future.result()
-            self.pool.shutdown(wait=True)
+        self._monitor.stop()
 
     def cgroup_monitor(self) -> None:
-        self.future = self.pool.submit(self._monitor_cgroup)
-
-    def _monitor_cgroup(self) -> None:
-        """Continuously monitors cgroup memory utilization every second."""
-        memory_current = self.cgroup_path / 'memory.current'
-        sqlite_writer = SQLiteWriter(self.db_path)
-        try:
-            while not self.stop_event.is_set():
-                try:
-                    timeline_record = CgroupMetric(
-                        test_id=self.test_id,
-                        host_id=HOST_ID,
-                        memory=int(memory_current.read_text().strip()),
-                        timestamp=datetime.now()
-                    )
-                    sqlite_writer.write_row(timeline_record, CGROUP_MEMORY_METRICS_TABLE)
-                except Exception as e:
-                    self.logger.debug(f"Could not read cgroup memory for {self.cgroup_path}: {e}")
-                self.stop_event.wait(1)
-        finally:
-            sqlite_writer.close()
+        self._monitor.start(self.test_id)
 
     def setup_test_tracking(self) -> None:
         # memory.peak's per-FD tracker is reset by *writing* a non-empty string to the

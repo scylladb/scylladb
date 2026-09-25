@@ -447,7 +447,8 @@ async def process_coverage(options):
                                                                logger = logger)
     logger.debug(f"Binary ids map is: {files_to_ids_map}")
     logger.info("Done getting binary ids for coverage conversion")
-    sources_to_exclude = [line for line in open("coverage_excludes.txt", 'r').read().split('\n') if line and not line.startswith('#')]
+    with open("coverage_excludes.txt", 'r') as f:
+        sources_to_exclude = [line for line in f.read().split('\n') if line and not line.startswith('#')]
 
     # The retired TestSuite registry used to hand out the suites that ran; the
     # pytest runner instead writes per-suite raw profiles to
@@ -463,10 +464,9 @@ async def process_coverage(options):
     def pathsize(path : pathlib.Path):
         if path.is_file():
             return os.path.getsize(path)
-        elif path.is_dir():
-            return sum([os.path.getsize(f) for f in path.glob("**/*") if f.is_file()])
-        else:
+        if not path.is_dir():
             return 0
+        return sum(os.path.getsize(f) for f in path.glob("**/*") if f.is_file())
     class Stats:
         def __init__(self, name = "", size = 0, time = 0) -> None:
             self.name = name
