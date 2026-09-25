@@ -13,10 +13,20 @@
 #include <seastar/core/format.hh>
 
 #include "sstables/component_type.hh"
+#include "sstables/stats.hh"
 #include "seastarx.hh"
 
 namespace sstables {
+
 class malformed_sstable_exception : public std::exception {
+    class malformed_accounter {
+        sstables_stats _stats;
+    public:
+        malformed_accounter() {
+           _stats.on_malformed_sstable_exception();
+        }
+    };
+    malformed_accounter _accounter;
     sstring _msg;
 public:
     malformed_sstable_exception(sstring msg, component_name filename)
