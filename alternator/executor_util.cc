@@ -504,7 +504,7 @@ void describe_single_item(const cql3::selection::selection& selection,
             ++column_it;
             continue;
         }
-        std::string column_name = (*column_it)->name_as_text();
+        const sstring& column_name = (*column_it)->name_as_text();
         if (column_name != executor::ATTRS_COLUMN_NAME) {
             if (item_length_in_bytes) {
                 (*item_length_in_bytes) += column_name.length() + cell->size();
@@ -520,36 +520,33 @@ void describe_single_item(const cql3::selection::selection& selection,
             }
         } else {
             auto deserialized = attrs_type()->deserialize(*cell);
-            auto keys_and_values = value_cast<map_type_impl::native_type>(deserialized);
-            for (auto entry : keys_and_values) {
-                std::string attr_name = value_cast<sstring>(entry.first);
+            const auto& keys_and_values = value_cast<map_type_impl::native_type>(deserialized);
+            for (const auto& entry : keys_and_values) {
+                const sstring& attr_name = value_cast<sstring>(entry.first);
                 if (item_length_in_bytes) {
                     (*item_length_in_bytes) += attr_name.length();
                 }
-                if (include_all_embedded_attributes || !attrs_to_get || attrs_to_get->contains(attr_name)) {
-                    bytes value = value_cast<bytes>(entry.second);
-                    if (item_length_in_bytes && value.length()) {
-                        // ScyllaDB uses one extra byte compared to DynamoDB for the bytes length
-                        (*item_length_in_bytes) += value.length() - 1;
-                    }
-                    rjson::value v = deserialize_item(value);
-                    if (attrs_to_get) {
-                        auto it = attrs_to_get->find(attr_name);
-                        if (it != attrs_to_get->end()) {
-                            // attrs_to_get may have asked for only part of
-                            // this attribute. hierarchy_filter() modifies v,
-                            // and returns false when nothing is to be kept.
-                            if (!hierarchy_filter(v, it->second)) {
-                                continue;
-                            }
-                        }
-                    }
-                    // item is expected to start empty, and attribute
-                    // names are unique so add() makes sense
-                    rjson::add_with_string_name(item, attr_name, std::move(v));
-                } else if (item_length_in_bytes) {
-                    (*item_length_in_bytes) += value_cast<bytes>(entry.second).length() - 1;
+                const bytes& value = value_cast<bytes>(entry.second);
+                if (item_length_in_bytes && value.length()) {
+                    // ScyllaDB uses one extra byte compared to DynamoDB for the bytes length
+                    (*item_length_in_bytes) += value.length() - 1;
                 }
+                const attrs_to_get_node* node = nullptr;
+                if (attrs_to_get) {
+                    auto it = attrs_to_get->find(attr_name);
+                    if (it != attrs_to_get->end()) {
+                        node = &it->second;
+                    } else if (!include_all_embedded_attributes) {
+                        continue;
+                    }
+                }
+                rjson::value v = deserialize_item(value);
+                // A nested projection keeps only part of v; false means nothing is left.
+                if (node && !hierarchy_filter(v, *node)) {
+                    continue;
+                }
+                // item starts empty and names are unique, so add() is safe.
+                rjson::add_with_string_name(item, attr_name, std::move(v));
             }
         }
         ++column_it;
