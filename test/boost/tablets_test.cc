@@ -8871,4 +8871,118 @@ SEASTAR_TEST_CASE(test_load_stats_split_ready_invalidation) {
     return make_ready_future<>();
 }
 
+// Replication factor of a tablet erm is derived from the tablet's read replica set.
+SEASTAR_THREAD_TEST_CASE(test_tablet_erm_replication_factor) {
+    auto h1 = host_id(utils::UUID_gen::get_time_UUID()); // local node, resolved through the topology config
+    auto h2 = host_id(utils::UUID_gen::get_time_UUID()); // dc1
+    auto h3 = host_id(utils::UUID_gen::get_time_UUID()); // dc1
+    auto h4 = host_id(utils::UUID_gen::get_time_UUID()); // dc1
+    auto h5 = host_id(utils::UUID_gen::get_time_UUID()); // dc2
+    auto h6 = host_id(utils::UUID_gen::get_time_UUID()); // dc2
+    auto unknown = host_id(utils::UUID_gen::get_time_UUID()); // not in the topology
+
+    locator::token_metadata::config tm_cfg;
+    tm_cfg.topo_cfg.this_host_id = h1;
+    tm_cfg.topo_cfg.local_dc_rack = {"dc1", "r1"};
+    semaphore sem(1);
+    shared_token_metadata stm([&] () noexcept { return get_units(sem, 1); }, tm_cfg);
+    auto stop_stm = deferred_stop(stm);
+    stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
+        auto& topo = tm.get_topology();
+        topo.add_node(h2, {"dc1", "r2"}, node::state::normal, 1);
+        topo.add_node(h3, {"dc1", "r3"}, node::state::normal, 1);
+        topo.add_node(h4, {"dc1", "r4"}, node::state::normal, 1);
+        topo.add_node(h5, {"dc2", "r1"}, node::state::normal, 1);
+        topo.add_node(h6, {"dc2", "r2"}, node::state::normal, 1);
+        // The topology constructor indexes the local node. Drop it so that h1 resolves
+        // through the topology config instead, like it does for a shallow-copied topology.
+        topo.remove_node(h1);
+        return make_ready_future<>();
+    }).get();
+
+    auto table = table_id(utils::UUID_gen::get_time_UUID());
+    auto token = dht::token::get_random_token(); // every token maps to the only tablet
+    auto replicas = [] (const std::vector<host_id>& hosts) {
+        tablet_replica_set result;
+        for (auto h : hosts) {
+            result.push_back(tablet_replica{h, 0});
+        }
+        return result;
+    };
+    auto make_erm = [&] (tablet_map tmap) {
+        auto tablet_count = tmap.tablet_count();
+        stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
+            tm.tablets().set_tablet_map(table, std::move(tmap));
+            return make_ready_future<>();
+        }).get();
+        auto tmptr = stm.get();
+        replication_strategy_params params({{"dc1", sstring("3")}, {"dc2", sstring("2")}}, tablet_count, std::nullopt);
+        auto rs = abstract_replication_strategy::create_replication_strategy("NetworkTopologyStrategy", params, tmptr->get_topology());
+        return rs->maybe_as_tablet_aware()->make_replication_map(table, tmptr);
+    };
+
+    // All replicas resolve, the local node through the config.
+    {
+        tablet_map tmap(1);
+        tmap.set_tablet(tmap.first_tablet(), tablet_info{replicas({h1, h2, h3, h5, h6})});
+        auto erm = make_erm(std::move(tmap));
+        BOOST_REQUIRE_EQUAL(erm->get_replication_factor(token), 5u);
+        BOOST_REQUIRE_EQUAL(erm->get_replication_factor(token, "dc1"), 3u);
+        BOOST_REQUIRE_EQUAL(erm->get_replication_factor(token, "dc2"), 2u);
+        BOOST_REQUIRE_EQUAL(erm->get_replication_factor(token, "dc3"), 0u);
+    }
+
+    // A transition adding a dc1 replica: the read replica set follows the stage.
+    for (auto [stage, dc1_rf] : {std::pair<tablet_transition_stage, size_t>{tablet_transition_stage::allow_write_both_read_old, 3},
+                                 {tablet_transition_stage::use_new, 4}}) {
+        tablet_map tmap(1);
+        tmap.set_tablet(tmap.first_tablet(), tablet_info{replicas({h1, h2, h3, h5, h6})});
+        tmap.set_tablet_transition_info(tmap.first_tablet(), tablet_transition_info{
+            stage, tablet_transition_kind::migration, replicas({h1, h2, h3, h4, h5, h6}), tablet_replica{h4, 0}});
+        auto erm = make_erm(std::move(tmap));
+        BOOST_REQUIRE_EQUAL(erm->get_replication_factor(token), dc1_rf + 2);
+        BOOST_REQUIRE_EQUAL(erm->get_replication_factor(token, "dc1"), dc1_rf);
+        BOOST_REQUIRE_EQUAL(erm->get_replication_factor(token, "dc2"), 2u);
+    }
+
+    // A replica whose host is not in the topology is counted in the datacenter being
+    // asked about, but never takes the count above the configured replication factor.
+    {
+        tablet_map tmap(1);
+        tmap.set_tablet(tmap.first_tablet(), tablet_info{replicas({h1, h2, unknown, h5})});
+        auto erm = make_erm(std::move(tmap));
+        BOOST_REQUIRE_EQUAL(erm->get_replication_factor(token), 4u);
+        BOOST_REQUIRE_EQUAL(erm->get_replication_factor(token, "dc1"), 3u); // h1, h2, unknown
+        BOOST_REQUIRE_EQUAL(erm->get_replication_factor(token, "dc2"), 2u); // h5, unknown
+        // A datacenter the schema does not replicate to configures a replication factor of
+        // 0, so a replica which cannot be placed is not counted there. LOCAL_QUORUM relies
+        // on the 0 to reject a keyspace which is not replicated to the local datacenter.
+        BOOST_REQUIRE_EQUAL(erm->get_replication_factor(token, "dc3"), 0u);
+    }
+
+    // Unplaceable replicas never push a datacenter above its configured replication
+    // factor, and never below the replicas which could be placed.
+    {
+        auto unknown2 = host_id(utils::UUID_gen::get_time_UUID());
+        tablet_map tmap(1);
+        tmap.set_tablet(tmap.first_tablet(), tablet_info{replicas({h2, h3, h4, unknown, unknown2})});
+        auto erm = make_erm(std::move(tmap));
+        BOOST_REQUIRE_EQUAL(erm->get_replication_factor(token), 5u);
+        BOOST_REQUIRE_EQUAL(erm->get_replication_factor(token, "dc1"), 3u); // capped at the configured 3
+        BOOST_REQUIRE_EQUAL(erm->get_replication_factor(token, "dc2"), 2u); // capped at the configured 2
+    }
+
+    // A tablet which lags behind a replication factor decrease keeps more dc1 replicas
+    // than the schema configures. The cap never drops the count below them.
+    {
+        tablet_map tmap(1);
+        tmap.set_tablet(tmap.first_tablet(), tablet_info{replicas({h1, h2, h3, h4, unknown})});
+        auto erm = make_erm(std::move(tmap));
+        BOOST_REQUIRE_EQUAL(erm->get_replication_factor(token), 5u);
+        BOOST_REQUIRE_EQUAL(erm->get_replication_factor(token, "dc1"), 4u); // h1, h2, h3, h4, above the configured 3
+        BOOST_REQUIRE_EQUAL(erm->get_replication_factor(token, "dc2"), 1u); // unknown alone, below the configured 2
+    }
+
+}
+
 BOOST_AUTO_TEST_SUITE_END()

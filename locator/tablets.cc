@@ -1561,6 +1561,58 @@ private:
         return *_tmap;
     }
 
+    // Datacenter of a replica host, or nullptr if the host is not in the topology.
+    // The local node resolves through the topology config even before it is added
+    // to the topology, like topology::get_location() does.
+    const sstring* find_datacenter(host_id host) const {
+        const auto& topo = get_topology();
+        if (const auto* node = topo.find_node(host)) {
+            return &node->dc_rack().dc;
+        }
+        return topo.is_me(host) ? &topo.get_location().dc : nullptr;
+    }
+
+    // Replica count in one datacenter, and whether every replica could be placed.
+    struct dc_replica_count {
+        size_t count = 0;
+        bool exact = true;
+    };
+
+    // Counts the read replicas of the tablet located in the datacenter.
+    // Replicas which could be placed are always counted. Topology may briefly lag behind
+    // tablet metadata (scylladb/scylladb#21856), leaving replicas whose datacenter is
+    // unknown; each is added to whichever datacenter is asked about, up to the replication
+    // factor the schema configures, which bounds what a lagging topology can inflate.
+    dc_replica_count count_replicas_in_dc(tablet_id tablet, const sstring& datacenter) const {
+        dc_replica_count result;
+        host_id_vector_replica_set unplaceable;
+        for (const auto& r : get_tablet_map().get_replicas_for_reading(tablet)) {
+            if (const auto* dc = find_datacenter(r.host)) {
+                result.count += *dc == datacenter;
+            } else {
+                unplaceable.push_back(r.host);
+            }
+        }
+        if (!unplaceable.empty()) {
+            result.exact = false;
+            const auto* rs = get_replication_strategy().maybe_as_tablet_aware();
+            if (!rs) [[unlikely]] {
+                on_internal_error(tablet_logger, format("table={}: tablet erm built from a strategy which does not use tablets", _table));
+            }
+            auto configured = rs->get_replication_factor(datacenter);
+            auto placed = result.count;
+            result.count = std::max(placed, std::min(placed + unplaceable.size(), configured));
+            // Declared here so that the counting path, which every request walks, does not
+            // pay the thread-local initialization check. One message per call, so a tablet
+            // with several unresolved replicas does not consume the rate limit budget which
+            // every table shares.
+            static thread_local seastar::logger::rate_limit rate_limit(std::chrono::seconds(1));
+            tablet_logger.log(log_level::warn, rate_limit, "table={}, tablet={}: replicas {} are not in topology, datacenter {}: {} replicas placed, {} configured, replication factor reported as {}",
+                              _table, tablet, unplaceable, datacenter, placed, configured, result.count);
+        }
+        return result;
+    }
+
     const tablet_replica_set& get_replicas_for_write(dht::token search_token) const {
         auto&& tablets = get_tablet_map();
         auto tablet = tablets.get_tablet_id(search_token);
@@ -1647,12 +1699,8 @@ public:
     }
 
     virtual size_t get_replication_factor(token search_token, const sstring& datacenter) const override {
-        auto&& tablets = get_tablet_map();
-        auto tablet = tablets.get_tablet_id(search_token);
-        const auto& topo = get_topology();
-        size_t rf = std::ranges::count_if(tablets.get_replicas_for_reading(tablet), [&] (const tablet_replica& r) {
-            return topo.get_datacenter(r.host) == datacenter;
-        });
+        auto tablet = get_tablet_map().get_tablet_id(search_token);
+        auto rf = count_replicas_in_dc(tablet, datacenter).count;
         tablet_logger.trace("get_replication_factor({}, {}): table={}, tablet={}, rf={}", search_token, datacenter, _table, tablet, rf);
         return rf;
     }
