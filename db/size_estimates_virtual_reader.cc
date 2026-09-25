@@ -262,8 +262,10 @@ future<> size_estimates_mutation_reader::get_next_partition() {
         co_return;
     }
     auto guard = reader_permit::awaits_guard(_permit);
-    auto ranges = co_await get_local_ranges(_db, _sys_ks);
-    auto estimates = co_await this->estimates_for_current_keyspace(std::move(ranges));
+    if (!_local_ranges) {
+        _local_ranges = co_await get_local_ranges(_db, _sys_ks);
+    }
+    auto estimates = co_await this->estimates_for_current_keyspace(*_local_ranges);
     auto mutations = db::system_keyspace::make_size_estimates_mutation(*_current_partition, std::move(estimates));
     ++_current_partition;
     utils::chunked_vector<mutation> ms;
@@ -308,6 +310,7 @@ future<> size_estimates_mutation_reader::fast_forward_to(const dht::partition_ra
     clear_buffer();
     _prange = &pr;
     _keyspaces = std::nullopt;
+    _local_ranges.reset();
     _end_of_stream = false;
     return close_partition_reader();
 }
