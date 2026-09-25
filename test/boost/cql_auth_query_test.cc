@@ -346,7 +346,7 @@ SEASTAR_TEST_CASE(modify_table_with_index) {
             cquery_nofail(env, "INSERT INTO t (p, v) values (14, 'aaa')");
         });
         assert_that(cquery_nofail(env, "SELECT p FROM t WHERE v='aaa' ALLOW FILTERING;")).is_rows().with_rows(
-                {{int32_type->decompose(14)}});
+                {{int32_type->decompose(14), utf8_type->decompose(sstring("aaa"))}});
     }, db_config_with_auth());
 }
 
