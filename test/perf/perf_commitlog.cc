@@ -36,6 +36,7 @@ struct test_config {
     unsigned concurrency;
     unsigned duration_in_seconds;
     unsigned operations_per_shard = 0;
+    unsigned tables = 1;
 
     size_t min_data_size;
     size_t max_data_size;
@@ -112,11 +113,18 @@ struct commitlog_service {
     std::optional<db::commitlog> log;
     std::optional<db::commitlog::flush_handler_anchor> fa;
     timer<> flush_timer;
+    std::unordered_set<db::cf_id_type> flush_ids;
+    size_t next_table = 0;
 
     commitlog_service(const test_config& c)
         : cfg(c)
         , delay_dist(cfg.min_flush_delay_in_ms, cfg.max_flush_delay_in_ms)
         , size_dist(cfg.min_data_size, cfg.max_data_size)
+        , flush_timer([this] {
+            for (auto& id : std::exchange(flush_ids, {})) {
+                log->discard_completed_segments(id);
+            }
+        })
     {}
 
     future<> init(const db::commitlog::config& cfg) {
@@ -131,19 +139,23 @@ struct commitlog_service {
         }
     }
     void flush_handler(db::cf_id_type id, db::replay_position pos) {
+        flush_ids.insert(id);
         if (!flush_timer.armed()) {
-            flush_timer.set_callback([id, this] { log->discard_completed_segments(id); });
             flush_timer.arm(std::chrono::milliseconds(delay_dist(tests::random::gen())));
         }
     }
 };
 
 static std::vector<clperf_result> do_commitlog_test(sharded<commitlog_service>& cls, test_config& cfg) {
-    auto uuid = table_id(utils::UUID_gen::get_time_UUID());
+    std::vector<table_id> ids(cfg.tables);
+    for (auto& id : ids) {
+        id = table_id(utils::UUID_gen::get_time_UUID());
+    }
 
     return time_parallel_ex<clperf_result>([&] {
         auto& log = cls.local();
         size_t size = log.size_dist(tests::random::gen());
+        auto& uuid = ids[log.next_table++ % ids.size()];
         return log.log->add_mutation(uuid, size, db::commitlog::force_sync::no, [size](db::commitlog::output& dst) {
             dst.fill('1', size);
         }).then([](db::rp_handle h) {
@@ -160,6 +172,7 @@ int main(int argc, char** argv) {
         ("duration", bpo::value<unsigned>()->default_value(5), "test duration in seconds")
         ("concurrency", bpo::value<unsigned>()->default_value(100), "workers per core")
         ("operations-per-shard", bpo::value<unsigned>(), "run this many operations per shard (overrides duration)")
+        ("tables", bpo::value<unsigned>()->default_value(1), "number of table ids to spread entries over (round robin)")
 
         ("commitlog-sync", bpo::value<sstring>(), "commitlog sync method (pediodic/batch)")
         ("commitlog-segment-size-in-mb", bpo::value<unsigned>(), "commitlog segment size")
@@ -217,6 +230,7 @@ int main(int argc, char** argv) {
         if (app.configuration().contains("operations-per-shard")) {
             cfg.operations_per_shard = app.configuration()["operations-per-shard"].as<unsigned>();
         }
+        cfg.tables = std::max(1u, app.configuration()["tables"].as<unsigned>());
         cfg.min_data_size = app.configuration()["min-data-size"].as<size_t>();
         cfg.max_data_size = app.configuration()["max-data-size"].as<size_t>();
         cfg.min_flush_delay_in_ms = app.configuration()["min-flush-delay-in-ms"].as<uint64_t>();
