@@ -19,6 +19,13 @@ namespace service::strong_consistency {
 // other is what a request must never do: the sets serve different questions, and the
 // wider one contains replicas that cannot answer a read.
 
+// Whether `replica` is still responsible for the group's raft log at this stage.
+// Both the running group and commitlog replay ask this: a replica that answers no has
+// had its raft server torn down and its segment references given up, so replay must
+// not recover a log for it.
+bool hosts_raft_group(const locator::tablet_info& tinfo,
+        const locator::tablet_transition_info* trinfo, const locator::tablet_replica& replica);
+
 // Replicas that may currently be the raft group's leader.
 //
 // A request that has to reach the leader may be sent to any of these: one that isn't
