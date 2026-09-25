@@ -1009,28 +1009,6 @@ future<tasks::task_manager::task_ptr> task_manager_module::start_table_reshaping
     });
 }
 
-future<> shard_reshaping_compaction_task_impl::run() {
-    auto& table = _db.local().find_column_family(_status.keyspace, _status.table);
-    auto holder = table.async_gate().hold();
-    auto info = this->info();
-
-    std::unordered_map<compaction::compaction_group_view*, std::unordered_set<sstables::shared_sstable>> sstables_grouped_by_compaction_group;
-    for (auto& sstable : _dir.get_unshared_local_sstables()) {
-        auto& t = table.compaction_group_view_for_sstable(sstable);
-        sstables_grouped_by_compaction_group[&t].insert(sstable);
-    }
-
-    // reshape sstables individually within the compaction groups
-    for (auto& sstables_in_cg : sstables_grouped_by_compaction_group) {
-        auto lock_holder = co_await table.get_compaction_manager().get_incremental_repair_read_lock(*sstables_in_cg.first, "reshaping_compaction");
-        try {
-            co_await reshape_compaction_group(*sstables_in_cg.first, sstables_in_cg.second, table, info);
-        } catch (compaction::compaction_stopped_exception&) {
-            break;
-        }
-    }
-}
-
 future<> shard_reshaping_compaction_task_impl::reshape_compaction_group(compaction::compaction_group_view& t, std::unordered_set<sstables::shared_sstable>& sstables_in_cg, replica::column_family& table, const tasks::task_info& info) {
 
     while (true) {
@@ -1088,6 +1066,28 @@ future<> shard_reshaping_compaction_task_impl::reshape_compaction_group(compacti
         _total_shard_size += reshaped_size;
 
         co_await coroutine::maybe_yield();
+    }
+}
+
+future<> shard_reshaping_compaction_task_impl::run() {
+    auto& table = _db.local().find_column_family(_status.keyspace, _status.table);
+    auto holder = table.async_gate().hold();
+    auto info = this->info();
+
+    std::unordered_map<compaction::compaction_group_view*, std::unordered_set<sstables::shared_sstable>> sstables_grouped_by_compaction_group;
+    for (auto& sstable : _dir.get_unshared_local_sstables()) {
+        auto& t = table.compaction_group_view_for_sstable(sstable);
+        sstables_grouped_by_compaction_group[&t].insert(sstable);
+    }
+
+    // reshape sstables individually within the compaction groups
+    for (auto& sstables_in_cg : sstables_grouped_by_compaction_group) {
+        auto lock_holder = co_await table.get_compaction_manager().get_incremental_repair_read_lock(*sstables_in_cg.first, "reshaping_compaction");
+        try {
+            co_await reshape_compaction_group(*sstables_in_cg.first, sstables_in_cg.second, table, info);
+        } catch (compaction::compaction_stopped_exception&) {
+            break;
+        }
     }
 }
 
