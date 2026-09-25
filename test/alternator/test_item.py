@@ -888,3 +888,19 @@ def test_attribute_allowed_chars(test_table_s):
         test_table_s.update_item(Key={'p': p},
             AttributeUpdates={chars: {'Value': chars, 'Action': 'PUT'}})
         assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'][chars] == chars
+
+# DynamoDB's "TableName" documentation specifies that besides the obvious
+# possibility of giving the table's name, "You can also provide the Amazon
+# Resource Name (ARN) of the table in this parameter.". Here we check this for
+# the item operations, PutItem and GetItem.
+# Reproduces SCYLLADB-4683.
+def test_item_table_name_arn(test_table_s):
+    client = test_table_s.meta.client
+    arn = client.describe_table(TableName=test_table_s.name)['Table']['TableArn']
+    p = random_string()
+    client.put_item(TableName=arn, Item={'p': p, 'x': 'hello'})
+    assert client.get_item(TableName=arn, Key={'p': p},
+        ConsistentRead=True)['Item'] == {'p': p, 'x': 'hello'}
+    # The ARN and the name refer to one and the same table, so the item just
+    # written through the ARN can be read back through the name:
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'x': 'hello'}

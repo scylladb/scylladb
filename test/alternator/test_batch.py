@@ -630,3 +630,89 @@ def test_batch_get_item_full_failure(scylla_only, dynamodb, rest_api, test_table
     with scylla_inject_error(rest_api, "alternator_batch_get_item", one_shot=False):
         with pytest.raises(ClientError, match="InternalServerError"):
             test_table_sn.meta.client.batch_get_item(RequestItems = to_read)
+
+# DynamoDB's "TableName" documentation specifies that besides the obvious
+# possibility of giving the table's name, "You can also provide the Amazon
+# Resource Name (ARN) of the table in this parameter.". The batch operations
+# don't have a TableName parameter - they name the table by the keys of their
+# RequestItems map - but the documentation of those says the same thing: they
+# take "a map of one or more table names or table ARNs". So we check here that
+# both BatchWriteItem and BatchGetItem accept table ARNs as keys in their
+# RequestItems maps.
+# Reproduces SCYLLADB-4683.
+def test_batch_table_name_arn(test_table_s):
+    client = test_table_s.meta.client
+    arn = client.describe_table(TableName=test_table_s.name)['Table']['TableArn']
+    items = [{'p': random_string(), 'x': random_string()} for i in range(3)]
+    client.batch_write_item(RequestItems={
+        arn: [{'PutRequest': {'Item': item}} for item in items]})
+    # The items written through the ARN can be read back through the table's
+    # name, so both really named the same table:
+    for item in items:
+        assert test_table_s.get_item(Key={'p': item['p']}, ConsistentRead=True)['Item'] == item
+    # BatchGetItem can also take an ARN:
+    reply = client.batch_get_item(RequestItems={
+        arn: {'Keys': [{'p': item['p']} for item in items], 'ConsistentRead': True}})
+    # The reply's "Responses" is a map keyed by table as well. DynamoDB's
+    # documentation calls it "a map of table name or table ARN", without
+    # spelling out which of the two is used when the request named the table
+    # by its ARN - but it must be the same string the request used: the
+    # documentation of RequestItems says that "each table name or ARN can be
+    # used only once per BatchGetItem request", and one request may name
+    # same-named tables of two different accounts, which the reply could only
+    # tell apart by their ARNs.
+    assert list(reply['Responses'].keys()) == [arn]
+    assert multiset(items) == multiset(reply['Responses'][arn])
+
+# The test above checked BatchGetItem's "Responses" map, but its reply has a
+# second map keyed by table - "UnprocessedKeys" - which must be keyed the same
+# way, and for a stronger reason than mere consistency: UnprocessedKeys is
+# meant to be passed back verbatim as the RequestItems of a retry, and it also
+# repeats the request's other per-table parameters (ConsistentRead and friends)
+# which Alternator copies out of the request by looking it up under this very
+# name. Naming the table differently from the request would not just look odd,
+# it would fail to find the request.
+# Alternator only produces a non-empty UnprocessedKeys when some of the reads
+# fail, which we can only arrange with Alternator's error injection - hence
+# scylla_only. This test is modeled on test_batch_get_item_partial() above.
+# Reproduces SCYLLADB-4683.
+def test_batch_get_item_unprocessed_keys_arn(scylla_only, rest_api, test_table_sn):
+    client = test_table_sn.meta.client
+    arn = client.describe_table(TableName=test_table_sn.name)['Table']['TableArn']
+    p = random_string()
+    content = random_string()
+    # Spread the items over several partitions, so that the read is split into
+    # several requests and the one-shot injection below fails only some of them
+    count = 10
+    partitions = 3
+    with test_table_sn.batch_writer() as batch:
+        for i in range(count):
+            batch.put_item(Item={
+                'p': p + str(i % partitions), 'c': i, 'content': content})
+    responses = []
+    # Note how the ARN, not the table's name, is what identifies the table in
+    # the request - and, on every retry below, in the UnprocessedKeys we got
+    # back from the previous round.
+    to_read = { arn: {'Keys': [{'p': p + str(c % partitions), 'c': c} for c in range(count)], 'ConsistentRead': True } }
+    with scylla_inject_error(rest_api, "alternator_batch_get_item", one_shot=True):
+        some_keys_were_unprocessed = False
+        while to_read:
+            reply = client.batch_get_item(RequestItems = to_read)
+            # Both of the reply's per-table maps name the table exactly as the
+            # request did - by its ARN. UnprocessedKeys may also be empty, in
+            # the last round where nothing failed.
+            assert arn in reply['Responses']
+            assert set(reply['UnprocessedKeys'].keys()) <= {arn}
+            to_read = reply['UnprocessedKeys']
+            # The UnprocessedKeys should not only list the keys, it should
+            # also copy the additional parameters used in the original read.
+            # In this example this was "ConsistentRead". This is the part which
+            # Alternator can only produce by finding the request under the same
+            # name it reports here.
+            for tbl in to_read:
+                assert 'ConsistentRead' in to_read[tbl]
+            some_keys_were_unprocessed = some_keys_were_unprocessed or len(to_read) > 0
+            responses.extend(reply['Responses'][arn])
+        assert multiset(responses) == multiset(
+            [{'p': p + str(i % partitions), 'c': i, 'content': content} for i in range(count)])
+        assert some_keys_were_unprocessed
