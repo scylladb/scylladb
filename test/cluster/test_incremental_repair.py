@@ -1401,6 +1401,104 @@ async def test_tombstone_gc_no_resurrection_basic_ordering(manager: ScyllaCluste
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_tombstone_gc_no_resurrection_repair_completing_mid_compaction(manager: ScyllaClusterManager):
+    """Verify that a repair completing while a repaired compaction runs cannot make it purge a
+    tombstone over data that the repair promoted to repaired.
+
+    A compaction on the repaired set consults only the repaired sstables captured when it starts.
+    That is safe for the tombstones which are GC-eligible at that point: whatever they shadow was
+    promoted to repaired before their repair_time was committed. A repair can promote data (mark it
+    with the next repaired_at) while a repaired compaction runs -- after the promotion stopped the
+    compactions that were running then, but before the coordinator commits sstables_repaired_at and
+    repair_time. The commit makes the promoted data repaired, but outside the running compaction's
+    snapshot, and makes more tombstones GC-eligible. So the compaction has to work with the gc state
+    from its start.
+
+    Scenario:
+      - propagation_delay=10s. T (row deletion, ts=2) written, flushed, and a second sstable too, so
+        that a minor compaction on the repaired set has two sstables to work with.
+      - Repair #1 promotes both to repaired. gc_before = repair_time - 10s < T.deletion_time, so T
+        is not GC-eligible yet.
+      - D (ts=1, shadowed by T) written and flushed: unrepaired.
+      - 10s later, repair #2 promotes D, but is held before its commit.
+      - A minor compaction on the repaired set starts and is paused after taking its snapshots.
+      - Repair #2 commits: D is now repaired, and T GC-eligible.
+      - The compaction resumes. It must keep T: D is not in its snapshot, and T was not GC-eligible
+        when the snapshot was taken.
+      - Key must remain deleted.
+    """
+    # gc_before is also capped by commitlog::min_gc_time(): the segment holding the DELETE stays
+    # active, so its time for the table -- the time of the DELETE -- becomes gc_before, and T is
+    # never GC-eligible. Run without a commitlog so gc_before is decided by repair_time alone.
+    servers, cql, hosts, ks, table_id, logs = await _setup_tombstone_gc_cluster(
+        manager, tablets=1, extra_cmdline=['--logger-log-level', 'compaction=debug', '--enable-commitlog', '0'])
+    propagation_delay = 10
+    await cql.run_async(
+        f"ALTER TABLE {ks}.test WITH tombstone_gc = {{'mode': 'repair', 'propagation_delay_in_seconds': '{propagation_delay}'}}"
+        " AND compaction = {'class': 'SizeTieredCompactionStrategy', 'min_threshold': 2}")
+    # The minor compaction is started by hand, once everything is in place.
+    for s in servers:
+        await manager.api.disable_autocompaction(s.ip_addr, ks, "test")
+
+    key = 42
+    await cql.run_async(f"DELETE FROM {ks}.test USING TIMESTAMP 2 WHERE pk = {key}")
+    for s in servers:
+        await manager.api.flush_keyspace(s.ip_addr, ks)
+    await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({key + 1}, 1) USING TIMESTAMP 3")
+    for s in servers:
+        await manager.api.flush_keyspace(s.ip_addr, ks)
+
+    # T promoted to repaired, but not GC-eligible: T.deletion_time > repair_time - propagation_delay.
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", "all", incremental_mode='incremental')
+
+    # D, older than T, lands in the unrepaired set.
+    await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({key}, 1) USING TIMESTAMP 1")
+    for s in servers:
+        await manager.api.flush_keyspace(s.ip_addr, ks)
+
+    # Repair #2 promotes D, then waits for the coordinator to commit, which is held.
+    time.sleep(propagation_delay + 1)
+    coord = await get_topology_coordinator(manager)
+    coord_serv = await manager.find_server_by_host_id(servers, coord)
+    coord_log = await manager.server_open_log(coord_serv.server_id)
+    coord_mark = await coord_log.mark()
+    await inject_error_on(manager, "delay_end_repair_update", servers)
+    response = await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", "all", await_completion=False, incremental_mode='incremental')
+    await coord_log.wait_for("Finished tablet repair", from_mark=coord_mark)
+
+    # The repaired compaction starts in the window, and is paused after taking its snapshots.
+    marks = [await log.mark() for log in logs]
+    for s in servers:
+        await manager.api.enable_injection(s.ip_addr, "compaction_repaired_view_wait_after_gc_snapshots", one_shot=True)
+        await manager.api.enable_autocompaction(s.ip_addr, ks, "test")
+    for s in servers:
+        await manager.api.wait_for_injection_enter(s.ip_addr, "compaction_repaired_view_wait_after_gc_snapshots")
+
+    # Repair #2 commits: D is repaired, T GC-eligible (T.deletion_time < repair_time - propagation_delay).
+    await inject_error_off(manager, "delay_end_repair_update", servers)
+    await manager.api.wait_task(servers[0].ip_addr, response['tablet_task_id'])
+    # The coordinator sends this once the commit is applied, which the task completing does not
+    # imply. Only then does the node's gc state see the new repair_time.
+    for log, mark in zip(logs, marks):
+        await log.wait_for("Got repair_update_compaction_ctrl", from_mark=mark)
+
+    for s in servers:
+        await manager.api.message_injection(s.ip_addr, "compaction_repaired_view_wait_after_gc_snapshots")
+    for log, mark in zip(logs, marks):
+        await log.wait_for("Compacted 2 sstables to", from_mark=mark)
+
+    # Bypass the cache: it still holds T merged with D from before the compaction, which does not
+    # invalidate it, so a resurrection would only be visible once the entry is evicted.
+    for h in hosts:
+        rows = await cql.run_async(
+            SimpleStatement(f"SELECT pk FROM {ks}.test WHERE pk = {key} BYPASS CACHE", consistency_level=ConsistencyLevel.ONE),
+            host=h)
+        assert not rows, f"Key {key} visible on host {h}: T was GC'd by a repaired compaction although it became GC-eligible only after the compaction started"
+
+    logger.info("test_tombstone_gc_no_resurrection_repair_completing_mid_compaction: PASSED")
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tombstone_gc_no_resurrection_hints_flush_failure(manager: ScyllaClusterManager):
     """Verify that repair_time stays at epoch when hints flush fails, so tombstones
     are never GC-eligible after such a repair and data resurrection cannot occur.

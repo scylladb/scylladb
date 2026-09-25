@@ -420,6 +420,9 @@ future<compaction_result> compaction_task_executor::compact_sstables(compaction_
     descriptor.gc_state = ignores_newer_data ? t.get_tombstone_gc_state().snapshot() : t.get_tombstone_gc_state();
     if (can_purge) {
         descriptor.enable_garbage_collection(co_await sstable_set_for_tombstone_gc(t));
+        if (t.skip_memtable_for_tombstone_gc()) {
+            co_await utils::get_local_injector().inject("compaction_repaired_view_wait_after_gc_snapshots", utils::wait_for_message(5min));
+        }
     }
     descriptor.creator = [&t] (shard_id) {
         // All compaction types going through this path will work on normal input sstables only.
