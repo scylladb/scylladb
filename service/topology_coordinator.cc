@@ -4241,6 +4241,20 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         _topo_sm.event.broadcast();
     }
 
+    // Keyspace changes decide which racks are eligible for auto-RF. Wake up so that
+    // the auto-RF reconciler re-evaluates them.
+    virtual void on_create_keyspace(const sstring& ks_name) override {
+        _topo_sm.event.broadcast();
+    }
+
+    virtual void on_update_keyspace(const sstring& ks_name) override {
+        _topo_sm.event.broadcast();
+    }
+
+    virtual void on_drop_keyspace(const sstring& ks_name) override {
+        _topo_sm.event.broadcast();
+    }
+
     future<> cancel_all_requests(group0_guard guard, std::unordered_set<raft::server_id> dead_nodes) {
         utils::chunked_vector<canonical_mutation> muts;
         std::vector<raft::server_id> reject_join;
