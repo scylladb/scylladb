@@ -720,12 +720,12 @@ private:
             auto stop_cm = deferred_stop(_cm);
             _cm.invoke_on_all(&compaction::compaction_manager::start, std::ref(*cfg), only_on_shard0(&*_disk_space_monitor_shard0)).get();
 
-            _sstm.start(std::ref(*cfg), sstables::storage_manager::config{}).get();
-            auto stop_sstm = deferred_stop(_sstm);
-
             _sl_controller.start(std::ref(_auth_service), std::ref(_token_metadata), std::ref(abort_sources), qos::service_level_options{.shares = 1000}, scheduling_supergroup(), scheduling_groups.statement_scheduling_group).get();
             auto stop_sl_controller = defer_verbose_shutdown("service level controller", [this] { _sl_controller.stop().get(); });
             _sl_controller.invoke_on_all(&qos::service_level_controller::start).get();
+
+            _sstm.start(std::ref(*cfg), sstables::storage_manager::config{}).get();
+            auto stop_sstm = deferred_stop(_sstm);
 
             lang::manager::config lang_config;
             lang_config.lua.max_bytes = cfg->user_defined_function_allocation_limit_bytes();
