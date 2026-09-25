@@ -1197,6 +1197,13 @@ public:
         return _sstable_identifier;
     }
 
+    // Set on the source of a component rewrite (see link_with_rewritten_component()):
+    // the basename of the Data component of the sstable it was cloned into. Lets holders
+    // of a reference to the replaced sstable find its current generation in the table.
+    const std::optional<sstring>& cloned_to_sstable_filename() const noexcept {
+        return _cloned_to_sstable_filename;
+    }
+
     // Drops all evictable in-memory caches of on-disk content.
     future<> drop_caches();
 
