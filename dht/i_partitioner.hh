@@ -90,6 +90,16 @@ inline token get_token(const schema& s, partition_key_view key) {
 }
 
 dht::partition_range to_partition_range(dht::token_range);
+
+// Returns the smallest token range which contains the tokens of all the keys
+// contained in the given partition range.
+//
+// This is not the same as replacing every ring position with its token, because
+// a ring position which excludes a key does not exclude that key's token: other
+// keys can share the token. For example, the range starting right after key k
+// still contains keys which share the token of k, so the resulting token range
+// has to contain the token of k.
+dht::token_range to_token_range(const dht::partition_range&);
 dht::partition_range_vector to_partition_ranges(const dht::token_range_vector& ranges, utils::can_yield can_yield = utils::can_yield::no);
 future<utils::chunked_vector<dht::partition_range>> to_partition_ranges_chunked(const dht::token_range_vector& ranges);
 
