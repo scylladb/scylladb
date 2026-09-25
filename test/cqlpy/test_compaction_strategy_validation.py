@@ -7,8 +7,8 @@
 #############################################################################
 
 import pytest
-from .util import new_test_table
-from cassandra.protocol import ConfigurationException
+from .util import new_test_table, new_materialized_view, unique_name, is_scylla
+from cassandra.protocol import ConfigurationException, SyntaxException
 
 @pytest.fixture(scope="module")
 def table1(cql, test_keyspace):
@@ -48,6 +48,14 @@ def test_time_window_compaction_strategy_options(cql, table1):
 
 def test_leveled_compaction_strategy_options(cql, table1):
     assert_throws(cql, table1, r"sstable_size_in_mb value \(-5\) must be positive|sstable_size_in_mb must be larger than 0, but was -5", "ALTER TABLE %s WITH compaction = { 'class' : 'LeveledCompactionStrategy', 'sstable_size_in_mb' : -5 }")
+    # Refs SCYLLADB-4474. Scylla reports an unparsable integer as a syntax
+    # error, Cassandra as a configuration error.
+    if is_scylla(cql):
+        expected_error = (SyntaxException, r"Invalid integer value 2147483648 for 'sstable_size_in_mb'")
+    else:
+        expected_error = (ConfigurationException, r"2147483648 is not a parsable int")
+    with pytest.raises(expected_error[0], match=expected_error[1]):
+        cql.execute(f"ALTER TABLE {table1} WITH compaction = {{ 'class' : 'LeveledCompactionStrategy', 'sstable_size_in_mb' : 2147483648 }}")
 
 def test_incremental_compaction_strategy_options(cql, table1, scylla_only):
     assert_throws(cql, table1, r"min_sstable_size value \(-1\) must be non negative", "ALTER TABLE %s WITH compaction = { 'class' : 'IncrementalCompactionStrategy', 'min_sstable_size' : -1 }")
@@ -85,3 +93,44 @@ def test_not_allowed_options(cql, table1):
     assert_throws(cql, table1, rf"{scylla_error(dog=3)}||Properties specified \[dog\] are not understood by TimeWindowCompactionStrategy", "ALTER TABLE %s WITH compaction = { 'class' : 'TimeWindowCompactionStrategy', 'dog' : 3 }")
     assert_throws(cql, table1, rf"{scylla_error(compaction_window_size=4)}|Properties specified \[compaction_window_size\] are not understood by LeveledCompactionStrategy", "ALTER TABLE %s WITH compaction = { 'class' : 'LeveledCompactionStrategy', 'compaction_window_size' : 4 }")
     assert_throws(cql, table1, rf"{scylla_error(cold_reads_to_omit=0.5)}|Properties specified \[cold_reads_to_omit\] are not understood by IncrementalCompactionStrategy", "ALTER TABLE %s WITH compaction = { 'class' : 'IncrementalCompactionStrategy', 'cold_reads_to_omit' : 0.5 }")
+
+BAD_TOMBSTONE_THRESHOLD = "{ 'class' : 'SizeTieredCompactionStrategy', 'tombstone_threshold' : -0.4 }"
+BAD_TOMBSTONE_THRESHOLD_ERROR = r"tombstone_threshold value \(-0.4\) must be between 0.0 and 1.0|tombstone_threshold must be greater than 0, but was -0.400000"
+
+# The statement is prepared once and executed twice on purpose: the compaction
+# class, once recorded, skips the validation on re-execution.
+def assert_prepared_throws_twice(cql, msg, cmd):
+    prepared = cql.prepare(cmd)
+    for _ in range(2):
+        with pytest.raises(ConfigurationException, match=msg):
+            cql.execute(prepared)
+
+# Reproduces SCYLLADB-4214.
+def test_create_view_compaction_options(cql, table1):
+    keyspace = table1.split('.')[0]
+    view_name = unique_name()
+    mv = f"{keyspace}.{view_name}"
+    try:
+        assert_prepared_throws_twice(cql, BAD_TOMBSTONE_THRESHOLD_ERROR,
+            f"CREATE MATERIALIZED VIEW {mv} AS SELECT * FROM {table1} WHERE a IS NOT NULL AND b IS NOT NULL PRIMARY KEY (b, a) WITH compaction = {BAD_TOMBSTONE_THRESHOLD}")
+        assert list(cql.execute(f"SELECT view_name FROM system_schema.views WHERE keyspace_name = '{keyspace}' AND view_name = '{view_name}'")) == []
+    finally:
+        cql.execute(f"DROP MATERIALIZED VIEW IF EXISTS {mv}")
+
+# Reproduces SCYLLADB-4214.
+def test_alter_view_compaction_options(cql, table1):
+    with new_materialized_view(cql, table1, '*', 'b, a', 'a IS NOT NULL AND b IS NOT NULL') as mv:
+        assert_prepared_throws_twice(cql, BAD_TOMBSTONE_THRESHOLD_ERROR,
+            f"ALTER MATERIALIZED VIEW {mv} WITH compaction = {BAD_TOMBSTONE_THRESHOLD}")
+        keyspace, view_name = mv.split('.')
+        compaction = cql.execute(f"SELECT compaction FROM system_schema.views WHERE keyspace_name = '{keyspace}' AND view_name = '{view_name}'").one().compaction
+        assert 'tombstone_threshold' not in compaction
+
+# Reproduces SCYLLADB-4214.
+def test_create_index_compaction_options(cql, table1, scylla_only):
+    keyspace, table_name = table1.split('.')
+    index_name = unique_name()
+    assert_prepared_throws_twice(cql, BAD_TOMBSTONE_THRESHOLD_ERROR,
+        f"CREATE INDEX {index_name} ON {table1} (b) WITH compaction = {BAD_TOMBSTONE_THRESHOLD}")
+    assert list(cql.execute(f"SELECT index_name FROM system_schema.indexes WHERE keyspace_name = '{keyspace}' AND table_name = '{table_name}' AND index_name = '{index_name}'")) == []
+    assert list(cql.execute(f"SELECT view_name FROM system_schema.views WHERE keyspace_name = '{keyspace}' AND view_name = '{index_name}_index'")) == []
