@@ -411,6 +411,7 @@ future<sstables::sstable_set> compaction_task_executor::sstable_set_for_tombston
 future<compaction_result> compaction_task_executor::compact_sstables(compaction_descriptor descriptor, ::compaction::compaction_data& cdata, on_replacement& on_replace, compaction_manager::can_purge_tombstones can_purge,
                                                                                sstables::offstrategy offstrategy) {
     compaction_group_view& t = *_compacting_table;
+    descriptor.gc_state = t.get_tombstone_gc_state();
     if (can_purge) {
         descriptor.enable_garbage_collection(co_await sstable_set_for_tombstone_gc(t));
     }
@@ -2161,6 +2162,7 @@ private:
                     compaction_descriptor::default_max_sstable_bytes,
                     sst->run_identifier(),
                     compaction_type_options::make_scrub(compaction_type_options::scrub::mode::validate, _quarantine_sstables));
+            desc.gc_state = _compacting_table->get_tombstone_gc_state();
             auto res = co_await ::compaction::compact_sstables(std::move(desc), _compaction_data, *_compacting_table, _progress_monitor);
             co_await update_history(*_compacting_table, compaction_result(res), _compaction_data);
             co_return res;
