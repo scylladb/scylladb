@@ -1976,6 +1976,58 @@ SEASTAR_TEST_CASE(test_commitlog_update_max_data_lifetime) {
     co_await log.clear();
 }
 
+// A CF that becomes clean and is re-dirtied in the same segment keeps its original min time.
+SEASTAR_TEST_CASE(test_commitlog_max_data_lifetime_redirty) {
+    commitlog::config cfg;
+
+    cfg.commitlog_segment_size_in_mb = 1;
+    cfg.commitlog_total_space_in_mb = 2 * this_smp_shard_count();
+    cfg.commitlog_sync_period_in_ms = 10;
+    cfg.commitlog_data_max_lifetime_in_seconds = std::nullopt;
+
+    tmpdir tmp;
+    cfg.commit_log_location = tmp.path().string();
+    auto log = co_await commitlog::create_commitlog(cfg);
+
+    auto uuid = make_table_id();
+    std::unordered_set<cf_id_type> ids;
+    condition_variable cond;
+
+    auto r = log.add_flush_handler([&](cf_id_type id, replay_position pos) {
+        ids.insert(id);
+        cond.signal();
+    });
+
+    auto add = [&] {
+        return log.add_mutation(uuid, 1, db::commitlog::force_sync::no, [&](db::commitlog::output& dst) {
+            dst.fill('1', 1);
+        });
+    };
+
+    rp_set rps;
+    rps.put(co_await add());
+    auto first = rps.usage().begin()->first;
+    log.discard_completed_segments(uuid, rps);
+
+    co_await seastar::sleep(2s);
+    rp_handle h = co_await add();
+    BOOST_REQUIRE_EQUAL(h.rp().id, first);
+    h.release();
+
+    // Only the first entry is >= 2s old, so the request must come well within 1s.
+    log.update_max_data_lifetime(2);
+    try {
+        co_await cond.wait(900ms, [&] {
+            return ids.contains(uuid);
+        });
+    } catch (condition_variable_timed_out&) {
+    }
+    BOOST_REQUIRE(ids.contains(uuid));
+
+    co_await log.shutdown();
+    co_await log.clear();
+}
+
 /**
  * Test allocating oversized multi-entry
 */
