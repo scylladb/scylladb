@@ -13,12 +13,16 @@ import logging
 import subprocess
 from cassandra.query import SimpleStatement, ConsistencyLevel
 
+from test.pylib.util import unique_name, wait_for_cql_and_get_hosts
 from test.pylib.tablets import get_tablet_count, get_all_tablet_replicas
 from test.pylib.rest_client import HTTPError, read_barrier
 from test.pylib.internal_types import ServerInfo
+from test.pylib.object_storage import Storage, StorageFactory
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.cluster.util import new_test_keyspace, reconnect_driver
 from test.cluster.tasks.task_manager_client import TaskManagerClient
+from test.cluster.object_store.test_backup import topo, create_cluster, take_snapshot, do_backup, \
+    do_restore_server, run_cluster_backup
 
 logger = logging.getLogger(__name__)
 
@@ -249,6 +253,54 @@ async def verify_migration_status(manager: ScyllaClusterManager, server: ServerI
                 await asyncio.sleep(retry_interval)
             else:
                 raise
+
+
+async def upgrade_node_storage_to_tablets(manager: ScyllaClusterManager, servers: list[ServerInfo], server: ServerInfo):
+    """Upgrade the storage of one node to tablets: mark it and restart it.
+
+    Returns a fresh cql session, since the driver is reconnected after the restart.
+    """
+    logger.info(f"Upgrading node {server.server_id} to tablets")
+    await manager.api.upgrade_node_to_tablets(server.ip_addr)
+    await manager.server_restart(server.server_id)
+    await reconnect_driver(manager)
+    cql, _ = await manager.get_ready_cql(servers)
+    return cql
+
+
+async def finalize_keyspace_migration(manager: ScyllaClusterManager, server: ServerInfo,
+                                      ks: str, tables: list[str], wait_for_convergence: bool = True):
+    """Finalize the migration of a keyspace and, unless told otherwise, wait for
+    the pow2 convergence of every table."""
+    logger.info(f"Finalizing vnodes-to-tablets migration of keyspace '{ks}'")
+    await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks)
+    # finalize_vnode_tablet_migration returns once the group0 command is applied on the
+    # topology coordinator; other nodes apply it asynchronously.
+    await read_barrier(manager.api, server.ip_addr)
+
+    if wait_for_convergence:
+        for table in tables:
+            logger.info(f"Waiting for pow2 convergence of {ks}.{table}")
+            await wait_for_pow2_convergence(manager, server, ks, table)
+
+
+async def migrate_keyspace_to_tablets(manager: ScyllaClusterManager, servers: list[ServerInfo],
+                                      ks: str, tables: list[str], wait_for_convergence: bool = True):
+    """Drive a keyspace through the whole vnodes-to-tablets migration.
+
+    Prepares the tablet maps, upgrades the storage of every node with a rolling
+    restart, finalizes the migration and, unless told otherwise, waits for the
+    pow2 convergence of every table. Returns a fresh cql session, since the
+    driver is reconnected after each restart.
+    """
+    logger.info(f"Starting vnodes-to-tablets migration of keyspace '{ks}'")
+    await manager.api.create_vnode_tablet_migration(servers[0].ip_addr, ks)
+
+    for s in servers:
+        cql = await upgrade_node_storage_to_tablets(manager, servers, s)
+
+    await finalize_keyspace_migration(manager, servers[0], ks, tables, wait_for_convergence)
+    return cql
 
 
 async def test_migration(manager: ScyllaClusterManager):
@@ -1458,3 +1510,347 @@ async def test_migration_with_zero_token_node(manager: ScyllaClusterManager):
 
         logger.info("Verifying data integrity after finalization")
         await verify_data_integrity(cql, ks, "test", num_keys)
+
+
+#####################################
+# Tests for Backup and Restore
+#####################################
+
+@pytest.fixture
+async def s3_storage(object_storage_factory: StorageFactory) -> Storage:
+    return await object_storage_factory("s3")
+
+
+# RF must equal the number of racks for the migrated keyspace to be RF-rack-valid.
+BACKUP_TOPOLOGY = topo(rf=2, nodes=2, racks=2, dcs=1)
+BACKUP_NUM_KEYS = 50
+
+
+async def create_backup_cluster(manager: ScyllaClusterManager, object_storage: Storage, extra_cmdline: list[str] = []):
+    """Start a vnode-based cluster suitable for a migration followed by backup and restore."""
+    servers, _ = await create_cluster(BACKUP_TOPOLOGY, manager, logger, object_storage,
+                                      extra_config={'num_tokens': 16, 'tablet_load_stats_refresh_interval_in_seconds': 1},
+                                      # More than one shard so that the storage upgrade reshards for real
+                                      extra_cmdline=['--smp', '2'] + extra_cmdline)
+    return servers
+
+
+async def create_vnode_table(cql, ks: str, table: str, num_keys: int):
+    await cql.run_async(f"CREATE TABLE {ks}.{table} (pk int PRIMARY KEY, c int)")
+    insert_stmt = cql.prepare(f"INSERT INTO {ks}.{table} (pk, c) VALUES (?, ?)")
+    insert_stmt.consistency_level = ConsistencyLevel.ALL
+    await asyncio.gather(*(cql.run_async(insert_stmt, [k, k]) for k in range(num_keys)))
+
+
+async def truncate_table(cql, ks: str, table: str):
+    logger.info(f"Truncating {ks}.{table}")
+    await cql.run_async(f"TRUNCATE {ks}.{table}")
+    assert not await cql.run_async(f"SELECT pk FROM {ks}.{table}"), f"{ks}.{table} is not empty after truncation"
+
+
+async def check_table_replicas(cql, manager: ScyllaClusterManager, servers: list[ServerInfo],
+                               ks: str, table: str, num_keys: int):
+    """Check that every node holds every row of the table locally.
+
+    Assumes that the replication factor equals the number of nodes. A regular
+    SELECT would not do: the coordinator may serve it from any replica, so it
+    says nothing about the data on the node it was sent to.
+    """
+    expected = set(range(num_keys))
+    for s in servers:
+        host = await wait_for_cql_and_get_hosts(cql, [s], time.time() + 30)
+        await read_barrier(manager.api, s.ip_addr)  # scylladb/scylladb#18199
+        rows = await cql.run_async(f"SELECT pk FROM MUTATION_FRAGMENTS({ks}.{table})", host=host[0])
+        actual = {r.pk for r in rows}
+        assert actual == expected, \
+            f"Node {s.server_id} does not hold every row of {ks}.{table} locally: missing {sorted(expected - actual)}, extra {sorted(actual - expected)}"
+
+
+async def check_snapshot_manifests(manager: ScyllaClusterManager, servers: list[ServerInfo],
+                                   ks: str, snap_name: str, expected_tablets_type: str, expected_tablet_count: int):
+    """Check the manifest every node wrote for a snapshot.
+
+    `tablets_type` is the only field telling vnodes from tablets: it is "none"
+    for a vnode table and the tablet layout ("arbitrary" or "powof2") otherwise.
+    `tablet_count` is the tablet count of the table, or 0 for a vnode table.
+    """
+    for s in servers:
+        workdir = await manager.server_get_workdir(s.server_id)
+        cf_dir = os.listdir(f'{workdir}/data/{ks}')[0]
+        with open(f'{workdir}/data/{ks}/{cf_dir}/snapshots/{snap_name}/manifest.json') as f:
+            manifest = json.load(f)['table']
+        assert manifest['tablets_type'] == expected_tablets_type, \
+            f"Node {s.server_id}: expected tablets_type '{expected_tablets_type}' in the manifest of snapshot {snap_name}, got '{manifest['tablets_type']}'"
+        assert manifest['tablet_count'] == expected_tablet_count, \
+            f"Node {s.server_id}: expected tablet_count {expected_tablet_count} in the manifest of snapshot {snap_name}, got {manifest['tablet_count']}"
+
+
+async def test_backup_restore_after_migration(manager: ScyllaClusterManager, s3_storage: Storage):
+    """Verify that a keyspace migrated to tablets can be backed up and restored.
+
+    Once the migration has been finalized and the tablet layout has converged
+    to a power of two, the keyspace should be indistinguishable from a
+    natively-created tablets keyspace as far as backup and restore are concerned.
+    This test checks this against both backup and restore APIs:
+
+    * per-node snapshot + per-node backup from every node, then restored back
+      into the truncated table twice: with the tablet-aware restore API and
+      with the load-and-stream API;
+    * cluster snapshot + cluster backup (requires a power-of-two tablet layout).
+      Such backup cannot yet been restored, see SCYLLADB-3521.
+
+    The table is restored in place, so that the restore target is the migrated
+    table itself; restoring into a natively-created tablets table is already
+    covered by test_restore_tablets and test_restore_with_streaming_scopes in
+    test/cluster/object_store/test_backup.py.
+
+    Each restore is checked for contents and replica placement.
+    """
+    servers = await create_backup_cluster(manager, s3_storage)
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {BACKUP_TOPOLOGY.rf}}} AND tablets = {{'enabled': false}}") as src_ks:
+        await create_vnode_table(cql, src_ks, 'test', BACKUP_NUM_KEYS)
+
+        cql = await migrate_keyspace_to_tablets(manager, servers, src_ks, ['test'])
+        await verify_data_integrity(cql, src_ks, 'test', BACKUP_NUM_KEYS)
+        tablet_count = await get_tablet_count(manager, servers[0], src_ks, 'test')
+
+        logger.info("Taking a per-node snapshot")
+        snap_name, sstables = await take_snapshot(src_ks, servers, manager, logger)
+        await check_snapshot_manifests(manager, servers, src_ks, snap_name, 'powof2', tablet_count)
+
+        logger.info("Backing up per-node snapshots to object storage")
+        prefix = f'restore-prefix/{snap_name}'
+        await asyncio.gather(*(do_backup(server, snap_name, f'{prefix}/{server.server_id}', src_ks, 'test', s3_storage, manager, logger) for server in servers))
+
+        logger.info("Taking a cluster snapshot")
+        cluster_snap_name = unique_name('csnap_')
+        await manager.api.take_cluster_snapshot(servers[0].ip_addr, src_ks, tag=cluster_snap_name, tables=['test'])
+        await check_snapshot_manifests(manager, servers, src_ks, cluster_snap_name, 'powof2', tablet_count)
+        # The cluster snapshot also records the tablet layout in system_distributed,
+        # which is where the cluster backup takes it from.
+        rows = await cql.run_async(f"SELECT tablet_layout FROM system_distributed.snapshot_tables WHERE snapshot_name = '{cluster_snap_name}' AND keyspace_name = '{src_ks}' AND table_name = 'test'")
+        assert len(rows) == 1, f"Expected one snapshot_tables row for {cluster_snap_name}, got {len(rows)}"
+        assert rows[0].tablet_layout == 'powof2', f"Expected tablet_layout 'powof2' in system_distributed.snapshot_tables, got '{rows[0].tablet_layout}'"
+
+        logger.info("Running a cluster backup of the cluster snapshot")
+        manifest = await run_cluster_backup(s3_storage, f'cluster/{cluster_snap_name}', manager, cluster_snap_name, src_ks, 'test', servers)
+        tablets_type = manifest['table']['tablets_type']
+        assert tablets_type == 'powof2', f"Expected tablets_type 'powof2' in the cluster backup manifest, got '{tablets_type}'"
+
+        await truncate_table(cql, src_ks, 'test')
+
+        logger.info(f"Restoring the per-node backup into {src_ks}.test with the tablet-aware API")
+        # The table already has the tablet count recorded in the manifests, so the
+        # tablet count the restore pins it to changes nothing and no resize follows.
+        locations = [{
+            "datacenter": servers[0].datacenter,
+            "endpoint": s3_storage.address,
+            "bucket": s3_storage.bucket_name,
+            "prefix": prefix,
+            "manifests": [f'{s.server_id}/manifest.json' for s in servers],
+        }]
+        tid = await manager.api.restore_tablets_multidc(servers[0].ip_addr, src_ks, 'test', snap_name, locations)
+        status = await manager.api.wait_task(servers[0].ip_addr, tid)
+        assert status is not None and status['state'] == 'done', f"Tablet-aware restore failed: {status}"
+        assert status['progress_total'] > 0
+        assert status['progress_completed'] == status['progress_total']
+        await verify_data_integrity(cql, src_ks, 'test', BACKUP_NUM_KEYS)
+        await check_table_replicas(cql, manager, servers, src_ks, 'test', BACKUP_NUM_KEYS)
+
+        await truncate_table(cql, src_ks, 'test')
+
+        logger.info(f"Restoring the per-node backup into {src_ks}.test with the load-and-stream API")
+        await asyncio.gather(*(do_restore_server(manager, logger, src_ks, 'test', s, sstables[s], None, False, f'{prefix}/{s.server_id}', s3_storage) for s in servers))
+        await verify_data_integrity(cql, src_ks, 'test', BACKUP_NUM_KEYS)
+        await check_table_replicas(cql, manager, servers, src_ks, 'test', BACKUP_NUM_KEYS)
+
+
+async def test_restore_pre_migration_backup_after_migration(manager: ScyllaClusterManager, s3_storage: Storage):
+    """Verify that a backup taken before the migration can be restored into the
+    migrated keyspace with the load-and-stream API.
+
+    The backup is restored into the migrated table itself; restoring a
+    vnodes-based backup into a natively-created tablets table is already covered
+    by test_restore_into_renamed_target[vnodes_to_tablets] in
+    test/cluster/object_store/test_backup.py.
+    """
+    servers = await create_backup_cluster(manager, s3_storage)
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {BACKUP_TOPOLOGY.rf}}} AND tablets = {{'enabled': false}}") as ks:
+        await create_vnode_table(cql, ks, 'test', BACKUP_NUM_KEYS)
+
+        logger.info("Taking a per-node snapshot and backing it up from every node before the migration")
+        snap_name, sstables = await take_snapshot(ks, servers, manager, logger)
+        prefix = f'pre-migration/{snap_name}'
+        await asyncio.gather(*(do_backup(s, snap_name, f'{prefix}/{s.server_id}', ks, 'test', s3_storage, manager, logger) for s in servers))
+
+        cql = await migrate_keyspace_to_tablets(manager, servers, ks, ['test'])
+        await verify_data_integrity(cql, ks, 'test', BACKUP_NUM_KEYS)
+
+        await truncate_table(cql, ks, 'test')
+
+        logger.info("Restoring the pre-migration backup into the migrated table with the load-and-stream API")
+        await asyncio.gather(*(do_restore_server(manager, logger, ks, 'test', s, sstables[s], None, False, f'{prefix}/{s.server_id}', s3_storage) for s in servers))
+        await verify_data_integrity(cql, ks, 'test', BACKUP_NUM_KEYS)
+        await check_table_replicas(cql, manager, servers, ks, 'test', BACKUP_NUM_KEYS)
+
+
+# The tablet-aware restore rejects a manifest whose tablet count is not a power of
+# two with on_internal_error(), although the manifest is user input. The test
+# harness starts nodes with --abort-on-internal-error, which would crash the
+# coordinator; production defaults to throwing instead, and that is the behaviour
+# the tests below pin, so they turn the abort off.
+NO_ABORT_ON_INTERNAL_ERROR = ['--abort-on-internal-error', '0']
+
+
+async def test_backup_during_migration(manager: ScyllaClusterManager, s3_storage: Storage):
+    """Take a backup mid-migration and restore it after the migration.
+
+    Backups during a migration are not officially supported, but nothing in the
+    code excludes them with migration. This test records what happens if they
+    are taken anyway, to document the current behaviour and notice any future
+    changes.
+
+    With one node upgraded to tablets and one still on vnodes:
+
+    * a per-node snapshot succeeds on every node, but the manifests disagree:
+      the upgraded node describes a tablets table with the not yet converged
+      layout, the other node a vnodes table;
+    * a cluster snapshot is rejected, because the keyspace schema still says
+      vnodes until the migration is finalized.
+
+    Once the migration is over, restoring the mid-migration backup:
+
+    * fails with the tablet-aware API while parsing the manifests: neither
+      tablet count is a power of two (the tablets one is not converged, the
+      vnodes one is 0), and they disagree with each other; which check fails
+      first depends on the parsing order;
+    * succeeds with the load-and-stream API, since it does not read the
+      manifests.
+    """
+    servers = await create_backup_cluster(manager, s3_storage, NO_ABORT_ON_INTERNAL_ERROR)
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {BACKUP_TOPOLOGY.rf}}} AND tablets = {{'enabled': false}}") as src_ks:
+        await create_vnode_table(cql, src_ks, 'test', BACKUP_NUM_KEYS)
+
+        logger.info(f"Starting vnodes-to-tablets migration of keyspace '{src_ks}'")
+        await manager.api.create_vnode_tablet_migration(servers[0].ip_addr, src_ks)
+        upgraded, not_upgraded = servers[0], servers[1]
+        cql = await upgrade_node_storage_to_tablets(manager, servers, upgraded)
+        tablet_count = await get_tablet_count(manager, servers[0], src_ks, 'test')
+
+        logger.info("Taking a per-node snapshot with one node upgraded to tablets")
+        snap_name, sstables = await take_snapshot(src_ks, servers, manager, logger)
+        await check_snapshot_manifests(manager, [upgraded], src_ks, snap_name, 'arbitrary', tablet_count)
+        await check_snapshot_manifests(manager, [not_upgraded], src_ks, snap_name, 'none', 0)
+
+        logger.info("Backing up the per-node snapshots to object storage")
+        prefix = f'mid-migration/{snap_name}'
+        await asyncio.gather(*(do_backup(s, snap_name, f'{prefix}/{s.server_id}', src_ks, 'test', s3_storage, manager, logger) for s in servers))
+
+        logger.info("Checking that a cluster snapshot is rejected during the migration")
+        # storage_proxy::snapshot_keyspace() checks the keyspace schema, which switches
+        # to tablets only at migration finalization.
+        for s in servers:
+            with pytest.raises(HTTPError, match=f"Keyspace {src_ks} does not use tablets"):
+                await manager.api.take_cluster_snapshot(s.ip_addr, src_ks, tag=unique_name('csnap_'), tables=['test'])
+
+        cql = await upgrade_node_storage_to_tablets(manager, servers, not_upgraded)
+        await finalize_keyspace_migration(manager, servers[0], src_ks, ['test'])
+        await verify_data_integrity(cql, src_ks, 'test', BACKUP_NUM_KEYS)
+
+        async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {BACKUP_TOPOLOGY.rf}}}") as dst_ks:
+            await cql.run_async(f"CREATE TABLE {dst_ks}.test_ta (pk int PRIMARY KEY, c int)")
+            await cql.run_async(f"CREATE TABLE {dst_ks}.test_ls (pk int PRIMARY KEY, c int)")
+
+            logger.info(f"Checking that the tablet-aware API rejects the mid-migration backup")
+            locations = [{
+                "datacenter": servers[0].datacenter,
+                "endpoint": s3_storage.address,
+                "bucket": s3_storage.bucket_name,
+                "prefix": prefix,
+                "manifests": [f'{s.server_id}/manifest.json' for s in servers],
+            }]
+            # The manifests are parsed concurrently, so any of the two may fail the
+            # power-of-two check first, or the second one may fail the consistency check.
+            with pytest.raises(HTTPError, match=r"Invalid tablet_count \d+ in manifest .* expected a power of 2"
+                                                "|Inconsistent tablet_count values in manifest") as excinfo:
+                await manager.api.restore_tablets_multidc(servers[0].ip_addr, dst_ks, 'test_ta', snap_name, locations)
+            logger.info(f"Tablet-aware restore of the mid-migration backup failed with: {excinfo.value}")
+            assert not await cql.run_async(f"SELECT pk FROM {dst_ks}.test_ta"), f"{dst_ks}.test_ta is not empty after the rejected restore"
+
+            logger.info(f"Restoring the mid-migration backup into {dst_ks}.test_ls with the load-and-stream API")
+            await asyncio.gather(*(do_restore_server(manager, logger, dst_ks, 'test_ls', s, sstables[s], None, False, f'{prefix}/{s.server_id}', s3_storage) for s in servers))
+            await verify_data_integrity(cql, dst_ks, 'test_ls', BACKUP_NUM_KEYS)
+            await check_table_replicas(cql, manager, servers, dst_ks, 'test_ls', BACKUP_NUM_KEYS)
+
+
+async def test_backup_during_pow2_convergence(manager: ScyllaClusterManager, s3_storage: Storage):
+    """Take a backup while converging to pow2, check that it cannot be restored
+    with the tablet-aware API, but it can with the load-and-stream API.
+
+    Tablet-aware restore requires that the tablet count in the manifest is a
+    power of two, which is not true for backups taken during the convergence.
+    The per-node and the cluster backup both record the not yet converged
+    layout.
+    """
+    servers = await create_backup_cluster(manager, s3_storage, NO_ABORT_ON_INTERNAL_ERROR)
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {BACKUP_TOPOLOGY.rf}}} AND tablets = {{'enabled': false}}") as src_ks:
+        await create_vnode_table(cql, src_ks, 'test', BACKUP_NUM_KEYS)
+
+        await manager.disable_tablet_balancing()
+        cql = await migrate_keyspace_to_tablets(manager, servers, src_ks, ['test'], wait_for_convergence=False)
+        await verify_data_integrity(cql, src_ks, 'test', BACKUP_NUM_KEYS)
+        target_pow2 = await get_target_pow2_tablet_count(manager, servers[0], src_ks, 'test')
+        assert target_pow2 > 0, "Expected the tablet layout to still be converging"
+        tablet_count = await get_tablet_count(manager, servers[0], src_ks, 'test')
+        assert tablet_count & (tablet_count - 1) != 0, \
+            f"Expected a non power-of-two tablet count before the convergence, got {tablet_count}"
+
+        logger.info("Taking a per-node snapshot during the pow2 convergence")
+        snap_name, sstables = await take_snapshot(src_ks, servers, manager, logger)
+        await check_snapshot_manifests(manager, servers, src_ks, snap_name, 'arbitrary', tablet_count)
+
+        logger.info("Backing up the per-node snapshots to object storage")
+        prefix = f'mid-convergence/{snap_name}'
+        await asyncio.gather(*(do_backup(s, snap_name, f'{prefix}/{s.server_id}', src_ks, 'test', s3_storage, manager, logger) for s in servers))
+
+        logger.info("Taking a cluster snapshot and running a cluster backup of it during the pow2 convergence")
+        cluster_snap_name = unique_name('csnap_')
+        await manager.api.take_cluster_snapshot(servers[0].ip_addr, src_ks, tag=cluster_snap_name, tables=['test'])
+        await check_snapshot_manifests(manager, servers, src_ks, cluster_snap_name, 'arbitrary', tablet_count)
+        manifest = await run_cluster_backup(s3_storage, f'cluster/{cluster_snap_name}', manager, cluster_snap_name, src_ks, 'test', servers)
+        tablets_type = manifest['table']['tablets_type']
+        assert tablets_type == 'arbitrary', f"Expected tablets_type 'arbitrary' in the cluster backup manifest, got '{tablets_type}'"
+
+        await manager.enable_tablet_balancing()
+        logger.info(f"Waiting for pow2 convergence of {src_ks}.test")
+        await wait_for_pow2_convergence(manager, servers[0], src_ks, 'test')
+
+        async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {BACKUP_TOPOLOGY.rf}}}") as dst_ks:
+            await cql.run_async(f"CREATE TABLE {dst_ks}.test_ta (pk int PRIMARY KEY, c int)")
+            await cql.run_async(f"CREATE TABLE {dst_ks}.test_ls (pk int PRIMARY KEY, c int)")
+
+            logger.info(f"Checking that the tablet-aware API rejects the mid-convergence backup")
+            locations = [{
+                "datacenter": servers[0].datacenter,
+                "endpoint": s3_storage.address,
+                "bucket": s3_storage.bucket_name,
+                "prefix": prefix,
+                "manifests": [f'{s.server_id}/manifest.json' for s in servers],
+            }]
+            with pytest.raises(HTTPError, match=f"Invalid tablet_count {tablet_count} in manifest .* expected a power of 2") as excinfo:
+                await manager.api.restore_tablets_multidc(servers[0].ip_addr, dst_ks, 'test_ta', snap_name, locations)
+            logger.info(f"Tablet-aware restore of the mid-convergence backup failed with: {excinfo.value}")
+            assert not await cql.run_async(f"SELECT pk FROM {dst_ks}.test_ta"), f"{dst_ks}.test_ta is not empty after the rejected restore"
+
+            logger.info(f"Restoring the mid-convergence backup into {dst_ks}.test_ls with the load-and-stream API")
+            await asyncio.gather(*(do_restore_server(manager, logger, dst_ks, 'test_ls', s, sstables[s], None, False, f'{prefix}/{s.server_id}', s3_storage) for s in servers))
+            await verify_data_integrity(cql, dst_ks, 'test_ls', BACKUP_NUM_KEYS)
+            await check_table_replicas(cql, manager, servers, dst_ks, 'test_ls', BACKUP_NUM_KEYS)
