@@ -165,58 +165,6 @@ inline constexpr auto scrub_sstables_compaction_task_type = "scrub sstables comp
 
 inline constexpr auto reshaping_compaction_task_type = "reshaping compaction";
 
-class reshaping_compaction_task_impl : public compaction_task_impl {
-public:
-    reshaping_compaction_task_impl(tasks::task_manager::module_ptr module,
-            tasks::task_id id,
-            unsigned sequence_number,
-            std::string scope,
-            std::string keyspace,
-            std::string table,
-            std::string entity,
-            tasks::task_id parent_id) noexcept
-        : compaction_task_impl(module, id, sequence_number, std::move(scope), std::move(keyspace), std::move(table), std::move(entity), parent_id)
-    {}
-
-    virtual std::string type() const override {
-        return reshaping_compaction_task_type;
-    }
-protected:
-    virtual future<> run() override = 0;
-};
-
-class shard_reshaping_compaction_task_impl : public reshaping_compaction_task_impl {
-private:
-    sstables::sstable_directory& _dir;
-    sharded<replica::database>& _db;
-    reshape_mode _mode;
-    compaction_sstable_creator_fn _creator;
-    std::function<bool (const sstables::shared_sstable&)> _filter;
-    uint64_t& _total_shard_size;
-public:
-    shard_reshaping_compaction_task_impl(tasks::task_manager::module_ptr module,
-            std::string keyspace,
-            std::string table,
-            tasks::task_id parent_id,
-            sstables::sstable_directory& dir,
-            sharded<replica::database>& db,
-            reshape_mode mode,
-            compaction_sstable_creator_fn creator,
-            std::function<bool (const sstables::shared_sstable&)> filter,
-            uint64_t& total_shard_size) noexcept
-        : reshaping_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, "shard", std::move(keyspace), std::move(table), "", parent_id)
-        , _dir(dir)
-        , _db(db)
-        , _mode(mode)
-        , _creator(std::move(creator))
-        , _filter(std::move(filter))
-        , _total_shard_size(total_shard_size)
-    {}
-protected:
-    virtual future<> run() override;
-};
-
-
 class resharding_compaction_task_impl : public compaction_task_impl {
 public:
     resharding_compaction_task_impl(tasks::task_manager::module_ptr module,
@@ -353,6 +301,10 @@ public:
 
     // Starts a reshape of a table's sstables collected by the directory, on all the shards.
     future<tasks::task_manager::task_ptr> start_table_reshaping_compaction(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, std::string keyspace, std::string table, reshape_mode mode, compaction_sstable_creator_fn creator, std::function<bool (const sstables::shared_sstable&)> filter);
+
+    // Starts a reshape of a table's sstables collected by the directory, on this shard.
+    // total_shard_size is increased by the size of the reshaped sstables.
+    future<tasks::task_manager::task_ptr> start_shard_reshaping_compaction(sstables::sstable_directory& dir, sharded<replica::database>& db, std::string keyspace, std::string table, reshape_mode mode, compaction_sstable_creator_fn creator, std::function<bool (const sstables::shared_sstable&)> filter, uint64_t& total_shard_size, tasks::task_info parent_info);
 };
 
 class regular_compaction_task_impl : public compaction_task_impl {
