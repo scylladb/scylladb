@@ -83,6 +83,10 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption('--run_id', action='store', default=None, help='Run id for the test run')
     parser.addoption('--byte-limit', action="store", default=randint(0, 2000), type=int,
                      help="Specific byte limit for failure injection (random by default)")
+    parser.addoption('--no-3rd-party-services', action='store_true', default=False,
+                     help='Do not start the 3rd party services (LDAP, S3 mock, S3 proxy).  They are '
+                          'expected to be already running and their environment variables to be set, '
+                          'see test/pylib/start_3rd_party_services.py')
     parser.addoption("--gather-metrics", action=BooleanOptionalAction, default=False,
                      help='Switch on gathering cgroup metrics')
     parser.addoption('--random-seed', action="store",
@@ -434,6 +438,7 @@ def pytest_sessionstart(session: pytest.Session) -> None:
             gather_metrics=gather_metrics,
             save_log_on_success=session.config.getoption("--save-log-on-success"),
             toxiproxy_byte_limit= session.config.getoption("--byte-limit"),
+            start_3rd_party=not session.config.getoption("--no-3rd-party-services"),
         )
     if gather_metrics:
         # In the master process, set up the cgroup hierarchy if test.py hasn't done it already.
@@ -916,8 +921,10 @@ def prepare_environment(tempdir_base: pathlib.Path,
                         modes: list[str],
                         gather_metrics: bool,
                         save_log_on_success: bool,
-                        toxiproxy_byte_limit: int) -> None:
+                        toxiproxy_byte_limit: int,
+                        start_3rd_party: bool) -> None:
     prepare_dirs(tempdir_base, modes, gather_metrics, save_log_on_success=save_log_on_success)
-    start_3rd_party_services(tempdir_base=tempdir_base, toxiproxy_byte_limit=toxiproxy_byte_limit)
+    if start_3rd_party:
+        start_3rd_party_services(tempdir_base=tempdir_base, toxiproxy_byte_limit=toxiproxy_byte_limit)
 
 
