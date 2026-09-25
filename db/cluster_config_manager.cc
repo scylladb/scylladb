@@ -115,7 +115,8 @@ future<> cluster_config_manager::stop() {
     _refresh_done_cv.broadcast();
     co_await std::exchange(_refresh_fiber, make_ready_future<>());
     // Wake any wait_until_ready() waiter still parked on this shard; it observes _stopping
-    // and fails with gate_closed_exception. stop() never marks the manager ready.
+    // and fails with gate_closed_exception. stop() never marks the manager ready. Such
+    // waiters hold the gate, so closing it below also waits for them to resume and exit.
     _ready_cv.broadcast();
     // Close the gate before touching _config_callbacks. A callback pass running under
     // apply_refresh() holds this shard's gate across its suspension points and
@@ -141,6 +142,11 @@ future<> cluster_config_manager::refresh() {
 }
 
 future<> cluster_config_manager::wait_until_ready() {
+    // Hold the gate across the wait. stop() wakes this waiter via _ready_cv, but the
+    // coroutine resumes later, as a separate task; without the gate, stop() could complete
+    // and the manager be destroyed before the waiter reads _stopping below.
+    // Throws gate_closed_exception if stop() already closed the gate.
+    auto gate_held = _gate.hold();
     co_await _ready_cv.when([this] { return _is_ready || _stopping; });
     // A stopping manager fails the wait even if it became ready first.
     if (_stopping) {
