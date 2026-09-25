@@ -43,7 +43,7 @@ from cassandra.policies import ExponentialReconnectionPolicy  # type: ignore
 from cassandra.policies import WhiteListRoundRobinPolicy  # type: ignore
 
 from test import TOP_SRC_DIR, TEST_DIR, asan_options, ubsan_options
-from test.pylib.driver_utils import safe_driver_shutdown, safe_shutting_down
+from test.pylib.driver_utils import control_connection_query_fallback_options, safe_driver_shutdown, safe_shutting_down
 from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo, ServerUpState
 from test.pylib.rest_client import ScyllaRESTAPIClient, HTTPError
 from test.pylib.util import async_rmtree, read_last_line, get_xdist_worker_id, scale_timeout_by_mode
@@ -733,6 +733,9 @@ class ScyllaServer:
             auth_provider=self.auth_provider,
             reconnection_policy=_DRIVER_RECONNECTION_POLICY,
         )
+        # New drivers can retain this control connection while excluding its
+        # zero-token or unreachable advertised endpoint from query pools.
+        cluster_kwargs.update(control_connection_query_fallback_options())
         try:
             # In a cluster setup, it's possible that the CQL
             # here is directed to a node different from the initial contact
