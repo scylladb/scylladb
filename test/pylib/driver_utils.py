@@ -10,12 +10,29 @@ import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 
+import cassandra.cluster as cassandra_cluster  # type: ignore
 from cassandra.cluster import Cluster  # type: ignore # pylint: disable=no-name-in-module
 
 logger = logging.getLogger(__name__)
 
 # How long to wait for the driver's Task Scheduler thread to finish
 _SCHEDULER_JOIN_TIMEOUT = 2.0
+
+
+def control_connection_query_fallback_options(*, skip_pool_creation: bool = False) -> dict[str, object]:
+    """Return control-connection fallback options supported by the installed driver.
+
+    The current test-suite pin, driver 3.29.7, predates this option but retains
+    explicit contact points as query hosts, so no workaround is needed there.
+    Drivers 3.29.8 and 3.29.9 neither retain those hosts nor expose fallback;
+    direct queries to excluded contact points remain unsupported on those versions.
+    """
+    fallback = getattr(cassandra_cluster, "ControlConnectionQueryFallback", None)
+    if fallback is None:
+        return {}
+
+    mode = fallback.SkipPoolCreation if skip_pool_creation else fallback.Fallback
+    return {"allow_control_connection_query_fallback": mode}
 
 
 def safe_driver_shutdown(cluster: Cluster) -> None:

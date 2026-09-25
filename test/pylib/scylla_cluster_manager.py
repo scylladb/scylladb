@@ -45,7 +45,7 @@ from cassandra.policies import (
     WhiteListRoundRobinPolicy,
 )
 
-from test.pylib.driver_utils import safe_driver_shutdown
+from test.pylib.driver_utils import control_connection_query_fallback_options, safe_driver_shutdown
 from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo, ServerUpState, SeastarIOMetricName
 from test.pylib.log_browsing import ScyllaLogFile
 from test.pylib.rest_client import HTTPError, ScyllaMetricsClient, ScyllaRESTAPIClient
@@ -730,7 +730,9 @@ class ScyllaClusterManager:
                 port: int = 9042,
                 use_ssl: bool = False,
                 auth_provider: AuthProvider | None = None,
-                load_balancing_policy: LoadBalancingPolicy = RoundRobinPolicy()) -> CassandraCluster:
+                load_balancing_policy: LoadBalancingPolicy = RoundRobinPolicy(),
+                allow_control_connection_query_fallback: bool = False,
+                use_control_connection_for_queries: bool = False) -> CassandraCluster:
         """Create a CQL Cluster connection object according to configuration.
 
         It does not .connect() yet.
@@ -754,7 +756,10 @@ class ScyllaClusterManager:
             serial_consistency_level=ConsistencyLevel.LOCAL_SERIAL,
             request_timeout=200,
         )
-        return CassandraCluster(
+        if allow_control_connection_query_fallback and use_control_connection_for_queries:
+            raise ValueError("Select fallback or control-connection-only mode, not both")
+
+        cluster_kwargs = dict(
             execution_profiles={
                 EXEC_PROFILE_DEFAULT: profile,
                 "whitelist": whitelist_profile,
@@ -792,8 +797,17 @@ class ScyllaClusterManager:
             # Capture messages for debugging purposes.
             connection_class=CustomConnection,
         )
+        if allow_control_connection_query_fallback or use_control_connection_for_queries:
+            cluster_kwargs.update(control_connection_query_fallback_options(
+                skip_pool_creation=use_control_connection_for_queries))
+        return CassandraCluster(**cluster_kwargs)
 
-    async def driver_connect(self, server: ServerInfo | None = None, auth_provider: AuthProvider | None = None) -> None:
+    async def driver_connect(
+            self,
+            server: ServerInfo | None = None,
+            auth_provider: AuthProvider | None = None,
+            allow_control_connection_query_fallback: bool = False,
+    ) -> None:
         """Connect to cluster."""
 
         targets = [server] if server else await self.running_servers()
@@ -802,11 +816,12 @@ class ScyllaClusterManager:
         self.driver_close()
         self.logger.debug("driver connecting to %s", servers)
         self.ccluster = self.con_gen(
-            servers,
-            self.port,
-            self.use_ssl,
-            auth_provider if auth_provider else self.auth_provider,
-            self.load_balancing_policy,
+            hosts=servers,
+            port=self.port,
+            use_ssl=self.use_ssl,
+            auth_provider=auth_provider if auth_provider else self.auth_provider,
+            load_balancing_policy=self.load_balancing_policy,
+            allow_control_connection_query_fallback=allow_control_connection_query_fallback,
         )
         self.cql = self.ccluster.connect()
 
