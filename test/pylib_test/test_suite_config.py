@@ -104,6 +104,7 @@ def test_run_pytest_returns_5_when_every_named_test_is_dropped(suite: pathlib.Pa
     monkeypatch.setitem(sys.modules, "test_py", test_py)
     spec.loader.exec_module(test_py)
     options = argparse.Namespace(tmpdir=str(suite), name=[f"{suite / 'test_a.py'}::test_x"],
-                                 keep_duplicates=True, modes=["dev"])
+                                 keep_duplicates=True, modes=["dev"],
+                                 select_tests_as_mode=None)
     # Returns before building the pytest command line, which would otherwise run the whole test/ directory.
     assert test_py.run_pytest(options) == pytest.ExitCode.NO_TESTS_COLLECTED
