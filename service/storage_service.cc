@@ -12,6 +12,7 @@
 #include "storage_service.hh"
 #include "db/view/view_building_worker.hh"
 #include "utils/chunked_vector.hh"
+#include "utils/chain_abort_source.hh"
 #include <seastar/core/shard_id.hh>
 #include "db/view/view_building_coordinator.hh"
 #include "utils/disk_space_monitor.hh"
@@ -3842,19 +3843,11 @@ future<> storage_service::removenode_with_stream(locator::host_id leaving_node,
     return seastar::async([this, leaving_node, as_ptr, topo_guard] {
         auto tmptr = get_token_metadata_ptr();
         abort_source as;
-        auto sub = _abort_source.subscribe([&as] () noexcept {
-            if (!as.abort_requested()) {
-                as.request_abort();
-            }
-        });
+        auto sub = utils::chain_abort_source(as, _abort_source);
         if (!as_ptr) {
             throw std::runtime_error("removenode_with_stream: abort_source is nullptr");
         }
-        auto as_ptr_sub = as_ptr->subscribe([&as] () noexcept {
-            if (!as.abort_requested()) {
-                as.request_abort();
-            }
-        });
+        auto as_ptr_sub = utils::chain_abort_source(as, *as_ptr);
         auto streamer = make_lw_shared<dht::range_streamer>(_stream_manager, tmptr, as, tmptr->get_my_id(), _snitch.local()->get_location(), "Removenode", streaming::stream_reason::removenode, topo_guard,
                 _db.local().get_config().consistent_rangemovement(), _db.local().get_config().stream_plan_ranges_fraction());
         removenode_add_ranges(streamer, leaving_node).get();
@@ -5202,21 +5195,17 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                         rtlogger.debug("streaming to remove node {}", id);
                         auto parent_info = tasks::make_cluster_task_info(tasks::task_id{it->second.request_id});
                         auto task = co_await get_node_ops_module().make_and_start_task<node_ops::streaming_task_impl>(parent_info,
-                                parent_info.get_id(), streaming::stream_reason::removenode, _remove_result[id], [this, id = locator::host_id{id.uuid()}, session] (this auto) {
+                                parent_info.get_id(), streaming::stream_reason::removenode, _remove_result[id], [this, id = locator::host_id{id.uuid()}, session] (this auto) -> future<> {
                             auto as = make_shared<abort_source>();
-                            auto sub = _abort_source.subscribe([as] () noexcept {
-                                if (!as->abort_requested()) {
-                                    as->request_abort();
-                                }
-                            });
+                            auto sub = utils::chain_abort_source(*as, _abort_source);
                             if (is_repair_based_node_ops_enabled(streaming::stream_reason::removenode)) {
                                 std::list<locator::host_id> ignored_ips = _topology_state_machine._topology.ignored_nodes | std::views::transform([] (const auto& id) {
                                     return locator::host_id(id.uuid());
                                 }) | std::ranges::to<std::list<locator::host_id>>();
                                 auto ops = seastar::make_shared<node_ops_info>(node_ops_id::create_random_id(), as, std::move(ignored_ips));
-                                return _repair.local().removenode_with_repair(get_token_metadata_ptr(), id, ops, session);
+                                co_await _repair.local().removenode_with_repair(get_token_metadata_ptr(), id, ops, session);
                             } else {
-                                return removenode_with_stream(id, session, as);
+                                co_await removenode_with_stream(id, session, as);
                             }
                         });
                         co_await task->done();
