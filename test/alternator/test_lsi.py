@@ -341,6 +341,10 @@ def test_lsi_describe_indexstatus(test_table_lsi_1):
     assert len(lsis) == 1
     lsi = lsis[0]
     assert not 'IndexStatus' in lsi
+    # An LSI has neither of the throughput structures that a GSI has: it shares
+    # the base table's provisioning.
+    assert not 'ProvisionedThroughput' in lsi
+    assert not 'WarmThroughput' in lsi
 
 # In addition to the basic listing of an LSI in DescribeTable tested above,
 # in this test we check additional fields that should appear in each LSI's
