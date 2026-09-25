@@ -411,20 +411,20 @@ future<sstables::sstable_set> compaction_task_executor::sstable_set_for_tombston
 future<compaction_result> compaction_task_executor::compact_sstables(compaction_descriptor descriptor, ::compaction::compaction_data& cdata, on_replacement& on_replace, compaction_manager::can_purge_tombstones can_purge,
                                                                                sstables::offstrategy offstrategy) {
     compaction_group_view& t = *_compacting_table;
-    // Decided once, for the whole compaction: the property depends on the table's tombstone_gc
-    // mode, which can change while the compaction runs. Taken with no preemption point before
-    // the sstable set for tombstone gc is selected below, which depends on the same property.
-    descriptor.skip_memtable_for_tombstone_gc = t.skip_memtable_for_tombstone_gc();
-    // A compaction that ignores the memtables, or more, ignores data that is not in the sstable
-    // snapshot taken below, on the grounds that no GC-eligible tombstone can shadow it. That
-    // holds only for tombstones which are eligible when the snapshot is taken, so freeze the
-    // gc state before it: a repair completing mid-compaction must not make more tombstones
-    // eligible. See compaction_descriptor::gc_state.
-    const bool ignores_newer_data = descriptor.gc_check_only_compacting_sstables || descriptor.skip_memtable_for_tombstone_gc;
-    descriptor.gc_state = ignores_newer_data ? t.get_tombstone_gc_state().snapshot() : t.get_tombstone_gc_state();
+    // Decided once, for the whole compaction: the table's own property depends on its
+    // tombstone_gc mode, which can change while the compaction runs. Decided with no preemption
+    // point before the sstable set for tombstone gc is selected below, which depends on the same
+    // property. See compaction_descriptor::gc_scope.
+    descriptor.gc_scope = effective_gc_scope(t, descriptor.gc_scope);
+    // A narrowed gc scope ignores data that is not in the sstable snapshot taken below, on the
+    // grounds that no GC-eligible tombstone can shadow it. That holds only for tombstones which
+    // are eligible when the snapshot is taken, so freeze the gc state before it: a repair
+    // completing mid-compaction must not make more tombstones eligible. See tombstone_gc_scope.
+    const bool narrowed_scope = descriptor.gc_scope != tombstone_gc_scope::all;
+    descriptor.gc_state = narrowed_scope ? t.get_tombstone_gc_state().snapshot() : t.get_tombstone_gc_state();
     if (can_purge) {
         descriptor.enable_garbage_collection(co_await sstable_set_for_tombstone_gc(t));
-        if (descriptor.skip_memtable_for_tombstone_gc) {
+        if (descriptor.gc_scope == tombstone_gc_scope::skip_memtable) {
             co_await utils::get_local_injector().inject("compaction_repaired_view_wait_after_gc_snapshots", utils::wait_for_message(5min));
         }
     }
@@ -628,7 +628,9 @@ protected:
         compaction_group_view* t = _compacting_table;
         compaction_strategy cs = t->get_compaction_strategy();
         compaction_descriptor descriptor = cs.get_major_compaction_job(*t, co_await _cm.get_candidates(*t));
-        descriptor.gc_check_only_compacting_sstables = _consider_only_existing_data;
+        if (_consider_only_existing_data) {
+            descriptor.gc_scope = tombstone_gc_scope::compacting_sstables_only;
+        }
         auto compacting = compacting_sstable_registration(_cm, _cm.get_compaction_state(t), descriptor.sstables);
         auto on_replace = compacting.update_on_sstable_replacement();
         setup_new_compaction(descriptor.run_identifier);
