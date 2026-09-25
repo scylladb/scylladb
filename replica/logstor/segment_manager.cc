@@ -1760,10 +1760,16 @@ future<seg_ptr> segment_manager_impl::allocate_segment() {
         // no free segments - wait for a segment to be freed.
         // compaction might fail to free segments now, but can succeed later as data is freed.
         // for now let's solve it by waiting with a timeout to re-trigger compaction periodically.
-        try {
-            co_await _segment_freed_cv.wait(std::chrono::seconds(5));
-        } catch (seastar::broken_condition_variable&) {
-            co_return coroutine::return_exception(abort_requested_exception());
+        // Timeout is the expected common case; avoid a real C++ throw per iteration.
+        auto f = co_await coroutine::as_future(_segment_freed_cv.wait(std::chrono::seconds(5)));
+        if (f.failed()) {
+            auto ep = f.get_exception();
+            if (try_catch<seastar::broken_condition_variable>(ep)) {
+                co_return coroutine::return_exception(abort_requested_exception());
+            }
+            if (!try_catch<seastar::condition_variable_timed_out>(ep)) {
+                co_await coroutine::return_exception_ptr(std::move(ep));
+            }
         }
     }
 }
