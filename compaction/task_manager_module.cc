@@ -1102,33 +1102,36 @@ future<tasks::task_manager::task_ptr> task_manager_module::start_shard_reshaping
     });
 }
 
-future<> table_resharding_compaction_task_impl::run() {
-    auto all_jobs = co_await collect_all_shared_sstables(_dir, _db, _status.keyspace, _status.table, _owned_ranges_ptr);
+static future<> run_table_resharding_compaction(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, std::string keyspace, std::string table, compaction_sstable_creator_fn creator, compaction::owned_ranges_ptr owned_ranges_ptr, bool vnodes_resharding, std::optional<uint64_t>& expected_workload, tasks::task_info task_info) {
+    auto all_jobs = co_await collect_all_shared_sstables(dir, db, keyspace, table, owned_ranges_ptr);
     auto destinations = co_await distribute_reshard_jobs(std::move(all_jobs));
 
     uint64_t total_size = std::ranges::fold_left(destinations | std::views::transform(std::mem_fn(&replica::reshard_shard_descriptor::size)), uint64_t(0), std::plus{});
-    _expected_workload = total_size;
+    expected_workload = total_size;
     if (total_size == 0) {
         co_return;
     }
 
     auto start = std::chrono::steady_clock::now();
-    dblog.info("Resharding {} for {}.{}", utils::pretty_printed_data_size(total_size), _status.keyspace, _status.table);
+    dblog.info("Resharding {} for {}.{}", utils::pretty_printed_data_size(total_size), keyspace, table);
 
-    auto parent_info = info();
-    co_await _db.invoke_on_all(coroutine::lambda([&] (replica::database& db) -> future<> {
-        auto& compaction_module = _db.local().get_compaction_manager().get_task_manager_module();
+    co_await db.invoke_on_all(coroutine::lambda([&] (replica::database& local_db) -> future<> {
+        auto& compaction_module = local_db.get_compaction_manager().get_task_manager_module();
         // make shard-local copy of owned_ranges
         compaction::owned_ranges_ptr local_owned_ranges_ptr;
-        if (_owned_ranges_ptr) {
-            local_owned_ranges_ptr = make_lw_shared<const dht::token_range_vector>(*_owned_ranges_ptr);
+        if (owned_ranges_ptr) {
+            local_owned_ranges_ptr = make_lw_shared<const dht::token_range_vector>(*owned_ranges_ptr);
         }
-        auto task = co_await compaction_module.make_and_start_task<shard_resharding_compaction_task_impl>(parent_info, _status.keyspace, _status.table, _status.id, _dir, db, _creator, std::move(local_owned_ranges_ptr), _vnodes_resharding, destinations);
+        auto task = co_await compaction_module.make_and_start_task<shard_resharding_compaction_task_impl>(task_info, keyspace, table, task_info.get_id(), dir, local_db, creator, std::move(local_owned_ranges_ptr), vnodes_resharding, destinations);
         co_await task->done();
     }));
 
     auto duration = std::chrono::duration_cast<std::chrono::duration<float>>(std::chrono::steady_clock::now() - start);
-    dblog.info("Resharded {} for {}.{} in {:.2f} seconds, {}", utils::pretty_printed_data_size(total_size), _status.keyspace, _status.table, duration.count(), utils::pretty_printed_throughput(total_size, duration));
+    dblog.info("Resharded {} for {}.{} in {:.2f} seconds, {}", utils::pretty_printed_data_size(total_size), keyspace, table, duration.count(), utils::pretty_printed_throughput(total_size, duration));
+}
+
+future<> table_resharding_compaction_task_impl::run() {
+    return run_table_resharding_compaction(_dir, _db, _status.keyspace, _status.table, _creator, _owned_ranges_ptr, _vnodes_resharding, _expected_workload, info());
 }
 
 future<std::optional<double>> table_resharding_compaction_task_impl::expected_total_workload() const {
