@@ -1379,8 +1379,14 @@ public:
             auto entry_size = writer.num_entries == 1 ? size : writer.size(*this, entry);
             auto es = entry_size + entry_overhead_size;
 
-            _cf_dirty[id]++; // increase use count for cf.
-            _cf_min_time.emplace(id, gc_clock::now()); // if value already exists this does nothing.
+            // _cf_min_time is never erased, so it already holds id if id is dirty.
+            // Insert the time first: if either insert throws, no count is left without an rp_handle.
+            if (auto dirty = _cf_dirty.find(id); dirty != _cf_dirty.end()) {
+                ++dirty->second;
+            } else {
+                _cf_min_time.emplace(id, gc_clock::now());
+                _cf_dirty.emplace(id, 1);
+            }
 
             rp_handle h(static_pointer_cast<cf_holder>(shared_from_this()), std::move(id), rp);
 
