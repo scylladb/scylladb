@@ -187,8 +187,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
     // Whether auto-RF has a change to make, as of the last evaluation: tablet load
     // balancing yields while it is set (should_preempt_balancing()), so that the
     // reconciler gets to schedule the change. Evaluating is not free, so it is done
-    // only when the answer may have changed (_auto_rf_needed_stale): an RF change
-    // ended, or this coordinator has just started. The reconciler's own pass clears both.
+    // only when the answer may have changed (_auto_rf_needed_stale): a keyspace was
+    // created or dropped, an RF change ended, or this coordinator has just started.
+    // The reconciler's own pass clears both.
     bool _auto_rf_needed = false;
     bool _auto_rf_needed_stale = true;
 
@@ -4932,6 +4933,20 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
 
     virtual void on_drop_view(const sstring& ks_name, const sstring& view_name) override {
         // Tablet distribution has changed. Wake up the load balancer.
+        _topo_sm.event.broadcast();
+    }
+
+    // Creating or dropping a keyspace changes which racks are eligible for auto-RF and
+    // is a plain schema change, which does not wake the coordinator: wake up so that
+    // the auto-RF reconciler re-evaluates them. Altering a tablets keyspace's
+    // replication is a topology request, handled here, so updates need no listener.
+    virtual void on_create_keyspace(const sstring& ks_name) override {
+        _auto_rf_needed_stale = true;
+        _topo_sm.event.broadcast();
+    }
+
+    virtual void on_drop_keyspace(const sstring& ks_name) override {
+        _auto_rf_needed_stale = true;
         _topo_sm.event.broadcast();
     }
 
