@@ -29,6 +29,10 @@ namespace db {
     class system_keyspace;
 }
 
+namespace locator {
+    class tablet_metadata;
+}
+
 namespace service {
 
 class raft_group0;
@@ -133,6 +137,21 @@ struct topology_features {
 
     // Calculates a set of features that are supported by all normal nodes but not yet enabled.
     std::set<sstring> calculate_not_yet_enabled_features() const;
+};
+
+// Scope of a system.topology change detected in a group0 command's mutations,
+// reused directly as the kind of reload topology_state_load() performs.
+// std::nullopt (no topology_change_hint at all) means "unknown, do a full reload".
+// An engaged hint's `reload_scope` says how narrow the reload can be.
+struct topology_change_hint {
+    enum class scope {
+        tablets_only,  // command carried no system.topology mutations at all
+        versions_only, // only version/fence_version static cells changed
+        full,          // some other static column, a clustering row, or a tombstone changed
+    };
+    scope reload_scope = scope::tablets_only;
+    std::optional<int64_t> version;
+    std::optional<int64_t> fence_version;
 };
 
 struct topology {
@@ -256,6 +275,13 @@ struct topology {
     size_t size() const;
     // Are there any non-left nodes?
     bool is_empty() const;
+
+    // Updates every piece of `topology` that is derived from tablet placement
+    // rather than from system.topology's own rows: narrows left_nodes_rs /
+    // excluded_tablet_nodes to nodes still holding a tablet replica, and
+    // rebuilds paused_requests from scratch. Must run after tmptr's tablet
+    // metadata has been finalized for this reload, on every reload path.
+    void update_tablet_dependent_state(const locator::tablet_metadata& tablets, bool parallel_tablet_draining);
 
     // Returns false iff we can safely start a new topology change.
     bool is_busy() const;

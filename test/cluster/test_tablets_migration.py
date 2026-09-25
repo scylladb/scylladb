@@ -129,6 +129,88 @@ async def test_tablet_transition_sanity(manager: ScyllaClusterManager, action, s
                 assert res[0].count == 0
 
 
+async def test_tablet_migration_skips_topology_reload(manager: ScyllaClusterManager):
+    """Most group0 commands during a tablet migration touch only the
+    version/fence_version cells of system.topology and must take the fast
+    path (patch in place, no full reload); a real topology change (node join)
+    still must do a full reload."""
+    cfg = {'tablets_mode_for_new_keyspaces': 'enabled'}
+    servers = await manager.servers_add(2, config=cfg)
+    cql = manager.get_cql()
+
+    await manager.disable_tablet_balancing()
+
+    host0 = await manager.get_host_id(servers[0].server_id)
+    host1 = await manager.get_host_id(servers[1].server_id)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 8}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY);")
+
+        log = await manager.server_open_log(servers[0].server_id)
+        mark = await log.mark()
+
+        tablets = await get_all_tablet_replicas(manager, servers[0], ks, "test")
+        for tablet in tablets:
+            src = tablet.replicas[0]
+            dst = host1 if src[0] == host0 else host0
+            logger.info(f"Move tablet at token {tablet.last_token}: {src[0]} -> {dst}")
+            await manager.api.move_tablet(servers[0].ip_addr, ks, "test", src[0], src[1], dst, 0, tablet.last_token)
+
+        reloads = await log.grep("topology_state_load: loading topology state", from_mark=mark)
+        applies = await log.grep("topology_state_load: waiting for token metadata lock", from_mark=mark)
+        logger.info(f"{len(reloads)} full system.topology reloads out of {len(applies)} topology_state_load calls")
+        assert len(applies) > 0, "expected at least one topology_state_load call during tablet migration"
+        assert len(reloads) < len(applies), \
+            f"expected most topology_state_load calls during tablet migration to take the fast path, " \
+            f"got {len(reloads)} full reloads out of {len(applies)} calls"
+
+    # Sanity: a real topology change (node join) still causes a full reload.
+    mark2 = await log.mark()
+    await manager.server_add(config=cfg)
+    reloads2 = await log.grep("topology_state_load: loading topology state", from_mark=mark2)
+    assert len(reloads2) > 0, "node join should still cause a full system.topology reload"
+
+
+async def test_tablet_decommission_uses_fast_reload_path_while_draining(manager: ScyllaClusterManager):
+    """A decommission drives many tablet-migration-only group0 commands while
+    tablets drain off the leaving node. Those commands must take a non-full
+    reload path instead of forcing a full system.topology reload each time
+    (regression test for the tablet-rebuild-drain scope gap).
+
+    Note: this exercises the ordinary tablet-migration fast path, not the
+    left_nodes_rs-narrowing path specifically - decommission/removenode assert
+    tablets are fully drained (topology_coordinator.cc, "Tablets should have
+    been drained earlier") before the node ever reaches 'left' state, so
+    left_nodes_rs never goes non-empty here. The scenario that populates
+    left_nodes_rs with a still-draining node is node replace, which has no
+    equivalent pre-'left' drain assertion."""
+    cfg = {'tablets_mode_for_new_keyspaces': 'enabled'}
+    # RF=2 needs exactly 2 racks kept populated; put 2 nodes in rack r1 (so
+    # decommissioning one of them still leaves r1 non-empty) and 1 in r2.
+    servers = [await manager.server_add(config=cfg, property_file={"dc": "datacenter1", "rack": "r1"}),
+               await manager.server_add(config=cfg, property_file={"dc": "datacenter1", "rack": "r1"}),
+               await manager.server_add(config=cfg, property_file={"dc": "datacenter1", "rack": "r2"})]
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 32}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        keys = range(2000)
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in keys])
+
+        log = await manager.server_open_log(servers[0].server_id)
+        mark = await log.mark()
+
+        await manager.decommission_node(servers[1].server_id)
+
+        reloads = await log.grep("topology_state_load: loading topology state", from_mark=mark)
+        applies = await log.grep("topology_state_load: waiting for token metadata lock", from_mark=mark)
+        logger.info(f"{len(reloads)} full system.topology reloads out of {len(applies)} topology_state_load calls during decommission")
+        assert len(applies) > 0, "expected at least one topology_state_load call during decommission"
+        assert len(reloads) < len(applies), \
+            f"expected most topology_state_load calls during decommission-while-draining to take a non-full reload path, " \
+            f"got {len(reloads)} full reloads out of {len(applies)} calls"
+
+
 async def make_rack_aware_cluster(manager: ScyllaClusterManager, cfg: dict):
     """Creates a cluster of two nodes in rack r1 and one node in rack r2 of dc1.
     Returns the servers and a rack name -> host ids mapping."""

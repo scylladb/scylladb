@@ -31,6 +31,7 @@
 #include "types/types.hh"
 #include "auth_version.hh"
 #include "db/view/view_building_state.hh"
+#include "mutation/canonical_mutation.hh"
 
 namespace netw {
     class shared_dict;
@@ -748,6 +749,10 @@ public:
         return _qp;
     }
 }; // class system_keyspace
+
+// Always returns an engaged hint; see service::topology_change_hint::scope
+// for what its reload_scope means.
+future<service::topology_change_hint> get_topology_change_hint(const utils::chunked_vector<canonical_mutation>& mutations);
 
 } // namespace db
 
