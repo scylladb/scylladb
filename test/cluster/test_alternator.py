@@ -1530,7 +1530,7 @@ def make_ca(tmp_path, name='ca', cn='TestCA'):
     """Generate a self-signed CA key and certificate (tmp_path/{name}.key,
     tmp_path/{name}.crt), for use as an Alternator mTLS truststore or to
     sign client certificates via make_client_cert() below."""
-    system(f'openssl genrsa 2048 > "{tmp_path}/{name}.key" 2>/dev/null')
+    system(f'openssl ecparam -name prime256v1 -genkey -noout > "{tmp_path}/{name}.key" 2>/dev/null')
     system(f'openssl req -new -x509 -nodes -sha256 -days 365 '
               f'-subj "/CN={cn}" -key "{tmp_path}/{name}.key" -out "{tmp_path}/{name}.crt" 2>/dev/null')
 
@@ -1548,7 +1548,7 @@ def make_client_cert(tmp_path, name, cn=None, *, subj=None, ca='ca', extfile=Non
     already-expired certificate."""
     if subj is None:
         subj = f'/CN={cn}'
-    system(f'openssl genrsa 2048 > "{tmp_path}/{name}.key" 2>/dev/null')
+    system(f'openssl ecparam -name prime256v1 -genkey -noout > "{tmp_path}/{name}.key" 2>/dev/null')
     system(f'openssl req -new -sha256 -subj "{subj}" '
               f'-key "{tmp_path}/{name}.key" -out "{tmp_path}/{name}.csr" 2>/dev/null')
     validity = f'-not_before {not_before} -not_after {not_after}' if not_before else '-days 365'
