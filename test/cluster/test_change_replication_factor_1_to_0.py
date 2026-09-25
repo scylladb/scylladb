@@ -22,8 +22,7 @@ logger = logging.getLogger(__name__)
     "use_tablets",
     [
         pytest.param(False, id="vnodes"),
-        pytest.param(True, id="tablets", marks=[pytest.mark.skip_bug(
-            link="https://github.com/scylladb/scylladb/issues/20282", reason="Coredump and error of: failed to log message: fmt='Requested location for node {} not in topology",),pytest.mark.tier2])
+        pytest.param(True, id="tablets"),
     ]
 )
 async def test_change_replication_factor_1_to_0(request: pytest.FixtureRequest, manager: ScyllaClusterManager, use_tablets: bool) -> None:
