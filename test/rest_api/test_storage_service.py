@@ -952,40 +952,52 @@ def test_drop_quarantined_sstables(cql, this_dc, rest_api):
                 resp = rest_api.send("POST", f"storage_service/keyspace_flush/{keyspace}")
                 resp.raise_for_status()
 
-                # Drop quarantined sstables from all keyspaces (no parameters)
+                # Rejected when data resurrection risk acceptance is omitted.
                 resp = rest_api.send("POST", "storage_service/drop_quarantined_sstables")
+                assert resp.status_code == requests.codes.bad_request
+                assert 'To accept the risk and carry out the operation, provide the "accept_data_resurrection_risk" parameter.' in resp.json()["message"]
+
+                # Rejected when data resurrection risk is not accepted.
+                resp = rest_api.send("POST", "storage_service/drop_quarantined_sstables",
+                                   params={"accept_data_resurrection_risk": "false"})
+                assert resp.status_code == requests.codes.bad_request
+                assert 'To accept the risk and carry out the operation, provide the "accept_data_resurrection_risk" parameter.' in resp.json()["message"]
+
+                # Drop quarantined sstables from all keyspaces
+                resp = rest_api.send("POST", "storage_service/drop_quarantined_sstables",
+                                   params={"accept_data_resurrection_risk": "true"})
                 resp.raise_for_status()
 
                 # Drop quarantined sstables from specific keyspace
                 resp = rest_api.send("POST", "storage_service/drop_quarantined_sstables",
-                                   params={"keyspace": keyspace})
+                                   params={"accept_data_resurrection_risk": "true", "keyspace": keyspace})
                 resp.raise_for_status()
 
                 # Drop quarantined sstables from specific table
                 resp = rest_api.send("POST", "storage_service/drop_quarantined_sstables",
-                                   params={"keyspace": keyspace, "tables": test_tables[0]})
+                                   params={"accept_data_resurrection_risk": "true", "keyspace": keyspace, "tables": test_tables[0]})
                 resp.raise_for_status()
 
                 # Drop quarantined sstables from multiple tables
                 resp = rest_api.send("POST", "storage_service/drop_quarantined_sstables",
-                                   params={"keyspace": keyspace, "tables": f"{test_tables[0]},{test_tables[1]}"})
+                                   params={"accept_data_resurrection_risk": "true", "keyspace": keyspace, "tables": f"{test_tables[0]},{test_tables[1]}"})
                 resp.raise_for_status()
 
                 # # Non-existing keyspace
                 resp = rest_api.send("POST", "storage_service/drop_quarantined_sstables",
-                                   params={"keyspace": "non_existent_keyspace"})
+                                   params={"accept_data_resurrection_risk": "true", "keyspace": "non_existent_keyspace"})
                 assert resp.status_code == requests.codes.bad_request
                 assert resp.json()["message"] == "Can't find a keyspace non_existent_keyspace"
 
                 # Non-existing table
                 resp = rest_api.send("POST", "storage_service/drop_quarantined_sstables",
-                                   params={"keyspace": keyspace, "tables": "non_existent_table"})
+                                   params={"accept_data_resurrection_risk": "true", "keyspace": keyspace, "tables": "non_existent_table"})
                 assert resp.status_code == requests.codes.bad_request
                 assert "Can't find a column family non_existent_table in keyspace" in resp.json()["message"]
 
                 # Mix of existing and non-existing tables
                 resp = rest_api.send("POST", "storage_service/drop_quarantined_sstables",
-                                   params={"keyspace": keyspace, "tables": f"{test_tables[0]},non_existent_table"})
+                                   params={"accept_data_resurrection_risk": "true", "keyspace": keyspace, "tables": f"{test_tables[0]},non_existent_table"})
                 assert resp.status_code == requests.codes.bad_request
                 assert "Can't find a column family non_existent_table in keyspace" in resp.json()["message"]
 

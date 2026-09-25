@@ -4036,6 +4036,10 @@ void setstreamthroughput_operation(scylla_rest_client& client, const bpo::variab
 void dropquarantinedsstables_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     std::unordered_map<sstring, sstring> params;
 
+    if (vm.contains("i-accept-data-resurrection-risk")) {
+        params["accept_data_resurrection_risk"] = "true";
+    }
+
     if (vm.contains("keyspace")) {
         const auto [keyspace, tables] = parse_keyspace_and_tables(client, vm);
         params["keyspace"] = keyspace;
@@ -5597,8 +5601,15 @@ Set the MiB/s throughput for streaming, or 0 to disable throttling
 R"(
 Drop quarantined SSTables from the specified keyspace and table(s), or from all
 keyspaces if no keyspace is specified.
+
+Dropping quarantined SSTables can resurrect deleted data.
+This can happen regardless of the consistency level and of the repair tombstone GC mode.
+This operation should only be used with full understanding of the risks when no viable alternatives remain.
+To accept the risk and carry out the operation, provide the --i-accept-data-resurrection-risk flag.
 )",
-            {},
+            {
+                typed_option<>("i-accept-data-resurrection-risk", "Accept data resurrection risk. The command is rejected if not specified."),
+            },
             {
                 typed_option<sstring>("keyspace", "The keyspace to drop quarantined SSTables from, if missing, all keyspaces will be affected", 1),
                 typed_option<std::vector<sstring>>("table", "The table(s) to drop quarantined SSTables from, if missing, all tables will be affected", -1),

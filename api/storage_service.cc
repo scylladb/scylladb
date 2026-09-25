@@ -1877,6 +1877,16 @@ rest_get_schema_versions(sharded<service::storage_service>& ss, std::unique_ptr<
 static
 future<json::json_return_type>
 rest_drop_quarantined_sstables(http_context& ctx, sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
+    auto accept_risk = api::req_param<bool>(*req, "accept_data_resurrection_risk", false);
+    if (!accept_risk) {
+        co_await coroutine::return_exception(bad_request_exception(
+            "Dropping quarantined SSTables can resurrect deleted data. "
+            "This can happen regardless of the consistency level and of the \"repair\" tombstone GC mode. "
+            "Its usage is highly discouraged. "
+            "The only supported way to rid a node of corrupt data is to replace it. Anything else risks data resurrection or data loss. "
+            "This operation should only be used with full understanding of the risks when no viable alternatives remain. "
+            "To accept the risk and carry out the operation, provide the \"accept_data_resurrection_risk\" parameter."));
+    }
     auto keyspace = req->get_query_param("keyspace");
     try {
         if (!keyspace.empty()) {

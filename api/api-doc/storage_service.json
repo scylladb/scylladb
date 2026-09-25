@@ -3692,6 +3692,14 @@
                      "allowMultiple":false,
                      "type":"string",
                      "paramType":"query"
+                  },
+                  {
+                     "name":"accept_data_resurrection_risk",
+                     "description":"The drop quarantined SSTables operation is unsafe. Accept the risk of data resurrection. Required for the operation to execute.",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"boolean",
+                     "paramType":"query"
                   }
                ]
             }

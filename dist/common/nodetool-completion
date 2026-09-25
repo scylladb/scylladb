@@ -189,7 +189,6 @@ have nodetool && have cqlsh &&
             toppartitions
             verify
             viewbuildstatus
-            dropquarantinedsstables
             '
 
         local optwcfs='
@@ -242,6 +241,11 @@ have nodetool && have cqlsh &&
                         COMPREPLY=( $(compgen -W "-a --include-all-sstables $ks" -- "${cur}") )
                         return 0
                         ;;
+                    dropquarantinedsstables)
+                        ks=$(get_keyspaces)
+                        COMPREPLY=( $(compgen -W "--i-accept-data-resurrection-risk $ks" -- "${cur}") )
+                        return 0
+                        ;;
                 esac
             fi
         elif [[ $COMP_CWORD -eq 3 ]] ; then
@@ -253,6 +257,12 @@ have nodetool && have cqlsh &&
                 upgradesstables)
                     if [[ ! ${prev} == -* ]]; then
                         show_cfs ${prev} ${cur}
+                    fi
+                    return 0
+                    ;;
+                dropquarantinedsstables)
+                    if [[ ${prev} == -* ]]; then
+                        show_keyspaces "${cur}"
                     fi
                     return 0
                     ;;
