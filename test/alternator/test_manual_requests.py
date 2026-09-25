@@ -154,7 +154,6 @@ def test_too_large_request_content_length(dynamodb, test_table, mb):
 # we can use the same limit too. In all useful cases, headers will be
 # much shorter.
 # Reproduces #23438.
-@pytest.mark.xfail(reason="issue #23438")
 def test_too_large_request_headers(dynamodb, test_table):
     # First prepare a valid signed request, which works:
     req = get_signed_request(dynamodb, 'PutItem',
@@ -169,13 +168,14 @@ def test_too_large_request_headers(dynamodb, test_table):
     response = requests.post(req.url, headers=headers, data=req.body, verify=False, cert=req.cert)
     assert response.status_code == 200
     # Finally, make the two extra headers long - totaling more than 16 KB.
-    # The request should now fail with a 400 Bad Request. Although such a
-    # 400 Bad Request could have many reasons, we know the only difference
-    # between this request and the previous ones is the length of the extra
-    # headers, so it proves the server caught the oversized headers.
+    # The request should now fail: DynamoDB fails it with a 400 Bad Request,
+    # while Alternator uses the more specific 431 Request Header Fields Too
+    # Large. Although such errors could have many reasons, we know the only
+    # difference between this request and the previous ones is the length of
+    # the extra headers, so it proves the server caught the oversized headers.
     headers.update({'header1': 'x'*8192, 'header2': 'y'*8192})
     response = requests.post(req.url, headers=headers, data=req.body, verify=False, cert=req.cert)
-    assert response.status_code == 400
+    assert response.status_code in (400, 431)
 
 # In addition to oversized request bodies and headers tested in the above
 # tests, there is also a risk that a huge request *line* (the URL) can
@@ -184,7 +184,6 @@ def test_too_large_request_headers(dynamodb, test_table):
 # can use the same limit too. In all useful cases, the request line will
 # be much shorter (for ordinary API requests, it is even empty).
 # Reproduces #23438.
-@pytest.mark.xfail(reason="issue #23438")
 def test_too_large_request_line(dynamodb, test_table):
     # First prepare a valid signed request, which works:
     req = get_signed_request(dynamodb, 'PutItem',
@@ -202,11 +201,13 @@ def test_too_large_request_line(dynamodb, test_table):
     # don't want to the 404 or InvalidSignatureException that were fine
     # with the short URL - because either of those errors would mean that
     # the server read the entire URL, and stored it entirely in memory.
-    # This time, we need to see a 400 Bad Request - but not one with a
-    # InvalidSignatureException error in its body.
+    # This time, we need to see an error which the server can produce without
+    # reading the entire URL - a 400 Bad Request on DynamoDB, or the more
+    # specific 414 URI Too Long on Alternator - and in any case, not one with
+    # an InvalidSignatureException error in its body.
     url = req.url + '/' + 'x' * 17000
     response = requests.post(url, headers=req.headers, data=req.body, verify=False, cert=req.cert)
-    assert response.status_code == 400 and not 'InvalidSignatureException' in response.text
+    assert response.status_code in (400, 414) and not 'InvalidSignatureException' in response.text
 
 def test_incorrect_json(dynamodb, test_table):
     correct_req = '{"TableName": "' + test_table.name + '", "Item": {"p": {"S": "x"}, "c": {"S": "x"}}}'
