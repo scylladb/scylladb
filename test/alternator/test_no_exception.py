@@ -132,12 +132,13 @@ def test_get_records_timeout_error_no_exception(dynamodb, dynamodbstreams, scyll
         shard_id = shard['ShardId']
         iter = dynamodbstreams.get_shard_iterator(StreamArn=arn, ShardId=shard_id, ShardIteratorType='LATEST')['ShardIterator']
 
-        with pytest.raises(ClientError, match="InternalServerError.*Alternator's error injection: timeout"):
+        # We need a `_scylla_cdc_log` appended to a table, because query_result is used for reading from the CDC table, whose name is
+        # table_name + '_scylla_cdc_log'. Keep the injection enabled after it fires so its enter count remains observable.
+        with scylla_inject_error(rest_api, 'alternator_query_result_timeout', parameters={ 'table_name': table.name + '_scylla_cdc_log' }) as injection:
             with check_increases_metric_exact(metrics, 'scylla_reactor_cpp_exceptions', [[0, None]]):
-                # We need a `_scylla_cdc_log` appended to a table, because query_result is used for readign from CDC table, which name is
-                # table_name + '_scylla_cdc_log'.
-                with scylla_inject_error(rest_api, 'alternator_query_result_timeout', one_shot=True, parameters={ 'table_name': table.name + '_scylla_cdc_log' }):
+                with pytest.raises(ClientError, match="InternalServerError.*Alternator's error injection: timeout"):
                     dynamodbstreams.get_records(ShardIterator=iter)
+            assert injection.enter_count() > 0
 
 # Test that DescribeTable returns an InternalServerError with a timeout message if the is_view_built query times out and
 # the error is passed by value (instead of being thrown).
@@ -165,4 +166,3 @@ def test_describe_table_with_timeout_in_is_view_built_no_exception(dynamodb, res
             with check_increases_metric_exact(metrics, 'scylla_reactor_cpp_exceptions', [[0, None]]):
                 with pytest.raises(ClientError, match='InternalServerError.*timeout'):
                     table.meta.client.describe_table(TableName=table.name)['Table']
-
