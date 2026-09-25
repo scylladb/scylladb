@@ -71,7 +71,7 @@ def test_quoted_ann_function_in_where_clause(cql, indexed_vector_table):
     # A quoted function name bypasses the keyword restriction and reaches the semantic
     # checks. With an ANN ordering the query is a vector search, which is what claims the
     # restriction - and rejects it, because threshold filtering is not implemented.
-    with pytest.raises(InvalidRequest, match=re.escape("ANN() is not supported in the WHERE clause")):
+    with pytest.raises(InvalidRequest, match="Filtering by ANN similarity in the WHERE clause is not supported"):
         cql.execute(f'SELECT * FROM {indexed_vector_table} WHERE "ann"(v, [0.1, 0.2, 0.3]) > 0 '
                     f'ORDER BY ANN(v, [0.1, 0.2, 0.3]) LIMIT 5')
 
@@ -165,6 +165,14 @@ def test_ann_function_in_select_with_null_bind_marker(cql, indexed_vector_table)
     stmt = cql.prepare(f"SELECT p, ANN(v, ?) FROM {indexed_vector_table} ORDER BY ANN(v, ?) LIMIT 5")
     with pytest.raises(InvalidRequest, match="Unsupported null value"):
         cql.execute(stmt, [None, None])
+
+# With a bind marker the two occurrences are only compared at execution, where the message used to
+# say "ANN()" whatever the query was written with.
+def test_ann_score_in_select_with_different_bound_query_vector(cql, indexed_vector_table):
+    stmt = cql.prepare(f"SELECT p, ANN_SCORE(v, ?) FROM {indexed_vector_table} ORDER BY ANN(v, ?) LIMIT 5")
+    with pytest.raises(InvalidRequest,
+            match=re.escape("ANN_SCORE() in SELECT must use the same query vector as the ANN ordering")):
+        cql.execute(stmt, [[0.4, 0.5, 0.6], [0.1, 0.2, 0.3]])
 
 def test_unknown_scoring_function_in_order_by(cql, indexed_vector_table):
     with pytest.raises(InvalidRequest, match=re.escape(UNKNOWN_SCORING_FUNCTION_MESSAGE)):
