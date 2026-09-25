@@ -83,6 +83,10 @@ public:
      * remote location metadata per datacenter. */
     static constexpr auto SNAPSHOT_REMOTE_LOCATIONS = "snapshot_remote_locations";
 
+    /* Alternator export to S3 metadata tables. */
+    static constexpr auto ALTERNATOR_EXPORT_TO_S3_EXPORTS = "alternator_export_to_s3_exports";
+    static constexpr auto ALTERNATOR_EXPORT_TO_S3_CLIENT_TOKENS = "alternator_export_to_s3_client_tokens";
+
     static constexpr uint64_t SNAPSHOT_SSTABLES_TTL_SECONDS = std::chrono::seconds(std::chrono::days(3)).count();
 
     /* Information required to modify/query some system_distributed tables, passed from the caller. */
@@ -126,6 +130,30 @@ public:
     // NOTE: there's a sibling `read_cdc_for_tablets_current_generation_timestamp` in `system_keyspace`, that does the same for tables backed up by tablets.
     // NOTE: currently used only by alternator
     future<db_clock::time_point> cdc_current_generation_timestamp(context);
+
+    /* The persisted state of a single Alternator "export to S3", as needed to answer
+     * DescribeExport. The columns above the optional ones are all written by the statement that
+     * creates the export row, so a row is either complete or not there at all. Everything that
+     * describes a finished export is optional, because it is only filled in as the export runs. */
+    struct alternator_export {
+        sstring client_token;
+        /* The original ExportTableToPointInTime request, as JSON. It is the source of truth for the
+         * request-derived fields of ExportDescription (S3Bucket, ExportFormat, TableArn, ...). */
+        sstring request;
+        sstring status;
+        ::table_id table_id;  // The exported table, as resolved when the export was accepted
+        db_clock::time_point export_time;  // The point in time the data was exported from
+        db_clock::time_point accepted_at;
+        std::optional<sstring> manifest;
+        std::optional<sstring> failure_code;
+        std::optional<sstring> failure_message;
+        std::optional<int64_t> item_count;
+        std::optional<int64_t> billed_size_bytes;
+        std::optional<db_clock::time_point> completed_at;
+    };
+
+    // Returns the export with the given ARN, or nullopt if there is no such export.
+    future<std::optional<alternator_export>> get_alternator_export(std::string_view export_arn, context);
 
 private:
     future<> create_tables(std::vector<schema_ptr> tables);
