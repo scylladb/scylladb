@@ -26,6 +26,8 @@
 #include <flat_set>
 #include <iterator>
 #include <chrono>
+#include <cstdint>
+#include <limits>
 
 #include <fmt/ranges.h>
 
@@ -1541,9 +1543,19 @@ future<bool> check_tablet_replica_shards(const tablet_metadata& tm, host_id this
 }
 
 class tablet_effective_replication_map : public effective_replication_map {
+    // Cache entry for a tablet whose local-datacenter replica count was not computed yet.
+    static constexpr uint8_t rf_not_cached = 0;
+    // Replica counts are cached as rf + 1, which leaves the largest one uncacheable.
+    static constexpr size_t max_cached_rf = std::numeric_limits<uint8_t>::max() - 1;
+
     table_id _table;
     tablet_sharder _sharder;
     mutable const tablet_map* _tmap = nullptr;
+    // Read replica count in the local datacenter per tablet, allocated and filled on
+    // first use.
+    // The erm is an immutable snapshot of topology and tablet metadata and is never
+    // shared between shards, so a cached count can neither go stale nor race.
+    mutable utils::chunked_vector<uint8_t> _local_dc_rf;
 private:
     host_id_vector_replica_set to_host_set(const tablet_replica_set& replicas) const {
         host_id_vector_replica_set result;
@@ -1611,6 +1623,31 @@ private:
                               _table, tablet, unplaceable, datacenter, placed, configured, result.count);
         }
         return result;
+    }
+
+    // Only the local datacenter is cached, because LOCAL_ONE, LOCAL_QUORUM and
+    // LOCAL_SERIAL ask for it on every request. A remote datacenter is asked for only
+    // by EACH_QUORUM, and the other consistency levels use the total replica count.
+    // A count which is not exact is not cached, so it keeps being recomputed and keeps
+    // reporting the replica which cannot be placed.
+    size_t get_local_dc_replication_factor(tablet_id tablet, const sstring& local_dc) const {
+        if (_local_dc_rf.empty()) [[unlikely]] {
+            // Allocated on first use, so that an erm which is never asked for a
+            // local-datacenter replication factor costs nothing.
+            _local_dc_rf.resize(get_tablet_map().tablet_count());
+        }
+        if (tablet.value() >= _local_dc_rf.size()) [[unlikely]] {
+            return count_replicas_in_dc(tablet, local_dc).count;
+        }
+        auto& entry = _local_dc_rf[tablet.value()];
+        if (entry != rf_not_cached) {
+            return entry - 1;
+        }
+        auto rf = count_replicas_in_dc(tablet, local_dc);
+        if (rf.exact && rf.count <= max_cached_rf) {
+            entry = rf.count + 1;
+        }
+        return rf.count;
     }
 
     const tablet_replica_set& get_replicas_for_write(dht::token search_token) const {
@@ -1700,7 +1737,9 @@ public:
 
     virtual size_t get_replication_factor(token search_token, const sstring& datacenter) const override {
         auto tablet = get_tablet_map().get_tablet_id(search_token);
-        auto rf = count_replicas_in_dc(tablet, datacenter).count;
+        auto rf = datacenter == get_topology().get_datacenter()
+                ? get_local_dc_replication_factor(tablet, datacenter)
+                : count_replicas_in_dc(tablet, datacenter).count;
         tablet_logger.trace("get_replication_factor({}, {}): table={}, tablet={}, rf={}", search_token, datacenter, _table, tablet, rf);
         return rf;
     }

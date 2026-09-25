@@ -8983,6 +8983,37 @@ SEASTAR_THREAD_TEST_CASE(test_tablet_erm_replication_factor) {
         BOOST_REQUIRE_EQUAL(erm->get_replication_factor(token, "dc2"), 1u); // unknown alone, below the configured 2
     }
 
+    // Tablets with different replica counts, queried repeatedly and interleaved, so that
+    // the local-datacenter cache is both filled and read back for every tablet.
+    {
+        std::vector<std::vector<host_id>> tablet_replicas = {
+            {h1, h2, h5},     // dc1: 2, dc2: 1
+            {h2, h3, h4, h5}, // dc1: 3, dc2: 1
+            {h5, h6},         // dc1: 0, dc2: 2
+            {h1, h5, h6},     // dc1: 1, dc2: 2
+        };
+        tablet_map tmap(tablet_replicas.size());
+        auto tid = tmap.first_tablet();
+        std::vector<dht::token> tokens;
+        for (const auto& hosts : tablet_replicas) {
+            tmap.set_tablet(tid, tablet_info{replicas(hosts)});
+            tokens.push_back(tmap.get_last_token(tid));
+            if (auto next = tmap.next_tablet(tid)) {
+                tid = *next;
+            }
+        }
+        auto erm = make_erm(std::move(tmap));
+
+        auto expected_dc1 = std::vector<size_t>{2, 3, 0, 1};
+        auto expected_dc2 = std::vector<size_t>{1, 1, 2, 2};
+        for (int round = 0; round < 2; ++round) {
+            for (size_t i = 0; i < tokens.size(); ++i) {
+                BOOST_REQUIRE_EQUAL(erm->get_replication_factor(tokens[i], "dc1"), expected_dc1[i]);
+                BOOST_REQUIRE_EQUAL(erm->get_replication_factor(tokens[i], "dc2"), expected_dc2[i]);
+                BOOST_REQUIRE_EQUAL(erm->get_replication_factor(tokens[i]), tablet_replicas[i].size());
+            }
+        }
+    }
 }
 
 BOOST_AUTO_TEST_SUITE_END()
