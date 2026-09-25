@@ -16,6 +16,10 @@ from test.cqlpy import nodetool
 from test.cqlpy.util import cql_session
 from test.pylib.skip_types import skip_env
 
+# Module-level constants for test parameters
+RUN_COUNT = 200
+CPP_EXCEPTION_THRESHOLD = 20
+
 def get_protocol_error_metrics(host) -> int:
     result = 0
     metrics = requests.get(f"http://{host}:9180/metrics").text
@@ -54,7 +58,6 @@ def cql_with_protocol(host_str, port, creds, protocol_version):
                 protocol_version=protocol_version,
         ) as session:
             yield session
-            session.shutdown()
     except NoHostAvailable:
         yield None
 
@@ -104,8 +107,8 @@ def debug_exceptions_logging(request, cql):
 # If there is a protocol version mismatch, the server should
 # raise a protocol error, which is counted in the metrics.
 def test_protocol_version_mismatch(scylla_only, debug_exceptions_logging, request, host):
-    run_count = 200
-    cpp_exception_threshold = 20
+    run_count = RUN_COUNT
+    cpp_exception_threshold = CPP_EXCEPTION_THRESHOLD
 
     cpp_exception_metrics_before = get_cpp_exceptions_metrics(host)
     protocol_exception_metrics_before = get_protocol_error_metrics(host)
@@ -144,8 +147,9 @@ def _build_frame(*, opcode: int, stream: int, body: bytes) -> bytearray:
 def _send_frame(sock: socket.socket, *, opcode: int, stream: int, body: bytes) -> None:
     sock.send(_build_frame(opcode=opcode, stream=stream, body=body))
 
+MAX_RECV_FRAME_SIZE = 4096
 def _recv_frame(sock: socket.socket) -> bytes:
-    return sock.recv(4096)
+    return sock.recv(MAX_RECV_FRAME_SIZE)
 
 # Many protocol errors are caused by sending malformed messages.
 # It is not possible to reproduce them with the Python driver,
@@ -287,8 +291,8 @@ def _protocol_error_impl(
         s.close()
 
 def _test_impl(host, flag):
-    run_count = 200
-    cpp_exception_threshold = 20
+    run_count = RUN_COUNT
+    cpp_exception_threshold = CPP_EXCEPTION_THRESHOLD
 
     cpp_exception_metrics_before = get_cpp_exceptions_metrics(host)
     protocol_exception_metrics_before = get_protocol_error_metrics(host)
@@ -349,8 +353,8 @@ def test_process_register_malformed_string_list(scylla_only, no_ssl, debug_excep
 # This is to ensure that the protocol exceptions are not cleared or reset
 # during the test execution.
 def test_no_protocol_exceptions(scylla_only, no_ssl, debug_exceptions_logging, host):
-    run_count = 200
-    cpp_exception_threshold = 20
+    run_count = RUN_COUNT
+    cpp_exception_threshold = CPP_EXCEPTION_THRESHOLD
 
     cpp_exception_metrics_before = get_cpp_exceptions_metrics(host)
     protocol_exception_metrics_before = get_protocol_error_metrics(host)
