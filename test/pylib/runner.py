@@ -323,7 +323,9 @@ def testpy_cluster_factory(request: pytest.FixtureRequest,
     # environment variables that should be the base of all processes running in this suit
     base_env = {}
 
-    if options.coverage and (build_mode in options.coverage_modes) and bool(suite_config.cfg.get("coverage", True)):
+    # Under --coverage-per-test the nodes keep the test's own LLVM_PROFILE_FILE from os.environ.
+    if (options.coverage and (build_mode in options.coverage_modes) and bool(suite_config.cfg.get("coverage", True))
+            and not getattr(options, "coverage_per_test", None)):
         # Set the coverage data from each instrumented object to use the same file (and merged into it with locking)
         # as long as we don't need test specific coverage data, this looks sufficient. The benefit of doing this in
         # this way is that the storage will not be bloated with coverage files (each can weigh 10s of MBs so for several
