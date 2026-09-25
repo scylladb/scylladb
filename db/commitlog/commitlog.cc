@@ -2946,7 +2946,8 @@ future<> db::commitlog::segment_manager::do_pending_deletes() {
             auto usage = totals.total_size_on_disk;
             auto next_usage = usage - size;
 
-            if (next_usage <= max_disk_size && mode != dispose_mode::ForceDelete) {
+            // zero means unlimited, as in allocate_segment()
+            if ((max_disk_size == 0 || next_usage <= max_disk_size) && mode != dispose_mode::ForceDelete) {
                 descriptor d(next_id(), "Recycled-" + cfg.fname_prefix);
                 auto dst = this->filename(d);
 
