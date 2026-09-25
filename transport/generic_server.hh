@@ -144,10 +144,11 @@ public:
 
     future<> listen(socket_address addr,
         std::shared_ptr<seastar::tls::credentials_builder> creds,
-        bool is_shard_aware, bool keepalive,
+        bool keepalive,
         std::optional<file_permissions> unix_domain_socket_permissions,
         bool proxy_protocol = false,
-        std::function<server&()> get_shard_instance = {}
+        std::function<server&()> get_shard_instance = {},
+        std::optional<seastar::server_socket::load_balancing_algorithm> lba = {}
         );
 
     future<> do_accepts(int which, bool keepalive, socket_address server_addr, bool is_tls);
