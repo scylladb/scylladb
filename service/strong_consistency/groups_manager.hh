@@ -349,11 +349,6 @@ public:
     future<> wait_for_table_raft_groups_on_all_hosts(table_id table, lowres_clock::time_point timeout);
 
     tablet_group_leader_cache& leader_cache() { return _leader_cache; }
-
-    std::optional<locator::tablet_routing_info_v2> check_tablet_version(
-        const replica::table&,
-        const dht::token&,
-        const locator::tablet_version_block);
 };
 
 /// A temporary, RAII-style handle to an active Raft group server instance,

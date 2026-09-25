@@ -313,6 +313,12 @@ public:
     // `current_leader()` function and retry `wait_for_leader()` if it returns an empty
     // `raft::server_id`.
     //
+    // With `reset`, a follower first forgets the leader it knows of, so the future
+    // resolves only once a leader sends it a message again. For a caller which knows
+    // from outside of raft that the leader `current_leader()` names is gone - e.g. it
+    // was removed from the configuration - but this server hasn't heard from the new
+    // leader yet. `reset` does nothing on a leader or a candidate.
+    //
     // The caller may pass a pointer to an abort_source to make the function abortable.
     // If it passes nullptr, the function is unabortable.
     //
@@ -321,7 +327,7 @@ public:
     //     Thrown if abort() was called on the server instance.
     // raft::request_aborted
     //     Thrown if abort is requested before the operation finishes.
-    virtual future<> wait_for_leader(seastar::abort_source* as) = 0;
+    virtual future<> wait_for_leader(seastar::abort_source* as, bool reset = false) = 0;
 
     // Manually trigger snapshot creation and log truncation.
     //

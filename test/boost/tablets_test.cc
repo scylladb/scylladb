@@ -8663,10 +8663,13 @@ SEASTAR_THREAD_TEST_CASE(test_tablet_version_changes_after_tablet_migration) {
 // A tablet leaving a shard has its raft group deleted. If it returns before
 // the deletion finishes, the group's entry survives, pointing at the server
 // the deletion is about to destroy until the restart publishes a new one.
-// Routing a request in that window must not touch the destroyed server.
+// Whoever reaches the server through the entry in that window must notice
+// that it has no usable server, instead of touching the destroyed one.
+// stepdown_leaders() is the caller that walks every entry without waiting
+// for its server to be ready, so it is what probes the window here.
 //
 // Reproduces SCYLLADB-4378.
-SEASTAR_THREAD_TEST_CASE(test_tablet_version_during_raft_group_restart) {
+SEASTAR_THREAD_TEST_CASE(test_stepdown_leaders_during_raft_group_restart) {
 #ifndef SCYLLA_ENABLE_ERROR_INJECTION
     testlog.info("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev,sanitize).");
 #else
@@ -8706,20 +8709,24 @@ SEASTAR_THREAD_TEST_CASE(test_tablet_version_during_raft_group_restart) {
             save_token_metadata(e, std::move(guard)).get();
         };
 
-        // check_tablet_version() answers nullopt both for a matching block and
-        // for a group without a usable server; two blocks differing in the
-        // value nibble tell the cases apart.
-        const auto version_on_home = [&] {
-            return smp::submit_to(home.shard, [&e, table] -> std::optional<tablet_version> {
-                const auto& [coordinator, holder] = e.local_qp().acquire_strongly_consistent_coordinator();
-                auto& gm = coordinator.get().get_groups_manager();
-                const auto& t = e.local_db().find_column_family(table);
-                for (const auto block : {tablet_version_block{0x00}, tablet_version_block{0x01}}) {
-                    if (const auto info = gm.check_tablet_version(t, dht::token{0}, block)) {
-                        return info->hash;
-                    }
-                }
-                return std::nullopt;
+        // A write is served by the group's server, and waits for its leader.
+        const auto write_on_home = [&] {
+            smp::submit_to(home.shard, [&e] {
+                return seastar::async([&e] {
+                    // Strongly consistent writes accept only QUORUM/LOCAL_QUORUM; the
+                    // text-only execute_cql() would send ONE.
+                    e.execute_cql("insert into sc_ks.tbl (pk, v) values (1, 1)",
+                            std::make_unique<cql3::query_options>(db::consistency_level::QUORUM,
+                                    std::vector<cql3::raw_value>{})).get();
+                });
+            }).get();
+        };
+        const auto stepdown_leaders_on_home = [&] {
+            smp::submit_to(home.shard, [&e] {
+                return seastar::async([&e] {
+                    const auto& [coordinator, holder] = e.local_qp().acquire_strongly_consistent_coordinator();
+                    coordinator.get().get_groups_manager().stepdown_leaders().get();
+                });
             }).get();
         };
         const auto entered = [] (const char* injection) {
@@ -8729,8 +8736,7 @@ SEASTAR_THREAD_TEST_CASE(test_tablet_version_during_raft_group_restart) {
         // assertion releases both pauses when these go out of scope.
         std::optional<scoped_error_injection> deletion_pause, start_pause;
 
-        // No leader, no version: wait for the election.
-        BOOST_REQUIRE(eventually_true([&] { return version_on_home().has_value(); }));
+        write_on_home();
 
         // Pause the deletion, then bring the tablet back: the restart queues
         // behind the deletion, so the group keeps its entry.
@@ -8744,8 +8750,8 @@ SEASTAR_THREAD_TEST_CASE(test_tablet_version_during_raft_group_restart) {
         deletion_pause.reset();
         BOOST_REQUIRE(entered("sc_start_raft_group_pause"));
 
-        // Must neither crash nor report a version.
-        BOOST_REQUIRE(!version_on_home().has_value());
+        // Must skip the group rather than touch its destroyed server.
+        stepdown_leaders_on_home();
 
         // Moving the tablet by rewriting its map leaves the group's commit
         // index in system.raft_groups, while its log died with the server;
@@ -8755,7 +8761,7 @@ SEASTAR_THREAD_TEST_CASE(test_tablet_version_during_raft_group_restart) {
                 home.shard, group_id)).get();
         start_pause.reset();
 
-        BOOST_REQUIRE(eventually_true([&] { return version_on_home().has_value(); }));
+        write_on_home();
     }, std::move(cfg)).get();
 #endif
 }

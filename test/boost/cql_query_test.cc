@@ -63,8 +63,6 @@
 #include "compaction/compaction_manager.hh"
 #include "service/query_state.hh"
 #include "service_permit.hh"
-#include "service/strong_consistency/coordinator.hh"
-#include "service/strong_consistency/groups_manager.hh"
 #include "db/cluster_config_registry.hh"
 #include "locator/token_metadata.hh"
 #include "locator/topology.hh"
@@ -1206,45 +1204,12 @@ SEASTAR_TEST_CASE(test_tablets_routing_strong_consistency) {
         // block must yield a tablets-routing-v2 payload, and a matching one must
         // not. The check only runs on the shard that hosts the tablet replica;
         // a request to any other shard is redirected before the version check.
-        smp::submit_to(local_shard, [&e, token] {
-            return seastar::async([&e, token] {
+        smp::submit_to(local_shard, [&e] {
+            return seastar::async([&e] {
                 cql_transport::cql_protocol_extension_enum_set exts = e.local_client_state().get_protocol_extensions();
                 exts.remove(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V1);
                 exts.set(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V2_EXPERIMENTAL);
                 e.local_client_state().set_protocol_extensions(std::move(exts));
-
-                const auto local_schema = e.local_db().find_schema("ks_tablet", "tbl");
-                const auto& [coordinator_ref, _] = e.local_qp().acquire_strongly_consistent_coordinator();
-                auto& groups_manager = coordinator_ref.get().get_groups_manager();
-
-                const auto get_tablet_version = [&] (const replica::table& table, const dht::token& token) -> std::optional<locator::tablet_version> {
-                    const locator::tablet_version_block blocks[] = {
-                        locator::tablet_version_block{0x00}, locator::tablet_version_block{0x01}
-                    };
-                    for (auto block : blocks) {
-                        auto result = groups_manager.check_tablet_version(table, token, block);
-                        if (result) {
-                            return std::make_optional(result->hash);
-                        }
-                    }
-                    return std::nullopt;
-                };
-
-                // Leader might not be available instantly, so poll until we can compute the tablet version.
-                locator::tablet_version version{0};
-                const bool version_ready = eventually_true([&] {
-                    if (const auto v = get_tablet_version(local_schema->table(), token)) {
-                        version = *v;
-                        return true;
-                    }
-                    return false;
-                });
-                BOOST_REQUIRE_MESSAGE(version_ready,
-                    "Strongly consistent tablet version was not computed in time");
-
-                const auto correct_tvb = extract_tablet_version_block(version, 0);
-                // Keep the same block index, but change its value to force a mismatch.
-                const auto wrong_tvb = locator::tablet_version_block{correct_tvb.value() ^ 0x0F};
 
                 const auto insert_id = e.prepare("INSERT INTO ks_tablet.tbl (pk, v) VALUES (?, ?)").get();
                 const auto make_options = [] {
@@ -1256,6 +1221,33 @@ SEASTAR_TEST_CASE(test_tablets_routing_strong_consistency) {
                         }),
                         cql3::query_options::specific_options::DEFAULT);
                 };
+                const auto tablet_version_of = [&] (::shared_ptr<cql_transport::messages::result_message> result) {
+                    const auto& payload = result->custom_payload().value().at("tablets-routing-v2");
+                    // The tuple is (first token: u64, last token: u64, replicas: List<Tuple<UUID, u32>>, version: u64).
+                    const auto fields = value_cast<tuple_type_impl::native_type>(replica::get_tablet_info_v2_type()->deserialize(payload));
+                    return locator::tablet_version{std::bit_cast<uint64_t>(value_cast<int64_t>(fields[3]))};
+                };
+
+                // The version is only known through the routing information a mismatching
+                // block brings back. Two blocks that differ in the value nibble can't both
+                // match, so one of these two writes returns it. The write itself waits for
+                // the raft group's leader, so there is nothing to poll for here.
+                const auto get_tablet_version = [&] {
+                    for (const auto block : {locator::tablet_version_block{0x00}, locator::tablet_version_block{0x01}}) {
+                        auto options = make_options();
+                        options->set_tablet_version_block(block);
+                        const auto result = e.execute_prepared_with_qo(insert_id, std::move(options)).get();
+                        if (has_tablets_routing_v2(result)) {
+                            return tablet_version_of(result);
+                        }
+                    }
+                    throw std::runtime_error("Couldn't obtain strongly consistent tablet version");
+                };
+                const auto version = get_tablet_version();
+
+                const auto correct_tvb = extract_tablet_version_block(version, 0);
+                // Keep the same block index, but change its value to force a mismatch.
+                const auto wrong_tvb = locator::tablet_version_block{correct_tvb.value() ^ 0x0F};
 
                 // Mismatching block: tablets-routing-v2 payload SHOULD be returned.
                 auto wrong_options = make_options();

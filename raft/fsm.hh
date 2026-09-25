@@ -590,6 +590,17 @@ public:
         }
     }
 
+    // Forget the leader this follower knows of, so that current_leader()
+    // is empty until a leader sends us a message again. For a caller which
+    // knows from outside of raft that the reported leader is gone - e.g. it
+    // was removed from the configuration - but this follower hasn't heard
+    // from the new leader yet. Does nothing on a leader or a candidate.
+    void forget_leader() {
+        if (is_follower()) {
+            follower_state().current_leader = server_id{};
+        }
+    }
+
     // Ask to search for a leader if one is not known.
     // Immediately sends ping messages to all peers and keeps pinging
     // on subsequent ticks until a leader is found.

@@ -499,7 +499,7 @@ private:
     void add_to_rpc_config(server_address srv);
     void remove_from_rpc_config(const server_address& srv);
 
-    future<> wait_for_leader(seastar::abort_source* as) override;
+    future<> wait_for_leader(seastar::abort_source* as, bool reset) override;
 
     future<> wait_for_state_change(seastar::abort_source* as) override;
 
@@ -667,9 +667,12 @@ future<> server_impl::wait_for_next_tick(seastar::abort_source* as) {
     }
 }
 
-future<> server_impl::wait_for_leader(seastar::abort_source* as) {
+future<> server_impl::wait_for_leader(seastar::abort_source* as, bool reset) {
     check_not_aborted();
 
+    if (reset) {
+        _fsm->forget_leader();
+    }
     if (_fsm->current_leader()) {
         co_return;
     }
@@ -972,7 +975,7 @@ future<> server_impl::do_on_leader_with_retries(seastar::abort_source* as, Async
         }
         check_not_aborted();
         if (leader == server_id{}) {
-            co_await wait_for_leader(as);
+            co_await wait_for_leader(as, false);
             leader = _fsm->current_leader();
             continue;
         }

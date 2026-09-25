@@ -221,7 +221,51 @@ SEASTAR_THREAD_TEST_CASE(test_modify_config_on_aborted_server_enabled_forwarding
 // of the state of the passed abort_source.
 // Reproducer of SCYLLADB-841.
 SEASTAR_THREAD_TEST_CASE(test_wait_for_leader_on_aborted_server) {
-    test_func_on_aborted_server_aux(&raft::server::wait_for_leader);
+    test_func_on_aborted_server_aux([] (raft::server& server, abort_source* as) {
+        return server.wait_for_leader(as);
+    });
+}
+
+// wait_for_leader() with `reset` makes a follower forget the leader it knows of, so the
+// wait resolves only once a leader contacts it again. It is for a caller which knows from
+// outside of raft that the leader current_leader() names is gone - removed from the
+// configuration - while this follower hasn't heard from the new one yet.
+SEASTAR_THREAD_TEST_CASE(test_wait_for_leader_with_reset) {
+    auto cluster = get_default_cluster(test_case{ .nodes = 3 });
+    cluster.start_all().get();
+    auto stop = defer([&cluster] noexcept { cluster.stop_all().get(); });
+
+    // start_all() elects node 0; the follower learns of it from the first heartbeat.
+    auto& leader = cluster.get_server(0);
+    auto& follower = cluster.get_server(1);
+    follower.wait_for_leader(nullptr).get();
+    BOOST_REQUIRE(follower.current_leader() == to_raft_id(0));
+
+    // Reset does nothing on the leader: there is no leader for it to forget.
+    BOOST_CHECK(leader.wait_for_leader(nullptr, true).available());
+    BOOST_CHECK(leader.current_leader() == to_raft_id(0));
+
+    // Cut the follower off first, so that no heartbeat can bring the leader back
+    // before the checks below run; nothing yields between disconnect() and them.
+    cluster.disconnect(1);
+
+    // Without reset the follower goes on trusting the leader it last heard from,
+    // and the wait is satisfied at once.
+    BOOST_CHECK(follower.wait_for_leader(nullptr).available());
+    BOOST_CHECK(follower.current_leader() == to_raft_id(0));
+
+    // With reset it forgets that leader, and the wait is for the next one to make
+    // contact.
+    abort_source as;
+    future<> wait = follower.wait_for_leader(&as, true);
+    BOOST_CHECK(follower.current_leader() == raft::server_id{});
+    BOOST_CHECK(!wait.available());
+
+    // Once messages flow again the follower hears from a leader: node 0 still, or
+    // whoever wins the election the follower's own timeout may have started meanwhile.
+    cluster.connect_all();
+    wait.get();
+    BOOST_CHECK(follower.current_leader() != raft::server_id{});
 }
 
 // A call to raft::server::wait_for_state_change should complete with

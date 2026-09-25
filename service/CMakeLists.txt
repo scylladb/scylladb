@@ -18,7 +18,6 @@ target_sources(service
     strong_consistency/groups_manager.cc
     strong_consistency/state_machine.cc
     strong_consistency/coordinator.cc
-    strong_consistency/tablet_replica_sets.cc
     strong_consistency/raft_groups_storage.cc
     strong_consistency/raft_commitlog.cc
     raft/discovery.cc
