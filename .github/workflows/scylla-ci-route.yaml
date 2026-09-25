@@ -49,11 +49,8 @@ jobs:
           gh_api_retry() {
             local max_attempts=4 attempt=1 delay=1 output rc http_code
             while [ $attempt -le $max_attempts ]; do
-              # Capture the exit code immediately: after `if cmd; then ...; fi`
-              # with a false condition and no else, bash resets $? to 0, which
-              # would make a failed call look successful.
-              output=$(gh api "$@" 2>&1)
-              rc=$?
+              rc=0
+              output=$(gh api "$@" 2>&1) || rc=$?
               if [ $rc -eq 0 ]; then
                 # Only emit when there is output: --silent calls produce none,
                 # and an unconditional trailing newline would corrupt callers
