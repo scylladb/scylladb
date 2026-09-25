@@ -58,6 +58,14 @@ public:
     future<> recover(std::vector<sstring> files, sstring fname_prefix);
     future<> recover(sstring file, sstring fname_prefix);
 
+    struct totals {
+        uint64_t applied = 0;
+        uint64_t invalid = 0;
+        uint64_t skipped = 0;
+    };
+    // Mutation counts of the last recover().
+    totals last_totals() const;
+
 private:
     commitlog_replayer(seastar::sharded<replica::database>&, seastar::sharded<db::system_keyspace>&,
             seastar::sharded<raft_commitlog_replay_buffer>* raft_buffer,
