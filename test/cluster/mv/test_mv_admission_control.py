@@ -12,6 +12,7 @@ import logging
 
 from test.pylib.util import wait_for_view
 from test.cluster.mv.tablets.test_mv_tablets import pin_the_only_tablet, get_tablet_replicas
+from test.cluster.mv.util import RetryOverloadedOnSameHost
 from test.cluster.util import new_test_keyspace
 
 from cassandra.cluster import ConsistencyLevel, EXEC_PROFILE_DEFAULT # type: ignore
@@ -106,6 +107,7 @@ async def test_mv_retried_writes_reach_all_replicas(manager: ScyllaClusterManage
         # for all requests (the backlog increase caused by a write is only
         # immediately noted on the shard that the write was performed on).
         stmt = cql.prepare(f"INSERT INTO {ks}.tab (key, c, v) VALUES (?, ?, ?)")
+        stmt.retry_policy = RetryOverloadedOnSameHost()
         for i in range(10):
             # Perform a write that will increase the view update backlog on the slow node
             # to a level causing admission control to reject the following writes.
