@@ -929,6 +929,80 @@ async def run_scylla_sstable(args, timeout=300):
     return proc.returncode, stdout.decode(), stderr.decode()
 
 
+async def test_scylla_sstable_layout_of_object_storage_table(manager: ScyllaClusterManager, object_storage):
+    """`scylla sstable layout ks table` describes a table living in object storage.
+
+    Its sstables cannot be listed: the bucket is shared by the whole cluster and
+    its objects are named after an sstable id alone, so which of them make up
+    the table on this node is only recorded in system.sstables. The tool has no
+    CQL to ask, and reads the registry from the sstables of the data dir."""
+    objconf = object_storage.create_endpoint_conf()
+    cfg = {'enable_user_defined_functions': False,
+           'object_storage_endpoints': objconf}
+    server = await manager.server_add(config=cfg)
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, keyspace_options(object_storage)) as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (name text PRIMARY KEY, value int)")
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (name, value) VALUES ('{k}', {k});")
+                               for k in range(4)])
+        await manager.api.flush_keyspace(server.ip_addr, ks)
+        # the tool reads the registry and the schema off the disk of a node it
+        # assumes is down, so both have to be flushed, and the node must not
+        # compact them away while it reads them
+        await manager.api.flush_keyspace(server.ip_addr, "system")
+        await manager.api.flush_keyspace(server.ip_addr, "system_schema")
+        await manager.api.disable_autocompaction(server.ip_addr, "system_schema")
+        await manager.api.disable_autocompaction(server.ip_addr, "system", "sstables")
+
+        table_id = await get_table_id(cql, ks, 'test')
+        res = await cql.run_async(
+            SimpleStatement(f"SELECT sstable_id, status FROM system.sstables WHERE table_id = {table_id} ALLOW FILTERING",
+                            consistency_level=ConsistencyLevel.ONE))
+        sealed = [row for row in res if row.status == 'sealed']
+        assert sealed, f'No sealed sstables registered for {ks}.test'
+
+        # the boto3 client only speaks to the s3 server, the gs one rejects its
+        # ListObjects, so the objects are compared where they can be listed and
+        # the registry -- the only metadata a write would go through -- always
+        def bucket_contents():
+            if object_storage.type != 's3':
+                return []
+            return sorted((o.key, o.size, o.e_tag) for o in
+                          object_storage.get_resource().Bucket(object_storage.bucket_name).objects.all())
+
+        before = bucket_contents()
+
+        scylla_path = await manager.server_get_exe(server.server_id)
+        workdir = await manager.server_get_workdir(server.server_id)
+        args = [scylla_path, "sstable", "layout",
+                "--scylla-yaml-file", os.path.join(workdir, "conf", "scylla.yaml"),
+                "--output-format", "json", "--keyspace", ks, "--table", "test"]
+        returncode, out, err = await run_scylla_sstable(args)
+        assert returncode == 0, f"scylla sstable failed: {out} {err}"
+
+        # describing a table must not write to the bucket holding it, nor to
+        # the registry which says what the bucket holds
+        assert bucket_contents() == before, "the bucket changed"
+        after_registry = await cql.run_async(
+            SimpleStatement(f"SELECT sstable_id, status FROM system.sstables WHERE table_id = {table_id} ALLOW FILTERING",
+                            consistency_level=ConsistencyLevel.ONE))
+        assert sorted((r.sstable_id, r.status) for r in after_registry) == \
+               sorted((r.sstable_id, r.status) for r in res), "the sstables registry changed"
+
+        laid_out = [sst for group in json.loads(out)["compaction_groups"]
+                    for bucket in group["buckets"] for sst in bucket["sstables"]]
+        # every sstable the registry knows of was described, and it was read
+        assert len(laid_out) == len(sealed), f"{laid_out} != {sealed}"
+        assert all(sst["size"] > 0 for sst in laid_out), laid_out
+
+        # the table keeps nothing in the data dir, so the sstables it described
+        # can only have been the ones the registry named
+        local = [f for _, _, files in os.walk(os.path.join(workdir, "data", ks))
+                 for f in files if f.endswith("-Data.db")]
+        assert not local, f"{ks} has sstables in the data dir: {local}"
+
+
 async def test_scylla_sstable_dump_scylla_metadata(manager: ScyllaClusterManager, object_storage, tmp_path):
     objconf = object_storage.create_endpoint_conf()
     cfg = {'enable_user_defined_functions': False,

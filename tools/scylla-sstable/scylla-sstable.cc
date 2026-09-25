@@ -20,6 +20,8 @@
 #include "compaction/compaction.hh"
 #include "compaction/compaction_strategy.hh"
 #include "compaction/compaction_strategy_state.hh"
+#include "compaction/time_window_compaction_strategy.hh"
+#include "tombstone_gc.hh"
 #include "cql3/statements/raw/parsed_statement.hh"
 #include "cql3/cql_config.hh"
 #include "cql3/statements/modification_statement.hh"
@@ -41,6 +43,7 @@
 #include "schema/compression_initializer.hh"
 #include "schema/speculative_retry_initializer.hh"
 #include "sstables/index_reader.hh"
+#include "sstables/sstable_version.hh"
 #include "sstables/sstables_manager.hh"
 #include "sstables/sstable_directory.hh"
 #include "sstables/open_info.hh"
@@ -51,14 +54,20 @@
 #include "test/lib/cql_test_env.hh"
 #include "tools/json_writer.hh"
 #include "tools/json_mutation_stream_parser.hh"
-#include "tools/load_system_tablets.hh"
+#include "tools/load_system_tables.hh"
 #include "tools/lua_sstable_consumer.hh"
+#include "tools/read_mutation.hh"
 #include "tools/schema_loader.hh"
 #include "tools/sstable_consumer.hh"
+#include "tools/scylla-sstable/scylla-sstable.hh"
+#include "tools/scylla-sstable/scylla-sstable-layout.hh"
 #include "tools/utils.hh"
 #include "types/json_utils.hh"
 #include "locator/host_id.hh"
 #include "mutation_writer/token_group_based_splitting_writer.hh"
+#include "dht/token-sharding.hh"
+#include "utils/overloaded_functor.hh"
+#include "utils/pretty_printers.hh"
 
 using namespace seastar;
 using namespace sstables;
@@ -83,7 +92,12 @@ namespace {
 
 const auto app_name = "sstable";
 
-logging::logger sst_log(format("scylla-{}", app_name));
+using tools::sst_log;
+using tools::sstable_path_info;
+using tools::extract_from_sstable_path;
+using tools::find_data_dir;
+using tools::output_format;
+using tools::get_output_format_from_options;
 
 using partition_set = std::set<dht::decorated_key, dht::decorated_key::less_comparator>;
 
@@ -145,13 +159,37 @@ partition_set get_partitions(schema_ptr schema, const bpo::variables_map& app_co
     return partitions;
 }
 
-struct sstable_path_info {
-    std::filesystem::path sstable_path;
-    std::filesystem::path data_dir_path;
-    sstring keyspace;
-    sstring table;
-    table_id id;
-};
+// The table a directory holds the sstables of, deduced from its path:
+// <data dir>/<keyspace>/<table>-<id>, with the sstables of a state like upload
+// or staging one level below that.
+sstable_path_info extract_from_table_directory(std::filesystem::path directory) {
+    directory = directory.lexically_normal();
+    // a trailing separator leaves an empty filename behind
+    if (directory.filename().empty()) {
+        directory = directory.parent_path();
+    }
+    // a table directory is named "<table>-<id>", the id being 32 hex characters
+    auto is_table_directory = [] (const std::filesystem::path& path) {
+        constexpr size_t id_size = 32;
+        const auto name = path.filename().native();
+        return name.size() > id_size + 1 && name[name.size() - id_size - 1] == '-';
+    };
+    const auto table_directory = is_table_directory(directory) ? directory : directory.parent_path();
+    if (!is_table_directory(table_directory)) {
+        throw std::invalid_argument(fmt::format("cannot extract information from the path of {}: it is neither the"
+                " directory of a table nor one of its sub-directories", directory));
+    }
+    auto [table, id] = replica::parse_table_directory_name(table_directory.filename().native());
+    return sstable_path_info{
+            directory, table_directory.parent_path().parent_path(),
+            table_directory.parent_path().filename().native(), std::move(table), id};
+}
+
+} // anonymous namespace
+
+namespace tools {
+
+logging::logger sst_log(format("scylla-{}", app_name));
 
 sstable_path_info extract_from_sstable_path(const bpo::variables_map& app_config) {
     if (!app_config.count("sstables")) {
@@ -162,7 +200,9 @@ sstable_path_info extract_from_sstable_path(const bpo::variables_map& app_config
     sstring keyspace, table;
     auto result = sstables::parse_path(sst_path);
     if (!result) {
-        throw std::invalid_argument(fmt::format("cannot extract information from sstable path, sstable has invalid path: {}", sst_path));
+        // the argument can be the directory holding the sstables instead of one
+        // of them, and a directory names its table just as well
+        return extract_from_table_directory(std::move(sst_path));
     }
     auto [_, ks, tbl] = std::move(*result);
     keyspace = std::move(ks);
@@ -183,6 +223,10 @@ sstable_path_info extract_from_sstable_path(const bpo::variables_map& app_config
     return sstable_path_info{
             std::move(sst_path), std::move(data_dir_path), std::move(keyspace), std::move(table), id};
 }
+
+} // namespace tools
+
+namespace {
 
 std::pair<sstring, sstring> get_keyspace_and_table_options(const bpo::variables_map& app_config) {
     sstring keyspace_name, table_name;
@@ -205,20 +249,47 @@ struct path_with_source {
     sstring source;
 };
 
-path_with_source obtain_data_dir(const bpo::variables_map& app_config, db::config& cfg) {
+path_with_source obtain_data_dir(const bpo::variables_map& app_config, const db::config& cfg) {
     if (app_config.contains("scylla-data-dir")) {
         return {.path = fs::path(app_config["scylla-data-dir"].as<sstring>()), .source = "--scylla-data-dir parameter"};
     } else if (app_config.contains("scylla-yaml-file")) {
-        return {.path = fs::path(cfg.data_file_directories()[0]), .source = "--scylla-yaml-file parameter"};
+        // at(), not [], as the configuration may not name a data dir at all
+        return {.path = fs::path(cfg.data_file_directories().at(0)), .source = "--scylla-yaml-file parameter"};
     } else if (std::getenv("SCYLLA_CONF")) {
-        return {.path = fs::path(cfg.data_file_directories()[0]), .source = "SCYLLA_CONF environment variable"};
+        return {.path = fs::path(cfg.data_file_directories().at(0)), .source = "SCYLLA_CONF environment variable"};
     } else if (std::getenv("SCYLLA_HOME")) {
-        return {.path = fs::path(cfg.data_file_directories()[0]), .source = "SCYLLA_HOME environment variable"};
+        return {.path = fs::path(cfg.data_file_directories().at(0)), .source = "SCYLLA_HOME environment variable"};
     } else {
         const auto info = extract_from_sstable_path(app_config);
         return {.path = info.data_dir_path, .source = seastar::format("autodetected from sstable path ({})", info.sstable_path.native())};
     }
 }
+
+// The data dir the sstables being examined live in. Unlike obtain_data_dir(),
+// which answers where this node keeps its data, the sstable path wins here: it
+// is the data dir the user pointed the tool at, which is not necessarily the
+// one the configuration names.
+} // anonymous namespace
+
+namespace tools {
+
+std::filesystem::path find_data_dir(const bpo::variables_map& app_config, const db::config& dbcfg) {
+    try {
+        return extract_from_sstable_path(app_config).data_dir_path;
+    } catch (...) {
+        sst_log.debug("failed to extract the data dir from the sstable path: {:t}", std::current_exception());
+    }
+    try {
+        return obtain_data_dir(app_config, dbcfg).path;
+    } catch (...) {
+        sst_log.debug("failed to obtain the data dir: {:t}", std::current_exception());
+    }
+    return {};
+}
+
+} // namespace tools
+
+namespace {
 
 struct schema_with_source {
     schema_ptr schema;
@@ -297,11 +368,11 @@ std::optional<schema_with_source> try_load_schema_autodetect(const bpo::variable
 
     try {
         const auto [keyspace_name, table_name] = get_keyspace_and_table_options(app_config);
-        const auto data_dir_path = std::filesystem::path(cfg.data_file_directories().at(0));
-        return schema_with_source{.schema = tools::load_schema_from_schema_tables(cfg, data_dir_path, keyspace_name, table_name).get(),
+        const auto path_with_source = obtain_data_dir(app_config, cfg);
+        return schema_with_source{.schema = tools::load_schema_from_schema_tables(cfg, path_with_source.path, keyspace_name, table_name).get(),
             .source = "schema-tables",
-            .path = data_dir_path,
-            .obtained_from = "data dir"};
+            .path = path_with_source.path,
+            .obtained_from = format("data dir (obtained via {})", path_with_source.source)};
     } catch (...) {
         sst_log.debug("Trying to locate data dir failed: {:t}", std::current_exception());
     }
@@ -326,8 +397,150 @@ std::optional<schema_with_source> try_load_schema_autodetect(const bpo::variable
         sst_log.debug("Trying to load schema from the sstable itself failed: {:t}", std::current_exception());
     }
 
-    fmt::print(std::cerr, "Failed to autodetect and load schema, try again with --logger-log-level scylla-sstable=debug to learn more or provide the schema source manually\n");
+    fmt::print(std::cerr, "Failed to autodetect and load schema, try again with --logger-log-level scylla-sstable=debug to learn more or provide the schema source manually.\n"
+            "If the schema is expected to come from the schema tables of a running node, they have to be on disk: nodetool flush system_schema\n");
     return {};
+}
+
+// An object storage path is not a local file, it cannot be a directory and it
+// does not name a keyspace.
+bool is_object_storage_path(const std::filesystem::path& path) {
+    using osp = db::object_storage_endpoint_param;
+    static const auto types = { osp::s3_type, osp::gs_type };
+    return std::ranges::any_of(types, std::bind_front(&data_dictionary::is_object_storage_fqn, path));
+}
+
+// The argument which names a directory of sstables -- typically a table
+// directory -- rather than an sstable, if that is what the tool was given.
+//
+// A single directory at a time: the sstables of a directory are enumerated as
+// scylla enumerates them, which is neither something to mix with sstables named
+// one by one, nor something to do for several tables at once, as they do not
+// have to share a schema.
+std::optional<sstring> get_sstable_directory_argument(const bpo::variables_map& app_config) {
+    if (!app_config.count("sstables")) {
+        return std::nullopt;
+    }
+    std::optional<sstring> directory;
+    size_t files = 0;
+    for (const auto& argument : app_config["sstables"].as<std::vector<sstring>>()) {
+        if (is_object_storage_path(std::filesystem::path(argument))) {
+            ++files;
+            continue;
+        }
+        const auto ftype = file_type(argument, follow_symlink::yes).get();
+        if (!ftype) {
+            // say so here: further down the line the path is only reported as a
+            // schema which could not be autodetected, or as an sstable whose
+            // components are missing
+            throw std::invalid_argument(fmt::format("no such file or directory: {}", argument));
+        }
+        if (*ftype != directory_entry_type::directory) {
+            ++files;
+        } else if (directory) {
+            throw std::invalid_argument(fmt::format("only a single directory of sstables can be processed at a time,"
+                    " got {} and {}", *directory, argument));
+        } else {
+            directory = argument;
+        }
+    }
+    if (directory && files) {
+        throw std::invalid_argument("sstables arguments cannot be a mix of directories and sstable files, provide a"
+                " single directory or a list of sstable files");
+    }
+    return directory;
+}
+
+// The sstables the given storage options hold, enumerated the way scylla
+// enumerates them: a directory listing for local storage, the sstables registry
+// of the node for a table living in object storage.
+//
+// Only sealed sstables are picked up, and an sstable the node deletes while the
+// scan is running is left out, as the data dir of a running node is a moving
+// target.
+std::vector<sstables::shared_sstable> load_sstables_of_storage(schema_ptr schema, sstables::sstables_manager& sst_man,
+        lw_shared_ptr<const data_dictionary::storage_options> storage_options) {
+    sstables::sstable_directory sst_dir(sst_man, schema, &schema->get_sharder(), std::move(storage_options),
+            sstables::sstable_state::normal, default_io_error_handler_gen());
+    auto flags = sstables::sstable_directory::process_flags::read_only();
+    flags.skip_vanished_sstables = true;
+    sst_dir.scan_sstable_dir().get();
+    sst_dir.process_sstable_dir(flags).get();
+    return std::move(sst_dir.get_unsorted_sstables());
+}
+
+// The sstables of a directory -- typically the table directory of a node.
+std::vector<sstables::shared_sstable> load_sstables_of_directory(schema_ptr schema, sstables::sstables_manager& sst_man,
+        const std::filesystem::path& directory) {
+    return load_sstables_of_storage(schema, sst_man, make_lw_shared<const data_dictionary::storage_options>(
+            data_dictionary::make_local_options(directory)));
+}
+
+} // anonymous namespace
+
+namespace tools {
+
+std::vector<sstables::shared_sstable> load_sstables_of_table(schema_ptr schema, sstables::sstables_manager& sst_man,
+        const db::config& dbcfg, const bpo::variables_map& app_config, reader_permit permit) {
+    const auto keyspace = schema->ks_name();
+    const auto table = schema->cf_name();
+    const auto data_dir_path = find_data_dir(app_config, dbcfg);
+    if (data_dir_path.empty()) {
+        throw std::invalid_argument(fmt::format("cannot resolve the sstables of {}.{}: the scylla data dir is not"
+                " known, provide it with --scylla-data-dir or --scylla-yaml-file", keyspace, table));
+    }
+    auto storage_options = tools::load_keyspace_storage_options(dbcfg, data_dir_path, keyspace, permit).get();
+    if (!storage_options) {
+        // a keyspace with no row in system_schema.scylla_keyspaces keeps its
+        // sstables in the data dir
+        storage_options = data_dictionary::make_local_options(
+                get_table_directory(data_dir_path, keyspace, table).get());
+    }
+    sst_log.debug("resolving the sstables of {}.{} through its {} storage", keyspace, table,
+            storage_options->type_string());
+
+    if (auto* os = std::get_if<data_dictionary::storage_options::object_storage>(&storage_options->value);
+            os && !os->location) {
+        // The sstables of such a table are recorded in the registry under the
+        // node owning them, so an unknown identity does not find fewer sstables,
+        // it finds none. Say that, instead of reporting an empty table.
+        if (!tools::load_local_node_info(dbcfg, data_dir_path, permit).get()) {
+            throw std::invalid_argument(fmt::format("cannot resolve the sstables of {}.{}: they are recorded in the"
+                    " sstables registry under the node owning {}, whose identity could not be read from system.local",
+                    keyspace, table, data_dir_path));
+        }
+    }
+
+    // the sstables of a table on object storage are enumerated from the
+    // registry of the node, which is down, so serve it from its data dir
+    sst_man.plug_sstables_registry(tools::make_offline_sstables_registry(dbcfg, data_dir_path, permit));
+    auto unplug_registry = defer([&sst_man] noexcept { sst_man.unplug_sstables_registry(); });
+
+    return load_sstables_of_storage(schema, sst_man,
+            make_lw_shared<const data_dictionary::storage_options>(std::move(*storage_options)));
+}
+
+} // namespace tools
+
+namespace {
+
+// The identity of the node whose data directory is being examined. A data dir
+// which doesn't identify its node falls back to a made up identity, as every
+// operation did before.
+locator::host_id resolve_local_host_id(const bpo::variables_map& app_config, const db::config& dbcfg,
+        reader_permit permit) {
+    if (const auto data_dir_path = find_data_dir(app_config, dbcfg); !data_dir_path.empty()) {
+        try {
+            if (auto local_node = tools::load_local_node_info(dbcfg, data_dir_path, permit).get()) {
+                sst_log.debug("the data dir {} belongs to node {}", data_dir_path, local_node->host_id);
+                return local_node->host_id;
+            }
+        } catch (...) {
+            sst_log.debug("failed to read the identity of the node owning {}: {:t}",
+                    data_dir_path, std::current_exception());
+        }
+    }
+    return locator::host_id::create_random_id();
 }
 
 const std::vector<sstables::shared_sstable> load_sstables(schema_ptr schema, sstables::sstables_manager& sst_man, sstables::storage_manager& sstm,
@@ -444,15 +657,23 @@ const std::vector<sstables::shared_sstable> load_sstables(schema_ptr schema, sst
             };
             co_await sst->load(schema->get_sharder(), open_cfg);
         } catch (...) {
+            auto ex = std::current_exception();
+            if (components_are_missing(ex)) {
+                sst_log.warn("Skipping SSTable {}, it was deleted while being loaded: {:t}", sst->get_filename(), ex);
+                co_return;
+            }
             // Print each individual error here since parallel_for_each
             // will propagate only one of them up the stack.
             auto msg = fmt::format("Could not load SSTable: {}", sst->get_filename());
-            fmt::print(std::cerr, "{}: {:t}\n", msg, std::current_exception());
+            fmt::print(std::cerr, "{}: {:t}\n", msg, ex);
             throw_with_nested(std::runtime_error(msg));
         }
 
         sstables[i] = std::move(sst);
     }).get();
+
+    // the sstables which were deleted while being loaded left a hole behind
+    std::erase(sstables, nullptr);
 
     return sstables;
 }
@@ -481,9 +702,9 @@ public:
     }
 };
 
-enum class output_format {
-    text, json
-};
+} // anonymous namespace
+
+namespace tools {
 
 output_format get_output_format_from_options(const bpo::variables_map& opts, output_format default_format) {
     if (auto it = opts.find("output-format"); it != opts.end()) {
@@ -498,6 +719,10 @@ output_format get_output_format_from_options(const bpo::variables_map& opts, out
     }
     return default_format;
 }
+
+} // namespace tools
+
+namespace {
 
 enum class input_format {
     cql, json
@@ -2186,6 +2411,9 @@ void shard_of_with_tablets(const std::vector<sstables::shared_sstable>& sstables
                            reader_permit permit) {
     auto tablets = tools::load_system_tablets(dbcfg, data_dir_path, id,
                                               permit).get();
+    if (tablets.empty()) {
+        throw std::runtime_error(fmt::format("failed to find tablets for table {}", id));
+    }
     json_writer writer;
     writer.StartStream();
     for (auto& sst : sstables) {
@@ -2210,8 +2438,8 @@ void shard_of_with_tablets(const std::vector<sstables::shared_sstable>& sstables
             fmt::print(std::cerr, "unable to find replica set for sstable: {}\n", sst->get_filename());
             continue;
         }
-        auto& [token, replica_set] = *tablet;
-        for (auto& replica : replica_set) {
+        auto& [token, tablet_row] = *tablet;
+        for (auto& replica : tablet_row.replicas) {
             writer.StartObject();
             writer.Key("host");
             writer.String(fmt::to_string(replica.host));
@@ -2980,6 +3208,65 @@ For more information, see: {}
                 typed_option<>("merge", "combine all input sstable(s) into a single stream before splitting"),
             }},
             split_operation},
+/* layout */
+    {{"layout",
+            "Describe the layout of the sstables of a table",
+fmt::format(R"(
+Describe how the sstables of a table are organized by its compaction strategy.
+Incremental and size-tiered compaction organize sstables into runs, leveled
+compaction into levels and time-window compaction into time windows. The
+sstables are grouped accordingly, and each group is annotated with the aggregate
+of the sstables in it.
+
+The compaction strategy, its options and the tombstone_gc mode are the ones of
+the schema. --strategy and --strategy-option are shortcuts for describing the
+layout in the terms of another strategy, useful when the schema is not available
+-- in which case the schema loader falls back to the default, incremental
+compaction. Everything else the description depends on is a property of the
+schema too, so overriding the schema itself, with --schema-file, customizes all
+of it.
+
+Sstables belonging to different compaction groups are described separately, as
+compaction only ever considers sstables of the same compaction group. For a
+tablet-based table the compaction group is the tablet, which is looked up in
+system.tablets, located in the data dir. If system.tablets lives elsewhere, its
+directory can be provided with --system-tablets-dir. For a vnode-based table the
+compaction group is the shard, which is derived from the sharding parameters of
+the node, read from system.topology; --shards and --ignore-msb-bits provide them
+when it cannot be read, and are rejected for a tablet-based table, whose
+sharding is its tablet map.
+
+The table directory, or the keyspace and the table names, can be passed instead
+of the individual sstables, in which case all the sstables of the table are
+described.
+
+Chose the columns to include with --columns and the order of the sstables within
+each group with --sort. The supported columns are:
+{}
+
+For more information, see: {}
+)",
+        tools::layout_columns_help(),
+        doc_link("operating-scylla/admin-tools/scylla-sstable#layout")),
+            {
+                typed_option<sstring>("strategy", "the compaction strategy to describe the layout in the terms of, one of"
+                        " (ics, stcs, lcs, twcs), defaults to the compaction strategy of the schema"),
+                typed_option<program_options::string_map>("strategy-option", {}, "compaction strategy option(s) overriding"
+                        " those of the schema, e.g. --strategy-option compaction_window_unit=HOURS"),
+                typed_option<sstring>("columns", tools::default_layout_columns(),
+                        "the columns to include, a comma-separated list of column names, or \"all\" for all of them"),
+                typed_option<sstring>("sort", "size:desc", "the columns to order the sstables of each group by, a"
+                        " comma-separated list of column[:asc|desc], in decreasing order of relevance"),
+                typed_option<sstring>("system-tablets-dir", "tablet-based tables only: path to the directory containing"
+                        " the sstables of system.tablets, when it cannot be located in the data dir"),
+                typed_option<unsigned>("shards", "vnode-based tables only: the number of shards the source scylla"
+                        " instance has, defaults to the one recorded in system.topology"),
+                typed_option<unsigned>("ignore-msb-bits", "vnode-based tables only:"
+                        " 'murmur3_partitioner_ignore_msb_bits' set by scylla.yaml, defaults to the one recorded in"
+                        " system.topology"),
+                typed_option<std::string>("output-format", "text", "the output-format, one of (text, json)"),
+            }},
+            tools::layout_operation},
 };
 
 } // anonymous namespace
@@ -3111,6 +3398,16 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
     tool_app_template app(std::move(app_cfg));
 
     return app.run_async(argc, argv, [&app] (const operation& operation, const bpo::variables_map& app_config) {
+        // The sstables to work on can be named one by one, or by the directory
+        // holding them. Tell which it is before anything looks at the arguments.
+        std::optional<sstring> sstable_directory;
+        try {
+            sstable_directory = get_sstable_directory_argument(app_config);
+        } catch (std::invalid_argument& e) {
+            fmt::print(std::cerr, "error processing arguments: {}\n", e.what());
+            return 1;
+        }
+
         schema_ptr schema;
         std::optional<schema_with_source> schema_with_source;
 
@@ -3230,6 +3527,16 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
         db::nop_large_data_handler large_data_handler;
         db::nop_corrupt_data_handler corrupt_data_handler(db::corrupt_data_handler::register_metrics::no);
 
+        reader_concurrency_semaphore rcs_sem(reader_concurrency_semaphore::no_limits{}, app_name, reader_concurrency_semaphore::register_metrics::no);
+        auto stop_semaphore = deferred_stop(rcs_sem);
+
+        const auto permit = rcs_sem.make_tracking_only_permit(schema, app_name, db::no_timeout, {});
+
+        // Whoever asks the manager for the local host id -- the compaction
+        // setup and the sstable writer do, from a coroutine -- cannot wait for
+        // it, so resolve it here, while still in a seastar thread.
+        const auto local_host_id = resolve_local_host_id(app_config, dbcfg, permit);
+
         feature_service.ms_sstable.enable();
         feature_service.mt_sstable.enable();
         sstables::sstables_manager sst_man(
@@ -3240,7 +3547,7 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
             feature_service,
             tracker,
             dir_sem,
-            [host_id = locator::host_id::create_random_id()] { return host_id; },
+            [local_host_id] { return local_host_id; },
             *scf,
             abort,
             dbcfg.extensions().sstable_file_io_extensions(),
@@ -3249,7 +3556,15 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
         auto close_sst_man = deferred_close(sst_man);
 
         std::vector<sstables::shared_sstable> sstables;
-        if (app_config.count("sstables")) {
+        if (sstable_directory) {
+            try {
+                sstables = load_sstables_of_directory(schema, sst_man, std::filesystem::path(*sstable_directory));
+            } catch (...) {
+                fmt::print(std::cerr, "error loading the sstables of {}: {:t}\n",
+                        *sstable_directory, std::current_exception());
+                return 1;
+            }
+        } else if (app_config.count("sstables")) {
             const auto sstable_names = app_config["sstables"].as<std::vector<sstring>>();
             if (std::set(sstable_names.begin(), sstable_names.end()).size() != sstable_names.size()) {
                 fmt::print(std::cerr, "error processing arguments: duplicate sstable arguments found\n");
@@ -3262,11 +3577,6 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
                 return 1;
             }
         }
-
-        reader_concurrency_semaphore rcs_sem(reader_concurrency_semaphore::no_limits{}, app_name, reader_concurrency_semaphore::register_metrics::no);
-        auto stop_semaphore = deferred_stop(rcs_sem);
-
-        const auto permit = rcs_sem.make_tracking_only_permit(schema, app_name, db::no_timeout, {});
 
         try {
             operations_with_func.at(operation)(schema, permit, sstables, sst_man, dbcfg, app_config);
