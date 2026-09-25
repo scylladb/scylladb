@@ -4,7 +4,6 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 from cassandra.query import SimpleStatement, ConsistencyLevel
-from cassandra.protocol import InvalidRequest
 from cassandra.cluster import TruncateError
 from cassandra.policies import FallthroughRetryPolicy
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
@@ -118,7 +117,9 @@ async def test_truncate_with_concurrent_drop(manager: ScyllaClusterManager, stor
             assert False, 'Unable to determine raft leader'
 
         # Start a TRUNCATE in the background
-        trunc_future = cql.run_async(f'TRUNCATE TABLE {ks}.test', host=trunc_host)
+        trunc_future = cql.run_async(
+            SimpleStatement(f'TRUNCATE TABLE {ks}.test', retry_policy=FallthroughRetryPolicy()),
+            host=trunc_host)
         # Wait for the topology coordinator to reach a point wher it is about to start sending the truncate RPCs
         await manager.api.wait_for_injection_enter(raft_leader.ip_addr, "truncate_table_wait")
         # Execute DROP TABLE
@@ -126,7 +127,7 @@ async def test_truncate_with_concurrent_drop(manager: ScyllaClusterManager, stor
         # Release TRUNCATE table in topology coordinator
         await manager.api.message_injection(raft_leader.ip_addr, 'truncate_table_wait')
         # Check we received an error
-        with pytest.raises(InvalidRequest, match='unconfigured table test'):
+        with pytest.raises(TruncateError, match=r'Cannot TRUNCATE table with UUID .* because it does not exist'):
             await trunc_future
 
 

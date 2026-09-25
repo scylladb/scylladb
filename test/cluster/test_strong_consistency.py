@@ -15,7 +15,7 @@ from test.pylib.internal_types import HostID, ServerInfo
 from cassandra import InvalidRequest, ReadTimeout, WriteTimeout
 from cassandra.cluster import ConsistencyLevel
 from cassandra.policies import FallthroughRetryPolicy
-from cassandra.protocol import InvalidRequest
+from cassandra.protocol import ServerError
 from cassandra.query import SimpleStatement, BoundStatement
 from test.pylib.tablets import get_all_tablet_replicas, get_tablet_info, get_tablet_replicas
 from test.pylib.rest_client import read_barrier
@@ -1043,9 +1043,13 @@ async def test_queries_while_dropping_table(manager: ScyllaClusterManager):
                 "sc_coordinator_wait_before_begin_mutate", one_shot=True))
 
         read_fut = asyncio.ensure_future(
-            cql.run_async(f"SELECT * FROM {table} WHERE pk = 0", host=leader_host))
+            cql.run_async(SimpleStatement(
+                f"SELECT * FROM {table} WHERE pk = 0",
+                retry_policy=FallthroughRetryPolicy()), host=leader_host))
         write_fut = asyncio.ensure_future(
-            cql.run_async(f"INSERT INTO {table} (pk, v) VALUES (7, 17)", host=leader_host))
+            cql.run_async(SimpleStatement(
+                f"INSERT INTO {table} (pk, v) VALUES (7, 17)",
+                retry_policy=FallthroughRetryPolicy()), host=leader_host))
 
         # Wait for both to hit their injection points.
         await asyncio.gather(
@@ -1081,8 +1085,10 @@ async def test_queries_while_dropping_table(manager: ScyllaClusterManager):
         # The raft server is aborted as part of group deletion, causing
         # stopped_error which the coordinator converts to no_such_column_family.
         # Use a timeout to detect the old buggy behavior (write stuck forever).
+        missing_table_error = r"[Uu]nconfigured table|[Cc]an't find a column family|[Nn]o such column family"
         try:
-            await asyncio.wait_for(asyncio.shield(write_fut), timeout=15)
+            with pytest.raises((InvalidRequest, ServerError), match=missing_table_error):
+                await asyncio.wait_for(asyncio.shield(write_fut), timeout=15)
         except asyncio.TimeoutError:
             cql.cluster.shutdown()
             for s in servers:
@@ -1090,11 +1096,8 @@ async def test_queries_while_dropping_table(manager: ScyllaClusterManager):
             pytest.fail("SCYLLADB-2080: write is stuck waiting for quorum that can never "
                         "be reached because the follower's raft group was already destroyed. "
                         "The leader should abort the raft server to unblock the write.")
-        except InvalidRequest as e:
-            assert re.search(r"[Uu]nconfigured table|[Nn]o such column family", str(e)), \
-                f"Expected 'unconfigured table' or 'no such column family', got: {e}"
 
-        with pytest.raises((InvalidRequest, Exception), match="[Uu]nconfigured table|[Cc]an't find a column family|[Nn]o such column family"):
+        with pytest.raises((InvalidRequest, ServerError), match=missing_table_error):
             await read_fut
 
 
