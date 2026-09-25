@@ -137,6 +137,13 @@ fsm_debug create_follower(raft::server_id id, raft::log log, raft::failure_detec
     return fsm_debug(id, raft::term_t{}, raft::server_id{}, std::move(log), fd, fsm_cfg);
 }
 
+fsm_debug create_follower(raft::server_id id, raft::log log,
+        std::function<std::vector<raft::server_id>()> get_priority_members, raft::failure_detector& fd) {
+    auto fcfg = fsm_cfg;
+    fcfg.get_priority_members = std::move(get_priority_members);
+    return fsm_debug(id, raft::term_t{}, raft::server_id{}, std::move(log), fd, fcfg);
+}
+
 
 // Raft uses UUID 0 as special case.
 // Convert local 0-based integer id to raft +1 UUID
