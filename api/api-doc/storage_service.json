@@ -90,7 +90,7 @@
          "operations":[
             {
                "method":"GET",
-               "summary":"Returns a list of the tokens endpoint mapping, provide keyspace and cf param to get tablet mapping",
+               "summary":"Returns the token to endpoint mapping: the vnode ring by default, or the per-table (tablet) mapping when keyspace and cf are given",
                "type":"array",
                "items":{
                   "type":"mapper"
@@ -102,7 +102,7 @@
                "parameters":[
                   {
                      "name":"keyspace",
-                     "description":"The keyspace to provide the tablet mapping for",
+                     "description":"The keyspace. Alone, it must be a vnode keyspace and the vnode ring is returned; tablet keyspaces also require cf",
                      "required":false,
                      "allowMultiple":false,
                      "type":"string",
@@ -110,7 +110,7 @@
                   },
                   {
                      "name":"cf",
-                     "description":"The table to provide the tablet mapping for",
+                     "description":"The table to provide the per-table mapping for; requires keyspace",
                      "required":false,
                      "allowMultiple":false,
                      "type":"string",

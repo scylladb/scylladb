@@ -917,6 +917,36 @@ def test_get_effective_ownership_tablets_enabled_keyspace_and_table_params_used(
             verify_ownership(resp=resp, expected_ip=rest_api.host, expected_ownership=1.0, delta=0.001)
 
 
+def test_tokens_endpoint_vnodes_keyspace(cql, this_dc, rest_api):
+    with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }} AND TABLETS = {{ 'enabled': false }}") as keyspace:
+        with new_test_table(cql, keyspace, 'p int PRIMARY KEY') as table:
+            cf = table.split('.')[1]
+            resp = rest_api.send("GET", "storage_service/tokens_endpoint")
+            resp.raise_for_status()
+            ring = resp.json()
+            assert len(ring) > 0
+            for params in [{"keyspace": keyspace}, {"keyspace": keyspace, "cf": cf}]:
+                resp = rest_api.send("GET", "storage_service/tokens_endpoint", params=params)
+                resp.raise_for_status()
+                assert resp.json() == ring
+
+def test_tokens_endpoint_tablets_keyspace(cql, this_dc, rest_api, skip_without_tablets):
+    with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }} AND TABLETS = {{ 'enabled': true }}") as keyspace:
+        with new_test_table(cql, keyspace, 'p int PRIMARY KEY') as table:
+            cf = table.split('.')[1]
+            resp = rest_api.send("GET", "storage_service/tokens_endpoint", params={"keyspace": keyspace})
+            assert resp.status_code == requests.codes.bad_request
+            assert resp.json()["message"] == f"storage_service/tokens_endpoint is per-table in keyspace '{keyspace}'. Please provide table name using 'cf' parameter."
+
+            resp = rest_api.send("GET", "storage_service/tokens_endpoint", params={"keyspace": keyspace, "cf": cf})
+            resp.raise_for_status()
+            assert len(resp.json()) > 0
+
+def test_tokens_endpoint_cf_without_keyspace(rest_api):
+    resp = rest_api.send("GET", "storage_service/tokens_endpoint", params={"cf": "t"})
+    assert resp.status_code == requests.codes.bad_request
+
+
 def test_move_tablets_invalid_table(rest_api, skip_without_tablets):
     """Scylla should return an HTTP error if the specified table is not found
     """
