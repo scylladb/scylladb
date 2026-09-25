@@ -2028,6 +2028,41 @@ SEASTAR_TEST_CASE(test_commitlog_max_data_lifetime_redirty) {
     co_await log.clear();
 }
 
+// Entries that do not fit the request controller take the waiting path and are counted.
+SEASTAR_TEST_CASE(test_commitlog_requests_blocked_memory) {
+    commitlog::config cfg;
+    cfg.metrics_category_name = "commitlog";
+    cfg.commitlog_segment_size_in_mb = 1;
+    cfg.commitlog_total_space_in_mb = 16 * this_smp_shard_count();
+    return cl_test(cfg, [](commitlog& log) -> future<> {
+        auto get_blocked = [] {
+            uint64_t n = 0;
+            const auto& values = seastar::metrics::impl::get_value_map();
+            if (auto i = values.find("commitlog_requests_blocked_memory"); i != values.end()) {
+                for (const auto& [labels, metric] : i->second) {
+                    if (metric) {
+                        n += (*metric)().ui();
+                    }
+                }
+            }
+            return n;
+        };
+        auto before = get_blocked();
+        auto uuid = make_table_id();
+        auto size = log.max_record_size() / 2;
+        std::vector<future<rp_handle>> futs;
+        for (int i = 0; i < 8; ++i) {
+            futs.push_back(log.add_mutation(uuid, size, db::commitlog::force_sync::no, [size](db::commitlog::output& dst) {
+                dst.fill('1', size);
+            }));
+        }
+        for (auto& f : futs) {
+            (co_await std::move(f)).release();
+        }
+        BOOST_REQUIRE_GT(get_blocked(), before);
+    });
+}
+
 /**
  * Test allocating oversized multi-entry
 */

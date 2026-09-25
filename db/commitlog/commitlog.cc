@@ -1567,14 +1567,17 @@ future<R> db::commitlog::segment_manager::allocate_when_possible(T writer, db::t
     // If this is already too big now, we should fall back early. This measurement does not count
     // overhead into the estimate, i.e. it might be worse.
     if (size < max_mutation_size) {
-        auto fut = get_units(_request_controller, size, timeout);
-        if (_request_controller.waiters()) {
-            totals.requests_blocked_memory++;
-        }
-
         scope_increment_counter allocating(totals.active_allocations);
 
-        auto permit = co_await std::move(fut);
+        // Skip the get_units() future machinery when units are available.
+        auto permit = try_get_units(_request_controller, size);
+        if (!permit) {
+            auto fut = get_units(_request_controller, size, timeout);
+            if (_request_controller.waiters()) {
+                totals.requests_blocked_memory++;
+            }
+            permit = co_await std::move(fut);
+        }
         sseg_ptr s;
 
         if (!_segments.empty() && _segments.back()->is_still_allocating()) {
@@ -1588,7 +1591,7 @@ future<R> db::commitlog::segment_manager::allocate_when_possible(T writer, db::t
         while (retry) {
             using write_result = segment::write_result;
 
-            switch (s->allocate(writer, permit, timeout)) {
+            switch (s->allocate(writer, *permit, timeout)) {
                 case write_result::ok:
                     co_return writer.result();
                 case write_result::must_sync:
