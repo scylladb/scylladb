@@ -236,6 +236,9 @@ def parse_cmd_line() -> argparse.Namespace:
                         help = "Do not delete llvm indexed profiles when processing coverage reports.")
     parser.add_argument("--coverage-keep-lcovs",action = 'store_true',
                         help = "Do not delete intermediate lcov traces when processing coverage reports.")
+    parser.add_argument("--select-tests-as-mode", action="store", default=None, metavar="MODE",
+                        help="Choose tests by MODE's run_in_*/skip_in_* lists, whatever mode runs them "
+                             "(e.g. --mode coverage --select-tests-as-mode dev).")
     parser.add_argument("--artifacts_dir_url", action='store', type=str, default=None, dest="artifacts_dir_url",
                         help="Provide the URL to artifacts directory to generate the link to failed tests directory "
                              "with logs")
@@ -416,6 +419,8 @@ def run_pytest(options: argparse.Namespace) -> int:
         args.append(f'--random-seed={options.random_seed}')
     if options.gather_metrics:
         args.append('--gather-metrics')
+    if options.select_tests_as_mode:
+        args.append(f'--select-tests-as-mode={options.select_tests_as_mode}')
     if options.coverage:
         args.append('--coverage')
         args.extend(f'--coverage-mode={mode}' for mode in options.coverage_modes)
