@@ -26,8 +26,6 @@ class reshard_shard_descriptor;
 namespace compaction {
 
 class compaction_task_impl : public tasks::task_manager::task::impl {
-protected:
-    mutable std::optional<uint64_t> _expected_workload;
 public:
     compaction_task_impl(tasks::task_manager::module_ptr module,
             tasks::task_id id,
@@ -167,50 +165,6 @@ inline constexpr auto reshaping_compaction_task_type = "reshaping compaction";
 
 inline constexpr auto resharding_compaction_task_type = "resharding compaction";
 
-class resharding_compaction_task_impl : public compaction_task_impl {
-public:
-    resharding_compaction_task_impl(tasks::task_manager::module_ptr module,
-            tasks::task_id id,
-            unsigned sequence_number,
-            std::string scope,
-            std::string keyspace,
-            std::string table,
-            std::string entity,
-            tasks::task_id parent_id) noexcept
-        : compaction_task_impl(module, id, sequence_number, std::move(scope), std::move(keyspace), std::move(table), std::move(entity), parent_id)
-    {}
-
-    virtual std::string type() const override {
-        return resharding_compaction_task_type;
-    }
-protected:
-    virtual future<> run() override = 0;
-};
-
-class shard_resharding_compaction_task_impl : public resharding_compaction_task_impl {
-private:
-    sharded<sstables::sstable_directory>& _dir;
-    replica::database& _db;
-    compaction_sstable_creator_fn _creator;
-    compaction::owned_ranges_ptr _local_owned_ranges_ptr;
-    bool _vnodes_resharding;
-    std::vector<replica::reshard_shard_descriptor>& _destinations;
-public:
-    shard_resharding_compaction_task_impl(tasks::task_manager::module_ptr module,
-            std::string keyspace,
-            std::string table,
-            tasks::task_id parent_id,
-            sharded<sstables::sstable_directory>& dir,
-            replica::database& db,
-            compaction_sstable_creator_fn creator,
-            compaction::owned_ranges_ptr local_owned_ranges_ptr,
-            bool vnodes_resharding,
-            std::vector<replica::reshard_shard_descriptor>& destinations) noexcept;
-protected:
-    virtual future<> run() override;
-    virtual future<std::optional<double>> expected_total_workload() const override;
-};
-
 class task_manager_module : public tasks::task_manager::module {
 public:
     task_manager_module(tasks::task_manager& tm) noexcept : tasks::task_manager::module(tm, "compaction") {}
@@ -282,6 +236,10 @@ public:
     // Starts a reshard of a table's sstables collected by the directory, on all the shards.
     // The shared sstables are resharded, and so are those that need cleanup if owned_ranges_ptr is set.
     future<tasks::task_manager::task_ptr> start_table_resharding_compaction(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, std::string keyspace, std::string table, compaction_sstable_creator_fn creator, compaction::owned_ranges_ptr owned_ranges_ptr, bool vnodes_resharding, tasks::task_info parent_info);
+
+    // Starts a reshard of the sstables that destinations assigns to this shard.
+    // The sstables are moved out of this shard's entry of destinations.
+    future<tasks::task_manager::task_ptr> start_shard_resharding_compaction(sharded<sstables::sstable_directory>& dir, replica::database& db, std::string keyspace, std::string table, compaction_sstable_creator_fn creator, compaction::owned_ranges_ptr local_owned_ranges_ptr, bool vnodes_resharding, std::vector<replica::reshard_shard_descriptor>& destinations, tasks::task_info parent_info);
 };
 
 class regular_compaction_task_impl : public compaction_task_impl {

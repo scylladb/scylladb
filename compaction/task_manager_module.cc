@@ -1122,7 +1122,7 @@ static future<> run_table_resharding_compaction(sharded<sstables::sstable_direct
         if (owned_ranges_ptr) {
             local_owned_ranges_ptr = make_lw_shared<const dht::token_range_vector>(*owned_ranges_ptr);
         }
-        auto task = co_await compaction_module.make_and_start_task<shard_resharding_compaction_task_impl>(task_info, keyspace, table, task_info.get_id(), dir, local_db, creator, std::move(local_owned_ranges_ptr), vnodes_resharding, destinations);
+        auto task = co_await compaction_module.start_shard_resharding_compaction(dir, local_db, keyspace, table, creator, std::move(local_owned_ranges_ptr), vnodes_resharding, destinations, task_info);
         co_await task->done();
     }));
 
@@ -1152,27 +1152,6 @@ future<tasks::task_manager::task_ptr> task_manager_module::start_table_reshardin
     });
 }
 
-shard_resharding_compaction_task_impl::shard_resharding_compaction_task_impl(tasks::task_manager::module_ptr module,
-        std::string keyspace,
-        std::string table,
-        tasks::task_id parent_id,
-        sharded<sstables::sstable_directory>& dir,
-        replica::database& db,
-        compaction_sstable_creator_fn creator,
-        compaction::owned_ranges_ptr local_owned_ranges_ptr,
-        bool vnodes_resharding,
-        std::vector<replica::reshard_shard_descriptor>& destinations) noexcept
-    : resharding_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, "shard", std::move(keyspace), std::move(table), "", parent_id)
-    , _dir(dir)
-    , _db(db)
-    , _creator(std::move(creator))
-    , _local_owned_ranges_ptr(std::move(local_owned_ranges_ptr))
-    , _vnodes_resharding(vnodes_resharding)
-    , _destinations(destinations)
-{
-    _expected_workload = _destinations[this_shard_id()].size();
-}
-
 static future<> run_shard_resharding_compaction(sharded<sstables::sstable_directory>& dir, replica::database& db, std::string keyspace, std::string table_name, compaction_sstable_creator_fn creator, compaction::owned_ranges_ptr local_owned_ranges_ptr, bool vnodes_resharding, std::vector<replica::reshard_shard_descriptor>& destinations, tasks::task_info task_info) {
     auto& table = db.find_column_family(keyspace, table_name);
     auto info_vec = std::move(destinations[this_shard_id()].info_vec);
@@ -1180,12 +1159,19 @@ static future<> run_shard_resharding_compaction(sharded<sstables::sstable_direct
     co_await dir.local().move_foreign_sstables(dir);
 }
 
-future<> shard_resharding_compaction_task_impl::run() {
-    return run_shard_resharding_compaction(_dir, _db, _status.keyspace, _status.table, _creator, std::move(_local_owned_ranges_ptr), _vnodes_resharding, _destinations, info());
-}
-
-future<std::optional<double>> shard_resharding_compaction_task_impl::expected_total_workload() const {
-    co_return _expected_workload;
+future<tasks::task_manager::task_ptr> task_manager_module::start_shard_resharding_compaction(sharded<sstables::sstable_directory>& dir, replica::database& db, std::string keyspace, std::string table, compaction_sstable_creator_fn creator, compaction::owned_ranges_ptr local_owned_ranges_ptr, bool vnodes_resharding, std::vector<replica::reshard_shard_descriptor>& destinations, tasks::task_info parent_info) {
+    tasks::task_manager::task_builder task_builder{shared_from_this(), resharding_compaction_task_type};
+    task_builder.set_scope("shard")
+                .set_keyspace(keyspace)
+                .set_table(table)
+                .set_progress_units("bytes")
+                .set_parent_info(parent_info)
+                .set_workload_fn([workload = destinations[this_shard_id()].size()] () -> future<std::optional<double>> {
+                    co_return workload;
+                });
+    return std::move(task_builder).build([&dir, &db, keyspace = std::move(keyspace), table = std::move(table), creator = std::move(creator), local_owned_ranges_ptr = std::move(local_owned_ranges_ptr), vnodes_resharding, &destinations] (tasks::task_manager::task::impl& self) {
+        return run_shard_resharding_compaction(dir, db, keyspace, table, creator, local_owned_ranges_ptr, vnodes_resharding, destinations, self.info());
+    });
 }
 
 }
