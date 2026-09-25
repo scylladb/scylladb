@@ -248,7 +248,11 @@ async def test_interrupt_build_with_resharding(manager: ManagerClient, smp_befor
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v text, PRIMARY KEY (key, c))")
 
-        n_partitions = 10
+        # At least one shard needs more than view_builder::batch_size (128) rows so its
+        # first build step saves progress instead of finishing the whole view. A shard
+        # that finishes early only records next_token == first_token, which reshard()
+        # skips on restart.
+        n_partitions = 128 * smp_before + 1
         await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.tab (key, c, v) VALUES ({i}, {i}, '{i}')") for i in range(n_partitions)])
 
         # Pause the view builder using injection to control build progress
@@ -257,11 +261,12 @@ async def test_interrupt_build_with_resharding(manager: ManagerClient, smp_befor
         await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv AS SELECT * FROM {ks}.tab "
                         "WHERE key IS NOT NULL AND c IS NOT NULL AND v IS NOT NULL PRIMARY KEY (c, key, v)")
 
-        # Wait for build to start and save progress
+        # Wait until every shard finished its first build step and saved next_token.
+        # Rows without next_token exist from the moment the view is registered.
         async def progress_saved():
             rows = await cql.run_async(
                 f"SELECT * FROM system.scylla_views_builds_in_progress WHERE keyspace_name = '{ks}' AND view_name = 'mv' ALLOW FILTERING")
-            return len(rows) > 0 or None
+            return (len(rows) > 0 and all(r.next_token is not None for r in rows)) or None
         await wait_for(progress_saved, time.time() + 60)
 
         # Block further build steps and release the current one
