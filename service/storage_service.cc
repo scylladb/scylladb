@@ -1433,7 +1433,9 @@ future<> storage_service::update_topology_with_local_metadata(raft::server& raft
     // Only report the mode once every node knows the column; older nodes silently drop
     // a cell for a column their schema lacks. The flag gates the comparison below too,
     // or the loop would keep retrying a write it is not allowed to make.
-    const bool report_storage_mode = bool(_feature_service.topology_current_storage_mode);
+    // The injection stands in for a release that published no mode.
+    const bool report_storage_mode = bool(_feature_service.topology_current_storage_mode)
+            && !utils::get_local_injector().enter("skip_current_storage_mode_publish");
     // The mode this node built its tables with. It reads the intent before it has caught
     // up with group0, and a node can die between committing an intent and applying it, so
     // the row may already carry one this boot never saw - the tables are vnode-flavored
@@ -4500,7 +4502,8 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
         // started before the cluster knew the column, which is the single case the
         // status API answers from tablet sizes. Each node overwrites its own cell with
         // what it booted with as it restarts.
-        {
+        // The injection reproduces a migration prepared before the column existed.
+        if (!utils::get_local_injector().enter("skip_current_storage_mode_seed")) {
             topology_mutation_builder builder(guard.write_timestamp());
             for (const auto& [node_id, _] : topology.normal_nodes) {
                 builder.with_node(node_id).set("current_storage_mode", storage_mode::vnodes);

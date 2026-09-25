@@ -1697,3 +1697,145 @@ async def test_migration_status_reset_between_migrations(manager: ScyllaClusterM
                 res = await cql.run_async(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{ks}'")
                 assert len(res) == 1 and res[0].initial_tablets is not None, \
                     f"Keyspace {ks} is still using vnodes after migration finalization"
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_migration_refused_before_feature_enabled(manager: ScyllaClusterManager):
+    """Verify a migration cannot start until TOPOLOGY_CURRENT_STORAGE_MODE is enabled.
+
+    suppress_features stands in for a node that still runs older code.
+    """
+    cfg = {
+        'num_tokens': 16,
+        'error_injections_at_startup': [
+            {'name': 'suppress_features', 'value': 'TOPOLOGY_CURRENT_STORAGE_MODE'}],
+    }
+    servers = await manager.servers_add(1, cmdline=['--smp', '2'], config=cfg)
+    server = servers[0]
+    cql, _ = await manager.get_ready_cql(servers)
+
+    not_enabled = "TOPOLOGY_CURRENT_STORAGE_MODE cluster feature is not enabled yet"
+
+    ks_opts = "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}"
+    async with new_test_keyspace(manager, ks_opts) as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+
+        with pytest.raises(HTTPError, match=not_enabled):
+            await manager.api.create_vnode_tablet_migration(server.ip_addr, ks)
+
+        logger.info("Restarting the node without the suppression so the feature is enabled")
+        await manager.server_stop_gracefully(server.server_id)
+        await manager.server_remove_config_option(server.server_id, 'error_injections_at_startup')
+        await manager.server_start(server.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        # The coordinator enables the feature once every node supports it. Retry only
+        # that refusal; anything else is a real error and must not be swallowed.
+        deadline = time.time() + 60
+        while True:
+            try:
+                await manager.api.create_vnode_tablet_migration(server.ip_addr, ks)
+                break
+            except HTTPError as e:
+                if not_enabled not in e.message:
+                    raise
+                assert time.time() < deadline, f"Migration still refused after the feature should be enabled: {e}"
+                await asyncio.sleep(0.5)
+
+        host_id = await manager.get_host_id(server.server_id)
+        await verify_migration_status(manager, server, ks,
+            expected_status='migrating_to_tablets',
+            expected_node_statuses={host_id: ('vnodes', 'vnodes')})
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_migration_status_falls_back_to_tablet_sizes(manager: ScyllaClusterManager):
+    """Verify the status API answers from tablet sizes for a migration that recorded no modes.
+
+    A migration started before the cluster knew current_storage_mode - one carried
+    across the version upgrade that introduced it - has no mode for any node, not even
+    for nodes that have already switched. No node can publish one on the upgrade boot
+    either, because the feature is only enabled after every node has advertised support,
+    which is the same write that would carry the mode. The status API has to fall back
+    to the source the release that started the migration used.
+
+    Two injections reproduce that state on a single version: the seed is skipped so
+    prepare records no mode, and the publish is skipped so the node records none when it
+    restarts. Without the fallback, step 4 reports vnodes for a node that has switched.
+
+    Steps:
+    1. Start a node with both injections and prepare a migration - no mode is recorded.
+    2. Mark the node; it still reports vnodes, having not restarted.
+    3. Restart it, so it switches its storage but publishes no mode.
+    4. The status must report tablets, which can only come from the tablet sizes.
+    5. Finalize, which must not be blocked by the absent modes.
+    """
+    num_keys = 100
+
+    # The fallback reads system.tablet_sizes, which the coordinator refreshes on its own
+    # schedule, so this test does depend on that interval where the others no longer do.
+    cfg = {
+        'tablet_load_stats_refresh_interval_in_seconds': 1,
+        'num_tokens': 16,
+        'error_injections_at_startup': ['skip_current_storage_mode_seed',
+                                        'skip_current_storage_mode_publish'],
+    }
+    servers = await manager.servers_add(1, cmdline=['--smp', '2'], config=cfg)
+    server = servers[0]
+    host_id = await manager.get_host_id(server.server_id)
+    cql, _ = await manager.get_ready_cql(servers)
+
+    ks_opts = "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}"
+    async with new_test_keyspace(manager, ks_opts) as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+        stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, c) VALUES (?, ?)")
+        await asyncio.gather(*(cql.run_async(stmt, [k, k]) for k in range(num_keys)))
+
+        logger.info("Preparing the migration with the mode seeding suppressed")
+        await manager.api.create_vnode_tablet_migration(server.ip_addr, ks)
+
+        logger.info("Verifying that no node recorded a mode")
+        rows = await cql.run_async("SELECT host_id, current_storage_mode FROM system.topology WHERE key = 'topology'")
+        assert len(rows) == 1 and rows[0].current_storage_mode is None, \
+            f"Expected no recorded mode, got {[(r.host_id, r.current_storage_mode) for r in rows]}"
+
+        await verify_migration_status(manager, server, ks,
+            expected_status='migrating_to_tablets',
+            expected_node_statuses={host_id: ('vnodes', 'vnodes')})
+
+        logger.info("Marking the node, which has not restarted yet")
+        await manager.api.upgrade_node_to_tablets(server.ip_addr)
+        await verify_migration_status(manager, server, ks,
+            expected_status='migrating_to_tablets',
+            expected_node_statuses={host_id: ('vnodes', 'tablets')})
+
+        logger.info("Restarting the node, which switches but publishes no mode")
+        await manager.server_restart(server.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+
+        rows = await cql.run_async("SELECT current_storage_mode FROM system.topology WHERE key = 'topology'")
+        assert rows[0].current_storage_mode is None, \
+            f"Expected the publish to stay suppressed, got '{rows[0].current_storage_mode}'"
+
+        # Only the fallback can answer this: the column is empty and the node has switched.
+        # Poll, because the fallback reads load stats, which are refreshed periodically.
+        logger.info("Verifying the status reports tablets from the tablet sizes")
+        deadline = time.time() + 60
+        while True:
+            status = await manager.api.get_vnode_tablet_migration_status(server.ip_addr, ks)
+            modes = {n['host_id']: (n['current_mode'], n['intended_mode']) for n in status['nodes']}
+            if modes == {host_id: ('tablets', 'tablets')}:
+                break
+            assert time.time() < deadline, f"Status never reported tablets from tablet sizes, last: {modes}"
+            await asyncio.sleep(0.5)
+
+        logger.info("Finalizing, which must not be blocked by the absent modes")
+        await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks)
+        await read_barrier(manager.api, server.ip_addr)
+
+        res = await cql.run_async(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{ks}'")
+        assert len(res) == 1 and res[0].initial_tablets is not None, \
+            "Keyspace is still using vnodes after migration finalization"
+        await verify_data_integrity(cql, ks, "test", num_keys, cl=ConsistencyLevel.ONE)
