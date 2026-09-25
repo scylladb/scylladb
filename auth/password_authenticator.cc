@@ -23,6 +23,7 @@
 #include "auth/common.hh"
 #include "auth/config.hh"
 #include "auth/passwords.hh"
+#include "utils/error_injection.hh"
 #include "auth/roles-metadata.hh"
 #include "cql3/untyped_result_set.hh"
 #include "utils/log.hh"
@@ -94,6 +95,11 @@ future<> password_authenticator::maybe_create_default_password() {
     }
     // We don't want to start operation earlier to avoid quorum requirement in
     // a common case.
+    co_await utils::get_local_injector().inject("maybe_create_default_password_timeout", [] {
+        return std::make_exception_ptr(
+            ::service::raft_operation_timeout_error(
+                "injected raft timeout in maybe_create_default_password"));
+    });
     ::service::group0_batch batch(
             co_await _group0_client.start_operation(_as, get_raft_timeout()));
     // Check again as the state may have changed before we took the guard (batch).
@@ -125,8 +131,8 @@ future<> password_authenticator::maybe_create_default_password_with_retries() {
             plogger.error("Failed to create default superuser password due to guard conflict.");
             co_return;
         } catch (const ::service::raft_operation_timeout_error& ex) {
-            plogger.error("Failed to create default superuser password due to exception: {}", ex.what());
-            co_return;
+            plogger.warn("Failed to create default superuser password due to raft timeout, will retry: {}", ex.what());
+            throw;
         }
     }
 }
