@@ -70,11 +70,14 @@ future<> snapshot_ctl::check_snapshot_not_exist(sstring ks_name, sstring name, s
     });
 }
 
-future<> snapshot_ctl::run_snapshot_modify_operation(noncopyable_function<future<>()>&& f) {
-    return with_gate(_ops, [f = std::move(f), this] () mutable {
-        return container().invoke_on(0, [f = std::move(f)] (snapshot_ctl& snap) mutable {
-            return with_lock(snap._lock.for_write(), std::move(f));
-        });
+future<> snapshot_ctl::run_snapshot_modify_operation(noncopyable_function<future<>()>&& f, seastar::abort_source* as) {
+    if (as && this_shard_id() != 0) {
+        on_internal_error(snap_log, "run_snapshot_modify_operation() can only be aborted from shard 0");
+    }
+    auto gh = _ops.hold();
+    co_await container().invoke_on(0, [f = std::move(f), as] (snapshot_ctl& snap) mutable -> future<> {
+        auto holder = co_await (as ? snap._lock.hold_write_lock(*as) : snap._lock.hold_write_lock());
+        co_await f();
     });
 }
 

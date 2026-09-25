@@ -139,7 +139,9 @@ private:
     // matches a column family.
     sstring resolve_table_name(const sstring& ks_name, const sstring& name) const;
 
-    future<> run_snapshot_modify_operation(noncopyable_function<future<>()> &&);
+    // The lock lives on shard 0, so a caller that wants to abort the wait for
+    // it must run there too.
+    future<> run_snapshot_modify_operation(noncopyable_function<future<>()> &&, seastar::abort_source* = nullptr);
 
     template <typename Func>
     std::invoke_result_t<Func> run_snapshot_list_operation(Func&& f) {
