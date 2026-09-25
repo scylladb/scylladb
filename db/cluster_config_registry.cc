@@ -63,6 +63,13 @@ constexpr std::array registry_options = {
         .min_version = version::v0,
         .default_value = false,
     },
+    option{
+        .name = "repair_hints_batchlog_flush_discard_unreplayed_hints",
+        .description = "Discard the regular hints a repair's hints flush gave up waiting for, so that the next repair does not wait for them again. This covers every hint on the node, for all tables and destinations; a write that only hints hold (consistency level ANY) is lost with them. View hints are never discarded",
+        .scopes = scope_set::of<scope::cluster>(),
+        .min_version = version::v0,
+        .default_value = false,
+    },
 };
 
 constexpr bool all_registry_options_are_single_domain() {

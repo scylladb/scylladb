@@ -162,6 +162,11 @@ public:
         return _sender.wait_until_hints_are_replayed_up_to(as, up_to_rp);
     }
 
+    /// \brief Marks the hints at or below a given replay position for discarding, see hint_sender::set_discard_bound().
+    bool set_discard_bound(db::replay_position rp) noexcept {
+        return _sender.set_discard_bound(rp);
+    }
+
     /// \brief Safely runs a given functor under the file_update_mutex of \ref this object.
     ///
     /// Runs a given functor under the file_update_mutex of this hint_endpoint_manager instance.

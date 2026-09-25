@@ -481,6 +481,9 @@ future<std::tuple<bool, bool, gc_clock::time_point>> repair_service::flush_hints
             return ignore_nodes.contains(addr);
         });
         auto hints_timeout = std::chrono::seconds(300);
+        if (auto timeout_s = utils::get_local_injector().inject_parameter<uint32_t>("repair_flush_hints_timeout_in_s")) {
+            hints_timeout = std::chrono::seconds(*timeout_s);
+        }
         auto batchlog_timeout = std::chrono::seconds(300);
         repair_flush_hints_batchlog_request req{id.uuid(), {}, hints_timeout, batchlog_timeout};
         auto start_time = gc_clock::now();

@@ -874,6 +874,11 @@ public:
 
     future<db::hints::sync_point> create_hint_sync_point(std::vector<locator::host_id> target_hosts) const;
     future<> wait_for_hint_sync_point(const db::hints::sync_point spoint, clock_type::time_point deadline);
+    /// \brief Marks the regular hints up to `spoint` for discarding instead of sending, on every shard.
+    ///
+    /// For a caller whose wait_for_hint_sync_point() on `spoint` timed out. View hints are left alone:
+    /// no repair regenerates a discarded view update.
+    future<> discard_hints_up_to_sync_point(const db::hints::sync_point spoint);
 
     const stats& get_stats() const {
         return scheduling_group_get_specific<storage_proxy_stats::stats>(_stats_key);

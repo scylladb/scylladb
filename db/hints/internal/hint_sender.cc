@@ -329,13 +329,7 @@ future<> hint_sender::send_one_hint(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fr
             // We just need to account in the ctx that sending of this hint has failed.
             if (!f.failed()) {
                 ctx_ptr->on_hint_send_success(rp);
-                auto new_bound = ctx_ptr->get_replayed_bound();
-                // Segments from other shards are replayed first and are considered to be "before" replay position 0.
-                // Update the sent upper bound only if it is a local segment.
-                if (new_bound.shard_id() == this_shard_id() && _sent_upper_bound_rp < new_bound) {
-                    _sent_upper_bound_rp = new_bound;
-                    notify_replay_waiters();
-                }
+                advance_sent_upper_bound(*ctx_ptr);
             } else {
                 ctx_ptr->on_hint_send_failure(rp);
             }
@@ -345,6 +339,64 @@ future<> hint_sender::send_one_hint(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fr
         manager_logger.trace("hint_sender[{}]:send_one_hint: Exception occurred: {}", _ep_key, eptr);
         ctx_ptr->on_hint_send_failure(rp);
     });
+}
+
+void hint_sender::advance_sent_upper_bound(const send_one_file_ctx& ctx) noexcept {
+    auto new_bound = ctx.get_replayed_bound();
+    // Segments from other shards are replayed first and are considered to be "before" replay position 0.
+    // Update the sent upper bound only if it is a local segment.
+    if (new_bound.shard_id() == this_shard_id() && _sent_upper_bound_rp < new_bound) {
+        _sent_upper_bound_rp = new_bound;
+        notify_replay_waiters();
+    }
+}
+
+bool hint_sender::discard_in_effect() const noexcept {
+    // A drain discards the hints under the bound, a plain stop leaves them for the next start.
+    return _discard_bound_rp && !(stopping() && !draining());
+}
+
+bool hint_sender::under_discard_bound(db::replay_position rp) const noexcept {
+    if (!discard_in_effect()) {
+        return false;
+    }
+    // Foreign segments count as older than any local position.
+    return rp.shard_id() != this_shard_id() || rp <= *_discard_bound_rp;
+}
+
+bool hint_sender::discards_pending() const noexcept {
+    return discard_in_effect() && (!_foreign_segments_to_replay.empty() || _sent_upper_bound_rp <= *_discard_bound_rp);
+}
+
+bool hint_sender::set_discard_bound(db::replay_position rp) noexcept {
+    // The default position is what a sync point holds for an endpoint it does not cover.
+    if (rp != db::replay_position{} && rp.shard_id() != this_shard_id()) {
+        manager_logger.debug("hint_sender[{}]:set_discard_bound: Position {} is not from this shard", end_point_key(), rp);
+        return false;
+    }
+    if (_foreign_segments_to_replay.empty() && rp < _sent_upper_bound_rp) {
+        manager_logger.debug("hint_sender[{}]:set_discard_bound: No hints to discard up to {} (sent up to {})",
+                end_point_key(), rp, _sent_upper_bound_rp);
+        return false;
+    }
+    if (_discard_bound_rp && rp <= *_discard_bound_rp) {
+        return false;
+    }
+    manager_logger.debug("hint_sender[{}]:set_discard_bound: Discarding hints up to {}", end_point_key(), rp);
+    _discard_bound_rp = rp;
+    // Flush and walk the segments on the next iteration.
+    _next_flush_tp = clock::now();
+    _next_send_retry_tp = clock::now();
+    return true;
+}
+
+void hint_sender::clear_discard_bound_maybe() noexcept {
+    // Kept while the segment holding the bound may still be reread, since a reread must discard the hints under it again.
+    if (_discard_bound_rp && _foreign_segments_to_replay.empty() && *_discard_bound_rp < _sent_upper_bound_rp) {
+        manager_logger.info("hint_sender[{}]:clear_discard_bound_maybe: Discarded {} hints up to {}", end_point_key(), _discarded_under_bound, *_discard_bound_rp);
+        _discard_bound_rp.reset();
+        _discarded_under_bound = 0;
+    }
 }
 
 void hint_sender::notify_replay_waiters() noexcept {
@@ -454,6 +506,7 @@ db::replay_position hint_sender::send_one_file_ctx::get_replayed_bound() const n
 void hint_sender::rewind_sent_replay_position_to(db::replay_position rp) {
     _sent_upper_bound_rp = rp;
     notify_replay_waiters();
+    clear_discard_bound_maybe();
 }
 
 // runs in a seastar::async context
@@ -470,6 +523,18 @@ bool hint_sender::send_one_file(const sstring& fname) {
             auto& rp = buf_rp.position;
 
             while (true) {
+                if (under_discard_bound(rp)) {
+                    ctx_ptr->on_hint_send_success(rp);
+                    if (rp > _last_counted_discarded_rp) {
+                        _last_counted_discarded_rp = rp;
+                        ++shard_stats().discarded_on_failed_replay;
+                        ++_discarded_under_bound;
+                    }
+                    advance_sent_upper_bound(*ctx_ptr);
+                    co_await flush_maybe();
+                    co_return;
+                }
+
                 // Check that we can still send the next hint. Don't try to send it if the destination host
                 // is DOWN or if we have already failed to send some of the previous hints.
                 if (!draining() && ctx_ptr->segment_replay_failed) {
@@ -485,6 +550,22 @@ bool hint_sender::send_one_file(const sstring& fname) {
                 // Break early if stop() was called or the destination node went down.
                 if (!can_send()) {
                     ctx_ptr->segment_replay_failed = true;
+                    if (discard_in_effect()) {
+                        // The bound need not be a hint position; move the sent position past it so its waiters
+                        // are released, but no further than a hint of this pass that failed or is still in flight.
+                        auto past_bound = *_discard_bound_rp;
+                        past_bound.pos++;
+                        if (ctx_ptr->first_failed_rp) {
+                            past_bound = std::min(past_bound, *ctx_ptr->first_failed_rp);
+                        }
+                        if (!ctx_ptr->in_progress_rps.empty()) {
+                            past_bound = std::min(past_bound, *ctx_ptr->in_progress_rps.begin());
+                        }
+                        if (_sent_upper_bound_rp < past_bound) {
+                            _sent_upper_bound_rp = past_bound;
+                            notify_replay_waiters();
+                        }
+                    }
                     co_return;
                 }
 
@@ -554,6 +635,7 @@ bool hint_sender::send_one_file(const sstring& fname) {
 
     // clear the replay position - we are going to send the next segment...
     _last_not_complete_rp = replay_position();
+    _last_counted_discarded_rp = replay_position();
     _last_schema_ver_to_column_mapping.clear();
     manager_logger.debug("hint_sender[{}]:send_one_file: Segment {} has been sent in full and deleted", _ep_key, fname);
     return true;
@@ -593,7 +675,8 @@ void hint_sender::send_hints_maybe() noexcept {
                 break;
             }
             const sstring* seg_name = name_of_current_segment();
-            if (!seg_name || !replay_allowed() || !can_send()) {
+            // Hints under the discard bound are discarded also while the destination is DOWN.
+            if (!seg_name || !replay_allowed() || (!can_send() && !discards_pending())) {
                 break;
             }
             if (!send_one_file(*seg_name)) {
@@ -603,6 +686,7 @@ void hint_sender::send_hints_maybe() noexcept {
             ++replayed_segments_count;
 
             notify_replay_waiters();
+            clear_discard_bound_maybe();
         }
 
     // Ignore exceptions, we will retry sending this file from where we left off the next time.
