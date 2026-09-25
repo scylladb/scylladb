@@ -1482,6 +1482,7 @@ private:
         // Releases reference to sstables compacted by this compaction or another, both of which belongs
         // to the same column family
         for (auto& pending_replacement : pending_replacements) {
+            bool replaces_snapshot_sstable = false;
             for (auto& sst : pending_replacement.removed) {
                 // Set may not contain sstable to be removed because this compaction may have started
                 // before the creation of that sstable.
@@ -1489,6 +1490,17 @@ private:
                     continue;
                 }
                 _sstable_set->erase(sst);
+                replaces_snapshot_sstable = true;
+            }
+            // If none of the removed sstables is in the snapshot, the added ones hold only data
+            // which was not in it either: data written or flushed after the snapshot was taken.
+            // A compaction with a narrowed gc scope has established that no GC-eligible tombstone
+            // can shadow such data, see tombstone_gc_scope, so it has no reason to consult them.
+            // Adding them anyway lets data written during a long compaction block the purge of
+            // tombstones, once another compaction happens to rewrite it.
+            // Otherwise the added sstables must be consulted: they hold data of the snapshot.
+            if (!replaces_snapshot_sstable && _gc_scope != tombstone_gc_scope::all) {
+                continue;
             }
             for (auto& sst : pending_replacement.added) {
                 _sstable_set->insert(sst);
