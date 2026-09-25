@@ -368,8 +368,12 @@ public:
         return overlapped;
     }
 
+    static bool worth_promoting_L0_candidates(uint64_t l0_total_bytes, uint64_t max_sstable_size_in_bytes) {
+        return l0_total_bytes >= max_sstable_size_in_bytes;
+    }
+
     bool worth_promoting_L0_candidates(const std::vector<sstables::shared_sstable>& candidates) const {
-        return get_total_bytes(candidates) >= _max_sstable_size_in_bytes;
+        return worth_promoting_L0_candidates(get_total_bytes(candidates), _max_sstable_size_in_bytes);
     }
 private:
     candidates_info candidates_for_level_0_compaction() {
@@ -497,10 +501,23 @@ public:
             uint64_t max_bytes_for_this_level = max_bytes_for_level(i, max_sstable_size_in_bytes);
 
             if (total_bytes_for_this_level < max_bytes_for_this_level) {
+                // L0 is compacted well before it reaches its max size: as soon as it holds
+                // a full sstable's worth of data, get_compaction_candidates() promotes it
+                // to L1 (see worth_promoting_L0_candidates()). Account for that task, so
+                // the table isn't reported as having nothing to do while that compaction
+                // is due.
+                if (i == 0 && worth_promoting_L0_candidates(total_bytes_for_this_level, max_sstable_size_in_bytes)) {
+                    tasks += 1;
+                }
                 continue;
             }
             // If there is 1 byte over TBL - (MBL * 1.001), there is still a task left, so we need to round up.
-            tasks += std::ceil(float(total_bytes_for_this_level - max_bytes_for_this_level*TARGET_SCORE) / max_sstable_size_in_bytes);
+            int64_t level_tasks = std::ceil(float(total_bytes_for_this_level - max_bytes_for_this_level*TARGET_SCORE) / max_sstable_size_in_bytes);
+            // Within TARGET_SCORE of its max size, the above yields no task, but L0 is still due for promotion.
+            if (i == 0) {
+                level_tasks = std::max<int64_t>(level_tasks, 1);
+            }
+            tasks += level_tasks;
         }
         return tasks;
     }
