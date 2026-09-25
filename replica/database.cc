@@ -2133,7 +2133,7 @@ max_purgeable memtable_list::get_max_purgeable(const dht::decorated_key& dk, is_
     };
     const auto get_expiry_treshold = [s = _current_schema(), &dk] (const memtable& mt) -> max_purgeable::expiry_threshold_opt {
         if (auto* snapshot = mt.get_tombstone_gc_state_snapshot(); snapshot) {
-            return snapshot->get_gc_before_for_key(s, dk, false);
+            return snapshot->get_gc_before_for_key(s, dk, gc_clock::now());
         }
         return std::nullopt;
     };

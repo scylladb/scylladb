@@ -648,7 +648,7 @@ protected:
         , _owned_ranges(std::move(descriptor.owned_ranges))
         , _sharder(descriptor.sharder)
         , _owned_ranges_checker(_owned_ranges ? std::optional<dht::incremental_owned_ranges_checker>(*_owned_ranges) : std::nullopt)
-        , _tombstone_gc_state(_table_s.get_tombstone_gc_state())
+        , _tombstone_gc_state(descriptor.gc_state)
         , _progress_monitor(progress_monitor)
     {
         if (descriptor.gc_check_only_compacting_sstables) {

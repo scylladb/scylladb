@@ -411,8 +411,18 @@ future<sstables::sstable_set> compaction_task_executor::sstable_set_for_tombston
 future<compaction_result> compaction_task_executor::compact_sstables(compaction_descriptor descriptor, ::compaction::compaction_data& cdata, on_replacement& on_replace, compaction_manager::can_purge_tombstones can_purge,
                                                                                sstables::offstrategy offstrategy) {
     compaction_group_view& t = *_compacting_table;
+    // A compaction that ignores the memtables, or more, ignores data that is not in the sstable
+    // snapshot taken below, on the grounds that no GC-eligible tombstone can shadow it. That
+    // holds only for tombstones which are eligible when the snapshot is taken, so freeze the
+    // gc state before it: a repair completing mid-compaction must not make more tombstones
+    // eligible. See compaction_descriptor::gc_state.
+    const bool ignores_newer_data = descriptor.gc_check_only_compacting_sstables || t.skip_memtable_for_tombstone_gc();
+    descriptor.gc_state = ignores_newer_data ? t.get_tombstone_gc_state().snapshot() : t.get_tombstone_gc_state();
     if (can_purge) {
         descriptor.enable_garbage_collection(co_await sstable_set_for_tombstone_gc(t));
+        if (t.skip_memtable_for_tombstone_gc()) {
+            co_await utils::get_local_injector().inject("compaction_repaired_view_wait_after_gc_snapshots", utils::wait_for_message(5min));
+        }
     }
     descriptor.creator = [&t] (shard_id) {
         // All compaction types going through this path will work on normal input sstables only.
@@ -2161,6 +2171,7 @@ private:
                     compaction_descriptor::default_max_sstable_bytes,
                     sst->run_identifier(),
                     compaction_type_options::make_scrub(compaction_type_options::scrub::mode::validate, _quarantine_sstables));
+            desc.gc_state = _compacting_table->get_tombstone_gc_state();
             auto res = co_await ::compaction::compact_sstables(std::move(desc), _compaction_data, *_compacting_table, _progress_monitor);
             co_await update_history(*_compacting_table, compaction_result(res), _compaction_data);
             co_return res;
