@@ -108,6 +108,10 @@ def pytest_addoption(parser: pytest.Parser) -> None:
                           "The lcov files can eventually be used for generating coverage reports")
     parser.addoption("--coverage-mode", action='append', type=str, dest="coverage_modes",
                      help="Collect and process coverage only for the modes specified. implies: --coverage, default: All built modes")
+    parser.addoption("--select-tests-as-mode", default=None, metavar="MODE",
+                     help="Choose tests by MODE's run_in_*/skip_in_* lists in the suite configs, whatever mode "
+                          "runs them (e.g. `--mode coverage --select-tests-as-mode dev` runs dev's tests on "
+                          "the coverage build).")
     parser.addoption("--extra-scylla-cmdline-options", default='',
                      help="Passing extra scylla cmdline options for all tests.  Options should be space separated:"
                           " '--logger-log-level raft=trace --default-log-level error'")
@@ -663,9 +667,10 @@ def pytest_collect_file(file_path: pathlib.Path,
 
         build_modes = parent.config.build_modes
         if suite_config := TestSuiteConfig.from_pytest_node(node=collectors[0]):
+            select_as = parent.config.getoption("--select-tests-as-mode")
             build_modes = (
                 mode for mode in build_modes
-                if not suite_config.is_test_disabled(build_mode=mode, path=file_path)
+                if not suite_config.is_test_disabled(build_mode=select_as or mode, path=file_path)
             )
         if repeats := [mode for mode in build_modes for _ in range(parent.config.getoption("--repeat"))]:
             ihook = parent.ihook
