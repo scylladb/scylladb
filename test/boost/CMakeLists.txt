@@ -9,6 +9,9 @@ add_scylla_test(allocation_strategy_test
 add_scylla_test(alternator_export_test
   KIND SEASTAR
   LIBRARIES alternator)
+add_scylla_test(alternator_table_scan_test
+  KIND SEASTAR
+  LIBRARIES alternator)
 add_scylla_test(alternator_unit_test
   KIND SEASTAR
   LIBRARIES alternator)
