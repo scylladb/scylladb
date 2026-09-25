@@ -74,7 +74,12 @@ async def test_describe_cluster_sanity(manager: ScyllaClusterManager, mode: str)
             return True if os.path.exists(maintenance_socket_path) else None
         await wait_for(socket_exists, time() + 30)
         socket_endpoint = UnixSocketEndPoint(maintenance_socket_path)
-        cluster = manager.con_gen([socket_endpoint], load_balancing_policy=WhiteListRoundRobinPolicy([socket_endpoint]))
+        # Maintenance nodes have no tokens and are excluded from query pools.
+        cluster = manager.con_gen(
+            [socket_endpoint],
+            load_balancing_policy=WhiteListRoundRobinPolicy([socket_endpoint]),
+            use_control_connection_for_queries=True,
+        )
         cql = cluster.connect()
 
     try:
