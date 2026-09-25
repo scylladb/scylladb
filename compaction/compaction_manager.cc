@@ -411,7 +411,13 @@ future<sstables::sstable_set> compaction_task_executor::sstable_set_for_tombston
 future<compaction_result> compaction_task_executor::compact_sstables(compaction_descriptor descriptor, ::compaction::compaction_data& cdata, on_replacement& on_replace, compaction_manager::can_purge_tombstones can_purge,
                                                                                sstables::offstrategy offstrategy) {
     compaction_group_view& t = *_compacting_table;
-    descriptor.gc_state = t.get_tombstone_gc_state();
+    // A compaction that ignores the memtables, or more, ignores data that is not in the sstable
+    // snapshot taken below, on the grounds that no GC-eligible tombstone can shadow it. That
+    // holds only for tombstones which are eligible when the snapshot is taken, so freeze the
+    // gc state before it: a repair completing mid-compaction must not make more tombstones
+    // eligible. See compaction_descriptor::gc_state.
+    const bool ignores_newer_data = descriptor.gc_check_only_compacting_sstables || t.skip_memtable_for_tombstone_gc();
+    descriptor.gc_state = ignores_newer_data ? t.get_tombstone_gc_state().snapshot() : t.get_tombstone_gc_state();
     if (can_purge) {
         descriptor.enable_garbage_collection(co_await sstable_set_for_tombstone_gc(t));
     }
