@@ -106,6 +106,18 @@ def test_query_filter_sort_key(test_table_sn_with_data):
             KeyConditions={ 'p': { 'AttributeValueList': [p], 'ComparisonOperator': 'EQ' }},
             QueryFilter={ 'c': { 'AttributeValueList': [3], 'ComparisonOperator': 'EQ' }})
 
+# The error for a filter on a key attribute names the parameter which carried
+# that filter. Both DynamoDB and Alternator name the legacy parameter
+# "QueryFilter" here, as opposed to "Filter expression" for a FilterExpression
+# (see test_filter_expression.py), so pin the name down - the two branches are
+# easy to confuse.
+def test_query_filter_key_attribute_names_the_parameter(test_table_sn_with_data):
+    table, p, items = test_table_sn_with_data
+    with pytest.raises(ClientError, match='ValidationException.*QueryFilter can only contain'):
+        full_query(table,
+            KeyConditions={ 'p': { 'AttributeValueList': [p], 'ComparisonOperator': 'EQ' }},
+            QueryFilter={ 'c': { 'AttributeValueList': [3], 'ComparisonOperator': 'EQ' }})
+
 # Having a filter on a key column is the problem - it doesn't help if we
 # also have an additional filter on a non-key column.
 def test_query_filter_sort_key_2(test_table_sn_with_data):
