@@ -781,6 +781,8 @@ class db::commitlog::segment : public enable_shared_from_this<segment>, public c
     size_t _buffer_ostream_size = 0;
     std::unordered_map<cf_id_type, uint64_t> _cf_dirty;
     std::unordered_map<cf_id_type, gc_clock::time_point> _cf_min_time;
+    // Latest time passed to mark_dirty(); every _cf_min_time entry is <= it.
+    gc_clock::time_point _latest_dirty_time = gc_clock::time_point::min();
     std::unordered_multimap<replay_position, rp_handle> _extended_segments;
     time_point _sync_time;
     utils::flush_queue<replay_position, std::less<replay_position>, clock_type> _pending_ops;
@@ -906,6 +908,7 @@ public:
     // Either insert can throw on a new cf, so the time entry goes first: a count no handle
     // owns keeps the segment dirty for good, a time entry alone is a flushed cf's state.
     void mark_dirty(const cf_id_type& cf, gc_clock::time_point time) {
+        _latest_dirty_time = std::max(_latest_dirty_time, time);
         auto [it, inserted] = _cf_min_time.emplace(cf, time);
         if (!inserted) {
             it->second = std::min(it->second, time);
@@ -1421,7 +1424,13 @@ public:
             auto entry_size = writer.num_entries == 1 ? size : writer.size(*this, entry);
             auto es = entry_size + entry_overhead_size;
 
-            mark_dirty(id, gc_clock::now());
+            // A dirty id's min time is <= _latest_dirty_time, so it can only drop if the clock stepped back.
+            auto now = gc_clock::now();
+            if (auto dirty = _cf_dirty.find(id); dirty != _cf_dirty.end() && now >= _latest_dirty_time) {
+                ++dirty->second;
+            } else {
+                mark_dirty(id, now);
+            }
 
             rp_handle h(static_pointer_cast<cf_holder>(shared_from_this()), std::move(id), rp);
 
