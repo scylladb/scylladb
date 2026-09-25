@@ -111,7 +111,7 @@ distributed_loader::lock_table(global_table_ptr& table, sharded<sstables::sstabl
 future<>
 distributed_loader::reshard(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, sstring ks_name, sstring table_name, compaction::compaction_sstable_creator_fn creator, compaction::owned_ranges_ptr owned_ranges_ptr, bool vnodes_resharding, tasks::task_info parent_info) {
     auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
-    auto task = co_await compaction_module.make_and_start_task<compaction::table_resharding_compaction_task_impl>(parent_info, std::move(ks_name), std::move(table_name), parent_info.get_id(), dir, db, std::move(creator), std::move(owned_ranges_ptr), vnodes_resharding);
+    auto task = co_await compaction_module.start_table_resharding_compaction(dir, db, std::move(ks_name), std::move(table_name), std::move(creator), std::move(owned_ranges_ptr), vnodes_resharding, parent_info);
     co_await task->done();
 }
 

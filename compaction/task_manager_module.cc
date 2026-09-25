@@ -1130,12 +1130,26 @@ static future<> run_table_resharding_compaction(sharded<sstables::sstable_direct
     dblog.info("Resharded {} for {}.{} in {:.2f} seconds, {}", utils::pretty_printed_data_size(total_size), keyspace, table, duration.count(), utils::pretty_printed_throughput(total_size, duration));
 }
 
-future<> table_resharding_compaction_task_impl::run() {
-    return run_table_resharding_compaction(_dir, _db, _status.keyspace, _status.table, _creator, _owned_ranges_ptr, _vnodes_resharding, _expected_workload, info());
-}
-
-future<std::optional<double>> table_resharding_compaction_task_impl::expected_total_workload() const {
-    co_return _expected_workload;
+future<tasks::task_manager::task_ptr> task_manager_module::start_table_resharding_compaction(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, std::string keyspace, std::string table, compaction_sstable_creator_fn creator, compaction::owned_ranges_ptr owned_ranges_ptr, bool vnodes_resharding, tasks::task_info parent_info) {
+    // The action finds out the workload once it has distributed the sstables among the shards.
+    auto expected_workload = make_lw_shared<std::optional<uint64_t>>();
+    tasks::task_manager::task_builder task_builder{shared_from_this(), resharding_compaction_task_type};
+    task_builder.set_scope("table")
+                .set_keyspace(keyspace)
+                .set_table(table)
+                .set_progress_units("bytes")
+                .set_parent_info(parent_info)
+                .set_is_abortable(tasks::is_abortable{!parent_info})
+                .set_is_user_task(tasks::is_user_task::no)
+                .set_workload_fn([expected_workload] () -> future<std::optional<double>> {
+                    co_return *expected_workload;
+                });
+    if (!parent_info) {
+        task_builder.set_sequence_number(new_sequence_number());
+    }
+    return std::move(task_builder).build([&dir, &db, keyspace = std::move(keyspace), table = std::move(table), creator = std::move(creator), owned_ranges_ptr = std::move(owned_ranges_ptr), vnodes_resharding, expected_workload] (tasks::task_manager::task::impl& self) {
+        return run_table_resharding_compaction(dir, db, keyspace, table, creator, owned_ranges_ptr, vnodes_resharding, *expected_workload, self.info());
+    });
 }
 
 shard_resharding_compaction_task_impl::shard_resharding_compaction_task_impl(tasks::task_manager::module_ptr module,
