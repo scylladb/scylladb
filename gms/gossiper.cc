@@ -2019,7 +2019,7 @@ void gossiper::examine_gossiper(utils::chunked_vector<gossip_digest>& g_digest_l
     }
 }
 
-future<> gossiper::start_gossiping(gms::generation_type generation_nbr, application_state_map preload_local_states) {
+future<> gossiper::start_gossiping(gms::generation_type generation_nbr, application_state_map preload_local_states, joining is_joining) {
     co_await coroutine::switch_to(_gcfg.gossip_scheduling_group);
     auto permit = co_await lock_endpoint(my_host_id(), null_permit_id);
 
@@ -2027,13 +2027,6 @@ future<> gossiper::start_gossiping(gms::generation_type generation_nbr, applicat
     if (_gcfg.force_gossip_generation() > 0) {
         generation_nbr = gms::generation_type(_gcfg.force_gossip_generation());
         logger.warn("Use the generation number provided by user: generation = {}", generation_nbr);
-    } else if (_generation_seen_for_my_address >= generation_nbr) {
-        // The generation is seconds since epoch, which is not guaranteed to be greater
-        // than the one a previous node at this address used.
-        const auto bumped = gms::generation_type(_generation_seen_for_my_address.value() + 1);
-        logger.info("A previous node at {} is known to the cluster with generation {}, using {} instead of {}",
-                get_broadcast_address(), _generation_seen_for_my_address, bumped, generation_nbr);
-        generation_nbr = bumped;
     }
 
     // Create a new local state.
@@ -2058,8 +2051,34 @@ future<> gossiper::start_gossiping(gms::generation_type generation_nbr, applicat
     co_await container().invoke_on_all([] (gms::gossiper& g) {
         g._enabled = true;
     });
-    // Start gossiping immediately to speed up bootstrap.
-    _scheduled_gossip_task.arm(std::chrono::milliseconds(0));
+
+    auto first_round_delay = std::chrono::milliseconds(0);
+    if (is_joining) {
+        // FIXME: This delay is the only thing that prevents a joining node from having
+        // the same generation as another node that used the same IP. A node that joins
+        // for the first time has no stored generation and takes the current time in
+        // seconds as the generation. A bootstrap or replace retried on the same address
+        // within the same second would therefore reuse the generation of the previous
+        // attempt. Peers skip a state whose generation and version they already hold,
+        // so the new node would stay invisible to them and wait_for_ip would time out.
+        // Delaying the first gossip round until the wall clock reaches the next
+        // generation guarantees that by the time peers learn about a generation, no
+        // later attempt can pick it. We should somehow get rid of this delay completely
+        // to speed up bootstrap and replace, but it seems to be not trivial.
+        using namespace std::chrono;
+        const auto next_generation_start = high_resolution_clock::time_point(seconds(generation_nbr.value() + 1));
+        const auto now = high_resolution_clock::now();
+        if (next_generation_start > now) {
+            // The timer runs on lowres_clock and can fire slightly early.
+            constexpr auto margin = milliseconds(10);
+            first_round_delay = std::min(duration_cast<milliseconds>(next_generation_start - now) + margin, INTERVAL);
+            logger.info("Delaying the first gossip round by {} to reach the next generation", first_round_delay);
+        }
+    }
+    // The delay can be zero, so arm the timer only after _background_msg has been
+    // reset, since the gossip round enters that gate.
+    _scheduled_gossip_task.arm(first_round_delay);
+
     co_await container().invoke_on(0, [] (gms::gossiper& g) {
         g._failure_detector_loop_done = g.failure_detector_loop();
     });
@@ -2145,15 +2164,6 @@ future<> gossiper::do_shadow_round(std::unordered_set<gms::inet_address> nodes, 
         sleep_abortable(std::chrono::seconds(1), _abort_source).get();
         logger.info("Connect nodes={} again ... ({} seconds passed)",
                 nodes, std::chrono::duration_cast<std::chrono::seconds>(clk::now() - start_time).count());
-    }
-    // Remember what the peers think has been running at this address.
-    const auto my_addr = get_broadcast_address();
-    const auto my_id = my_host_id();
-    for (const auto& [id, eps] : _endpoint_state_map) {
-        if (id != my_id && eps->get_ip() == my_addr) {
-            _generation_seen_for_my_address = std::max(_generation_seen_for_my_address,
-                    eps->get_heart_beat_state().get_generation());
-        }
     }
     logger.info("Gossip shadow round finished with nodes_talked={}", nodes_talked);
 }

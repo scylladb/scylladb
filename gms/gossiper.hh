@@ -247,10 +247,6 @@ private:
 
     bool _in_shadow_round = false;
 
-    // The highest generation a shadow round saw the peers associate with this node's
-    // address, belonging to a node other than this one.
-    gms::generation_type _generation_seen_for_my_address{};
-
     service::topology_state_machine& _topo_sm;
 
     // Must be called on shard 0.
@@ -548,7 +544,8 @@ public:
      * existing nodes can talk to the replacing node. So the probability of
      * replacing node being talked to is pretty high.
      */
-    future<> start_gossiping(gms::generation_type generation_nbr, application_state_map preload_local_states = {});
+    using joining = bool_class<class joining_tag>;
+    future<> start_gossiping(gms::generation_type generation_nbr, application_state_map preload_local_states = {}, joining is_joining = joining::no);
 
 public:
     using mandatory = bool_class<class mandatory_tag>;
