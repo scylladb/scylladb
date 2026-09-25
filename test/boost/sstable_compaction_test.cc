@@ -1867,6 +1867,94 @@ SEASTAR_TEST_CASE(mv_tombstone_purge_test) {
     return test_env::do_with_async([](test_env& env) { mv_tombstone_purge(env).get(); });
 }
 
+// Another compaction's replacement is propagated to the sstable set snapshot a running compaction
+// uses for tombstone GC. If none of the replaced sstables is in that snapshot, the replacement's
+// output holds only data from after the snapshot was taken, and a compaction with a narrowed gc
+// scope must not start consulting it. See regular_compaction::update_pending_ranges().
+SEASTAR_TEST_CASE(tombstone_purge_ignores_replacement_of_sstables_outside_snapshot_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto builder = schema_builder(this_smp_shard_count(), "tests", "tombstone_purge_pending_replacement")
+                .with_column("pk", utf8_type, column_kind::partition_key)
+                .with_column("ck", int32_type, column_kind::clustering_key)
+                .with_column("v", int32_type);
+        builder.set_gc_grace_seconds(0);
+        auto s = builder.build();
+        auto sst_gen = env.make_sst_factory(s);
+
+        // Pending replacements are applied when the compaction starts writing a partition, so the
+        // one under test needs a partition ahead of it.
+        auto keys = tests::generate_partition_keys(2, s);
+        const auto& first_pk = keys[0].key();
+        const auto& pk = keys[1].key();
+        auto make_ck = [&] (int32_t ck) {
+            return clustering_key::from_single_value(*s, int32_type->decompose(ck));
+        };
+        auto make_row = [&] (int32_t ck, api::timestamp_type ts, const partition_key& key) {
+            mutation m(s, key);
+            m.set_clustered_cell(make_ck(ck), bytes("v"), data_value(int32_t(1)), ts);
+            return m;
+        };
+        auto make_row_of_pk = [&] (int32_t ck, api::timestamp_type ts) {
+            return make_row(ck, ts, pk);
+        };
+
+        // The compacted sstable: a GC-eligible tombstone over ck=0, and live rows, so that the
+        // sstable is not fully expired and the tombstone goes through the purge check.
+        auto input_mut = make_row_of_pk(1, 3000);
+        input_mut.partition().apply_delete(*s, make_ck(0), tombstone(2000, gc_clock::now() - std::chrono::hours(1)));
+        const auto first_mut = make_row(1, 3000, first_pk);
+        // In the snapshot but not compacted, with nothing the tombstone shadows.
+        auto snapshot_sst = make_sstable_containing(sst_gen, {make_row_of_pk(2, 3000)}).get();
+        // Not in the snapshot, e.g. flushed after it was taken.
+        auto fresh_sst = make_sstable_containing(sst_gen, {make_row_of_pk(3, 3000)}).get();
+        // What another compaction rewrote the removed sstables into: a row the tombstone shadows.
+        auto rewritten_sst = make_sstable_containing(sst_gen, {make_row_of_pk(0, 1000)}).get();
+
+        auto tombstone_purged = [&] (compaction::tombstone_gc_scope gc_scope, std::vector<shared_sstable> removed) {
+            auto input_sst = make_sstable_containing(sst_gen, {first_mut, input_mut}).get();
+            auto cf = env.make_table_for_tests(s);
+            auto stop_cf = deferred_stop(cf);
+            column_family_test(cf).add_sstable(input_sst).get();
+            column_family_test(cf).add_sstable(snapshot_sst).get();
+            auto& table_s = cf.as_compaction_group_view();
+
+            auto descriptor = compaction::compaction_descriptor({input_sst});
+            descriptor.gc_scope = gc_scope;
+            descriptor.gc_state = table_s.get_tombstone_gc_state();
+            descriptor.enable_garbage_collection(*table_s.main_sstable_set().get());
+            descriptor.creator = [&] (shard_id) { return sst_gen(); };
+            descriptor.replacer = sstables::replacer_fn_no_op();
+
+            compaction::compaction_result result;
+            run_compaction_task(env, descriptor.run_identifier, table_s, [&] (compaction::compaction_data& cdata) {
+                // Queued by the other compaction's replacer; applied before the first partition.
+                cdata.pending_replacements.push_back({std::move(removed), {rewritten_sst}});
+                return do_with(compaction::compaction_progress_monitor{}, [&] (compaction::compaction_progress_monitor& progress_monitor) {
+                    return ::compaction::compact_sstables(std::move(descriptor), cdata, table_s, progress_monitor).then([&] (compaction::compaction_result res) {
+                        result = std::move(res);
+                    });
+                });
+            }).get();
+
+            BOOST_REQUIRE_EQUAL(result.new_sstables.size(), 1);
+            auto reader = sstable_reader(result.new_sstables.front(), s, env.make_reader_permit());
+            auto close_reader = deferred_close(reader);
+            BOOST_REQUIRE(read_mutation_from_mutation_reader(reader).get());
+            auto m = read_mutation_from_mutation_reader(reader).get();
+            BOOST_REQUIRE(m);
+            BOOST_REQUIRE(m->key().equal(*s, pk));
+            return m->partition().tombstone_for_row(*s, make_ck(0)).tomb() == tombstone();
+        };
+
+        // None of the removed sstables is in the snapshot: the output is not consulted.
+        BOOST_REQUIRE(tombstone_purged(compaction::tombstone_gc_scope::skip_memtable, {fresh_sst}));
+        // One of them is: the output holds data of the snapshot and must be consulted.
+        BOOST_REQUIRE(!tombstone_purged(compaction::tombstone_gc_scope::skip_memtable, {fresh_sst, snapshot_sst}));
+        // Without a narrowed scope, the output is consulted regardless.
+        BOOST_REQUIRE(!tombstone_purged(compaction::tombstone_gc_scope::all, {fresh_sst}));
+    });
+}
+
 SEASTAR_TEST_CASE(mv_tombstone_purge_s3_test, *boost::unit_test::precondition(tests::has_scylla_test_env)
         *seastar::testing::async_fixture<s3_fixture>()) {
     return test_env::do_with_async([](test_env& env) { mv_tombstone_purge(env).get(); }, test_env_config{.storage = make_test_object_storage_options("S3")});
