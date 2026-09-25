@@ -34,6 +34,13 @@ bool operator==(const cql3::raw_value_view& a, const cql3::raw_value_view& b) {
 
 } // namespace cql3
 
+static memory_data_sink_buffers write_message_to_buffers(cql_transport::response& res, uint8_t version, cql_transport::cql_compression compression, size_t compression_threshold) {
+    memory_data_sink_buffers buffers;
+    output_stream<char> out(data_sink(std::make_unique<memory_data_sink>(buffers)));
+    res.write_message(out, version, compression, compression_threshold, deleter()).get();
+    return buffers;
+}
+
 SEASTAR_THREAD_TEST_CASE(test_response_request_reader) {
     auto stream_id = tests::random::get_int<int16_t>();
     auto opcode = tests::random::get_int<uint8_t>(uint8_t(cql_transport::cql_binary_opcode::AUTH_SUCCESS));
@@ -93,11 +100,7 @@ SEASTAR_THREAD_TEST_CASE(test_response_request_reader) {
     res.serialize({sc::change_type::CREATED, sc::target_type::FUNCTION, "foo", "bar", "zed"}, version);
     res.serialize({sc::change_type::CREATED, sc::target_type::AGGREGATE, "foo", "bar", "zed"}, version);
 
-    memory_data_sink_buffers buffers;
-    {
-        output_stream<char> out(data_sink(std::make_unique<memory_data_sink>(buffers)));
-        res.write_message(out, version, cql_transport::cql_compression::none, deleter()).get();
-    }
+    auto buffers = write_message_to_buffers(res, version, cql_transport::cql_compression::none, 0);
     auto total_length = buffers.size();
     auto fbufs = fragmented_temporary_buffer(buffers.buffers() | std::views::as_rvalue | std::ranges::to<std::vector>(), total_length);
 
@@ -166,6 +169,52 @@ SEASTAR_THREAD_TEST_CASE(test_response_request_reader) {
     BOOST_CHECK_EQUAL(req.read_string().value(), "zed");
 }
 
+// Reflects the response as written to the wire: (frame flags, frame body).
+static std::pair<uint8_t, bytes> write_response_frame(cql_transport::response& res, cql_transport::cql_compression compression, size_t compression_threshold) {
+    auto buffers = write_message_to_buffers(res, 4, compression, compression_threshold);
+    bytes frame(bytes::initialized_later(), buffers.size());
+    size_t off = 0;
+    for (auto& buf : buffers.buffers()) {
+        std::copy_n(buf.get(), buf.size(), reinterpret_cast<char*>(frame.data()) + off);
+        off += buf.size();
+    }
+    BOOST_REQUIRE_GE(frame.size(), 9);
+    return {uint8_t(frame[1]), frame.substr(9)};
+}
+
+static cql_transport::response make_response_with_body(size_t size) {
+    auto res = cql_transport::response(0, cql_transport::cql_binary_opcode::RESULT, tracing::trace_state_ptr());
+    for (size_t i = 0; i < size / 8; ++i) {
+        res.write_long(0x0101010101010101);
+    }
+    return res;
+}
+
+SEASTAR_THREAD_TEST_CASE(test_response_compression_threshold) {
+    constexpr size_t threshold = 1024;
+    constexpr uint8_t compression_flag = 0x01;
+
+    // Body below the threshold: sent uncompressed, no compression flag.
+    auto small = make_response_with_body(512);
+    auto [flags, body] = write_response_frame(small, cql_transport::cql_compression::lz4, threshold);
+    BOOST_CHECK(!(flags & compression_flag));
+    BOOST_CHECK_EQUAL(body.size(), 512);
+
+    // Body at/above the threshold: compressed, flag set, 4-byte length prefix.
+    auto large = make_response_with_body(2048);
+    std::tie(flags, body) = write_response_frame(large, cql_transport::cql_compression::lz4, threshold);
+    BOOST_CHECK(flags & compression_flag);
+    BOOST_REQUIRE_GE(body.size(), 4);
+    uint32_t uncompressed_len = (uint8_t(body[0]) << 24) | (uint8_t(body[1]) << 16) | (uint8_t(body[2]) << 8) | uint8_t(body[3]);
+    BOOST_CHECK_EQUAL(uncompressed_len, 2048);
+    BOOST_CHECK_LT(body.size(), 2048); // repetitive content must shrink
+
+    // Threshold 0 compresses everything.
+    auto small2 = make_response_with_body(512);
+    std::tie(flags, body) = write_response_frame(small2, cql_transport::cql_compression::lz4, 0);
+    BOOST_CHECK(flags & compression_flag);
+}
+
 SEASTAR_THREAD_TEST_CASE(test_response_metadata_changed_for_empty_request_metadata_id) {
     auto col = make_lw_shared<cql3::column_specification>(
             "ks", "cf", ::make_shared<cql3::column_identifier>("v", true), utf8_type);
@@ -181,11 +230,7 @@ SEASTAR_THREAD_TEST_CASE(test_response_metadata_changed_for_empty_request_metada
             cql3::cql_metadata_id_type(bytes_view(dummy_request_bytes)),
             cql3::cql_metadata_id_type(bytes_view(expected_metadata_id))), true);
 
-    memory_data_sink_buffers buffers;
-    {
-        output_stream<char> out(data_sink(std::make_unique<memory_data_sink>(buffers)));
-        res.write_message(out, 4, cql_transport::cql_compression::none, deleter()).get();
-    }
+    auto buffers = write_message_to_buffers(res, 4, cql_transport::cql_compression::none, 0);
     auto total_length = buffers.size();
     auto fbufs = fragmented_temporary_buffer(buffers.buffers() | std::views::as_rvalue | std::ranges::to<std::vector>(), total_length);
 
