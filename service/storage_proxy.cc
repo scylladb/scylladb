@@ -1220,7 +1220,8 @@ private:
         }
 
         // Wait for the topology request to complete
-        sstring error = co_await _topology_state_machine.wait_for_request_completion(_sys_ks.local(), global_request_id, true);
+        sstring error = co_await _topology_state_machine.wait_for_request_completion(_sys_ks.local(),
+                _group0_client, _group0_as, global_request_id, true);
         if (!error.empty()) {
             throw std::runtime_error(error);
         }

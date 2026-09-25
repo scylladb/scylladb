@@ -275,12 +275,21 @@ validate_removing_node(replica::database& db, locator::host_id host_id) {
     return node_validation_success {};
 }
 
-future<sstring> topology_state_machine::wait_for_request_completion(db::system_keyspace& sys_ks, utils::UUID id, bool require_entry) {
+future<sstring> topology_state_machine::wait_for_request_completion(db::system_keyspace& sys_ks,
+        raft_group0_client& group0_client, abort_source& as, utils::UUID id, bool require_entry) {
     tsmlogger.debug("Start waiting for topology request completion (request id {})", id);
     while (true) {
         auto c = reload_count;
         auto [done, error] = co_await sys_ks.get_topology_request_state(id, require_entry);
         if (done) {
+            // The group0 command that marks the request done also carries its effects.
+            // Applying it writes the mutations first and rebuilds the in-memory state
+            // only afterwards, so the flag read above can already be visible while the
+            // schema and topology state still describe the request as outstanding. The
+            // apply holds the read/apply mutex across both steps, so taking the mutex
+            // here waits for it to finish and keeps callers from acting on stale state.
+            auto units = co_await group0_client.hold_read_apply_mutex(as);
+            units.return_all();
             tsmlogger.debug("Request with id {} is completed with status: {}", id, error.empty() ? sstring("success") : error);
             co_return error;
         }
