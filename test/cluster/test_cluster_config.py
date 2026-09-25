@@ -193,13 +193,6 @@ async def test_keyspace_config_survives_vnodes_to_tablets_migration(manager: Scy
         "keyspace-scope cluster-config override was lost by tablets migration finalization"
 
 
-@pytest.mark.skip_bug(
-    link="https://scylladb.atlassian.net/browse/SCYLLADB-3818",
-    reason="An audited statement run just before a node is stopped for the rolling upgrade "
-           "leaves a write response handler that never expires, pinning a stale "
-           "token_metadata version and deadlocking barrier_and_drain, so the node added at "
-           "the end never leaves bootstrap",
-)
 @pytest.mark.asyncio
 async def test_mixed_version_upgrade_with_old_binary(
     manager: ScyllaClusterManager, scylla_binary: Path, scylla_2026_1: ScyllaVersionDescription,
