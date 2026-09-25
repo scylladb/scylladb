@@ -18,7 +18,6 @@
 #include "bytes.hh"
 #include "reader_permit.hh"
 #include "utils/fragmented_temporary_buffer.hh"
-#include "utils/small_vector.hh"
 #include "exceptions.hh"
 
 #include <variant>
@@ -107,7 +106,7 @@ private:
     // state for READING_BYTES prestate
     size_t _read_bytes_len = 0;
     temporary_buffer<char> _read_bytes_buf; // for contiguous reading.
-    utils::small_vector<Buffer, 1> _read_bytes;
+    std::vector<Buffer> _read_bytes; // borrows the destination's vector, so no per-value allocation
     temporary_buffer<char>* _read_bytes_where_contiguous; // which buffer to set, _key, _val, _cell_path or _pk?
     FragmentedBuffer* _read_bytes_where;
 
@@ -253,6 +252,10 @@ public:
             return read_status::ready;
         } else {
             // copy what we have so far, read the rest later
+            _read_bytes = std::move(where).release();
+            // release() only moves the fragments out; leave "where" in a well-defined
+            // empty state rather than with fragments gone but the old size_bytes still set.
+            where = FragmentedBuffer();
             _read_bytes.clear();
             _read_bytes.push_back(data.share());
             _read_bytes_len = len;
@@ -443,8 +446,7 @@ public:
             data.trim_front(n);
             _pos += n;
             if (_pos == _read_bytes_len) {
-                std::vector<Buffer> fragments(std::make_move_iterator(_read_bytes.begin()), std::make_move_iterator(_read_bytes.end()));
-                *_read_bytes_where = FragmentedBuffer(std::move(fragments), _read_bytes_len);
+                *_read_bytes_where = FragmentedBuffer(std::move(_read_bytes), _read_bytes_len);
                 _prestate = prestate::NONE;
                 return read_status::ready;
             }
@@ -492,7 +494,14 @@ public:
     }
 
     void reset() {
+        // A half-read value into _read_bytes_where must not be left inconsistent
+        // (fragments gone, stale size_bytes) for the next reader of that destination.
+        if (_prestate == prestate::READING_BYTES || _prestate == prestate::READING_UNSIGNED_VINT_LENGTH_BYTES
+                || _prestate == prestate::READING_UNSIGNED_VINT_LENGTH_BYTES_WITH_LEN) {
+            *_read_bytes_where = FragmentedBuffer();
+        }
         _prestate = prestate::NONE;
+        _read_bytes.clear(); // release input buffers pinned by a half-read value
     }
 
     bool active() const {
