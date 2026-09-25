@@ -13,6 +13,7 @@
 #include "raft/raft.hh"
 #include "service/raft/group0_fwd.hh"
 #include "service/raft/raft_group0.hh"
+#include "service/raft/raft_metrics.hh"
 #include "service/raft/raft_rpc.hh"
 #include "service/raft/raft_sys_table_storage.hh"
 #include "service/raft/group0_state_machine.hh"
@@ -150,8 +151,9 @@ class group0_rpc: public service::raft_rpc {
 public:
     explicit group0_rpc(direct_failure_detector::failure_detector& direct_fd,
             raft_state_machine& sm, netw::messaging_service& ms,
-            shared_ptr<raft::failure_detector> raft_fd, raft::group_id gid, raft::server_id srv_id)
-        : raft_rpc(sm, ms, std::move(raft_fd), gid, srv_id)
+            shared_ptr<raft::failure_detector> raft_fd, raft::group_id gid, raft::server_id srv_id,
+            lw_shared_ptr<raft_rpc::stats> shared_stats)
+        : raft_rpc(sm, ms, std::move(raft_fd), gid, srv_id, std::move(shared_stats))
         , _direct_fd(direct_fd)
     {}
 
@@ -224,7 +226,7 @@ raft_server_for_group raft_group0::create_server_for_group0(raft::group_id gid, 
     auto state_machine = std::make_unique<group0_state_machine>(
             _client, mm, qp.proxy(), ss, _gossiper, _feat, enable_sm_immediately);
     auto& state_machine_ref = *state_machine;
-    auto rpc = std::make_unique<group0_rpc>(_raft_gr.direct_fd(), *state_machine, _ms.local(), _raft_gr.failure_detector(), gid, my_id);
+    auto rpc = std::make_unique<group0_rpc>(_raft_gr.direct_fd(), *state_machine, _ms.local(), _raft_gr.failure_detector(), gid, my_id, _rpc_stats);
     // Keep a reference to a specific RPC class.
     auto& rpc_ref = *rpc;
     auto storage = std::make_unique<raft_sys_table_storage>(qp, gid, my_id);
@@ -246,20 +248,28 @@ raft_server_for_group raft_group0::create_server_for_group0(raft::group_id gid, 
         config.snapshot_threshold_log_size = config.max_log_size / 2;
         config.snapshot_trailing_size = config.snapshot_threshold_log_size / 2;
     };
+    auto server_stats = make_lw_shared<raft::server_stats>();
     auto server = raft::create_server(my_id, std::move(rpc), std::move(state_machine),
-            std::move(storage), _raft_gr.failure_detector(), config);
+            std::move(storage), _raft_gr.failure_detector(), config, server_stats);
 
     // initialize the corresponding timer to tick the raft server instance
     auto ticker = std::make_unique<raft_ticker_type>([srv = server.get()] { srv->tick(); });
-    return raft_server_for_group{
+    auto result = raft_server_for_group{
         .gid = std::move(gid),
         .server = std::move(server),
         .ticker = std::move(ticker),
         .rpc = rpc_ref,
         .persistence = persistence_ref,
         .state_machine = state_machine_ref,
-        .default_op_timeout_in_ms = qp.proxy().get_db().local().get_config().group0_raft_op_timeout_in_ms
+        .default_op_timeout_in_ms = qp.proxy().get_db().local().get_config().group0_raft_op_timeout_in_ms,
+        .server_stats = std::move(server_stats)
     };
+    // The group name predates the "raft_group0" one used elsewhere and is kept
+    // so that the existing dashboards keep working.
+    const auto options = raft_metrics_options{.group_name = "raft", .labels = {raft_server_id_label(my_id)}};
+    register_raft_server_stats_metrics(result.metrics, *result.server_stats, options);
+    register_raft_server_metrics(result.metrics, *result.server, options);
+    return result;
 }
 
 future<group0_info>
@@ -954,6 +964,7 @@ void raft_group0::register_metrics() {
         sm::make_gauge("status", [this] { return static_cast<uint8_t>(_status_for_monitoring); },
             sm::description("status of the raft group, 1 - normal, 2 - aborted"))
     });
+    register_raft_rpc_stats_metrics(_metrics, *_rpc_stats, raft_metrics_options{.group_name = "raft_group0"});
 }
 
 } // end of namespace service

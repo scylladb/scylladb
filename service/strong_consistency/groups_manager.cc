@@ -93,8 +93,9 @@ class groups_manager::rpc_impl: public service::raft_rpc {
 public:
     rpc_impl(raft_state_machine& sm, netw::messaging_service& ms,
              shared_ptr<raft::failure_detector> failure_detector,
-             raft::group_id gid, raft::server_id my_id)
-        : service::raft_rpc(sm, ms, std::move(failure_detector), gid, my_id)
+             raft::group_id gid, raft::server_id my_id,
+             lw_shared_ptr<raft_rpc::stats> shared_stats)
+        : service::raft_rpc(sm, ms, std::move(failure_detector), gid, my_id, std::move(shared_stats))
     {
     }
 
@@ -201,14 +202,15 @@ groups_manager::groups_manager(netw::messaging_service& ms,
 
 future<> groups_manager::start_raft_group(global_tablet_id tablet,
         raft::group_id group_id,
-        token_metadata_ptr tm)
+        token_metadata_ptr tm,
+        lw_shared_ptr<raft::server_stats> server_stats,
+        lw_shared_ptr<raft_rpc::stats> rpc_stats)
 {
     const auto my_id = to_server_id(tm->get_my_id());
     const auto this_replica = locator::tablet_replica{
         .host = tm->get_my_id(),
         .shard = this_shard_id(),
     };
-
 
     co_await utils::get_local_injector().inject("sc_start_raft_group_pause",
             utils::wait_for_message(std::chrono::minutes(1)));
@@ -237,7 +239,8 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
     auto state_machine = make_state_machine(tablet, group_id, _db, _mm, _sys_ks, *storage);
 
     auto& state_machine_ref = *state_machine;
-    auto rpc = std::make_unique<rpc_impl>(state_machine_ref, _ms, _raft_gr.failure_detector(), group_id, my_id);
+    auto rpc = std::make_unique<rpc_impl>(state_machine_ref, _ms, _raft_gr.failure_detector(), group_id, my_id,
+        std::move(rpc_stats));
     // Keep a reference to a specific RPC class.
     auto& rpc_ref = *rpc;
 
@@ -287,7 +290,7 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
         .fast_bootstrap_seed = std::hash<raft::group_id>()(group_id)
     };
     auto server = raft::create_server(my_id, std::move(rpc), std::move(state_machine),
-            std::move(storage), _raft_gr.failure_detector(), config);
+            std::move(storage), _raft_gr.failure_detector(), config, std::move(server_stats));
 
     // initialize the corresponding timer to tick the raft server instance
     auto ticker = std::make_unique<raft_ticker_type>([srv = server.get()] { srv->tick(); });
@@ -342,6 +345,10 @@ void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_
         // configuration change: abort_server() above is what terminates it.
         co_await state.config_sync.get_future();
 
+        if (state.metrics) {
+            state.metrics->remove_server(*state.server);
+            state.metrics = nullptr;
+        }
         _raft_gr.destroy_server(id);
         state.server = nullptr;
         logger.info("schedule_raft_group_deletion(): raft server for group id {} is destroyed", id);
@@ -375,6 +382,45 @@ std::optional<raft_server> groups_manager::try_acquire_server(raft_group_state& 
     }
     SCYLLA_ASSERT(state.server);
     return raft_server(state, std::move(*h));
+}
+
+static table_metrics::reporting table_metrics_reporting(const db::config& cfg) {
+    if (cfg.enable_keyspace_column_family_metrics()) {
+        return table_metrics::reporting::per_shard;
+    }
+    if (cfg.enable_node_aggregated_table_metrics()) {
+        return table_metrics::reporting::per_node;
+    }
+    return table_metrics::reporting::none;
+}
+
+table_metrics* groups_manager::get_table_metrics(table_id table) {
+    // A group0 command commits the schema change before it publishes the token
+    // metadata, but throwing out of update() aborts the node, and metrics are
+    // not worth that.
+    if (!_db.column_family_exists(table)) {
+        logger.warn("get_table_metrics(): table {} not found, its raft metrics are not reported", table);
+        return nullptr;
+    }
+    const auto s = _db.find_schema(table);
+    auto key = std::make_pair(s->ks_name(), s->cf_name());
+    if (const auto it = _table_metrics.find(key); it != _table_metrics.end()) {
+        if (it->second.table() == table) {
+            return &it->second;
+        }
+        // update() drops the metrics of the dropped tables before it gets here,
+        // so this only keeps a table re-created under the same name from
+        // registering a series colliding with the old entry's.
+        _table_metrics.erase(it);
+    }
+    return &_table_metrics.try_emplace(std::move(key), table, s->ks_name(), s->cf_name(),
+        table_metrics_reporting(_db.get_config())).first->second;
+}
+
+void groups_manager::drop_dropped_tables_metrics() {
+    std::erase_if(_table_metrics, [this] (const auto& entry) {
+        return !_db.column_family_exists(entry.second.table());
+    });
 }
 
 void groups_manager::schedule_raft_groups_deletion(bool all) {
@@ -1154,6 +1200,7 @@ void groups_manager::update(token_metadata_ptr new_tm) {
     for (auto& [id, state]: _raft_groups) {
         state.has_tablet = false;
     }
+    drop_dropped_tables_metrics();
 
     const auto this_replica = locator::tablet_replica {
         .host = new_tm->get_my_id(),
@@ -1186,14 +1233,25 @@ void groups_manager::update(token_metadata_ptr new_tm) {
             }
 
             logger.info("update(): starting raft server for tablet {}, group id {}", tablet, id);
+            auto* metrics = get_table_metrics(tablet.table);
+            // Counters nobody exports when the table has no metrics.
+            auto m = metrics ? metrics->weak_from_this() : seastar::weak_ptr<table_metrics>();
+            auto server_stats = metrics ? metrics->server_stats() : make_lw_shared<raft::server_stats>();
+            auto rpc_stats = metrics ? metrics->rpc_stats() : make_lw_shared<raft_rpc::stats>();
             state.gate = make_lw_shared<gate>();
             // Still linked if the previous start hasn't finished yet.
             if (!state.is_linked()) {
                 _starting_groups.push_back(state);
             }
-            chain_control_op(state, id, [&state, this, tablet, id, new_tm, g = state.gate] () mutable -> future<> {
-                co_await start_raft_group(tablet, id, std::move(new_tm));
+            chain_control_op(state, id, [&state, this, tablet, id, new_tm, g = state.gate,
+                    m = std::move(m), server_stats = std::move(server_stats),
+                    rpc_stats = std::move(rpc_stats)] () mutable -> future<> {
+                co_await start_raft_group(tablet, id, std::move(new_tm), std::move(server_stats), std::move(rpc_stats));
                 state.server = &_raft_gr.get_server(id);
+                state.metrics = std::move(m);
+                if (state.metrics) {
+                    state.metrics->add_server(*state.server);
+                }
                 state.leader_info_updater = leader_info_updater(state, tablet, id);
 
                 // We want to make sure the server is ready to serve requests before

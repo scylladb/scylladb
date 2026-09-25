@@ -16,6 +16,7 @@ target_sources(service
     qos/service_level_controller.cc
     qos/raft_service_level_distributed_data_accessor.cc
     strong_consistency/groups_manager.cc
+    strong_consistency/table_metrics.cc
     strong_consistency/state_machine.cc
     strong_consistency/coordinator.cc
     strong_consistency/tablet_replica_sets.cc
@@ -29,6 +30,7 @@ target_sources(service
     raft/raft_group0.cc
     raft/raft_group0_client.cc
     raft/raft_group_registry.cc
+    raft/raft_metrics.cc
     raft/raft_rpc.cc
     raft/raft_sys_table_storage.cc
     session.cc

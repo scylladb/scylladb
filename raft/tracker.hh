@@ -79,7 +79,7 @@ public:
     }
 
     // Return true if a new replication record can be sent to the follower.
-    bool can_send_to();
+    bool can_send_to() const;
 
     follower_progress(server_id id_arg, index_t next_idx_arg)
         : id(id_arg), next_idx(next_idx_arg)

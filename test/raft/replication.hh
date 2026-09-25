@@ -129,6 +129,8 @@ struct initial_state {
     raft::snapshot_descriptor snapshot;
     snapshot_value snp_value;
     raft::server::configuration server_config = raft::server::configuration{.append_request_threshold = 200};
+    // Null gives the server counters of its own, see raft::create_server().
+    seastar::lw_shared_ptr<raft::server_stats> stats;
 };
 
 // For verbosity in test declaration (i.e. node_id{x})
@@ -278,6 +280,8 @@ struct test_case {
     const std::vector<struct initial_log> initial_states;
     const std::vector<struct initial_snapshot> initial_snapshots;
     const std::vector<raft::server::configuration> config;
+    // Shared by every server of the cluster when set.
+    const seastar::lw_shared_ptr<raft::server_stats> stats;
     const std::vector<update> updates;
     const bool commutative_hash = false;
     const bool verify_persisted_snapshots = true;
@@ -828,7 +832,7 @@ typename raft_cluster<Clock>::test_server raft_cluster<Clock>::create_server(siz
     auto fd = seastar::make_shared<failure_detector>(uuid, _connected.get());
 
     auto raft = raft::create_server(uuid, std::move(mrpc), std::move(sm), std::move(mpersistence),
-        std::move(fd), state.server_config);
+        std::move(fd), state.server_config, state.stats);
 
     return {
         std::move(raft),
@@ -1472,6 +1476,7 @@ std::vector<initial_state> raft_cluster<Clock>::get_states(test_case test, bool 
         } else {
             states[i].server_config = { .enable_prevoting = prevote };
         }
+        states[i].stats = test.stats;
     }
     return states;
 }

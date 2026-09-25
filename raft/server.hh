@@ -9,6 +9,7 @@
 #include <seastar/core/abort_source.hh>
 #include "raft.hh"
 #include <functional>
+#include <seastar/core/shared_ptr.hh>
 
 namespace raft {
 
@@ -275,10 +276,9 @@ public:
     //     Thrown if the stepdown process is already in progress.
     virtual future<> stepdown(logical_clock::duration timeout, server_id target = {}) = 0;
 
-    // Register metrics for this server. Metric are global but their names
-    // depend on the server's ID, so it is possible to register metrics
-    // of two servers iff their IDs are different.
-    virtual void register_metrics() = 0;
+    // All zeros before the server is started, so that it can be registered
+    // as a source of metrics as soon as it is created.
+    virtual server_status get_status() const = 0;
 
     // Returns true if this servers thinks that it is the leader.
     // The information is only relevant for the current_term() only
@@ -352,9 +352,12 @@ public:
     virtual size_t max_command_size() const = 0;
 };
 
+// A null `stats` gives the server counters of its own; passing the same
+// instance to several servers accumulates their counters together.
 std::unique_ptr<server> create_server(server_id uuid, std::unique_ptr<rpc> rpc,
         std::unique_ptr<state_machine> state_machine, std::unique_ptr<persistence> persistence,
-        seastar::shared_ptr<failure_detector> failure_detector, server::configuration config);
+        seastar::shared_ptr<failure_detector> failure_detector, server::configuration config,
+        seastar::lw_shared_ptr<server_stats> stats = nullptr);
 
 } // namespace raft
 

@@ -13,8 +13,10 @@
 #include "locator/tablet_metadata_guard.hh"
 #include "message/messaging_service.hh"
 #include "service/raft/raft_group_registry.hh"
+#include "service/strong_consistency/table_metrics.hh"
 #include "cql3/query_processor.hh"
 #include "db/commitlog/raft_commitlog_replay_buffer.hh"
+#include "utils/hash.hh"
 
 #include <seastar/util/noncopyable_function.hh>
 
@@ -138,6 +140,8 @@ class groups_manager : public peering_sharded_service<groups_manager> {
         bool has_tablet = false;
         lw_shared_ptr<gate> gate = nullptr;
         raft::server* server = nullptr;
+        // Of the table of this tablet; expires when the table is dropped.
+        seastar::weak_ptr<table_metrics> metrics;
         shared_future<> server_control_op = make_ready_future<>();
 
         // Populated only when this node thinks it's a tablet raft group leader.
@@ -176,6 +180,10 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     gms::gossiper& _gossiper;
     db::raft_commitlog_replay_buffer& _raft_replay_buffer;
     std::unordered_map<raft::group_id, raft_group_state> _raft_groups = {};
+    // Keyed by keyspace and table name, which is what the series are labelled
+    // with, so that two entries can never register colliding series.
+    using table_metrics_map = std::unordered_map<std::pair<sstring, sstring>, table_metrics, utils::tuple_hash>;
+    table_metrics_map _table_metrics;
     boost::intrusive::list<raft_group_state, boost::intrusive::constant_time_size<false>> _starting_groups;
     locator::token_metadata_ptr _pending_tm = nullptr;
     bool _started = false;
@@ -185,7 +193,18 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     // Should be called on the shard that hosts the Raft group
     future<> start_raft_group(locator::global_tablet_id tablet,
         raft::group_id group_id,
-        locator::token_metadata_ptr tm);
+        locator::token_metadata_ptr tm,
+        lw_shared_ptr<raft::server_stats> server_stats,
+        lw_shared_ptr<raft_rpc::stats> rpc_stats);
+
+    // Creates them if the table does not have any yet. Null when the table
+    // cannot be looked up, which leaves its raft groups unreported.
+    table_metrics* get_table_metrics(table_id table);
+
+    // Drops the metrics of the tables that no longer exist. They are kept
+    // while the table exists even after its last tablet left this shard, or
+    // the sum over the shards would go backwards.
+    void drop_dropped_tables_metrics();
 
     void schedule_raft_group_deletion(raft::group_id group_id, raft_group_state& group_state);
 

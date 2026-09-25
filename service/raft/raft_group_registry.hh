@@ -8,6 +8,7 @@
 #pragma once
 
 #include <seastar/core/future.hh>
+#include <seastar/core/metrics_registration.hh>
 #include <seastar/core/sharded.hh>
 
 #include "message/messaging_service_fwd.hh"
@@ -55,6 +56,12 @@ struct raft_server_for_group {
     raft_state_machine& state_machine;
     std::optional<seastar::shared_future<>> aborted;
     std::optional<utils::updateable_value<uint32_t>> default_op_timeout_in_ms;
+    // The counters the server accumulates into, when its creator exports them.
+    seastar::lw_shared_ptr<raft::server_stats> server_stats;
+    // Whatever the creator of the group exports about this server. Declared
+    // last, so that no gauge is evaluated once the server or its counters are
+    // gone.
+    seastar::metrics::metric_groups metrics;
 };
 
 class raft_operation_timeout_error : public std::runtime_error {

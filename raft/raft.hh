@@ -833,6 +833,76 @@ public:
     virtual bool is_alive(server_id server) = 0;
 };
 
+// Number of followers the leader cannot send entries to, by reason. Followers
+// the failure detector reports down are not counted.
+struct blocked_followers {
+    // Waiting for the reply to a probe of the follower's log.
+    size_t probe = 0;
+    // The maximal number of append requests is in flight.
+    size_t pipeline_full = 0;
+    // Waiting for a snapshot transfer to complete.
+    size_t snapshot = 0;
+};
+
+// Counters of a server. Servers given the same instance accumulate into it,
+// so a whole set of them can be exported as one metric series.
+struct server_stats {
+    uint64_t add_command = 0;
+    uint64_t add_dummy = 0;
+    uint64_t add_config = 0;
+    uint64_t append_entries_received = 0;
+    uint64_t append_entries_reply_received = 0;
+    uint64_t request_vote_received = 0;
+    uint64_t request_vote_reply_received = 0;
+    uint64_t waiters_awoken = 0;
+    uint64_t waiters_dropped = 0;
+    uint64_t append_entries_reply_sent = 0;
+    uint64_t append_entries_sent = 0;
+    uint64_t vote_request_sent = 0;
+    uint64_t vote_request_reply_sent = 0;
+    uint64_t install_snapshot_sent = 0;
+    uint64_t snapshot_reply_sent = 0;
+    uint64_t polls = 0;
+    uint64_t store_term_and_vote = 0;
+    uint64_t store_snapshot = 0;
+    uint64_t sm_load_snapshot = 0;
+    uint64_t truncate_persisted_log = 0;
+    uint64_t persisted_log_entries = 0;
+    uint64_t queue_entries_for_apply = 0;
+    uint64_t applied_entries = 0;
+    uint64_t snapshots_taken = 0;
+    uint64_t timeout_now_sent = 0;
+    uint64_t timeout_now_received = 0;
+    uint64_t read_quorum_sent = 0;
+    uint64_t read_quorum_received = 0;
+    uint64_t read_quorum_reply_sent = 0;
+    uint64_t read_quorum_reply_received = 0;
+    // Number of times adding an entry had to wait for log memory.
+    uint64_t log_limiter_waits = 0;
+};
+
+// Everything a server reports about itself on demand, read in one call so
+// that the values are consistent with each other and can be summed over
+// several servers.
+struct server_status {
+    bool is_leader = false;
+    // 0 - follower, 1 - candidate, 2 - leader.
+    size_t state = 0;
+    // Number of entries in the in-memory part of the log.
+    size_t in_memory_log_size = 0;
+    // Bytes used by the in-memory part of the log.
+    size_t log_memory_usage = 0;
+    index_t last_idx;
+    term_t last_term;
+    index_t commit_idx;
+    index_t applied_idx;
+    index_t last_snapshot_idx;
+    term_t last_snapshot_term;
+    // Number of entries waiting for the log to shrink below max_log_size.
+    size_t log_limiter_waiters = 0;
+    blocked_followers blocked;
+};
+
 } // namespace raft
 
 template <>

@@ -21,7 +21,6 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/as_future.hh>
 #include <seastar/core/pipe.hh>
-#include <seastar/core/metrics.hh>
 #include <seastar/rpc/rpc_types.hh>
 #include <absl/container/flat_hash_map.h>
 #include <seastar/core/gate.hh>
@@ -54,10 +53,6 @@ struct awaited_conf_change {
     optimized_optional<abort_source::subscription> abort;
 };
 
-static const seastar::metrics::label server_id_label("id");
-static const seastar::metrics::label log_entry_type("log_entry_type");
-static const seastar::metrics::label message_type("message_type");
-
 // Result types for do_on_leader_with_retries action lambda.
 // retry_with_leader: retry on the specified leader. If the leader is the
 //   same as current, waits for a tick to avoid tight loops (e.g. when a
@@ -79,7 +74,8 @@ class server_impl : public rpc_server, public server {
 public:
     explicit server_impl(server_id uuid, std::unique_ptr<rpc> rpc,
         std::unique_ptr<state_machine> state_machine, std::unique_ptr<persistence> persistence,
-        seastar::shared_ptr<failure_detector> failure_detector, server::configuration config);
+        seastar::shared_ptr<failure_detector> failure_detector, server::configuration config,
+        lw_shared_ptr<server_stats> stats);
 
     server_impl(server_impl&&) = delete;
 
@@ -122,7 +118,7 @@ public:
     future<> stepdown(logical_clock::duration timeout, server_id target) override;
     future<> modify_config(std::vector<config_member> add, std::vector<server_id> del, seastar::abort_source* as) override;
     future<entry_id> add_entry_on_leader(command command, seastar::abort_source* as, term_t append_in_term);
-    void register_metrics() override;
+    server_status get_status() const override;
     size_t max_command_size() const override;
 private:
     seastar::condition_variable _events;
@@ -174,38 +170,8 @@ private:
         trigger_snapshot_msg>;
     queue<applier_fiber_message> _apply_entries = queue<applier_fiber_message>(10);
 
-    struct stats {
-        uint64_t add_command = 0;
-        uint64_t add_dummy = 0;
-        uint64_t add_config = 0;
-        uint64_t append_entries_received = 0;
-        uint64_t append_entries_reply_received = 0;
-        uint64_t request_vote_received = 0;
-        uint64_t request_vote_reply_received = 0;
-        uint64_t waiters_awoken = 0;
-        uint64_t waiters_dropped = 0;
-        uint64_t append_entries_reply_sent = 0;
-        uint64_t append_entries_sent = 0;
-        uint64_t vote_request_sent = 0;
-        uint64_t vote_request_reply_sent = 0;
-        uint64_t install_snapshot_sent = 0;
-        uint64_t snapshot_reply_sent = 0;
-        uint64_t polls = 0;
-        uint64_t store_term_and_vote = 0;
-        uint64_t store_snapshot = 0;
-        uint64_t sm_load_snapshot = 0;
-        uint64_t truncate_persisted_log = 0;
-        uint64_t persisted_log_entries = 0;
-        uint64_t queue_entries_for_apply = 0;
-        uint64_t applied_entries = 0;
-        uint64_t snapshots_taken = 0;
-        uint64_t timeout_now_sent = 0;
-        uint64_t timeout_now_received = 0;
-        uint64_t read_quorum_sent = 0;
-        uint64_t read_quorum_received = 0;
-        uint64_t read_quorum_reply_sent = 0;
-        uint64_t read_quorum_reply_received = 0;
-    } _stats;
+    // Private unless the creator passed a shared instance, see create_server().
+    lw_shared_ptr<server_stats> _stats;
 
     struct op_status {
         term_t term; // term the entry was added with
@@ -308,8 +274,6 @@ private:
     future<> _applier_status = make_ready_future<>();
     future<> _io_status = make_ready_future<>();
 
-    seastar::metrics::metric_groups _metrics;
-
     // Server address set to be used by RPC module to maintain its address
     // mappings.
     // Doesn't really correspond to any configuration, neither
@@ -375,11 +339,13 @@ private:
 
 server_impl::server_impl(server_id uuid, std::unique_ptr<rpc> rpc,
         std::unique_ptr<state_machine> state_machine, std::unique_ptr<persistence> persistence,
-        seastar::shared_ptr<failure_detector> failure_detector, server::configuration config) :
+        seastar::shared_ptr<failure_detector> failure_detector, server::configuration config,
+        lw_shared_ptr<server_stats> stats) :
                     _rpc(std::move(rpc)), _state_machine(std::move(state_machine)),
                     _persistence(std::move(persistence)), _failure_detector(failure_detector),
                     _id(uuid), _tag(config.tag.empty() ? format("{}", uuid) : std::move(config.tag)),
-                    _config(config), _do_on_leader_gate("raft::server_impl::do_on_leader_gate")
+                    _config(config), _stats(stats ? std::move(stats) : make_lw_shared<server_stats>()),
+                    _do_on_leader_gate("raft::server_impl::do_on_leader_gate")
 {
     set_rpc_server(_rpc.get());
     if (_config.snapshot_threshold_log_size > _config.max_log_size) {
@@ -587,7 +553,7 @@ future<> server_impl::wait_for_entry(entry_id eid, wait_type type, seastar::abor
 
             auto term = _fsm->log_term_for(eid.idx);
 
-            _stats.waiters_awoken++;
+            _stats->waiters_awoken++;
 
             if (!term) {
                 // The entry at index `eid.idx` got truncated away.
@@ -649,7 +615,7 @@ future<> server_impl::wait_for_entry(entry_id eid, wait_type type, seastar::abor
                 // bigger than ours, our entry must have been
                 // already dropped (see 3.6.2 "Committing entries
                 // from previous terms").
-                _stats.waiters_awoken++;
+                _stats->waiters_awoken++;
                 throw dropped_entry();
             } else {
                 // Our entry might still get committed if another
@@ -658,7 +624,7 @@ future<> server_impl::wait_for_entry(entry_id eid, wait_type type, seastar::abor
                 // index and see which one wins, keep waiting for
                 // an entry with a bigger term and hope that the
                 // newly elected leader will have a newer log tail.
-                _stats.waiters_dropped++;
+                _stats->waiters_dropped++;
                 throw commit_status_unknown();
             }
         }
@@ -669,10 +635,10 @@ future<> server_impl::wait_for_entry(entry_id eid, wait_type type, seastar::abor
         // applies for choosing the right exception status as earlier.
         if (term_of_commit_idx > prev_wait.term) {
             prev_wait.done.set_exception(dropped_entry{});
-            _stats.waiters_awoken++;
+            _stats->waiters_awoken++;
         } else {
             prev_wait.done.set_exception(commit_status_unknown{});
-            _stats.waiters_dropped++;
+            _stats->waiters_dropped++;
         }
     }
 
@@ -704,7 +670,8 @@ future<entry_id> server_impl::add_entry_on_leader(command cmd, seastar::abort_so
     // Wait for sufficient memory to become available
     fsm::memory_permit memory_permit;
     try {
-        memory_permit = co_await _fsm->wait_for_memory_permit(as, log::memory_usage_of(cmd, _config.max_command_size));
+        memory_permit = co_await _fsm->wait_for_memory_permit(as,
+                log::memory_usage_of(cmd, _config.max_command_size), *_stats);
     } catch (semaphore_aborted&) {
         throw request_aborted(
             format("Semaphore aborted while waiting for memory availability for adding entry on leader in term: {}, on server: {}, current term: {}",
@@ -795,7 +762,7 @@ future<> server_impl::add_entry(command command, wait_type type, seastar::abort_
                      _tag, command.size(), _config.max_command_size);
         throw command_is_too_big_error(command.size(), _config.max_command_size);
     }
-    _stats.add_command++;
+    _stats->add_command++;
 
     check_not_aborted();
 
@@ -985,37 +952,37 @@ future<> server_impl::modify_config(std::vector<config_member> add, std::vector<
 }
 
 void server_impl::append_entries(server_id from, append_request append_request) {
-    _stats.append_entries_received++;
+    _stats->append_entries_received++;
     _fsm->step(from, std::move(append_request));
 }
 
 void server_impl::append_entries_reply(server_id from, append_reply reply) {
-    _stats.append_entries_reply_received++;
+    _stats->append_entries_reply_received++;
     _fsm->step(from, std::move(reply));
 }
 
 void server_impl::request_vote(server_id from, vote_request vote_request) {
-    _stats.request_vote_received++;
+    _stats->request_vote_received++;
     _fsm->step(from, std::move(vote_request));
 }
 
 void server_impl::request_vote_reply(server_id from, vote_reply vote_reply) {
-    _stats.request_vote_reply_received++;
+    _stats->request_vote_reply_received++;
     _fsm->step(from, std::move(vote_reply));
 }
 
 void server_impl::timeout_now_request(server_id from, timeout_now timeout_now) {
-    _stats.timeout_now_received++;
+    _stats->timeout_now_received++;
     _fsm->step(from, std::move(timeout_now));
 }
 
 void server_impl::read_quorum_request(server_id from, struct read_quorum read_quorum) {
-    _stats.read_quorum_received++;
+    _stats->read_quorum_received++;
     _fsm->step(from, std::move(read_quorum));
 }
 
 void server_impl::read_quorum_reply(server_id from, struct read_quorum_reply read_quorum_reply) {
-    _stats.read_quorum_reply_received++;
+    _stats->read_quorum_reply_received++;
     _fsm->step(from, std::move(read_quorum_reply));
 }
 
@@ -1043,7 +1010,7 @@ void server_impl::notify_waiters(waiter_queue& waiters,
             // was a leadership change and the entry was replaced.
             status.done.set_exception(dropped_entry());
         }
-        _stats.waiters_awoken++;
+        _stats->waiters_awoken++;
     }
     // Drop all waiters with smaller term that last one been committed
     // since there is no way they will be committed any longer (terms in
@@ -1053,7 +1020,7 @@ void server_impl::notify_waiters(waiter_queue& waiters,
         if (status->term < last_committed_term) {
             status->done.set_exception(dropped_entry());
             waiters.extract(waiters.base_index());
-            _stats.waiters_awoken++;
+            _stats->waiters_awoken++;
         } else {
             break;
         }
@@ -1071,10 +1038,10 @@ void server_impl::drop_waiters(waiter_queue& waiters, const snapshot_descriptor*
             // entry_idx <= snapshot index and the entry's term matches the snapshot term.
             // By the Log Matching Property the entry was committed and included in the snapshot.
             status.done.set_value();
-            _stats.waiters_awoken++;
+            _stats->waiters_awoken++;
         } else {
             status.done.set_exception(commit_status_unknown());
-            _stats.waiters_dropped++;
+            _stats->waiters_dropped++;
         }
     }
 }
@@ -1096,10 +1063,10 @@ void server_impl::send_message(server_id id, Message m) {
     std::visit([this, id] (auto&& m) {
         using T = std::decay_t<decltype(m)>;
         if constexpr (std::is_same_v<T, append_reply>) {
-            _stats.append_entries_reply_sent++;
+            _stats->append_entries_reply_sent++;
             _rpc->send_append_entries_reply(id, m);
         } else if constexpr (std::is_same_v<T, append_request>) {
-            _stats.append_entries_sent++;
+            _stats->append_entries_sent++;
              _append_request_status[id].count++;
              _append_request_status[id].f = _append_request_status[id].f.then([this, cm = std::move(m), cid = id] () noexcept -> future<> {
                 // We need to copy everything from the capture because it cannot be accessed after co-routine yields.
@@ -1117,26 +1084,26 @@ void server_impl::send_message(server_id id, Message m) {
                 }
             });
         } else if constexpr (std::is_same_v<T, vote_request>) {
-            _stats.vote_request_sent++;
+            _stats->vote_request_sent++;
             _rpc->send_vote_request(id, m);
         } else if constexpr (std::is_same_v<T, vote_reply>) {
-            _stats.vote_request_reply_sent++;
+            _stats->vote_request_reply_sent++;
             _rpc->send_vote_reply(id, m);
         } else if constexpr (std::is_same_v<T, timeout_now>) {
-            _stats.timeout_now_sent++;
+            _stats->timeout_now_sent++;
             _rpc->send_timeout_now(id, m);
         } else if constexpr (std::is_same_v<T, struct read_quorum>) {
-            _stats.read_quorum_sent++;
+            _stats->read_quorum_sent++;
             _rpc->send_read_quorum(id, std::move(m));
         } else if constexpr (std::is_same_v<T, struct read_quorum_reply>) {
-            _stats.read_quorum_reply_sent++;
+            _stats->read_quorum_reply_sent++;
             _rpc->send_read_quorum_reply(id, std::move(m));
         } else if constexpr (std::is_same_v<T, install_snapshot>) {
-            _stats.install_snapshot_sent++;
+            _stats->install_snapshot_sent++;
             // Send in the background.
             send_snapshot(id, std::move(m));
         } else if constexpr (std::is_same_v<T, snapshot_reply>) {
-            _stats.snapshot_reply_sent++;
+            _stats->snapshot_reply_sent++;
             SCYLLA_ASSERT(_snapshot_application_done.contains(id));
             // Send a reply to install_snapshot after
             // snapshot application is done.
@@ -1175,7 +1142,7 @@ future<> server_impl::process_fsm_output(index_t& last_stable, fsm_output&& batc
         // term, but it's safe to update both in this
         // case.
         co_await _persistence->store_term_and_vote(batch.term_and_vote->first, batch.term_and_vote->second);
-        _stats.store_term_and_vote++;
+        _stats->store_term_and_vote++;
 
         // When the term advances, any in-flight snapshot transfers
         // belong to an outdated term: the progress tracker has been
@@ -1197,7 +1164,7 @@ future<> server_impl::process_fsm_output(index_t& last_stable, fsm_output&& batc
         co_await _persistence->store_snapshot_descriptor(snp, preserve_log_entries);
         _snapshot_desc_idx = snp.idx;
         _snapshot_desc_idx_changed.broadcast();
-        _stats.store_snapshot++;
+        _stats->store_snapshot++;
         // If this is locally generated snapshot there is no need to
         // load it.
         if (!is_local) {
@@ -1222,7 +1189,7 @@ future<> server_impl::process_fsm_output(index_t& last_stable, fsm_output&& batc
 
         if (last_stable >= entries[0]->idx) {
             co_await _persistence->truncate_log(entries[0]->idx);
-            _stats.truncate_persisted_log++;
+            _stats->truncate_persisted_log++;
         }
 
         utils::get_local_injector().inject("store_log_entries/test-failure",
@@ -1233,7 +1200,7 @@ future<> server_impl::process_fsm_output(index_t& last_stable, fsm_output&& batc
         co_await _persistence->store_log_entries(entries);
 
         last_stable = (*entries.crbegin())->idx;
-        _stats.persisted_log_entries += entries.size();
+        _stats->persisted_log_entries += entries.size();
     }
 
     // Update RPC server address mappings. Add servers which are joining
@@ -1293,7 +1260,7 @@ future<> server_impl::process_fsm_output(index_t& last_stable, fsm_output&& batc
         // it from a quorum. So the commit notification above does not need to
         // wait for this write.
         co_await _persistence->store_commit_idx(batch.committed.back()->idx);
-        _stats.queue_entries_for_apply += batch.committed.size();
+        _stats->queue_entries_for_apply += batch.committed.size();
         co_await _apply_entries.push_eventually(std::move(batch.committed));
     }
 
@@ -1363,7 +1330,7 @@ future<> server_impl::io_fiber(index_t last_stable) {
                 co_await seastar::sleep(std::chrono::milliseconds(100));
             }
 
-            _stats.polls++;
+            _stats->polls++;
 
             if (has_fsm_output) {
                 auto batch = _fsm->get_output();
@@ -1489,7 +1456,7 @@ future<> server_impl::applier_fiber() {
                     } catch (...) {
                         std::throw_with_nested(raft::state_machine_error{});
                     }
-                    _stats.applied_entries += size;
+                    _stats->applied_entries += size;
                 }
 
                 // Use error injection to override the snapshot thresholds.
@@ -1527,7 +1494,7 @@ future<> server_impl::applier_fiber() {
                         logger.trace("[{}] applier fiber: while taking snapshot term={} idx={} id={},"
                                 " fsm received a later snapshot at idx={}", _tag, snp.term, snp.idx, snp.id, _fsm->log_last_snapshot_idx());
                     }
-                    _stats.snapshots_taken++;
+                    _stats->snapshots_taken++;
                 }
             },
             [this] (snapshot_descriptor& snp) -> future<> {
@@ -1549,7 +1516,7 @@ future<> server_impl::applier_fiber() {
                 drop_waiters(_awaited_applies, &snp);
                 _applied_idx = snp.idx;
                 _applied_index_changed.broadcast();
-                _stats.sm_load_snapshot++;
+                _stats->sm_load_snapshot++;
             },
             [this] (const removed_from_config&) -> future<> {
                 // If the node is no longer part of a config and no longer the leader
@@ -1575,7 +1542,7 @@ future<> server_impl::applier_fiber() {
                     logger.trace("[{}] while taking snapshot term={} idx={} id={} due to request,"
                            " fsm received a later snapshot at idx={}", _tag, snp.term, snp.idx, snp.id, _fsm->log_last_snapshot_idx());
                 }
-                _stats.snapshots_taken++;
+                _stats->snapshots_taken++;
             }
             ), v);
 
@@ -1830,7 +1797,7 @@ future<> server_impl::set_configuration(config_member_set c_new, seastar::abort_
         co_return;
     }
 
-    _stats.add_config++;
+    _stats->add_config++;
 
     if (_non_joint_conf_commit_promise) {
         logger.warn("[{}] set_configuration: a configuration change is still in progress (at index: {}, config: {})",
@@ -1880,92 +1847,13 @@ server_impl::get_configuration() const {
     return _fsm->get_configuration();
 }
 
-void server_impl::register_metrics() {
-    namespace sm = seastar::metrics;
-    _metrics.add_group("raft", {
-        sm::make_total_operations("add_entries", _stats.add_command,
-             sm::description("Number of entries added on this node, the log_entry_type label can be command, dummy or config"), {server_id_label(_id), log_entry_type("command")}),
-        sm::make_total_operations("add_entries", _stats.add_dummy,
-             sm::description("Number of entries added on this node, the log_entry_type label can be command, dummy or config"), {server_id_label(_id), log_entry_type("dummy")}),
-        sm::make_total_operations("add_entries", _stats.add_config,
-             sm::description("Number of entries added on this node, the log_entry_type label can be command, dummy or config"), {server_id_label(_id), log_entry_type("config")}),
-
-        sm::make_total_operations("messages_received", _stats.append_entries_received,
-             sm::description("Number of messages received, the message_type determines the type of message"), {server_id_label(_id), message_type("append_entries")}),
-        sm::make_total_operations("messages_received", _stats.append_entries_reply_received,
-             sm::description("Number of messages received, the message_type determines the type of message"), {server_id_label(_id), message_type("append_entries_reply")}),
-        sm::make_total_operations("messages_received", _stats.request_vote_received,
-             sm::description("Number of messages received, the message_type determines the type of message"), {server_id_label(_id), message_type("request_vote")}),
-        sm::make_total_operations("messages_received", _stats.request_vote_reply_received,
-             sm::description("Number of messages received, the message_type determines the type of message"), {server_id_label(_id), message_type("request_vote_reply")}),
-        sm::make_total_operations("messages_received", _stats.timeout_now_received,
-             sm::description("Number of messages received, the message_type determines the type of message"), {server_id_label(_id), message_type("timeout_now")}),
-        sm::make_total_operations("messages_received", _stats.read_quorum_received,
-             sm::description("Number of messages received, the message_type determines the type of message"), {server_id_label(_id), message_type("read_quorum")}),
-        sm::make_total_operations("messages_received", _stats.read_quorum_reply_received,
-             sm::description("Number of messages received, the message_type determines the type of message"), {server_id_label(_id), message_type("read_quorum_reply")}),
-
-        sm::make_total_operations("messages_sent", _stats.append_entries_sent,
-             sm::description("Number of messages sent, the message_type determines the type of message"), {server_id_label(_id), message_type("append_entries")}),
-        sm::make_total_operations("messages_sent", _stats.append_entries_reply_sent,
-             sm::description("Number of messages sent, the message_type determines the type of message"), {server_id_label(_id), message_type("append_entries_reply")}),
-        sm::make_total_operations("messages_sent", _stats.vote_request_sent,
-             sm::description("Number of messages sent, the message_type determines the type of message"), {server_id_label(_id), message_type("request_vote")}),
-        sm::make_total_operations("messages_sent", _stats.vote_request_reply_sent,
-             sm::description("Number of messages sent, the message_type determines the type of message"), {server_id_label(_id), message_type("request_vote_reply")}),
-        sm::make_total_operations("messages_sent", _stats.install_snapshot_sent,
-             sm::description("Number of messages sent, the message_type determines the type of message"), {server_id_label(_id), message_type("install_snapshot")}),
-        sm::make_total_operations("messages_sent", _stats.snapshot_reply_sent,
-             sm::description("Number of messages sent, the message_type determines the type of message"), {server_id_label(_id), message_type("snapshot_reply")}),
-        sm::make_total_operations("messages_sent", _stats.timeout_now_sent,
-             sm::description("Number of messages sent, the message_type determines the type of message"), {server_id_label(_id), message_type("timeout_now")}),
-        sm::make_total_operations("messages_sent", _stats.read_quorum_sent,
-             sm::description("Number of messages sent, the message_type determines the type of message"), {server_id_label(_id), message_type("read_quorum")}),
-        sm::make_total_operations("messages_sent", _stats.read_quorum_reply_sent,
-             sm::description("Number of messages sent, the message_type determines the type of message"), {server_id_label(_id), message_type("read_quorum_reply")}),
-
-        sm::make_total_operations("waiter_awoken", _stats.waiters_awoken,
-             sm::description("Number of waiters that got result back"), {server_id_label(_id)}),
-        sm::make_total_operations("waiter_dropped", _stats.waiters_dropped,
-             sm::description("Number of waiters that did not get result back"), {server_id_label(_id)}),
-        sm::make_total_operations("polls", _stats.polls,
-             sm::description("Number of times raft state machine polled"), {server_id_label(_id)}),
-        sm::make_total_operations("store_term_and_vote", _stats.store_term_and_vote,
-             sm::description("Number of times term and vote persisted"), {server_id_label(_id)}),
-        sm::make_total_operations("store_snapshot", _stats.store_snapshot,
-             sm::description("Number of snapshots persisted"), {server_id_label(_id)}),
-        sm::make_total_operations("sm_load_snapshot", _stats.sm_load_snapshot,
-             sm::description("Number of times user state machine reloaded with a snapshot"), {server_id_label(_id)}),
-        sm::make_total_operations("truncate_persisted_log", _stats.truncate_persisted_log,
-             sm::description("Number of times log truncated on storage"), {server_id_label(_id)}),
-        sm::make_total_operations("persisted_log_entries", _stats.persisted_log_entries,
-             sm::description("Number of log entries persisted"), {server_id_label(_id)}),
-        sm::make_total_operations("queue_entries_for_apply", _stats.queue_entries_for_apply,
-             sm::description("Number of log entries queued to be applied"), {server_id_label(_id)}),
-        sm::make_total_operations("applied_entries", _stats.applied_entries,
-             sm::description("Number of log entries applied"), {server_id_label(_id)}),
-        sm::make_total_operations("snapshots_taken", _stats.snapshots_taken,
-             sm::description("Number of times user's state machine snapshotted"), {server_id_label(_id)}),
-
-        sm::make_gauge("in_memory_log_size", [this] { return _fsm->in_memory_log_size(); },
-                       sm::description("size of in-memory part of the log"), {server_id_label(_id)}),
-        sm::make_gauge("log_memory_usage", [this] { return _fsm->log_memory_usage(); },
-                       sm::description("memory usage of in-memory part of the log in bytes"), {server_id_label(_id)}),
-        sm::make_gauge("log_last_index", [this] { return _fsm->log_last_idx().value(); },
-                       sm::description("index of the last log entry"), {server_id_label(_id)}),
-        sm::make_gauge("log_last_term", [this] { return _fsm->log_last_term().value(); },
-                       sm::description("term of the last log entry"), {server_id_label(_id)}),
-        sm::make_gauge("snapshot_last_index", [this] { return _fsm->log_last_snapshot_idx().value(); },
-                       sm::description("index of the snapshot"), {server_id_label(_id)}),
-        sm::make_gauge("snapshot_last_term", [this] { return _fsm->log_term_for(_fsm->log_last_snapshot_idx()).value().value(); },
-                       sm::description("term of the snapshot"), {server_id_label(_id)}),
-        sm::make_gauge("state", [this] { return _fsm->state_to_metric(); },
-                       sm::description("current state: 0 - follower, 1 - candidate, 2 - leader"), {server_id_label(_id)}),
-        sm::make_gauge("commit_index", [this] { return _fsm->commit_idx().value(); },
-                       sm::description("commit index"), {server_id_label(_id)}),
-        sm::make_gauge("apply_index", [this] { return _applied_idx.value(); },
-                       sm::description("applied index"), {server_id_label(_id)}),
-    });
+server_status server_impl::get_status() const {
+    if (!_fsm) {
+        return {};
+    }
+    auto status = _fsm->get_status();
+    status.applied_idx = _applied_idx;
+    return status;
 }
 
 void server_impl::wait_until_candidate() {
@@ -2052,10 +1940,11 @@ size_t server_impl::max_command_size() const {
 
 std::unique_ptr<server> create_server(server_id uuid, std::unique_ptr<rpc> rpc,
     std::unique_ptr<state_machine> state_machine, std::unique_ptr<persistence> persistence,
-    seastar::shared_ptr<failure_detector> failure_detector, server::configuration config) {
+    seastar::shared_ptr<failure_detector> failure_detector, server::configuration config,
+    lw_shared_ptr<server_stats> stats) {
     SCYLLA_ASSERT(uuid != raft::server_id{utils::UUID(0, 0)});
     return std::make_unique<raft::server_impl>(uuid, std::move(rpc), std::move(state_machine),
-        std::move(persistence), failure_detector, config);
+        std::move(persistence), failure_detector, config, std::move(stats));
 }
 
 std::ostream& operator<<(std::ostream& os, const server_impl& s) {
