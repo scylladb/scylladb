@@ -18,7 +18,7 @@ import struct
 import decimal
 from packaging.version import Version
 from decimal import Decimal
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from functools import cache
 
 from botocore.exceptions import ClientError
@@ -26,7 +26,7 @@ import boto3.dynamodb.types
 import botocore
 
 from test.pylib.skip_types import skip_env
-from .util import random_string, new_test_table, unique_table_name, scylla_config_read, scylla_config_write, scylla_config_temporary, client_no_transform, is_aws, manual_request, metrics, check_increases_operation, check_table_increases_operation, get_metrics, get_metric, check_increases_metric_exact
+from .util import random_string, new_test_table, precreated_keyspace, tablets_option, unique_table_name, scylla_config_read, scylla_config_write, scylla_config_temporary, client_no_transform, is_aws, manual_request, metrics, check_increases_operation, check_table_increases_operation, get_metrics, get_metric, check_increases_metric_exact
 from .test_streams import wait_for_status_active, wait_for_active_stream, list_shards, fetch_more
 
 
@@ -7339,6 +7339,36 @@ def test_createtable_vectorindexes_vnodes_forbidden(dynamodb, scylla_only):
                 }]
             ) as table:
             pass
+
+# The same restriction has to be checked on a keyspace which the user
+# pre-created with CQL, because that is the keyspace the table lands in - the
+# "system:initial_tablets" tag, which asks for the opposite here, only
+# configures a keyspace that Alternator creates itself.
+# When we finally remove vnode support from the code, this test should be
+# deleted.
+@pytest.mark.parametrize('tablets', [False, True])
+def test_createtable_vectorindexes_precreated_keyspace(dynamodb, cql, scylla_only, tablets):
+    if not tablets and scylla_config_read(dynamodb, 'tablets_mode_for_new_keyspaces') == '"enforced"':
+        skip_env('Cannot pre-create a keyspace with vnodes when tablets are enforced')
+    name = unique_table_name()
+    with precreated_keyspace(cql, name, tablets_option(tablets)):
+        expected = nullcontext() if tablets else pytest.raises(
+                ClientError, match='ValidationException.*vnodes')
+        with expected:
+            # Ask, via the tag, for the opposite of what the keyspace was pre-created with.
+            with new_test_table(dynamodb, name=name,
+                Tags=[{'Key': 'system:initial_tablets', 'Value': 'none' if tablets else '0'}],
+                KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }],
+                AttributeDefinitions=[{ 'AttributeName': 'p', 'AttributeType': 'S' }],
+                VectorIndexes=[
+                    {   'IndexName': 'hello',
+                        'VectorAttribute': {'AttributeName': 'x'},
+                        'Dimensions': 7,
+                        'DistanceFunction': 'COSINE',
+                        'Projection': {'ProjectionType': 'KEYS_ONLY'}
+                    }]
+                ) as table:
+                pass
 
 # Test that if a table is created to use vnodes instead of the modern default
 # of tablets, then one can't add to it a vector index because vector index is
