@@ -203,7 +203,7 @@ private:
         }
     } _stats_collector;
 
-    std::optional<tombstone_gc_state_snapshot> _tombstone_gc_snapshot;
+    std::optional<tombstone_gc_state> _tombstone_gc_snapshot;
 
     void update(db::rp_handle&&);
     friend class ::row_cache;
@@ -358,7 +358,7 @@ public:
         return _dirty_mgr;
     }
 
-    const tombstone_gc_state_snapshot* get_tombstone_gc_state_snapshot() const noexcept {
+    const tombstone_gc_state* get_tombstone_gc_state_snapshot() const noexcept {
         return _tombstone_gc_snapshot ? &_tombstone_gc_snapshot.value() : nullptr;
     }
 
