@@ -405,6 +405,9 @@ public:
     named_value<bool> enable_cache;
     named_value<bool> enable_commitlog;
     named_value<bool> volatile_system_keyspace_for_testing;
+#ifdef SCYLLA_ENABLE_ERROR_INJECTION
+    named_value<int64_t> test_clocks_offset_seconds;
+#endif
     named_value<uint16_t> api_port;
     named_value<sstring> api_address;
     named_value<sstring> api_ui_dir;

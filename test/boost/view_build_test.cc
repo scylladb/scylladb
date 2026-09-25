@@ -10,6 +10,7 @@
 #include <fmt/ranges.h>
 
 #include "replica/database.hh"
+#include "db/view/node_view_update_backlog.hh"
 #include "db/view/view_builder.hh"
 #include "db/view/view_updating_consumer.hh"
 #include "db/view/view_update_generator.hh"
@@ -1070,6 +1071,48 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering_with_empty_mutatio
     BOOST_REQUIRE(buffer_flushed);
 
     vuc.consume_end_of_stream();
+}
+
+// A unit test of the db::view::node_update_backlog class. It used to live in
+// view_schema_test.cc, together with that file's CQL tests of materialized
+// views - but those were all translated to Python in issue #16134, and this
+// one could not be: there is no way to reach this class from CQL, and no
+// reason to want to. So it moved here, to the other tests of view internals.
+SEASTAR_THREAD_TEST_CASE(node_view_update_backlog) {
+    // This test was originally written assuming we have (at least) two
+    // shards and the test doesn't run on shard 1...
+    BOOST_ASSERT(this_shard_id() != 1);
+    BOOST_ASSERT(this_smp_shard_count() >= 2);
+
+    // First, check that a db::view::node_update_backlog object doesn't
+    // recalculate the backlog if the interval hasn't yet passed (we use
+    // a long 10 second interval that will certainly not pass during this
+    // test).
+    db::view::node_update_backlog b(2, 10s);
+    auto backlog = [] (size_t size) { return db::view::update_backlog{size, 1000}; };
+    smp::submit_to(0, [&b, &backlog] {
+        b.add(backlog(10));
+        b.fetch();
+    }).get();
+    smp::submit_to(1, [&b, &backlog] {
+        b.add(backlog(50));
+        b.fetch();
+    }).get();
+    BOOST_REQUIRE(b.load() == backlog(10));
+    // Second, check that the backlog *is* recalculated if the interval
+    // has passed. We use a very short interval (10ms) and sleep a bit more
+    // to make sure it has passed.
+    db::view::node_update_backlog b2(2, 10ms);
+    smp::submit_to(0, [&b2, &backlog] {
+        b2.add(backlog(10));
+        b2.fetch();
+    }).get();
+    sleep(11ms).get();
+    smp::submit_to(1, [&b2, &backlog] {
+        b2.add(backlog(100));
+        b2.fetch();
+    }).get();
+    BOOST_REQUIRE(b2.load() == backlog(100));
 }
 
 BOOST_AUTO_TEST_SUITE_END()
