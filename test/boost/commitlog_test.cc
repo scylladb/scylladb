@@ -28,6 +28,7 @@
 #include <seastar/core/metrics_api.hh>
 #include <seastar/core/file.hh>
 #include <seastar/core/seastar.hh>
+#include <seastar/core/reactor.hh>
 #include <seastar/util/noncopyable_function.hh>
 #include <seastar/util/closeable.hh>
 
@@ -48,6 +49,7 @@
 #include "test/lib/mutation_source_test.hh"
 #include "test/lib/key_utils.hh"
 #include "test/lib/test_utils.hh"
+#include "test/lib/log.hh"
 #include "utils/checked-file-impl.hh"
 #include "idl/commitlog.dist.impl.hh"
 
@@ -3023,6 +3025,184 @@ SEASTAR_TEST_CASE(test_descriptor_roundtrip) {
     }
 
     return make_ready_future<>();
+}
+
+namespace {
+
+struct create_counter : public db::commitlog_file_extension {
+    size_t created = 0;
+    seastar::future<seastar::file> wrap_file(const seastar::sstring&, seastar::file f, seastar::open_flags flags) override {
+        if ((flags & open_flags::create) == open_flags::create) {
+            ++created;
+        }
+        co_return f;
+    }
+    seastar::future<> before_delete(const seastar::sstring&) override {
+        co_return;
+    }
+};
+
+struct o_dsync_env {
+    tmpdir tmp;
+    commitlog::config cfg;
+    db::extensions exts;
+    create_counter* counter;
+    table_id uuid = make_table_id();
+
+    explicit o_dsync_env(bool allow_over_limit = false) {
+        cfg.commitlog_segment_size_in_mb = 1;
+        cfg.commitlog_total_space_in_mb = 16 * this_smp_shard_count();
+        cfg.allow_going_over_size_limit = allow_over_limit;
+        cfg.use_o_dsync = true;
+        cfg.commit_log_location = tmp.path().string();
+        auto ep = std::make_unique<create_counter>();
+        counter = ep.get();
+        exts.add_commitlog_file_extension("counter", std::move(ep));
+        cfg.extensions = &exts;
+    }
+
+    future<rp_set> write(commitlog& log, size_t n) {
+        auto size = log.max_record_size() / 2;
+        rp_set rps;
+        for (size_t i = 0; i < n; ++i) {
+            rps.put(co_await log.add_mutation(uuid, size, db::commitlog::force_sync::no, [&](db::commitlog::output& dst) {
+                dst.fill('1', size);
+            }));
+        }
+        co_return rps;
+    }
+
+    size_t segment_size() const {
+        return cfg.commitlog_segment_size_in_mb * 1024 * 1024;
+    }
+
+    size_t count_files(std::string_view prefix) const {
+        size_t n = 0;
+        for (auto& e : std::filesystem::directory_iterator(tmp.path())) {
+            n += e.path().filename().string().starts_with(prefix);
+        }
+        return n;
+    }
+};
+
+} // anonymous namespace
+
+// Pre-written O_DSYNC segments should survive a clean shutdown and be
+// reused by the next instance, without going through replay.
+SEASTAR_TEST_CASE(test_commitlog_reuses_segments_after_restart) {
+    o_dsync_env env;
+    constexpr size_t records = 24;
+
+    size_t aio_first, created_first;
+    {
+        auto aio_before = engine().get_io_stats().aio_write_bytes;
+        auto log = co_await commitlog::create_commitlog(env.cfg);
+        log.discard_completed_segments(env.uuid, co_await env.write(log, records));
+        co_await log.force_new_active_segment();
+        co_await log.shutdown();
+        co_await log.release();
+        aio_first = engine().get_io_stats().aio_write_bytes - aio_before;
+        created_first = std::exchange(env.counter->created, 0);
+    }
+
+    auto kept = env.count_files("Recycled-");
+
+    auto aio_before = engine().get_io_stats().aio_write_bytes;
+    auto log = co_await commitlog::create_commitlog(env.cfg);
+    auto replay_set = co_await log.get_segments_to_replay();
+    log.discard_completed_segments(env.uuid, co_await env.write(log, records));
+    co_await log.force_new_active_segment();
+    co_await log.delete_segments({}); // sync recycling
+    auto aio_second = engine().get_io_stats().aio_write_bytes - aio_before;
+
+    auto footprint = log.disk_footprint();
+    auto limit = log.disk_limit();
+    auto segment_size = env.segment_size();
+    co_await log.shutdown();
+    co_await log.clear();
+    auto kept_after_clear = env.count_files("Recycled-");
+
+    testlog.info("kept {} files; created {} then {} segments; wrote {} then {} aio bytes", kept, created_first, env.counter->created, aio_first, aio_second);
+
+    BOOST_REQUIRE_GT(kept, 0);
+    BOOST_REQUIRE(replay_set.empty());
+    BOOST_REQUIRE_LE(footprint, limit + segment_size);
+    BOOST_REQUIRE_LT(env.counter->created, created_first);
+    // same workload, but no zero-fill of new segments
+    BOOST_REQUIRE_LT(aio_second * 2, aio_first);
+    BOOST_REQUIRE_EQUAL(kept_after_clear, 0);
+}
+
+// A zero disk limit means unlimited, so it must not stop recycling.
+SEASTAR_TEST_CASE(test_commitlog_recycles_with_unlimited_disk) {
+    o_dsync_env env;
+    env.cfg.commitlog_total_space_in_mb = 0;
+    auto log = co_await commitlog::create_commitlog(env.cfg);
+    log.discard_completed_segments(env.uuid, co_await env.write(log, 24));
+    co_await log.force_new_active_segment();
+    co_await log.delete_segments({}); // sync recycling
+    auto recycled = env.count_files("Recycled-");
+    co_await log.shutdown();
+    co_await log.clear();
+
+    BOOST_REQUIRE_GT(recycled, 1);
+}
+
+// Segments still holding data keep their name and replay; kept files do not.
+SEASTAR_TEST_CASE(test_commitlog_replays_dirty_segment_with_kept_segments) {
+    o_dsync_env env;
+    {
+        auto log = co_await commitlog::create_commitlog(env.cfg);
+        log.discard_completed_segments(env.uuid, co_await env.write(log, 24));
+        co_await log.force_new_active_segment();
+        co_await log.delete_segments({}); // sync recycling
+        // never discarded
+        co_await env.write(log, 2);
+        co_await log.shutdown();
+        co_await log.release();
+    }
+    BOOST_REQUIRE_GT(env.count_files("Recycled-"), 0);
+    env.counter->created = 0;
+
+    auto log = co_await commitlog::create_commitlog(env.cfg);
+    auto replay_set = co_await log.get_segments_to_replay();
+
+    size_t replayed = 0;
+    commitlog::replay_state state;
+    for (auto& f : replay_set) {
+        BOOST_REQUIRE(!f.contains("Recycled-"));
+        co_await commitlog::read_log_file(state, f, env.cfg.fname_prefix, [&](commitlog::buffer_and_replay_position) {
+            ++replayed;
+            return make_ready_future<>();
+        });
+    }
+    co_await log.delete_segments(replay_set);
+    auto created = env.counter->created;
+    co_await log.shutdown();
+    co_await log.clear();
+
+    BOOST_REQUIRE(!replay_set.empty());
+    BOOST_REQUIRE_EQUAL(replayed, 2);
+    BOOST_REQUIRE_EQUAL(created, 0);
+}
+
+// Shutdown keeps at most the disk limit worth of segments.
+SEASTAR_TEST_CASE(test_commitlog_shutdown_trims_kept_segments) {
+    o_dsync_env env(true);
+    size_t max_files;
+    {
+        auto log = co_await commitlog::create_commitlog(env.cfg);
+        max_files = log.disk_limit() / env.segment_size() + 1;
+        // about 2x the limit, all of it over the limit
+        log.discard_completed_segments(env.uuid, co_await env.write(log, 4 * 2 * (max_files - 1)));
+        co_await log.force_new_active_segment();
+        co_await log.shutdown();
+        co_await log.release();
+    }
+    auto files = env.count_files("");
+    testlog.info("{} files left, at most {} allowed", files, max_files);
+    BOOST_REQUIRE_GT(files, 0);
+    BOOST_REQUIRE_LE(files, max_files);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
