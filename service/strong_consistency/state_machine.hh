@@ -10,11 +10,14 @@
 
 #include "service/raft/raft_state_machine.hh"
 #include "mutation/frozen_mutation.hh"
+#include "mutation/timestamp.hh"
 #include <functional>
 #include <unordered_map>
+#include <variant>
 #include "locator/tablets.hh"
 #include "service/strong_consistency/raft_groups_storage.hh"
 #include "utils/loading_cache.hh"
+#include "utils/UUID.hh"
 
 namespace db {
 class system_keyspace;
@@ -26,8 +29,17 @@ class migration_manager;
 
 namespace service::strong_consistency {
 
-struct raft_command {
+struct write_mutation {
     frozen_mutation mutation;
+};
+
+struct truncate_command {
+    api::timestamp_type truncated_at;
+    utils::UUID request_id;
+};
+
+struct raft_command {
+    std::variant<truncate_command, write_mutation> change;
 };
 
 std::unique_ptr<raft_state_machine> make_state_machine(locator::global_tablet_id tablet,
@@ -36,6 +48,12 @@ std::unique_ptr<raft_state_machine> make_state_machine(locator::global_tablet_id
     service::migration_manager& mm,
     db::system_keyspace& sys_ks,
     raft_groups_storage& storage);
+
+// Applies a committed truncate_command of the group `gid`, which serves `tablet`, on this shard.
+// A no-op when `record` already carries tc.request_id.
+future<> apply_truncate_command(replica::database& db, cql3::query_processor& qp,
+        locator::global_tablet_id tablet, raft::group_id gid,
+        const truncate_command& tc, truncate_record& record);
 
 // Resolves schemas for frozen mutations and upgrades them to the current schema if needed.
 //
@@ -75,8 +93,8 @@ public:
 };
 
 namespace detail {
-// Deserialize a frozen_mutation from a raft::log_entry_ptr.
+// Deserialize a raft_command from a raft::log_entry_ptr.
 // The log entry must contain a raft::command in its data variant.
-frozen_mutation deserialize_to_frozen_mutation(const raft::log_entry_ptr& entry);
+raft_command deserialize_raft_command(const raft::log_entry_ptr& entry);
 } // namespace detail
 } // namespace service::strong_consistency

@@ -468,13 +468,13 @@ future<value_or_redirect<>> coordinator::mutate(schema_ptr schema,
         // still wins on the cells they share. Such a history is not
         // linearizable.
         const raft_command command {
-            .mutation{mutation_gen(ts_with_term->timestamp)}
+            .change = write_mutation{.mutation{mutation_gen(ts_with_term->timestamp)}}
         };
         raft::command raft_cmd;
         ser::serialize(raft_cmd, command);
 
         logger.debug("mutate(): add_entry({}), {}",
-            command.mutation.pretty_printer(schema), state_fmt);
+            std::get<write_mutation>(command.change).mutation.pretty_printer(schema), state_fmt);
 
         // CAUTION: If a preemption point gets added between `begin_mutate`
         // and `add_entry`, add an explicit check that the term has not

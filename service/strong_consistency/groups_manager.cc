@@ -9,6 +9,7 @@
 #include "groups_manager.hh"
 
 #include "locator/tablets.hh"
+#include "locator/tablet_sharder.hh"
 #include "raft/raft.hh"
 #include "service/migration_manager.hh"
 #include "service/strong_consistency/state_machine.hh"
@@ -22,8 +23,13 @@
 #include "service/storage_proxy.hh"
 #include "replica/database.hh"
 #include "db/config.hh"
+#include "serializer_impl.hh"
+#include "idl/strong_consistency/state_machine.dist.hh"
+#include "idl/strong_consistency/state_machine.dist.impl.hh"
 #include "idl/strong_consistency/groups_manager.dist.hh"
+#include "utils/chain_abort_source.hh"
 #include "utils/error_injection.hh"
+#include "utils/exceptions.hh"
 #include "utils/on_internal_error.hh"
 #include <seastar/core/lowres_clock.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
@@ -33,6 +39,7 @@
 #include "utils/chain_abort_source.hh"
 #include "utils/exponential_backoff_retry.hh"
 
+#include <seastar/core/abort_on_expiry.hh>
 #include <seastar/core/abort_source.hh>
 
 namespace service::strong_consistency {
@@ -502,10 +509,109 @@ void groups_manager::init_messaging_service() {
             });
         }
     );
+    ser::groups_manager_rpc_verbs::register_truncate_tablet(&_ms,
+        [this] (rpc::opt_time_point timeout, raft::server_id dst_id, global_tablet_id tablet, raft::group_id group_id,
+                utils::UUID request_id, service::frozen_topology_guard guard) -> future<truncate_tablet_result> {
+            if (_raft_gr.get_my_raft_id() != dst_id) {
+                throw raft_destination_id_not_correct{_raft_gr.get_my_raft_id(), dst_id};
+            }
+            const auto shard = find_shard_for_tablet(tablet, group_id);
+            if (!shard) {
+                logger.debug("truncate_tablet: no local shard hosts group {} of tablet {}", group_id, tablet);
+                co_return truncate_tablet_result{};
+            }
+            co_return co_await container().invoke_on(*shard,
+                    [timeout = *timeout, group_id, request_id, guard] (groups_manager& gm) {
+                return gm.truncate_tablet_group(group_id, request_id, guard, timeout);
+            });
+        }
+    );
 }
 
 future<> groups_manager::uninit_messaging_service() {
     return ser::groups_manager_rpc_verbs::unregister(&_ms);
+}
+
+std::optional<shard_id> groups_manager::find_shard_for_tablet(global_tablet_id tablet, raft::group_id expected_gid) const {
+    if (!_db.column_family_exists(tablet.table)) {
+        return std::nullopt;
+    }
+    auto erm = _db.find_column_family(tablet.table).get_effective_replication_map();
+    const auto& tm = erm->get_token_metadata();
+    const auto& tablet_map = tm.tablets().get_tablet_map(tablet.table);
+    if (!tablet_map.has_raft_info()) {
+        return std::nullopt;
+    }
+    // A tablet id is an index into the tablet map, so it only names the tablet the caller meant
+    // as long as this replica sees the same map. Comparing the group id catches the case where it
+    // does not; the caller retries until this replica catches up.
+    if (tablet.tablet.value() >= tablet_map.tablet_count()
+            || tablet_map.get_tablet_raft_info(tablet.tablet).group_id != expected_gid) {
+        return std::nullopt;
+    }
+    return locator::get_shard_for_reads(tablet_map, tablet.tablet, tm.get_my_id());
+}
+
+future<truncate_tablet_result> groups_manager::truncate_tablet_group(raft::group_id gid, utils::UUID request_id,
+        service::frozen_topology_guard frozen_guard, lowres_clock::time_point timeout) {
+    // Throws once the topology coordinator has closed the session; the caller sees an RPC error.
+    topology_guard guard(frozen_guard);
+
+    const auto it = _raft_groups.find(gid);
+    if (it == _raft_groups.end()) {
+        logger.debug("truncate_tablet: group {} is not known on this shard", gid);
+        co_return truncate_tablet_result{};
+    }
+    // The group may not be started here yet, or may be going away. Both resolve on their own, so
+    // the topology coordinator retries.
+    auto srv = try_acquire_server(it->second);
+    if (!srv) {
+        logger.debug("truncate_tablet: the raft server of group {} is not available here", gid);
+        co_return truncate_tablet_result{};
+    }
+
+    abort_on_expiry<lowres_clock> aoe(timeout);
+    [[maybe_unused]] const auto sub = utils::chain_abort_source(aoe.abort_source(), guard.abort_source());
+    auto& as = aoe.abort_source();
+
+    while (true) {
+        auto disposition = srv->begin_mutate(as);
+        if (const auto* not_a_leader = std::get_if<raft::not_a_leader>(&disposition)) {
+            logger.debug("truncate_tablet: group {} is led by {}, not by this replica", gid, not_a_leader->leader);
+            co_return truncate_tablet_result{.leader = not_a_leader->leader};
+        }
+        if (auto* wait_for_leader = std::get_if<raft_server::need_wait_for_leader>(&disposition)) {
+            co_await std::move(wait_for_leader->future);
+            continue;
+        }
+        const auto& ts_with_term = std::get<raft_server::timestamp_with_term>(disposition);
+
+        // No suspension between begin_mutate() and add_entry(), see coordinator::mutate().
+        raft::command raft_cmd;
+        ser::serialize(raft_cmd, raft_command{.change = truncate_command{
+            .truncated_at = ts_with_term.timestamp,
+            .request_id = request_id,
+        }});
+        logger.info("truncate_tablet: group {}: adding a truncate at {} by request {}, term {}",
+                gid, ts_with_term.timestamp, request_id, ts_with_term.term);
+        auto res = co_await coroutine::as_future(
+                srv->server().add_entry(std::move(raft_cmd), raft::wait_type::committed, &as));
+        if (!res.failed()) {
+            co_return truncate_tablet_result{.committed = true};
+        }
+
+        auto ex = res.get_exception();
+        if (try_catch<raft::not_a_leader>(ex) || try_catch<raft::dropped_entry>(ex)) {
+            logger.debug("truncate_tablet: group {}: add_entry failed with {}, retrying", gid, ex);
+            continue;
+        }
+        if (try_catch<raft::commit_status_unknown>(ex)) {
+            // Maybe committed. The retry carries the same request id, so a second entry is a no-op.
+            logger.debug("truncate_tablet: group {}: the commit status of the truncate is unknown, asking for a retry", gid);
+            co_return truncate_tablet_result{};
+        }
+        std::rethrow_exception(std::move(ex));
+    }
 }
 
 future<> groups_manager::wait_for_table_raft_groups_on_all_hosts(table_id table, lowres_clock::time_point timeout) {
@@ -568,9 +674,10 @@ future<> groups_manager::leader_info_updater(raft_group_state& state, global_tab
                 // There's no reason to abort this operation in any other case.
                 co_await state.server->read_barrier(nullptr);
 
+                const auto truncate = co_await raft_groups_storage::load_truncate_record(_qp, gid, this_shard_id());
                 state.leader_info = leader_info {
                     .term = current_term,
-                    .last_timestamp = schema->table().get_max_timestamp_for_tablet(tablet.tablet)
+                    .last_timestamp = std::max(schema->table().get_max_timestamp_for_tablet(tablet.tablet), truncate.truncated_at)
                 };
                 logger.debug("leader_info_updater({}-{}): read_barrier() completed, "
                     "new leader term {}, last_timestamp {}",

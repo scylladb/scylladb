@@ -138,6 +138,10 @@ schema_ptr make_raft_schema(sstring name, bool is_group0) {
             .build();
     } else {
         return builder
+            // The last truncate the group's state machine applied: the write timestamp the leader
+            // assigned to it and the id of the topology request which issued it.
+            .with_column("truncated_at", long_type, column_kind::static_column)
+            .with_column("last_truncate_request_id", uuid_type, column_kind::static_column)
             .set_comment("Persisted RAFT log, votes and snapshot info for strongly consistent tablets")
             .with_partitioner(dht::fixed_shard_partitioner::classname)
             .with_sharder(dht::fixed_shard_sharder::instance())
