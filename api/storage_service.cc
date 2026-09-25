@@ -2270,7 +2270,7 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
 
         compaction::compaction_stats stats;
         auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
-        auto task = co_await compaction_module.make_and_start_task<compaction::scrub_sstables_compaction_task_impl>(tasks::make_empty_task_info(), info.keyspace, db, info.column_families, info.opts, &stats);
+        auto task = co_await compaction_module.start_scrub_sstables_keyspace_compaction(db, info.keyspace, info.column_families, info.opts, &stats);
         try {
             co_await task->done();
             if (stats.validation_errors) {
