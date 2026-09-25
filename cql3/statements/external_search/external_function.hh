@@ -80,7 +80,7 @@ struct search_temporaries {
 /// A temporary that replaces a whole call carries the call in replaced_expr, so an unaliased
 /// selector still formats as the call. The two temporaries inside the tuple carry no call; see
 /// name_selector_as_written().
-expr::expression replace_search_call(functions::search_value value, const expr::expression& call, search_temporaries& temporaries,
+expr::expression search_call_replacement(functions::search_value value, const expr::expression& call, search_temporaries& temporaries,
         expr::temporary_allocator& allocator);
 
 /// Names an unaliased selector after `written`, the expression the user wrote, when what it was

@@ -430,7 +430,7 @@ def test_bm25_without_comparison(cql, fulltext_table):
 
 def test_bm25_requires_limit(cql, fulltext_table):
     """A SELECT with BM25 but no LIMIT must be rejected."""
-    with pytest.raises(InvalidRequest, match="require a LIMIT"):
+    with pytest.raises(InvalidRequest, match="must have a limit specified"):
         cql.execute(f"SELECT * FROM {fulltext_table} WHERE BM25(content, 'hello') > 0 ORDER BY BM25(content, 'hello')")
 
 
@@ -521,7 +521,7 @@ def test_bm25_on_nonexistent_column_fails(cql, fulltext_table):
 
 def test_bm25_where_only_rejected(cql, fulltext_table):
     """WHERE BM25 without an ORDER BY BM25 clause must be rejected."""
-    with pytest.raises(InvalidRequest, match="require an ORDER BY BM25"):
+    with pytest.raises(InvalidRequest, match="names a search that the ORDER BY clause does not run"):
         cql.execute(f"SELECT * FROM {fulltext_table} WHERE BM25(content, 'hello') > 0 LIMIT 1")
 
 
@@ -531,7 +531,7 @@ def test_bm25_multiple_where_restrictions_rejected(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, schema) as table:
         cql.execute(f"CREATE CUSTOM INDEX ON {table}(col1) USING 'fulltext_index'")
         cql.execute(f"CREATE CUSTOM INDEX ON {table}(col2) USING 'fulltext_index'")
-        with pytest.raises(InvalidRequest, match="only one WHERE BM25"):
+        with pytest.raises(InvalidRequest, match="names a search that the ORDER BY clause does not run"):
             cql.execute(f"SELECT * FROM {table} WHERE BM25(col1, 'hello') > 0 AND BM25(col2, 'hello') > 0 ORDER BY BM25(col1, 'hello') LIMIT 1")
 
 
@@ -557,7 +557,7 @@ def test_bm25_where_with_ann_order_by_rejected(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, schema) as table:
         cql.execute(f"CREATE CUSTOM INDEX ON {table}(content) USING 'fulltext_index'")
         cql.execute(f"CREATE CUSTOM INDEX ON {table}(vec) USING 'vector_index'")
-        with pytest.raises(InvalidRequest, match="BM25 and ANN cannot be combined in the same query"):
+        with pytest.raises(InvalidRequest, match="names a search that the ORDER BY clause does not run"):
             cql.execute(f"SELECT * FROM {table} WHERE BM25(content, 'hello') > 0 ORDER BY vec ANN OF [1.0, 2.0] LIMIT 1")
 
 
@@ -627,8 +627,8 @@ def test_bm25_on_clustering_key_with_fulltext_index(cql, test_keyspace):
 
 
 def test_non_scoring_function_in_order_by_rejected(cql, fulltext_table):
-    """A non-scoring function call in ORDER BY clause must be rejected."""
-    with pytest.raises(InvalidRequest, match="supported as scoring functions in ORDER BY"):
+    """A function call in ORDER BY that names no search must be rejected."""
+    with pytest.raises(InvalidRequest, match="must name at least one search"):
         cql.execute(f"SELECT * FROM {fulltext_table} ORDER BY now() LIMIT 1")
 
 
@@ -655,7 +655,7 @@ def test_bm25_different_columns_rejected(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, schema) as table:
         cql.execute(f"CREATE CUSTOM INDEX ON {table}(col1) USING 'fulltext_index'")
         cql.execute(f"CREATE CUSTOM INDEX ON {table}(col2) USING 'fulltext_index'")
-        with pytest.raises(InvalidRequest, match="same column"):
+        with pytest.raises(InvalidRequest, match="names a search that the ORDER BY clause does not run"):
             cql.execute(f"SELECT * FROM {table} WHERE BM25(col1, 'hello') > 0 ORDER BY BM25(col2, 'hello') LIMIT 1")
 
 
@@ -733,3 +733,15 @@ def test_bm25_rejected_in_non_select_statements(cql, fulltext_table):
         cql.execute(f"UPDATE {fulltext_table} SET content = 'x' WHERE p = 1 AND BM25(content, 'hello') > 0")
     with pytest.raises(InvalidRequest, match="only supported in SELECT statements"):
         cql.execute(f"DELETE FROM {fulltext_table} WHERE p = 1 AND BM25(content, 'hello') > 0")
+
+
+def test_aggregate_in_order_by_rejected(cql, fulltext_table):
+    """An aggregate collapses the rows it is computed over, so it cannot order them.
+
+    Without an explicit rejection the score selector added for the ordering would turn the whole
+    statement into an aggregation, and the query would silently return a single row.
+    """
+    for aggregate in ["SUM", "MIN", "MAX", "AVG", "COUNT"]:
+        with pytest.raises(InvalidRequest, match="Aggregation functions are not supported in the ORDER BY clause"):
+            cql.prepare(f"SELECT * FROM {fulltext_table} WHERE BM25(content, 'hello') > 0 "
+                        f"ORDER BY {aggregate}(BM25_SCORE(content, 'hello')) LIMIT 10")

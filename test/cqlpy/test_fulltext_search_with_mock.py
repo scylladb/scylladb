@@ -144,7 +144,7 @@ def test_fts_http_error_propagated_as_invalid_request(cql, vector_store_mock, ft
 
 
 def test_fts_limit_exceeds_max_raises_error(cql, fts_setup_with_mock):
-    """A LIMIT exceeding max_fts_query_limit (1000) must be rejected."""
+    """A LIMIT exceeding max_query_limit (1000) must be rejected."""
     table, _ = fts_setup_with_mock
 
     with pytest.raises(InvalidRequest, match="1000"):
