@@ -11,10 +11,11 @@
 #pragma once
 
 #include "cql3/statements/property_definitions.hh"
- 
+
 #include "schema/schema_builder.hh"
 #include "compaction/compaction_strategy.hh"
 #include "utils/UUID.hh"
+#include <seastar/util/bool_class.hh>
 
 namespace data_dictionary {
 class database;
@@ -40,6 +41,8 @@ namespace statements {
 
 class cf_prop_defs : public property_definitions {
 public:
+    using is_alter = seastar::bool_class<struct is_alter_tag>;
+
     static const sstring KW_COMMENT;
     static const sstring KW_GCGRACESECONDS;
     static const sstring KW_PAXOSGRACESECONDS;
@@ -85,7 +88,7 @@ public:
     std::optional<compaction::compaction_strategy_type> get_compaction_strategy_class() const;
 
     schema::extensions_map make_schema_extensions(const db::extensions& exts) const;
-    void validate(const data_dictionary::database db, sstring ks_name, const schema::extensions_map& schema_extensions) const;
+    void validate(const data_dictionary::database db, sstring ks_name, const schema::extensions_map& schema_extensions, is_alter = is_alter::no) const;
     std::map<sstring, sstring> get_compaction_type_options() const;
     std::optional<std::map<sstring, sstring>> get_compression_options() const;
     const cdc::options* get_cdc_options(const schema::extensions_map&) const;
