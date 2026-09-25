@@ -1413,7 +1413,12 @@ public:
             auto entry_size = writer.num_entries == 1 ? size : writer.size(*this, entry);
             auto es = entry_size + entry_overhead_size;
 
-            mark_dirty(id, gc_clock::now());
+            // _cf_min_time is never erased, so it already holds id if id is dirty.
+            if (auto dirty = _cf_dirty.find(id); dirty != _cf_dirty.end()) {
+                ++dirty->second;
+            } else {
+                mark_dirty(id, gc_clock::now());
+            }
 
             rp_handle h(static_pointer_cast<cf_holder>(shared_from_this()), std::move(id), rp);
 
