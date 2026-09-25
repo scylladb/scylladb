@@ -30,6 +30,7 @@ namespace functions {
 
     using declared_t = std::unordered_multimap<function_name, shared_ptr<function>>;
     void add_agg_functions(declared_t& funcs);
+    void add_math_functions(declared_t& funcs);
 
 using function_resolution = utils::result_with_exception<shared_ptr<function>, exceptions::invalid_request_exception>;
 
