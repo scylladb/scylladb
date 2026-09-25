@@ -44,6 +44,7 @@
 #include "db/config.hh"
 #include "readers/combined.hh"
 #include "sstables/exceptions.hh"
+#include "sstables/hyperloglog.hh"
 #include "utils/chunked_string.hh"
 
 using namespace sstables;
@@ -1368,6 +1369,8 @@ SEASTAR_TEST_CASE(test_uncompressed_partition_key_only_load) {
   return test_env::do_with_async([] (test_env& env) {
     sstable_assertions sst(env, UNCOMPRESSED_PARTITION_KEY_ONLY_SCHEMA, UNCOMPRESSED_PARTITION_KEY_ONLY_PATH);
     sst.load();
+    // Written by Cassandra, whose HLL++ encoding we don't parse.
+    BOOST_REQUIRE(!sst->get_cardinality_estimator());
   });
 }
 
@@ -5832,6 +5835,8 @@ SEASTAR_TEST_CASE(test_legacy_udt_in_collection_table) {
 
     sstable_assertions sst(env, s, LEGACY_UDT_IN_COLLECTION_PATH);
     sst.load();
+    // Written by an older Scylla with a 16-register sketch.
+    BOOST_REQUIRE_EQUAL(sst->get_cardinality_estimator().value().registerSize(), 16);
     assert_that(sst.make_reader()).produces(mut).produces_end_of_stream();
   });
 }
@@ -6039,3 +6044,26 @@ SEASTAR_THREAD_TEST_CASE(test_large_data_stats_large_collections) {
         BOOST_REQUIRE_EQUAL(handler.stats().rows_bigger_than_threshold, 0);
     }
 }
+
+SEASTAR_TEST_CASE(test_write_cardinality_estimator) {
+  return test_env::do_with_async([] (test_env& env) {
+    schema_ptr s = schema_builder(this_smp_shard_count(), "sst3", "cardinality")
+        .with_column("pk", int32_type, column_kind::partition_key)
+        .build();
+    constexpr int partitions = 10'000;
+    utils::chunked_vector<mutation> muts;
+    for (auto i : std::views::iota(0, partitions)) {
+        muts.emplace_back(s, partition_key::from_deeply_exploded(*s, {i}));
+        muts.back().partition().apply(tombstone{write_timestamp, write_time_point});
+    }
+    for (auto version : {sstable_version_types::me, sstable_version_types::mt}) {
+        auto sst = make_sstable_containing(env.make_sstable(s, version), muts).get();
+        auto h = sst->get_cardinality_estimator();
+        BOOST_REQUIRE(h);
+        BOOST_REQUIRE_EQUAL(h->registerSize(), 1024);
+        // 4 standard errors at p=10.
+        BOOST_REQUIRE_LE(std::abs(h->estimate() - partitions), partitions * 0.13);
+    }
+  });
+}
+
