@@ -285,6 +285,7 @@ public:
                     return sst_gen();
                 };
                 descriptor.replacer = sstables::replacer_fn_no_op();
+                descriptor.gc_state = cf->try_get_compaction_group_view_with_static_sharding().get_tombstone_gc_state();
                 auto cdata = compaction::compaction_manager::create_compaction_data();
                 compaction::compaction_progress_monitor progress_monitor;
                 auto ret = compaction::compact_sstables(std::move(descriptor), cdata, cf->try_get_compaction_group_view_with_static_sharding(), progress_monitor).get();
