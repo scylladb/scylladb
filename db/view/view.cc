@@ -961,6 +961,23 @@ bool view_updates::can_skip_view_updates(const clustering_or_static_row& update,
     const row& existing_row = existing.cells();
     const row& updated_row = update.cells();
 
+    // When the view key has no new key columns, the view row carries the base
+    // row's marker (see the "Zero new key columns" case in generate_update()),
+    // so we cannot skip an update that changes the marker even if it changes no
+    // cell. Such an update is e.g. an INSERT naming only key columns, which
+    // rewrites the marker with a new timestamp and TTL, or a row deletion which
+    // shadows the marker but not a newer cell. If we skipped it, the view row
+    // would keep the old marker, and it would expire or be deleted while the
+    // base row is still live.
+    // With new key columns, the view row's marker is computed from the view
+    // key columns instead, so a change to the base marker alone does not
+    // affect it.
+    if (!_base_info.has_base_non_pk_columns_in_view_pk
+            && !_view_info.has_computed_column_depending_on_base_non_primary_key()
+            && existing.marker() != update.marker()) {
+        return false;
+    }
+
     return std::ranges::all_of(_base->regular_columns(), [this, &updated_row, &existing_row] (const column_definition& cdef) {
         const auto view_it = _view->columns_by_name().find(cdef.name());
         const bool column_is_selected = view_it != _view->columns_by_name().end();
