@@ -1,0 +1,31 @@
+# Nodetool compactionstats
+
+**compactionstats** - Displays statistics for compactions. Each row represents a running compaction.
+
+For example:
+
+```shell
+nodetool compactionstats
+```
+
+Example output:
+
+```shell
+pending tasks: 2
+compaction type  keyspace   column family   completed      total         unit   progress
+major            nba        player_name     5770708712     55239418023   bytes  10.11%
+minor            nba        player_stats    18569428       3610548974    bytes  51.43%
+```
+
+| Parameter             | Description                      |
+|-----------------------|----------------------------------|
+| pending tasks         | Number of pending compactions    |
+| compaction type       | Type of compaction               |
+| keyspace              | The keyspace name                |
+| column family (table) | The column family (table) name   |
+| completed             | Completed bytes out of the total |
+| total                 | Total size of the compaction     |
+| unit                  | Compaction unit type             |
+| progress              | Compaction progress %            |
+
+[Nodetool Reference](https://opensource.docs.scylladb.com/branch-5.2/operating-scylla/nodetool.md)

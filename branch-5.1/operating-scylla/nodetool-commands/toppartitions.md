@@ -1,0 +1,105 @@
+# Nodetool toppartitions
+
+#### Versionadded
+Added in version 3.1.
+
+**toppartitions** <keyspace> <table> <duration> - Samples cluster writes and reads and reports the most active partitions in a specified table and time frame.
+
+#### Versionchanged
+Changed in version 4.6.
+
+**toppartitions**  [<–ks-filters ks>] [<–cf-filters tables>] [<-d duration>]
+
+#### NOTE
+The command needs to be run while there are writes and reads operations.
+
+| Parameter   | Description                  |
+|-------------|------------------------------|
+| keyspace    | The keyspace name            |
+| table       | The table name               |
+| duration    | The duration in milliseconds |
+
+Additional parameters from Scylla 4.6
+
+| Parameter   | Description                      |
+|-------------|----------------------------------|
+| ks-filters  | List of keyspaces                |
+| cf-filters  | List of Tables (Column Families) |
+| duration    | The duration in milliseconds     |
+
+For example:
+
+```shell
+nodetool toppartitions nba team_roster 5000
+```
+
+For Example (Starting from Scylla 4.6):
+
+* listing the top partitions from *all* tables in *all* keyspaces `nodetool toppartitions`
+* listing the top partitions for the last 1000 ms `nodetool toppartitions -d 1000`
+* listing the top partitions from a list of tables `nodetool toppartitions --cf-filters ks:t,system:status`
+* listing the top partitions from all tables from a list of keyspaces `nodetool toppartitions --ks-filters ks,system`
+* combining lists of keyspaces and tables `nodetool toppartitions --ks-filters ks --cf-filters system:local`
+
+#### NOTE
+In Scylla 4.6, **duration** parameter requires a  *-d* prefix
+
+Example output:
+
+```shell
+WRITES Sampler:
+  Cardinality: ~5 (256 capacity)
+  Top 10 partitions:
+         Partition                Count       +/-
+         Russell Westbrook         100         0
+         Jermi Grant               25          0
+         Victor Oladipo            17          0
+         Andre Roberson            1           0
+         Steven Adams              1           0
+
+READS Sampler:
+  Cardinality: ~5 (256 capacity)
+  Top 10 partitions:
+         Partition                Count       +/-
+         Russell Westbrook         100         0
+         Victor Oladipo            17          0
+         Jermi Grant               12          0
+         Andre Roberson            5           0
+         Steven Adams              1           0
+```
+
+In this example, we can see that for the `Partition` with `Partition Key` “Russell Westbrook”, 100 writes and 100 read operations were done during the set duration.
+
+For each of the samplers (WRITES and READS in this specific example), nodetool toppartitions reports:
+
+* The cardinality of the sampled operations (number of unique operations in the sample set).
+* The number of partitions in a specified table that had the most traffic in a specified time period.
+
+## Output
+
+| Parameter     | Description                                                                                   |
+|---------------|-----------------------------------------------------------------------------------------------|
+| Partition     | The Partition Key, prefixed by the Keyspace and table (ks:cf) for Scylla 4.6 and later        |
+| Count         | The number of operations of the specified type that occurred during the specified time period |
+| +/-           | The margin of error for the Count statistic                                                   |
+| Write Count   | The total number of writes since last boot                                                    |
+| Write Latency | The average read latency                                                                      |
+
+To know which node hold the partition key use the nodetool [getendpoints](https://opensource.docs.scylladb.com/branch-5.1/operating-scylla/nodetool-commands/getendpoints.md) command.
+
+For example:
+
+```shell
+nodetool getendpoints nba team_roster Russell Westbrook
+```
+
+Example output:
+
+```shell
+10.0.0.72
+```
+
+## Additional Information
+
+* [Catching a Hot Partition](https://opensource.docs.scylladb.com/branch-5.1/using-scylla/tracing.md#tracing-catching-a-hot-partition) - Information on how to locate a hot partition
+* [Nodetool Reference](https://opensource.docs.scylladb.com/branch-5.1/operating-scylla/nodetool.md)

@@ -1,0 +1,35 @@
+# Security
+
+
+            <div class="cell my-panel">
+                <div class="panel">
+                    <h5 class="panel_\_title">Security</h5>
+            * [Scylla Security Checklist](https://opensource.docs.scylladb.com/branch-5.1/operating-scylla/security/security-checklist.md)
+* [Scylla Auditing Guide](https://opensource.docs.scylladb.com/branch-5.1/operating-scylla/security/auditing.md)
+
+</div></div>
+            <div class="cell my-panel">
+                <div class="panel">
+                    <h5 class="panel_\_title">Authentication and Authorization</h5>
+            * [Enable Authentication](https://opensource.docs.scylladb.com/branch-5.1/operating-scylla/security/authentication.md)
+* [Enable and Disable Authentication Without Downtime](https://opensource.docs.scylladb.com/branch-5.1/operating-scylla/security/runtime-authentication.md)
+* [Generate a cqlshrc File](https://opensource.docs.scylladb.com/branch-5.1/operating-scylla/security/gen-cqlsh-file.md)
+* [Enable Authorization](https://opensource.docs.scylladb.com/branch-5.1/operating-scylla/security/enable-authorization.md)
+* [Role Based Access Control (RBAC)](https://opensource.docs.scylladb.com/branch-5.1/operating-scylla/security/rbac-usecase.md)
+* [Grant Authorization CQL Reference](https://opensource.docs.scylladb.com/branch-5.1/operating-scylla/security/authorization.md)
+* [Reset Authenticator Password](https://opensource.docs.scylladb.com/branch-5.1/troubleshooting/password-reset.md)
+* [LDAP Authentication](https://opensource.docs.scylladb.com/branch-5.1/operating-scylla/security/ldap-authentication.md)
+* [LDAP Authorization (Role Management)](https://opensource.docs.scylladb.com/branch-5.1/operating-scylla/security/ldap-authorization.md)
+
+</div></div>
+            <div class="cell my-panel">
+                <div class="panel">
+                    <h5 class="panel_\_title">Encryption</h5>
+            * [Encryption: Data in Transit Client to Node](https://opensource.docs.scylladb.com/branch-5.1/operating-scylla/security/client-node-encryption.md)
+* [Encryption: Data in Transit Node to Node](https://opensource.docs.scylladb.com/branch-5.1/operating-scylla/security/node-node-encryption.md)
+* [Generating a self-signed Certificate Chain Using openssl](https://opensource.docs.scylladb.com/branch-5.1/operating-scylla/security/generate-certificate.md)
+* [Encryption at Rest](https://opensource.docs.scylladb.com/branch-5.1/operating-scylla/security/encryption-at-rest.md)
+
+</div></div>
+
+Also check out the [Security Features lesson](https://university.scylladb.com/courses/scylla-operations/lessons/security-features/topic/security-features/) on Scylla University.

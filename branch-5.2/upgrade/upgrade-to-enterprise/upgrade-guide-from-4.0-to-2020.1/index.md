@@ -1,0 +1,20 @@
+# Upgrade - Scylla 4.0 to Scylla Enterprise 2020.1
+
+<div class="panel callout radius animated">
+         <div class="row">
+           <div class="medium-3 columns">
+             <h5 id="getting-started">Upgrade Scylla Scylla 4.0 to Scylla Enterprise 2020.1</h5>
+           </div>
+           <div class="medium-9 columns">
+
+Upgrade guides are available for:
+
+* [Upgrade Scylla Enterprise from 4.0.x to 2020.1.y on Red Hat Enterprise Linux and CentOS](https://opensource.docs.scylladb.com/branch-5.2/upgrade/upgrade-to-enterprise/upgrade-guide-from-4.0-to-2020.1/upgrade-guide-from-4.0-to-2020.1-rpm.md)
+* [Upgrade Scylla Enterprise from 4.0.x to 2020.1.y on Ubuntu 16.04](https://opensource.docs.scylladb.com/branch-5.2/upgrade/upgrade-to-enterprise/upgrade-guide-from-4.0-to-2020.1/upgrade-guide-from-4.0-to-2020.1-ubuntu-16-04.md)
+* [Upgrade Scylla Enterprise from 4.0.x to 2020.1.y on Ubuntu 18.04](https://opensource.docs.scylladb.com/branch-5.2/upgrade/upgrade-to-enterprise/upgrade-guide-from-4.0-to-2020.1/upgrade-guide-from-4.0-to-2020.1-ubuntu-18-04.md)
+* [Upgrade Scylla Enterprise from 4.0.x to 2020.1.y on Debian](https://opensource.docs.scylladb.com/branch-5.2/upgrade/upgrade-to-enterprise/upgrade-guide-from-4.0-to-2020.1/upgrade-guide-from-4.0-to-2020.1-debian.md)
+* [Scylla Metrics Update - Scylla 4.0 to 2020.1](https://opensource.docs.scylladb.com/branch-5.2/upgrade/upgrade-to-enterprise/upgrade-guide-from-4.0-to-2020.1/metric-update-4.0-to-2020.1.md)
+
+</div>
+</div>
+</div>

@@ -1,0 +1,199 @@
+# Upgrade Guide - Scylla 4.3 to Scylla Enterprise 2021.1 for Ubuntu 20.04
+
+This document is a step by step procedure for upgrading from Scylla 4.3 to Scylla Enterprise 2021.1, and rollback to 4.3 if required.
+
+## Applicable versions
+
+This guide covers upgrading Scylla from the following versions: 4.3.x to Scylla Enterprise version 2021.1.y on the following platform:
+
+* Ubuntu 20.04
+
+#### NOTE
+Ubuntu 14 is not supported in the following versions of Scylla Enterprise 2019.1.0 and above
+
+## Upgrade Procedure
+
+#### NOTE
+Execute the following commands one node at the time, moving to the next node only **after** the upgrade procedure completed successfully.
+
+#### WARNING
+If you are using CDC and upgrading Scylla 4.3 to 4.4, please review the API updates in [querying CDC streams](https://opensource.docs.scylladb.com/branch-5.2/using-scylla/cdc/cdc-querying-streams.md) and [CDC stream generations](https://opensource.docs.scylladb.com/branch-5.2/using-scylla/cdc/cdc-stream-generations.md).
+In particular, you should update applications that use CDC according to [CDC Upgrade notes](https://opensource.docs.scylladb.com/branch-5.2/using-scylla/cdc/cdc-querying-streams.md#scylla-4-3-to-4-4-upgrade) **before** upgrading the cluster to 4.4.
+
+If you are using CDC and upgrading from pre 4.3 version to 4.3, note the [upgrading from experimental CDC](https://opensource.docs.scylladb.com/branch-5.2/kb/cdc-experimental-upgrade.md).
+
+A Scylla upgrade is a rolling procedure which does **not** require full cluster shutdown.
+For each of the nodes in the cluster, you will:
+
+* Check cluster schema
+* Drain node and backup the data
+* Backup configuration file
+* Stop Scylla
+* Download and install new Scylla packages
+* Start Scylla
+* Validate that the upgrade was successful
+
+Apply the following procedure **serially** on each node. Do not move to the next node before validating the node is up and running with the new version.
+
+**During** the rolling upgrade it is highly recommended:
+
+* Not to use new 2021.1 features
+* Not to run administration functions, like repairs, refresh, rebuild or add or remove nodes. See [sctool](https://manager.docs.scylladb.com/stable/sctool/index.html) for suspending Scylla Manager scheduled or running repairs.
+* Not to apply schema changes
+
+#### NOTE
+Before upgrading to 2019.1, make sure to use [Scylla Monitoring 2.3](https://github.com/scylladb/scylla-monitoring/releases/tag/scylla-monitoring-2.3) or newer, for the 2019.1 Dashboards.
+
+## Upgrade steps
+
+### Check cluster schema
+
+Make sure that all nodes have the schema synched prior to upgrade, we won’t survive an upgrade that has schema disagreement between nodes.
+
+```sh
+nodetool describecluster
+```
+
+### Drain node and backup the data
+
+Before any major procedure, like an upgrade, it is recommended to backup all the data to an external device. In Scylla, backup is done using the `nodetool snapshot` command. For **each** node in the cluster, run the following command:
+
+```sh
+nodetool drain
+nodetool snapshot
+```
+
+Take note of the directory name that nodetool gives you, and copy all the directories having this name under `/var/lib/scylla` to a backup device.
+
+When the upgrade is complete (all nodes), the snapshot should be removed by `nodetool clearsnapshot -t <snapshot>`, or you risk running out of space.
+
+### Backup configuration files
+
+```sh
+for conf in $(cat /var/lib/dpkg/info/scylla-*server.conffiles /var/lib/dpkg/info/scylla-*conf.conffiles /var/lib/dpkg/info/scylla-*jmx.conffiles | grep -v init ) /etc/systemd/system/{var-lib-scylla,var-lib-systemd-coredump}.mount; do sudo cp -v $conf $conf.backup-4.3; done
+```
+
+### Gracefully stop the node
+
+```sh
+sudo service scylla-server stop
+```
+
+### Download and install the new release
+
+Before upgrading, check what version you are running now using `dpkg -l scylla\*server`. You should use the same version in case you want to [rollback](/upgrade/upgrade-to-enterprise/upgrade-guide-from-4.3-to-2021.1/upgrade-guide-from-4.3-to-2021.1-ubuntu-20-04/#id4) the upgrade. If you are not running a 4.3.x version, stop right here! This guide only covers 4.3.x to 2021.1.y upgrades.
+
+To upgrade:
+
+1. Update the [Scylla Enterprise Deb repo](https://www.scylladb.com/customer-portal/?product=ent&platform=ubuntu-20.04&version=stable-release-2021.1) to **2021.1**
+2. Install
+
+```sh
+sudo apt-get clean all
+sudo apt-get update
+sudo apt-get remove scylla\*
+sudo apt-get install scylla-enterprise
+for conf in $(cat /var/lib/dpkg/info/scylla-*server.conffiles /var/lib/dpkg/info/scylla-*conf.conffiles /var/lib/dpkg/info/scylla-*jmx.conffiles | grep -v init ) /etc/systemd/system/{var-lib-scylla,var-lib-systemd-coredump}.mount; do sudo cp -v $conf.backup-4.3 $conf; done
+sudo systemctl daemon-reload (Ubuntu 16.04)
+```
+
+Answer ‘y’ to the first two questions.
+
+### Start the node
+
+New io.conf format was introduced in Scylla 2.3 and 2019.1. If your io.conf doesn’t contain –io-properties-file option, then it’s still the old format, you need to re-run the io setup to generate new io.conf.
+
+```sh
+sudo scylla_io_setup
+```
+
+```sh
+sudo service scylla-server start
+```
+
+### Validate
+
+1. Check cluster status with `nodetool status` and make sure **all** nodes, including the one you just upgraded, are in UN status.
+2. Use `curl -X GET "http://localhost:10000/storage_service/scylla_release_version"` to check scylla version.
+3. Check scylla-server log (by `journalctl _COMM=scylla`) and `/var/log/syslog` to validate there are no errors.
+4. Check again after 2 minutes, to validate no new issues are introduced.
+
+Once you are sure the node upgrade is successful, move to the next node in the cluster.
+
+* More on [Scylla Metrics Update - Scylla 4.3 to 2021.1](https://opensource.docs.scylladb.com/branch-5.2/upgrade/upgrade-to-enterprise/upgrade-guide-from-4.3-to-2021.1/metric-update-4.3-to-2021.1.md)
+
+## Rollback Procedure
+
+#### NOTE
+Execute the following commands one node at the time, moving to the next node only **after** the rollback procedure completed successfully.
+
+The following procedure describes a rollback from Scylla Enterprise release 2021.1.x to Scylla 4.3.y. Apply this procedure if an upgrade from 4.3 to 2021.1 failed before completing on all nodes. Use this procedure only for nodes you upgraded to 2021.1
+
+Scylla rollback is a rolling procedure which does **not** require full cluster shutdown.
+For each of the nodes rollback to 4.3, you will:
+
+* Drain the node and stop Scylla
+* Retrieve the old Scylla packages
+* Restore the configuration file
+* Restart Scylla
+* Validate the rollback success
+
+Apply the following procedure **serially** on each node. Do not move to the next node before validating the node is up and running with the new version.
+
+## Rollback steps
+
+### Gracefully shutdown Scylla
+
+```sh
+nodetool drain
+sudo service scylla-server stop
+```
+
+### download and install the old release
+
+1. Remove the old repo file.
+
+```sh
+sudo rm -rf /etc/apt/sources.list.d/scylla.list
+```
+
+1. Update the [Scylla deb repo](http://www.scylladb.com/download/) to **4.3**
+2. install
+
+```sh
+sudo apt-get clean all
+sudo apt-get update
+sudo apt-get remove scylla\* -y
+sudo apt-get install scylla
+```
+
+Answer ‘y’ to the first two questions.
+
+### Restore the configuration files
+
+```sh
+for conf in $(cat /var/lib/dpkg/info/scylla-*server.conffiles /var/lib/dpkg/info/scylla-*conf.conffiles /var/lib/dpkg/info/scylla-*jmx.conffiles | grep -v init ) /etc/systemd/system/{var-lib-scylla,var-lib-systemd-coredump}.mount; do sudo cp -v $conf.backup-4.3 $conf; done
+sudo systemctl daemon-reload (Ubuntu 16.04)
+```
+
+### Restore system tables
+
+Restore all tables of **system** and **system_schema** from the previous snapshot because 2021.1 uses a different set of system tables. See [Restore from a Backup and Incremental Backup](https://opensource.docs.scylladb.com/branch-5.2/operating-scylla/procedures/backup-restore/restore.md) for reference.
+
+```console
+cd /var/lib/scylla/data/keyspace_name/table_name-UUID/
+sudo find . -maxdepth 1 -type f  -exec sudo rm -f "{}" +
+cd /var/lib/scylla/data/keyspace_name/table_name-UUID/snapshots/<snapshot_name>/
+sudo cp -r * /var/lib/scylla/data/keyspace_name/table_name-UUID/
+sudo chown -R scylla:scylla /var/lib/scylla/data/keyspace_name/table_name-UUID/
+```
+
+### Start the node
+
+```sh
+sudo service scylla-server start
+```
+
+### Validate
+
+Check upgrade instruction above for validation. Once you are sure the node rollback is successful, move to the next node in the cluster.
