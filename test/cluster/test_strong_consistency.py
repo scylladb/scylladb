@@ -19,6 +19,7 @@ from cassandra.protocol import InvalidRequest
 from cassandra.query import SimpleStatement, BoundStatement
 from test.pylib.tablets import get_all_tablet_replicas, get_tablet_info, get_tablet_replicas
 from test.pylib.rest_client import read_barrier
+from test.pylib.scylla_cluster import ReplaceConfig
 
 import asyncio
 import pytest
@@ -2077,6 +2078,177 @@ async def test_rf_change(manager: ScyllaClusterManager):
                 rows = await cql.run_async(f"SELECT * FROM {table} WHERE pk = {i}", host=leader_host)
                 assert len(rows) == 1, f"Expected 1 row for pk={i}, got {len(rows)}"
                 assert rows[0].c == i, f"Expected c={i}, got {rows[0].c}"
+
+
+async def insert_rows(cql, table: str, pks, host: Host | None = None):
+    for pk in pks:
+        await cql.run_async(f"INSERT INTO {table} (pk, c) VALUES ({pk}, {pk + 1})", host=host)
+
+
+async def check_rows(cql, table: str, pks, host: Host | None = None):
+    for pk in pks:
+        rows = await cql.run_async(f"SELECT * FROM {table} WHERE pk = {pk}", host=host)
+        assert len(rows) == 1, f"Expected 1 row for pk={pk}, got {len(rows)}"
+        assert rows[0].c == pk + 1, f"Expected c={pk + 1} for pk={pk}, got c={rows[0].c}"
+
+
+async def check_new_replica_serves_data(manager: ScyllaClusterManager, server: ServerInfo, host: Host,
+                                        group_id: str, cql, table: str, pks):
+    """Make `server` the leader of the tablet's group and read `pks` through it.
+
+    A linearizable read is served by the leader, so this passes only if the data
+    reached `server` - through the snapshot transfer of the transition that made
+    it a replica, not just through writes that followed it.
+    """
+    await ensure_raft_group_leader_on(manager, server, group_id)
+    await check_rows(cql, table, pks, host=host)
+
+
+async def test_rf_decrease(manager: ScyllaClusterManager):
+    """RF decrease removes a replica from the tablet's raft group.
+
+    The replica is dropped by a rebuild_v2 transition with no pending replica. It
+    has to leave the group - its raft server torn down - while the remaining two
+    keep serving reads and writes.
+    """
+    cmdline = DEFAULT_CMDLINE + ['--logger-log-level', 'raft_topology=debug']
+    servers = await manager.servers_add(3, config=DEFAULT_CONFIG, cmdline=cmdline, property_file=[
+        {'dc': 'dc1', 'rack': 'rack1'},
+        {'dc': 'dc1', 'rack': 'rack2'},
+        {'dc': 'dc1', 'rack': 'rack3'},
+    ])
+    cql, hosts = await manager.get_ready_cql(servers)
+    host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
+
+    await manager.disable_tablet_balancing()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1', 'rack2', 'rack3']} "
+                                         "AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, c int") as table:
+            table_name = table.split('.')[-1]
+            group_id = await get_table_raft_group_id(manager, ks, table_name)
+
+            await insert_rows(cql, table, range(10))
+
+            dropped_log = await manager.server_open_log(servers[2].server_id)
+            mark = await dropped_log.mark()
+
+            logger.info("Decreasing RF from 3 to 2")
+            await cql.run_async(f"ALTER KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['rack1', 'rack2']}}")
+            await manager.api.quiesce_topology(servers[0].ip_addr)
+
+            tablets = await get_all_tablet_replicas(manager, servers[0], ks, table_name)
+            assert len(tablets) == 1
+            replica_hosts = {host_id for host_id, _ in tablets[0].replicas}
+            assert replica_hosts == {host_ids[0], host_ids[1]}, f"Expected replicas on rack1 and rack2, got {tablets[0].replicas}"
+
+            await dropped_log.wait_for(f"raft server for group id {group_id} is destroyed", from_mark=mark, timeout=60)
+
+            await insert_rows(cql, table, range(10, 20))
+            for server, host in zip(servers[:2], hosts[:2]):
+                await check_new_replica_serves_data(manager, server, host, group_id, cql, table, range(20))
+
+
+async def test_removenode(manager: ScyllaClusterManager):
+    """removenode of a replica rebuilds the tablet on another node of the same rack.
+
+    The removed node is down, so the rebuild has only the remaining two voters to
+    commit the raft config change with, and the new replica gets the data from the
+    snapshot transfer.
+    """
+    cmdline = DEFAULT_CMDLINE + ['--logger-log-level', 'raft_topology=debug']
+    servers = await manager.servers_add(4, config=DEFAULT_CONFIG, cmdline=cmdline, property_file=[
+        {'dc': 'dc1', 'rack': 'rack1'},
+        {'dc': 'dc1', 'rack': 'rack1'},
+        {'dc': 'dc1', 'rack': 'rack2'},
+        {'dc': 'dc1', 'rack': 'rack3'},
+    ])
+    cql, _ = await manager.get_ready_cql(servers)
+    host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
+
+    await manager.disable_tablet_balancing()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1', 'rack2', 'rack3']} "
+                                         "AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, c int") as table:
+            table_name = table.split('.')[-1]
+            group_id = await get_table_raft_group_id(manager, ks, table_name)
+
+            await insert_rows(cql, table, range(10))
+
+            tablets = await get_all_tablet_replicas(manager, servers[0], ks, table_name)
+            assert len(tablets) == 1
+            # Both nodes of rack1 can hold the replica without changing the rack
+            # distribution, so the replica can be rebuilt on the other one.
+            rack1 = host_ids[:2]
+            removed_host_id = next(host_id for host_id, _ in tablets[0].replicas if host_id in rack1)
+            new_host_id = next(host_id for host_id in rack1 if host_id != removed_host_id)
+            removed_server = servers[host_ids.index(removed_host_id)]
+            new_server = servers[host_ids.index(new_host_id)]
+            live_servers = [s for s in servers if s != removed_server]
+
+            logger.info(f"Stopping and removing the rack1 replica {removed_host_id}")
+            await manager.server_stop_gracefully(removed_server.server_id)
+            await manager.remove_node(servers[2].server_id, removed_server.server_id)
+            await manager.api.quiesce_topology(servers[2].ip_addr)
+
+            tablets = await get_all_tablet_replicas(manager, servers[2], ks, table_name)
+            assert len(tablets) == 1
+            replica_hosts = {host_id for host_id, _ in tablets[0].replicas}
+            assert replica_hosts == {new_host_id, host_ids[2], host_ids[3]}, \
+                f"Expected the rack1 replica to be rebuilt on {new_host_id}, got {tablets[0].replicas}"
+
+            cql, hosts = await manager.get_ready_cql(live_servers)
+            await check_new_replica_serves_data(manager, new_server, hosts[live_servers.index(new_server)],
+                                                group_id, cql, table, range(10))
+            await insert_rows(cql, table, range(10, 20))
+            await check_rows(cql, table, range(20))
+
+
+async def test_replace(manager: ScyllaClusterManager):
+    """Replacing a dead replica rebuilds the tablet on the replacing node.
+
+    The replacing node takes over the dead node's rack, so it becomes the tablet's
+    replica, and has to get the data from the snapshot transfer.
+    """
+    cmdline = DEFAULT_CMDLINE + ['--logger-log-level', 'raft_topology=debug']
+    servers = await manager.servers_add(3, config=DEFAULT_CONFIG, cmdline=cmdline, property_file=[
+        {'dc': 'dc1', 'rack': 'rack1'},
+        {'dc': 'dc1', 'rack': 'rack2'},
+        {'dc': 'dc1', 'rack': 'rack3'},
+    ])
+    cql, _ = await manager.get_ready_cql(servers)
+    host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
+
+    await manager.disable_tablet_balancing()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1', 'rack2', 'rack3']} "
+                                         "AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, c int") as table:
+            table_name = table.split('.')[-1]
+            group_id = await get_table_raft_group_id(manager, ks, table_name)
+
+            await insert_rows(cql, table, range(10))
+
+            logger.info(f"Stopping and replacing {host_ids[2]}")
+            await manager.server_stop_gracefully(servers[2].server_id)
+            replace_cfg = ReplaceConfig(replaced_id=servers[2].server_id, reuse_ip_addr=False, use_host_id=True)
+            new_server = await manager.server_add(replace_cfg=replace_cfg, config=DEFAULT_CONFIG, cmdline=cmdline,
+                                                  property_file={'dc': 'dc1', 'rack': 'rack3'})
+            await manager.api.quiesce_topology(servers[0].ip_addr)
+            new_host_id = await manager.get_host_id(new_server.server_id)
+
+            tablets = await get_all_tablet_replicas(manager, servers[0], ks, table_name)
+            assert len(tablets) == 1
+            replica_hosts = {host_id for host_id, _ in tablets[0].replicas}
+            assert replica_hosts == {host_ids[0], host_ids[1], new_host_id}, \
+                f"Expected the rack3 replica to be rebuilt on {new_host_id}, got {tablets[0].replicas}"
+
+            live_servers = [servers[0], servers[1], new_server]
+            cql, hosts = await manager.get_ready_cql(live_servers)
+            await check_new_replica_serves_data(manager, new_server, hosts[2], group_id, cql, table, range(10))
+            await insert_rows(cql, table, range(10, 20))
+            await check_rows(cql, table, range(20))
 
 
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
