@@ -336,8 +336,18 @@ public:
         Delete, ForceDelete, Keep,
     };
 
+    struct file_to_dispose {
+        named_file file;
+        dispose_mode mode;
+        // The segment's id. Erasing it from _pending_disposal is a no-op for a
+        // segment that never entered _segments, such as a reserve one.
+        std::optional<segment_id_type> id;
+        file_to_dispose(named_file f, dispose_mode m, std::optional<segment_id_type> i)
+            : file(std::move(f)), mode(m), id(i) {}
+    };
+
     std::optional<shared_future<with_clock<db::timeout_clock>>> _segment_allocating;
-    std::vector<std::pair<named_file, dispose_mode>> _files_to_dispose;
+    std::vector<file_to_dispose> _files_to_dispose;
 
     void account_memory_usage(size_t size) noexcept {
         _request_controller.consume(size);
@@ -471,7 +481,7 @@ public:
 
     future<> orphan_all();
 
-    void add_file_to_dispose(named_file, dispose_mode);
+    void add_file_to_dispose(named_file, dispose_mode, std::optional<segment_id_type>);
 
     future<> do_pending_deletes();
     future<> delete_segments(std::vector<sstring>);
@@ -528,6 +538,13 @@ private:
 
     size_t max_request_controller_units() const;
     segment_id_type _ids = 0, _low_id = 0;
+    // Ids of segments that left _segments while their file is still on disk under
+    // a replayable name, erased once the file is gone. Unordered, so the oldest is
+    // searched for; a file kept for replay keeps its id for good.
+    std::vector<segment_id_type> _pending_disposal;
+    // Ids whose file is unlinked but whose directory entry is not synced yet.
+    // Kept across passes so a later sync releases what an earlier one could not.
+    std::vector<segment_id_type> _unsynced_removals;
     std::vector<sseg_ptr> _segments;
     queue<sseg_ptr> _reserve_segments;
     queue<named_file> _recycled_segments;
@@ -875,7 +892,7 @@ public:
         _segment_manager->totals.buffer_list_bytes -= _buffer.size_bytes();
 
         if (mode != dispose_mode::Keep || _file) {
-            _segment_manager->add_file_to_dispose(std::move(_file), mode);
+            _segment_manager->add_file_to_dispose(std::move(_file), mode, _desc.id);
         }
     }
 
@@ -1529,11 +1546,11 @@ public:
 };
 
 db::replay_position db::commitlog::segment_manager::min_position() const {
-    if (_segments.empty()) {
-        return {_ids, 0};
-    } else {
-        return {_segments.front()->_desc.id, 0};
+    auto id = _segments.empty() ? _ids : _segments.front()->_desc.id;
+    if (!_pending_disposal.empty()) {
+        id = std::min(id, std::ranges::min(_pending_disposal));
     }
+    return {id, 0};
 }
 
 db::replay_position db::commitlog::segment_manager::current_position() const {
@@ -1905,11 +1922,18 @@ future<> db::commitlog::segment_manager::oversized_allocation(entry_writer& writ
 
     if (failed) {
         clogger.debug("Oversized allocation failed. Rolling back...");
+        // The sync above suspends, so a sweep may already have erased and
+        // registered one of these. Reserve for the worst case here, where a
+        // bad_alloc still propagates, so the loop cannot throw half way.
+        _pending_disposal.reserve(_pending_disposal.size() + _segments.size() + maybe_clear.size());
         // reset file positions.
         for (auto [s, fp] : maybe_clear) {
             s->reset_file_position(fp);
             if (fp == 0) {
                 s->mark_clean();
+                // The file can already hold a header, so keep min_position()
+                // from advancing past it until the file is disposed of.
+                _pending_disposal.push_back(s->_desc.id);
                 _segments.erase(std::remove(_segments.begin(), _segments.end(), s), _segments.end());
             }
         }
@@ -2457,7 +2481,8 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
         co_await f.close();
     }
     if (ep) {
-        add_file_to_dispose(std::move(f), dispose_mode::Delete);
+        // Never reached _segments, so there is no id to keep.
+        add_file_to_dispose(std::move(f), dispose_mode::Delete, std::nullopt);
         co_return coroutine::exception(std::move(ep));
     }
 
@@ -2539,6 +2564,10 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
         s = {};
         co_await do_pending_deletes();
     } else {
+        // Every id that can reach _pending_disposal comes from a segment in
+        // _segments, and discard_unused_segments() moves them there from a
+        // noexcept path. Reserve here, where a bad_alloc can still propagate.
+        _pending_disposal.reserve(_pending_disposal.size() + _segments.size() + 1);
         _segments.push_back(s);
         _segments.back()->reset_sync_time();
     }
@@ -2659,9 +2688,12 @@ void db::commitlog::segment_manager::discard_unused_segments() noexcept {
     // #25709 ensure we don't free any segment until after prune.
     {
         auto tmp = _segments; 
-        std::erase_if(_segments, [=](sseg_ptr s) {
+        std::erase_if(_segments, [this](sseg_ptr s) {
             if (s->can_delete()) {
                 clogger.debug("Segment {} is unused", *s);
+                // The file stays on disk until do_pending_deletes() removes or
+                // recycles it. Keep min_position() from advancing past it meanwhile.
+                _pending_disposal.push_back(s->_desc.id);
                 return true;
             }
             if (s->is_still_allocating()) {
@@ -2691,14 +2723,14 @@ future<> db::commitlog::segment_manager::clear_reserve_segments() {
         _reserve_segments.pop();
     }
 
-    for (auto& [f, mode] : _files_to_dispose) {
-        if (mode == dispose_mode::Delete) {
-            mode = dispose_mode::ForceDelete;
+    for (auto& e : _files_to_dispose) {
+        if (e.mode == dispose_mode::Delete) {
+            e.mode = dispose_mode::ForceDelete;
         }
     }
 
     _recycled_segments.consume([&](named_file f) {
-        _files_to_dispose.emplace_back(std::move(f), dispose_mode::ForceDelete);
+        _files_to_dispose.emplace_back(std::move(f), dispose_mode::ForceDelete, std::nullopt);
         return true;
     });
 
@@ -2798,8 +2830,8 @@ future<> db::commitlog::segment_manager::shutdown() {
     clogger.debug("Commitlog shutdown complete");
 }
 
-void db::commitlog::segment_manager::add_file_to_dispose(named_file f, dispose_mode mode) {
-    _files_to_dispose.emplace_back(std::move(f), mode);
+void db::commitlog::segment_manager::add_file_to_dispose(named_file f, dispose_mode mode, std::optional<segment_id_type> id) {
+    _files_to_dispose.emplace_back(std::move(f), mode, id);
 }
 
 future<> db::commitlog::segment_manager::delete_segments(std::vector<sstring> files) {
@@ -2819,7 +2851,7 @@ future<> db::commitlog::segment_manager::delete_segments(std::vector<sstring> fi
         auto size = co_await file_size(s);
         f.maybe_update_size(size);
         totals.total_size_on_disk += size;
-        _files_to_dispose.emplace_back(std::move(f), dispose_mode::Delete);
+        _files_to_dispose.emplace_back(std::move(f), dispose_mode::Delete, std::nullopt);
     }
     co_return co_await do_pending_deletes();
 }
@@ -2865,21 +2897,22 @@ struct fmt::formatter<db::commitlog::segment_manager::byte_flow<T>> {
     }
 };
 
-using file_to_dispose_t = std::pair<db::commitlog::segment_manager::named_file,
-                                    db::commitlog::segment_manager::dispose_mode>;
+using file_to_dispose_t = db::commitlog::segment_manager::file_to_dispose;
 template <>
 struct fmt::formatter<file_to_dispose_t> {
     constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
     auto format(const file_to_dispose_t& p, fmt::format_context& ctx) const {
-        auto& [file, mode] = p;
-        return fmt::format_to(ctx.out(), "{} ({})", file, mode);
+        if (p.id) {
+            return fmt::format_to(ctx.out(), "{} ({}, id={})", p.file, p.mode, *p.id);
+        }
+        return fmt::format_to(ctx.out(), "{} ({})", p.file, p.mode);
     }
 };
 
 future<> db::commitlog::segment_manager::do_pending_deletes() {
     auto ftd = std::exchange(_files_to_dispose, {});
 
-    if (ftd.empty()) {
+    if (ftd.empty() && _unsynced_removals.empty()) {
         co_return;
     }
 
@@ -2891,9 +2924,11 @@ future<> db::commitlog::segment_manager::do_pending_deletes() {
     std::exception_ptr recycle_error;
     auto exts = cfg.extensions;
 
-    clogger.debug("Discarding segments {}", ftd);
+    if (!ftd.empty()) {
+        clogger.debug("Discarding segments {}", ftd);
+    }
 
-    for (auto& [f, mode] : ftd) {
+    for (auto& [f, mode, id] : ftd) {
         // `f.remove_file()` resets known_size to 0, so remember the size here,
         // in order to subtract it from total_size_on_disk accurately.
         auto size = f.known_size();
@@ -2926,6 +2961,10 @@ future<> db::commitlog::segment_manager::do_pending_deletes() {
                 // cause header ID to be invalid in the file -> ignored
                 try {
                     co_await f.rename(dst);
+                    // The header id no longer matches the name, so replay skips it.
+                    if (id) {
+                        std::erase(_pending_disposal, *id);
+                    }
                     auto b = _recycled_segments.push(std::move(f));
                     SCYLLA_ASSERT(b); // we set this to max_size_t so...
                     continue;
@@ -2939,6 +2978,12 @@ future<> db::commitlog::segment_manager::do_pending_deletes() {
             clogger.debug("Deleting segment file {}", f.name());
             // last resort.
             co_await f.remove_file();
+            // seastar::remove_file() does not sync the directory, so the removal
+            // is not on disk yet. Registered ids only: a reserve segment carries
+            // an id that was never registered and needs no sync.
+            if (id && std::ranges::find(_pending_disposal, *id) != _pending_disposal.end()) {
+                _unsynced_removals.push_back(*id);
+            }
         } catch (...) {
             clogger.error("Could not delete segment {}: {:t}", f.name(), std::current_exception());
         }
@@ -2946,6 +2991,8 @@ future<> db::commitlog::segment_manager::do_pending_deletes() {
         // or had such an exception that we consider the file dead
         // anyway. In either case we _remove_ the file size from
         // footprint, because it is no longer our problem.
+        // A file that is still on disk keeps its id in _pending_disposal,
+        // so min_position() does not advance past it.
         totals.total_size_on_disk -= size;
     }
 
@@ -2958,10 +3005,34 @@ future<> db::commitlog::segment_manager::do_pending_deletes() {
     if (recycle_error && _recycled_segments.empty()) {
         abort_recycled_list(recycle_error);
     }
+
+    // An unlink is only on disk once the directory entry is, so sync before
+    // letting min_position() advance past the files removed above. One sync per
+    // batch, not per file.
+    if (!_unsynced_removals.empty()) {
+        try {
+            co_await sync_directory(cfg.commit_log_location);
+            // One successful sync covers every unlink issued before it, including
+            // those a previous pass could not sync.
+            std::erase_if(_pending_disposal, [this] (segment_id_type id) {
+                return std::ranges::find(_unsynced_removals, id) != _unsynced_removals.end();
+            });
+            _unsynced_removals.clear();
+        } catch (...) {
+            // The ids stay, so min_position() holds, and the next pass retries.
+            clogger.error("Could not sync commitlog directory {}: {:t}", cfg.commit_log_location, std::current_exception());
+        }
+    }
+
     deleting_done.set_value();
 }
 
 future<> db::commitlog::segment_manager::orphan_all() {
+    // The files stay on disk, dirty ones on purpose for replay. Register before
+    // the exchange, as the other two exits from _segments do.
+    for (auto& s : _segments) {
+        _pending_disposal.push_back(s->_desc.id);
+    }
     // #25709. the actual process of destroying the elements here
     // might cause a call into discard_unused_segments.
     // ensure the target vector is empty when we get to destructors
