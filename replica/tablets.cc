@@ -63,6 +63,9 @@ static bool strongly_consistent_tables_enabled = false;
 void set_strongly_consistent_tables_enabled(bool enabled) {
     strongly_consistent_tables_enabled = enabled;
 }
+bool is_strongly_consistent_tables_enabled() {
+    return strongly_consistent_tables_enabled;
+}
 
 schema_ptr make_tablets_schema() {
     // FIXME: Allow UDTs in system keyspace:
