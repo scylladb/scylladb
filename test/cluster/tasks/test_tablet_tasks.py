@@ -120,9 +120,6 @@ async def test_tablet_repair_wait_with_table_drop(manager: ScyllaClusterManager)
     assert task.table == "test"
     assert task.state in ["created", "running"]
 
-    log = await manager.server_open_log(servers[0].server_id)
-    mark = await log.mark()
-
     await enable_injection(manager, [servers[0]], injection)
 
     async def wait_for_task():
@@ -130,7 +127,7 @@ async def test_tablet_repair_wait_with_table_drop(manager: ScyllaClusterManager)
         assert status_wait.state == "done"
 
     async def drop_table():
-        await log.wait_for(f'"{injection}"', from_mark=mark)
+        await manager.api.wait_for_injection_enter(servers[0].ip_addr, injection)
         await disable_injection(manager, servers, "repair_tablet_fail_on_rpc_call")
         await manager.get_cql().run_async(f"DROP TABLE {ks}.test")
         await manager.api.message_injection(servers[0].ip_addr, injection)
