@@ -566,24 +566,26 @@ class ScyllaServer:
         """
         return copy.deepcopy(self.config)
 
-    def update_config(self, config_options: dict[str, Any]) -> None:
+    def update_config(self, config_options: dict[str, Any], reload: bool = True) -> None:
         """Update conf/scylla.yaml with `config_options` dict.
 
-        If we're running, reload the config with a SIGHUP.
+        If we're running, reload the config with a SIGHUP, unless `reload` is False:
+        then the file only changes, and the server reads it when told to or when it
+        starts again.
         """
         self.config.update(config_options)
         self._write_config_file()
-        if self.cmd:
+        if self.cmd and reload:
             self.cmd.send_signal(signal.SIGHUP)
 
-    def remove_config_option(self, key: str) -> None:
+    def remove_config_option(self, key: str, reload: bool = True) -> None:
         """Remove an option from conf/scylla.yaml.
 
-        If we're running, reload the config with a SIGHUP.
+        If we're running, reload the config with a SIGHUP, unless `reload` is False.
         """
         self.config.pop(key, None)  # don't fail if there is no such option in the config
         self._write_config_file()
-        if self.cmd:
+        if self.cmd and reload:
             self.cmd.send_signal(signal.SIGHUP)
 
     def update_cmdline(self, cmdline_options: List[str]) -> None:
