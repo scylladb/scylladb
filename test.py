@@ -223,6 +223,12 @@ def parse_cmd_line() -> argparse.Namespace:
                              "is only supported by python tests for now, other tests ignore it. "
                              "By default, the marker filter is not applied and all tests will be run without exception."
                              "To exclude e.g. slow tests you can write --markers 'not slow'.")
+    parser.add_argument('--force-resource-intensive-tests', action='store_true', default=False,
+                        help="dtest: run the tests marked resource_intensive even when the machine is too small for them")
+    parser.add_argument('--skip-resource-intensive-tests', action='store_true', default=False,
+                        help="dtest: deselect the tests marked resource_intensive")
+    parser.add_argument('--execute-upgrade-tests', action='store_true', default=False,
+                        help="dtest: run the tests marked upgrade_test, which are deselected by default")
     parser.add_argument('--coverage', action = 'store_true', default = False,
                         help="When running code instrumented with coverage support"
                              "Will route the profiles to `tmpdir`/mode/coverage/`suite` and post process them in order to generate "
@@ -451,6 +457,9 @@ def run_pytest(options: argparse.Namespace) -> int:
         args.append('--save-log-on-success')
     if options.markers:
         args.append(f'-m={options.markers}')
+    for flag in ("force_resource_intensive_tests", "skip_resource_intensive_tests", "execute_upgrade_tests"):
+        if getattr(options, flag):
+            args.append("--" + flag.replace("_", "-"))
     if options.log_level:
         args.append(f'--log-level={options.log_level}')
     args.extend(files_to_run)

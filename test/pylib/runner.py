@@ -83,6 +83,15 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption('--run_id', action='store', default=None, help='Run id for the test run')
     parser.addoption('--byte-limit', action="store", default=randint(0, 2000), type=int,
                      help="Specific byte limit for failure injection (random by default)")
+    # scylla-dtest's test selection options, with its names and defaults (they act on the
+    # dtest suite, test/cluster/dtest/conftest.py; registered here so that test.py can pass
+    # them whatever suites a run collects).
+    parser.addoption("--force-resource-intensive-tests", action="store_true", default=False,
+                     help="Run the tests marked resource_intensive even when the machine is too small for them")
+    parser.addoption("--skip-resource-intensive-tests", action="store_true", default=False,
+                     help="Deselect the tests marked resource_intensive")
+    parser.addoption("--execute-upgrade-tests", action="store_true", default=False,
+                     help="Run the tests marked upgrade_test (deselected by default)")
     parser.addoption("--gather-metrics", action=BooleanOptionalAction, default=False,
                      help='Switch on gathering cgroup metrics')
     parser.addoption('--random-seed', action="store",

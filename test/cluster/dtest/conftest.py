@@ -22,7 +22,7 @@ from test.cluster.dtest.ccmlib.ccm_parity import runs_as_upstream
 from test.cluster.dtest.dtest_config import DTestConfig
 from test.cluster.dtest.dtest_setup import DTestSetup
 from test.cluster.dtest.dtest_setup_overrides import DTestSetupOverrides
-from test.cluster.dtest.tools.marks import check_issue_closed, enable_with_features
+from test.cluster.dtest.tools.marks import MarkedLocals, check_issue_closed, enable_with_features
 from test.pylib.driver_utils import safe_driver_shutdown
 from test.pylib.runner import TEST_SUITE, get_params_stash
 from test.pylib.scylla_cluster import ScyllaCluster as PylibScyllaCluster
@@ -65,6 +65,7 @@ def pytest_addoption(parser: Parser) -> None:
     parser.addoption("--experimental-features", type=lambda s: s.split(","), action="store", help="Pass experimental features <feature>,<feature> to enable", default=None)
     parser.addoption("--tablets", action=argparse.BooleanOptionalAction, default=False, help="Whether to enable tablets support (default: %(default)s)")
     parser.addoption("--force-gossip-topology-changes", action="store_true", default=False, help="force gossip topology changes in a fresh cluster")
+    parser.addoption("--consider-as-closed", action="extend", nargs="+", default=[], help="Issues to treat as closed in require/unmark_if conditions")
     parser.addoption("--scylla-manager-package", action="store", default=None,
                      help="Scylla Manager relocatable to test against: a URL, a local .tar.gz, or a directory holding the unpacked "
                           "binaries. Defaults to the newest master build on downloads.scylladb.com.")
@@ -94,6 +95,7 @@ def pytest_collection_modifyitems(config: Config, items: list[pytest.Item]) -> N
     """
 
     features = config.scylla_features
+    _deselect_as_upstream(config, items, features)
     for item in items:
         marker = item.get_closest_marker("required_features")
         if marker and not enable_with_features(marker.args, features):
@@ -109,6 +111,51 @@ def pytest_collection_modifyitems(config: Config, items: list[pytest.Item]) -> N
                 item.add_marker(pytest.mark.skip_env(
                     reason=marker.kwargs.get("reason")
                            or f"skip_if condition holds for scylla features {sorted(features)}"))
+
+
+def _sufficient_system_resources_for_resource_intensive_tests() -> bool:
+    """scylla-dtest's bound: room for 9 nodes at 3 GB each."""
+    return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 1024 ** 3 >= 9 * 3
+
+
+def _deselect_as_upstream(config: Config, items: list[pytest.Item], features: set[str]) -> None:
+    """Deselect what scylla-dtest's own collection hook deselects without being asked.
+
+    The scheduling markers (dtest_full, next_gating, ...) select nothing by
+    default, only through -m (test.py --markers).  By default scylla-dtest drops
+    resource_intensive tests when the machine is too small for them (or with
+    --skip-resource-intensive-tests, unless --force-resource-intensive-tests),
+    upgrade_test tests unless --execute-upgrade-tests, and depends_cqlshlib
+    tests; with -m, a test's @pytest.mark.unmark_if takes the named markers off
+    it while its condition holds.
+    """
+    collect_only = config.getoption("--collect-only")
+    sufficient = _sufficient_system_resources_for_resource_intensive_tests()
+    matchexpr = config.option.markexpr
+    context = {"enabled_features": features, "config": config}
+    selected, deselected = [], []
+    for item in items:
+        deselect = False
+        if item.get_closest_marker("resource_intensive") and not collect_only \
+                and not config.getoption("--force-resource-intensive-tests") \
+                and (config.getoption("--skip-resource-intensive-tests") or not sufficient):
+            deselect = True
+        if item.get_closest_marker("upgrade_test") and not config.getoption("--execute-upgrade-tests"):
+            deselect = True
+        if item.get_closest_marker("depends_cqlshlib"):
+            deselect = True
+        if matchexpr:
+            unmarks = set()
+            if (marker := item.get_closest_marker("unmark_if")) and (condition := marker.kwargs.get("condition")) is not None:
+                condition.apply(**context)
+                if condition:
+                    unmarks.update(marker.args)
+            if unmarks and not eval(matchexpr, {}, MarkedLocals([m.name for m in item.iter_markers() if m.name not in unmarks])):
+                deselect = True
+        (deselected if deselect else selected).append(item)
+    if deselected:
+        config.hook.pytest_deselected(items=deselected)
+        items[:] = selected
 
 
 @pytest.fixture(scope="function", autouse=True)
