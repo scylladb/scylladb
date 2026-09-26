@@ -23,7 +23,7 @@ import decimal
 from botocore.exceptions import ClientError
 from contextlib import contextmanager, ExitStack
 
-from test.alternator.util import is_aws, new_test_table, create_test_table, random_string
+from test.alternator.util import get_table_arn, is_aws, new_test_table, create_test_table, random_string
 
 # NOTE: tests here use `pytest.mark.xfail(reason="Not yet implemented on Scylla and MinIO is not started")` as xfail marker as the implementation is ongoing.
 # The tests will pass against AWS.
@@ -38,46 +38,21 @@ def is_table_deleted(dynamodb, table_name: str) -> bool:
             return True
         raise
 
-# Helper to get the table ARN from a table object.
-def get_table_arn(table):
-    desc = table.meta.client.describe_table(TableName=table.name)
-    return desc['Table']['TableArn']
-
-
-# Helper to create a unique S3 bucket name.
+# Bucket names allow neither uppercase letters nor underscores, so
+# unique_table_name() cannot be used.
 def unique_bucket_name():
     return f"alternator-export-test-{uuid.uuid4().hex[:12]}"
 
-
-# Create an S3 client using the same endpoint configuration as the DynamoDB
-# fixture where possible. On AWS, the default S3 client is used. On Scylla,
-# we will use MinIo (or something similar capable of pretending S3).
-# The code has branch to handle both cases, but the MinIo path is not covered as
-# Scylla implementation is not ready - it's here as a placeholder.
+# An S3 client in the "dynamodb" fixture's region - DynamoDB refuses buckets
+# in other regions. Alternator has no S3 support yet.
 def make_s3_client(dynamodb):
     if is_aws(dynamodb):
-        return boto3.client('s3')
-    # Placeholder for MinIo configuration for local Scylla testing.
-    assert False, "MinIo S3 client configuration for local Scylla testing is not implemented yet"
+        return boto3.client('s3', region_name=dynamodb.meta.client.meta.region_name)
+    raise NotImplementedError(
+        'Alternator cannot read or write S3 yet, so there is no S3 endpoint '
+        'to point a client at')
 
-
-# Attach an explicit Deny on PutObject so an in-progress DynamoDB export
-# cannot recreate objects while we purge the bucket. Delete/List are left
-# alone, so cleanup still works with our own credentials.
-def block_bucket_writes_on_s3(s3_client, bucket_name):
-    policy = {
-        'Version': '2012-10-17',
-        'Statement': [{
-            'Sid': 'BlockWrites',
-            'Effect': 'Deny',
-            'Principal': '*',
-            'Action': ['s3:PutObject', 's3:PutObjectAcl'],
-            'Resource': f'arn:aws:s3:::{bucket_name}/*',
-        }],
-    }
-    s3_client.put_bucket_policy(Bucket=bucket_name, Policy=json.dumps(policy))
-
-# Context manager that creates a uniquely-named S3 bucket and deletes it (including all objects) on exit.
+# Create an S3 bucket and delete it, with its contents, on exit.
 @contextmanager
 def new_s3_bucket(s3_client, bucket_name=None):
     if bucket_name is None:
@@ -92,36 +67,45 @@ def new_s3_bucket(s3_client, bucket_name=None):
     try:
         yield bucket_name
     finally:
-        # We will try hard to cleanup on AWS (leftovers are costly)
-        # We don't care for local (Minio or similar) - cleanup is not critical there.
-        if is_aws(s3_client):
-            # An export may still be running and writing into this bucket; deny
-            # further writes first so the purge below cannot race with it.
-            try:
-                block_bucket_writes_on_s3(s3_client, bucket_name)
-            except ClientError as ce:
-                logging.error("Failed to block bucket writes on S3 for bucket %s: %s", bucket_name, ce)
-                # Not yet fatal - fall through to the retry loop below.
+        # DynamoDB cannot cancel an export. An export the test did not wait
+        # for keeps writing, so delete_bucket would fail with BucketNotEmpty
+        # and leak the bucket. Deny Put first; Delete/List stay allowed for
+        # our cleanup.
+        policy = {
+            'Version': '2012-10-17',
+            'Statement': [{
+                'Sid': 'BlockWrites',
+                'Effect': 'Deny',
+                'Principal': '*',
+                'Action': ['s3:PutObject', 's3:PutObjectAcl'],
+                'Resource': f'arn:aws:s3:::{bucket_name}/*',
+            }],
+        }
+        try:
+            s3_client.put_bucket_policy(Bucket=bucket_name, Policy=json.dumps(policy))
+        except ClientError as ce:
+            logging.error("Failed to block bucket writes on S3 for bucket %s: %s", bucket_name, ce)
+            # Not yet fatal - fall through to the retry loop below.
 
-            # Delete all objects before deleting the bucket
-            deadline = time.time() + 60 # 60-second timeout for bucket deletion
-            while time.time() < deadline:
-                paginator = s3_client.get_paginator('list_objects_v2')
-                for page in paginator.paginate(Bucket=bucket_name):
-                    if 'Contents' in page:
-                        s3_client.delete_objects(
-                            Bucket=bucket_name,
-                            Delete={'Objects': [{'Key': obj['Key']} for obj in page['Contents']]}
-                        )
-                try:
-                    s3_client.delete_bucket(Bucket=bucket_name)
-                    break
-                except ClientError as ce:
-                    if ce.response['Error']['Code'] != 'BucketNotEmpty':
-                        raise
-                    time.sleep(2)
-            else:
-                assert False, f"Failed to delete S3 bucket {bucket_name} within the timeout of 1 minute"
+        # Delete all objects, then the bucket.
+        deadline = time.time() + 60 # 60-second timeout for bucket deletion
+        while time.time() < deadline:
+            paginator = s3_client.get_paginator('list_objects_v2')
+            for page in paginator.paginate(Bucket=bucket_name):
+                if 'Contents' in page:
+                    s3_client.delete_objects(
+                        Bucket=bucket_name,
+                        Delete={'Objects': [{'Key': obj['Key']} for obj in page['Contents']]}
+                    )
+            try:
+                s3_client.delete_bucket(Bucket=bucket_name)
+                break
+            except ClientError as ce:
+                if ce.response['Error']['Code'] != 'BucketNotEmpty':
+                    raise
+                time.sleep(2)
+        else:
+            assert False, f"Failed to delete S3 bucket {bucket_name} within the timeout of 1 minute"
 
 
 # This creates an empty table with string partition key and no sort key. We do
