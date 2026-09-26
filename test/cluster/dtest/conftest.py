@@ -24,7 +24,7 @@ from test.cluster.dtest.dtest_setup import DTestSetup
 from test.cluster.dtest.dtest_setup_overrides import DTestSetupOverrides
 from test.cluster.dtest.tools.marks import MarkedLocals, check_issue_closed, enable_with_features
 from test.pylib.driver_utils import safe_driver_shutdown
-from test.pylib.runner import TEST_SUITE, get_params_stash
+from test.pylib.runner import BUILD_MODE, TEST_SUITE, get_params_stash
 from test.pylib.scylla_cluster import ScyllaCluster as PylibScyllaCluster
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.skip_types import skip_env
@@ -118,11 +118,43 @@ def _sufficient_system_resources_for_resource_intensive_tests() -> bool:
     return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 1024 ** 3 >= 9 * 3
 
 
+# scylla-dtest's scheduling markers.  A test carrying any of them came from scylla-dtest's
+# scheduled suites; a test carrying none (the tree's own dtests among them) is not affected.
+SCHEDULING_MARKERS = ("dtest_full", "next_gating", "dtest_smoke", "dtest_debug", "dtest_heavy", "dtest_long",
+                      "scylla_manager")
+
+
+def _mode_default_deselects(item: pytest.Item, mode: str | None) -> bool:
+    """Whether a build mode leaves this test out when no -m is given, as scylla-dtest's CI does.
+
+    scylla-dtest's scheduled selections: release runs everything (its gating job is
+    -m 'not skip'; the daily run takes dtest_full, the Manager jobs scylla_manager); debug
+    runs dtest_full only (heavy and long included); dev is never run, and the job closest
+    to it is the daily release run, -m 'not skip and dtest_full and not dtest_heavy and
+    not dtest_long'.  Only tests carrying scylla-dtest's scheduling markers are affected;
+    test.py --markers selects anything in any mode.
+    """
+    names = {m.name for m in item.iter_markers()}
+    if mode not in ("debug", "dev") or not names & set(SCHEDULING_MARKERS):
+        return False
+    if "dtest_full" not in names:
+        return True
+    return mode == "dev" and bool(names & {"dtest_heavy", "dtest_long"})
+
+
+def _item_build_mode(item: pytest.Item) -> str | None:
+    if (mode := item.stash.get(BUILD_MODE, None)) is not None:
+        return mode
+    stash = get_params_stash(node=item)
+    return stash.get(BUILD_MODE, None) if stash is not None else None
+
+
 def _deselect_as_upstream(config: Config, items: list[pytest.Item], features: set[str]) -> None:
     """Deselect what scylla-dtest's own collection hook deselects without being asked.
 
     The scheduling markers (dtest_full, next_gating, ...) select nothing by
-    default, only through -m (test.py --markers).  By default scylla-dtest drops
+    default, only through -m (test.py --markers) -- except in debug and dev mode,
+    whose defaults follow scylla-dtest's CI (see _mode_default_deselects()).  By default scylla-dtest drops
     resource_intensive tests when the machine is too small for them (or with
     --skip-resource-intensive-tests, unless --force-resource-intensive-tests),
     upgrade_test tests unless --execute-upgrade-tests, and depends_cqlshlib
@@ -143,6 +175,8 @@ def _deselect_as_upstream(config: Config, items: list[pytest.Item], features: se
         if item.get_closest_marker("upgrade_test") and not config.getoption("--execute-upgrade-tests"):
             deselect = True
         if item.get_closest_marker("depends_cqlshlib"):
+            deselect = True
+        if not matchexpr and _mode_default_deselects(item, _item_build_mode(item)):
             deselect = True
         if matchexpr:
             unmarks = set()
