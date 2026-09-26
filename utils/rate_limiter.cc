@@ -22,16 +22,16 @@ void utils::rate_limiter::on_timer() {
     _sem.signal(_units_per_s - _sem.current());
 }
 
-future<> utils::rate_limiter::reserve(size_t u) {
+future<> utils::rate_limiter::reserve(size_t u, lowres_clock::time_point timeout) {
     if (_units_per_s == 0) {
         return make_ready_future<>();
     }
     if (u <= _units_per_s) {
-        return _sem.wait(u);
+        return _sem.wait(timeout, u);
     }
     auto n = std::min(u, _units_per_s);
     auto r = u - n;
-    return _sem.wait(n).then([this, r] {
-        return reserve(r);
+    return _sem.wait(timeout, n).then([this, r, timeout] {
+        return reserve(r, timeout);
     });
 }

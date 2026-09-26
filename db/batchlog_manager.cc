@@ -14,6 +14,7 @@
 #include <seastar/core/future-util.hh>
 #include <seastar/core/do_with.hh>
 #include <seastar/core/semaphore.hh>
+#include <seastar/core/timed_out_error.hh>
 #include <seastar/core/metrics.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
@@ -39,6 +40,7 @@
 #include "cql3/untyped_result_set_idl_utils.hh"
 #include "service_permit.hh"
 #include "cql3/query_processor.hh"
+#include "exceptions/exceptions.hh"
 
 static logging::logger blogger("batchlog_manager");
 
@@ -164,21 +166,22 @@ db::batchlog_manager::batchlog_manager(cql3::query_processor& qp, db::system_key
     });
 }
 
-future<db::all_batches_replayed> db::batchlog_manager::do_batch_log_replay(post_replay_cleanup cleanup) {
-    return container().invoke_on(0, [cleanup] (auto& bm) -> future<db::all_batches_replayed> {
+future<db::all_batches_replayed> db::batchlog_manager::do_batch_log_replay(post_replay_cleanup cleanup,
+        db::timeout_clock::time_point deadline) {
+    return container().invoke_on(0, [cleanup, deadline] (auto& bm) -> future<db::all_batches_replayed> {
         auto gate_holder = bm._gate.hold();
-        auto sem_units = co_await get_units(bm._sem, 1);
+        auto sem_units = co_await get_units(bm._sem, 1, deadline);
 
         auto dest = bm._cpu++ % this_smp_shard_count();
         blogger.debug("Batchlog replay on shard {}: starts", dest);
         auto last_replay = gc_clock::now();
         all_batches_replayed all_replayed = all_batches_replayed::yes;
         if (dest == 0) {
-            all_replayed = co_await bm.replay_all_failed_batches(cleanup);
+            all_replayed = co_await bm.replay_all_failed_batches(cleanup, deadline);
         } else {
-            all_replayed = co_await bm.container().invoke_on(dest, [cleanup] (auto& bm) {
-                return with_gate(bm._gate, [&bm, cleanup] {
-                    return bm.replay_all_failed_batches(cleanup);
+            all_replayed = co_await bm.container().invoke_on(dest, [cleanup, deadline] (auto& bm) {
+                return with_gate(bm._gate, [&bm, cleanup, deadline] {
+                    return bm.replay_all_failed_batches(cleanup, deadline);
                 });
             });
         }
@@ -263,17 +266,37 @@ future<size_t> db::batchlog_manager::count_all_batches() const {
     });
 }
 
-future<> db::batchlog_manager::maybe_migrate_v1_to_v2() {
+// True for the exceptions a step bounded by the replay deadline fails with:
+// a batchlog read, a local batchlog write or the rate limiter wait
+// (semaphore_timed_out derives from timed_out_error).
+static bool is_deadline_timeout(std::exception_ptr ep) {
+    try {
+        std::rethrow_exception(std::move(ep));
+    } catch (const exceptions::read_timeout_exception&) {
+        return true;
+    } catch (const timed_out_error&) {
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+future<> db::batchlog_manager::maybe_migrate_v1_to_v2(db::timeout_clock::time_point deadline) {
     if (_migration_done) {
         return make_ready_future<>();
     }
-    return with_gate(_gate, [this] () mutable -> future<> {
+    return with_gate(_gate, [this, deadline] () mutable -> future<> {
         blogger.info("Migrating batchlog entries from v1 -> v2");
 
         auto schema_v1 = _qp.db().find_schema(system_keyspace::NAME, system_keyspace::BATCHLOG);
         auto schema_v2 = _qp.db().find_schema(system_keyspace::NAME, system_keyspace::BATCHLOG_V2);
 
-        auto batch = [this, schema_v1, schema_v2] (const cql3::untyped_result_set::row& row) -> future<stop_iteration> {
+        bool deadline_expired = false;
+        auto batch = [this, schema_v1, schema_v2, deadline, &deadline_expired] (const cql3::untyped_result_set::row& row) -> future<stop_iteration> {
+            if (db::timeout_clock::now() >= deadline) {
+                deadline_expired = true;
+                co_return stop_iteration::yes;
+            }
             // check version of serialization format
             if (!row.has("version")) {
                 blogger.warn("Not migrating logged batch because of unknown version");
@@ -295,11 +318,11 @@ future<> db::batchlog_manager::maybe_migrate_v1_to_v2() {
             utils::get_local_injector().inject("batchlog_manager_fail_migration", [] { throw std::runtime_error("Error injection: failing batchlog migration"); });
 
             auto migrate_mut = get_batchlog_mutation_for(schema_v2, std::move(data), version, batchlog_stage::failed_replay, written_at, id);
-            co_await sp.mutate_locally(migrate_mut, tracing::trace_state_ptr(), db::commitlog::force_sync::no);
+            co_await sp.mutate_locally(migrate_mut, tracing::trace_state_ptr(), db::commitlog::force_sync::no, deadline);
 
             mutation delete_mut(schema_v1, partition_key::from_single_value(*schema_v1, serialized(id)));
             delete_mut.partition().apply_delete(*schema_v1, clustering_key_prefix::make_empty(), tombstone(api::new_timestamp(), gc_clock::now()));
-            co_await sp.mutate_locally(delete_mut, tracing::trace_state_ptr(), db::commitlog::force_sync::no);
+            co_await sp.mutate_locally(delete_mut, tracing::trace_state_ptr(), db::commitlog::force_sync::no, deadline);
 
             co_return stop_iteration::no;
         };
@@ -309,9 +332,19 @@ future<> db::batchlog_manager::maybe_migrate_v1_to_v2() {
                     db::consistency_level::ONE,
                     {},
                     page_size,
+                    deadline,
                     std::move(batch));
         } catch (...) {
-            blogger.warn("Batchlog v1 to v2 migration failed: {:t}; will retry", std::current_exception());
+            if (!is_deadline_timeout(std::current_exception())) {
+                blogger.warn("Batchlog v1 to v2 migration failed: {:t}; will retry", std::current_exception());
+                co_return;
+            }
+            deadline_expired = true;
+        }
+        if (deadline_expired) {
+            // Migrated entries are gone from v1, so the next replay picks up
+            // where this one stopped.
+            blogger.info("Batchlog v1 to v2 migration stopped at the replay deadline; will continue on the next replay");
             co_return;
         }
 
@@ -344,6 +377,7 @@ static future<db::all_batches_replayed> process_batch(
         const db_clock::time_point now,
         db_clock::duration replay_timeout,
         std::chrono::seconds write_timeout,
+        db::timeout_clock::time_point deadline,
         const cql3::untyped_result_set::row& row) {
     const bool is_v1 = db::is_batchlog_v1(*schema);
     const auto stage = is_v1 ? db::batchlog_stage::initial : static_cast<db::batchlog_stage>(row.get_as<int8_t>("stage"));
@@ -419,9 +453,11 @@ static future<db::all_batches_replayed> process_batch(
                 // Our normal write path does not add much redundancy to the dispatch, and rate is handled after send
                 // in both cases.
                 // FIXME: verify that the above is reasonably true.
-                co_await limiter.reserve(size);
+                // Neither the rate limiter nor the write may wait past the
+                // deadline: the caller has given us until then to finish.
+                co_await limiter.reserve(size, deadline);
                 stats.write_attempts += mutations.size();
-                auto timeout = db::timeout_clock::now() + write_timeout;
+                auto timeout = std::min(db::timeout_clock::now() + write_timeout, deadline);
                 if (cleanup) {
                     co_await qp.proxy().send_batchlog_replay_to_all_replicas(mutations, timeout);
                 } else {
@@ -433,6 +469,11 @@ static future<db::all_batches_replayed> process_batch(
         // should probably ignore and drop the batch
     } catch (const data_dictionary::no_such_column_family&) {
         // As above -- we should drop the batch if the table doesn't exist anymore.
+    } catch (const semaphore_timed_out&) {
+        // The deadline passed while waiting for the rate limiter. The batch
+        // was not attempted, so keep it for the next replay as is.
+        blogger.debug("Stopping replay of {}: deadline expired while waiting for the replay rate limiter", id);
+        co_return db::all_batches_replayed::no;
     } catch (...) {
         blogger.warn("Replay failed (will retry): {:t}", std::current_exception());
         // timeout, overload etc.
@@ -447,22 +488,28 @@ static future<db::all_batches_replayed> process_batch(
 
     auto& sp = qp.proxy();
 
-    if (send_failed) {
-        blogger.debug("Moving batch {} to stage failed_replay", id);
-        auto m = get_batchlog_mutation_for(schema, mutations, netw::messaging_service::current_version, db::batchlog_stage::failed_replay, written_at, id);
-        co_await sp.mutate_locally(m, tracing::trace_state_ptr(), db::commitlog::force_sync::no);
-    }
+    try {
+        if (send_failed) {
+            blogger.debug("Moving batch {} to stage failed_replay", id);
+            auto m = get_batchlog_mutation_for(schema, mutations, netw::messaging_service::current_version, db::batchlog_stage::failed_replay, written_at, id);
+            co_await sp.mutate_locally(m, tracing::trace_state_ptr(), db::commitlog::force_sync::no, deadline);
+        }
 
-    // delete batch
-    auto m = get_batchlog_delete_mutation(schema, netw::messaging_service::current_version, stage, written_at, id);
-    co_await qp.proxy().mutate_locally(m, tracing::trace_state_ptr(), db::commitlog::force_sync::no);
+        // delete batch
+        auto m = get_batchlog_delete_mutation(schema, netw::messaging_service::current_version, stage, written_at, id);
+        co_await sp.mutate_locally(m, tracing::trace_state_ptr(), db::commitlog::force_sync::no, deadline);
+    } catch (const timed_out_error&) {
+        // The entry stays as it was, so the batch is replayed again next time.
+        blogger.debug("Stopping replay of {}: deadline expired while updating its batchlog entry", id);
+        co_return db::all_batches_replayed::no;
+    }
 
     shard_written_at.need_cleanup = true;
 
     co_return db::all_batches_replayed(!send_failed);
 }
 
-future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches_v1(post_replay_cleanup) {
+future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches_v1(post_replay_cleanup, db::timeout_clock::time_point deadline) {
     db::all_batches_replayed all_replayed = all_batches_replayed::yes;
     // rate limit is in bytes per second. Uses Double.MAX_VALUE if disabled (set to 0 in cassandra.yaml).
     // max rate is scaled by the number of nodes in the cluster (same as for HHOM - see CASSANDRA-5272).
@@ -477,22 +524,36 @@ future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches
     // same across a while prefix of written_at (across all ids).
     const auto now = db_clock::now();
 
-    auto batch = [this, &limiter, schema, &all_replayed, &replay_stats_per_shard, now] (const cql3::untyped_result_set::row& row) mutable -> future<stop_iteration> {
-        all_replayed = all_replayed && co_await process_batch(_qp, _stats, post_replay_cleanup::no, limiter, schema, replay_stats_per_shard, now, _replay_timeout, write_timeout, row);
+    auto batch = [this, &limiter, schema, &all_replayed, &replay_stats_per_shard, now, deadline] (const cql3::untyped_result_set::row& row) mutable -> future<stop_iteration> {
+        if (db::timeout_clock::now() >= deadline) {
+            blogger.debug("Stopping batchlog replay: deadline expired, remaining batches are left for the next replay");
+            all_replayed = all_batches_replayed::no;
+            co_return stop_iteration::yes;
+        }
+        all_replayed = all_replayed && co_await process_batch(_qp, _stats, post_replay_cleanup::no, limiter, schema, replay_stats_per_shard, now, _replay_timeout, write_timeout, deadline, row);
         co_return stop_iteration::no;
     };
 
-    co_await with_gate(_gate, [this, &all_replayed, batch = std::move(batch)] () mutable -> future<> {
+    co_await with_gate(_gate, [this, &all_replayed, batch = std::move(batch), deadline] () mutable -> future<> {
         blogger.debug("Started replayAllFailedBatches");
 
         auto schema = _qp.db().find_schema(system_keyspace::NAME, system_keyspace::BATCHLOG);
 
-        co_await _qp.query_internal(
-                format("SELECT * FROM {}.{} BYPASS CACHE", system_keyspace::NAME, system_keyspace::BATCHLOG),
-                db::consistency_level::ONE,
-                {},
-                page_size,
-                batch);
+        try {
+            co_await _qp.query_internal(
+                    format("SELECT * FROM {}.{} BYPASS CACHE", system_keyspace::NAME, system_keyspace::BATCHLOG),
+                    db::consistency_level::ONE,
+                    {},
+                    page_size,
+                    deadline,
+                    batch);
+        } catch (...) {
+            if (!is_deadline_timeout(std::current_exception())) {
+                throw;
+            }
+            blogger.debug("Stopping batchlog replay: deadline expired while reading the batchlog");
+            all_replayed = all_batches_replayed::no;
+        }
 
         blogger.debug("Finished replayAllFailedBatches with all_replayed: {}", all_replayed);
     });
@@ -500,8 +561,8 @@ future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches
     co_return all_replayed;
 }
 
-future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches_v2(post_replay_cleanup cleanup) {
-    co_await maybe_migrate_v1_to_v2();
+future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches_v2(post_replay_cleanup cleanup, db::timeout_clock::time_point deadline) {
+    co_await maybe_migrate_v1_to_v2(deadline);
 
     db::all_batches_replayed all_replayed = all_batches_replayed::yes;
     // rate limit is in bytes per second. Uses Double.MAX_VALUE if disabled (set to 0 in cassandra.yaml).
@@ -517,12 +578,17 @@ future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches
     // same across a while prefix of written_at (across all ids).
     const auto now = db_clock::now();
 
-    auto batch = [this, cleanup, &limiter, schema, &all_replayed, &replay_stats_per_shard, now] (const cql3::untyped_result_set::row& row) mutable -> future<stop_iteration> {
-        all_replayed = all_replayed && co_await process_batch(_qp, _stats, cleanup, limiter, schema, replay_stats_per_shard, now, _replay_timeout, write_timeout, row);
+    auto batch = [this, cleanup, &limiter, schema, &all_replayed, &replay_stats_per_shard, now, deadline] (const cql3::untyped_result_set::row& row) mutable -> future<stop_iteration> {
+        if (db::timeout_clock::now() >= deadline) {
+            blogger.debug("Stopping batchlog replay: deadline expired, remaining batches are left for the next replay");
+            all_replayed = all_batches_replayed::no;
+            co_return stop_iteration::yes;
+        }
+        all_replayed = all_replayed && co_await process_batch(_qp, _stats, cleanup, limiter, schema, replay_stats_per_shard, now, _replay_timeout, write_timeout, deadline, row);
         co_return stop_iteration::no;
     };
 
-    co_await with_gate(_gate, [this, cleanup, &all_replayed, batch = std::move(batch), now, &replay_stats_per_shard] () mutable -> future<> {
+    co_await with_gate(_gate, [this, cleanup, &all_replayed, batch = std::move(batch), now, &replay_stats_per_shard, deadline] () mutable -> future<> {
         blogger.debug("Started replayAllFailedBatches with cleanup: {}", cleanup);
 
         auto schema = _qp.db().find_schema(system_keyspace::NAME, system_keyspace::BATCHLOG_V2);
@@ -530,21 +596,36 @@ future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches
         co_await coroutine::parallel_for_each(std::views::iota(0, 16), [&] (int32_t chunk) -> future<> {
             const int32_t batchlog_chunk_base = chunk * 16;
             for (int32_t i = 0; i < 16; ++i) {
+                if (db::timeout_clock::now() >= deadline) {
+                    all_replayed = all_batches_replayed::no;
+                    co_return;
+                }
                 int32_t batchlog_shard = batchlog_chunk_base + i;
 
-                co_await _qp.query_internal(
-                        format("SELECT * FROM {}.{} WHERE version = ? AND stage = ? AND shard = ? BYPASS CACHE", system_keyspace::NAME, system_keyspace::BATCHLOG_V2),
-                        db::consistency_level::ONE,
-                        {data_value(netw::messaging_service::current_version), data_value(int8_t(batchlog_stage::failed_replay)), data_value(batchlog_shard)},
-                        page_size,
-                        batch);
+                try {
+                    co_await _qp.query_internal(
+                            format("SELECT * FROM {}.{} WHERE version = ? AND stage = ? AND shard = ? BYPASS CACHE", system_keyspace::NAME, system_keyspace::BATCHLOG_V2),
+                            db::consistency_level::ONE,
+                            {data_value(netw::messaging_service::current_version), data_value(int8_t(batchlog_stage::failed_replay)), data_value(batchlog_shard)},
+                            page_size,
+                            deadline,
+                            batch);
 
-                co_await _qp.query_internal(
-                        format("SELECT * FROM {}.{} WHERE version = ? AND stage = ? AND shard = ? BYPASS CACHE", system_keyspace::NAME, system_keyspace::BATCHLOG_V2),
-                        db::consistency_level::ONE,
-                        {data_value(netw::messaging_service::current_version), data_value(int8_t(batchlog_stage::initial)), data_value(batchlog_shard)},
-                        page_size,
-                        batch);
+                    co_await _qp.query_internal(
+                            format("SELECT * FROM {}.{} WHERE version = ? AND stage = ? AND shard = ? BYPASS CACHE", system_keyspace::NAME, system_keyspace::BATCHLOG_V2),
+                            db::consistency_level::ONE,
+                            {data_value(netw::messaging_service::current_version), data_value(int8_t(batchlog_stage::initial)), data_value(batchlog_shard)},
+                            page_size,
+                            deadline,
+                            batch);
+                } catch (...) {
+                    if (!is_deadline_timeout(std::current_exception())) {
+                        throw;
+                    }
+                    blogger.debug("Stopping batchlog replay: deadline expired while reading batchlog shard {}", batchlog_shard);
+                    all_replayed = all_batches_replayed::no;
+                    co_return;
+                }
 
                 if (cleanup != post_replay_cleanup::yes) {
                     continue;
@@ -577,9 +658,9 @@ future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches
     co_return all_replayed;
 }
 
-future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cleanup) {
+future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cleanup, db::timeout_clock::time_point deadline) {
     if (_fs.batchlog_v2) {
-        return replay_all_failed_batches_v2(cleanup);
+        return replay_all_failed_batches_v2(cleanup, deadline);
     }
-    return replay_all_failed_batches_v1(cleanup);
+    return replay_all_failed_batches_v1(cleanup, deadline);
 }
