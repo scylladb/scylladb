@@ -631,12 +631,13 @@ class ScyllaClusterManager:
                                    key: str | None = None,
                                    value: Any = None,
                                    *,
-                                   config_options: dict[str, Any] | None = None) -> None:
+                                   config_options: dict[str, Any] | None = None,
+                                   reload: bool = True) -> None:
         """Update conf/scylla.yaml of the given server.
 
         You can update a single option by providing the (key, value) pair, or multiple options
         using config_options.
-        If the server is running, reload the config with a SIGHUP.
+        If the server is running, reload the config with a SIGHUP, unless `reload` is False.
         """
         if key is not None:
             if value is None:
@@ -646,15 +647,15 @@ class ScyllaClusterManager:
             config_options = {key: value}
         elif not isinstance(config_options, dict):
             raise RuntimeError(f"`config_options` is expected to be a dict, not {type(config_options)}")
-        self.cluster.update_config(server_id=server_id, config_options=config_options)
+        self.cluster.update_config(server_id=server_id, config_options=config_options, reload=reload)
 
     @manager_op
-    async def server_remove_config_option(self, server_id: ServerNum, key: str) -> None:
+    async def server_remove_config_option(self, server_id: ServerNum, key: str, reload: bool = True) -> None:
         """Remove an option from conf/scylla.yaml of the given server.
 
-        If the server is running, reload the config with a SIGHUP.
+        If the server is running, reload the config with a SIGHUP, unless `reload` is False.
         """
-        self.cluster.remove_config_option(server_id=server_id, key=key)
+        self.cluster.remove_config_option(server_id=server_id, key=key, reload=reload)
 
     @manager_op
     async def server_update_cmdline(self, server_id: ServerNum, cmdline_options: list[str]) -> None:
