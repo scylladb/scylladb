@@ -1810,6 +1810,53 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_upgrade_type_change) {
     assert_that(m).is_equal_to(m2);
 }
 
+// Regression test for the rvalue mutation_partition::apply(schema&, mutation_partition&&, schema&, stats&)
+// overload: verifies it upgrades p in place before merging when schema versions differ.
+SEASTAR_THREAD_TEST_CASE(test_mutation_partition_apply_rvalue_upgrades_schema) {
+    auto make_builder = [] {
+        return schema_builder(this_smp_shard_count(), "ks", "cf")
+                .with_column("pk", bytes_type, column_kind::partition_key)
+                .with_column("ck", bytes_type, column_kind::clustering_key);
+    };
+
+    auto s1 = make_builder()
+            .with_column("v1", int32_type)
+            .build();
+    auto s2 = make_builder() // different version: extra column
+            .with_column("v1", int32_type)
+            .with_column("v2", int32_type)
+            .build();
+
+    BOOST_REQUIRE(s1->version() != s2->version());
+
+    auto pk = partition_key::from_singular(*s1, data_value(bytes("key1")));
+    auto ck1 = clustering_key::from_singular(*s1, data_value(bytes("A")));
+
+    mutation m1(s1, pk);
+    m1.set_clustered_cell(ck1, "v1", data_value(int32_t(1)), 1);
+
+    mutation m2(s2, pk);
+    m2.set_clustered_cell(ck1, "v1", data_value(int32_t(2)), 2);
+    m2.set_clustered_cell(ck1, "v2", data_value(int32_t(3)), 1);
+
+    mutation_application_stats app_stats;
+
+    // Expected result: m2's partition upgraded to s1 explicitly, then merged via the const& overload.
+    mutation expected(s1, pk);
+    expected.apply(m1);
+    mutation_partition p2_upgraded(*s2, m2.partition());
+    p2_upgraded.upgrade(*s2, *s1);
+    expected.partition().apply(*s1, p2_upgraded, *s1, app_stats);
+
+    // Exercise the 4-arg rvalue overload under test directly, with p under a different schema version.
+    mutation actual(s1, pk);
+    actual.apply(m1);
+    mutation_partition p2(*s2, m2.partition());
+    actual.partition().apply(*s1, std::move(p2), *s2, app_stats);
+
+    assert_that(actual).is_equal_to(expected);
+}
+
 // This test checks the behavior of row_marker::{is_live, is_dead, compact_and_expire}. Those functions have some
 // duplicated logic that decides if a row is expired, and this test verifies that they behave the same with respect
 // to TTL.
