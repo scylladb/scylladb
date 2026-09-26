@@ -75,9 +75,9 @@ uint32_t truncate_statement::get_bound_terms() const
     return _bound_terms;
 }
 
-bool truncate_statement::depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const
-{
-    return false;
+std::vector<dependent_table> truncate_statement::dependent_tables() const {
+    // TRUNCATE only needs the table to exist, so schema changes needn't evict it (pre-existing behaviour).
+    return {};
 }
 
 future<> truncate_statement::check_access(query_processor& qp, const service::client_state& state) const
