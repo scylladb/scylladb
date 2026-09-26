@@ -48,7 +48,8 @@ class db::commitlog_replayer::impl {
 
     friend class db::commitlog_replayer;
 public:
-    impl(seastar::sharded<replica::database>& db, seastar::sharded<db::system_keyspace>& sys_ks, seastar::sharded<raft_commitlog_replay_buffer>* raft_buffer);
+    impl(seastar::sharded<replica::database>& db, seastar::sharded<db::system_keyspace>& sys_ks, seastar::sharded<raft_commitlog_replay_buffer>* raft_buffer,
+            commitlog_replayer::synced_tables_only synced_only);
 
     future<> init();
 
@@ -117,16 +118,22 @@ public:
     seastar::sharded<replica::database>& _db;
     seastar::sharded<db::system_keyspace>& _sys_ks;
     seastar::sharded<raft_commitlog_replay_buffer>* _raft_buffer;
+    commitlog_replayer::synced_tables_only _synced_only;
+    // Filled in init() when _synced_only, from the tables loaded by then - the
+    // system keyspace, which is the only place the property is set.
+    std::unordered_set<table_id> _synced_tables;
     shard_rpm_map _rpm;
     db::system_keyspace::commitlog_cleanup_map _cleanup_map;
     shard_rp_map _min_pos;
 };
 
 db::commitlog_replayer::impl::impl(
-        seastar::sharded<replica::database>& db, seastar::sharded<db::system_keyspace>& sys_ks, seastar::sharded<raft_commitlog_replay_buffer>* raft_buffer)
+        seastar::sharded<replica::database>& db, seastar::sharded<db::system_keyspace>& sys_ks, seastar::sharded<raft_commitlog_replay_buffer>* raft_buffer,
+        commitlog_replayer::synced_tables_only synced_only)
     : _db(db)
     , _sys_ks(sys_ks)
     , _raft_buffer(raft_buffer)
+    , _synced_only(synced_only)
 {}
 
 future<> db::commitlog_replayer::impl::init() {
@@ -155,7 +162,10 @@ future<> db::commitlog_replayer::impl::init() {
     // existing sstables-per-shard.
     // So, go through all CF:s and check, if a shard mapping does not
     // have data for it, assume we must set global pos to zero.
-    _db.local().get_tables_metadata().for_each_table([&] (table_id id, lw_shared_ptr<replica::table>) {
+    _db.local().get_tables_metadata().for_each_table([&] (table_id id, lw_shared_ptr<replica::table> t) {
+        if (_synced_only && t->schema()->wait_for_sync_to_commitlog()) {
+            _synced_tables.insert(id);
+        }
         for (auto&p1 : _rpm) { // for each shard
             if (!p1.second.contains(id)) {
                 _min_pos[p1.first] = replay_position();
@@ -230,6 +240,11 @@ future<> db::commitlog_replayer::impl::process(
         const auto& read_entry = cer.entry().item;
 
         if (std::holds_alternative<raft_commitlog_entry>(read_entry)) {
+            if (_synced_only) {
+                // This pass does not own the raft replay buffer; the full
+                // replay that follows it processes these entries.
+                co_return;
+            }
             const auto& raft_entry = std::get<raft_commitlog_entry>(read_entry);
             SCYLLA_ASSERT(_raft_buffer);
             rlogger.debug("Adding raft log entry for group {} at {} to replay buffer", raft_entry.group_id, rp);
@@ -239,6 +254,14 @@ future<> db::commitlog_replayer::impl::process(
             const auto& mut_entry = std::get<mutation_entry>(read_entry);
 
             auto& fm = mut_entry.mutation();
+
+            // Decide before the schema version is resolved below, and before
+            // find_column_family(): a table out of scope may not exist yet, and
+            // reaching it would cost a thrown no_such_column_family per entry.
+            if (_synced_only && !_synced_tables.contains(fm.column_family_id())) {
+                s->skipped_mutations++;
+                co_return;
+            }
 
             auto& local_cm = _column_mappings.local().map;
             auto cm_it = local_cm.find(fm.schema_version());
@@ -343,8 +366,9 @@ future<> db::commitlog_replayer::impl::process(
 }
 
 db::commitlog_replayer::commitlog_replayer(
-        seastar::sharded<replica::database>& db, seastar::sharded<db::system_keyspace>& sys_ks, seastar::sharded<raft_commitlog_replay_buffer>* raft_buffer)
-    : _impl(std::make_unique<impl>(db, sys_ks, raft_buffer))
+        seastar::sharded<replica::database>& db, seastar::sharded<db::system_keyspace>& sys_ks, seastar::sharded<raft_commitlog_replay_buffer>* raft_buffer,
+        synced_tables_only synced_only)
+    : _impl(std::make_unique<impl>(db, sys_ks, raft_buffer, synced_only))
 {}
 
 db::commitlog_replayer::commitlog_replayer(commitlog_replayer&& r) noexcept
@@ -355,8 +379,9 @@ db::commitlog_replayer::~commitlog_replayer()
 {}
 
 future<db::commitlog_replayer> db::commitlog_replayer::create_replayer(
-        seastar::sharded<replica::database>& db, seastar::sharded<db::system_keyspace>& sys_ks, seastar::sharded<raft_commitlog_replay_buffer>* raft_buffer) {
-    return do_with(commitlog_replayer(db, sys_ks, raft_buffer), [](auto&& rp) {
+        seastar::sharded<replica::database>& db, seastar::sharded<db::system_keyspace>& sys_ks, seastar::sharded<raft_commitlog_replay_buffer>* raft_buffer,
+        synced_tables_only synced_only) {
+    return do_with(commitlog_replayer(db, sys_ks, raft_buffer, synced_only), [](auto&& rp) {
         auto f = rp._impl->init();
         return f.then([rp = std::move(rp)]() mutable {
             return make_ready_future<commitlog_replayer>(std::move(rp));
