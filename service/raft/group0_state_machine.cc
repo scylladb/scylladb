@@ -19,6 +19,7 @@
 #include "mutation/async_utils.hh"
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/on_internal_error.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include "schema/schema_mutations.hh"
 #include "schema/frozen_schema.hh"
@@ -670,28 +671,26 @@ void group0_update_collector::add_large(mutation m) {
     _closed_mutations.emplace_back(std::move(m), m.memory_usage(*m.schema()));
 }
 
-void group0_update_collector::add(utils::chunked_vector<canonical_mutation> muts) {
-    ++_change_counter;
-    for (auto& m : muts) {
-        _frozen_mutations.emplace_back(std::move(m));
+future<> group0_update_collector::for_each_mutation(std::function<void(const mutation&)> f) const {
+    for (const auto& [m, m_size] : _closed_mutations) {
+        f(m);
+        co_await coroutine::maybe_yield();
     }
-}
-
-void group0_update_collector::add(canonical_mutation m) {
-    ++_change_counter;
-    _frozen_mutations.emplace_back(std::move(m));
+    for (const auto& [m, m_size] : _mutations) {
+        f(m);
+        co_await coroutine::maybe_yield();
+    }
 }
 
 void group0_update_collector::clear() {
     ++_change_counter;
     _mutations.clear();
     _closed_mutations.clear();
-    _frozen_mutations.clear();
 }
 
 future<utils::chunked_vector<canonical_mutation>> group0_update_collector::collect() {
     utils::chunked_vector<canonical_mutation> result;
-    result.reserve(_closed_mutations.size() + _mutations.size() + _frozen_mutations.size());
+    result.reserve(_closed_mutations.size() + _mutations.size());
 
     for (auto& [m, m_size] : _closed_mutations) {
         if (m_size <= _max_mutation_size) {
@@ -713,11 +712,6 @@ future<utils::chunked_vector<canonical_mutation>> group0_update_collector::colle
         auto m = std::move(_mutations.extract(_mutations.begin()).key());
         result.emplace_back(co_await make_canonical_mutation_gently(m));
     }
-
-    for (auto& m : _frozen_mutations) {
-        result.emplace_back(std::move(m));
-    }
-    _frozen_mutations.clear();
 
     ++_change_counter;
 

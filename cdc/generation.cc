@@ -771,23 +771,24 @@ future<utils::chunked_vector<mutation>> generation_service::garbage_collect_cdc_
     co_return co_await get_cdc_stream_gc_mutations(table, new_base_it->second.ts, new_base_it->second.streams, ts);
 }
 
-future<> generation_service::garbage_collect_cdc_streams(utils::chunked_vector<canonical_mutation>& muts, api::timestamp_type ts) {
+future<> generation_service::garbage_collect_cdc_streams(service::group0_update_collector& muts, api::timestamp_type ts) {
     for (auto table : _cdc_metadata.get_tables_with_cdc_tablet_streams()) {
         co_await coroutine::maybe_yield();
 
         auto table_muts = co_await garbage_collect_cdc_streams_for_table(table, std::nullopt, ts);
         for (auto&& m : table_muts) {
-            muts.emplace_back(std::move(m));
+            co_await muts.add(std::move(m));
         }
     }
 }
 
-future<utils::chunked_vector<canonical_mutation>> generation_service::maybe_finalize_pending_stream_enables(const locator::token_metadata& tm, api::timestamp_type ts) {
-    utils::chunked_vector<canonical_mutation> muts;
+future<size_t> generation_service::maybe_finalize_pending_stream_enables(const locator::token_metadata& tm, api::timestamp_type ts,
+        service::group0_update_collector& muts) {
+    size_t tables = 0;
     const bool tablet_merge_block_feature = _db.features().cdc_block_tablet_merges_for_alternator_streams;
 
     if (tablet_merge_block_feature && utils::get_local_injector().enter("delay_cdc_stream_finalization")) {
-        co_return std::move(muts);
+        co_return tables;
     }
 
     co_await _db.get_tables_metadata().for_each_table_gently([&] (table_id id, lw_shared_ptr<replica::table> t) -> future<> {
@@ -836,12 +837,12 @@ future<utils::chunked_vector<canonical_mutation>> generation_service::maybe_fina
         });
 
         for (auto& m : schema_muts) {
-            muts.emplace_back(canonical_mutation(m));
-            co_await coroutine::maybe_yield();
+            co_await muts.add(std::move(m));
         }
+        ++tables;
     });
 
-    co_return std::move(muts);
+    co_return tables;
 }
 
 } // namespace cdc

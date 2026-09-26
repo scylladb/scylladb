@@ -9,6 +9,7 @@
 
 #include <seastar/core/gate.hh>
 #include <seastar/core/abort_source.hh>
+#include <functional>
 #include <unordered_map>
 
 #include "data_dictionary/data_dictionary.hh"
@@ -17,6 +18,7 @@
 #include "service/raft/group0_state_id_handler.hh"
 #include "mutation/canonical_mutation.hh"
 #include "mutation/mutation.hh"
+#include "mutation/small_mutation.hh"
 #include "service/raft/raft_state_machine.hh"
 #include "gms/feature.hh"
 #include "gms/inet_address.hh"
@@ -81,7 +83,6 @@ class group0_update_collector {
     // Mutations that reached _max_mutation_size and are no longer merged into,
     // together with their running upper-bound size estimate.
     utils::chunked_vector<std::pair<mutation, size_t>> _closed_mutations;
-    utils::chunked_vector<canonical_mutation> _frozen_mutations;
     uint64_t _change_counter = 0;
 
     // Locates the accumulating mutation that `m` should be merged into,
@@ -112,32 +113,17 @@ public:
     /// For places which don't want to defer due to future<>.
     void add_small(mutation);
 
+    /// Same, for a mutation whose type already says it is small enough to
+    /// merge without yielding.
+    void add(small_mutation sm) { add_small(std::move(sm)); }
+
     /// Like add() but assumes the mutation is large-enough to not need merging.
     /// It may be split later in collect().
     void add_large(mutation);
 
-    /// Adds a canonical mutation to the collector.
-    /// Not merged with other mutations and not split.
-    /// This is available for interoperability with old code, prefer add(mutation).
-    void add(canonical_mutation);
-
-    /// Adds a canonical mutation to the collector, without merging or splitting.
-    /// Vector-like alias for add(canonical_mutation), so that call sites which
-    /// used to emplace_back() into a canonical_mutation vector stay unchanged.
-    void emplace_back(canonical_mutation&& cm) {
-        add(std::move(cm));
-    }
-
-    /// Adds a vector of canonical mutations to the collector.
-    /// Not merged with other mutations and not split.
-    /// This is available for interoperability with old code, prefer add(mutation).
-    void add(utils::chunked_vector<canonical_mutation>);
-
-    /// Returns a reference to the vector of canonical_mutations that have been added to the collector.
-    /// This is available for interoperability with old code, prefer add(mutation).
-    utils::chunked_vector<canonical_mutation>& frozen_mutations() {
-        return _frozen_mutations;
-    }
+    /// Calls `f` on every collected mutation, in unspecified order.
+    /// Lets the update be inspected, e.g. validated, without deserializing it.
+    future<> for_each_mutation(std::function<void(const mutation&)> f) const;
 
     /// Converts accumulated mutations into a vector of canonical_mutations.
     /// Any collected mutation whose (in-memory) size exceeds max_mutation_size
@@ -155,12 +141,16 @@ public:
     }
 
     bool empty() const {
-        return _mutations.empty() && _closed_mutations.empty() && _frozen_mutations.empty();
+        return _mutations.empty() && _closed_mutations.empty();
     }
 };
 
+// The change a group0 command carries. Every alternative holds the command's
+// mutations, so the alternative alone says how they are applied.
+using group0_change = std::variant<schema_change, unused, topology_change, write_mutations, mixed_change>;
+
 struct group0_command {
-    std::variant<schema_change, unused, topology_change, write_mutations, mixed_change> change;
+    group0_change change;
 
     // Mutation of group0 history table, appending a new state ID and optionally a description.
     canonical_mutation history_append;

@@ -963,13 +963,14 @@ future<> migration_manager::announce_with_raft(utils::chunked_vector<mutation> s
     auto schema_features = _feat.cluster_schema_features();
     auto adjusted_schema = db::schema_tables::adjust_schema_for_schema_features(std::move(schema), schema_features);
 
-    auto group0_cmd = _group0_client.prepare_command(
-        mutation_type {
-                .mutations{adjusted_schema.begin(), adjusted_schema.end()},
-        },
-        guard, std::move(description));
+    group0_update_collector updates;
+    for (auto& m : adjusted_schema) {
+        co_await updates.add(std::move(m));
+    }
 
-    return _group0_client.add_entry(std::move(group0_cmd), std::move(guard), _as, timeout.value_or(raft_timeout{}));
+    auto group0_cmd = co_await _group0_client.prepare_command<mutation_type>(std::move(updates), guard, description);
+
+    co_await _group0_client.add_entry(std::move(group0_cmd), std::move(guard), _as, timeout.value_or(raft_timeout{}));
 }
 
 static mutation make_group0_schema_version_mutation(const data_dictionary::database db, const group0_guard& guard) {

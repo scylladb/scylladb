@@ -12,7 +12,6 @@
 #include <seastar/core/abort_source.hh>
 #include "db/system_keyspace.hh"
 #include "locator/tablets.hh"
-#include "mutation/canonical_mutation.hh"
 #include "raft/raft.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "service/raft/raft_group0.hh"
@@ -77,8 +76,8 @@ public:
     void rollback_aborted_tasks(service::group0_update_collector& out, const service::group0_guard& guard, table_id table_id);
     void rollback_aborted_tasks(service::group0_update_collector& out, const service::group0_guard& guard, table_id table_id, locator::tablet_replica replica, dht::token last_token);
 
-    future<> mark_view_build_statuses_on_node_join(utils::chunked_vector<canonical_mutation>& out, const service::group0_guard& guard, locator::host_id host_id);
-    future<> remove_view_build_statuses_on_left_node(utils::chunked_vector<canonical_mutation>& out, const service::group0_guard& guard, locator::host_id host_id);
+    future<> mark_view_build_statuses_on_node_join(service::group0_update_collector& out, const service::group0_guard& guard, locator::host_id host_id);
+    future<> remove_view_build_statuses_on_left_node(service::group0_update_collector& out, const service::group0_guard& guard, locator::host_id host_id);
 
     virtual void on_up(const gms::inet_address& endpoint, locator::host_id host_id) override;
 

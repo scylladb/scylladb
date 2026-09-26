@@ -17,7 +17,6 @@
 #include "cql3/statements/property_definitions.hh"
 #include "locator/tablets.hh"
 #include "locator/abstract_replication_strategy.hh"
-#include "mutation/canonical_mutation.hh"
 #include "prepared_statement.hh"
 #include <seastar/coroutine/exception.hh>
 #include "service/migration_manager.hh"
@@ -253,19 +252,8 @@ cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_proce
                          .set_new_keyspace_rf_change_data(_name, _attrs->flattened());
 
             };
-            service::topology_change change{{builder.build()}};
-
-            auto topo_schema = qp.db().find_schema(db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY);
-            std::ranges::transform(change.mutations, std::back_inserter(muts), [topo_schema] (const canonical_mutation& cm) {
-                return cm.to_mutation(topo_schema);
-            });
-
-            service::topology_change req_change{{rtbuilder.build()}};
-
-            auto topo_req_schema = qp.db().find_schema(db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY_REQUESTS);
-            std::ranges::transform(req_change.mutations, std::back_inserter(muts), [topo_req_schema] (const canonical_mutation& cm) {
-                return cm.to_mutation(topo_req_schema);
-            });
+            muts.push_back(builder.build().get());
+            muts.push_back(rtbuilder.build().get());
         } else {
             auto schema_mutations = service::prepare_keyspace_update_announcement(qp.db().real_database(), ks_md_update, ts);
             muts.insert(muts.begin(), schema_mutations.begin(), schema_mutations.end());
