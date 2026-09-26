@@ -48,6 +48,9 @@ future<> initialize_virtual_tables(
     db::config&,
     gms::feature_service&);
 
+// Drains the client_data cache behind system.clients on shard 0. Call from
+// system_keyspace::shutdown() before smp/reactors stop; see clients_table for why.
+future<> uninitialize_virtual_tables();
 
 class virtual_table;
 

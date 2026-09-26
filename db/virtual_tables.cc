@@ -11,6 +11,7 @@
 #include <boost/algorithm/string.hpp>
 #include <boost/lexical_cast.hpp>
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/timer.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/json/json_elements.hh>
 #include <seastar/core/reactor.hh>
@@ -44,6 +45,8 @@
 #include "types/types.hh"
 #include "utils/build_id.hh"
 #include "utils/log.hh"
+#include "utils/sequential_producer.hh"
+#include "utils/stall_free.hh"
 #include "replica/exceptions.hh"
 #include "service/paxos/paxos_state.hh"
 #include "idl/storage_proxy.dist.hh"
@@ -775,6 +778,217 @@ public:
 class clients_table : public streaming_virtual_table {
     service::storage_service& _ss;
 
+    // execute() runs once per shard; read-ahead starts several concurrently. Coalesce
+    // the O(shards) fan-out via sequential_producer on shard 0 (SCYLLADB-4230); never
+    // reuse a completed snapshot across calls, only release it on a timer to bound memory.
+    // A client's finished row, built on its origin shard. client_data itself is never kept:
+    // it pins the protocol server's option cache entries, which must not outlive that server
+    // (nodetool disablebinary destroys it), and the snapshot lives on past the query.
+    struct ip_row {
+        net::inet_address ip;
+        clustering_row row;
+    };
+    using shard_rows = utils::chunked_vector<ip_row>;
+
+    // One partitioned row: an ip's partition key plus every client row sharing that ip
+    // (possibly gathered from several origin shards), aggregated once per collection window
+    // so execute() never has to re-scan other shards' data to find its own rows.
+    struct partition_row {
+        dht::decorated_key key;
+        std::vector<const clustering_row*> rows;
+    };
+
+    struct client_data_cache {
+        std::vector<foreign_ptr<std::unique_ptr<shard_rows>>> rows_vec;
+        // buckets[i]: rows owned by shard i (dht::static_shard_of(key.token()) == i), sorted by key.
+        std::vector<utils::chunked_vector<partition_row>> buckets;
+        lowres_clock::time_point expiry;
+    };
+
+    static dht::decorated_key make_partition_key(const class schema& s, net::inet_address ip) {
+        return dht::decorate_key(s, partition_key::from_single_value(s, data_value(ip).serialize_nonnull()));
+    }
+
+    static clustering_key make_clustering_key(const class schema& s, int32_t port, sstring clt) {
+        return clustering_key::from_exploded(s, {
+            data_value(port).serialize_nonnull(),
+            data_value(clt).serialize_nonnull()
+        });
+    }
+
+    static clustering_row make_row(const class schema& s, const client_data& cd) {
+        static thread_local const auto map_type = map_type_impl::get_instance(utf8_type, utf8_type, false);
+        clustering_row cr(make_clustering_key(s, cd.port, cd.client_type_str()));
+        set_cell(s, cr.cells(), "shard_id", cd.shard_id);
+        set_cell(s, cr.cells(), "connection_stage", cd.stage_str());
+        if (cd.driver_name) {
+            set_cell(s, cr.cells(), "driver_name", cd.driver_name->key());
+        }
+        if (cd.driver_version) {
+            set_cell(s, cr.cells(), "driver_version", cd.driver_version->key());
+        }
+        if (cd.hostname) {
+            set_cell(s, cr.cells(), "hostname", *cd.hostname);
+        }
+        if (cd.protocol_version) {
+            set_cell(s, cr.cells(), "protocol_version", *cd.protocol_version);
+        }
+        if (cd.ssl_cipher_suite) {
+            set_cell(s, cr.cells(), "ssl_cipher_suite", *cd.ssl_cipher_suite);
+        }
+        if (cd.ssl_enabled) {
+            set_cell(s, cr.cells(), "ssl_enabled", *cd.ssl_enabled);
+        }
+        if (cd.ssl_protocol) {
+            set_cell(s, cr.cells(), "ssl_protocol", *cd.ssl_protocol);
+        }
+        set_cell(s, cr.cells(), "username", cd.username ? *cd.username : auth::anonymous_username);
+        if (cd.scheduling_group_name) {
+            set_cell(s, cr.cells(), "scheduling_group", *cd.scheduling_group_name);
+        }
+        map_type_impl::native_type opts;
+        for (auto& co : cd.client_options) {
+            opts.emplace_back(data_value(co.key.key()), data_value(co.value.key()));
+        }
+        set_cell(s, cr.cells(), "client_options", make_map_value(map_type, std::move(opts)));
+        return cr;
+    }
+
+    // Buckets rows by owning shard once per collection window, instead of every
+    // shard's execute() re-scanning the full rows_vec on every call (the O(N*C) hot path
+    // behind SCYLLADB-4230): each execute() then only reads its own O(C/N) bucket.
+    static future<> partition_client_data(client_data_cache& cache) {
+        schema_ptr s = build_schema();
+        cache.buckets.clear();
+        cache.buckets.resize(this_smp_shard_count());
+
+        // chunked_vector::push_back only guarantees index stability, not reference/pointer
+        // stability: below half its chunk capacity it reallocates+migrates the first chunk on
+        // growth, so a raw partition_row* taken early would dangle - key on (shard, index) instead.
+        std::unordered_map<net::inet_address, std::pair<unsigned, size_t>> ip_location;
+        for (const auto& rows : cache.rows_vec) {
+            for (const auto& r : *rows) {
+                auto it = ip_location.find(r.ip);
+                if (it != ip_location.end()) {
+                    cache.buckets[it->second.first][it->second.second].rows.push_back(&r.row);
+                } else {
+                    dht::decorated_key key = make_partition_key(*s, r.ip);
+                    unsigned shard = dht::static_shard_of(*s, key.token());
+                    ip_location.emplace(r.ip, std::make_pair(shard, cache.buckets[shard].size()));
+                    cache.buckets[shard].push_back(partition_row{std::move(key), {&r.row}});
+                }
+                co_await coroutine::maybe_yield();
+            }
+        }
+        co_await utils::clear_gently(ip_location);
+
+        dht::ring_position_less_comparator less(*s);
+        for (auto& bucket : cache.buckets) {
+            co_await sort_gently(bucket, [&less] (const partition_row& a, const partition_row& b) { return less(a.key, b.key); });
+        }
+
+        // Sort each partition's rows once here, not on every execute() call reusing this snapshot.
+        clustering_key::less_compare ck_less(*s);
+        for (auto& bucket : cache.buckets) {
+            for (auto& row : bucket) {
+                co_await sort_gently(row.rows, [&ck_less] (const clustering_row* a, const clustering_row* b) { return ck_less(a->key(), b->key()); });
+            }
+        }
+    }
+
+    // std::sort can't yield; a bucket may hold ~100K rows, so sort chunks and merge them with yields in between.
+    template <typename Range, typename Less>
+    static future<> sort_gently(Range& r, Less less) {
+        constexpr size_t chunk = 4096;
+        const size_t n = r.size();
+        for (size_t b = 0; b < n; b += chunk) {
+            std::sort(r.begin() + b, r.begin() + std::min(b + chunk, n), less);
+            co_await coroutine::maybe_yield();
+        }
+        for (size_t w = chunk; w < n; w *= 2) {
+            for (size_t b = 0; b + w < n; b += 2 * w) {
+                std::inplace_merge(r.begin() + b, r.begin() + b + w, r.begin() + std::min(b + 2 * w, n), less);
+                co_await coroutine::maybe_yield();
+            }
+        }
+    }
+
+    static future<lw_shared_ptr<client_data_cache>> collect_client_data(service::storage_service& ss) {
+        auto cache = make_lw_shared<client_data_cache>();
+        cache->rows_vec.resize(this_smp_shard_count());
+
+        auto servers = ss.protocol_servers();
+        co_await smp::invoke_on_all([&rows_vec_ = cache->rows_vec, &servers_ = servers] () -> future<> {
+            auto& rows_vec = rows_vec_;
+            auto& servers = servers_;
+
+            schema_ptr s = build_schema();
+            auto rows = std::make_unique<shard_rows>();
+            for (const auto& ps : servers) {
+                // cds, and with it the option cache entries, dies here on the owning shard.
+                auto cds = co_await ps->get_client_data();
+                for (const auto& cd : cds) {
+                    rows->push_back(ip_row{cd.ip, make_row(*s, cd)});
+                    co_await coroutine::maybe_yield();
+                }
+            }
+            rows_vec[this_shard_id()] = make_foreign(std::move(rows));
+        });
+
+        co_await partition_client_data(*cache);
+
+        cache->expiry = lowres_clock::now() + client_data_cache_ttl;
+        co_return cache;
+    }
+
+    static constexpr std::chrono::milliseconds client_data_cache_ttl{500};
+
+    // State behind get_client_data_on_shard0(), hoisted out of function-local statics so
+    // shutdown_client_data_cache() can drain it too. Only ever touched on shard 0 (via the
+    // invoke_on(0, ...) in execute() below), so no locking of its own is needed.
+    struct shard0_state {
+        std::optional<sequential_producer<lw_shared_ptr<client_data_cache>>> producer;
+        std::optional<timer<lowres_clock>> release_timer;
+        // Closed by shutdown_client_data_cache() to drain an in-flight collect_client_data()
+        // before tearing down cross-shard state; reset afterwards so a later lifecycle
+        // (unit tests) starts a fresh producer/gate capturing its current storage_service.
+        std::optional<seastar::gate> gate;
+    };
+    static shard0_state& get_shard0_state() {
+        static shard0_state state;
+        return state;
+    }
+
+    // producer's factory captures ss from the call that (re)creates it; safe because
+    // invoke_on(0, ...) always resolves to the same shard-0 storage_service instance for
+    // as long as this producer/gate pair lives (reset together at shutdown).
+    static future<lw_shared_ptr<client_data_cache>> get_client_data_on_shard0(service::storage_service& ss) {
+        auto& state = get_shard0_state();
+        if (!state.producer) {
+            state.producer.emplace([&ss] { return collect_client_data(ss); });
+            state.gate.emplace();
+            // sequential_producer retains its last result until cleared; the snapshot holds
+            // every client's row and the next query may never come, so bound its lifetime by
+            // dropping it at expiry rather than on the next call.
+            state.release_timer.emplace([&state] {
+                // A collection in flight is about to publish a fresh timer; clearing
+                // producer here would start a second overlapping node-wide fan-out.
+                if (state.gate->get_count() == 0) {
+                    state.producer->clear();
+                }
+            });
+        }
+
+        // Always re-collect: reusing a completed snapshot across calls that arrive after it
+        // finished could return connections that no longer exist (SCYLLADB-4230 review).
+        // Throws gate_closed_exception post-shutdown; propagates to execute()'s caller rather
+        // than resuming to touch state that's being (or has been) torn down.
+        auto h = state.gate->hold();
+        auto cache = co_await (*state.producer)();
+        state.release_timer->rearm(cache->expiry);
+        co_return cache;
+    }
+
     static schema_ptr build_schema() {
         auto id = generate_legacy_id(system_keyspace::NAME, "clients");
         return schema_builder(this_smp_shard_count(), system_keyspace::NAME, "clients", std::make_optional(id))
@@ -797,134 +1011,42 @@ class clients_table : public streaming_virtual_table {
             .build();
     }
 
-    dht::decorated_key make_partition_key(net::inet_address ip) {
-        return dht::decorate_key(*_s, partition_key::from_single_value(*_s, data_value(ip).serialize_nonnull()));
-    }
-
-    clustering_key make_clustering_key(int32_t port, sstring clt) {
-        return clustering_key::from_exploded(*_s, {
-            data_value(port).serialize_nonnull(),
-            data_value(clt).serialize_nonnull()
-        });
-    }
-
     future<> execute(reader_permit permit, result_collector& result, const query_restrictions& qr) override {
-        // Collect
-        using client_data_vec = utils::chunked_vector<foreign_ptr<std::unique_ptr<client_data>>>;
-        using shard_client_data = std::vector<client_data_vec>;
-        std::vector<foreign_ptr<std::unique_ptr<shard_client_data>>> cd_vec;
-        cd_vec.resize(this_smp_shard_count());
-
-        auto servers = co_await _ss.container().invoke_on(0, [] (auto& ss) { return ss.protocol_servers(); });
-        co_await smp::invoke_on_all([&cd_vec_ = cd_vec, &servers_ = servers] () -> future<> {
-            auto& cd_vec = cd_vec_;
-            auto& servers = servers_;
-
-            auto scd = std::make_unique<shard_client_data>();
-            for (const auto& ps : servers) {
-                client_data_vec cds = co_await ps->get_client_data();
-                if (cds.size() != 0) {
-                    scd->emplace_back(std::move(cds));
-                }
-            }
-            cd_vec[this_shard_id()] = make_foreign(std::move(scd));
+        // Collect, coalesced on shard 0 (see get_client_data_on_shard0()). foreign_ptr keeps
+        // this shard's copy destroying safely on shard 0 regardless of which shard reads it;
+        // read-only access only below, never move out of it.
+        foreign_ptr<lw_shared_ptr<client_data_cache>> cache = co_await _ss.container().invoke_on(0,
+                [] (service::storage_service& ss) -> future<foreign_ptr<lw_shared_ptr<client_data_cache>>> {
+            co_return make_foreign(co_await get_client_data_on_shard0(ss));
         });
+        // Partitioning already happened once for the whole collection window (see
+        // partition_client_data()); just read this shard's own precomputed bucket and apply
+        // the query's range restriction, which is per-call and can't be cached.
+        const auto& bucket = cache->buckets[this_shard_id()];
+        const auto& range = qr.partition_range();
 
-        // Partition
-        struct decorated_ip {
-            dht::decorated_key key;
-            net::inet_address ip;
-
-            struct compare {
-                dht::ring_position_less_comparator less;
-                explicit compare(const class schema& s) : less(s) {}
-                bool operator()(const decorated_ip& a, const decorated_ip& b) const {
-                    return less(a.key, b.key);
-                }
-            };
-        };
-
-        decorated_ip::compare cmp(*_s);
-        std::set<decorated_ip, decorated_ip::compare> ips(cmp);
-        std::unordered_map<net::inet_address, client_data_vec> cd_map;
-        for (unsigned i = 0; i < this_smp_shard_count(); i++) {
-            for (auto&& ps_cdc : *cd_vec[i]) {
-                for (auto&& cd : ps_cdc) {
-                    if (cd_map.contains(cd->ip)) {
-                        cd_map[cd->ip].emplace_back(std::move(cd));
-                    } else {
-                        dht::decorated_key key = make_partition_key(cd->ip);
-                        if (this_shard_owns(key) && contains_key(qr.partition_range(), key)) {
-                            ips.insert(decorated_ip{std::move(key), cd->ip});
-                            cd_map[cd->ip].emplace_back(std::move(cd));
-                        }
-                    }
-                    co_await coroutine::maybe_yield();
-                }
-            }
+        // Emit. Rows are pre-sorted per partition in partition_client_data(); contains_key()
+        // remains the sole authority on bound inclusion below, the seek/break are pure optimizations.
+        // dht::partition_range is a non-wrap-around interval (end is never before start), so
+        // no wrap check is needed before seeking/breaking on its bounds.
+        auto it = bucket.begin();
+        dht::ring_position_less_comparator less(*_s);
+        if (range.start()) {
+            it = std::lower_bound(bucket.begin(), bucket.end(), range.start()->value(),
+                    [&less] (const partition_row& row, const dht::ring_position& start) { return less(row.key, start); });
         }
-
-        // Emit
-        for (const auto& dip : ips) {
-            co_await result.emit_partition_start(dip.key);
-            auto& clients = cd_map[dip.ip];
-
-            std::ranges::sort(clients, [] (const foreign_ptr<std::unique_ptr<client_data>>& a, const foreign_ptr<std::unique_ptr<client_data>>& b) {
-                if (a->port != b->port) {
-                    return a->port < b->port;
-                }
-                return a->client_type_str() < b->client_type_str();
-            });
-
-            for (const auto& cd : clients) {
-                clustering_row cr(make_clustering_key(cd->port, cd->client_type_str()));
-                set_cell(cr.cells(), "shard_id", cd->shard_id);
-                set_cell(cr.cells(), "connection_stage", cd->stage_str());
-                if (cd->driver_name) {
-                    set_cell(cr.cells(), "driver_name", cd->driver_name->key());
-                }
-                if (cd->driver_version) {
-                    set_cell(cr.cells(), "driver_version", cd->driver_version->key());
-                }
-                if (cd->hostname) {
-                    set_cell(cr.cells(), "hostname", *cd->hostname);
-                }
-                if (cd->protocol_version) {
-                    set_cell(cr.cells(), "protocol_version", *cd->protocol_version);
-                }
-                if (cd->ssl_cipher_suite) {
-                    set_cell(cr.cells(), "ssl_cipher_suite", *cd->ssl_cipher_suite);
-                }
-                if (cd->ssl_enabled) {
-                    set_cell(cr.cells(), "ssl_enabled", *cd->ssl_enabled);
-                }
-                if (cd->ssl_protocol) {
-                    set_cell(cr.cells(), "ssl_protocol", *cd->ssl_protocol);
-                }
-                set_cell(cr.cells(), "username", cd->username ? *cd->username : auth::anonymous_username);
-                if (cd->scheduling_group_name) {
-                    set_cell(cr.cells(), "scheduling_group", *cd->scheduling_group_name);
-                }
-
-                auto map_type = map_type_impl::get_instance(
-                    utf8_type,
-                    utf8_type,
-                    false
-                );
-
-                auto prepare_client_options = [] (const auto& client_options) {
-                    map_type_impl::native_type tmp;
-                    for (auto& co: client_options) {
-                        auto map_element = std::make_pair(data_value(co.key.key()), data_value(co.value.key()));
-                        tmp.push_back(std::move(map_element));
-                    }
-                    return tmp;
-                };
-
-                set_cell(cr.cells(), "client_options",
-                    make_map_value(map_type, prepare_client_options(cd->client_options)));
-
-                co_await result.emit_row(std::move(cr));
+        for (; it != bucket.end(); ++it) {
+            const auto& row = *it;
+            if (range.end() && less(range.end()->value(), row.key)) {
+                break;
+            }
+            if (!contains_key(range, row.key)) {
+                co_await coroutine::maybe_yield();
+                continue;
+            }
+            co_await result.emit_partition_start(row.key);
+            for (const auto* cr : row.rows) {
+                co_await result.emit_row(clustering_row(*_s, *cr));
             }
             co_await result.emit_partition_end();
         }
@@ -936,6 +1058,28 @@ public:
             , _ss(ss)
     {
         _shard_aware = true;
+    }
+
+    // Drops the cached client_data (and its cross-shard foreign_ptr rows) while shard 0's
+    // reactor is still up. Must run before smp/reactors are torn down: production shutdown
+    // exits via _exit() and skips this entirely, but unit-test shutdown paths run static
+    // destructors after smp has stopped, which is unsafe for cross-shard pointer release.
+    // Public (rather than friended to uninitialize_virtual_tables()) because clang doesn't
+    // bind a friend declared inside an anonymous-namespace class to the enclosing namespace's
+    // same-named function -- it silently friends an unreachable shadow instead.
+    static future<> shutdown_client_data_cache() {
+        auto& state = get_shard0_state();
+        if (state.release_timer) {
+            state.release_timer->cancel();
+        }
+        // sequential_producer::clear() doesn't cancel or await an in-flight collection; close
+        // the gate first so one already suspended here finishes before we tear down.
+        if (state.gate) {
+            co_await state.gate->close();
+        }
+        state.producer.reset();
+        state.release_timer.reset();
+        state.gate.reset();
     }
 };
 
@@ -2175,6 +2319,12 @@ future<> initialize_virtual_tables(
             activate_large_data_virtual_tables().get();
         });
     }
+}
+
+future<> uninitialize_virtual_tables() {
+    // Named directly (not via a lambda): friendship doesn't extend into a nested
+    // closure type, so the access check must happen here, in the friend itself.
+    return smp::submit_to(0, &clients_table::shutdown_client_data_cache);
 }
 
 virtual_tables_registry::virtual_tables_registry() : unique_ptr(std::make_unique<virtual_tables_registry_impl>()) {
