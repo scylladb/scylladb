@@ -8,6 +8,7 @@
 
 #define ZSTD_STATIC_LINKING_ONLY
 #include <zstd.h>
+#include <charconv>
 #include <lz4.h>
 #include <zlib.h>
 #include <snappy-c.h>
@@ -359,12 +360,13 @@ static std::optional<std::vector<std::byte>> dict_from_options(const sstables::c
     for (const auto& [k, v] : c.options.elements) {
         auto k_str = sstring(k.value.begin(), k.value.end());
         if (k_str.starts_with(DICTIONARY_OPTION)) {
-            try {
-                auto i = std::stoi(k_str.substr(DICTIONARY_OPTION.size()));
-                parts.emplace(i, v.value);
-            } catch (const std::exception& e) {
+            const std::string_view index_str(k_str.data() + DICTIONARY_OPTION.size(), k_str.size() - DICTIONARY_OPTION.size());
+            int i = 0;
+            auto [ptr, ec] = std::from_chars(index_str.data(), index_str.data() + index_str.size(), i, 10);
+            if (ec != std::errc{} || ptr != index_str.data() + index_str.size() || i < 0) {
                 sstables::throw_malformed_sstable_exception(fmt::format("Corrupted dictionary option: {}", k_str));
             }
+            parts.emplace(i, v.value);
         }
         auto v_str = sstring(v.value.begin(), v.value.end());
     }

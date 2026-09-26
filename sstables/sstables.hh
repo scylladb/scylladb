@@ -30,6 +30,7 @@
 #include "sstables/progress_monitor.hh"
 #include "db/commitlog/replay_position.hh"
 #include "component_type.hh"
+#include "sstables/exceptions.hh"
 #include "column_translation.hh"
 #include "stats.hh"
 #include "utils/observable.hh"
@@ -904,11 +905,11 @@ private:
     static auto& get_mutable_serialization_header(Components& components) {
         auto entry = components.statistics.contents.find(metadata_type::Serialization);
         if (entry == components.statistics.contents.end()) {
-            throw std::runtime_error("Serialization header metadata not available");
+            throw_malformed_sstable_exception("Serialization header metadata not available");
         }
         auto& p = entry->second;
         if (!p) {
-            throw std::runtime_error("Statistics is malformed");
+            throw_malformed_sstable_exception("Statistics is malformed");
         }
         serialization_header& s = *static_cast<serialization_header *>(p.get());
         return s;
@@ -1039,11 +1040,11 @@ public:
     const stats_metadata& get_stats_metadata() const {
         auto entry = _components->statistics.contents.find(metadata_type::Stats);
         if (entry == _components->statistics.contents.end()) {
-            throw std::runtime_error(fmt::format("Stats metadata not available for SSTable {}", get_filename()));
+            throw_malformed_sstable_exception("Stats metadata not available", get_filename(component_type::Statistics));
         }
         auto& p = entry->second;
         if (!p) {
-            throw std::runtime_error(fmt::format("Statistics is malformed for SSTable {}", get_filename()));
+            throw_malformed_sstable_exception("Statistics is malformed", get_filename(component_type::Statistics));
         }
         const stats_metadata& s = *static_cast<stats_metadata *>(p.get());
         return s;
@@ -1051,11 +1052,11 @@ public:
     const compaction_metadata& get_compaction_metadata() const {
         auto entry = _components->statistics.contents.find(metadata_type::Compaction);
         if (entry == _components->statistics.contents.end()) {
-            throw std::runtime_error("Compaction metadata not available");
+            throw_malformed_sstable_exception("Compaction metadata not available", get_filename(component_type::Statistics));
         }
         auto& p = entry->second;
         if (!p) {
-            throw std::runtime_error("Statistics is malformed");
+            throw_malformed_sstable_exception("Statistics is malformed", get_filename(component_type::Statistics));
         }
         const compaction_metadata& s = *static_cast<compaction_metadata *>(p.get());
         return s;

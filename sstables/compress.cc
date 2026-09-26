@@ -180,7 +180,9 @@ void compression::segmented_offsets::init(uint32_t chunk_size) {
 
 uint64_t compression::segmented_offsets::at(std::size_t i, compression::segmented_offsets::state& s) const {
     if (i >= _size) {
-        throw std::out_of_range(format("{}: index {} is out of range", __FUNCTION__, i));
+        // The index comes from a position read from another component (e.g.
+        // Index.db), so this is an inconsistency between components.
+        throw_malformed_sstable_exception(format("{}: chunk offset index {} is out of range (offsets: {})", __FUNCTION__, i, _size));
     }
 
     s.update_position_trackers(i, _segment_size_bits, _segments_per_bucket, _grouped_offsets);
@@ -325,7 +327,8 @@ public:
     {
         _pos = _beg_pos = pos;
         if (pos > _compression_metadata->uncompressed_file_length()) {
-            throw std::runtime_error("attempt to uncompress beyond end");
+            sstables::throw_malformed_sstable_exception(format("attempt to uncompress beyond end: pos={} uncompressed_file_length={}",
+                    pos, _compression_metadata->uncompressed_file_length()));
         }
         if (len == 0 || pos == _compression_metadata->uncompressed_file_length()) {
             // Nothing to read

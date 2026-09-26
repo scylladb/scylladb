@@ -12,6 +12,7 @@
 #include "column_translation.hh"
 #include "sstables/mx/parsers.hh"
 #include "sstables/index_entry.hh"
+#include "sstables/exceptions.hh"
 #include <seastar/core/circular_buffer.hh>
 
 namespace sstables {
@@ -152,7 +153,7 @@ private:
 public:
     void verify_end_state() const {
         if (_num_blocks_left != 0) {
-            throw std::runtime_error("promoted_index_blocks_reader - no more data but parsing is incomplete");
+            throw_malformed_sstable_exception(format("promoted_index_blocks_reader - no more data but parsing is incomplete, {} block(s) left", _num_blocks_left));
         }
     }
 
