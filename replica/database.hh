@@ -2348,6 +2348,8 @@ public:
 // into name and uuid of the table (see init_table_storage())
 std::pair<sstring, table_id> parse_table_directory_name(const sstring&);
 
+bool may_publish_tablet_routing_info(const table& t, data_dictionary::database db);
+
 } // namespace replica
 
 future<> start_large_data_handler(sharded<replica::database>& db);

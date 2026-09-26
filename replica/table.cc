@@ -982,6 +982,17 @@ bool table::uses_tablets() const {
     return _erm && _erm->get_replication_strategy().uses_tablets();
 }
 
+bool may_publish_tablet_routing_info(const table& t, data_dictionary::database db) {
+    if (!t.uses_tablets()) {
+        return false;
+    }
+    // The table can be stored in tablets here while its keyspace still replicates by
+    // vnodes: an unfinalized migration, which can still be rolled back. Routing info
+    // handed out now would outlive the rollback in the driver's cache.
+    auto ks = db.try_find_keyspace(t.schema()->ks_name());
+    return ks && ks->uses_tablets();
+}
+
 storage_group::storage_group(compaction_group_ptr cg)
         : _main_cg(cg)
         , _async_gate(format("[storage_group {}.{} {}]", cg->schema()->ks_name(), cg->schema()->cf_name(), cg->group_id()))

@@ -324,7 +324,7 @@ modification_statement::do_execute(query_processor& qp, service::query_state& qs
 
     auto&& table = s->table();
 
-    if (keys_size_one && _may_use_token_aware_routing && table.uses_tablets()) {
+    if (keys_size_one && _may_use_token_aware_routing && replica::may_publish_tablet_routing_info(table, qp.db())) {
         auto erm = table.get_effective_replication_map();
         if (qs.get_client_state().is_protocol_extension_set(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V2_EXPERIMENTAL)) {
             // We only return routing information for EXECUTE requests.
@@ -469,7 +469,9 @@ modification_statement::execute_with_condition(query_processor& qp, service::que
     std::optional<locator::tablet_routing_info> tablet_info;
 
     auto&& table = s->table();
-    if (_may_use_token_aware_routing && table.uses_tablets() && qs.get_client_state().is_protocol_extension_set(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V1)) {
+    if (_may_use_token_aware_routing
+            && qs.get_client_state().is_protocol_extension_set(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V1)
+            && replica::may_publish_tablet_routing_info(table, qp.db())) {
         auto erm = table.get_effective_replication_map();
         tablet_info = erm->check_locality(token, qs.get_client_state().get_original_shard());
     }
