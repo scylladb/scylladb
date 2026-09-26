@@ -17,6 +17,8 @@
 
 #include <seastar/core/future.hh>
 #include <seastar/core/sharded.hh>
+#include <seastar/core/gate.hh>
+#include <seastar/core/semaphore.hh>
 
 #include "commitlog.hh"
 #include "commitlog_replayer.hh"
@@ -183,33 +185,63 @@ db::commitlog_replayer::impl::recover(const commitlog::descriptor& d, const comm
 
     if (rp.id < gp.id) {
         rlogger.debug("skipping replay of fully-flushed {}", f);
-        return make_ready_future<stats>();
+        co_return stats{};
     }
     position_type p = 0;
     if (rp.id == gp.id) {
         p = gp.pos;
     }
 
-    auto s = make_lw_shared<stats>();
+    // Bound the bytes pinned by in-flight applies; a huge entry is applied alone.
+    static constexpr size_t max_in_flight_bytes = 4 << 20;
+    static constexpr size_t min_entry_charge = 16 << 10;
+    // Owned jointly with the detached applies, so none of them points into this frame.
+    struct pipeline {
+        stats s;
+        named_semaphore sem{max_in_flight_bytes, named_semaphore_exception_factory{"commitlog_replay"}};
+        gate g;
+    };
+    auto st = make_lw_shared<pipeline>();
     auto& exts = _db.local().extensions();
     auto entry_format = get_entry_format(d);
 
-    return db::commitlog::read_log_file(rpstate, f, d.filename_prefix,
-            std::bind(&impl::process, this, s.get(), entry_format, std::placeholders::_1),
-            p, &exts).then_wrapped([s](future<> f) {
-        try {
-            f.get();
-        } catch (commitlog::segment_data_corruption_error& e) {
-            s->corrupt_bytes += e.bytes();
-        } catch (commitlog::segment_truncation& e) {
-            s->truncated_at = e.position();
-        } catch (commitlog::header_checksum_error&) {
-            ++s->broken_files;
-        } catch (...) {
-            throw;
-        }
-        return make_ready_future<stats>(*s);
-    });
+    auto consume = [this, st, entry_format](commitlog::buffer_and_replay_position buf_rp) {
+        auto n = std::clamp(buf_rp.buffer.size_bytes(), min_entry_charge, max_in_flight_bytes);
+        return get_units(st->sem, n).then([this, st, entry_format, buf_rp = std::move(buf_rp)](auto units) mutable {
+            // process() only suspends at the apply, so raft and column mapping state still follow log order.
+            auto f = process(&st->s, entry_format, std::move(buf_rp));
+            if (f.available()) {
+                return f;
+            }
+            // Don't wait for in-flight applies, so reading overlaps with the cross-shard round trips.
+            (void)std::move(f).then_wrapped([st, units = std::move(units), h = st->g.hold()](future<> f) {
+                if (f.failed()) {
+                    st->s.invalid_mutations++;
+                    rlogger.warn("error replaying: {:t}", f.get_exception());
+                }
+            });
+            return make_ready_future<>();
+        });
+    };
+
+    std::exception_ptr ex;
+    try {
+        co_await db::commitlog::read_log_file(rpstate, f, d.filename_prefix, consume, p, &exts);
+    } catch (commitlog::segment_data_corruption_error& e) {
+        st->s.corrupt_bytes += e.bytes();
+    } catch (commitlog::segment_truncation& e) {
+        st->s.truncated_at = e.position();
+    } catch (commitlog::header_checksum_error&) {
+        ++st->s.broken_files;
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    // close() cannot fail, so the applies, which reference this, always finish first.
+    co_await st->g.close();
+    if (ex) {
+        std::rethrow_exception(ex);
+    }
+    co_return st->s;
 }
 
 detail::commitlog_entry_serialization_format db::commitlog_replayer::impl::get_entry_format(const commitlog::descriptor& d) const {
@@ -227,6 +259,8 @@ future<> db::commitlog_replayer::impl::process(
     try {
 
         commitlog_entry_reader cer(buf, entry_format);
+        // cer owns a copy, don't keep the raw buffer pinned.
+        buf = {};
         const auto& read_entry = cer.entry().item;
 
         if (std::holds_alternative<raft_commitlog_entry>(read_entry)) {

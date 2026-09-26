@@ -49,6 +49,7 @@
 #include "db/config.hh"
 #include "db/commitlog/commitlog_replayer.hh"
 #include "db/commitlog/commitlog.hh"
+#include "db/commitlog/commitlog_entry.hh"
 #include "test/lib/tmpdir.hh"
 #include "db/data_listeners.hh"
 #include "replica/multishard_query.hh"
@@ -161,6 +162,250 @@ SEASTAR_TEST_CASE(test_safety_after_truncate) {
         assert_query_result(keys_per_shard);
         return make_ready_future<>();
     }, cfg);
+}
+
+namespace {
+
+// Logs m to this shard's commitlog only, so the memtables stay empty until replay.
+future<db::replay_position> log_mutation(replica::database& db, const mutation& m) {
+    auto fm = freeze(m);
+    auto h = co_await db.commitlog()->add_entry(
+            m.schema()->id(), commitlog_mutation_entry_writer(m.schema(), fm, db::commitlog::force_sync::no), db::no_timeout);
+    co_return h.release();
+}
+
+// The next key of this shard's sequence that another shard owns, so its replay apply is cross-shard.
+mutation next_foreign_mutation(const replica::table& t, uint64_t& j) {
+    auto s = t.schema();
+    for (;;) {
+        mutation m(s, partition_key::from_single_value(*s, to_bytes(fmt::format("k-{}-{}", this_shard_id(), j++))));
+        if (this_smp_shard_count() == 1 || t.shard_for_reads(m.token()) != this_shard_id()) {
+            return m;
+        }
+    }
+}
+
+void replay_commitlog(cql_test_env& e) {
+    auto rp = db::commitlog_replayer::create_replayer(e.db(), e.get_system_keyspace()).get();
+    auto paths = e.local_db().commitlog()->list_existing_segments().get();
+    rp.recover(paths, db::commitlog::descriptor::FILENAME_PREFIX).get();
+}
+
+using rows_type = std::vector<std::vector<bytes_opt>>;
+
+rows_type sorted_rows(cql_test_env& e, sstring query) {
+    auto msg = e.execute_cql(query).get();
+    auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
+    BOOST_REQUIRE(rows);
+    rows_type ret;
+    for (auto& row : rows->rs().result_set().rows()) {
+        ret.emplace_back(row | std::views::transform([](const managed_bytes_opt& v) {
+            return to_bytes_opt(v);
+        }) | std::ranges::to<std::vector>());
+    }
+    std::ranges::sort(ret);
+    return ret;
+}
+
+rows_type merge_rows(rows_type a, rows_type b) {
+    a.insert(a.end(), b.begin(), b.end());
+    std::ranges::sort(a);
+    return a;
+}
+
+template <typename Func>
+rows_type log_on_all_shards(cql_test_env& e, Func f) {
+    return e.db().map_reduce0(std::move(f), rows_type(), merge_rows).get();
+}
+
+void require_rows_equal(const rows_type& got, const rows_type& expected) {
+    BOOST_REQUIRE_EQUAL(got.size(), expected.size());
+    BOOST_REQUIRE(got == expected);
+}
+
+} // anonymous namespace
+
+// Replay pipelines cross-shard applies; check every row arrives with its own value.
+SEASTAR_TEST_CASE(test_commitlog_replay_foreign_shard_values) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("create table ks.cf (k text, c int, v int, primary key (k, c));").get();
+        auto uuid = e.local_db().find_uuid("ks", "cf");
+        constexpr uint64_t keys_per_shard = 2000;
+        constexpr int32_t rows_per_key = 3;
+
+        auto expected = log_on_all_shards(e, [uuid](replica::database& db) -> future<rows_type> {
+            auto& t = db.find_column_family(uuid);
+            auto s = t.schema();
+            rows_type rows;
+            uint64_t j = 0;
+            for (uint64_t i = 0; i < keys_per_shard; ++i) {
+                auto m = next_foreign_mutation(t, j);
+                for (int32_t c = 0; c < rows_per_key; ++c) {
+                    auto v = int32_t(this_shard_id() * keys_per_shard * rows_per_key + i * rows_per_key + c);
+                    m.set_clustered_cell(clustering_key::from_single_value(*s, int32_type->decompose(c)), "v", v, api::new_timestamp());
+                    rows.push_back({m.key().explode(*s).front(), int32_type->decompose(c), int32_type->decompose(v)});
+                }
+                co_await log_mutation(db, m);
+            }
+            co_await db.commitlog()->sync_all_segments();
+            co_return rows;
+        });
+
+        replay_commitlog(e);
+        require_rows_equal(sorted_rows(e, "select k, c, v from ks.cf"), expected);
+    });
+}
+
+// Out-of-order cross-shard applies of one key must converge on the last write, tombstone included.
+SEASTAR_TEST_CASE(test_commitlog_replay_foreign_shard_same_key) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("create table ks.cf (k text primary key, v int, w int);").get();
+        auto uuid = e.local_db().find_uuid("ks", "cf");
+        constexpr int32_t updates = 1000;
+
+        auto expected = e.db().invoke_on(0, [uuid](replica::database& db) -> future<rows_type> {
+                                  auto& t = db.find_column_family(uuid);
+                                  auto s = t.schema();
+                                  uint64_t j = 0;
+                                  auto key = next_foreign_mutation(t, j).key();
+                                  auto ts = api::new_timestamp();
+                                  for (int32_t i = 1; i <= updates; ++i) {
+                                      mutation m(s, key);
+                                      m.set_clustered_cell(clustering_key_prefix::make_empty(), "v", i, ts + i);
+                                      if (i <= updates / 2) {
+                                          // Only written before the tombstone, so it must not survive.
+                                          m.set_clustered_cell(clustering_key_prefix::make_empty(), "w", i, ts + i);
+                                      }
+                                      co_await log_mutation(db, m);
+                                      if (i == updates / 2) {
+                                          mutation d(s, key);
+                                          d.partition().apply(tombstone(ts + i, gc_clock::now()));
+                                          co_await log_mutation(db, d);
+                                      }
+                                  }
+                                  co_await db.commitlog()->sync_all_segments();
+                                  co_return rows_type{{key.explode(*s).front(), int32_type->decompose(updates), std::nullopt}};
+                              }).get();
+
+        replay_commitlog(e);
+        require_rows_equal(sorted_rows(e, "select k, v, w from ks.cf"), expected);
+    });
+}
+
+// Entries that fail or are skipped while other applies are in flight must not stop or lose the others.
+SEASTAR_TEST_CASE(test_commitlog_replay_foreign_shard_invalid_entries) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("create table ks.cf (k text primary key, v int);").get();
+        e.execute_cql("create table ks.dropped (k text primary key, v int);").get();
+        auto uuid = e.local_db().find_uuid("ks", "cf");
+        auto dropped_uuid = e.local_db().find_uuid("ks", "dropped");
+        constexpr uint64_t keys_per_shard = 2000;
+
+        auto expected = log_on_all_shards(e, [uuid, dropped_uuid](replica::database& db) -> future<rows_type> {
+            auto& t = db.find_column_family(uuid);
+            auto& dt = db.find_column_family(dropped_uuid);
+            auto s = t.schema();
+            rows_type rows;
+            uint64_t j = 0, dj = 0;
+            for (uint64_t i = 0; i < keys_per_shard; ++i) {
+                auto v = int32_t(this_shard_id() * keys_per_shard + i);
+                auto m = next_foreign_mutation(t, j);
+                m.set_clustered_cell(clustering_key_prefix::make_empty(), "v", v, api::new_timestamp());
+                rows.push_back({m.key().explode(*s).front(), int32_type->decompose(v)});
+                co_await log_mutation(db, m);
+                if (i % 10 == 0) {
+                    auto dm = next_foreign_mutation(dt, dj);
+                    dm.set_clustered_cell(clustering_key_prefix::make_empty(), "v", v, api::new_timestamp());
+                    co_await log_mutation(db, dm);
+                    // An empty key fails validation on the applying shard.
+                    mutation bad(s, partition_key::from_single_value(*s, bytes()));
+                    bad.set_clustered_cell(clustering_key_prefix::make_empty(), "v", v, api::new_timestamp());
+                    co_await log_mutation(db, bad);
+                }
+            }
+            co_await db.commitlog()->sync_all_segments();
+            co_return rows;
+        });
+        e.execute_cql("drop table ks.dropped;").get();
+
+        replay_commitlog(e);
+        require_rows_equal(sorted_rows(e, "select k, v from ks.cf"), expected);
+    });
+}
+
+// A segment truncated after in-flight applies were dispatched: no crash, and everything before the cut is applied.
+SEASTAR_TEST_CASE(test_commitlog_replay_foreign_shard_truncated_segment) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("create table ks.cf (k text primary key, v int);").get();
+        auto uuid = e.local_db().find_uuid("ks", "cf");
+        constexpr uint64_t keys_per_shard = 2000;
+
+        auto expected = log_on_all_shards(e, [uuid](replica::database& db) -> future<rows_type> {
+            auto& t = db.find_column_family(uuid);
+            auto s = t.schema();
+            rows_type rows;
+            uint64_t j = 0;
+            db::replay_position cut;
+            for (uint64_t i = 0; i < 2 * keys_per_shard; ++i) {
+                auto v = int32_t(this_shard_id() * 2 * keys_per_shard + i);
+                auto m = next_foreign_mutation(t, j);
+                m.set_clustered_cell(clustering_key_prefix::make_empty(), "v", v, api::new_timestamp());
+                auto rp = co_await log_mutation(db, m);
+                if (i < keys_per_shard) {
+                    rows.push_back({m.key().explode(*s).front(), int32_type->decompose(v)});
+                } else if (i == keys_per_shard) {
+                    cut = rp;
+                }
+                if (i == keys_per_shard - 1) {
+                    // End a chunk here, so the cut below only damages the second half.
+                    co_await db.commitlog()->sync_all_segments();
+                }
+            }
+            co_await db.commitlog()->sync_all_segments();
+            bool found = false;
+            for (auto& seg : db.commitlog()->get_active_segment_names()) {
+                if (db::commitlog::descriptor(seg).id == cut.id) {
+                    auto f = co_await open_file_dma(seg, open_flags::rw);
+                    co_await f.truncate(cut.pos + 1);
+                    co_await f.close();
+                    found = true;
+                }
+            }
+            BOOST_REQUIRE(found);
+            co_return rows;
+        });
+
+        replay_commitlog(e);
+        require_rows_equal(sorted_rows(e, "select k, v from ks.cf"), expected);
+    });
+}
+
+// An entry larger than the in-flight byte budget is applied alone, without stalling the small ones around it.
+SEASTAR_TEST_CASE(test_commitlog_replay_foreign_shard_large_entry) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("create table ks.cf (k text primary key, v blob);").get();
+        auto uuid = e.local_db().find_uuid("ks", "cf");
+        constexpr uint64_t keys_per_shard = 200;
+
+        auto expected = log_on_all_shards(e, [uuid](replica::database& db) -> future<rows_type> {
+            auto& t = db.find_column_family(uuid);
+            auto s = t.schema();
+            rows_type rows;
+            uint64_t j = 0;
+            for (uint64_t i = 0; i < keys_per_shard; ++i) {
+                auto v = tests::random::get_bytes(i == keys_per_shard / 2 ? 5 << 20 : 100);
+                auto m = next_foreign_mutation(t, j);
+                m.set_clustered_cell(clustering_key_prefix::make_empty(), "v", data_value(v), api::new_timestamp());
+                rows.push_back({m.key().explode(*s).front(), v});
+                co_await log_mutation(db, m);
+            }
+            co_await db.commitlog()->sync_all_segments();
+            co_return rows;
+        });
+
+        replay_commitlog(e);
+        require_rows_equal(sorted_rows(e, "select k, v from ks.cf"), expected);
+    });
 }
 
 // Reproducer for:
