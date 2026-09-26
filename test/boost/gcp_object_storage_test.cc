@@ -47,6 +47,7 @@
 #include "utils/http.hh"
 #include "utils/error_injection.hh"
 #include "utils/rjson.hh"
+#include "utils/exceptions.hh"
 
 #include <seastar/core/metrics_api.hh>
 #include <seastar/testing/test_fixture.hh>
@@ -268,6 +269,171 @@ SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_create_small_object, local_gcs_wrappe
 
 SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_create_large_object, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
     co_await test_read_write_helper(*this, 32*1024*1024 + 357 + 1022*67);
+}
+
+// The download source is the path Data and Index reads take on a gs cluster:
+// object_storage_base::make_source() ignores the file it is handed and always
+// builds one of these.  Sized to need two ranged GETs, so a retried range also
+// has to land in the right place relative to the one after it.
+SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_download_source_truncated_body, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
+    auto& c = client();
+    auto name = make_name();
+    std::vector<temporary_buffer<char>> written;
+    constexpr size_t object_size = 8*1024*1024 + 1024;
+
+    objects_to_delete.emplace_back(name);
+    co_await create_object_of_size(c, bucket, name, object_size, &written);
+
+#ifdef SCYLLA_ENABLE_ERROR_INJECTION
+    testlog.info("One truncated range is retried, and the stream still delivers every byte");
+    utils::get_local_injector().enable("gcp_source_truncated_body", true); // one shot
+    co_await compare_object_data(*this, name, std::move(written));
+    BOOST_REQUIRE(!utils::get_local_injector().is_enabled("gcp_source_truncated_body"));
+
+    testlog.info("A range that keeps ending early fails once the retries run out");
+    utils::get_local_injector().enable("gcp_source_truncated_body");
+    try {
+        auto is = seastar::input_stream<char>(c.create_download_source(bucket, name));
+        while (true) {
+            auto buf = co_await is.read();
+            if (buf.empty()) {
+                break;
+            }
+        }
+        BOOST_ERROR("a range that always ends early should not have produced a complete stream");
+    } catch (const storage_io_error&) {
+        // Expected once the retry budget is spent: send_with_retry() wraps whatever
+        // escapes it, so the caller sees the same error type it saw before this was
+        // made retryable.
+    }
+    utils::get_local_injector().disable("gcp_source_truncated_body");
+#else
+    testlog.info("Skipping the truncated-body cases, they need SCYLLA_ENABLE_ERROR_INJECTION");
+#endif
+}
+
+// A read that fails partway has to leave the source where it was. Before
+// SCYLLADB-4293 the state was discarded on the way out, so the retry started the
+// object again from zero while every layer above kept counting from where it had
+// reached - genuine bytes at the wrong offset, which nothing downstream can see.
+SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_download_source_resumes_after_failure, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
+    auto& c = client();
+    auto name = make_name();
+    std::vector<temporary_buffer<char>> written;
+    // Several ranges, so the injected failure lands mid-object. On the first
+    // range a rewind and a resume are the same thing.
+    constexpr size_t object_size = 24*1024*1024 + 4096;
+
+    objects_to_delete.emplace_back(name);
+    co_await create_object_of_size(c, bucket, name, object_size, &written);
+
+#ifdef SCYLLA_ENABLE_ERROR_INJECTION
+    auto [expected, total] = stream_from_buffers(std::move(written));
+    auto is = seastar::input_stream<char>(c.create_download_source(bucket, name));
+
+    // Drain the whole first range before injecting. The source fetches
+    // default_gcp_storage_chunk_size at a time and serves later reads out of that
+    // buffer without going near the network, so a failure injected before it is
+    // exhausted never fires. The constant is file-static in object_storage.cc, so
+    // this 8 MiB is coupled to it by hand: if it changes, change this too, or the
+    // injection is served from a still-full buffer and BOOST_REQUIRE(threw) fails.
+    size_t read = 0;
+    while (read < 8*1024*1024) {
+        auto buf = co_await is.read();
+        BOOST_REQUIRE(!buf.empty());
+        BOOST_REQUIRE_EQUAL(buf, co_await expected.read_exactly(buf.size()));
+        read += buf.size();
+    }
+
+    // Fail the next range until the retries run out, so the error reaches us,
+    // then carry on reading the same source.
+    utils::get_local_injector().enable("gcp_source_truncated_body");
+    bool threw = false;
+    try {
+        co_await is.read();
+    } catch (const storage_io_error&) {
+        threw = true;
+    }
+    utils::get_local_injector().disable("gcp_source_truncated_body");
+    BOOST_REQUIRE(threw);
+
+    // What comes next must be what comes next, not the object over again.
+    while (read < total) {
+        auto buf = co_await is.read();
+        if (buf.empty()) {
+            break;
+        }
+        BOOST_REQUIRE_EQUAL(buf, co_await expected.read_exactly(buf.size()));
+        read += buf.size();
+    }
+    BOOST_REQUIRE_EQUAL(read, total);
+
+    co_await is.close();
+    co_await expected.close();
+#else
+    testlog.info("Skipping the resume-after-failure case, it needs SCYLLA_ENABLE_ERROR_INJECTION");
+#endif
+}
+
+// make_readable_file() is how the sstable layer opens every component it does
+// not stream -- TOC, Statistics, Summary, Filter, Scylla metadata -- and had no
+// coverage at all.
+SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_readable_file_truncated_body, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
+    auto& c = client();
+    auto name = make_name();
+    constexpr size_t object_size = 8192;
+
+    objects_to_delete.emplace_back(name);
+    co_await create_object_of_size(c, bucket, name, object_size);
+
+    auto f = c.make_readable_file(bucket, name);
+    BOOST_REQUIRE_EQUAL(co_await f.size(), object_size);
+
+    auto buf = temporary_buffer<char>::aligned(f.memory_dma_alignment(), 4096);
+    BOOST_REQUIRE_EQUAL(co_await f.dma_read(0, buf.get_write(), buf.size()), buf.size());
+
+    // A range running past the end of the object is answered short by design.
+    BOOST_REQUIRE_EQUAL(co_await f.dma_read(object_size - 100, buf.get_write(), buf.size()), 100);
+
+#ifdef SCYLLA_ENABLE_ERROR_INJECTION
+    testlog.info("One truncated body is retried, and the read still returns the data");
+    utils::get_local_injector().enable("gcp_client_truncated_body", true); // one shot
+    BOOST_REQUIRE_EQUAL(co_await f.dma_read(0, buf.get_write(), buf.size()), buf.size());
+    BOOST_REQUIRE(!utils::get_local_injector().is_enabled("gcp_client_truncated_body"));
+
+    testlog.info("A body that keeps ending early fails once the retries run out");
+    utils::get_local_injector().enable("gcp_client_truncated_body");
+    try {
+        co_await f.dma_read(0, buf.get_write(), buf.size());
+        BOOST_ERROR("a body that always ends early should not have produced a successful read");
+    } catch (const storage_io_error&) {
+        // send_with_retry() wraps whatever escapes it, so the type the caller sees
+        // is unchanged by this becoming retryable.
+    }
+    utils::get_local_injector().disable("gcp_client_truncated_body");
+
+    // A reply that carried the whole object instead of the range delivers the
+    // right number of bytes from offset zero, so the length check cannot see it.
+    testlog.info("A whole-object reply to a strict sub-range must fail");
+    utils::get_local_injector().enable("gcp_client_whole_object_reply");
+    auto disable_whole = seastar::defer([] () noexcept {
+        utils::get_local_injector().disable("gcp_client_whole_object_reply");
+    });
+    try {
+        co_await f.dma_read(0, buf.get_write(), buf.size());
+        BOOST_ERROR("a whole-object reply to a sub-range should not have produced a successful read");
+    } catch (const storage_io_error&) {
+    }
+
+    // The same reply to a request that already covers the whole object carries
+    // exactly the bytes that were asked for, so it has to keep working.
+    testlog.info("A whole-object reply to a whole-object request must succeed");
+    auto whole = temporary_buffer<char>::aligned(f.memory_dma_alignment(), object_size);
+    BOOST_REQUIRE_EQUAL(co_await f.dma_read(0, whole.get_write(), whole.size()), object_size);
+#else
+    testlog.info("Skipping the truncated-body cases, they need SCYLLA_ENABLE_ERROR_INJECTION");
+#endif
+    co_await f.close();
 }
 
 // SCYLLADB-3889: a zero-length object must finalize the resumable upload with
