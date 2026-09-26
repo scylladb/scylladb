@@ -11,6 +11,7 @@ import asyncio
 import pytest
 from test.pylib.util import wait_for_view, wait_for
 from test.cluster.mv.tablets.test_mv_tablets import pin_the_only_tablet
+from test.cluster.mv.util import RetryOverloadedOnSameHost
 from test.pylib.tablets import get_tablet_replica
 from test.cluster.util import new_test_keyspace
 
@@ -67,6 +68,7 @@ async def test_gossip_same_backlog(manager: ScyllaClusterManager) -> None:
         await pin_the_only_tablet(manager, ks, "mv_cf_view", servers[1])
 
         stmt = cql.prepare(f"INSERT INTO {ks}.tab (key, c, v) VALUES (?, ?, ?)")
+        stmt.retry_policy = RetryOverloadedOnSameHost()
 
         await asyncio.gather(*(manager.api.enable_injection(s.ip_addr, "never_finish_remote_view_updates", one_shot=False) for s in servers))
         await cql.run_async(stmt, [0, 0, 240000*'a'], host=hosts[0])
