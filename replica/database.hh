@@ -1743,6 +1743,7 @@ private:
         uint64_t total_reads = 0;
         uint64_t total_reads_failed = 0;
         uint64_t total_reads_rate_limited = 0;
+        uint64_t schema_change_commit_waits = 0;
 
         uint64_t short_data_queries = 0;
         uint64_t short_mutation_queries = 0;
@@ -1798,6 +1799,13 @@ private:
 
     flat_hash_map<sstring, keyspace> _keyspaces;
     tables_metadata _tables_metadata;
+    // Engaged while a schema change is being committed on all shards; see begin_schema_change_commit().
+    struct schema_change_commit {
+        std::unordered_set<table_id> tables;
+        std::unordered_set<table_id> dropped_tables;
+        shared_promise<> committed;
+    };
+    std::optional<schema_change_commit> _schema_change_commit;
     std::unique_ptr<db::commitlog> _commitlog;
     std::unique_ptr<db::commitlog> _schema_commitlog;
     utils::updateable_value_source<table_schema_version> _version;
@@ -1890,6 +1898,29 @@ private:
     reader_concurrency_semaphore& view_update_read_concurrency_sem();
     auto sum_read_concurrency_sem_var(std::invocable<reader_concurrency_semaphore&> auto member);
     auto sum_read_concurrency_sem_stat(std::invocable<reader_concurrency_semaphore::stats&> auto stats_member);
+
+    // Called by schema_change_commit_guard's destructor.
+    void end_schema_change_commit() noexcept;
+
+    // Slow path of table_for_request(): waits out the commit pending on the table, then looks it up.
+    future<lw_shared_ptr<table>> table_for_request_slow_path(table_id, db::timeout_clock::time_point timeout);
+
+    // Whether this shard's schema is the one the request was built against. A native reverse query
+    // carries the reversed schema.
+    static bool serves_request_schema(const schema& local, table_schema_version request) noexcept {
+        return local.version() == request || local.version() == reversed(request);
+    }
+
+    // Returns the table a request with schema `s` is to be served from, throwing
+    // no_such_column_family if there is none. A request can arrive ahead of the schema change
+    // commit it was built on; then wait for the commit.
+    future<lw_shared_ptr<table>> table_for_request(const schema& s, table_id id, db::timeout_clock::time_point timeout) {
+        auto t = _tables_metadata.get_table_if_exists(id);
+        if (!t || (_schema_change_commit && !serves_request_schema(*t->schema(), s.version()))) [[unlikely]] {
+            return table_for_request_slow_path(id, timeout);
+        }
+        return make_ready_future<lw_shared_ptr<table>>(std::move(t));
+    }
 
     future<db::large_data_violation_type> do_apply(schema_ptr, const frozen_mutation&, tracing::trace_state_ptr tr_state, db::timeout_clock::time_point timeout, db::commitlog_force_sync sync, db::per_partition_rate_limit::info rate_limit_info, bool skip_large_data_guardrails);
     future<> do_apply_many(const utils::chunked_vector<frozen_mutation>&, db::timeout_clock::time_point timeout);
@@ -2082,6 +2113,33 @@ public:
     future<counter_update_guard> acquire_counter_locks(schema_ptr s, const frozen_mutation& fm, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state);
     future<mutation> prepare_counter_update(schema_ptr s, const frozen_mutation& fm, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state);
     future<> apply_counter_update(schema_ptr, const frozen_mutation& fm, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state);
+
+    // RAII handle for a commit announced by begin_schema_change_commit(). Destroying it, which has
+    // to happen on the announcing shard, releases the requests waiting for the commit.
+    class schema_change_commit_guard {
+        database& _db;
+    public:
+        explicit schema_change_commit_guard(database& db) noexcept : _db(db) {}
+        schema_change_commit_guard(const schema_change_commit_guard&) = delete;
+        schema_change_commit_guard& operator=(const schema_change_commit_guard&) = delete;
+        ~schema_change_commit_guard() {
+            _db.end_schema_change_commit();
+        }
+    };
+
+    // Announces a schema change commit on this shard, see schema_applier::commit(). Until the
+    // returned guard is destroyed, requests to `tables` which this shard's schema cannot serve wait
+    // for the commit, see table_for_request(); `dropped_tables` are only remembered, not held back.
+    std::unique_ptr<schema_change_commit_guard> begin_schema_change_commit(std::unordered_set<table_id> tables, std::unordered_set<table_id> dropped_tables);
+
+    // Whether a schema change dropping table `id` is being committed on all shards.
+    bool is_table_being_dropped(table_id id) const {
+        return _schema_change_commit && _schema_change_commit->dropped_tables.contains(id);
+    }
+
+    // Waits for a pending schema change commit affecting table `id`, if any. For paths which
+    // resolve the table on other shards synchronously and so cannot use table_for_request() there.
+    future<> wait_for_schema_change_commit(table_id id, db::timeout_clock::time_point timeout);
 
     const sstring& get_snitch_name() const;
     /*!
