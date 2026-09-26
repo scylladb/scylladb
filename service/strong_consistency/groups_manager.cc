@@ -128,9 +128,15 @@ auto raft_server::begin_mutate(abort_source& as) -> begin_mutate_result {
     }
     const auto leader = _state.server->current_leader();
     if (!leader) {
+        if (!is_member()) {
+            return not_a_member{};
+        }
         return need_wait_for_leader{_state.server->wait_for_leader(&as)};
     }
     if (leader != _state.server->id()) {
+        if (!is_member(leader)) {
+            return need_wait_for_stale_leader(as);
+        }
         return raft::not_a_leader{leader};
     }
     const auto term = _state.server->get_current_term();
@@ -161,12 +167,31 @@ auto raft_server::begin_read(abort_source& as) -> begin_read_result {
     }
     const auto leader = _state.server->current_leader();
     if (!leader) {
+        if (!is_member()) {
+            return not_a_member{};
+        }
         return need_wait_for_leader{_state.server->wait_for_leader(&as)};
     }
     if (leader != _state.server->id()) {
+        if (!is_member(leader)) {
+            return need_wait_for_stale_leader(as);
+        }
         return raft::not_a_leader{leader};
     }
     return ok{};
+}
+
+bool raft_server::is_member(std::optional<raft::server_id> id) const {
+    return _state.server->get_configuration().contains(id.value_or(_state.server->id()));
+}
+
+// current_leader() on a follower is the last leader it heard from. A leader that removed
+// itself from the group - which is what a migration's leaving replica does when it is the
+// leader - keeps being named until this follower's election timeout fires, and a request
+// redirected to it would only be sent back: it knows no leader and isn't a member. So
+// forget it and wait for the next leader instead.
+auto raft_server::need_wait_for_stale_leader(abort_source& as) -> need_wait_for_leader {
+    return need_wait_for_leader{_state.server->wait_for_leader(&as, true)};
 }
 
 groups_manager::groups_manager(netw::messaging_service& ms, 
@@ -1051,6 +1076,8 @@ future<> groups_manager::sync_raft_group_config(global_tablet_id tablet, raft::g
     abort_on_expiry aoe(deadline);
     auto sub = utils::chain_abort_source(aoe.abort_source(), guard.get_abort_source());
     co_await converge_group_config(tablet, gid, guard, deadline, aoe.abort_source());
+
+    co_await utils::get_local_injector().inject("sc_pause_after_config_sync", utils::wait_for_message(5min));
 }
 
 future<> groups_manager::drain_group_deletion(global_tablet_id tablet, raft::group_id gid,
@@ -1198,6 +1225,11 @@ void groups_manager::update(token_metadata_ptr new_tm) {
                     }
                     auto srv = raft_server(state, std::move(*holder));
                     auto res = srv.begin_mutate(aoe.abort_source());
+                    // A server that isn't a member yet, such as a migration's pending
+                    // replica before it is added to the group, waits for a leader too.
+                    if (holds_alternative<raft_server::not_a_member>(res)) {
+                        res = raft_server::need_wait_for_leader{state.server->wait_for_leader(&aoe.abort_source())};
+                    }
                     if (auto w = get_if<raft_server::need_wait_for_leader>(&res)) {
                         auto f = co_await coroutine::as_future(std::move(w->future));
                         if (f.failed()) {
