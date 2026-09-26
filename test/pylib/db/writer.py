@@ -21,11 +21,12 @@ METRICS_TABLE = 'test_metrics'
 SYSTEM_RESOURCE_METRICS_TABLE = 'system_resource_metrics'
 CGROUP_MEMORY_METRICS_TABLE = 'cgroup_memory_metrics'
 HOST_INFO_TABLE = 'host_info'
+RESOURCE_UTILIZATION_TABLE = 'resource_utilization'
 DEFAULT_DB_NAME = f'sqlite_{HOST_ID}.db'
 DATE_TIME_TEMPLATE = '%Y-%m-%d %H:%M:%S.%f'
 
 create_table = [
-    # host_info must be created first — all other tables reference it via host_id FK
+    # host_info must be created first — the tables that carry a host_id reference it by FK
     f'''
     CREATE TABLE IF NOT EXISTS {HOST_INFO_TABLE} (
         host_id VARCHAR(5) PRIMARY KEY,
@@ -53,7 +54,6 @@ create_table = [
     CREATE TABLE IF NOT EXISTS {METRICS_TABLE} (
         id INTEGER PRIMARY KEY,
         test_id INT NOT NULL,
-        host_id VARCHAR(5) NOT NULL,
         user_sec REAL,
         system_sec REAL,
         usage_sec REAL,
@@ -68,8 +68,7 @@ create_table = [
         success BOOLEAN,
         status VARCHAR(15),
         worker_id VARCHAR(15),
-        FOREIGN KEY(test_id) REFERENCES {TESTS_TABLE}(id),
-        FOREIGN KEY(host_id) REFERENCES {HOST_INFO_TABLE}(host_id)
+        FOREIGN KEY(test_id) REFERENCES {TESTS_TABLE}(id)
     );
     ''',
 
@@ -90,14 +89,34 @@ create_table = [
     ''',
 
     f'''
+    CREATE TABLE IF NOT EXISTS {RESOURCE_UTILIZATION_TABLE} (
+        id INTEGER PRIMARY KEY,
+        host_id VARCHAR(5) NOT NULL,
+        architecture VARCHAR(15) NOT NULL,
+        mode VARCHAR(63) NOT NULL,
+        samples INTEGER NOT NULL,
+        cpu_avg REAL,
+        cpu_median REAL,
+        cpu_p95 REAL,
+        cpu_p99 REAL,
+        cpu_score REAL,
+        memory_avg REAL,
+        memory_median REAL,
+        memory_p95 REAL,
+        memory_p99 REAL,
+        memory_score REAL,
+        timestamp DATETIME,
+        FOREIGN KEY(host_id) REFERENCES {HOST_INFO_TABLE}(host_id)
+    );
+    ''',
+
+    f'''
     CREATE TABLE IF NOT EXISTS {CGROUP_MEMORY_METRICS_TABLE} (
         id INTEGER PRIMARY KEY,
         test_id INT NOT NULL,
-        host_id VARCHAR(5) NOT NULL,
         memory REAL,
         timestamp DATETIME,
-        FOREIGN KEY(test_id) REFERENCES {TESTS_TABLE}(id),
-        FOREIGN KEY(host_id) REFERENCES {HOST_INFO_TABLE}(host_id)
+        FOREIGN KEY(test_id) REFERENCES {TESTS_TABLE}(id)
     );
     '''
 ]
