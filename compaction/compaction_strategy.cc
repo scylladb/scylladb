@@ -269,7 +269,7 @@ size_tiered_backlog_tracker::sstables_backlog_contribution size_tiered_backlog_t
     return contrib;
 }
 
-double size_tiered_backlog_tracker::backlog(const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const {
+double size_tiered_backlog_tracker::backlog(const compaction_backlog_source&, const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const {
     if (_backlog_dirty) {
         _contrib = calculate_sstables_backlog_contribution(_all | std::ranges::to<std::vector>(), _stcs_options);
         _backlog_dirty = false;
@@ -357,7 +357,7 @@ public:
         , _stcs_options(stcs_options)
     {}
 
-    virtual double backlog(const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const override {
+    virtual double backlog(const compaction_backlog_source& src, const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const override {
         auto no_ow = compaction_backlog_tracker::ongoing_writes();
         auto no_oc = compaction_backlog_tracker::ongoing_compactions();
 
@@ -365,7 +365,7 @@ public:
         if (ow.empty() && oc.empty()) {
             double b = 0;
             for (auto& windows : _windows) {
-                b += windows.second.backlog(no_ow, no_oc);
+                b += windows.second.backlog(src, no_ow, no_oc);
             }
             return b;
         }
@@ -398,7 +398,7 @@ public:
             if (itc != compactions_per_window.end()) {
                 oc_this_window = &itc->second;
             }
-            b += windows.second.backlog(*ow_this_window, *oc_this_window);
+            b += windows.second.backlog(src, *ow_this_window, *oc_this_window);
             if (itw != writes_per_window.end()) {
                 // We will erase here so we can keep track of which
                 // writes belong to existing windows. Writes that don't belong to any window
@@ -410,7 +410,7 @@ public:
 
         // Partial writes that don't belong to any window are accounted here.
         for (auto& current : writes_per_window) {
-            b += size_tiered_backlog_tracker(_stcs_options).backlog(current.second, no_oc);
+            b += size_tiered_backlog_tracker(_stcs_options).backlog(src, current.second, no_oc);
         }
         return b;
     }
@@ -471,7 +471,7 @@ public:
         , _max_sstable_size(max_sstable_size_in_mb * 1024 * 1024)
     {}
 
-    virtual double backlog(const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const override {
+    virtual double backlog(const compaction_backlog_source& src, const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const override {
         std::vector<uint64_t> effective_size_per_level = _size_per_level;
         compaction_backlog_tracker::ongoing_writes l0_partial_writes;
         compaction_backlog_tracker::ongoing_compactions l0_compacted;
@@ -492,7 +492,7 @@ public:
             effective_size_per_level[level] -= cp.second->compacted();
         }
 
-        double b = _l0_scts.backlog(l0_partial_writes, l0_compacted);
+        double b = _l0_scts.backlog(src, l0_partial_writes, l0_compacted);
 
         size_t max_populated_level = [&effective_size_per_level] () -> size_t {
             auto it = std::find_if(effective_size_per_level.rbegin(), effective_size_per_level.rend(), [] (uint64_t s) {
@@ -583,14 +583,14 @@ public:
 };
 
 struct unimplemented_backlog_tracker final : public compaction_backlog_tracker::impl {
-    virtual double backlog(const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const override {
+    virtual double backlog(const compaction_backlog_source& src, const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const override {
         return compaction_controller::disable_backlog;
     }
     virtual void replace_sstables(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts) override {}
 };
 
 struct null_backlog_tracker final : public compaction_backlog_tracker::impl {
-    virtual double backlog(const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const override {
+    virtual double backlog(const compaction_backlog_source& src, const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const override {
         return 0;
     }
     virtual void replace_sstables(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts) override {}

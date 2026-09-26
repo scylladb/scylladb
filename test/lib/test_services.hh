@@ -63,6 +63,7 @@ struct table_for_tests {
     const replica::column_family* operator->() const { return _data->cf.get(); }
 
     compaction::compaction_group_view& as_compaction_group_view() noexcept;
+    compaction::compaction_backlog_source& as_compaction_backlog_source() noexcept;
 
     future<> stop() noexcept;
 

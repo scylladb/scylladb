@@ -93,7 +93,7 @@ class size_tiered_backlog_tracker final : public compaction_backlog_tracker::imp
 public:
     size_tiered_backlog_tracker(size_tiered_compaction_strategy_options stcs_options) : _stcs_options(stcs_options) {}
 
-    virtual double backlog(const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const override;
+    virtual double backlog(const compaction_backlog_source& src, const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const override;
 
     // Removing could be the result of a failure of an in progress write, successful finish of a
     // compaction, or some one-off operation, like drop

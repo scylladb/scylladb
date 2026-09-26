@@ -16,15 +16,17 @@ namespace compaction {
 // The only difference to size tiered backlog tracker is that it will calculate
 // backlog contribution using total bytes of each sstable run instead of total
 // bytes of an individual sstable object.
+//
+// The runs are taken directly from the sstable set of the compaction group the
+// backlog is computed for, rather than being maintained by the tracker on every
+// sstable replacement.
 class incremental_backlog_tracker final : public compaction_backlog_tracker::impl {
     incremental_compaction_strategy_options _options;
-    int64_t _total_bytes = 0;
-    unsigned _threshold = 0;
-    std::unordered_map<sstables::run_id, sstables::sstable_run> _all;
 
     // Cached backlog contribution fields, recalculated lazily when _backlog_dirty is set.
     // Marked mutable because they are caches updated on first backlog() call after a change.
     mutable bool _backlog_dirty = true;
+    mutable int64_t _total_bytes = 0;
     mutable int64_t _total_backlog_bytes = 0;
     mutable double _sstables_backlog_contribution = 0.0f;
     mutable std::unordered_set<sstables::run_id> _sstable_runs_contributing_backlog;
@@ -37,6 +39,7 @@ class incremental_backlog_tracker final : public compaction_backlog_tracker::imp
     inflight_component compacted_backlog(const compaction_backlog_tracker::ongoing_compactions& ongoing_compactions) const;
 
     struct backlog_calculation_result {
+        int64_t total_bytes;
         int64_t total_backlog_bytes;
         float sstables_backlog_contribution;
         std::unordered_set<sstables::run_id> sstable_runs_contributing_backlog;
@@ -48,20 +51,15 @@ public:
         return log(x) * inv_log_4;
     }
 
-    static backlog_calculation_result calculate_sstables_backlog_contribution(const std::unordered_map<sstables::run_id, sstables::sstable_run>& all,
-            const incremental_compaction_strategy_options& options,  unsigned threshold);
+    static backlog_calculation_result calculate_sstables_backlog_contribution(const compaction_backlog_source& src, const incremental_compaction_strategy_options& options);
 
     incremental_backlog_tracker(incremental_compaction_strategy_options options);
 
-    virtual double backlog(const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const override;
+    virtual double backlog(const compaction_backlog_source& src, const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const override;
 
-    // Removing could be the result of a failure of an in progress write, successful finish of a
-    // compaction, or some one-off operation, like drop
+    // The replaced sstables are already reflected in the group's sstable set, so this
+    // only invalidates the cached backlog contribution.
     virtual void replace_sstables(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts) override;
-
-    int64_t total_bytes() const {
-        return _total_bytes;
-    }
 };
 
 }

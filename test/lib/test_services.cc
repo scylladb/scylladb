@@ -33,7 +33,7 @@
 static const sstring some_keyspace("ks");
 static const sstring some_column_family("cf");
 
-class table_for_tests::compaction_group_view : public compaction::compaction_group_view {
+class table_for_tests::compaction_group_view : public compaction::compaction_group_view, public compaction::compaction_backlog_source {
     table_for_tests::data& _data;
     sstables::sstables_manager& _sstables_manager;
     std::vector<sstables::shared_sstable> _compacted_undeleted;
@@ -73,6 +73,11 @@ public:
         co_return co_await table().try_get_compaction_group_view_with_static_sharding().maintenance_sstable_set();
     }
     lw_shared_ptr<const sstables::sstable_set> sstable_set_for_tombstone_gc() const override {
+        return table().try_get_compaction_group_with_static_sharding()->main_sstables();
+    }
+    // compaction_backlog_source: the group has a single backlog tracker, so its backlog
+    // is computed on the whole main set.
+    lw_shared_ptr<const sstables::sstable_set> sstables_for_backlog() const override {
         return table().try_get_compaction_group_with_static_sharding()->main_sstables();
     }
     bool skip_memtable_for_tombstone_gc() const noexcept override { return false; }
@@ -165,6 +170,10 @@ table_for_tests::table_for_tests(sstables::sstables_manager& sstables_manager, c
 }
 
 compaction::compaction_group_view& table_for_tests::as_compaction_group_view() noexcept {
+    return *_data->table_s;
+}
+
+compaction::compaction_backlog_source& table_for_tests::as_compaction_backlog_source() noexcept {
     return *_data->table_s;
 }
 

@@ -3037,7 +3037,7 @@ void backlog_tracker_correctness_after_changing_compaction_strategy_fn(test_env&
     }
     // triggers code that iterates through registered compactions.
     cf->get_compaction_manager().backlog();
-    cf.as_compaction_group_view().get_backlog_tracker().backlog();
+    cf.as_compaction_group_view().get_backlog_tracker().backlog(cf.as_compaction_backlog_source());
 }
 
 SEASTAR_TEST_CASE(backlog_tracker_correctness_after_changing_compaction_strategy) {
@@ -4755,13 +4755,14 @@ void basic_ics_controller_correctness_fn(test_env& env) {
                 auto sst = sstable_for_overlapping_test(env, cf->schema(), tokens[i].key(), tokens[i].key());
                 sstables::test(sst).set_data_file_size(fragment_size);
                 sstables::test(sst).set_run_identifier(run_identifier);
+                cf->add_sstable_and_update_cache(sst).get();
                 backlog_tracker.replace_sstables({}, {std::move(sst)});
             }
             data_set_size += current_sstable_size;
             current_sstable_size *= 2;
         }
 
-        return backlog_tracker.backlog();
+        return backlog_tracker.backlog(cf.as_compaction_backlog_source());
     };
 
     compaction::incremental_compaction_strategy_options ics_options;
@@ -4786,6 +4787,16 @@ SEASTAR_TEST_CASE(basic_ics_controller_correctness_s3_test, *boost::unit_test::p
 SEASTAR_FIXTURE_TEST_CASE(basic_ics_controller_correctness_gcs_test, gcs_fixture, *tests::check_run_test_decorator("ENABLE_GCP_STORAGE_TEST", true)) {
     return test_env::do_with_async([](test_env& env) { basic_ics_controller_correctness_fn(env); },
                                    test_env_config{.storage = make_test_object_storage_options("GS")});
+}
+
+namespace {
+// The size-tiered tracker accounts for the sstables handed to replace_sstables(), so its
+// backlog() never looks at the source.
+struct dummy_backlog_source : public compaction::compaction_backlog_source {
+    schema_ptr _s;
+    const schema_ptr& schema() const noexcept override { return _s; }
+    lw_shared_ptr<const sstables::sstable_set> sstables_for_backlog() const override { return nullptr; }
+};
 }
 
 // Backlog must be the same whether sstables are added one at a time or all at once.
@@ -4815,7 +4826,8 @@ SEASTAR_TEST_CASE(size_tiered_backlog_deferred_matches_bulk) {
         compaction::size_tiered_backlog_tracker bulk(stcs_options);
         bulk.replace_sstables({}, ssts);
 
-        BOOST_CHECK_CLOSE(deferred.backlog({}, {}), bulk.backlog({}, {}), 0.0001);
+        dummy_backlog_source src;
+        BOOST_CHECK_CLOSE(deferred.backlog(src, {}, {}), bulk.backlog(src, {}, {}), 0.0001);
     });
 }
 
@@ -4825,7 +4837,7 @@ struct throwing_backlog_tracker_impl : public compaction::compaction_backlog_tra
     std::shared_ptr<int> calls;
     explicit throwing_backlog_tracker_impl(std::shared_ptr<int> c) : calls(std::move(c)) {}
     void replace_sstables(const std::vector<sstables::shared_sstable>&, const std::vector<sstables::shared_sstable>&) override {}
-    double backlog(const compaction::compaction_backlog_tracker::ongoing_writes&, const compaction::compaction_backlog_tracker::ongoing_compactions&) const override {
+    double backlog(const compaction::compaction_backlog_source&, const compaction::compaction_backlog_tracker::ongoing_writes&, const compaction::compaction_backlog_tracker::ongoing_compactions&) const override {
         (*calls)++;
         throw std::runtime_error("injected backlog computation failure");
     }
@@ -4834,14 +4846,15 @@ struct throwing_backlog_tracker_impl : public compaction::compaction_backlog_tra
 
 // A throwing impl must disable the tracker, not propagate to compaction_backlog_manager.
 BOOST_AUTO_TEST_CASE(compaction_backlog_tracker_isolates_backlog_exception) {
+    dummy_backlog_source src;
     auto calls = std::make_shared<int>(0);
     compaction::compaction_backlog_tracker tracker(std::make_unique<throwing_backlog_tracker_impl>(calls));
 
-    BOOST_REQUIRE_EQUAL(tracker.backlog(), compaction_controller::disable_backlog);
+    BOOST_REQUIRE_EQUAL(tracker.backlog(src), compaction_controller::disable_backlog);
     BOOST_REQUIRE_EQUAL(*calls, 1);
 
     // Now disabled: a second call must not reach the (still-throwing) impl again.
-    BOOST_REQUIRE_EQUAL(tracker.backlog(), compaction_controller::disable_backlog);
+    BOOST_REQUIRE_EQUAL(tracker.backlog(src), compaction_controller::disable_backlog);
     BOOST_REQUIRE_EQUAL(*calls, 1);
 
     // replace_sstables() on a disabled tracker must be a safe no-op.
@@ -4942,11 +4955,11 @@ future<> run_controller_test(compaction::compaction_strategy_type compaction_str
             auto key = tests::generate_partition_key(t.schema()).key();
             sstables::test(sst).set_values_for_leveled_strategy(data_size, level, 0 /*max ts*/, key, key);
             SCYLLA_ASSERT(sst->data_size() == data_size);
-            auto backlog_before = t.as_compaction_group_view().get_backlog_tracker().backlog();
+            auto backlog_before = t.as_compaction_group_view().get_backlog_tracker().backlog(t.as_compaction_backlog_source());
             t->add_sstable_and_update_cache(sst).get();
             testlog.debug("\tNew sstable of size={} level={}; Backlog diff={};",
                           utils::pretty_printed_data_size(data_size), level,
-                          t.as_compaction_group_view().get_backlog_tracker().backlog() - backlog_before);
+                          t.as_compaction_group_view().get_backlog_tracker().backlog(t.as_compaction_backlog_source()) - backlog_before);
         };
 
         auto create_table = [&] () {

@@ -3460,7 +3460,7 @@ bool compaction_group::empty() const noexcept {
         && (!_logstor_state || _logstor_state->empty());
 }
 
-const schema_ptr& compaction_group::schema() const {
+const schema_ptr& compaction_group::schema() const noexcept {
     return _t.schema();
 }
 
@@ -5540,9 +5540,15 @@ compaction::compaction_backlog_tracker& compaction_group::get_backlog_tracker() 
     return *_backlog_tracker;
 }
 
+lw_shared_ptr<const sstables::sstable_set> compaction_group::sstables_for_backlog() const {
+    // The main set, not the sstables of any one view: the group has a single backlog tracker,
+    // so what it accounts for is the whole group, every repair state included.
+    return main_sstables();
+}
+
 void compaction_group::register_backlog_tracker(compaction::compaction_backlog_tracker new_backlog_tracker) {
     _backlog_tracker.emplace(std::move(new_backlog_tracker));
-    get_compaction_manager().register_backlog_tracker(*_backlog_tracker);
+    get_compaction_manager().register_backlog_tracker(*_backlog_tracker, *this);
 }
 
 compaction::compaction_manager& compaction_group::get_compaction_manager() noexcept {

@@ -119,6 +119,12 @@ bool is_eligible_for_compaction(const sstables::shared_sstable& sst) noexcept {
     return !sst->requires_view_building() && !sst->is_quarantined();
 }
 
+bool is_eligible_for_compaction(const sstables::frozen_sstable_run& run) noexcept {
+    return std::ranges::all_of(run->all(), [] (const sstables::shared_sstable& sst) {
+        return is_eligible_for_compaction(sst);
+    });
+}
+
 logging::logger clogger("compaction");
 
 struct compaction_names {
