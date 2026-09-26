@@ -11,7 +11,6 @@ import sys
 import tempfile
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import pytest
 from cassandra.cluster import Session
@@ -34,11 +33,13 @@ SCRIPTS_DIR = str(TOP_SRC_DIR / "scripts")
 if SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, SCRIPTS_DIR)
 
-if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, AsyncIterator, Callable
-    from typing import Any
+# These must be imported normally, not under "if TYPE_CHECKING", because the
+# fixtures below use them in their annotations, and pytest reads a fixture's
+# annotations at runtime to find out what that fixture takes.
+from collections.abc import AsyncGenerator, AsyncIterator, Callable
+from typing import Any
 
-    from test.pylib.scylla_cluster import ClusterFactory, ScyllaCluster
+from test.pylib.scylla_cluster import ClusterFactory, ScyllaCluster
 
 
 type TeardownCallback = Callable[[], Any]
