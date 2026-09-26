@@ -64,7 +64,7 @@ void set_strongly_consistent_tables_enabled(bool enabled) {
     strongly_consistent_tables_enabled = enabled;
 }
 
-schema_ptr make_tablets_schema() {
+static schema_ptr make_tablets_schema() {
     // FIXME: Allow UDTs in system keyspace:
     // CREATE TYPE tablet_replica (replica_id uuid, shard int);
     // replica_set_type = frozen<list<tablet_replica>>
@@ -105,6 +105,18 @@ schema_ptr make_tablets_schema() {
     return builder
             .with_hash_version()
             .build();
+}
+
+schema_ptr get_tablets_schema() {
+    // The column set depends on strongly_consistent_tables_enabled, which a
+    // server sets before first use and a test process sets per environment.
+    static thread_local bool built_with = strongly_consistent_tables_enabled;
+    static thread_local schema_ptr schema = make_tablets_schema();
+    if (built_with != strongly_consistent_tables_enabled) {
+        built_with = strongly_consistent_tables_enabled;
+        schema = make_tablets_schema();
+    }
+    return schema;
 }
 
 schema_ptr make_raft_schema(sstring name, bool is_group0) {

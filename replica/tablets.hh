@@ -42,7 +42,7 @@ data_type get_tablet_info_v2_type();
 
 void set_strongly_consistent_tables_enabled(bool enabled);
 
-schema_ptr make_tablets_schema();
+schema_ptr get_tablets_schema();
 
 schema_ptr make_raft_schema(sstring name, bool is_group0);
 schema_ptr make_raft_snapshots_schema(sstring name, bool is_group0);
