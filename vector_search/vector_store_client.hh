@@ -14,6 +14,7 @@
 #include "error.hh"
 #include "utils/rjson.hh"
 #include <chrono>
+#include <cstdint>
 #include <expected>
 #include <functional>
 #include <optional>
@@ -26,14 +27,11 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/sharded.hh>
 #include <seastar/http/reply.hh>
+#include <seastar/net/inet_address.hh>
 
 class schema;
 namespace db {
 class config;
-}
-
-namespace seastar::net {
-class inet_address;
 }
 
 namespace vector_search {
@@ -103,18 +101,76 @@ public:
 
     /// The operational status of a single vector index, as reported by the vector store.
     enum class index_status {
-        /// The index is not yet ready: initializing, not yet discovered, or the
-        /// vector store is unreachable.
-        creating,
+        /// The status could not be determined: the vector store is unreachable,
+        /// the index is not known to it yet, or the reply could not be parsed.
+        unknown,
+        /// The index has been discovered and is being initialized, but the
+        /// initial table scan has not started yet.
+        initializing,
         /// The index is performing the initial full scan of the base table
         /// (backfilling). Queries may be served but results are incomplete.
-        backfilling,
+        bootstrapping,
         /// The index has completed the initial scan and is fully operational.
         serving,
     };
 
     /// Query the vector store for the current status of a specific vector index.
     auto get_index_status(keyspace_name keyspace, index_name name, abort_source& as) -> future<index_status>;
+
+    /// The role of a vector store node, derived from which configuration list
+    /// (vector_store_primary_uri / vector_store_secondary_uri) it came from.
+    enum class node_role {
+        primary,
+        secondary,
+    };
+
+    /// Connectivity of a vector store node from the perspective of this Scylla
+    /// node, i.e. whether this node can reach and query it.
+    enum class node_connectivity {
+        /// The node is reachable and can be queried.
+        up,
+        /// The node is currently considered unreachable.
+        down,
+    };
+
+    /// A resolved address of a vector store node and whether it is reachable.
+    struct resolved_endpoint {
+        seastar::net::inet_address ip;
+        node_connectivity connectivity;
+    };
+
+    /// What a single vector store node reports about a single index.
+    struct index_state {
+        /// `unknown` when the node was not queried, does not know the index,
+        /// or returned an unparsable reply.
+        index_status status;
+        /// Number of vectors currently indexed. Empty when not available.
+        std::optional<uint64_t> count;
+        /// Backfill progress in the range [0, 100]. Empty when not available.
+        std::optional<double> build_progress;
+    };
+
+    /// The state of one index on one known vector store node.
+    struct index_node_status {
+        node_role role;
+        host_name host;
+        port_number port;
+        /// Empty while the host has not been resolved, in which case its
+        /// reachability is not known either.
+        std::optional<resolved_endpoint> endpoint;
+        index_state state;
+    };
+
+    /// The state of the given index on every known vector store node: one
+    /// entry per resolved address of every configured URI, plus one `unknown`
+    /// entry for each configured host that has not been resolved yet.
+    ///
+    /// Only reachable nodes are queried; the others carry a default (unknown)
+    /// state. The node list is built from what the background DNS refresh has
+    /// resolved so far, so the call never resolves on demand and cannot block
+    /// on it; a host configured since the last refresh, or one that cannot be
+    /// resolved, is reported as `unknown`.
+    auto get_index_status_per_node(keyspace_name keyspace, index_name name, abort_source& as) -> future<std::vector<index_node_status>>;
 
     /// Request the vector store service for the primary keys of the nearest
     /// neighbors. Each returned primary_key has its similarity field set to
@@ -175,3 +231,18 @@ struct vector_store_client_tester {
 };
 
 } // namespace vector_search
+
+template <>
+struct fmt::formatter<vector_search::vector_store_client::index_status> : fmt::formatter<string_view> {
+    auto format(vector_search::vector_store_client::index_status, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+
+template <>
+struct fmt::formatter<vector_search::vector_store_client::node_role> : fmt::formatter<string_view> {
+    auto format(vector_search::vector_store_client::node_role, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+
+template <>
+struct fmt::formatter<vector_search::vector_store_client::node_connectivity> : fmt::formatter<string_view> {
+    auto format(vector_search::vector_store_client::node_connectivity, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
