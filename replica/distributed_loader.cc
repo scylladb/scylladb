@@ -9,6 +9,7 @@
 #include "db/view/view_building_worker.hh"
 #include "sstables/shared_sstable.hh"
 #include "utils/assert.hh"
+#include "utils/error_injection.hh"
 #include <fmt/std.h>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/smp.hh>
@@ -426,6 +427,9 @@ future<> table_populator::populate_subdir(sharded<sstables::sstable_directory>& 
     compaction::owned_ranges_ptr owned_ranges_ptr = nullptr;
 
     if (vnodes_resharding) {
+        utils::get_local_injector().inject("fail_vnodes_resharding",
+                [] { throw std::runtime_error("injected failure: vnodes resharding failed"); });
+
         // Build owned_ranges from the tablet map.
         auto table_uuid = _global_table->schema()->id();
         auto& tmap = _db.local().get_shared_token_metadata().get()->tablets().get_tablet_map(table_uuid);
@@ -592,6 +596,8 @@ future<> distributed_loader::init_system_keyspace(sharded<db::system_keyspace>& 
 future<> distributed_loader::init_non_system_keyspaces(sharded<replica::database>& db,
         sharded<service::storage_proxy>& proxy, sharded<db::system_keyspace>& sys_ks) {
     return seastar::async([&db, &proxy, &sys_ks] {
+        const auto& cfg = db.local().get_config();
+
         // Load the node's intended storage mode from topology.
         // This determines the ERM flavor and resharding direction for tables
         // under vnodes-to-tablets migration.
@@ -600,11 +606,21 @@ future<> distributed_loader::init_non_system_keyspaces(sharded<replica::database
         auto node = topology.normal_nodes.find(raft::server_id{host_id.uuid()});
         std::optional<service::intended_storage_mode> storage_mode = node != topology.normal_nodes.end() ? node->second.storage_mode : std::nullopt;
 
+        auto recorded_mode = storage_mode ? format("{}", *storage_mode) : sstring("unset");
+        if (cfg.force_vnodes_storage_mode()) {
+            dblog.warn("force_vnodes_storage_mode is set, overriding the intended storage mode recorded in "
+                    "system.topology ('{}'). system.topology is left unchanged: run "
+                    "'nodetool migrate-to-tablets downgrade' against this node once it is up, then unset "
+                    "this option.",
+                    recorded_mode);
+            storage_mode = service::intended_storage_mode::vnodes;
+        } else if (storage_mode) {
+            dblog.info("Using intended storage mode '{}' recorded in system.topology", recorded_mode);
+        }
+
         db.invoke_on_all([&proxy, &sys_ks, &storage_mode] (replica::database& db) {
             return db.parse_system_tables(proxy, sys_ks, storage_mode);
         }).get();
-
-        const auto& cfg = db.local().get_config();
 
         for (bool prio_only : { true, false}) {
             std::vector<future<>> futures;
