@@ -7070,6 +7070,16 @@ future<> storage_service::do_await_topology_quiesced() {
                         "quiesce request {}: topology not idle: {} (attempt {}, waiting for {} s)",
                         request_id, error, attempts, elapsed_s());
         }
+        if (std::string_view(error) == auto_rf_backed_off_error) {
+            // The topology is idle during the backoff, so the waits below would not block.
+            // The retry is a topology change, which signals the event; the timeout covers a
+            // signal which came before this wait.
+            try {
+                co_await _topology_state_machine.event.wait(auto_rf_backoff_max);
+            } catch (const seastar::condition_variable_timed_out&) {
+            }
+            continue;
+        }
         // Wait locally for topology to settle before resubmitting.
         co_await _topology_state_machine.await_not_busy();
         co_await _topology_state_machine.event.when([this] {
