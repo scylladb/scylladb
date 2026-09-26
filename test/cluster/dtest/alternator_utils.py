@@ -1262,7 +1262,9 @@ class StreamsTable:
 
 
 def random_string(length: int, chars=string.ascii_uppercase + string.digits):
-    return "".join(random.choices(chars, k=length))
+    # One random.choice() per character, as scylla-dtest: random.choices() draws from the
+    # generator differently, so every later draw of a seeded test would differ.
+    return "".join(random.choice(chars) for _ in range(length))
 
 
 def generate_put_request_items(num_of_items: int = NUM_OF_ITEMS, add_gsi: bool = False) -> list[dict[str, str | dict[str, str]]]:
