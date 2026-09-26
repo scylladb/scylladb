@@ -325,9 +325,8 @@ def _do_test_repair_options_tablets(
             args += list(dc)
 
             if dc[0] == "-local" or dc[0] == "--in-local-dc":
-                # Looks like JMX caches the response to this, so we have to make it optional
                 expected_requests += [
-                    expected_request("GET", "/snitch/datacenter", response="DC_local", multiple=expected_request.ANY),
+                    expected_request("GET", "/snitch/datacenter", response="DC_local"),
                 ]
                 dcs.append("DC_local")
 

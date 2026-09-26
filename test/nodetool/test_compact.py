@@ -9,19 +9,10 @@ from test.nodetool.utils import check_nodetool_fails_with
 import pytest
 
 
-# `scylla nodetool compact` invokes the newly added global compact api
-def test_all_keyspaces(nodetool, scylla_only):
+# `nodetool compact` invokes the global compact api
+def test_all_keyspaces(nodetool):
     nodetool("compact", expected_requests=[
         expected_request("POST", "/storage_service/compact")])
-
-
-# The java-based `nodetool compact` lists all keyspaces and invoke the keyspace_compaction api on each of them
-def test_all_keyspaces_jmx(nodetool, cassandra_only):
-    nodetool("compact", expected_requests=[
-        expected_request("GET", "/storage_service/keyspaces", multiple=expected_request.MULTIPLE,
-                         response=["system", "system_schema"]),
-        expected_request("POST", "/storage_service/keyspace_compaction/system"),
-        expected_request("POST", "/storage_service/keyspace_compaction/system_schema")])
 
 
 def test_keyspace(nodetool):
@@ -38,8 +29,7 @@ def test_nonexistent_keyspace(nodetool):
             {"expected_requests": [
                 expected_request("GET", "/storage_service/keyspaces", multiple=expected_request.MULTIPLE,
                                  response=["system"])]},
-            ["nodetool: Keyspace [non_existent_ks] does not exist.",
-             "error processing arguments: keyspace non_existent_ks does not exist"])
+            ["error processing arguments: keyspace non_existent_ks does not exist"])
 
 
 def test_table(nodetool):
@@ -76,7 +66,7 @@ def test_token_range_compatibility_argument(nodetool):
     nodetool("compact", "system_schema", "--start-token", "0", "--end-token", "1000", expected_requests=dummy_request)
 
 
-def test_user_defined(nodetool, scylla_only):
+def test_user_defined(nodetool):
     check_nodetool_fails_with(
             nodetool,
             ("compact", "--user-defined", "/var/lib/scylla/data/system/local-7ad54392bcdd35a684174e047860b377/"
@@ -86,8 +76,7 @@ def test_user_defined(nodetool, scylla_only):
 
 
 @pytest.mark.parametrize("flush", ("true", "false"))
-# The `--flush-memtables` option to `nodetool compact` is available only with `scylla_nodetool`
-def test_keyspace_flush_memtables_option(nodetool, scylla_only, flush):
+def test_keyspace_flush_memtables_option(nodetool, flush):
     params = {"flush_memtables": flush}
     nodetool("compact", "system_schema", "--flush-memtables", flush, expected_requests=[
             expected_request("GET", "/storage_service/keyspaces", multiple=expected_request.MULTIPLE,
@@ -96,8 +85,7 @@ def test_keyspace_flush_memtables_option(nodetool, scylla_only, flush):
 
 
 @pytest.mark.parametrize("flush", ("true", "false"))
-# The `--flush-memtables` option to `nodetool compact` is available only with `scylla_nodetool`
-def test_all_keyspaces_flush_memtables_option(nodetool, scylla_only, flush):
+def test_all_keyspaces_flush_memtables_option(nodetool, flush):
     params = {"flush_memtables": flush}
     nodetool("compact", "--flush-memtables", flush, expected_requests=[
             expected_request("POST", "/storage_service/compact", params=params)])

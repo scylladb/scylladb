@@ -49,7 +49,7 @@ def format_compaction(compaction, progress=None):
 
 @pytest.mark.parametrize("num_compactions", [0, 1, 2])
 @pytest.mark.parametrize("throughput", [0, 1024])
-def test_compactionstats(nodetool, request, num_compactions, throughput):
+def test_compactionstats(nodetool, num_compactions, throughput):
     pending_tasks = [create_task(i, 1) for i in range(num_compactions)]
     compactions = [create_compaction_stats(task["ks"], task["cf"])
                    for task in pending_tasks]
@@ -59,9 +59,8 @@ def test_compactionstats(nodetool, request, num_compactions, throughput):
         expected_request("GET", "/compaction_manager/compactions",
                          response=compactions),
     ]
-    if request.config.getoption("nodetool") == "cassandra" or len(compactions) > 0:
-        # scylla nodetool does not bother reading throughput if there is no
-        # pending compaction. but cassandra's nodetool always does.
+    if len(compactions) > 0:
+        # nodetool does not bother reading throughput if there is no pending compaction
         expected_requests.append(
             expected_request("GET", "/storage_service/compaction_throughput",
                              response=throughput))

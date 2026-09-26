@@ -12,8 +12,6 @@ from typing import NamedTuple
 
 import pytest
 
-from test.pylib.skip_types import skip_env
-
 
 class NodeStatus(Enum):
     Up = 'U'
@@ -48,14 +46,9 @@ null_ownership_error = ("Non-system keyspaces don't have the same replication se
                         "effective ownership information is meaningless")
 
 
-def validate_status_output(res, keyspace, nodes, ownership, resolve, effective_ownership_unknown, token_count_unknown,
-                           cassandra_nodetool):
+def validate_status_output(res, keyspace, nodes, ownership, resolve, effective_ownership_unknown, token_count_unknown):
     datacenters = sorted(list(set([node.datacenter for node in nodes.values()])))
-    if cassandra_nodetool:
-        # the legacy nodetool divides by 1024, but labels the result with base-10 units
-        load_multiplier = {"bytes": 1, "KB": 1024, "MB": 1024**2, "GB": 1024**3, "TB": 1024**4}
-    else:
-        load_multiplier = {"bytes": 1, "KiB": 1024, "MiB": 1024**2, "GiB": 1024**3, "TiB": 1024**4}
+    load_multiplier = {"bytes": 1, "KiB": 1024, "MiB": 1024**2, "GiB": 1024**3, "TiB": 1024**4}
 
     lines = res.split('\n')
     i = 0
@@ -125,10 +118,7 @@ def validate_status_output(res, keyspace, nodes, ownership, resolve, effective_o
             if node.host_id is not None:
                 assert host_id == node.host_id
             else:
-                if cassandra_nodetool:
-                    assert host_id == "null"
-                else:
-                    assert host_id == "?"
+                assert host_id == "?"
             assert rack == node.rack
 
         assert len(dc_eps) == 0
@@ -188,9 +178,7 @@ def _get_ownership(nodes):
     return ownership
 
 
-def _do_test_status(request, nodetool, status_query_target, node_list, resolve=None):
-    uses_cassandra_nodetool = request.config.getoption("nodetool") == "cassandra"
-
+def _do_test_status(nodetool, status_query_target, node_list, resolve=None):
     if status_query_target:
         keyspace = status_query_target.keyspace
         table = status_query_target.table
@@ -240,21 +228,11 @@ def _do_test_status(request, nodetool, status_query_target, node_list, resolve=N
         expected_request("GET", "/storage_service/host_id", response=host_id_map),
     ]
 
-    if keyspace is None:
-        expected_requests += [
-                expected_request("GET",
-                                 "/storage_service/ownership/null",
-                                 response_status=500,
-                                 multiple=expected_request.ANY,
-                                 response={"message": f"std::runtime_error({null_ownership_error})", "code": 500}),
-                expected_request("GET", "/storage_service/ownership", multiple=expected_request.ANY,
-                                 response=ownership_response)]
-    else:
-        if not uses_cassandra_nodetool:
-            keyspaces_using_tablets = [keyspace] if keyspace_uses_tablets else []
-            expected_requests.append(
-                expected_request("GET", "/storage_service/keyspaces", params={"replication": "tablets"},
-                                 multiple=expected_request.ONE, response=keyspaces_using_tablets))
+    if keyspace is not None:
+        keyspaces_using_tablets = [keyspace] if keyspace_uses_tablets else []
+        expected_requests.append(
+            expected_request("GET", "/storage_service/keyspaces", params={"replication": "tablets"},
+                             multiple=expected_request.ONE, response=keyspaces_using_tablets))
         if table is None:
             if not keyspace_uses_tablets:
                 expected_requests.append(
@@ -289,10 +267,10 @@ def _do_test_status(request, nodetool, status_query_target, node_list, resolve=N
     effective_ownership_unknown = keyspace is None or (table is None and keyspace_uses_tablets)
     token_count_unknown = keyspace_uses_tablets and not table
     validate_status_output(res.stdout, keyspace, nodes, ownership, bool(resolve), effective_ownership_unknown,
-                           token_count_unknown, uses_cassandra_nodetool)
+                           token_count_unknown)
 
 
-def test_status_no_keyspace_single_dc(request, nodetool):
+def test_status_no_keyspace_single_dc(nodetool):
     nodes = [
         Node(
             endpoint="127.0.0.1",
@@ -326,15 +304,12 @@ def test_status_no_keyspace_single_dc(request, nodetool):
         ),
     ]
 
-    _do_test_status(request, nodetool, None, nodes)
+    _do_test_status(nodetool, None, nodes)
 
 
 @pytest.mark.parametrize("uses_tablets", (False, True))
 @pytest.mark.parametrize("table", (None, "cf"))
-def test_status_keyspace_single_dc(request, nodetool, uses_tablets, table):
-    if request.config.getoption("nodetool") == "cassandra" and (uses_tablets or table):
-        skip_env("skipping tablets-related test with Cassandra nodetool")
-
+def test_status_keyspace_single_dc(nodetool, uses_tablets, table):
     nodes = [
         Node(
             endpoint="127.0.0.1",
@@ -369,10 +344,10 @@ def test_status_keyspace_single_dc(request, nodetool, uses_tablets, table):
     ]
 
     status_target = StatusQueryTarget(keyspace="ks", table=table, uses_tablets=uses_tablets)
-    _do_test_status(request, nodetool, status_target, nodes)
+    _do_test_status(nodetool, status_target, nodes)
 
 
-def test_status_no_keyspace_multi_dc(request, nodetool):
+def test_status_no_keyspace_multi_dc(nodetool):
     nodes = [
         Node(
             endpoint="127.1.0.1",
@@ -416,14 +391,11 @@ def test_status_no_keyspace_multi_dc(request, nodetool):
         ),
     ]
 
-    _do_test_status(request, nodetool, None, nodes)
+    _do_test_status(nodetool, None, nodes)
 
 @pytest.mark.parametrize("uses_tablets", (False, True))
 @pytest.mark.parametrize("table", (None, "cf"))
-def test_status_keyspace_multi_dc(request, nodetool, uses_tablets, table):
-    if request.config.getoption("nodetool") == "cassandra" and (uses_tablets or table):
-        skip_env("skipping tablets-related test with Cassandra nodetool")
-
+def test_status_keyspace_multi_dc(nodetool, uses_tablets, table):
     nodes = [
         Node(
             endpoint="127.1.0.1",
@@ -468,11 +440,11 @@ def test_status_keyspace_multi_dc(request, nodetool, uses_tablets, table):
     ]
 
     status_target = StatusQueryTarget(keyspace="ks", table=table, uses_tablets=uses_tablets)
-    _do_test_status(request, nodetool, status_target, nodes)
+    _do_test_status(nodetool, status_target, nodes)
 
 
 @pytest.mark.parametrize("resolve", (None, '-r', '--resolve-ip'))
-def test_status_resolve(request, nodetool, resolve):
+def test_status_resolve(nodetool, resolve):
     nodes = [
         Node(
             endpoint="127.0.0.1",
@@ -486,10 +458,10 @@ def test_status_resolve(request, nodetool, resolve):
         ),
     ]
 
-    _do_test_status(request, nodetool, None, nodes, resolve)
+    _do_test_status(nodetool, None, nodes, resolve)
 
 
-def test_status_with_zero_token_nodes(request, nodetool):
+def test_status_with_zero_token_nodes(nodetool):
     nodes = [
         Node(
             endpoint="127.0.0.1",
@@ -523,10 +495,10 @@ def test_status_with_zero_token_nodes(request, nodetool):
         ),
     ]
 
-    _do_test_status(request, nodetool, None, nodes)
+    _do_test_status(nodetool, None, nodes)
 
 
-def test_status_negative_load(request, nodetool):
+def test_status_negative_load(nodetool):
     nodes = [
         Node(
             endpoint="127.0.0.1",
@@ -561,10 +533,10 @@ def test_status_negative_load(request, nodetool):
     ]
 
     status_target = StatusQueryTarget(keyspace="ks", table=None, uses_tablets=False)
-    _do_test_status(request, nodetool, status_target, nodes)
+    _do_test_status(nodetool, status_target, nodes)
 
 
-def test_status_load_on_unit_boundary(request, nodetool):
+def test_status_load_on_unit_boundary(nodetool):
     # A load which is an exact multiple of the unit has to roll over to that
     # unit, instead of being reported in the previous one (1 KiB, not 1024 bytes).
     nodes = [
@@ -600,4 +572,4 @@ def test_status_load_on_unit_boundary(request, nodetool):
         ),
     ]
 
-    _do_test_status(request, nodetool, None, nodes)
+    _do_test_status(nodetool, None, nodes)

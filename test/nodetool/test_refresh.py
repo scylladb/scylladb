@@ -34,8 +34,7 @@ def test_refresh_no_table(nodetool):
             nodetool,
             ("refresh", "ks"),
             {"expected_requests": []},
-            ["nodetool: refresh requires ks and cf args",
-             "error processing arguments: required parameter is missing: table"])
+            ["error processing arguments: required parameter is missing: table"])
 
 
 def test_refresh_no_table_no_keyspace(nodetool):
@@ -43,11 +42,10 @@ def test_refresh_no_table_no_keyspace(nodetool):
             nodetool,
             ("refresh",),
             {"expected_requests": []},
-            ["nodetool: refresh requires ks and cf args",
-             "error processing arguments: required parameters are missing: keyspace and table"])
+            ["error processing arguments: required parameters are missing: keyspace and table"])
 
 
-def test_refresh_primary_replica_only(nodetool, scylla_only):
+def test_refresh_primary_replica_only(nodetool):
     check_nodetool_fails_with(
             nodetool,
             ("refresh", "ks", "tbl", "--primary-replica-only"),
@@ -55,26 +53,26 @@ def test_refresh_primary_replica_only(nodetool, scylla_only):
             ["error processing arguments: --primary-replica-only|-pro takes no effect without --load-and-stream|-las"])
 
 
-def test_refresh_skip_cleanup(nodetool, scylla_only):
+def test_refresh_skip_cleanup(nodetool):
     nodetool("refresh", "ks", "tbl", "--skip-cleanup", expected_requests=[
         expected_request("POST", "/storage_service/sstables/ks", params={"cf": "tbl", "skip_cleanup": "true"})])
 
 
-def test_refresh_skip_cleanup_load_and_stream(nodetool, scylla_only):
+def test_refresh_skip_cleanup_load_and_stream(nodetool):
     check_nodetool_fails_with(
             nodetool,
             ("refresh", "ks", "tbl", "--load-and-stream", "--skip-cleanup"),
             {"expected_requests": []},
             ["error processing arguments: --skip-cleanup takes no effect with --load-and-stream|-las"])
 
-def test_refresh_scope_only(nodetool, scylla_only):
+def test_refresh_scope_only(nodetool):
     check_nodetool_fails_with(
             nodetool,
             ("refresh", "ks", "tbl", "--scope=all"),
             {"expected_requests": []},
             ["error processing arguments: --scope takes no effect without --load-and-stream|-las"])
 
-def test_refresh_scope_node_primary_replica(nodetool, scylla_only):
+def test_refresh_scope_node_primary_replica(nodetool):
     check_nodetool_fails_with(
             nodetool,
             ("refresh", "ks", "tbl", "--scope=node", "--primary-replica-only", "--load-and-stream"),
@@ -82,12 +80,12 @@ def test_refresh_scope_node_primary_replica(nodetool, scylla_only):
             ["error processing arguments: Cannot set both primary_replica_only and scope=node"])
 
 @pytest.mark.parametrize("scope_val", ["all", "dc", "rack"])
-def test_refresh_scope_primary_replica(nodetool, scylla_only, scope_val):
+def test_refresh_scope_primary_replica(nodetool, scope_val):
     nodetool("refresh", "ks", "tbl", "--load-and-stream", f"--scope={scope_val}", "--primary-replica-only", expected_requests=[
         expected_request("POST", "/storage_service/sstables/ks",
                          params={"cf": "tbl", "load_and_stream": "true", "primary_replica_only": "true", "scope": f"{scope_val}"})])
 
-def test_refresh_scope_illegal(nodetool, scylla_only):
+def test_refresh_scope_illegal(nodetool):
     check_nodetool_fails_with(
             nodetool,
             ("refresh", "ks", "tbl", "--scope=broken", "--load-and-stream"),
@@ -102,12 +100,12 @@ def test_refresh_load_and_stream_scope(nodetool, load_and_stream_opt, scope_val)
                          params={"cf": "tbl", "load_and_stream": "true", "scope": f"{scope_val}"})])
 
 
-def test_refresh_skip_reshape(nodetool, scylla_only):
+def test_refresh_skip_reshape(nodetool):
     nodetool("refresh", "ks", "tbl", "--skip-reshape", expected_requests=[
         expected_request("POST", "/storage_service/sstables/ks", params={"cf": "tbl", "skip_reshape": "true"})])
 
 
-def test_refresh_skip_reshape_load_and_stream(nodetool, scylla_only):
+def test_refresh_skip_reshape_load_and_stream(nodetool):
     check_nodetool_fails_with(
             nodetool,
             ("refresh", "ks", "tbl", "--load-and-stream", "--skip-reshape"),

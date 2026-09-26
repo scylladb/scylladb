@@ -43,7 +43,7 @@ class cache_metrics(NamedTuple):
     save_period: int
 
 
-def normalize_output(output, is_scylla=True):
+def normalize_output(output):
     # Scylla does not run a JVM, so it the memory usage exposed by MemoryMXBean
     # is meaningless to it.
     normalized = ''
@@ -52,11 +52,6 @@ def normalize_output(output, is_scylla=True):
             continue
         if line.startswith('Uptime'):
             continue
-        if not is_scylla:
-            # cassandra nodetool divides by 1024 but labels the result with
-            # base-10 units, scylla nodetool always uses the base-2 units
-            for si, iec in [('KB', 'KiB'), ('MB', 'MiB'), ('GB', 'GiB')]:
-                line = line.replace(si, iec)
         normalized += f'{line}\n'
     return normalized
 
@@ -67,10 +62,8 @@ def normalize_output(output, is_scylla=True):
                              False,
                          ]
                          )
-def test_info(request, nodetool, display_all_tokens):
+def test_info(nodetool, display_all_tokens):
     host_id = 'hostid0'
-    endpoint = '127.0.0.1'
-    endpoint_to_host_id = {endpoint: host_id}
     generation_number = 42
     load = 42424242
     uptime = 12345
@@ -107,14 +100,8 @@ def test_info(request, nodetool, display_all_tokens):
         expected_request('GET', '/storage_service/generation_number', response=generation_number),
     ]
 
-    is_scylla = request.config.getoption('nodetool') == 'scylla'
-
-    if is_scylla:
-        expected_requests.append(
-            expected_request('GET', '/system/uptime_ms', response=uptime))
-    else:
-        # cassandra nodetool uses RuntimeMXBean
-        pass
+    expected_requests.append(
+        expected_request('GET', '/system/uptime_ms', response=uptime))
     expected_requests.append(
         expected_request('GET', '/column_family/',
                          multiple=expected_request.MULTIPLE,
@@ -156,19 +143,9 @@ def test_info(request, nodetool, display_all_tokens):
                          response=join_ring))
 
     if join_ring:
-        if is_scylla:
-            expected_requests.append(
-                expected_request('GET', '/storage_service/tokens',
-                                 response=tokens))
-        else:
-            expected_requests += [
-                expected_request('GET', '/storage_service/host_id',
-                                 response=[{'key': endpoint, 'value': hostid}
-                                           for endpoint, hostid in endpoint_to_host_id.items()]),
-                expected_request('GET', '/storage_service/hostid/local', response=host_id),
-                expected_request('GET', f'/storage_service/tokens/{endpoint}',
-                                 response=tokens)
-            ]
+        expected_requests.append(
+            expected_request('GET', '/storage_service/tokens',
+                             response=tokens))
 
     mem_used = 0.0
     mem_max = 0.0
@@ -214,4 +191,4 @@ def test_info(request, nodetool, display_all_tokens):
     if display_all_tokens:
         args.append('--tokens')
     res = nodetool("info", *args, expected_requests=expected_requests)
-    assert normalize_output(res.stdout, is_scylla) == normalize_output(expected_output)
+    assert normalize_output(res.stdout) == normalize_output(expected_output)

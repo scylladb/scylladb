@@ -7,14 +7,14 @@
 from test.nodetool.rest_api_mock import expected_request
 from test.nodetool.utils import check_nodetool_fails_with_error_contains
 
-def test_failure(nodetool, scylla_only):
+def test_failure(nodetool):
     check_nodetool_fails_with_error_contains(
             nodetool,
             ("tasks"),
             {"expected_requests": []},
             ["unrecognized operation argument"])
 
-def test_abort(nodetool, scylla_only):
+def test_abort(nodetool):
     nodetool("tasks", "abort", "675ed9f4-6564-6dbd-can8-43fddce952gy", expected_requests=[
         expected_request("POST", "/task_manager/abort_task/675ed9f4-6564-6dbd-can8-43fddce952gy")])
 
@@ -22,14 +22,14 @@ def test_abort(nodetool, scylla_only):
         expected_request("POST", "/task_manager/abort_task/675ed9f4-6564-6dbd-can8-43fddce952gy", response=[], response_status=403)])
     assert "Task with id 675ed9f4-6564-6dbd-can8-43fddce952gy is not abortable" in res.stdout
 
-def test_abort_failure(nodetool, scylla_only):
+def test_abort_failure(nodetool):
     check_nodetool_fails_with_error_contains(
             nodetool,
             ("tasks", "abort"),
             {"expected_requests": []},
             ["required parameter is missing"])
 
-def test_drain(nodetool, scylla_only):
+def test_drain(nodetool):
     nodetool("tasks", "drain", expected_requests=[
         expected_request("GET", "/task_manager/list_modules", response=["repair", "compaction"]),
         expected_request("POST", "/task_manager/drain/repair"),
@@ -38,7 +38,7 @@ def test_drain(nodetool, scylla_only):
     nodetool("tasks", "drain", "--module", "repair", expected_requests=[
         expected_request("POST", "/task_manager/drain/repair")])
 
-def test_user_ttl(nodetool, scylla_only):
+def test_user_ttl(nodetool):
     nodetool("tasks", "user-ttl", expected_requests=[
         expected_request("GET", "/task_manager/user_ttl")])
 
@@ -46,7 +46,7 @@ def test_user_ttl(nodetool, scylla_only):
     nodetool("tasks", "user-ttl", "--set", params["user_ttl"], expected_requests=[
         expected_request("POST", "/task_manager/user_ttl", params)])
 
-def test_list(nodetool, scylla_only):
+def test_list(nodetool):
     nodetool("tasks", "list", "repair", expected_requests=[
         expected_request("GET", "/task_manager/list_module_tasks/repair", response=[])])
 
@@ -67,7 +67,7 @@ def test_list(nodetool, scylla_only):
     nodetool("tasks", "list", "repair", "--interval", "1", "--iterations", str(iterations), expected_requests=[
         expected_request("GET", "/task_manager/list_module_tasks/repair", response=[]) for _ in range(0, iterations + 1)])
 
-def test_list_failure(nodetool, scylla_only):
+def test_list_failure(nodetool):
     check_nodetool_fails_with_error_contains(
             nodetool,
             ("tasks", "list"),
@@ -80,22 +80,22 @@ def test_list_failure(nodetool, scylla_only):
             {"expected_requests": []},
             ["unrecognised option"])
 
-def test_modules(nodetool, scylla_only):
+def test_modules(nodetool):
     nodetool("tasks", "modules", expected_requests=[
         expected_request("GET", "/task_manager/list_modules", response=[])])
 
-def test_status(nodetool, scylla_only):
+def test_status(nodetool):
     nodetool("tasks", "status", "675ed9f4-6564-6dbd-can8-43fddce952gy", expected_requests=[
         expected_request("GET", "/task_manager/task_status/675ed9f4-6564-6dbd-can8-43fddce952gy")])
 
-def test_status_failure(nodetool, scylla_only):
+def test_status_failure(nodetool):
     check_nodetool_fails_with_error_contains(
             nodetool,
             ("tasks", "status"),
             {"expected_requests": []},
             ["required parameter is missing"])
 
-def test_tree(nodetool, scylla_only):
+def test_tree(nodetool):
     nodetool("tasks", "tree", "675ed9f4-6564-6dbd-can8-43fddce952gy", expected_requests=[
         expected_request("GET", "/task_manager/task_status_recursive/675ed9f4-6564-6dbd-can8-43fddce952gy", response=[])])
 
@@ -104,14 +104,14 @@ def test_tree(nodetool, scylla_only):
         expected_request("GET", "/task_manager/list_module_tasks/repair", response=[{ "task_id": "675ed9f4-6564-6dbd-can8-43fddce952gy" }]),
         expected_request("GET", "/task_manager/task_status_recursive/675ed9f4-6564-6dbd-can8-43fddce952gy", response=[])])
 
-def test_tree_failure(nodetool, scylla_only):
+def test_tree_failure(nodetool):
     check_nodetool_fails_with_error_contains(
             nodetool,
             ("tasks", "tree", "foo", "bar"),
             {"expected_requests": []},
             ["cannot be specified more than once"])
 
-def test_ttl(nodetool, scylla_only):
+def test_ttl(nodetool):
     nodetool("tasks", "ttl", expected_requests=[
         expected_request("GET", "/task_manager/ttl")])
 
@@ -119,14 +119,14 @@ def test_ttl(nodetool, scylla_only):
     nodetool("tasks", "ttl", "--set", params["ttl"], expected_requests=[
         expected_request("POST", "/task_manager/ttl", params)])
 
-def test_wait(nodetool, scylla_only):
+def test_wait(nodetool):
     nodetool("tasks", "wait", "675ed9f4-6564-6dbd-can8-43fddce952gy", expected_requests=[
         expected_request("GET", "/task_manager/wait_task/675ed9f4-6564-6dbd-can8-43fddce952gy")])
 
     res = nodetool("tasks", "wait", "675ed9f4-6564-6dbd-can8-43fddce952gy", "--timeout", "10", expected_requests=[
         expected_request("GET", "/task_manager/wait_task/675ed9f4-6564-6dbd-can8-43fddce952gy", params={ "timeout": "10" }, response=[], response_status=408)], check_return_code=False)
 
-def test_wait_quiet(nodetool, scylla_only):
+def test_wait_quiet(nodetool):
     nodetool("tasks", "wait", "675ed9f4-6564-6dbd-can8-43fddce952gy", "--quiet", expected_requests=[
         expected_request("GET", "/task_manager/wait_task/675ed9f4-6564-6dbd-can8-43fddce952gy", response={ "state": "done" })])
 
@@ -142,7 +142,7 @@ def test_wait_quiet(nodetool, scylla_only):
         expected_request("GET", "/task_manager/wait_task/675ed9f4-6564-6dbd-can8-43fddce952gy", response=[], response_status=400)], check_return_code=False)
     assert res.returncode == 125
 
-def test_wait_failure(nodetool, scylla_only):
+def test_wait_failure(nodetool):
     check_nodetool_fails_with_error_contains(
             nodetool,
             ("tasks", "wait"),
