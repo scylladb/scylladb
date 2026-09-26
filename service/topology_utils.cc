@@ -57,4 +57,13 @@ future<bool> ongoing_rf_change(const topology& topology, db::system_keyspace& sy
     co_return false;
 }
 
+future<bool> auto_rf_change_ongoing(const topology& topology, db::system_keyspace& sys_ks, const group0_guard& guard) {
+    for (const auto& [ks_name, goal] : auto_rf_keyspaces()) {
+        if (co_await ongoing_rf_change(topology, sys_ks, guard, ks_name)) {
+            co_return true;
+        }
+    }
+    co_return false;
+}
+
 }

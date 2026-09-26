@@ -33,4 +33,7 @@ bool is_auto_rf_keyspace(std::string_view ks_name);
 
 seastar::future<bool> ongoing_rf_change(const topology& topology, db::system_keyspace& sys_ks, const group0_guard& guard, seastar::sstring ks);
 
+// Whether some auto-RF keyspace has a keyspace_rf_change queued or in flight.
+seastar::future<bool> auto_rf_change_ongoing(const topology& topology, db::system_keyspace& sys_ks, const group0_guard& guard);
+
 }

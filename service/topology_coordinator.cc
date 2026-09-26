@@ -1340,6 +1340,22 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         batch.size());
             }
 
+            // The reconciler only runs when the global request queue is empty, and a
+            // client that keeps resubmitting quiesce requests keeps it non-empty. So when
+            // auto-RF has a change to make, schedule it from here; this request stays at
+            // the head of the queue and is evaluated again once the change is queued.
+            {
+                std::optional<lowres_clock::time_point> retry_at;
+                auto candidate = co_await find_auto_rf_change(guard, retry_at);
+                if (retry_at) {
+                    _auto_rf_retry_timer.rearm(*retry_at);
+                }
+                if (candidate) {
+                    co_await schedule_auto_rf_change(std::move(guard), *candidate);
+                    co_return;
+                }
+            }
+
             try {
                 rtlogger.debug("quiesce topology request: refreshing tablet load stats");
                 auto [load_stats, complete] = co_await collect_tablet_load_stats(require_live_nodes::yes);
@@ -1356,6 +1372,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         requires_schema_changes = plan.requires_schema_changes();
                     } else if (!tm->tablets().is_idle()) {
                         error = "tablet resize in progress";
+                    } else if (_feature_service.auto_replication_factor && co_await auto_rf_change_ongoing(_topo_sm._topology, _sys_ks, guard)) {
+                        // An auto-RF change is queued or running (typically the one
+                        // scheduled just above, which sits behind this request in the
+                        // queue), so the topology is not quiesced yet.
+                        error = "auto-RF change in progress";
                     }
                 }
             } catch (...) {
