@@ -1862,10 +1862,16 @@ void invoke_on_user_type(const data_type& t, const std::function<void(const user
     }
 }
 
+// The keyspace all tables are created in, in the cql environment used by the
+// query and write operations. The keyspace of the original schema is replaced
+// with this, to avoid collisions with system keyspaces. It is the current
+// keyspace of the cql environment, so queries don't have to name it.
+constexpr std::string_view scylla_sstable_keyspace_name = "scylla_sstable";
+
 future<replica::table&> create_table_in_cql_env(cql_test_env& env, schema_ptr sstable_schema) {
     auto& db = env.local_db();
 
-    const auto keyspace_name = "scylla_sstable";
+    const auto keyspace_name = sstring(scylla_sstable_keyspace_name);
     co_await env.execute_cql(seastar::format("CREATE KEYSPACE {} WITH replication = {{'class': 'LocalStrategy'}}", keyspace_name));
     auto& keyspace = db.find_keyspace(keyspace_name);
 
@@ -1909,6 +1915,10 @@ future<replica::table&> create_table_in_cql_env(cql_test_env& env, schema_ptr ss
 
     co_await env.execute_cql(schema_create_statement);
 
+    // Make the keyspace implicit for all subsequent queries, so users don't
+    // have to qualify the table name with it.
+    co_await env.execute_cql(seastar::format("USE {}", keyspace_name));
+
     co_return std::ref(db.find_column_family(keyspace_name, table_name));
 }
 
@@ -1927,11 +1937,12 @@ validate_and_prepare_query(std::string_view query, std::string_view table_name, 
     const auto raw_statement = raw_statements.front().get();
 
     if (auto cf_statement = dynamic_cast<cql3::statements::raw::cf_statement*>(raw_statement)) {
-        if (!cf_statement->has_keyspace()) {
-            throw std::invalid_argument("query must have keyspace and the keyspace has to be scylla_sstable");
-        }
-        if (cf_statement->keyspace() != "scylla_sstable") {
-            throw std::invalid_argument(seastar::format("query must be against scylla_sstable keyspace, got {} instead", std::string_view(cf_statement->keyspace())));
+        // The keyspace is optional, it defaults to the keyspace the table was
+        // created in, just like it does when the query is executed.
+        cf_statement->prepare_keyspace(scylla_sstable_keyspace_name);
+        if (std::string_view(cf_statement->keyspace()) != scylla_sstable_keyspace_name) {
+            throw std::invalid_argument(seastar::format("query must be against the {} keyspace (or omit the keyspace altogether), got {} instead",
+                        scylla_sstable_keyspace_name, std::string_view(cf_statement->keyspace())));
         }
         if (cf_statement->column_family() != table_name) {
             throw std::invalid_argument(seastar::format("query must be against {} table, got {} instead", table_name, std::string_view(cf_statement->column_family())));
@@ -2327,7 +2338,7 @@ void query_operation(schema_ptr sstable_schema, reader_permit permit, const std:
             auto fstream = make_file_input_stream(file);
             query = co_await util::read_entire_stream_contiguous(fstream);
         } else {
-            query = seastar::format("SELECT * FROM {}.{} ", table_schema->ks_name(), table_schema->cf_name());
+            query = seastar::format("SELECT * FROM {} ", table_schema->cf_name());
         }
 
         validate_query<cql3::statements::select_statement>(query, table_schema->cf_name(), db.as_data_dictionary(), "a select");
@@ -2729,6 +2740,10 @@ Write output sstable(s) based on the CQL statements provided in the input.
 The following statements are supported: INSERT, UPDATE and DELETE.
 The statements are expected to be separated by semicolons.
 The statements do not need to be ordered in any way.
+The table lives in the scylla_sstable keyspace (to avoid collisions in case the
+sstables belong to a system keyspace), which is already selected when the
+statements are run, so the table name doesn't have to be qualified with it (but
+it can be).
 
 Data is buffered in memory, in a memtable. This provides the required ordering
 to the incoming statements. When the memtable reaches its maximum size, it is
@@ -2816,7 +2831,9 @@ Custom queries can be provided either via the --query (on the command-line) or
 via --query-file (in a file).
 When writing queries by hand, there are some things to keep in in mind:
 * The keyspace of the table is changed to scylla_sstable. This is to avoid any
-  collisions in case the sstables belong to a system keyspace.
+  collisions in case the sstables belong to a system keyspace. The queries are
+  run with this keyspace already selected, so the table name doesn't have to be
+  qualified with it (but it can be).
 * If the schema is read from the sstable itself, partition key columns will be
   $pk0..$pkN and clustering key columns will be $ck0..$ckN. This is because the
   in-sstable schema doesn't contain key column names.

@@ -584,7 +584,7 @@ def test_scylla_sstable_write_cql_large_input(scylla_path):
         with open(input_file, 'w') as f:
             for i in range(0, value_count):
                 expected_json.append({'pk': i, 'v': value})
-                f.write(f"INSERT INTO scylla_sstable.{table_name} (pk, v) VALUES ({i}, '{value}');\n")
+                f.write(f"INSERT INTO {table_name} (pk, v) VALUES ({i}, '{value}');\n")
 
         # memtable grows in segment_size increments (128KiB)
         memory_limit = 1 << 17
@@ -639,10 +639,10 @@ def test_scylla_sstable_write_validation(cql, scylla_path):
             assert "error processing arguments: " + expected_error in res.stderr
 
         check(f"INSERT INTO scylla_sstable.{table_name} (pk) VALUES,", "failed to parse query: exceptions::syntax_exception")
-        check(f"INSERT INTO {table_name} (pk) VALUES (0);", "query must have keyspace and the keyspace has to be scylla_sstable")
-        check(f"INSERT INTO foo.{table_name} (pk) VALUES (0);", "query must be against scylla_sstable keyspace, got foo instead")
-        check(f"INSERT INTO {keyspace_name}.{table_name} (pk) VALUES (0);", f"query must be against scylla_sstable keyspace, got {keyspace_name} instead")
+        check(f"INSERT INTO foo.{table_name} (pk) VALUES (0);", "query must be against the scylla_sstable keyspace (or omit the keyspace altogether), got foo instead")
+        check(f"INSERT INTO {keyspace_name}.{table_name} (pk) VALUES (0);", f"query must be against the scylla_sstable keyspace (or omit the keyspace altogether), got {keyspace_name} instead")
         check(f"INSERT INTO scylla_sstable.foo (pk) VALUES (0);", f"query must be against {table_name} table, got foo instead")
+        check(f"INSERT INTO foo (pk) VALUES (0);", f"query must be against {table_name} table, got foo instead")
         check(f"SELECT * FROM scylla_sstable.{table_name}", "query must be an insert, update or delete query")
 
 
@@ -1793,12 +1793,12 @@ class sstable_query_tester:
         self._table = table
         self._temp_workdir = temp_workdir
 
-    def test_json(self, query_template):
+    def check_json(self, query_template):
         cql_query_result = self._cql.execute(query_template.replace("SELECT", "SELECT JSON").format(f"{self._keyspace}.{self._table}"))
         cql_query_result = list(map(lambda row: json.loads(row[0]), cql_query_result))
 
         with open(os.path.join(self._temp_workdir, "query.cql"), "w+t") as query_file:
-            query_file.write(query_template.format(f"scylla_sstable.{self._table}"))
+            query_file.write(query_template.format(self._table))
             query_file.flush()
 
             sstable_query_result = json.loads(subprocess.check_output([
@@ -1811,7 +1811,7 @@ class sstable_query_tester:
 
         assert sstable_query_result == cql_query_result
 
-    def test_text(self, query_template=None):
+    def check_text(self, query_template=None):
         if query_template is None:
             cql_query_result = self._cql.execute("SELECT JSON * FROM {}".format(f"{self._keyspace}.{self._table}"))
         else:
@@ -1823,7 +1823,7 @@ class sstable_query_tester:
             "--output-format", "text",
             "--schema-tables"]
         if query_template is not None:
-            params += ["--query", query_template.format(f"scylla_sstable.{self._table}")]
+            params += ["--query", query_template.format(self._table)]
         params += self._sstables
 
         sstable_query_result = subprocess.check_output(params, text=True)
@@ -2022,7 +2022,7 @@ def test_scylla_sstable_query_data_types(request, cql, test_keyspace, test_table
     with nodetool.no_autocompaction_context(cql, "system_schema"):
         tester = sstable_query_tester(cql, scylla_path, sstables, test_keyspace, table, temp_workdir)
 
-        tester.test_json("SELECT * FROM {}")
+        tester.check_json("SELECT * FROM {}")
 
     cql.execute(f"DROP TABLE {test_keyspace}.{table}")
 
@@ -2062,12 +2062,12 @@ def test_scylla_sstable_query_advanced_queries(cql, test_keyspace, scylla_path, 
     with nodetool.no_autocompaction_context(cql, "system_schema"):
         tester = sstable_query_tester(cql, scylla_path, sstables, test_keyspace, table, temp_workdir)
 
-        tester.test_text()
-        tester.test_json("SELECT count(*) FROM {} WHERE pk = 0")
-        tester.test_json("SELECT ck, v FROM {} WHERE pk = 0 and ck = 0")
-        tester.test_text("SELECT ck, v FROM {} WHERE pk=0")
-        tester.test_json("SELECT * FROM {} WHERE pk = 0 AND v = 0 ALLOW FILTERING")
-        tester.test_text("SELECT pk, v FROM {} WHERE pk=0 AND v=0 ALLOW FILTERING")
+        tester.check_text()
+        tester.check_json("SELECT count(*) FROM {} WHERE pk = 0")
+        tester.check_json("SELECT ck, v FROM {} WHERE pk = 0 and ck = 0")
+        tester.check_text("SELECT ck, v FROM {} WHERE pk=0")
+        tester.check_json("SELECT * FROM {} WHERE pk = 0 AND v = 0 ALLOW FILTERING")
+        tester.check_text("SELECT pk, v FROM {} WHERE pk=0 AND v=0 ALLOW FILTERING")
 
     cql.execute(f"DROP TABLE {test_keyspace}.{table}")
 
@@ -2106,10 +2106,10 @@ def test_scylla_sstable_query_validation(cql, scylla_path, scylla_data_dir):
 
         check("SELECT * FROM ,", "failed to parse query: exceptions::syntax_exception")
         check("SELECT * FROM scylla_sstable.columns; SELECT * FROM scylla_sstable.columns;", "expected exactly 1 query, got 2")
-        check("SELECT * FROM foo", "query must have keyspace and the keyspace has to be scylla_sstable")
-        check("SELECT * FROM foo.bar", "query must be against scylla_sstable keyspace, got foo instead")
-        check("SELECT * FROM system.local", "query must be against scylla_sstable keyspace, got system instead")
+        check("SELECT * FROM foo.bar", "query must be against the scylla_sstable keyspace (or omit the keyspace altogether), got foo instead")
+        check("SELECT * FROM system.local", "query must be against the scylla_sstable keyspace (or omit the keyspace altogether), got system instead")
         check("SELECT * FROM scylla_sstable.foo", "query must be against local table, got foo instead")
+        check("SELECT * FROM foo", "query must be against local table, got foo instead")
         check("SELECT * FROM scylla_sstable.tables", "query must be against local table, got tables instead")
         check("INSERT INTO scylla_sstable.local (key, bootstrapped) VALUES ('local', 'COMPLETED')", "query must be a select query")
 
