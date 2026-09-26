@@ -90,12 +90,18 @@ private:
 
 using object_metadata = std::unordered_map<sstring, sstring>;
 
-// Only the user-defined attributes for now: unlike the GCS object resource,
-// which carries the name, size, generation and modification time alongside
-// them, S3 reports those through get_object_stats(), which leaves this with a
-// single member.
+// The user-defined attributes plus the entity tag: unlike the GCS object
+// resource, which carries the name, size, generation and modification time
+// alongside them, S3 reports those through get_object_stats().
 struct object_info {
     object_metadata metadata;
+    // The object's ETag exactly as S3 reports it, i.e. wrapped in double quotes
+    // (RFC 9110 entity-tag). Treat it as an opaque change detector: whether it
+    // is the MD5 of the content depends on how the object was uploaded and
+    // encrypted -- it is not an MD5 for multipart uploads, nor for objects
+    // encrypted with SSE-KMS or SSE-C -- so it must not be used for data
+    // integrity verification.
+    sstring etag;
 };
 static constexpr range full_range{0};
 
