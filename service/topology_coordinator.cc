@@ -2317,6 +2317,15 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         _auto_rf_needed = false;
         _auto_rf_needed_stale = false;
 
+        // Auto-RF is automatic tablet movement, so it honours the switch that stops
+        // the load balancer: an operator who disabled balancing to carry out a manual
+        // RF change or a rack removal must not be fought over the system keyspaces,
+        // and tests get one switch for all automatic tablet work.
+        if (!get_token_metadata_ptr()->tablets().balancing_enabled()) {
+            rtlogger.debug("auto-rf: tablet balancing is disabled, not scheduling RF changes");
+            co_return std::move(guard);
+        }
+
         auto auto_rf_keyspaces = get_keyspaces_that_require_auto_rf_change(guard);
         if (auto_rf_keyspaces.empty()) {
             rtlogger.debug("No keyspaces require auto RF change");
