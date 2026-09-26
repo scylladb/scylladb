@@ -1989,6 +1989,71 @@ SEASTAR_THREAD_TEST_CASE(test_tombstone_gc_state_snapshot_rf_one_tables) {
     BOOST_REQUIRE_EQUAL(snapshot.get_gc_before_for_key(table_gc_mode_repair2, dk, false), gc_clock::time_point::min());
 }
 
+SEASTAR_THREAD_TEST_CASE(test_tombstone_gc_state_views_being_built) {
+    auto base = schema_builder(this_smp_shard_count(), "test", "base")
+            .with_column("pk", utf8_type, column_kind::partition_key)
+            .with_column("v", utf8_type)
+            .build();
+    auto make_view = [&] (const char* name, tombstone_gc_options opts) {
+        return schema_builder(this_smp_shard_count(), "test", name)
+                .with_column("v", utf8_type, column_kind::partition_key)
+                .with_column("pk", utf8_type, column_kind::clustering_key)
+                .with_view_info(base, false, "pk IS NOT NULL AND v IS NOT NULL")
+                .with_tombstone_gc_options(std::move(opts))
+                .build();
+    };
+    auto view_gc_mode_timeout = make_view("view_gc_mode_timeout", tombstone_gc_options({ {"mode", "timeout"} }));
+    auto view_gc_mode_immediate = make_view("view_gc_mode_immediate", tombstone_gc_options({ {"mode", "immediate"} }));
+    auto view_gc_mode_repair = make_view("view_gc_mode_repair", tombstone_gc_options({ {"mode", "repair"} }));
+    auto view_built = make_view("view_built", tombstone_gc_options({ {"mode", "immediate"} }));
+
+    const auto pk = partition_key::from_single_value(*view_gc_mode_timeout, utf8_type->decompose(data_value("v")));
+    const auto dk = dht::decorate_key(*view_gc_mode_timeout, pk);
+    const auto range = dht::token_range::make(dht::first_token(), dk.token());
+
+    shared_tombstone_gc_state shared_state;
+    shared_state.set_table_rf_one(view_gc_mode_repair->id());
+
+    const auto now = gc_clock::now();
+    const auto gc_state = tombstone_gc_state(shared_state).with_commitlog_check_disabled();
+
+    // No view is known to be built: every view counts as being built, tables are not affected.
+    BOOST_REQUIRE_EQUAL(gc_state.get_gc_before_for_key(view_built, dk, now), gc_clock::time_point::min());
+    BOOST_REQUIRE_EQUAL(gc_state.get_gc_before_for_key(base, dk, now), now - base->gc_grace_seconds());
+
+    shared_state.set_built_views({view_built->id()});
+    const auto snapshot = shared_state.snapshot();
+
+    for (const auto& view : {view_gc_mode_timeout, view_gc_mode_immediate, view_gc_mode_repair}) {
+        BOOST_REQUIRE_EQUAL(gc_state.get_gc_before_for_key(view, dk, now), gc_clock::time_point::min());
+        const auto res = gc_state.get_gc_before_for_range(view, range, now);
+        BOOST_REQUIRE_EQUAL(res.min_gc_before, gc_clock::time_point::min());
+        BOOST_REQUIRE_EQUAL(res.max_gc_before, gc_clock::time_point::min());
+        BOOST_REQUIRE(res.knows_entire_range);
+        BOOST_REQUIRE_EQUAL(snapshot.get_gc_before_for_key(view, dk, false), gc_clock::time_point::min());
+    }
+    BOOST_REQUIRE_EQUAL(gc_state.get_gc_before_for_key(view_built, dk, now), now);
+
+    // The snapshot answers for a view that was built when it was taken.
+    BOOST_REQUIRE_NE(snapshot.get_gc_before_for_key(view_built, dk, false), gc_clock::time_point::min());
+    BOOST_REQUIRE_NE(snapshot.get_gc_before_for_key(base, dk, false), gc_clock::time_point::min());
+
+    // The build finished on every node: gc resumes.
+    shared_state.set_built_views({view_built->id(), view_gc_mode_timeout->id(), view_gc_mode_immediate->id(), view_gc_mode_repair->id()});
+    BOOST_REQUIRE_EQUAL(gc_state.get_gc_before_for_key(view_gc_mode_timeout, dk, now), now - view_gc_mode_timeout->gc_grace_seconds());
+    BOOST_REQUIRE_EQUAL(gc_state.get_gc_before_for_key(view_gc_mode_immediate, dk, now), now);
+    BOOST_REQUIRE_EQUAL(gc_state.get_gc_before_for_key(view_gc_mode_repair, dk, now), now);
+    BOOST_REQUIRE_NE(shared_state.snapshot().get_gc_before_for_key(view_gc_mode_immediate, dk, false), gc_clock::time_point::min());
+
+    // The builds ran while the memtable of the older snapshot was filling. It may
+    // hold their rows with old timestamps, so that snapshot keeps their tombstones.
+    for (const auto& view : {view_gc_mode_timeout, view_gc_mode_immediate, view_gc_mode_repair}) {
+        BOOST_REQUIRE_EQUAL(snapshot.get_gc_before_for_key(view, dk, false), gc_clock::time_point::min());
+    }
+    BOOST_REQUIRE_NE(snapshot.get_gc_before_for_key(view_built, dk, false), gc_clock::time_point::min());
+    BOOST_REQUIRE_NE(snapshot.get_gc_before_for_key(base, dk, false), gc_clock::time_point::min());
+}
+
 SEASTAR_TEST_CASE(test_max_purgeable_combine) {
     const gc_clock::time_point t_pre_treshold = gc_clock::now();
     const gc_clock::time_point t1 = t_pre_treshold + std::chrono::seconds(10);

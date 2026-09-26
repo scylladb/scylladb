@@ -71,6 +71,13 @@ class shared_tombstone_gc_state {
     // Tables which have a single replica and thus cannot be repaired (repair will not update the repair time for them).
     std::unordered_set<table_id> _rf_one_tables;
 
+    // Views whose build has finished on every node. Any other view counts as
+    // being built, also one this node has just created or has no state loaded for.
+    // The view builder writes rows with the timestamps of the base cells they
+    // come from, so a tombstone of such a view may still cover a row that has
+    // not arrived yet.
+    std::unordered_set<table_id> _built_views;
+
     std::unordered_map<table_id, utils::chunked_vector<range_repair_time>> _pending_updates;
 
 private:
@@ -79,7 +86,7 @@ private:
 public:
     shared_tombstone_gc_state();
     shared_tombstone_gc_state(gc_time_min_source gc_min_source, lw_shared_ptr<const per_table_history_maps> reconcile_history_maps,
-            gc_clock::time_point group0_gc_time, std::unordered_set<table_id> rf_one_tables);
+            gc_clock::time_point group0_gc_time, std::unordered_set<table_id> rf_one_tables, std::unordered_set<table_id> built_views);
     shared_tombstone_gc_state(shared_tombstone_gc_state&&);
     ~shared_tombstone_gc_state();
 
@@ -110,6 +117,13 @@ public:
         return _rf_one_tables.contains(id);
     }
 
+    void set_built_views(std::unordered_set<table_id> views) {
+        _built_views = std::move(views);
+    }
+    bool is_view_being_built(table_id id) const noexcept {
+        return !_built_views.contains(id);
+    }
+
     using opt_rp = std::optional<db::replay_position>;
     void update_repair_time(table_id id, const dht::token_range& range, gc_clock::time_point repair_time, opt_rp = {});
 
@@ -127,7 +141,7 @@ public:
     void insert_pending_repair_time_update(table_id id, const dht::token_range& range, gc_clock::time_point repair_time, shard_id shard);
     future<> flush_pending_repair_time_update(sharded<replica::database>&, sharded<db::system_keyspace>&);
 
-    tombstone_gc_state_snapshot snapshot() const noexcept;
+    tombstone_gc_state_snapshot snapshot() const;
 };
 
 class tombstone_gc_state_snapshot {
