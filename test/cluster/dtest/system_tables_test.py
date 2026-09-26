@@ -739,7 +739,9 @@ class TestRuntimeInfoTable(SystemTableBase):
                 assert re.match(r"\d+ seconds", row.value), f"The value='{row.value}' is unexpected for item='{row.item}'!"
                 assert int(row.value.replace(" seconds", "")) > 0, "Uptime for a node should be more than 0!"
             elif row.group == "memory" and row.item == "total":
-                if node.scylla_mode() != "debug":
+                # Debug and coverage builds run Seastar with the default allocator, which does not
+                # carve out the per-shard memory this checks.
+                if node.scylla_mode() not in ("debug", "coverage"):
                     total_memory = int(row.value)
                     # see also seastar/src/core/resource.cc: allocate(configuration&)
                     memory_alignment = 2 << 20
