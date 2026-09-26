@@ -13,7 +13,7 @@
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/algorithm/copy.hpp>
-#include <boost/range/join.hpp>
+#include <ranges>
 #include <boost/lexical_cast.hpp>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/future-util.hh>
@@ -2248,7 +2248,7 @@ future<> server_impl::abort(sstring reason) {
 
     std::array<future<>, 2> gates{_snapshot_gate.close(), _do_on_leader_gate.close()};
 
-    auto all_futures = boost::range::join(append_futures, gates);
+    auto all_futures = std::views::concat(append_futures, gates);
 
     co_await seastar::when_all_succeed(all_futures.begin(), all_futures.end()).discard_result();
 }
