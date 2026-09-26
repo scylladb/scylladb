@@ -21,7 +21,7 @@
 #include <seastar/core/shard_id.hh>
 #include <seastar/core/sharded.hh>
 
-#include <boost/range/join.hpp>
+#include <ranges>
 
 #include <fmt/ranges.h>
 
@@ -241,7 +241,7 @@ future<> schema_applier::merge_keyspaces()
     // 1. changes made to non-null columns...
     altered.insert(sk_altered.begin(), sk_altered.end());
     // 2. ... and new or deleted entries - these change only when ALTERing, not CREATE'ing or DROP'ing
-    for (auto&& ks : boost::range::join(sk_created, sk_dropped)) {
+    for (auto&& ks : std::views::concat(sk_created, sk_dropped)) {
         if (!created.contains(ks) && !_affected_keyspaces.names.dropped.contains(ks)) {
             altered.emplace(ks);
         }
@@ -499,7 +499,7 @@ in_progress_types_storage_per_shard::in_progress_types_storage_per_shard(replica
     }
     auto& types = affected_types.local();
     // initialize metadata for affected keyspaces (where types change)
-    for (auto& type : boost::range::join(boost::range::join(types.created, types.altered), types.dropped)) {
+    for (auto& type : std::views::concat(types.created, types.altered, types.dropped)) {
         auto& ks_name = type->_keyspace;
         if (!_in_progress_types.contains(ks_name)) {
             // copy metadata
@@ -507,7 +507,7 @@ in_progress_types_storage_per_shard::in_progress_types_storage_per_shard(replica
         }
     }
 
-    for (auto& type : boost::range::join(types.created, types.altered)) {
+    for (auto& type : std::views::concat(types.created, types.altered)) {
         auto& ks_name = type->_keyspace;
         _in_progress_types[ks_name].add_type(type);
     }
@@ -1019,7 +1019,7 @@ void schema_applier::commit_tables_and_views() {
         bool changed = db.update_column_family(altered.new_schema);
         diff.tables_and_views.local().columns_changed.push_back(changed);
     }
-    for (auto&& altered : boost::range::join(tables.altered, views.altered)) {
+    for (auto&& altered : std::views::concat(tables.altered, views.altered)) {
         bool changed = db.update_column_family(altered.new_schema);
         diff.tables_and_views.local().columns_changed.push_back(changed);
     }
