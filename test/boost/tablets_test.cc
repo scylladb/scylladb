@@ -2407,6 +2407,196 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_empty_node) {
   }).get();
 }
 
+// Size-based batching of tablet migrations. The tests below never complete the migrations the
+// balancer emits, so load accumulates until it refuses to emit more; what it settles on is the
+// effective concurrency limit.
+
+constexpr uint64_t one_mib = 1024 * 1024;
+constexpr uint64_t one_gib = 1024 * one_mib;
+
+// Highest number of transitions of a table streaming from (first) and to (second) a single shard.
+// Scoped to one table so that unrelated tables cannot skew the counts.
+static
+std::pair<size_t, size_t> max_streaming_load_per_shard(cql_test_env& e, table_id table) {
+    auto tm = e.shared_token_metadata().local().get();
+    const auto& topo = tm->get_topology();
+    std::map<tablet_replica, size_t> reads;
+    std::map<tablet_replica, size_t> writes;
+
+    const auto& tmap = tm->tablets().get_tablet_map(table);
+    for (auto&& [tid, trinfo] : tmap.transitions()) {
+        auto info = locator::get_migration_streaming_info(topo, tmap.get_tablet_info(tid), trinfo);
+        for (auto&& r : info.read_from) {
+            reads[r] += info.stream_weight;
+        }
+        for (auto&& r : info.written_to) {
+            writes[r] += info.stream_weight;
+        }
+    }
+
+    auto max_of = [] (const std::map<tablet_replica, size_t>& loads) {
+        size_t result = 0;
+        for (auto&& [replica, load] : loads) {
+            result = std::max(result, load);
+        }
+        return result;
+    };
+    return {max_of(reads), max_of(writes)};
+}
+
+static
+void accumulate_transitions(cql_test_env& e, shared_load_stats& load_stats) {
+    const size_t max_rounds = 100;
+    size_t rounds = 0;
+    rebalance_tablets_as_in_progress(e, load_stats, [&] (const migration_plan&) {
+        return ++rounds > max_rounds;
+    });
+    BOOST_REQUIRE_LE(rounds, max_rounds); // Must stop on its own rather than hang.
+}
+
+// A table whose tablets all live on one node, plus an empty node to balance onto.
+static
+table_id setup_one_sided_table(cql_test_env& e, topology_builder& topo,
+                               int tablet_count, uint64_t tablet_size) {
+    // Only host1 exists when the table is created, so it gets all the tablets.
+    auto host1 = topo.add_node(node_state::normal, 1);
+    auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, tablet_count);
+    auto table1 = add_table(e, ks_name).get();
+    auto host2 = topo.add_node(node_state::normal, 1);
+
+    auto& stm = e.shared_token_metadata().local();
+    BOOST_REQUIRE_EQUAL(stm.get()->tablets().get_tablet_map(table1).tablet_count(), size_t(tablet_count));
+
+    auto& load_stats = topo.get_shared_load_stats();
+    // Plenty of capacity, so disk usage never becomes the binding constraint.
+    load_stats.set_capacity(host1, 1'000'000'000'000);
+    load_stats.set_capacity(host2, 1'000'000'000'000);
+    load_stats.set_tablet_sizes(stm.get(), table1, tablet_size);
+
+    return table1;
+}
+
+SEASTAR_THREAD_TEST_CASE(test_small_tablets_are_batched_over_concurrency_limit) {
+    auto cfg = tablet_cql_test_config();
+    cfg.db_config->tablet_streaming_read_concurrency_per_shard(2);
+    cfg.db_config->tablet_streaming_write_concurrency_per_shard(2);
+    cfg.db_config->tablet_streaming_min_batch_size_in_bytes(one_gib);
+    // Take the token space cap out of the picture, it is exercised separately below.
+    cfg.db_config->tablet_streaming_max_token_space_percentage(100.0);
+
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+        // The batch fills up after 1GiB/64MiB = 16 migrations: above the count limit of 2, below
+        // the 64 needed to balance the nodes, so batching is what stops the balancer.
+        auto table1 = setup_one_sided_table(e, topo, 128, 64 * one_mib);
+
+        accumulate_transitions(e, topo.get_shared_load_stats());
+
+        auto [reads, writes] = max_streaming_load_per_shard(e, table1);
+        BOOST_REQUIRE_EQUAL(reads, 16u);
+        BOOST_REQUIRE_EQUAL(writes, 16u);
+    }, std::move(cfg)).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_large_tablets_are_not_batched) {
+    auto cfg = tablet_cql_test_config();
+    cfg.db_config->tablet_streaming_read_concurrency_per_shard(2);
+    cfg.db_config->tablet_streaming_write_concurrency_per_shard(2);
+    cfg.db_config->tablet_streaming_min_batch_size_in_bytes(one_gib);
+    cfg.db_config->tablet_streaming_max_token_space_percentage(100.0);
+
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+        // One tablet already exceeds the batch size, so the tablet count limit binds, as before.
+        auto table1 = setup_one_sided_table(e, topo, 32, 2 * one_gib);
+
+        accumulate_transitions(e, topo.get_shared_load_stats());
+
+        auto [reads, writes] = max_streaming_load_per_shard(e, table1);
+        BOOST_REQUIRE_EQUAL(reads, 2u);
+        BOOST_REQUIRE_EQUAL(writes, 2u);
+    }, std::move(cfg)).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_batching_is_capped_by_token_space_fraction) {
+    auto cfg = tablet_cql_test_config();
+    cfg.db_config->tablet_streaming_read_concurrency_per_shard(2);
+    cfg.db_config->tablet_streaming_write_concurrency_per_shard(2);
+    cfg.db_config->tablet_streaming_min_batch_size_in_bytes(one_gib);
+    cfg.db_config->tablet_streaming_max_token_space_percentage(5.0);
+
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+        // Same tablets as the test above, where the batch size alone allowed 16. Here 5% of the
+        // token space caps batching at 6 instead.
+        auto table1 = setup_one_sided_table(e, topo, 128, 64 * one_mib);
+
+        accumulate_transitions(e, topo.get_shared_load_stats());
+
+        auto [reads, writes] = max_streaming_load_per_shard(e, table1);
+        BOOST_REQUIRE_EQUAL(reads, 6u);
+        BOOST_REQUIRE_EQUAL(writes, 6u);
+
+        auto tm = e.shared_token_metadata().local().get();
+        BOOST_REQUIRE_EQUAL(tm->tablets().get_tablet_map(table1).transitions().size(), 6u);
+    }, std::move(cfg)).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_no_batching_on_top_of_a_repair) {
+    auto cfg = tablet_cql_test_config();
+    // Room for the repair (which streams with weight 2) plus two migrations.
+    cfg.db_config->tablet_streaming_read_concurrency_per_shard(4);
+    cfg.db_config->tablet_streaming_write_concurrency_per_shard(4);
+    cfg.db_config->tablet_streaming_min_batch_size_in_bytes(one_gib);
+    cfg.db_config->tablet_streaming_max_token_space_percentage(100.0);
+
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+        auto table1 = setup_one_sided_table(e, topo, 128, 64 * one_mib);
+
+        // Repair does not batch and its size is not measured, so the byte counters stop describing
+        // what the source shard does and nothing may be batched on top of it.
+        mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+            co_await tmeta.mutate_tablet_map_async(table1, [&] (tablet_map& tmap) {
+                auto tid = tmap.first_tablet();
+                auto& ti = tmap.get_tablet_info(tid);
+                tmap.set_tablet_transition_info(tid, tablet_transition_info(
+                        tablet_transition_stage::repair, tablet_transition_kind::repair,
+                        ti.replicas, {}));
+                return make_ready_future<>();
+            });
+        });
+
+        accumulate_transitions(e, topo.get_shared_load_stats());
+
+        // The batch size alone would have allowed 16. The count limit admits two on top of the
+        // repair's weight of 2, and batching may not go further.
+        auto [reads, writes] = max_streaming_load_per_shard(e, table1);
+        BOOST_REQUIRE_EQUAL(reads, 4u);
+        BOOST_REQUIRE_EQUAL(writes, 2u);
+    }, std::move(cfg)).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_batching_disabled_keeps_tablet_count_limit) {
+    auto cfg = tablet_cql_test_config();
+    cfg.db_config->tablet_streaming_read_concurrency_per_shard(2);
+    cfg.db_config->tablet_streaming_write_concurrency_per_shard(2);
+    // Zero disables size-based batching.
+    cfg.db_config->tablet_streaming_min_batch_size_in_bytes(0);
+    cfg.db_config->tablet_streaming_max_token_space_percentage(100.0);
+
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+            auto table1 = setup_one_sided_table(e, topo, 128, 64 * one_mib);
+
+        accumulate_transitions(e, topo.get_shared_load_stats());
+
+        auto [reads, writes] = max_streaming_load_per_shard(e, table1);
+        BOOST_REQUIRE_EQUAL(reads, 2u);
+        BOOST_REQUIRE_EQUAL(writes, 2u);
+    }, std::move(cfg)).get();
+}
+
 SEASTAR_THREAD_TEST_CASE(test_no_conflicting_migrations_in_the_plan) {
     do_with_cql_env_thread([] (auto& e) {
         topology_builder topo(e);

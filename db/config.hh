@@ -607,6 +607,8 @@ public:
     named_value<uint64_t> target_tablet_size_in_bytes;
     named_value<unsigned> tablet_streaming_read_concurrency_per_shard;
     named_value<unsigned> tablet_streaming_write_concurrency_per_shard;
+    named_value<uint64_t> tablet_streaming_min_batch_size_in_bytes;
+    named_value<double> tablet_streaming_max_token_space_percentage;
 
     named_value<uint32_t> service_levels_interval;
 

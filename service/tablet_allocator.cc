@@ -27,7 +27,9 @@
 #include "locator/load_sketch.hh"
 #include "replica/database.hh"
 #include "gms/feature_service.hh"
+#include <algorithm>
 #include <bit>
+#include <cmath>
 #include <iterator>
 #include <ranges>
 #include <utility>
@@ -945,6 +947,17 @@ class load_balancer {
     size_t max_write_streaming_load;
     size_t max_read_streaming_load;
 
+    // Migration mass which has to be streaming to or from a shard before the limits above are
+    // enforced for it. With small tablets the fixed coordination cost dominates moving the data,
+    // and the topology coordinator amortizes it across concurrent transitions. A shard may exceed
+    // this by one migration, otherwise a tablet larger than the batch could never batch at all.
+    // Zero disables batching.
+    uint64_t min_streaming_batch_size;
+
+    // Upper bound on the fraction of a table's token space batching may keep in transition, to
+    // limit how many requests pay the double-quorum overhead.
+    double max_token_space_fraction;
+
     replica::database& _db;
     token_metadata_ptr _tm;
     service::topology* _topology;
@@ -952,9 +965,20 @@ class load_balancer {
     std::optional<locator::load_sketch> _load_sketch;
     // Holds the set of tablets already scheduled for transition during plan-making.
     std::unordered_set<global_tablet_id> _scheduled_tablets;
+    // Fraction of each table's token space in transition, in [0, 1]: from tablet metadata, and
+    // accumulated over the round by mark_as_scheduled(). Keyed by co-location group base table.
+    absl::flat_hash_map<table_id, double> _token_space_in_transition_per_table;
+    absl::flat_hash_map<table_id, double> _scheduled_token_space_per_table;
     struct streaming_shard_load {
         size_t read_load = 0;
         size_t write_load = 0;
+        // Bytes streamed from and to the shard. Only migrations of measured size are counted.
+        uint64_t read_bytes = 0;
+        uint64_t write_bytes = 0;
+        // Cleared by a transition which cannot batch or whose size is unknown: the byte counters
+        // then understate the shard's work, so nothing may be batched on top of it.
+        bool read_batchable = true;
+        bool write_batchable = true;
     };
     // Per-shard streaming load, covering the whole cluster and kept for the whole planning
     // round, so that the streaming concurrency caps hold across all plan makers and DCs.
@@ -1092,6 +1116,10 @@ public:
         }
         max_read_streaming_load = db.get_config().tablet_streaming_read_concurrency_per_shard();
         max_write_streaming_load = db.get_config().tablet_streaming_write_concurrency_per_shard();
+        min_streaming_batch_size = db.get_config().tablet_streaming_min_batch_size_in_bytes();
+        auto token_space_pct = db.get_config().tablet_streaming_max_token_space_percentage();
+        // Live-updatable, so clamp it before it is compared against accumulated token space.
+        max_token_space_fraction = std::isnan(token_space_pct) ? 0.0 : std::clamp(token_space_pct, 0.0, 100.0) / 100.0;
     }
 
     bool ongoing_rack_list_colocation() const {
@@ -1148,6 +1176,7 @@ public:
 
         // Charge streaming load of transitions which are already in progress.
         co_await consider_scheduled_load();
+        co_await count_token_space_in_transition();
 
         auto rack_list_colocation = ongoing_rack_list_colocation();
         auto rf_change_prep = co_await prepare_per_rack_rf_change_plan(plan);
@@ -1281,18 +1310,76 @@ public:
         }
     }
 
-    future<> consider_scheduled_load() {
-        const locator::topology& topo = _tm->get_topology();
+    // The size is looked up on a replica involved in streaming, so that it is available for
+    // tablets already in transition.
+    std::optional<uint64_t> in_progress_migration_size(const tablet_map& tmap, table_id table, tablet_id tid,
+                                                       const tablet_migration_streaming_info& info) const {
+        const auto& replicas = !info.read_from.empty() ? info.read_from : info.written_to;
+        if (replicas.empty()) {
+            return std::nullopt;
+        }
+        auto replica = std::ranges::min(replicas, std::less<tablet_replica>());
+        return exact_tablet_group_size(tmap, table, tid, replica.host);
+    }
+
+    // Position of a token in the ring, in [0, 2^64). minimum_token() and maximum_token() share the
+    // same raw value and differ only in kind, so they cannot go through unbias().
+    static uint64_t token_position(dht::token t) {
+        if (t.is_maximum()) {
+            return std::numeric_limits<uint64_t>::max();
+        }
+        if (t.is_minimum()) {
+            return 0;
+        }
+        return t.unbias();
+    }
+
+    // Fraction of the ring owned by a tablet. Boundaries are arbitrary in the general case, so a
+    // count of tablets says little about how much of a table is affected.
+    static double token_space_fraction(const tablet_map& tmap, tablet_id tid) {
+        auto end = token_position(tmap.get_last_token(tid));
+        auto start = tid == tmap.first_tablet() ? 0 : token_position(tmap.get_last_token(tablet_id(size_t(tid) - 1)));
+        return std::ldexp(double(end - start), -64);
+    }
+
+    double token_space_fraction(const migration_tablet_set& tablets) const {
+        const auto& tmap = _tm->tablets().get_tablet_map(tablets.table());
+        double result = 0;
+        for (auto gid : tablets.tablets()) {
+            result += token_space_fraction(tmap, gid.tablet);
+        }
+        return result;
+    }
+
+    // Tablets scheduled during plan-making are counted separately, by mark_as_scheduled().
+    future<> count_token_space_in_transition() {
+        _token_space_in_transition_per_table.clear();
         for (auto&& [table, tables] : _tm->tablets().all_table_groups()) {
+            co_await coroutine::maybe_yield();
             if (is_migrating_table(table)) {
                 continue;
             }
+            const auto& tmap = _tm->tablets().get_tablet_map(table);
+            double fraction = 0;
+            for (auto&& [tid, trinfo]: tmap.transitions()) {
+                fraction += token_space_fraction(tmap, tid);
+            }
+            _token_space_in_transition_per_table[table] = fraction;
+        }
+    }
+
+    future<> consider_scheduled_load() {
+        const locator::topology& topo = _tm->get_topology();
+        // Tables migrating from vnodes to tablets are not balanced, but the caps limit a physical
+        // shard, so whatever they stream still has to be charged.
+        for (auto&& [table, tables] : _tm->tablets().all_table_groups()) {
             const auto& tmap = _tm->tablets().get_tablet_map(table);
             for (auto&& [tid, trinfo]: tmap.transitions()) {
                 co_await coroutine::maybe_yield();
                 if (is_streaming(&trinfo)) {
                     auto& tinfo = tmap.get_tablet_info(tid);
-                    apply_load(get_migration_streaming_info(topo, tinfo, trinfo));
+                    auto info = get_migration_streaming_info(topo, tinfo, trinfo);
+                    apply_load(info, in_progress_migration_size(tmap, table, tid, info), trinfo.transition);
                 }
             }
         }
@@ -1402,8 +1489,9 @@ public:
             co_await coroutine::maybe_yield();
             tablet_migration_streaming_info tmsi;
             tmsi = get_migration_streaming_info(topo, plan.tinfo, trinfo);
-            if (can_accept_load(tmsi)) {
-                apply_load(tmsi);
+            migration_tablet_set repaired_tablets{plan.gid, 0};
+            if (can_accept_load(tmsi, repaired_tablets, std::nullopt, tablet_transition_kind::repair)) {
+                apply_load(tmsi, std::nullopt, tablet_transition_kind::repair);
                 ret.add(plan.gid);
             }
         }
@@ -1434,6 +1522,61 @@ public:
             tablet_group_size += std::max(tablet_size_opt.value_or(_target_tablet_size), _minimal_tablet_size);
         }
         return tablet_group_size;
+    }
+
+    // Only transitions which move a tablet between two shards may batch. Rebuild, repair and
+    // restore stream from every replica, so batching them loads shards not party to the migration.
+    static bool is_batchable(tablet_transition_kind kind) {
+        switch (kind) {
+            case tablet_transition_kind::migration:
+            case tablet_transition_kind::intranode_migration:
+                return true;
+            case tablet_transition_kind::rebuild:
+            case tablet_transition_kind::rebuild_v2:
+            case tablet_transition_kind::repair:
+            case tablet_transition_kind::restore:
+                return false;
+        }
+        return false;
+    }
+
+    // Measured size of a tablet group, or nullopt if any of its tablets lacks statistics. Unlike
+    // get_tablet_group_size() this never substitutes an estimate: batching must not relax the
+    // limits on a guess.
+    std::optional<uint64_t> exact_tablet_group_size(const tablet_map& tmap, table_id table, tablet_id tid,
+                                                    host_id host) const {
+        if (_force_capacity_based_balancing) {
+            return std::nullopt;
+        }
+        uint64_t total = 0;
+        auto token_range = tmap.get_token_range(tid);
+        auto it = _tm->tablets().all_table_groups().find(table);
+        const auto& colocated_tables = it != _tm->tablets().all_table_groups().end() ? it->second : table_group_set{};
+        for (auto group_member : colocated_tables) {
+            const range_based_tablet_id rb_tid {group_member, token_range};
+            auto& member_tmap = _tm->tablets().get_tablet_map(group_member);
+            auto& ti = member_tmap.get_tablet_info(tid);
+            auto trinfo = member_tmap.get_tablet_transition_info(tid);
+            auto size = get_tablet_size(host, rb_tid, ti, trinfo);
+            if (!size) {
+                return std::nullopt;
+            }
+            total += *size;
+        }
+        return total;
+    }
+
+    std::optional<uint64_t> exact_migration_size(const migration_tablet_set& tablets, host_id host) const {
+        const auto& tmap = _tm->tablets().get_tablet_map(tablets.table());
+        uint64_t total = 0;
+        for (auto gid : tablets.tablets()) {
+            auto size = exact_tablet_group_size(tmap, gid.table, gid.tablet, host);
+            if (!size) {
+                return std::nullopt;
+            }
+            total += *size;
+        }
+        return total;
     }
 
     future<migration_plan> make_rack_list_colocation_plan_for_dc(
@@ -1520,8 +1663,9 @@ public:
                 auto& tmap = tmeta.get_tablet_map(source_tablets.table());
                 auto mig_streaming_info = get_migration_streaming_infos(topo, tmap, mig);
                 pick(*_load_sketch, dst.host, dst.shard, source_tablets);
-                if (can_accept_load(mig_streaming_info)) {
-                    apply_load(mig_streaming_info);
+                auto exact_size = exact_migration_size(source_tablets, src.host);
+                if (can_accept_load(mig_streaming_info, source_tablets, exact_size, kind)) {
+                    apply_load(mig_streaming_info, exact_size, kind);
                     lblogger.debug("Adding migration: {}", mig);
                     mark_as_scheduled(mig);
                     for (auto& m : mig) {
@@ -1898,9 +2042,10 @@ public:
                         };
                         auto mig_streaming_info = get_migration_streaming_info(topo, ti, mig);
                         pick(*_load_sketch, dst.host, dst.shard, source_tablets);
-                        if (can_accept_load(mig_streaming_info)) {
+                        auto exact_size = exact_migration_size(source_tablets, host);
+                        if (can_accept_load(mig_streaming_info, source_tablets, exact_size, mig.kind)) {
                             lblogger.debug("Starting rebuild_v2 transition to {}.{} of tablet {}; new_replica = {}", dc, rack, gid, pending_replica);
-                            apply_load(mig_streaming_info);
+                            apply_load(mig_streaming_info, exact_size, mig.kind);
                             mark_as_scheduled(mig);
                             mplan.add(std::move(mig));
                         }
@@ -1923,8 +2068,9 @@ public:
                         if (_load_sketch->has_node(replica->host) && !(rep_node && rep_node->is_excluded())) {
                             unload(*_load_sketch, replica->host, replica->shard, source_tablets);
                         }
-                        if (can_accept_load(mig_streaming_info)) {
-                            apply_load(mig_streaming_info);
+                        auto exact_size = exact_migration_size(source_tablets, host);
+                        if (can_accept_load(mig_streaming_info, source_tablets, exact_size, mig.kind)) {
+                            apply_load(mig_streaming_info, exact_size, mig.kind);
                             mark_as_scheduled(mig);
                             mplan.add(std::move(mig));
                         }
@@ -2169,13 +2315,15 @@ public:
 
                 auto mig = create_migration_info(t2_id, src, dst);
                 auto mig_streaming_info = get_migration_streaming_info(_tm->get_topology(), *t2.info, mig);
-                if (!can_accept_load(mig_streaming_info)) {
+                migration_tablet_set colocated_tablet{t2_id, get_tablet_group_size(tmap, table, t2.tid, src.host)};
+                auto exact_size = exact_migration_size(colocated_tablet, src.host);
+                if (!can_accept_load(mig_streaming_info, colocated_tablet, exact_size, mig.kind)) {
                     // FIXME: we can try another pair of non-colocated replicas of same sibling tablets.
                     lblogger.debug("Load limit reached, unable to emit migration for replica ({}, {}) to co-habit the replica ({}, {})",
                         t2_id, src, t1_id, dst);
                     return make_ready_future<>();
                 }
-                apply_load(mig_streaming_info);
+                apply_load(mig_streaming_info, exact_size, mig.kind);
 
                 lblogger.info("Created migration for replica ({}, {}) to co-habit same shard as ({}, {})", t2_id, src, t1_id, dst);
                 mark_as_scheduled(mig);
@@ -2961,43 +3109,96 @@ public:
         co_return std::move(resize_plan);
     }
 
-    void apply_load(const tablet_migration_streaming_info& info) {
+    // In transition according to tablet metadata, plus scheduled during this plan-making round.
+    double token_space_in_transition(table_id table) const {
+        double result = 0;
+        if (auto i = _token_space_in_transition_per_table.find(table); i != _token_space_in_transition_per_table.end()) {
+            result += i->second;
+        }
+        if (auto i = _scheduled_token_space_per_table.find(table); i != _scheduled_token_space_per_table.end()) {
+            result += i->second;
+        }
+        return result;
+    }
+
+    // Whether the count limits may be ignored for a shard already carrying streamed_bytes. Both the
+    // candidate and everything the shard streams must be batchable and of measured size.
+    bool can_batch(uint64_t streamed_bytes, bool shard_batchable, std::optional<uint64_t> exact_size,
+                   const migration_tablet_set& tablets, tablet_transition_kind kind) const {
+        if (!min_streaming_batch_size || !shard_batchable || !exact_size || !is_batchable(kind)) {
+            return false;
+        }
+        if (streamed_bytes >= min_streaming_batch_size) {
+            return false;
+        }
+        auto table = _tm->tablets().get_base_table(tablets.table());
+        return token_space_in_transition(table) + token_space_fraction(tablets) <= max_token_space_fraction;
+    }
+
+    void apply_load(const tablet_migration_streaming_info& info, uint64_t bytes, bool batchable) {
         for (auto&& replica : info.read_from) {
-            _streaming_load[replica].read_load += info.stream_weight;
+            auto& shard = _streaming_load[replica];
+            shard.read_load += info.stream_weight;
+            shard.read_bytes += bytes;
+            shard.read_batchable &= batchable;
         }
         for (auto&& replica : info.written_to) {
-            _streaming_load[replica].write_load += info.stream_weight;
+            auto& shard = _streaming_load[replica];
+            shard.write_load += info.stream_weight;
+            shard.write_bytes += bytes;
+            shard.write_batchable &= batchable;
         }
     }
 
-    void apply_load(const migration_streaming_info_vector& infos) {
+    void apply_load(const tablet_migration_streaming_info& info, std::optional<uint64_t> exact_size,
+                    tablet_transition_kind kind) {
+        apply_load(info, exact_size.value_or(0), bool(exact_size) && is_batchable(kind));
+    }
+
+    void apply_load(const migration_streaming_info_vector& infos, std::optional<uint64_t> exact_size,
+                    tablet_transition_kind kind) {
+        auto bytes = exact_size.value_or(0);
+        auto batchable = bool(exact_size) && is_batchable(kind);
         for (auto& info : infos) {
-            apply_load(info);
+            apply_load(info, bytes, batchable);
+            bytes = 0; // exact_size covers all of infos, so charge it once.
         }
     }
 
-    bool can_accept_load(const tablet_migration_streaming_info& info) {
+    bool can_accept_load(const tablet_migration_streaming_info& info, const migration_tablet_set& tablets,
+                         std::optional<uint64_t> exact_size, tablet_transition_kind kind) {
         for (auto r : info.read_from) {
             auto it = _streaming_load.find(r);
             auto load = it != _streaming_load.end() ? it->second.read_load : 0;
+            auto bytes = it != _streaming_load.end() ? it->second.read_bytes : 0;
+            auto batchable = it == _streaming_load.end() || it->second.read_batchable;
             if (load > 0 && load + info.stream_weight > max_read_streaming_load) {
-                lblogger.debug("Migration skipped because of read load limit on {} ({})", r, load);
-                return false;
+                if (!can_batch(bytes, batchable, exact_size, tablets, kind)) {
+                    lblogger.debug("Migration skipped because of read load limit on {} ({}, {} bytes)", r, load, bytes);
+                    return false;
+                }
+                lblogger.debug("Migration batched over read load limit on {} ({}, {} bytes)", r, load, bytes);
             }
         }
         for (auto r : info.written_to) {
             auto it = _streaming_load.find(r);
             auto load = it != _streaming_load.end() ? it->second.write_load : 0;
+            auto bytes = it != _streaming_load.end() ? it->second.write_bytes : 0;
+            auto batchable = it == _streaming_load.end() || it->second.write_batchable;
             if (load > 0 && load + info.stream_weight > max_write_streaming_load) {
-                lblogger.debug("Migration skipped because of write load limit on {} ({})", r, load);
-                return false;
+                if (!can_batch(bytes, batchable, exact_size, tablets, kind)) {
+                    lblogger.debug("Migration skipped because of write load limit on {} ({}, {} bytes)", r, load, bytes);
+                    return false;
+                }
+                lblogger.debug("Migration batched over write load limit on {} ({}, {} bytes)", r, load, bytes);
             }
         }
         return true;
     }
 
     // Precondition: all migration streaming info have same source and destination.
-    bool can_accept_load(const migration_streaming_info_vector& infos) {
+    bool can_accept_load(const migration_streaming_info_vector& infos, const migration_tablet_set& tablets,
+                         std::optional<uint64_t> exact_size, tablet_transition_kind kind) {
         // Since all migration info have the same source and destination, the load check can be done
         // once with the combined stream weight.
         auto info = infos[0];
@@ -3005,7 +3206,7 @@ public:
         for (auto& i : infos) {
             info.stream_weight += i.stream_weight;
         }
-        return can_accept_load(info);
+        return can_accept_load(info, tablets, exact_size, kind);
     }
 
     bool in_shuffle_mode() const {
@@ -3368,7 +3569,11 @@ public:
     }
 
     void mark_as_scheduled(const tablet_migration_info& mig) {
-        _scheduled_tablets.insert(mig.tablet);
+        if (_scheduled_tablets.insert(mig.tablet).second) {
+            const auto& tmap = _tm->tablets().get_tablet_map(mig.tablet.table);
+            _scheduled_token_space_per_table[_tm->tablets().get_base_table(mig.tablet.table)]
+                    += token_space_fraction(tmap, mig.tablet.tablet);
+        }
     }
 
     void mark_as_scheduled(const migration_plan::migrations_vector& migs) {
@@ -3476,13 +3681,14 @@ public:
             auto& tmap = tmeta.get_tablet_map(tablets.table());
             auto mig_streaming_info = get_migration_streaming_infos(_tm->get_topology(), tmap, mig);
 
-            if (!can_accept_load(mig_streaming_info)) {
+            auto exact_size = exact_migration_size(tablets, host);
+            if (!can_accept_load(mig_streaming_info, tablets, exact_size, tablet_transition_kind::intranode_migration)) {
                 _current_stats->migrations_skipped++;
                 lblogger.debug("Unable to balance {}: load limit reached", host);
                 break;
             }
 
-            apply_load(mig_streaming_info);
+            apply_load(mig_streaming_info, exact_size, tablet_transition_kind::intranode_migration);
             lblogger.debug("Adding migration: {} size: {}", mig, tablets.tablet_set_disk_size);
             _current_stats->migrations_produced++;
             _current_stats->intranode_migrations_produced++;
@@ -4188,8 +4394,9 @@ public:
 
             pick(*_load_sketch, dst.host, dst.shard, source_tablets);
 
-            if (can_accept_load(mig_streaming_info)) {
-                apply_load(mig_streaming_info);
+            auto exact_size = exact_migration_size(source_tablets, src.host);
+            if (can_accept_load(mig_streaming_info, source_tablets, exact_size, kind)) {
+                apply_load(mig_streaming_info, exact_size, kind);
                 lblogger.debug("Adding migration: {} size: {}", mig, source_tablets.tablet_set_disk_size);
                 _current_stats->migrations_produced++;
                 mark_as_scheduled(mig);
@@ -4316,16 +4523,21 @@ public:
             auto& host_load = host_streaming_load[replica.host];
             host_load.read_load += load.read_load;
             host_load.write_load += load.write_load;
+            host_load.read_bytes += load.read_bytes;
+            host_load.write_bytes += load.write_bytes;
         }
         for (auto&& [host, load] : nodes) {
             auto it = host_streaming_load.find(host);
             size_t read = it != host_streaming_load.end() ? it->second.read_load : 0;
             size_t write = it != host_streaming_load.end() ? it->second.write_load : 0;
+            uint64_t read_bytes = it != host_streaming_load.end() ? it->second.read_bytes : 0;
+            uint64_t write_bytes = it != host_streaming_load.end() ? it->second.write_bytes : 0;
             auto level = !only_active_ || (read + write) > 0 ? seastar::log_level::info : seastar::log_level::debug;
             lblogger.log(level, "Node {}: {}/{} load={:.6f} tablets={} shards={} tablets/shard={:.3f} state={} cap={}"
-                                " rd={} wr={}",
+                                " rd={} wr={} rd_bytes={} wr_bytes={}",
                          host, load.dc(), load.rack(), load.avg_load, load.tablet_count, load.shard_count,
-                         load.tablets_per_shard(), load.state(), load.dusage->capacity, read, write);
+                         load.tablets_per_shard(), load.state(), load.dusage->capacity, read, write,
+                         read_bytes, write_bytes);
         }
     }
 
