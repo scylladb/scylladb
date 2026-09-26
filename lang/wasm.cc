@@ -19,6 +19,8 @@
 #include <seastar/coroutine/exception.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include "lang/wasm_alien_thread_runner.hh"
+#include "lang/manager.hh"
+#include "exceptions/exceptions.hh"
 
 logging::logger wasm_logger("wasm");
 
@@ -320,3 +322,46 @@ seastar::future<bytes_opt> run_script(const db::functions::function_name& name, 
     return make_ready_future<bytes_opt>(ret);
 }
 }
+
+namespace lang {
+
+void manager::init_wasm(const wasm_config& cfg) {
+    if (this_shard_id() == 0) {
+        // Other shards will get this pointer in .start()
+        _wasm.engine = std::make_shared<rust::Box<wasmtime::Engine>>(wasmtime::create_engine(cfg.udf_memory_limit));
+        _wasm.alien_runner = std::make_shared<wasm::alien_thread_runner>();
+    }
+    _wasm.cache.emplace(cfg.cache_size, cfg.cache_instance_size, cfg.cache_timer_period);
+}
+
+future<> manager::start() {
+    if (this_shard_id() == 0) {
+        co_await container().invoke_on_others([this] (auto& m) {
+            m._wasm.engine = this->_wasm.engine;
+            m._wasm.alien_runner = this->_wasm.alien_runner;
+        });
+    }
+}
+
+future<> manager::stop() {
+    if (_wasm.cache) {
+        co_await _wasm.cache->stop();
+    }
+}
+
+void manager::remove(const db::functions::function_name& name, const std::vector<data_type>& arg_types) noexcept {
+    _wasm.cache->remove(name, arg_types);
+}
+
+future<wasm::context> manager::create_wasm(sstring name, const std::vector<sstring>& arg_names, std::string script) {
+    // FIXME: need better way to test wasm compilation without real_database()
+    auto wasm_ctx = wasm::context(**_wasm.engine, std::move(name), *_wasm.cache, wasm_yield_fuel, wasm_total_fuel);
+    try {
+        co_await ::wasm::precompile(*_wasm.alien_runner, wasm_ctx, arg_names, std::move(script));
+    } catch (const wasm::exception& we) {
+        throw exceptions::invalid_request_exception(we.what());
+    }
+    co_return std::move(wasm_ctx);
+}
+
+} // namespace lang

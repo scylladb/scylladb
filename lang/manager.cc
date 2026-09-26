@@ -20,27 +20,7 @@ manager::manager(config cfg)
         , lua_timeout(cfg.lua.timeout)
 {
     if (cfg.wasm) {
-        if (this_shard_id() == 0) {
-            // Other shards will get this pointer in .start()
-            _engine = std::make_shared<rust::Box<wasmtime::Engine>>(wasmtime::create_engine(cfg.wasm->udf_memory_limit));
-            _alien_runner = std::make_shared<wasm::alien_thread_runner>();
-        }
-        _instance_cache.emplace(cfg.wasm->cache_size, cfg.wasm->cache_instance_size, cfg.wasm->cache_timer_period);
-    }
-}
-
-future<> manager::start() {
-    if (this_shard_id() == 0) {
-        co_await container().invoke_on_others([this] (auto& m) {
-            m._engine = this->_engine;
-            m._alien_runner = this->_alien_runner;
-        });
-    }
-}
-
-future<> manager::stop() {
-    if (_instance_cache) {
-        co_await _instance_cache->stop();
+        init_wasm(*cfg.wasm);
     }
 }
 
@@ -58,14 +38,7 @@ future<manager::context> manager::create(sstring language, sstring name, const s
 
         ctx = std::move(lua_ctx);
     } else if (language == "wasm") {
-       // FIXME: need better way to test wasm compilation without real_database()
-       auto wasm_ctx = wasm::context(**_engine, std::move(name), *_instance_cache, wasm_yield_fuel, wasm_total_fuel);
-       try {
-            co_await ::wasm::precompile(*_alien_runner, wasm_ctx, arg_names, std::move(script));
-       } catch (const wasm::exception& we) {
-           throw exceptions::invalid_request_exception(we.what());
-       }
-       ctx.emplace(std::move(wasm_ctx));
+        ctx.emplace(co_await create_wasm(std::move(name), arg_names, std::move(script)));
     }
     co_return ctx;
 }
