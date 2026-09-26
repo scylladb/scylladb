@@ -4764,8 +4764,12 @@ future<> storage_service::process_tablet_split_candidate(table_id table) noexcep
     while (!_async_gate.is_closed() && !_group0_as.abort_requested()) {
         bool sleep = false;
         try {
-            // Ensures that latest changes to tablet metadata, in group0, are visible
-            auto guard = co_await _group0->client().start_operation(_group0_as);
+            // Ensures that latest changes to tablet metadata, in group0, are visible.
+            // The timeout matters even though this is a background fiber: the guard holds
+            // _operation_mutex, which serialises every group0 operation on this node, so
+            // waiting here without a bound blocks all of them. Failing and retrying on the
+            // backoff below releases the mutex between attempts; not timing out never does.
+            auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
             auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
             if (!tmap.needs_split()) {
                 release_guard(std::move(guard));
