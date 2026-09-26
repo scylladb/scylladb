@@ -20,6 +20,7 @@
 #include <seastar/core/sleep.hh>
 #include <seastar/http/exception.hh>
 #include <seastar/util/closeable.hh>
+#include <seastar/util/defer.hh>
 #include <seastar/util/short_streams.hh>
 #include <seastar/core/units.hh>
 #include <seastar/core/metrics_api.hh>
@@ -556,6 +557,106 @@ void client_readable_file(const client_maker_function& client_maker) {
     testlog.info("Check bulk read\n");
     auto buf = f.dma_read_bulk<char>(5, 8).get();
     BOOST_REQUIRE_EQUAL(to_sstring(std::move(buf)), sstring("67890ABC"));
+}
+
+// A range that runs past the end of the object is answered short by design, so
+// the short-read check has to clamp what it expects to what remains. A body
+// that ends early inside the object must still fail, which needs the injection
+// point since the http client reports a truncated body as a clean end of stream.
+void client_readable_file_short_read(const client_maker_function& client_maker) {
+    s3_test_fixture guard(client_maker);
+    auto cln = guard.client();
+    const auto name = guard.object_path("testshortreadobject");
+
+    temporary_buffer<char> data = sstring("1234567890ABCDEF").release();
+    cln->put_object(name, std::move(data)).get();
+
+    auto f = cln->make_readable_file(name);
+    auto close_readable_file = deferred_close(f);
+    BOOST_REQUIRE_EQUAL(f.size().get(), 16);
+
+    testlog.info("A read straddling the end of the object must succeed");
+    char buffer[64];
+    BOOST_REQUIRE_EQUAL(f.dma_read(10, buffer, 32).get(), 6);
+    BOOST_REQUIRE_EQUAL(sstring(buffer, 6), sstring("ABCDEF"));
+
+    auto buf = f.dma_read_bulk<char>(12, 64).get();
+    BOOST_REQUIRE_EQUAL(to_sstring(std::move(buf)), sstring("CDEF"));
+
+}
+
+// The other half of the same check: a body that ends early inside the object must
+// fail. Only error injection can produce one.
+void client_readable_file_short_body(const client_maker_function& client_maker) {
+    s3_test_fixture guard(client_maker);
+    auto cln = guard.client();
+    const auto name = guard.object_path("testshortbodyobject");
+
+    temporary_buffer<char> data = sstring("1234567890ABCDEF").release();
+    cln->put_object(name, std::move(data)).get();
+
+    auto f = cln->make_readable_file(name);
+    auto close_readable_file = deferred_close(f);
+
+    char buffer[64];
+    utils::get_local_injector().enable("s3_client_short_body");
+    auto disable = seastar::defer([] () noexcept { utils::get_local_injector().disable("s3_client_short_body"); });
+    BOOST_REQUIRE_EXCEPTION(f.dma_read(0, buffer, 8).get(), storage_io_error, [](const storage_io_error& e) {
+        return e.code().value() == EIO && std::string(e.what()).contains("Short read of object");
+    });
+}
+
+SEASTAR_THREAD_TEST_CASE(test_client_readable_file_short_read_s3) {
+    client_readable_file_short_read(make_s3_client);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_client_readable_file_short_body_s3) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    testlog.debug("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+    return;
+#endif
+    client_readable_file_short_body(make_s3_client);
+}
+
+// A truncated body is retried; only a reply that describes a different range
+// than the one asked for reaches the caller.
+void client_readable_file_truncated_body(const client_maker_function& client_maker) {
+    s3_test_fixture guard(client_maker);
+    auto cln = guard.client();
+    const auto name = guard.object_path("testtruncatedbodyobject");
+
+    temporary_buffer<char> data = sstring("1234567890ABCDEF").release();
+    cln->put_object(name, std::move(data)).get();
+
+    auto f = cln->make_readable_file(name);
+    auto close_readable_file = deferred_close(f);
+
+    char buffer[16];
+    testlog.info("One truncated body is retried, and the read still returns the data");
+    utils::get_local_injector().enable("s3_client_truncated_body", true); // one shot
+    auto sz = f.dma_read(4, buffer, 7).get();
+    BOOST_REQUIRE_EQUAL(sz, 7);
+    BOOST_REQUIRE_EQUAL(sstring(buffer, 7), sstring("567890A"));
+    BOOST_REQUIRE(!utils::get_local_injector().is_enabled("s3_client_truncated_body"));
+
+    testlog.info("A body that keeps ending early fails once the retries run out");
+    utils::get_local_injector().enable("s3_client_truncated_body");
+    auto disable = seastar::defer([] () noexcept { utils::get_local_injector().disable("s3_client_truncated_body"); });
+    // make_request() wraps whatever escapes the retry loop, so the caller still
+    // sees the storage_io_error it saw before this was made retryable.
+    // EPROTO is the point: it proves the body-ended-early check classified this as
+    // retryable and the failure is the exhausted retry, not some other error.
+    BOOST_REQUIRE_EXCEPTION(f.dma_read(4, buffer, 7).get(), storage_io_error, [](const storage_io_error& e) {
+        return e.code().value() == EIO && std::string(e.what()).contains("Protocol error");
+    });
+}
+
+SEASTAR_THREAD_TEST_CASE(test_client_readable_file_truncated_body_s3) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    testlog.debug("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+    return;
+#endif
+    client_readable_file_truncated_body(make_s3_client);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_client_readable_file_s3) {
