@@ -482,8 +482,8 @@ public:
         return _backlog_manager.backlog();
     }
 
-    void register_backlog_tracker(compaction_backlog_tracker& backlog_tracker) {
-        _backlog_manager.register_backlog_tracker(backlog_tracker);
+    void register_backlog_tracker(compaction_backlog_tracker& backlog_tracker, const compaction::compaction_backlog_source& src) {
+        _backlog_manager.register_backlog_tracker(backlog_tracker, src);
     }
 
     compaction_backlog_tracker& get_backlog_tracker(compaction::compaction_group_view& t);

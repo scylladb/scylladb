@@ -749,21 +749,6 @@ void do_compaction_efficiency_test(cql_test_env& env, test_config& cfg) {
     }
 }
 
-// Sum of the per-view backlog for the given table across all shards. Used only for
-// observability; the value crosses trackers/shards additively, so it is representative
-// of the total pressure the compaction controller sees.
-double get_total_backlog(sharded<replica::database>& db, const schema_ptr& s) {
-    return db.map_reduce0([gs = global_schema_ptr(s)] (replica::database& db) -> future<double> {
-        auto& cf = db.find_column_family(gs);
-        double sum = 0;
-        co_await cf.parallel_foreach_compaction_group_view([&sum] (compaction::compaction_group_view& v) -> future<> {
-            sum += v.get_backlog_tracker().backlog();
-            co_return;
-        });
-        co_return sum;
-    }, double(0), std::plus<double>()).get();
-}
-
 // Sum of the shard-local compaction_manager backlog across all shards. This includes
 // every table's backlog (not just ours) but in a benchmark that runs a single table
 // it is effectively equivalent to get_total_backlog and — more importantly — it is
@@ -1066,13 +1051,13 @@ void do_concurrent_compaction_test(cql_test_env& env, test_config& cfg) {
                 ? bytes_since_prev / double(flushes_since_prev) / 1024.0 : 0.0;
 
             auto sst_count = get_sstable_count(env.db(), s);
-            auto backlog = get_total_backlog(env.db(), s);
+            auto backlog = get_cm_backlog_sum(env.db());
             // The controller normalises backlog per-shard by that shard's
             // available_memory, then interpolates control points to pick shares.
             // Reproduce that here for display purposes (single-shard runs only;
             // multi-shard sums are an upper bound).
             auto norm_backlog = avail_mem > 0
-                ? get_cm_backlog_sum(env.db()) / avail_mem : 0.0;
+                ? backlog / avail_mem : 0.0;
             auto shares = get_compaction_shares_sum(env.db());
 
             fmt::print("{:>8.1f} {:>10.0f} {:>10.1f} {:>10} {:>11.1f} {:>14.2f} {:>10.3f} {:>8.1f} {:>10} {:>10} {:>10}\n",

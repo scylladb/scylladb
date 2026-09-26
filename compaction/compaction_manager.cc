@@ -317,7 +317,7 @@ public:
 private:
     float _added_backlog;
     size_t _available_memory;
-    virtual double backlog(const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const override {
+    virtual double backlog(const compaction_backlog_source& src, const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const override {
         return _added_backlog * _available_memory;
     }
     virtual void replace_sstables(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts) override {}
@@ -2723,12 +2723,12 @@ void compaction_backlog_tracker::retire() {
     disable();
 }
 
-double compaction_backlog_tracker::backlog() {
+double compaction_backlog_tracker::backlog(const compaction_backlog_source& src) {
     if (disabled()) {
         return compaction_controller::disable_backlog;
     }
     try {
-        return _impl->backlog(_ongoing_writes, _ongoing_compactions);
+        return _impl->backlog(src, _ongoing_writes, _ongoing_compactions);
     } catch (...) {
         // Isolate the failure to this tracker instead of poisoning the whole shard's backlog poll.
         cmlog.error("Disabling backlog tracker due to exception during backlog computation: {}", std::current_exception());
@@ -2834,8 +2834,8 @@ double compaction_backlog_manager::backlog() const {
     try {
         double backlog = 0;
 
-        for (auto& tracker: _backlog_trackers) {
-            backlog += tracker->backlog();
+        for (auto& [tracker, src] : _backlog_trackers) {
+            backlog += tracker->backlog(*src);
         }
         if (compaction_controller::backlog_disabled(backlog)) {
             return compaction_controller::disable_backlog;
@@ -2847,13 +2847,13 @@ double compaction_backlog_manager::backlog() const {
     }
 }
 
-void compaction_backlog_manager::register_backlog_tracker(compaction_backlog_tracker& tracker) {
+void compaction_backlog_manager::register_backlog_tracker(compaction_backlog_tracker& tracker, const compaction_backlog_source& src) {
     tracker._manager = this;
-    _backlog_trackers.insert(&tracker);
+    _backlog_trackers.insert_or_assign(&tracker, &src);
 }
 
 compaction_backlog_manager::~compaction_backlog_manager() {
-    for (auto* tracker : _backlog_trackers) {
+    for (auto& [tracker, _] : _backlog_trackers) {
         tracker->_manager = nullptr;
     }
 }

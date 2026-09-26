@@ -12,12 +12,31 @@
 #include <memory>
 #include "sstables/shared_sstable.hh"
 #include "mutation/timestamp.hh"
+#include "schema/schema_fwd.hh"
 
 class compaction_controller;
+
+namespace sstables {
+class sstable_set;
+}
 
 namespace compaction {
 
 class compaction_backlog_manager;
+
+// What a backlog tracker needs to know about the data it accounts for: the sstables
+// of a compaction group -- all of them, across every repair state -- and the schema
+// they belong to.
+//
+// Deliberately not a compaction_group_view: a view is scoped to one repair state and
+// is the target a compaction runs against, while a backlog is a property of the whole
+// group, which has a single tracker.
+class compaction_backlog_source {
+public:
+    virtual ~compaction_backlog_source() = default;
+    virtual const schema_ptr& schema() const noexcept = 0;
+    virtual lw_shared_ptr<const sstables::sstable_set> sstables_for_backlog() const = 0;
+};
 
 // Fixed cost, in bytes, that each sstable adds to the backlog on top of its own size.
 //
@@ -86,7 +105,7 @@ public:
     struct impl {
         // FIXME: Should provide strong exception safety guarantees
         virtual void replace_sstables(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts) = 0;
-        virtual double backlog(const ongoing_writes& ow, const ongoing_compactions& oc) const = 0;
+        virtual double backlog(const compaction_backlog_source& src, const ongoing_writes& ow, const ongoing_compactions& oc) const = 0;
         virtual ~impl() { }
     };
 
@@ -96,7 +115,7 @@ public:
     compaction_backlog_tracker(const compaction_backlog_tracker&) = delete;
     ~compaction_backlog_tracker();
 
-    double backlog();
+    double backlog(const compaction_backlog_source& src);
     // FIXME: Should provide strong exception safety guarantees
     void replace_sstables(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts);
     void register_partially_written_sstable(sstables::shared_sstable sst, backlog_write_progress_manager& wp);
@@ -142,7 +161,7 @@ private:
 // Keeping a static part for the backlog complicates the code significantly, though, so this will
 // be left for a future optimization.
 class compaction_backlog_manager {
-    std::unordered_set<compaction_backlog_tracker*> _backlog_trackers;
+    std::unordered_map<compaction_backlog_tracker*, const compaction_backlog_source*> _backlog_trackers;
     void remove_backlog_tracker(compaction_backlog_tracker* tracker);
     compaction_controller* _compaction_controller;
     friend class compaction_backlog_tracker;
@@ -150,7 +169,9 @@ public:
     ~compaction_backlog_manager();
     compaction_backlog_manager(compaction_controller& controller) : _compaction_controller(&controller) {}
     double backlog() const;
-    void register_backlog_tracker(compaction_backlog_tracker& tracker);
+    // The tracker's backlog is calculated on the sstables the source it is registered
+    // with provides.
+    void register_backlog_tracker(compaction_backlog_tracker& tracker, const compaction_backlog_source& src);
 };
 
 }

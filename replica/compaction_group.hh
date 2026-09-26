@@ -70,7 +70,7 @@ using repair_classifier_func = std::function<repair_sstable_classification(const
 //      - Also, a group will be owned by a single table. Different tables own different groups.
 //      - Each group can be thought of an isolated LSM tree, where Memtable(s) and SSTable(s) are
 //          isolated from other groups.
-class compaction_group {
+class compaction_group : public compaction::compaction_backlog_source {
     table& _t;
     // The compaction group views are the logical compaction groups, each having its own logical
     // set of sstables. Even though they share the same instance of sstable_set, compaction will
@@ -174,7 +174,7 @@ public:
         return _group_id;
     }
 
-    const schema_ptr& schema() const;
+    const schema_ptr& schema() const noexcept override;
 
     // Stops all activity in the group, synchronizes with in-flight writes, before
     // flushing memtable(s), so all data can be found in the SSTable set.
@@ -257,6 +257,8 @@ public:
     future<> merge_logstor_segments_from(compaction_group& group);
 
     const lw_shared_ptr<sstables::sstable_set>& main_sstables() const noexcept;
+    // compaction_backlog_source: the sstables the group's backlog is computed on
+    lw_shared_ptr<const sstables::sstable_set> sstables_for_backlog() const override;
     sstables::sstable_set make_main_sstable_set() const;
     void set_main_sstables(lw_shared_ptr<sstables::sstable_set> new_main_sstables);
 

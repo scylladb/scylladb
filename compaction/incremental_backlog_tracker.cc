@@ -5,7 +5,9 @@
  */
 
 #include "incremental_backlog_tracker.hh"
+#include "compaction.hh"
 #include "sstables/sstables.hh"
+#include "sstables/sstable_set.hh"
 
 namespace compaction {
 
@@ -27,14 +29,25 @@ incremental_backlog_tracker::inflight_component incremental_backlog_tracker::com
 }
 
 incremental_backlog_tracker::backlog_calculation_result
-incremental_backlog_tracker::calculate_sstables_backlog_contribution(const std::unordered_map<sstables::run_id, sstables::sstable_run>& all, const incremental_compaction_strategy_options& options,  unsigned threshold) {
+incremental_backlog_tracker::calculate_sstables_backlog_contribution(const compaction_backlog_source& src, const incremental_compaction_strategy_options& options) {
+    auto threshold = src.schema()->min_compaction_threshold();
+    int64_t total_bytes = 0;
     int64_t total_backlog_bytes = 0;
     float sstables_backlog_contribution = 0.0f;
     std::unordered_set<sstables::run_id> sstable_runs_contributing_backlog = {};
 
+    // Only runs eligible for compaction are accounted for, e.g. the ones still waiting
+    // for view building are left out.
+    std::vector<sstables::frozen_sstable_run> all;
+    for (auto& run : src.sstables_for_backlog()->all_sstable_runs()) {
+        if (is_eligible_for_compaction(run)) {
+            total_bytes += run->data_size();
+            all.push_back(run);
+        }
+    }
+
     if (!all.empty()) {
-      auto freeze = [] (const sstables::sstable_run& run) { return make_lw_shared<const sstables::sstable_run>(run); };
-      for (auto& bucket : incremental_compaction_strategy::get_buckets(all | std::views::values | std::views::transform(freeze) | std::ranges::to<std::vector>(), options)) {
+      for (auto& bucket : incremental_compaction_strategy::get_buckets(all, options)) {
         if (!incremental_compaction_strategy::is_bucket_interesting(bucket, threshold)) {
             continue;
         }
@@ -53,6 +66,7 @@ incremental_backlog_tracker::calculate_sstables_backlog_contribution(const std::
       }
     }
     return backlog_calculation_result{
+        .total_bytes = total_bytes,
         .total_backlog_bytes = total_backlog_bytes,
         .sstables_backlog_contribution = sstables_backlog_contribution,
         .sstable_runs_contributing_backlog = std::move(sstable_runs_contributing_backlog),
@@ -61,9 +75,10 @@ incremental_backlog_tracker::calculate_sstables_backlog_contribution(const std::
 
 incremental_backlog_tracker::incremental_backlog_tracker(incremental_compaction_strategy_options options) : _options(std::move(options)) {}
 
-double incremental_backlog_tracker::backlog(const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const {
+double incremental_backlog_tracker::backlog(const compaction_backlog_source& src, const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const {
     if (_backlog_dirty) {
-        auto result = calculate_sstables_backlog_contribution(_all, _options, _threshold);
+        auto result = calculate_sstables_backlog_contribution(src, _options);
+        _total_bytes = result.total_bytes;
         _total_backlog_bytes = result.total_backlog_bytes;
         _sstables_backlog_contribution = result.sstables_backlog_contribution;
         _sstable_runs_contributing_backlog = std::move(result.sstable_runs_contributing_backlog);
@@ -92,42 +107,10 @@ double incremental_backlog_tracker::backlog(const compaction_backlog_tracker::on
     return b > 0 ? b : 0;
 }
 
-// Removing could be the result of a failure of an in progress write, successful finish of a
-// compaction, or some one-off operation, like drop
 void incremental_backlog_tracker::replace_sstables(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts) {
-    auto all = _all;
-    auto total_bytes = _total_bytes;
-    auto threshold = _threshold;
-    for (auto&& sst : new_ssts) {
-    if (sst->data_size() > 0) {
-        // note: we don't expect failed insertions since each sstable will be inserted once
-        (void)all[sst->run_identifier()].insert(sst);
-        total_bytes += sst->data_size();
-        // Deduce threshold from the last SSTable added to the set
-        threshold = sst->get_schema()->min_compaction_threshold();
-    }
-    }
-
-    for (auto&& sst : old_ssts) {
-    if (sst->data_size() > 0) {
-        auto run_identifier = sst->run_identifier();
-        all[run_identifier].erase(sst);
-        if (all[run_identifier].all().empty()) {
-            all.erase(run_identifier);
-        }
-        total_bytes -= sst->data_size();
-    }
-    }
-
-    // commit calculations
-    std::invoke([&] () noexcept {
-        _all = std::move(all);
-        _total_bytes = total_bytes;
-        _threshold = threshold;
-        // Defer backlog contribution recalculation to the next backlog() call,
-        // avoiding O(N^2) cost when many sstables are added in a batch (e.g. boot).
-        _backlog_dirty = true;
-    });
+    // Defer backlog contribution recalculation to the next backlog() call,
+    // avoiding O(N^2) cost when many sstables are added in a batch (e.g. boot).
+    _backlog_dirty = true;
 }
 
 }
