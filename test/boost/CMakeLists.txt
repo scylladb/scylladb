@@ -137,6 +137,8 @@ add_scylla_test(hint_test
 add_scylla_test(hwlb_test
   KIND BOOST
   LIBRARIES db)
+add_scylla_test(hyperloglog_test
+  KIND BOOST)
 add_scylla_test(idl_test
   KIND BOOST
   LIBRARIES idl)
