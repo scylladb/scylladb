@@ -418,6 +418,22 @@ public:
     void on_leadership_lost();
 };
 
+/// Checks that the keyspace can be migrated from vnodes to tablets and returns its
+/// replication strategy. Throws a message meant for the operator otherwise. Both the API
+/// path and the topology coordinator ask this: the first so that a mistake is reported to
+/// the caller directly, the second because the state can change before it picks the
+/// request up.
+const locator::tablet_aware_replication_strategy* validate_keyspace_for_migration(
+        replica::database& db, const sstring& ks_name, const topology& topo);
+
+/// Builds the initial tablet map of a table being migrated from vnodes to tablets: one
+/// tablet per vnode range, replicated like that vnode, additionally split at the
+/// boundaries of `target_pow2` evenly spaced tablets when `target_pow2` is not 0.
+/// Depends on nothing but its arguments, so it can be driven with a synthetic topology.
+future<locator::tablet_map> build_tablet_map_for_migration(
+        const locator::static_effective_replication_map_ptr& erm,
+        size_t target_pow2 = 0);
+
 future<bool> requires_rack_list_colocation(
         replica::database& db,
         locator::token_metadata_ptr tmptr,
