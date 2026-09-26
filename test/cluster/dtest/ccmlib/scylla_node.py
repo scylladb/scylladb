@@ -1650,10 +1650,12 @@ class ScyllaNode:
                 else:
                     return stdout.encode('utf-8'), stderr.encode('utf-8')
             common_args = [scylla_path, "sstable", command] + additional_args
+            # As ccm: the given variables on top of the environment, not in place of it.
             # Under ccm parity, from a directory with no conf/: the tool falls back to
             # ./conf/scylla.yaml, which the repository's root has and scylla-dtest's checkout
             # has not.
-            res = subprocess.run(common_args + sstables, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=text, check=False, env=env,
+            res = subprocess.run(common_args + sstables, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=text, check=False,
+                                 env=os.environ | (env or {}),
                                  cwd=self.cluster.get_path() if self.cluster.ccm_parity else None)
             if res.returncode:
                 raise ToolError(command=' '.join(common_args + sstables), exit_status=res.returncode, stdout=res.stdout, stderr=res.stderr)
