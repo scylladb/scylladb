@@ -174,7 +174,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         unsigned consecutive_failures = 0;
     };
     static constexpr std::chrono::seconds auto_rf_backoff_base{1};
-    static constexpr std::chrono::seconds auto_rf_backoff_max{60};
     std::unordered_map<sstring, auto_rf_failure> _auto_rf_failures;
     // Wakes the coordinator fiber up when the earliest backoff expires; it may have no
     // other reason to wake up.
@@ -1352,6 +1351,26 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         batch.size());
             }
 
+            // The reconciler only runs when the global request queue is empty, and a
+            // client that keeps resubmitting quiesce requests keeps it non-empty. So when
+            // auto-RF has a change to make, schedule it from here; this request stays at
+            // the head of the queue and is evaluated again once the change is queued.
+            // A change held back by the backoff is still due, so the topology is not
+            // quiesced while one is.
+            bool auto_rf_backed_off = false;
+            {
+                std::optional<lowres_clock::time_point> retry_at;
+                auto candidate = co_await find_auto_rf_change(guard, retry_at);
+                if (retry_at) {
+                    _auto_rf_retry_timer.rearm(*retry_at);
+                    auto_rf_backed_off = true;
+                }
+                if (candidate) {
+                    co_await schedule_auto_rf_change(std::move(guard), *candidate);
+                    co_return;
+                }
+            }
+
             try {
                 rtlogger.debug("quiesce topology request: refreshing tablet load stats");
                 auto [load_stats, complete] = co_await collect_tablet_load_stats(require_live_nodes::yes);
@@ -1368,6 +1387,13 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         requires_schema_changes = plan.requires_schema_changes();
                     } else if (!tm->tablets().is_idle()) {
                         error = "tablet resize in progress";
+                    } else if (_feature_service.auto_replication_factor && co_await auto_rf_change_ongoing(_topo_sm._topology, _sys_ks, guard)) {
+                        // An auto-RF change is queued or running (typically the one
+                        // scheduled just above, which sits behind this request in the
+                        // queue), so the topology is not quiesced yet.
+                        error = "auto-RF change in progress";
+                    } else if (auto_rf_backed_off) {
+                        error = sstring(auto_rf_backed_off_error);
                     }
                 }
             } catch (...) {
@@ -1976,6 +2002,13 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
 
     // Schedules the next auto-RF change, if any. Returns the guard unless it was consumed.
     future<std::optional<group0_guard>> maybe_schedule_auto_rf_change(group0_guard guard) {
+        // Leaves a due change to the quiesce handler, which schedules it itself. Clears
+        // needs_auto_rf_change as if there were nothing to do, so that tablet load
+        // balancing is not preempted while the injection is on.
+        if (utils::get_local_injector().enter("auto_rf_skip_idle_path")) {
+            rtlogger.debug("Injection point auto_rf_skip_idle_path enabled, leaving auto-RF changes to the quiesce handler");
+            co_return co_await maybe_clear_needs_auto_rf_change(std::move(guard));
+        }
         std::optional<lowres_clock::time_point> retry_at;
         auto candidate = co_await find_auto_rf_change(guard, retry_at);
         if (retry_at) {
