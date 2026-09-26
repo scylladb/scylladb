@@ -15,6 +15,8 @@
 #include "cql3/statements/ks_prop_defs.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
+#include "timeout_config.hh"
+#include "db/config.hh"
 #include "locator/abstract_replication_strategy.hh"
 
 namespace audit {
@@ -54,7 +56,8 @@ audit_cf_storage_helper::audit_cf_storage_helper(cql3::query_processor& qp, serv
                        "username,"
                        "error) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                        KEYSPACE_NAME, TABLE_NAME))
-    , _dummy_query_state(service::client_state::for_internal_calls(), empty_service_permit())
+    , _client_state(service::client_state::internal_tag{}, updateable_timeout_config(qp.db().get_config()).current_values())
+    , _dummy_query_state(_client_state, empty_service_permit())
 {
 }
 
