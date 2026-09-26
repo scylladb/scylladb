@@ -6633,18 +6633,6 @@ class scylla_tablet_metadata(gdb.Command):
     For more information about usage, see:
         scylla tablet-metadata --help
     """
-    _token_bias = 9223372036854775808
-    _max_uint64 = 18446744073709551615
-
-    def _bias(self, n):
-        return n - self._token_bias
-
-    def _last_token_of_compaction_group(self, most_significant_bits, group):
-        if group == ((1 << most_significant_bits) - 1):
-            return self._bias(self._max_uint64)
-        else:
-            return self._bias(((group + 1) << (64 - most_significant_bits)) - 1);
-
     def __init__(self):
         gdb.Command.__init__(self, 'scylla tablet-metadata', gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
 
@@ -6688,8 +6676,12 @@ class scylla_tablet_metadata(gdb.Command):
                 continue
 
             tablet_map = seastar_lw_shared_ptr(tablet_map['_value']).get()
-            log2_tablets = int(tablet_map['_log2_tablets'])
-            tablet_count = 2 ** log2_tablets
+            # _log2_tablets is the log2 of the bucket count, which is rounded up to a
+            # power of two; it is not the tablet count. Tablet boundaries are stored
+            # one per tablet in _last_tokens, and are not uniform when the layout is
+            # arbitrary, so both the count and the boundaries have to come from there.
+            last_tokens = list(chunked_vector(tablet_map['_tablet_ids']['_last_tokens']))
+            tablet_count = len(last_tokens)
             resize_decision = std_variant(tablet_map['_resize_decision']['way']).get().type.name.replace('locator::resize_decision::', '')
             resize_decision_seq_num = int(tablet_map['_resize_decision']['sequence_number'])
 
@@ -6699,7 +6691,7 @@ class scylla_tablet_metadata(gdb.Command):
             gdb.write(f'table {keyspace_name}.{table_name}: id: {table_id}, tablets: {tablet_count}, resize decision: {resize_decision}#{resize_decision_seq_num}, transitions: {len(tablet_transitions)}\n')
 
             for tablet_id, tablet_info in enumerate(chunked_vector(tablet_map['_tablets'])):
-                last_token = self._last_token_of_compaction_group(log2_tablets, tablet_id)
+                last_token = int(last_tokens[tablet_id]['value'])
                 replicas = format_replica_set(tablet_info['replicas'])
                 gdb.write(f'  tablet#{tablet_id}: last token: {last_token}, replicas: [{replicas}]\n')
                 if tablet_id in tablet_transitions:
