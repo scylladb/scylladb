@@ -16,7 +16,7 @@
 #include <assert.h>
 #include <algorithm>
 
-#include <boost/range/join.hpp>
+#include <ranges>
 
 #include <seastar/core/future-util.hh>
 #include <seastar/core/scheduling.hh>
@@ -242,7 +242,7 @@ static max_purgeable get_max_purgeable_timestamp(const compaction_group_view& ta
         source = max_purgeable::timestamp_source::memtable_possibly_shadowing_data;
     }
     std::optional<utils::hashed_key> hk;
-    for (auto&& sst : boost::range::join(selector.select(dk).sstables, table_s.compacted_undeleted_sstables())) {
+    for (auto&& sst : std::views::concat(selector.select(dk).sstables, table_s.compacted_undeleted_sstables())) {
         if (compacting_set.contains(sst)) {
             continue;
         }
@@ -1973,7 +1973,7 @@ public:
         }
 
         // Mark new sstables for deletion as well
-        for (auto& sst : boost::range::join(_new_partial_sstables, _new_unused_sstables)) {
+        for (auto& sst : std::views::concat(_new_partial_sstables, _new_unused_sstables)) {
             sst->mark_for_deletion();
         }
     }
