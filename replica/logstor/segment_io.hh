@@ -55,8 +55,6 @@ concept log_record_consumer_like =
 
 future<std::optional<segment_info>> read_segment_info(seastar::input_stream<char>& in);
 
-future<log_record> read_log_record(seastar::input_stream<char>& in, record_location loc);
-
 future<> scan_segment(seastar::input_stream<char>& in,
         log_segment_id segment_id,
         size_t segment_size,

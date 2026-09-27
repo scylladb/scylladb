@@ -66,15 +66,6 @@ future<std::optional<segment_info>> read_segment_info(seastar::input_stream<char
     co_return make_segment_info(bh, sh);
 }
 
-future<log_record> read_log_record(seastar::input_stream<char>& in, record_location loc) {
-    auto buf = co_await in.read_exactly(loc.size);
-    if (buf.size() < loc.size) {
-        throw std::runtime_error(fmt::format("Truncated log record at {}", loc));
-    }
-    auto frame = simple_memory_input_stream(buf.begin(), buf.size());
-    co_return ondisk::read_record_frame(frame);
-}
-
 future<> scan_segment(seastar::input_stream<char>& in,
         log_segment_id segment_id,
         size_t segment_size,
