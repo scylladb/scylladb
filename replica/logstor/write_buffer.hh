@@ -201,7 +201,7 @@ public:
     // The bytes written to the buffer so far, which after seal() is the whole buffer to write out.
     size_t serialized_size() const noexcept { return _buffer_size - _stream.size(); }
 
-    size_t get_buffer_size() const noexcept { return _buffer_size; }
+    size_t buffer_size() const noexcept { return _buffer_size; }
 
     bool can_fit(size_t record_size) const noexcept;
 
@@ -328,7 +328,7 @@ public:
     const char* data() const noexcept { return _raw.data(); }
     size_t serialized_size() const noexcept { return _raw.serialized_size(); }
 
-    size_t get_buffer_size() const noexcept { return _raw.get_buffer_size(); }
+    size_t buffer_size() const noexcept { return _raw.buffer_size(); }
 
     bool can_fit(size_t record_size) const noexcept { return _raw.can_fit(record_size); }
     template <log_record_writer_concept Writer>

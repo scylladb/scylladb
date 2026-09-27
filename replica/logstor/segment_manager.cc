@@ -3069,7 +3069,7 @@ future<> logstor_group::write_to_separator(Writer writer, segment_ref seg_ref, s
             // of either kind takes.
             on_internal_error(logstor_logger, fmt::format(
                     "logstor separator record of size {} does not fit a separator buffer of {} bytes",
-                    writer.record_size(), _active_buffer.buf->get_buffer_size()));
+                    writer.record_size(), _active_buffer.buf->buffer_size()));
         }
 
         if (!_separator_flush.available()) {
