@@ -2227,12 +2227,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
 
                     rtlogger.debug("Syncing raft config of {} (group {}) at stage {} on {}",
                             gid, group_id, trinfo.stage, hosts);
-                    return do_with(std::move(hosts), [this, gid, group_id] (const auto& hosts) {
-                        return seastar::parallel_for_each(hosts, [this, gid, group_id] (locator::host_id host) {
-                            return ser::groups_manager_rpc_verbs::send_sync_raft_group_config(&_messaging,
-                                    host, lowres_clock::now() + tablet_config_sync_timeout, _as,
-                                    raft::server_id(host.uuid()), gid, group_id);
-                        });
+                    // All the RPCs are sent before parallel_for_each() returns, so the
+                    // hosts need not outlive it.
+                    return seastar::parallel_for_each(std::move(hosts), [this, gid, group_id] (locator::host_id host) {
+                        return ser::groups_manager_rpc_verbs::send_sync_raft_group_config(&_messaging,
+                                host, lowres_clock::now() + tablet_config_sync_timeout, _as,
+                                raft::server_id(host.uuid()), gid, group_id);
                     });
                 });
             };
@@ -2332,23 +2332,26 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         }
                     }
 
-                    if (advance_in_background(gid, tablet_state.rebuild_repair, "rebuild_repair", [&] {
+                    // The explicit object parameter copies the captures into the coroutine
+                    // frame. The captured references are used only before the first
+                    // suspension, while the tablet map they point into is still alive.
+                    if (advance_in_background(gid, tablet_state.rebuild_repair, "rebuild_repair",
+                            [this, &tmap, &trinfo, gid, gids] (this auto) -> future<> {
                         utils::get_local_injector().inject("rebuild_repair_stage_fail",
                             [] { throw std::runtime_error("rebuild_repair failed due to error injection"); });
                         auto tsi = get_migration_streaming_info(get_token_metadata().get_topology(), tmap.get_tablet_info(gid.tablet), trinfo);
                         if (tsi.read_from.empty()) {
                             rtlogger.info("Skipped tablet rebuild repair of {} as no tablet replica was found", gid);
-                            return make_ready_future<>();
+                            co_return;
                         }
                         auto dst = locator::maybe_get_primary_replica(gid.tablet, {tsi.read_from.begin(), tsi.read_from.end()},
                                                                       _db.get_token_metadata().get_topology(), [] (const auto& tr) { return true; }).value().host;
+                        const auto session_id = trinfo.session_id;
                         rtlogger.info("Initiating repair phase of tablet rebuild host={} tablet={}", dst, gid);
-                        return do_with(gids, [this, dst, session_id = trinfo.session_id] (const auto& gids) {
-                            return do_for_each(gids, [this, dst, session_id] (locator::global_tablet_id gid) {
-                                return ser::storage_service_rpc_verbs::send_tablet_repair(&_messaging,
-                                        dst, _as, raft::server_id(dst.uuid()), gid, session_id).discard_result();
-                            });
-                        });
+                        for (auto tablet : gids) {
+                            co_await ser::storage_service_rpc_verbs::send_tablet_repair(&_messaging,
+                                    dst, _as, raft::server_id(dst.uuid()), tablet, session_id).discard_result();
+                        }
                     })) {
                         rtlogger.debug("Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::streaming);
                         get_mutation_builder()
@@ -2404,36 +2407,32 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     }
 
                     bool wait = utils::get_local_injector().enter("stream_tablet_wait");
-                    if (!wait && advance_in_background(gid, tablet_state.streaming, "streaming", [&] {
+                    if (!wait && advance_in_background(gid, tablet_state.streaming, "streaming",
+                            [this, &tmap, &trinfo, gid, gids, is_strong_consistency] (this auto) -> future<> {
                         utils::get_local_injector().inject("stream_tablet_move_to_cleanup",
                                         [] { throw std::runtime_error("stream_tablet failed due to error injection"); });
 
                         if (!trinfo.pending_replica) {
                             rtlogger.info("Skipped tablet streaming ({}) of {} as no pending replica found", trinfo.transition, gid);
-                            return make_ready_future<>();
+                            co_return;
                         }
                         auto dst = trinfo.pending_replica->host;
                         if (is_strong_consistency) {
                             rtlogger.info("Initiating sc snapshot transfer ({}) of {} to {}", trinfo.transition, gid, *trinfo.pending_replica);
-                            auto gids_and_group = gids | std::views::transform([&] (const auto& gid) {
+                            const auto session_id = trinfo.session_id;
+                            const auto gids_and_group = gids | std::views::transform([&] (const auto& gid) {
                                 return std::make_pair(gid, tmap.get_tablet_raft_info(gid.tablet).group_id);
                             }) | std::ranges::to<std::vector>();
-
-                            return do_with(gids_and_group, [this, dst, session_id = trinfo.session_id] (const auto& gids_and_group) {
-                                return do_for_each(gids_and_group, [this, dst, session_id] (const auto& gid_and_group) {
-                                    auto [gid, group_id] = gid_and_group;
-                                    return ser::groups_manager_rpc_verbs::send_wait_for_snapshot_transfer(&_messaging,
-                                            dst, _as, raft::server_id(dst.uuid()), gid, group_id, session_id.uuid());
-                                });
-                            });
+                            for (const auto& [tablet, group_id] : gids_and_group) {
+                                co_await ser::groups_manager_rpc_verbs::send_wait_for_snapshot_transfer(&_messaging,
+                                        dst, _as, raft::server_id(dst.uuid()), tablet, group_id, session_id.uuid());
+                            }
                         } else {
                             rtlogger.info("Initiating tablet streaming ({}) of {} to {}", trinfo.transition, gid, *trinfo.pending_replica);
-                            return do_with(gids, [this, dst] (const auto& gids) {
-                                return do_for_each(gids, [this, dst] (locator::global_tablet_id gid) {
-                                    return ser::storage_service_rpc_verbs::send_tablet_stream_data(&_messaging,
-                                               dst, _as, raft::server_id(dst.uuid()), gid);
-                                });
-                            });
+                            for (auto tablet : gids) {
+                                co_await ser::storage_service_rpc_verbs::send_tablet_stream_data(&_messaging,
+                                        dst, _as, raft::server_id(dst.uuid()), tablet);
+                            }
                         }
                     })) {
                         if (is_strong_consistency) {
@@ -2510,26 +2509,25 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     break;
                 case locator::tablet_transition_stage::cleanup: {
                     bool wait = utils::get_local_injector().enter("cleanup_tablet_wait");
-                    if (!wait && advance_in_background(gid, tablet_state.cleanup, "cleanup", [&] {
+                    if (!wait && advance_in_background(gid, tablet_state.cleanup, "cleanup",
+                            [this, &tmap, &trinfo, gid, gids] (this auto) -> future<> {
                         auto maybe_dst = locator::get_leaving_replica(tmap.get_tablet_info(gid.tablet), trinfo);
                         if (!maybe_dst) {
                             rtlogger.info("Tablet cleanup of {} skipped because no replicas leaving", gid);
-                            return make_ready_future<>();
+                            co_return;
                         }
                         locator::tablet_replica& dst = *maybe_dst;
                         if (is_excluded(raft::server_id(dst.host.uuid()))) {
                             rtlogger.info("Tablet cleanup of {} on {} skipped because node is excluded", gid, dst);
-                            return make_ready_future<>();
+                            co_return;
                         }
                         rtlogger.info("Initiating tablet cleanup of {} on {}", gid, dst);
-                        return do_with(gids, [this, dst] (const auto& gids) {
-                            return do_for_each(gids, [this, dst] (locator::global_tablet_id gid) {
-                                return ser::storage_service_rpc_verbs::send_tablet_cleanup(&_messaging,
-                                                                                           dst.host, _as, raft::server_id(dst.host.uuid()), gid);
-                            });
-                        }).then([] {
-                            return utils::get_local_injector().inject("wait_after_tablet_cleanup", utils::wait_for_message{std::chrono::seconds{60}});
-                        });
+                        for (auto tablet : gids) {
+                            co_await ser::storage_service_rpc_verbs::send_tablet_cleanup(&_messaging,
+                                    dst.host, _as, raft::server_id(dst.host.uuid()), tablet);
+                        }
+                        co_await utils::get_local_injector().inject("wait_after_tablet_cleanup",
+                                utils::wait_for_message{std::chrono::seconds{60}});
                     })) {
                         transition_to(locator::tablet_transition_stage::end_migration);
                     }
@@ -2548,23 +2546,22 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     break;
                 case locator::tablet_transition_stage::cleanup_target:
                     if (do_barrier()) {
-                        if (advance_in_background(gid, tablet_state.cleanup, "cleanup_target", [&] {
+                        if (advance_in_background(gid, tablet_state.cleanup, "cleanup_target",
+                                [this, &trinfo, gid, gids] (this auto) -> future<> {
                             if (!trinfo.pending_replica) {
                                 rtlogger.info("Tablet cleanup of {} skipped because no replicas pending", gid);
-                                return make_ready_future<>();
+                                co_return;
                             }
                             locator::tablet_replica dst = *trinfo.pending_replica;
                             if (is_excluded(raft::server_id(dst.host.uuid()))) {
                                 rtlogger.info("Tablet cleanup of {} on {} skipped because node is excluded and doesn't need to revert migration", gid, dst);
-                                return make_ready_future<>();
+                                co_return;
                             }
                             rtlogger.info("Initiating tablet cleanup of {} on {} to revert migration", gid, dst);
-                            return do_with(gids, [this, dst] (const auto& gids) {
-                                return do_for_each(gids, [this, dst] (locator::global_tablet_id gid) {
-                                    return ser::storage_service_rpc_verbs::send_tablet_cleanup(&_messaging,
-                                                                                            dst.host, _as, raft::server_id(dst.host.uuid()), gid);
-                                });
-                            });
+                            for (auto tablet : gids) {
+                                co_await ser::storage_service_rpc_verbs::send_tablet_cleanup(&_messaging,
+                                        dst.host, _as, raft::server_id(dst.host.uuid()), tablet);
+                            }
                         })) {
                             transition_to(locator::tablet_transition_stage::revert_migration);
                         }
