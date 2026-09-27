@@ -182,6 +182,9 @@ Data is read locally, from the node which receives the query, so replica is alwa
 The query cannot be migrated between nodes. If a query is paged, all its pages have to be served by the same coordinator. This is enforced, and any attempt to migrate the query to another coordinator will result in the query being aborted.
 Note that by default, drivers use round robin load balancing policies, and consequently they will attempt to read each page from a different coordinator.
 
+On strongly consistent tables the statement is accepted only with consistency level ``ONE`` or ``LOCAL_ONE``.
+It reads the local replica as it is, with no read barrier, so its result is not linearizable.
+``QUORUM`` and ``LOCAL_QUORUM``, which promise a linearizable read on such tables, are rejected.
 
 The statement can output rows with a non-full clustering prefix.
 
