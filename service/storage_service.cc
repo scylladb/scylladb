@@ -1394,6 +1394,26 @@ future<bool> storage_service::ongoing_rf_change(const group0_guard& guard, sstri
     co_return false;
 }
 
+future<std::optional<utils::UUID>> storage_service::ongoing_prepare_migration(const group0_guard& guard, sstring ks) const {
+    auto ongoing_ks_prepare = [&] (utils::UUID request_id) -> future<bool> {
+        auto req_entry = co_await _sys_ks.local().get_topology_request_entry(request_id);
+        co_return std::holds_alternative<global_topology_request>(req_entry.request_type) &&
+            std::get<global_topology_request>(req_entry.request_type) == global_topology_request::prepare_migration &&
+            req_entry.prepare_migration_ks_name.has_value() && req_entry.prepare_migration_ks_name.value() == ks;
+    };
+    if (auto request_id = _topology_state_machine._topology.global_request_id) {
+        if (co_await ongoing_ks_prepare(*request_id)) {
+            co_return request_id;
+        }
+    }
+    for (auto request_id : _topology_state_machine._topology.global_requests_queue) {
+        if (co_await ongoing_ks_prepare(request_id)) {
+            co_return request_id;
+        }
+    }
+    co_return std::nullopt;
+}
+
 future<> storage_service::raft_initialize_discovery_leader(const join_node_request_params& params) {
     if (params.replaced_id.has_value()) {
         throw std::runtime_error(::format("Cannot perform a replace operation because this is the first node in the cluster"));
@@ -4282,6 +4302,15 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
         const auto* trs = validate_keyspace_for_migration(db, ks_name, _topology_state_machine._topology);
         auto& ks = db.find_keyspace(ks_name);
         const auto& cf_meta_data = ks.metadata()->cf_meta_data();
+
+        // Preparing a keyspace means only one thing, so if a preparation of it is already
+        // queued or running, wait for that one and report how it ends rather than queue
+        // another one behind it.
+        if (auto ongoing = co_await ongoing_prepare_migration(guard, ks_name)) {
+            slogger.info("A preparation of keyspace '{}' is already in progress, waiting for it", ks_name);
+            request_id = *ongoing;
+            break;
+        }
 
         // A keyspace whose tables all have a map has nothing left to prepare, so don't
         // queue a request which would do nothing. The coordinator checks again, since a
