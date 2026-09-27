@@ -20,7 +20,6 @@
 #include <array>
 #include <chrono>
 #include <system_error>
-#include <linux/if_link.h>
 #include <seastar/core/file.hh>
 #include <seastar/core/seastar.hh>
 #include <seastar/core/fstream.hh>
@@ -45,7 +44,6 @@
 #include <seastar/util/closeable.hh>
 #include <seastar/core/condition-variable.hh>
 #include <seastar/coroutine/as_future.hh>
-#include <seastar/coroutine/exception.hh>
 #include "replica/logstor/write_buffer.hh"
 #include "utils/checked-file-impl.hh"
 #include "utils/dynamic_bitset.hh"

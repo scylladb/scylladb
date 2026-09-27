@@ -5,20 +5,21 @@
 /*
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
-#include "write_buffer.hh"
-#include "dht/token.hh"
-#include "bytes_fwd.hh"
-#include "logstor.hh"
-#include "replica/logstor/types.hh"
+#include "replica/logstor/write_buffer.hh"
+
 #include <chrono>
+
+#include <seastar/core/align.hh>
+#include <seastar/core/aligned_buffer.hh>
+#include <seastar/core/on_internal_error.hh>
 #include <seastar/core/simple-stream.hh>
 #include <seastar/core/timed_out_error.hh>
 #include <seastar/core/with_scheduling_group.hh>
-#include <seastar/core/on_internal_error.hh>
 #include <seastar/coroutine/as_future.hh>
-#include "serializer_impl.hh"
-#include <seastar/core/align.hh>
-#include <seastar/core/aligned_buffer.hh>
+
+#include "dht/token.hh"
+#include "replica/exceptions.hh"
+#include "replica/logstor/logstor.hh"
 
 namespace replica::logstor {
 

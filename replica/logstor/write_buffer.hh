@@ -13,21 +13,17 @@
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/gate.hh>
-#include <seastar/core/temporary_buffer.hh>
 #include <seastar/core/aligned_buffer.hh>
 #include <seastar/core/condition-variable.hh>
 #include <seastar/core/scheduling.hh>
 #include <seastar/core/semaphore.hh>
-#include <seastar/core/queue.hh>
 #include <seastar/core/simple-stream.hh>
 #include <seastar/core/shared_future.hh>
 #include <seastar/core/expiring_fifo.hh>
 #include <seastar/core/timed_out_error.hh>
+#include <seastar/core/timer.hh>
 
-#include "replica/exceptions.hh"
 #include "replica/logstor/ondisk.hh"
-#include "schema/schema_fwd.hh"
-#include "types.hh"
 #include "timeout_config.hh"
 
 namespace replica {
