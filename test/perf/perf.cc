@@ -183,6 +183,17 @@ void write_json_result(const std::string& filename, const aggregated_perf_result
     stats["mad tps"] = tps.median_absolute_deviation;
     stats["max tps"] = tps.max;
     stats["min tps"] = tps.min;
+    // The spread of a counter over the iterations, so that the difference between two runs can be
+    // compared with the noise within one.
+    auto write_spread = [&] (const std::string& name) {
+        const auto& s = agg.stats.at(name);
+        stats["median " + name] = s.median;
+        stats["mad " + name] = s.median_absolute_deviation;
+        stats["min " + name] = s.min;
+        stats["max " + name] = s.max;
+    };
+    write_spread("instructions_per_op");
+    write_spread("cpu_cycles_per_op");
     results["stats"] = std::move(stats);
 
     results["test_properties"]["type"] = test_type;
