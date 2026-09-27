@@ -1365,6 +1365,26 @@ future<bool> storage_service::ongoing_rf_change(const group0_guard& guard, sstri
     co_return false;
 }
 
+future<bool> storage_service::ongoing_prepare_migration(const group0_guard& guard, sstring ks) const {
+    auto ongoing_ks_prepare = [&] (utils::UUID request_id) -> future<bool> {
+        auto req_entry = co_await _sys_ks.local().get_topology_request_entry(request_id);
+        co_return std::holds_alternative<global_topology_request>(req_entry.request_type) &&
+            std::get<global_topology_request>(req_entry.request_type) == global_topology_request::prepare_migration &&
+            req_entry.prepare_migration_ks_name.has_value() && req_entry.prepare_migration_ks_name.value() == ks;
+    };
+    if (_topology_state_machine._topology.global_request_id.has_value()) {
+        if (co_await ongoing_ks_prepare(*_topology_state_machine._topology.global_request_id)) {
+            co_return true;
+        }
+    }
+    for (auto request_id : _topology_state_machine._topology.global_requests_queue) {
+        if (co_await ongoing_ks_prepare(request_id)) {
+            co_return true;
+        }
+    }
+    co_return false;
+}
+
 future<> storage_service::raft_initialize_discovery_leader(const join_node_request_params& params) {
     if (params.replaced_id.has_value()) {
         throw std::runtime_error(::format("Cannot perform a replace operation because this is the first node in the cluster"));
@@ -4215,6 +4235,14 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
         const auto* trs = validate_keyspace_for_migration(db, ks_name, _topology_state_machine._topology);
         auto& ks = db.find_keyspace(ks_name);
         const auto& cf_meta_data = ks.metadata()->cf_meta_data();
+
+        // Preparing the same keyspace twice is a no-op, since the coordinator skips the
+        // tables which already have a map, but it would report success for a request which
+        // did nothing. Reject it instead, the way an RF change does.
+        if (co_await ongoing_prepare_migration(guard, ks_name)) {
+            throw std::runtime_error(fmt::format(
+                    "A preparation of keyspace '{}' is already in progress, please retry later", ks_name));
+        }
 
         // A keyspace whose tables all have a map has nothing left to prepare, so don't
         // queue a request which would do nothing. The coordinator checks again, since a
