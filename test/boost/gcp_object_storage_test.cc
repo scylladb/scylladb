@@ -47,8 +47,10 @@
 #include "utils/http.hh"
 #include "utils/error_injection.hh"
 #include "utils/rjson.hh"
+#include "utils/exceptions.hh"
 
 #include <seastar/core/metrics_api.hh>
+#include <seastar/util/defer.hh>
 #include <seastar/testing/test_fixture.hh>
 
 using namespace std::string_view_literals;
@@ -289,6 +291,48 @@ SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_readable_file, local_gcs_wrapper, *ch
 
     // A range running past the end of the object is answered short by design.
     BOOST_REQUIRE_EQUAL(co_await f.dma_read(object_size - 100, buf.get_write(), buf.size()), 100);
+
+    co_await f.close();
+}
+
+// A reply that carried the whole object instead of the range delivers the right
+// number of bytes from offset zero, so the length check cannot see it. Only
+// error injection can produce one -- fake-gcs answers the range it was asked for.
+SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_readable_file_whole_object_reply, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    testlog.debug("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+    co_return;
+#endif
+    auto& c = client();
+    auto name = make_name();
+    constexpr size_t object_size = 8192;
+
+    objects_to_delete.emplace_back(name);
+    co_await create_object_of_size(c, bucket, name, object_size);
+
+    auto f = c.make_readable_file(bucket, name);
+    auto buf = temporary_buffer<char>::aligned(f.memory_dma_alignment(), 4096);
+
+    testlog.info("A whole-object reply to a strict sub-range must fail");
+    utils::get_local_injector().enable("gcp_client_whole_object_reply");
+    auto disable_whole = seastar::defer([] () noexcept {
+        utils::get_local_injector().disable("gcp_client_whole_object_reply");
+    });
+    try {
+        co_await f.dma_read(0, buf.get_write(), buf.size());
+        BOOST_ERROR("a whole-object reply to a sub-range should not have produced a successful read");
+    } catch (const storage_io_error& e) {
+        // Check which error it is - a bare type check would also pass for a
+        // missing bucket or a refused credential.
+        BOOST_REQUIRE_EQUAL(e.code().value(), EIO);
+        BOOST_REQUIRE(std::string(e.what()).contains("answered the whole object"));
+    }
+
+    // The same reply to a request that already covers the whole object carries
+    // exactly the bytes that were asked for, so it has to keep working.
+    testlog.info("A whole-object reply to a whole-object request must succeed");
+    auto whole = temporary_buffer<char>::aligned(f.memory_dma_alignment(), object_size);
+    BOOST_REQUIRE_EQUAL(co_await f.dma_read(0, whole.get_write(), whole.size()), object_size);
 
     co_await f.close();
 }
