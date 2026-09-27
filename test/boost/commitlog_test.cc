@@ -28,6 +28,7 @@
 #include <seastar/core/metrics_api.hh>
 #include <seastar/core/file.hh>
 #include <seastar/core/seastar.hh>
+#include <seastar/core/sleep.hh>
 #include <seastar/util/noncopyable_function.hh>
 #include <seastar/util/closeable.hh>
 
@@ -1752,6 +1753,11 @@ SEASTAR_TEST_CASE(test_delete_recycled_segment_removes_size) {
     auto log = co_await commitlog::create_commitlog(cfg);
 
     auto max_file_size_bytes = (max_size_mb * 1024 * 1024);
+    // Reserve pre-alloc accounts its size only when done; racing delete_segments() skews recycling.
+    while (log.disk_footprint() < uint64_t(max_file_size_bytes)) {
+        co_await sleep(1ms);
+    }
+
     // we might be one segment over disk threshold. 
     auto max_shard_size_bytes = max_file_size_bytes + (cfg.commitlog_total_space_in_mb * 1024 * 1024) / this_smp_shard_count();
 
