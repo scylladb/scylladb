@@ -24,6 +24,7 @@
 #include <seastar/util/defer.hh>
 
 #include "mutation/canonical_mutation.hh"
+#include "replica/exceptions.hh"
 #include "replica/logstor/index.hh"
 #include "replica/logstor/logstor.hh"
 #include "replica/logstor/ondisk.hh"

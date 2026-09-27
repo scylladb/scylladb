@@ -7,12 +7,11 @@
  */
 
 #include "replica/logstor/segment_io.hh"
-#include "replica/logstor/logstor.hh"
 
 #include <seastar/core/align.hh>
 #include <seastar/core/simple-stream.hh>
+#include <seastar/util/log.hh>
 
-#include "replica/logstor/write_buffer.hh"
 #include "serializer_impl.hh"
 
 namespace replica::logstor {
