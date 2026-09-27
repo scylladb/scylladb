@@ -438,6 +438,14 @@ public:
                 httpclient::method_type::GET,
                 rest::key_values({{ RANGE, range }}),
                 _as);
+        // A body cut off in transit is caught and retried by the http client, so
+        // anything short here is a reply that described a different range than the
+        // one asked for.
+        if (result != to_read) {
+            throw storage_io_error(EIO, fmt::format("Short read of object {}:{}: asked for {} bytes at offset {}, got {}"
+                , _bucket, _object_name, to_read, pos, result
+            ));
+        }
         co_return result;
     }
 
