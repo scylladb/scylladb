@@ -146,22 +146,27 @@ void raw_write_buffer::write_header(segment_sequence segment_seq, std::optional<
     }
 }
 
-future<> write_buffer::complete_writes(segment_position buffer_position) {
-    _written.set_value(buffer_position);
-    co_await close();
-}
-
-future<> write_buffer::abort_writes(std::exception_ptr ex) {
-    if (!_written.available()) {
-        _written.set_exception(std::move(ex));
+size_t raw_write_buffer::estimate_required_segments(size_t record_bytes, size_t record_count, size_t segment_size, segment_kind kind) {
+    if (record_count == 0 || record_bytes == 0) {
+        return 0;
     }
 
-    // Mixed buffers keep copies of their records for separator rewriting. A failed flush has no
-    // separator pass to consume them, and they were never written anywhere, so drop them.
-    _records_copy.clear();
+    const size_t fixed_overhead = buffer_headers_size(kind);
 
-    co_await close();
+    if (segment_size <= fixed_overhead) {
+        return 1;
+    }
+
+    const auto usable_bytes = segment_size - fixed_overhead;
+    auto records_per_segment = (usable_bytes * record_count) / record_bytes;
+    if (records_per_segment == 0) {
+        records_per_segment = 1;
+    }
+    return (record_count + records_per_segment - 1) / records_per_segment;
 }
+
+template raw_write_buffer::append_result raw_write_buffer::append<log_record_writer>(const log_record_writer&);
+template raw_write_buffer::append_result raw_write_buffer::append<log_record_bytes_writer>(const log_record_bytes_writer&);
 
 // write_buffer
 
@@ -219,34 +224,29 @@ future<record_location_with_holder> write_buffer::write(Writer writer, write_tar
     });
 }
 
-template future<record_location_with_holder> write_buffer::write<log_record_writer>(log_record_writer, write_target);
-template future<record_location_with_holder> write_buffer::write<log_record_bytes_writer>(log_record_bytes_writer, write_target);
+future<> write_buffer::complete_writes(segment_position buffer_position) {
+    _written.set_value(buffer_position);
+    co_await close();
+}
 
-template raw_write_buffer::append_result raw_write_buffer::append<log_record_writer>(const log_record_writer&);
-template raw_write_buffer::append_result raw_write_buffer::append<log_record_bytes_writer>(const log_record_bytes_writer&);
+future<> write_buffer::abort_writes(std::exception_ptr ex) {
+    if (!_written.available()) {
+        _written.set_exception(std::move(ex));
+    }
+
+    // Mixed buffers keep copies of their records for separator rewriting. A failed flush has no
+    // separator pass to consume them, and they were never written anywhere, so drop them.
+    _records_copy.clear();
+
+    co_await close();
+}
 
 std::vector<write_buffer::record_in_buffer> write_buffer::take_separator_records() {
     return std::move(_records_copy);
 }
 
-size_t raw_write_buffer::estimate_required_segments(size_t record_bytes, size_t record_count, size_t segment_size, segment_kind kind) {
-    if (record_count == 0 || record_bytes == 0) {
-        return 0;
-    }
-
-    const size_t fixed_overhead = buffer_headers_size(kind);
-
-    if (segment_size <= fixed_overhead) {
-        return 1;
-    }
-
-    const auto usable_bytes = segment_size - fixed_overhead;
-    auto records_per_segment = (usable_bytes * record_count) / record_bytes;
-    if (records_per_segment == 0) {
-        records_per_segment = 1;
-    }
-    return (record_count + records_per_segment - 1) / records_per_segment;
-}
+template future<record_location_with_holder> write_buffer::write<log_record_writer>(log_record_writer, write_target);
+template future<record_location_with_holder> write_buffer::write<log_record_bytes_writer>(log_record_bytes_writer, write_target);
 
 // write_buffer_pool
 
