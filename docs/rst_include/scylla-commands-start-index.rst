@@ -10,7 +10,5 @@
 
       .. code-block:: shell
 
-         docker exec -it some-scylla supervisorctl start scylla
-
-      (with *some-scylla* container already running)
+         docker start some-scylla
                

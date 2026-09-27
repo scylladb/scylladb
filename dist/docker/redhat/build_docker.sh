@@ -82,8 +82,6 @@ packages=(
 
 bcp "${packages[@]}" packages/
 
-bcp dist/docker/etc etc/
-
 bcp dist/docker/scyllasetup.py /scyllasetup.py
 bcp dist/docker/commandlineparser.py /commandlineparser.py
 bcp dist/docker/docker-entrypoint.py /docker-entrypoint.py
@@ -94,9 +92,8 @@ bcp LICENSE-ScyllaDB-Source-Available.md /licenses/
 
 run microdnf clean all
 run microdnf --setopt=tsflags=nodocs -y --nobest update
-run microdnf --setopt=tsflags=nodocs -y install hostname kmod procps-ng python3 python3-pip systemd
+run microdnf --setopt=tsflags=nodocs -y install hostname kmod procps-ng python3 systemd
 run curl -L --output /etc/yum.repos.d/scylla.repo ${repo_file_url}
-run pip3 install --no-cache-dir --prefix /usr supervisor
 run bash -ec "echo LANG=C.UTF-8 > /etc/locale.conf"
 run bash -ec "rpm -ivh packages/*.rpm"
 run bash -ec "cat /scylla_bashrc >> /etc/bash.bashrc"
