@@ -64,53 +64,41 @@ bool raw_write_buffer::has_data() const noexcept {
     return serialized_size() > buffer_headers_size();
 }
 
-template <std::invocable<raw_write_buffer::ostream&> WriteFrame>
-raw_write_buffer::append_result raw_write_buffer::append_record(const record_header& header,
-        size_t header_size, size_t value_size, WriteFrame write_frame) {
-    const auto record_size = header_size + value_size;
-    if (!can_fit(record_size)) {
-        throw std::runtime_error(fmt::format("Write size {} exceeds buffer size {}", record_size, _stream.size()));
-    }
-    if (record_size == 0) {
-        throw std::runtime_error("Cannot write empty record");
-    }
+template <log_record_writer_concept Writer>
+raw_write_buffer::append_result raw_write_buffer::append(const Writer& writer) {
+    const auto& header = writer.header();
+    const size_t header_size = writer.header_size();
+    const size_t value_size = writer.value_size();
 
     if (header_size < ondisk::record_header_fixed_size) {
         on_internal_error(logstor_logger, fmt::format("Record header size {} is below its fixed size {}", header_size, ondisk::record_header_fixed_size));
+    }
+
+    const auto record_size = header_size + value_size;
+    if (!can_fit(record_size)) {
+        throw std::runtime_error(fmt::format("Record of size {} does not fit the {} bytes left in the buffer", record_size, _stream.size()));
     }
 
     const size_t frame_offset = serialized_size();
     const size_t frame_size = ondisk::record_frame_size(header_size, value_size);
 
     auto frame_out = _stream.write_substream(frame_size);
-    write_frame(frame_out);
+    writer.write_frame(frame_out);
     if (frame_out.size() != 0) {
         on_internal_error(logstor_logger, fmt::format("Record frame of {} bytes left {} unwritten", frame_size, frame_out.size()));
     }
 
+    pad_to_alignment(ondisk::record_alignment);
+
     _record_bytes += frame_size;
     _record_count++;
-    if (!_min_token || header.key.token() < *_min_token) {
-        _min_token = header.key.token();
-    }
-    if (!_max_token || header.key.token() > *_max_token) {
-        _max_token = header.key.token();
-    }
-
-    // Add padding to align the record frame
-    pad_to_alignment(ondisk::record_alignment);
+    _min_token = _min_token ? std::min(*_min_token, header.key.token()) : header.key.token();
+    _max_token = _max_token ? std::max(*_max_token, header.key.token()) : header.key.token();
 
     return append_result {
         .frame_offset = frame_offset,
         .frame_size = frame_size,
     };
-}
-
-template <log_record_writer_concept Writer>
-raw_write_buffer::append_result raw_write_buffer::append(const Writer& writer) {
-    return append_record(writer.header(), writer.header_size(), writer.value_size(), [&writer] (ostream& frame_out) {
-        writer.write_frame(frame_out);
-    });
 }
 
 size_t raw_write_buffer::sealed_size(size_t alignment) const noexcept {
@@ -126,16 +114,12 @@ void raw_write_buffer::pad_to_alignment(size_t alignment) {
     }
 }
 
-void raw_write_buffer::finalize(size_t alignment) {
-    _buffer_header.records_size = static_cast<uint32_t>(serialized_size() - buffer_headers_size());
-    pad_to_alignment(alignment);
-}
-
 void raw_write_buffer::seal(segment_sequence segment_seq, std::optional<table_id> table, size_t alignment) {
     if (_sealed) {
         throw std::runtime_error("Cannot seal write buffer more than once");
     }
-    finalize(alignment);
+    _buffer_header.records_size = static_cast<uint32_t>(serialized_size() - buffer_headers_size());
+    pad_to_alignment(alignment);
     write_header(segment_seq, table);
     _sealed = true;
 }

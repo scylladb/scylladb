@@ -270,11 +270,7 @@ private:
     // table is set for segment_kind::full
     void write_header(segment_sequence segment_seq, std::optional<table_id> table);
 
-    template <std::invocable<ostream&> WriteFrame>
-    append_result append_record(const record_header& header, size_t header_size, size_t value_size, WriteFrame write_frame);
-
     void pad_to_alignment(size_t alignment);
-    void finalize(size_t alignment);
 
     friend class write_buffer;
 };
@@ -339,7 +335,7 @@ public:
     size_t record_bytes() const noexcept { return _raw.record_bytes(); }
     size_t record_count() const noexcept { return _raw.record_count(); }
 
-    size_t sealed_size(size_t alignment) {
+    size_t sealed_size(size_t alignment) const noexcept {
         return _raw.sealed_size(alignment);
     }
 
