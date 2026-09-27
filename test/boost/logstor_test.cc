@@ -834,7 +834,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_write_buffer_pool_builds_buffers_on_demand
     BOOST_REQUIRE_EQUAL(pool.used_buffer_count(), 2u);
     BOOST_REQUIRE_EQUAL(pool.allocated_buffer_count(), 2u);
     BOOST_REQUIRE_EQUAL(pool.get_stats().buffers_created, 2u);
-    BOOST_REQUIRE_EQUAL(b0->get_buffer_size(), 4u * 1024);
+    BOOST_REQUIRE_EQUAL(b0->buffer_size(), 4u * 1024);
 
     close_and_return(std::move(b0));
     close_and_return(std::move(b1));

@@ -185,7 +185,7 @@ write_buffer::write_buffer(size_t buffer_size, segment_kind kind)
         : _raw(buffer_size, kind)
 {
     if (with_record_copy()) {
-        _records_copy.reserve(_raw.get_buffer_size() / 100);
+        _records_copy.reserve(_raw.buffer_size() / 100);
     }
 }
 
@@ -687,7 +687,7 @@ future<buffered_write_result> buffered_writer::write_to_buffer(log_record_writer
     // later rewrites it into, so it is bounded by whichever of the two takes less: one that only
     // fits the buffer it is written to first would be accepted here and then never fit anywhere the
     // separator could put it.
-    const size_t max_size = raw_write_buffer::max_record_size_any_kind(head_buf().get_buffer_size());
+    const size_t max_size = raw_write_buffer::max_record_size_any_kind(head_buf().buffer_size());
     if (writer.record_size() > max_size) [[unlikely]] {
         return make_exception_future<buffered_write_result>(std::runtime_error(
                 fmt::format("Write size {} exceeds the maximum record size {}", writer.record_size(), max_size)));
