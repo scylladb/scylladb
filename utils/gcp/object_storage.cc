@@ -426,6 +426,19 @@ public:
                         throw failed_operation(fmt::format("Could not read object {}:{} ({}/{} - {})",
                                 _bucket, _object_name, pos, _size, int(rep._status)));
                     }
+                    auto status = rep._status;
+                    utils::get_local_injector().inject("gcp_client_whole_object_reply", [&status] {
+                        status = seastar::http::reply::status_type::ok;
+                    });
+                    // 200 means the reply carries the whole object rather than the
+                    // range, and copying its first to_read bytes would give the right
+                    // count from the wrong offset. A request that already covers the
+                    // whole object is answered this way legitimately.
+                    if (status == seastar::http::reply::status_type::ok && (pos != 0 || to_read != _size)) {
+                        throw storage_io_error(EIO, fmt::format("Read of {}:{} answered the whole object for the {} bytes asked for at offset {}"
+                            , _bucket, _object_name, to_read, pos
+                        ));
+                    }
                     auto bufs = co_await util::read_entire_stream(in);
                     auto dst = reinterpret_cast<char*>(buffer);
                     for (auto& buf : bufs) {
