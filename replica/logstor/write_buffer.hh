@@ -210,10 +210,6 @@ public:
         return can_fit(writer.record_size());
     }
 
-    bool can_fit(size_t header_size, size_t value_size) const noexcept {
-        return can_fit(header_size + value_size);
-    }
-
     bool has_data() const noexcept;
 
     // The largest record - record header and value, the frame header aside - that fits an
