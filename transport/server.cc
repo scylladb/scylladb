@@ -11,6 +11,7 @@
 #include "cql3/statements/batch_statement.hh"
 #include "cql3/statements/modification_statement.hh"
 #include "cql3/statements/strong_consistency/batch_statement.hh"
+#include "cql3/statements/eventual_consistency/batch_executor.hh"
 #include "cql3/statements/strong_consistency/statement_helpers.hh"
 #include <seastar/core/scheduling.hh>
 #include <seastar/core/semaphore.hh>
@@ -2101,7 +2102,8 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
         }
         statement = ::make_shared<cql3::statements::strong_consistency::batch_statement>(cql3::statements::batch_statement::type(type.assume_value()), std::move(sc_modifications), cql3::attributes::none());
     } else {
-        statement = ::make_shared<cql3::statements::batch_statement>(cql3::statements::batch_statement::type(type.assume_value()), std::move(modifications), cql3::attributes::none(), qp.local().get_cql_stats());
+        statement = ::make_shared<cql3::statements::batch_statement>(cql3::statements::batch_statement::type(type.assume_value()), std::move(modifications), cql3::attributes::none(), qp.local().get_cql_stats(),
+                cql3::statements::eventual_consistency::batch_executor::instance());
     }
     statement->set_audit_info(std::move(ai));
 

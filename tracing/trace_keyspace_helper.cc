@@ -11,6 +11,7 @@
 #include "types/types.hh"
 #include "tracing/trace_keyspace_helper.hh"
 #include "cql3/statements/batch_statement.hh"
+#include "cql3/statements/eventual_consistency/batch_executor.hh"
 #include "cql3/statements/modification_statement.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/cql_config.hh"
@@ -406,7 +407,8 @@ future<> trace_keyspace_helper::apply_events_mutation(cql3::query_processor& qp,
 
         return do_with(
             cql3::query_options::make_batch_options(cql3::query_options(cql3::default_cql_config, db::consistency_level::ANY, std::nullopt, std::vector<cql3::raw_value>{}, false, cql3::query_options::specific_options::DEFAULT), std::move(values)),
-            cql3::statements::batch_statement(cql3::statements::batch_statement::type::UNLOGGED, std::move(modifications), cql3::attributes::none(), qp.get_cql_stats()),
+            cql3::statements::batch_statement(cql3::statements::batch_statement::type::UNLOGGED, std::move(modifications), cql3::attributes::none(), qp.get_cql_stats(),
+                    cql3::statements::eventual_consistency::batch_executor::instance()),
             [this, &qp] (auto& batch_options, auto& batch) {
                 return batch.execute(qp, _dummy_query_state, batch_options, std::nullopt).then([] (shared_ptr<cql_transport::messages::result_message> res) { return now(); });
             }
