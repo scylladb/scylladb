@@ -1586,9 +1586,7 @@ CREATE TYPE system.tablet_task_info (
 - `base_table`: Optionally set with the `table_id` of another table that this table is co-located with, meaning they always have the same tablet count and tablet replicas, and are migrated and resized together as a group. When `base_table` is set, the rest of the tablet map is empty, and the tablet map of `base_table` should be read instead. When `base_table` is NULL, this table has its own independent tablet map stored in the remaining columns.
 - `resize_type`: Resize decision type that spans all tablets of a given table (`merge`, `split`, or `none`)
 - `resize_seq_number`: Sequence number (>= 0) of the resize decision that globally identifies it. It's monotonically increasing, incremented by one for every new decision, so a higher value means it came later in time.
-- `repair_scheduler_config`: Configuration for the repair scheduler containing:
-  - `auto_repair_enabled`: When set to true, auto repair is enabled. Disabled by default.
-  - `auto_repair_threshold`: If the time since last repair is longer than `auto_repair_threshold` seconds, the tablet is eligible for auto repair.
+- `repair_scheduler_config`: Unused. Kept in the schema for compatibility; automatic repair is configured through the `auto_repair_enabled` and `auto_repair_threshold_in_seconds` cluster config options.
 
 **Per-Tablet Columns:**
 
