@@ -2198,7 +2198,7 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_sst
     co_return co_await perform_compaction<validate_sstables_compaction_task_executor>({.type = "sstables compaction"}, throw_if_stopping::no, info, &t, info.get_id(), std::move(all_sstables), quarantine_sstables);
 }
 
-class cleanup_sstables_compaction_task_executor : public compaction_task_executor, public cleanup_compaction_task_impl {
+class cleanup_sstables_compaction_task_executor : public compaction_task_executor {
     const compaction_type_options _cleanup_options;
     owned_ranges_ptr _owned_ranges_ptr;
     compacting_sstable_registration _compacting;
@@ -2207,7 +2207,6 @@ public:
     cleanup_sstables_compaction_task_executor(compaction_manager& mgr, throw_if_stopping do_throw_if_stopping, compaction_group_view* t, tasks::task_id parent_id, compaction_type_options options, owned_ranges_ptr owned_ranges_ptr,
                                      std::vector<sstables::shared_sstable> candidates, compacting_sstable_registration compacting)
             : compaction_task_executor(mgr, do_throw_if_stopping, t, options.type(), sstring(to_string(options.type())))
-            , cleanup_compaction_task_impl(mgr._task_manager_module, tasks::task_id::create_random_id(), 0, "compaction group", t->schema()->ks_name(), t->schema()->cf_name(), "", parent_id)
             , _cleanup_options(std::move(options))
             , _owned_ranges_ptr(std::move(owned_ranges_ptr))
             , _compacting(std::move(compacting))
@@ -2217,29 +2216,16 @@ public:
         // will have more space available released by previous jobs.
         std::ranges::sort(_pending_cleanup_jobs, std::ranges::greater(), std::mem_fn(&compaction_descriptor::sstables_size));
         _cm._stats.pending_tasks += _pending_cleanup_jobs.size();
-        _status.progress_units = "bytes";
     }
 
     virtual ~cleanup_sstables_compaction_task_executor() = default;
-
-    virtual future<> release_resources() noexcept override {
+protected:
+    virtual void release() noexcept override {
         _cm._stats.pending_tasks -= _pending_cleanup_jobs.size();
         _pending_cleanup_jobs = {};
         _compacting.release_all();
         _owned_ranges_ptr = nullptr;
-        return make_ready_future();
-    }
-
-    virtual future<tasks::task_manager::task::progress> get_progress() const override {
-        return compaction_task_impl::get_progress(_compaction_data, _progress_monitor);
-    }
-
-    virtual void abort() noexcept override {
-        return compaction_task_executor::abort(_as);
-    }
-protected:
-    virtual future<> run() override {
-        return perform();
+        compaction_task_executor::release();
     }
 
     virtual future<compaction_manager::compaction_stats_opt>  do_run() override {
