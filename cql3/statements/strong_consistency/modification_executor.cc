@@ -7,6 +7,7 @@
  */
 
 #include "cql3/statements/strong_consistency/modification_executor.hh"
+#include "cql3/statements/strong_consistency/batch_executor.hh"
 
 #include "cql3/query_processor.hh"
 #include "cql3/statements/modification_statement.hh"
@@ -72,6 +73,10 @@ modification_executor::commit(const modification_statement& stmt, query_processo
         result->add_tablet_info_v2(std::move(*routing_info));
     }
     co_return std::move(result);
+}
+
+const cql3::statements::batch_executor& modification_executor::for_batch() const {
+    return batch_executor::instance();
 }
 
 const modification_executor& modification_executor::instance() {

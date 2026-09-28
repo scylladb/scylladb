@@ -20,7 +20,6 @@
 #include "idl/raft_storage.dist.impl.hh"
 
 #include "cql3/statements/batch_statement.hh"
-#include "cql3/statements/eventual_consistency/batch_executor.hh"
 #include "cql3/statements/modification_statement.hh"
 #include "cql3/query_processor.hh"
 
@@ -254,8 +253,7 @@ future<size_t> raft_sys_table_storage::do_store_log_entries_one_batch(const std:
         cql3::statements::batch_statement::type::UNLOGGED,
         std::move(batch_stmts),
         cql3::attributes::none(),
-        _qp.get_cql_stats(),
-        cql3::statements::eventual_consistency::batch_executor::instance());
+        _qp.get_cql_stats());
 
     co_await batch.execute(_qp, _dummy_query_state, batch_options, std::nullopt);
 

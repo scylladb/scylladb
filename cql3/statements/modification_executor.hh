@@ -25,6 +25,7 @@ class query_options;
 namespace statements {
 
 class modification_statement;
+class batch_executor;
 
 /*
  * How a modification reaches storage.
@@ -45,9 +46,10 @@ public:
     commit(const modification_statement& stmt, query_processor& qp,
             service::query_state& qs, const query_options& options) const = 0;
 
-    // Whether this commits through Raft. The native protocol handler asks,
-    // because a batch may not mix modifications that do with ones that do not.
-    virtual bool is_strongly_consistent() const { return false; }
+    // What commits a batch of modifications which reach storage this way. A
+    // batch asks its members, so that nothing which builds one has to know
+    // which backends there are.
+    virtual const batch_executor& for_batch() const = 0;
 };
 
 }

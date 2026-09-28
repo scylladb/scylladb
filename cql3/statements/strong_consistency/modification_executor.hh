@@ -25,7 +25,7 @@ public:
     commit(const modification_statement& stmt, query_processor& qp,
             service::query_state& qs, const query_options& options) const override;
 
-    bool is_strongly_consistent() const override { return true; }
+    const cql3::statements::batch_executor& for_batch() const override;
 
     // Stateless, so one instance serves every statement that writes this way.
     static const modification_executor& instance();
