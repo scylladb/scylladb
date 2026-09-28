@@ -23,6 +23,7 @@
 #include <seastar/core/gate.hh>
 #include <seastar/core/sharded.hh>
 
+#include "schema/schema_fwd.hh"
 #include "service/migration_listener.hh"
 #include "seastarx.hh"
 #include "utils/UUID.hh"
@@ -62,6 +63,18 @@ public:
     future<> wait_until_ready();
 
     std::optional<sstring> resolve_config(std::string_view config_name, const lookup_context& ctx) const;
+
+    // Resolve a table-oriented option for a table, by name, in the option's native type.
+    //
+    // Unlike the resolve_*_config() accessors below, these report absence instead of
+    // substituting the registered default. That is what a consumer keeping a fallback of its
+    // own (a scylla.yaml setting) needs to tell "nobody set this" from "set to the default".
+    // Absence means no scope stores an override, or the table is no longer in the local
+    // schema (dropped since the caller sampled its id); the consumer applies the same
+    // fallback either way. A `config_name` that is not a registered option is an internal
+    // error, not absence.
+    std::optional<bool> resolve_boolean_table_config(std::string_view config_name, table_id table) const;
+    std::optional<int64_t> resolve_integer_table_config(std::string_view config_name, table_id table) const;
 
     // Resolve an option and return its effective value in the option's native type, falling
     // back to the default registered for it when no scope in the chain stores an override.
@@ -183,6 +196,12 @@ private:
     std::optional<sstring> get_node_config(const utils::UUID& node_uuid, std::string_view config_name) const;
     std::optional<sstring> get_keyspace_config(std::string_view keyspace_name, std::string_view config_name) const;
     std::optional<sstring> get_table_config(std::string_view keyspace_name, std::string_view table_name, std::string_view config_name) const;
+
+    // The lookup context addressing a table's table-oriented chain (table -> keyspace ->
+    // cluster), or nullopt when the table is not in the local schema. Private so a consumer
+    // holding a table_id reads through the typed resolve_*_table_config() accessors rather
+    // than assembling a context itself.
+    std::optional<lookup_context> table_lookup_context(table_id table) const;
 
     // Look up `config_name` in a keyed scope map (dc/rack/node/keyspace/table):
     // nullopt if the key is absent or holds no such override. Shared by the

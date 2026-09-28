@@ -23,6 +23,8 @@
 #include "utils/overloaded_functor.hh"
 #include "utils/div_ceil.hh"
 #include "db/config.hh"
+#include "db/cluster_config_manager.hh"
+#include "db/cluster_config_registry.hh"
 #include "db/tablet_options.hh"
 #include "locator/load_sketch.hh"
 #include "replica/database.hh"
@@ -952,6 +954,7 @@ class load_balancer {
     size_t max_read_streaming_load;
 
     replica::database& _db;
+    const db::cluster_config_manager& _cluster_config_manager;
     token_metadata_ptr _tm;
     service::topology* _topology;
     db::system_keyspace* _sys_ks;
@@ -1063,7 +1066,7 @@ private:
         return streaming_infos;
     }
 public:
-    load_balancer(replica::database& db, token_metadata_ptr tm,
+    load_balancer(replica::database& db, const db::cluster_config_manager& cluster_config_manager, token_metadata_ptr tm,
             service::topology* topology,
             db::system_keyspace* sys_ks,
             locator::load_stats_ptr table_load_stats,
@@ -1074,6 +1077,7 @@ public:
         : _target_tablet_size(target_tablet_size)
         , _tablets_per_shard_goal(tablets_per_shard_goal)
         , _db(db)
+        , _cluster_config_manager(cluster_config_manager)
         , _tm(std::move(tm))
         , _topology(topology)
         , _sys_ks(sys_ks)
@@ -1208,19 +1212,44 @@ public:
         return std::nullopt;
     }
 
-    bool is_auto_repair_enabled(const std::optional<locator::repair_scheduler_config>& config) {
-        // Only check the yaml config for now
-        return _db.get_config().auto_repair_enabled_default();
+    struct auto_repair_settings {
+        bool enabled;
+        std::chrono::seconds threshold;
+    };
+
+    // The effective auto repair settings for a table: the auto_repair_enabled and
+    // auto_repair_threshold_in_seconds cluster config options resolved through the table -> keyspace
+    // -> cluster chain, or, for an option no scope sets, the node's yaml defaults
+    // (auto_repair_enabled_default, auto_repair_threshold_default_in_seconds).
+    auto_repair_settings resolve_auto_repair_settings(table_id table) {
+        namespace opt = db::cluster_config_registry::option_name;
+        auto enabled = _cluster_config_manager.resolve_boolean_table_config(opt::auto_repair_enabled, table)
+                .value_or(_db.get_config().auto_repair_enabled_default());
+        auto threshold = _cluster_config_manager.resolve_integer_table_config(opt::auto_repair_threshold_in_seconds, table)
+                .value_or(_db.get_config().auto_repair_threshold_default_in_seconds());
+        auto_repair_settings settings{
+            .enabled = enabled,
+            .threshold = std::chrono::seconds(threshold),
+        };
+        lblogger.debug("Auto repair settings for table {}: enabled={} threshold={}",
+                table, settings.enabled, settings.threshold);
+        return settings;
     }
 
     future<bool> needs_auto_repair(const locator::global_tablet_id& gid, const locator::tablet_info& info,
-            const std::optional<locator::repair_scheduler_config>& config, db_clock::duration diff,
-            service::auto_repair_stats& stats) {
+            const auto_repair_settings& settings, db_clock::duration diff, service::auto_repair_stats& stats) {
         if (utils::get_local_injector().enter("tablet_keep_repairing")) {
             lblogger.info("Forced auto-repair for tablet={}", gid);
             co_return true;
         }
-        if (!is_auto_repair_enabled(config)) {
+        if (!settings.enabled) {
+            co_return false;
+        }
+        // A threshold of 0 disables time-based auto repair. The time since the last repair is
+        // never negative, so comparing against 0 would select every tablet on every round.
+        // Negative values are not rejected by the registry yet and are treated as 0.
+        if (settings.threshold <= std::chrono::seconds::zero()) {
+            lblogger.debug("Skipped auto repair for tablet={}: time-based auto repair is disabled", gid);
             co_return false;
         }
         auto size = info.replicas.size();
@@ -1228,11 +1257,11 @@ public:
             lblogger.debug("Skipped auto repair for tablet={} replicas={}", gid, size);
             co_return false;
         }
-        auto threshold = _db.get_config().auto_repair_threshold_default_in_seconds();
-        auto repair_time_threshold = std::chrono::seconds(threshold);
         lblogger.trace("Check gid={} diff={} last_repair_time={} repair_time_threshold={}",
-                gid, diff, info.repair_time, repair_time_threshold);
-        if (diff < repair_time_threshold) {
+                gid, diff, info.repair_time, settings.threshold);
+        // Compared in whole seconds: converting the threshold to db_clock's milliseconds
+        // instead could overflow for a very large value.
+        if (std::chrono::duration_cast<std::chrono::seconds>(diff) < settings.threshold) {
             co_return false;
         }
         stats.needs_repair_nr++;
@@ -1344,14 +1373,13 @@ public:
             }
             const auto& tmap = _tm->tablets().get_tablet_map(table);
             co_await coroutine::maybe_yield();
-            auto config = tmap.get_repair_scheduler_config();
-            auto auto_repair_enabled = is_auto_repair_enabled(config);
+            auto settings = resolve_auto_repair_settings(table);
             auto now = db_clock::now();
             auto skip = utils::get_local_injector().inject_parameter<std::string_view>("tablet_repair_skip_sched");
             auto skip_tablets = skip ? split_string_to_tablet_id(*skip, ',') : std::unordered_set<locator::tablet_id>();
             co_await tmap.for_each_tablet([&] (locator::tablet_id id, const locator::tablet_info& info) -> future<> {
                 auto gid = locator::global_tablet_id{table, id};
-                if (auto_repair_enabled) {
+                if (settings.enabled) {
                     auto_repair_stats.enabled_nr++;
                 }
                 // Skip tablet that is in transitions.
@@ -1391,7 +1419,7 @@ public:
                 if (is_user_request) {
                     // This means the user has issued a repair request manually. Select it for repair scheduling.
                 } else {
-                    auto auto_repair = co_await needs_auto_repair(gid, info, config, diff, auto_repair_stats);
+                    auto auto_repair = co_await needs_auto_repair(gid, info, settings, diff, auto_repair_stats);
                     if (!auto_repair) {
                         co_return;
                     }
@@ -4737,6 +4765,7 @@ class tablet_allocator_impl : public tablet_allocator::impl
                             , public service::migration_listener::empty_listener {
     service::migration_notifier& _migration_notifier;
     replica::database& _db;
+    sharded<db::cluster_config_manager>& _cluster_config_manager;
     load_balancer_stats_manager _load_balancer_stats;
     scheduling_group _background;
     bool _stopped = false;
@@ -4748,7 +4777,7 @@ private:
             db::system_keyspace* sys_ks,
             locator::load_stats_ptr table_load_stats,
             std::unordered_set<host_id> skiplist) {
-        load_balancer lb(_db, tm, topology, sys_ks, std::move(table_load_stats), _load_balancer_stats,
+        load_balancer lb(_db, _cluster_config_manager.local(), tm, topology, sys_ks, std::move(table_load_stats), _load_balancer_stats,
             _db.get_config().target_tablet_size_in_bytes(),
             _db.get_config().tablets_per_shard_goal(),
             std::move(skiplist));
@@ -4757,9 +4786,11 @@ private:
         return lb;
     }
 public:
-    tablet_allocator_impl(tablet_allocator::config cfg, service::migration_notifier& mn, replica::database& db)
+    tablet_allocator_impl(tablet_allocator::config cfg, service::migration_notifier& mn, replica::database& db,
+            sharded<db::cluster_config_manager>& cluster_config_manager)
             : _migration_notifier(mn)
             , _db(db)
+            , _cluster_config_manager(cluster_config_manager)
             , _load_balancer_stats("load_balancer")
             , _background(cfg.background_sg)
     {
@@ -5068,8 +5099,9 @@ future<std::unordered_set<locator::global_tablet_id>> migration_plan::get_migrat
     co_return tablets;
 }
 
-tablet_allocator::tablet_allocator(config cfg, service::migration_notifier& mn, replica::database& db)
-    : _impl(std::make_unique<tablet_allocator_impl>(std::move(cfg), mn, db)) {
+tablet_allocator::tablet_allocator(config cfg, service::migration_notifier& mn, replica::database& db,
+        sharded<db::cluster_config_manager>& cluster_config_manager)
+    : _impl(std::make_unique<tablet_allocator_impl>(std::move(cfg), mn, db, cluster_config_manager)) {
 }
 
 future<> tablet_allocator::stop() {
