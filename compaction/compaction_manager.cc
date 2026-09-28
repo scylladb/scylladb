@@ -567,6 +567,7 @@ protected:
 };
 
 class major_compaction_task_executor : public compaction_task_executor, public major_compaction_task_impl {
+    bool _consider_only_existing_data;
 public:
     major_compaction_task_executor(compaction_manager& mgr,
             throw_if_stopping do_throw_if_stopping,
@@ -574,7 +575,8 @@ public:
             tasks::task_id parent_id,
             bool consider_only_existing_data)
         : compaction_task_executor(mgr, do_throw_if_stopping, t, compaction_type::Major, "Major compaction")
-        , major_compaction_task_impl(mgr._task_manager_module, tasks::task_id::create_random_id(), 0, "compaction group", t->schema()->ks_name(), t->schema()->cf_name(), "", parent_id, flush_mode::compacted_tables, consider_only_existing_data)
+        , major_compaction_task_impl(mgr._task_manager_module, tasks::task_id::create_random_id(), 0, "compaction group", t->schema()->ks_name(), t->schema()->cf_name(), "", parent_id)
+        , _consider_only_existing_data(consider_only_existing_data)
     {
         _status.progress_units = "bytes";
     }

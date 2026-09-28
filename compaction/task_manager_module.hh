@@ -72,12 +72,8 @@ public:
             std::string keyspace,
             std::string table,
             std::string entity,
-            tasks::task_id parent_id,
-            flush_mode fm = flush_mode::compacted_tables,
-            bool consider_only_existing_data = false) noexcept
+            tasks::task_id parent_id) noexcept
         : compaction_task_impl(module, id, sequence_number, std::move(scope), std::move(keyspace), std::move(table), std::move(entity), parent_id)
-        , _flush_mode(fm)
-        , _consider_only_existing_data(consider_only_existing_data)
     {}
 
     virtual std::string type() const override {
@@ -85,9 +81,6 @@ public:
     }
 
 protected:
-    flush_mode _flush_mode;
-    bool _consider_only_existing_data;
-
     virtual future<> run() override = 0;
 };
 
