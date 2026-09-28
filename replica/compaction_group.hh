@@ -18,7 +18,7 @@
 #include "compaction/compaction_manager.hh"
 #include "locator/tablets.hh"
 #include "replica/logstor/logstor_fwd.hh"
-#include "replica/logstor/types.hh"
+#include "replica/logstor/segment_types.hh"
 #include "sstables/sstable_set.hh"
 #include "utils/chunked_vector.hh"
 #include "db/commitlog/replay_position.hh"

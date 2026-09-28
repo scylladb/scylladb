@@ -17,7 +17,7 @@
 #include <seastar/core/when_all.hh>
 #include "replica/global_table_ptr.hh"
 #include "replica/logstor/logstor_fwd.hh"
-#include "replica/logstor/types.hh"
+#include "replica/logstor/segment_types.hh"
 #include "types/user.hh"
 #include "utils/assert.hh"
 #include "utils/hash.hh"
