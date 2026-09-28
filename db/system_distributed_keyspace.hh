@@ -221,6 +221,26 @@ public:
      */
     future<utils::chunked_vector<snapshot_remote_location_entry>> get_snapshot_remote_locations(std::string_view snapshot_name, db::consistency_level cl = db::consistency_level::LOCAL_QUORUM);
 
+    /* Deletes the snapshots row, Clearing a snapshot deletes this entry last,
+     * after everything else is gone, the entry acts as a commit marker for refs-based
+     * remote tables.*/
+    future<> delete_snapshot_entry(std::string_view snapshot_name,
+            db::consistency_level cl = db::consistency_level::QUORUM);
+
+    /* Deletes the snapshot's keyspace, table, node and remote-location rows.*/
+    future<> delete_snapshot_metadata(std::string_view snapshot_name,
+            db::consistency_level cl = db::consistency_level::LOCAL_QUORUM);
+
+    /* Deletes one snapshot_sstables partition. */
+    future<> delete_snapshot_sstables_partition(std::string_view snapshot_name, std::string_view ks, std::string_view table,
+            std::string_view dc, std::string_view rack,
+            db::consistency_level cl = db::consistency_level::LOCAL_QUORUM);
+
+    /* Deletes one snapshot_tablets partition. */
+    future<> delete_snapshot_tablets_partition(std::string_view snapshot_name, std::string_view ks, std::string_view table,
+            std::string_view dc,
+            db::consistency_level cl = db::consistency_level::LOCAL_QUORUM);
+
     /**
      * Add keyspaces to a snapshot
      */

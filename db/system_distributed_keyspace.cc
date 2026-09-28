@@ -1154,6 +1154,43 @@ future<> snapshot_table_helper::insert_snapshot_sstables(std::string_view snapsh
     co_await do_insert_snapshot_sstables(_qp, snapshot_name, ks, table, dc, rack, sstables, cl);
 }
 
+future<> snapshot_table_helper::delete_snapshot_entry(std::string_view snapshot_name, db::consistency_level cl) {
+    static const sstring query = format("DELETE FROM {}.{} WHERE name = ?",
+        system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOTS);
+    co_await _qp.execute_internal(query, cl, internal_distributed_query_state(),
+            { sstring(snapshot_name) }, cql3::query_processor::cache_internal::yes).discard_result();
+}
+
+future<> snapshot_table_helper::delete_snapshot_metadata(std::string_view snapshot_name, db::consistency_level cl) {
+    for (auto table : { system_distributed_keyspace::SNAPSHOT_KEYSPACES, system_distributed_keyspace::SNAPSHOT_TABLES,
+                        system_distributed_keyspace::SNAPSHOT_NODES, system_distributed_keyspace::SNAPSHOT_REMOTE_LOCATIONS }) {
+        co_await _qp.execute_internal(
+                format("DELETE FROM {}.{} WHERE snapshot_name = ?", system_distributed_keyspace::NAME, table),
+                cl, internal_distributed_query_state(),
+                { sstring(snapshot_name) }, cql3::query_processor::cache_internal::yes).discard_result();
+    }
+}
+
+future<> snapshot_table_helper::delete_snapshot_sstables_partition(std::string_view snapshot_name, std::string_view ks, std::string_view table,
+        std::string_view dc, std::string_view rack, db::consistency_level cl) {
+    static const sstring query = format("DELETE FROM {}.{}"
+        " WHERE snapshot_name = ? AND \"keyspace\" = ? AND \"table\" = ? AND datacenter = ? AND rack = ?",
+        system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_SSTABLES);
+    co_await _qp.execute_internal(query, cl, internal_distributed_query_state(),
+            { sstring(snapshot_name), sstring(ks), sstring(table), sstring(dc), sstring(rack) },
+            cql3::query_processor::cache_internal::yes).discard_result();
+}
+
+future<> snapshot_table_helper::delete_snapshot_tablets_partition(std::string_view snapshot_name, std::string_view ks, std::string_view table,
+        std::string_view dc, db::consistency_level cl) {
+    static const sstring query = format("DELETE FROM {}.{}"
+        " WHERE snapshot_name = ? AND keyspace_name = ? AND table_name = ? AND datacenter = ?",
+        system_distributed_keyspace::NAME, system_distributed_keyspace::SNAPSHOT_TABLETS);
+    co_await _qp.execute_internal(query, cl, internal_distributed_query_state(),
+            { sstring(snapshot_name), sstring(ks), sstring(table), sstring(dc) },
+            cql3::query_processor::cache_internal::yes).discard_result();
+}
+
 future<> snapshot_table_helper::delete_snapshot_tablet_entry(std::string_view snapshot_name, std::string_view ks, std::string_view table,
         std::string_view dc, dht::token first_token, db::consistency_level cl) {
     static const sstring query = format("DELETE FROM {}.{}"
