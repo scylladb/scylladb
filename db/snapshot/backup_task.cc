@@ -334,11 +334,18 @@ future<> backup_task_impl::worker::deleted_sstable(sstables::generation_type gen
 }
 
 future<> backup_task_impl::run() {
+    // Passing the abort source below requires this task to run on shard 0,
+    // where the snapshot lock lives. snapshot_ctl::start_backup() creates the
+    // task there; keep it that way, or the wait stops being abortable.
+    if (this_shard_id() != 0) {
+        throw std::runtime_error("backup task must run on shard 0");
+    }
+
     // do_backup() removes a file once it is fully uploaded, so we are actually
     // mutating snapshots.
     co_await _snap_ctl.run_snapshot_modify_operation([this] {
         return do_backup();
-    });
+    }, &_as);
     snap_log.info("Finished backup");
 }
 
