@@ -277,7 +277,7 @@ future<> hint_sender::send_one_mutation(frozen_mutation_and_schema m) {
 
 future<> hint_sender::send_one_hint(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fragmented_temporary_buffer buf, db::replay_position rp, gc_clock::duration secs_since_file_mod, const sstring& fname) {
     return _resource_manager.get_send_units_for(buf.size_bytes()).then([this, secs_since_file_mod, &fname, buf = std::move(buf), rp, ctx_ptr] (auto units) mutable {
-        ctx_ptr->mark_hint_as_in_progress(rp);
+        mark_hint_as_in_progress(*ctx_ptr, rp);
 
         // Future is waited on indirectly in `send_one_file()` (via `ctx_ptr->file_send_gate`).
         auto h = ctx_ptr->file_send_gate.hold();
@@ -328,8 +328,8 @@ future<> hint_sender::send_one_hint(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fr
             // Information about the error was already printed somewhere higher.
             // We just need to account in the ctx that sending of this hint has failed.
             if (!f.failed()) {
-                ctx_ptr->on_hint_send_success(rp);
-                auto new_bound = ctx_ptr->get_replayed_bound();
+                on_hint_send_success(*ctx_ptr, rp);
+                auto new_bound = get_replayed_bound(*ctx_ptr);
                 // Segments from other shards are replayed first and are considered to be "before" replay position 0.
                 // Update the sent upper bound only if it is a local segment.
                 if (new_bound.shard_id() == this_shard_id() && _sent_upper_bound_rp < new_bound) {
@@ -337,13 +337,13 @@ future<> hint_sender::send_one_hint(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fr
                     notify_replay_waiters();
                 }
             } else {
-                ctx_ptr->on_hint_send_failure(rp);
+                on_hint_send_failure(*ctx_ptr, rp);
             }
             f.ignore_ready_future();
         });
     }).handle_exception([this, ctx_ptr, rp] (auto eptr) {
         manager_logger.trace("hint_sender[{}]:send_one_hint: Exception occurred: {}", _ep_key, eptr);
-        ctx_ptr->on_hint_send_failure(rp);
+        on_hint_send_failure(*ctx_ptr, rp);
     });
 }
 
@@ -409,43 +409,43 @@ future<> hint_sender::wait_until_hints_are_replayed_up_to(abort_source& as, db::
     });
 }
 
-void hint_sender::send_one_file_ctx::mark_hint_as_in_progress(db::replay_position rp) {
-    in_progress_rps.insert(rp);
+void hint_sender::mark_hint_as_in_progress(send_one_file_ctx& ctx, db::replay_position rp) const {
+    ctx.in_progress_rps.insert(rp);
 }
 
-void hint_sender::send_one_file_ctx::on_hint_send_success(db::replay_position rp) noexcept {
-    in_progress_rps.erase(rp);
-    if (!last_succeeded_rp || *last_succeeded_rp < rp) {
-        last_succeeded_rp = rp;
+void hint_sender::on_hint_send_success(send_one_file_ctx& ctx, db::replay_position rp) const noexcept {
+    ctx.in_progress_rps.erase(rp);
+    if (!ctx.last_succeeded_rp || *ctx.last_succeeded_rp < rp) {
+        ctx.last_succeeded_rp = rp;
     }
 }
 
-void hint_sender::send_one_file_ctx::on_hint_send_failure(db::replay_position rp) noexcept {
-    in_progress_rps.erase(rp);
-    segment_replay_failed = true;
-    if (!first_failed_rp || rp < *first_failed_rp) {
-        first_failed_rp = rp;
+void hint_sender::on_hint_send_failure(send_one_file_ctx& ctx, db::replay_position rp) const noexcept {
+    ctx.in_progress_rps.erase(rp);
+    ctx.segment_replay_failed = true;
+    if (!ctx.first_failed_rp || rp < *ctx.first_failed_rp) {
+        ctx.first_failed_rp = rp;
     }
 }
 
-db::replay_position hint_sender::send_one_file_ctx::get_replayed_bound() const noexcept {
+db::replay_position hint_sender::get_replayed_bound(const send_one_file_ctx& ctx) const noexcept {
     // We are sure that all hints were sent _below_ the position which is the minimum of the following:
-    // - Position of the first hint that failed to be sent in this replay (first_failed_rp),
-    // - Position of the last hint which was successfully sent (last_succeeded_rp, inclusive bound),
-    // - Position of the lowest hint which is being currently sent (in_progress_rps.begin()).
+    // - Position of the first hint that failed to be sent in this replay (ctx.first_failed_rp),
+    // - Position of the last hint which was successfully sent (ctx.last_succeeded_rp, inclusive bound),
+    // - Position of the lowest hint which is being currently sent (ctx.in_progress_rps.begin()).
 
     db::replay_position rp;
-    if (first_failed_rp) {
-        rp = *first_failed_rp;
-    } else if (last_succeeded_rp) {
-        // It is always true that `first_failed_rp` <= `last_succeeded_rp`, so no need to compare
-        rp = *last_succeeded_rp;
+    if (ctx.first_failed_rp) {
+        rp = *ctx.first_failed_rp;
+    } else if (ctx.last_succeeded_rp) {
+        // It is always true that `ctx.first_failed_rp` <= `ctx.last_succeeded_rp`, so no need to compare
+        rp = *ctx.last_succeeded_rp;
         // We replayed _up to_ `last_attempted_rp`, so the bound is not strict; we can increase `pos` by one
         rp.pos++;
     }
 
-    if (!in_progress_rps.empty() && *in_progress_rps.begin() < rp) {
-        rp = *in_progress_rps.begin();
+    if (!ctx.in_progress_rps.empty() && *ctx.in_progress_rps.begin() < rp) {
+        rp = *ctx.in_progress_rps.begin();
     }
 
     return rp;

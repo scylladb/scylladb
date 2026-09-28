@@ -86,13 +86,6 @@ class hint_sender {
         std::optional<db::replay_position> last_succeeded_rp;
         std::set<db::replay_position> in_progress_rps;
         bool segment_replay_failed = false;
-
-        void mark_hint_as_in_progress(db::replay_position rp);
-        void on_hint_send_success(db::replay_position rp) noexcept;
-        void on_hint_send_failure(db::replay_position rp) noexcept;
-
-        // Returns a position below which hints were successfully replayed.
-        db::replay_position get_replayed_bound() const noexcept;
     };
 
 private:
@@ -278,6 +271,13 @@ private:
     /// \brief Return the amount of time we want to sleep after the current iteration.
     /// \return The time till the soonest event: flushing or re-sending.
     clock::duration next_sleep_duration() const;
+
+    void mark_hint_as_in_progress(send_one_file_ctx&, db::replay_position rp) const;
+    void on_hint_send_success(send_one_file_ctx&, db::replay_position rp) const noexcept;
+    void on_hint_send_failure(send_one_file_ctx&, db::replay_position rp) const noexcept;
+
+    // Returns a position below which hints were successfully replayed.
+    db::replay_position get_replayed_bound(const send_one_file_ctx&) const noexcept;
 };
 
 } // namespace internal
