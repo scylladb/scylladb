@@ -3221,6 +3221,25 @@
                      "paramType":"query"
                   }
                ]
+            },
+            {
+               "method":"DELETE",
+               "summary":"Clears the cluster snapshot with the given tag: releases its bucket refs and deletes the catalog rows.",
+               "type":"string",
+               "nickname":"clear_cluster_snapshot",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"tag",
+                     "description":"the tag of the snapshot to clear",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
             }
          ]
       },
