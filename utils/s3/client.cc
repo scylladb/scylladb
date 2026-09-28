@@ -393,7 +393,13 @@ void client::register_client_metrics() {
     defs.emplace_back(sm::make_gauge("refused_request_ratio", [this] { return _request_limiter->refused_ratio(); },
             sm::description("Smoothed share of S3 requests the endpoint is refusing"), {ep_label, request_op}));
 
-    _client_metrics.add_group("s3", defs);
+    try {
+        _client_metrics.add_group("s3", defs);
+    } catch (const seastar::metrics::double_registration& e) {
+        // Same race as group_client::register_metrics: a prior client for this
+        // endpoint can still be referenced. Must not throw from the request path.
+        s3l.warn("Not reporting s3 client metrics for {}: {}", _host, e.what());
+    }
 }
 
 future<client::group_client&> client::find_or_create_client() {
