@@ -531,6 +531,47 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_record_frame_round_trip) {
     }
 }
 
+// Checks that ondisk::read_record_frame() rejects a frame header that does not match the frame
+// it is read from, rather than cutting the key and the value in the wrong places. A size one short
+// of the frame is the case that would otherwise go unnoticed, since the reads it sizes all fit.
+SEASTAR_THREAD_TEST_CASE(test_logstor_record_frame_invalid_header) {
+    auto schema = make_kv_schema();
+    auto record = make_log_record(schema, "pk0", "a-value-of-some-length", api::timestamp_type(1));
+    const auto frame = serialize_record_frame(record);
+    const ondisk::record_frame_header good {
+        .key_size = uint32_t(record.header.key.key().representation().size()),
+        .value_size = uint32_t(record.value.size()),
+    };
+
+    auto read_with_header = [&] (ondisk::record_frame_header h) {
+        auto corrupt = frame;
+        seastar::simple_memory_output_stream out(corrupt.data(), ondisk::record_frame_header_size);
+        ser::serializer<ondisk::record_frame_header>::write(out, h);
+        seastar::simple_memory_input_stream in(corrupt.data(), corrupt.size());
+        return ondisk::read_record_frame(in);
+    };
+
+    BOOST_REQUIRE(read_with_header(good).value == record.value);
+
+    auto h = good;
+    h.value_size = 0;
+    BOOST_REQUIRE_THROW(read_with_header(h), std::runtime_error);
+
+    h = good;
+    h.key_size = ondisk::max_key_size + 1;
+    BOOST_REQUIRE_THROW(read_with_header(h), std::runtime_error);
+
+    for (int delta : {-1, 1}) {
+        h = good;
+        h.key_size += delta;
+        BOOST_REQUIRE_THROW(read_with_header(h), std::runtime_error);
+
+        h = good;
+        h.value_size += delta;
+        BOOST_REQUIRE_THROW(read_with_header(h), std::runtime_error);
+    }
+}
+
 // Checks that the record header encoding round-trips, including a key longer than the inline size of
 // managed_bytes, and that its size is the fixed part plus the key.
 SEASTAR_THREAD_TEST_CASE(test_logstor_record_header_round_trip) {

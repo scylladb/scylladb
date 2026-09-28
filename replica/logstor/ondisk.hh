@@ -95,7 +95,18 @@ struct record_frame_header {
 static constexpr size_t max_key_size = std::numeric_limits<uint16_t>::max();
 
 bool validate_header(const buffer_header& bh);
-bool validate_record_frame_header(const record_frame_header& frame_header);
+
+inline bool validate_record_frame_header(const record_frame_header& frame_header) noexcept {
+    // A record always carries an encoded value, so a zero value_size cannot come from a record
+    // this code wrote. It is what a scan sees in the zero-filled tail of a torn
+    // buffer, and rejecting it stops the scan there instead of walking the tail as a run of
+    // zero-length records. The key bound rejects a corrupt header before its key_size is
+    // trusted to size a read or an allocation.
+    return frame_header.value_size != 0 && frame_header.key_size <= max_key_size;
+}
+
+// Out of line so that the formatting and the throw stay out of the inlined read path.
+[[noreturn]] void throw_invalid_record_frame(const record_frame_header& frame_header, size_t frame_size);
 
 } // namespace ondisk
 } // namespace replica::logstor
@@ -302,8 +313,13 @@ void write_record_frame(Output& out, log_record_bytes_view record_view) {
 template <typename Input>
 log_record read_record_frame(Input& in) {
     auto frame_header = ser::serializer<record_frame_header>::read(in);
+    const size_t header_size = record_header_size(frame_header.key_size);
 
-    auto header_stream = in.read_substream(record_header_size(frame_header.key_size));
+    if (!validate_record_frame_header(frame_header) || header_size + frame_header.value_size != in.size()) [[unlikely]] {
+        throw_invalid_record_frame(frame_header, record_frame_header_size + in.size());
+    }
+
+    auto header_stream = in.read_substream(header_size);
     auto value_stream = in.read_substream(frame_header.value_size);
 
     return log_record {
