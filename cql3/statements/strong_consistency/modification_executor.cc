@@ -24,7 +24,7 @@ static logging::logger logger("sc_modification_statement");
 
 using result_message = cql_transport::messages::result_message;
 
-mutation get_mutation(const cql3::statements::modification_statement& stmt, const query_options& options,
+mutation get_mutation(const modification_statement& stmt, const query_options& options,
         api::timestamp_type ts, const modification_spec& spec) {
     const auto prefetch_data = update_parameters::prefetch_data(stmt.s);
     const auto ttl = stmt.get_time_to_live(options);
@@ -38,7 +38,7 @@ mutation get_mutation(const cql3::statements::modification_statement& stmt, cons
 }
 
 future<::shared_ptr<result_message>>
-modification_executor::commit(const cql3::statements::modification_statement& stmt, query_processor& qp, service::query_state& qs,
+modification_executor::commit(const modification_statement& stmt, query_processor& qp, service::query_state& qs,
         const query_options& options) const {
     validate_write_consistency_level(options.get_consistency());
     stmt.validate_primary_key(options);

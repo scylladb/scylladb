@@ -261,6 +261,10 @@ public:
     // prepared; see cql3::statements::modification_executor.
     const modification_executor& executor() const { return _executor; }
 
+    // True if this modification commits through Raft rather than storage_proxy.
+    // The native protocol handler asks, because a batch may not mix the two.
+    bool is_strongly_consistent() const;
+
     virtual json_cache_opt maybe_prepare_json_cache(const query_options& options) const;
 
     db::timeout_clock::duration get_timeout(const service::client_state& state, const query_options& options) const;

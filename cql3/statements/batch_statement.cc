@@ -22,7 +22,6 @@
 #include "db/large_data_handler.hh"
 #include "tracing/trace_state.hh"
 #include "utils/unique_view.hh"
-#include "cql3/statements/strong_consistency/statement_helpers.hh"
 #include "cql3/statements/strong_consistency/batch_statement.hh"
 
 template<typename T = void>
@@ -479,7 +478,7 @@ batch_statement::prepare(data_dictionary::database db, cql_stats& stats, const c
             have_multiple_cfs |= first_cf.value() != parsed->column_family();
         }
         auto statement = parsed->prepare(db, meta, stats);
-        if (strong_consistency::is_strongly_consistent(db, parsed->keyspace())) {
+        if (statement->is_strongly_consistent()) {
             has_sc_statements = true;
         } else {
             has_non_sc_statements = true;
@@ -505,7 +504,7 @@ batch_statement::prepare(data_dictionary::database db, cql_stats& stats, const c
     shared_ptr<cql_statement> statement;
     if (has_sc_statements) {
         auto sc_statements = statements | std::views::as_rvalue | std::views::transform([] (auto&& s) {
-            return strong_consistency::batch_statement::single_statement{::make_shared<strong_consistency::modification_statement>(std::move(s.statement))};
+            return strong_consistency::batch_statement::single_statement{std::move(s.statement)};
         }) | std::ranges::to<std::vector>();
         statement = ::make_shared<strong_consistency::batch_statement>(meta.bound_variables_size(), _type, std::move(sc_statements), std::move(prep_attrs));
     } else {
