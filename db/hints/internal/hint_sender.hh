@@ -93,6 +93,7 @@ private:
     // Segments to replay which were not created on this shard but were moved during rebalancing
     std::list<sstring> _foreign_segments_to_replay;
     replay_position _last_not_complete_rp;
+    // Supposed to be only updated via rewind_sent_replay_position_to().
     replay_position _sent_upper_bound_rp;
     std::unordered_map<table_schema_version, column_mapping> _last_schema_ver_to_column_mapping;
     state_set _state;

@@ -415,8 +415,7 @@ void hint_sender::on_hint_send_success(send_one_file_ctx& ctx, db::replay_positi
     // Segments from other shards are replayed first and are considered to be "before" replay position 0.
     // Update the sent upper bound only if it is a local segment.
     if (new_bound.shard_id() == this_shard_id() && _sent_upper_bound_rp < new_bound) {
-        _sent_upper_bound_rp = new_bound;
-        notify_replay_waiters();
+        rewind_sent_replay_position_to(new_bound);
     }
 }
 
