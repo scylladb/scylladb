@@ -190,7 +190,7 @@ This package contains the main scylla configuration file.
 %package kernel-conf
 Group:          Applications/Databases
 Summary:        Scylla configuration package for the Linux kernel
-Requires:       kmod sed
+Requires:       sed
 # tuned overwrites our sysctl settings
 Obsoletes:      tuned >= 2.11.0
 # tuned-profiles-oci (preinstalled on OCI images) hard-requires an exact
