@@ -221,7 +221,6 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     future<> leader_info_updater(raft_group_state& state, locator::global_tablet_id tablet, raft::group_id gid);
 
     void init_messaging_service();
-    future<> uninit_messaging_service();
 
     // Schedules a single attempt to move the group's raft configuration to the one
     // the tablet's current migration stage implies, unless an attempt is already in
@@ -276,6 +275,11 @@ public:
     // Called during node boot. Starts all raft::server instances corresponding
     // to the latest group0 state in the background.
     void start();
+
+    // Unregisters the RPC handlers, waiting for those that are running. Has to complete
+    // on every shard before stop() runs on any: a handler that runs on one shard
+    // forwards to another, whose stop() deletes the raft groups the handler uses.
+    future<> uninit_messaging_service();
 
     // Called during node shutdown. Waits for all raft::server instances to stop.
     future<> stop();

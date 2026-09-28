@@ -1181,8 +1181,9 @@ future<raft_server> groups_manager::acquire_server(table_id table_id, raft::grou
     //
     // Node shutdown also closes gates (groups_manager::stop() closes every gate
     // regardless of table existence), but it cannot race with us either: the
-    // strongly consistent coordinator, the only caller of acquire_server, is
-    // destroyed before groups_manager::stop() runs.
+    // strongly consistent coordinator is destroyed before groups_manager::stop()
+    // runs, and the RPC handlers that call this are unregistered on every shard
+    // before it; see uninit_messaging_service().
     if (!_db.column_family_exists(table_id)) {
         return make_exception_future<raft_server>(
             replica::no_such_column_family(table_id));
@@ -1255,8 +1256,6 @@ future<> groups_manager::stepdown_leaders() {
 }
 
 future<> groups_manager::stop() {
-    co_await uninit_messaging_service();
-
     if (!_started) {
         co_return;
     }
