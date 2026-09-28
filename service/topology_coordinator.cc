@@ -2610,7 +2610,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         }
                         break;
                     }
-                    if (advance_in_background(gid, tablet_state.repair, "repair", [&] () -> future<> {
+                    // The explicit object parameter copies the captures, `this` included, into
+                    // the coroutine frame. The captured references are used only before the
+                    // first suspension.
+                    if (advance_in_background(gid, tablet_state.repair, "repair",
+                            [this, &tmap, &tablet_state, gid] (this auto) -> future<> {
                         auto& tinfo = tmap.get_tablet_info(gid.tablet);
                         bool valid = tinfo.repair_task_info != nullptr;
                         if (!valid) {
