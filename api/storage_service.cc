@@ -2236,6 +2236,18 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
         }
     });
 
+    ss::clear_cluster_snapshot.set(r, [&snap_ctl](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        apilog.info("clear_cluster_snapshot: {}", req->get_query_params());
+        auto tag = req->get_query_param("tag");
+        try {
+            auto task_id = co_await snap_ctl.local().clear_cluster_snapshot(tag);
+            co_return json::json_return_type(fmt::to_string(task_id));
+        } catch (...) {
+            apilog.error("clear_cluster_snapshot failed: {:t}", std::current_exception());
+            throw;
+        }
+    });
+
     ss::del_snapshot.set(r, [&snap_ctl](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         apilog.info("del_snapshot: {}", req->get_query_params());
         auto tag = req->get_query_param("tag");
@@ -2362,6 +2374,7 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
 void unset_snapshot(http_context& ctx, routes& r) {
     ss::get_snapshot_details.unset(r);
     ss::take_snapshot.unset(r);
+    ss::clear_cluster_snapshot.unset(r);
     ss::del_snapshot.unset(r);
     ss::true_snapshots_size.unset(r);
     ss::scrub.unset(r);
