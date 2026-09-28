@@ -722,34 +722,16 @@ future<> compaction_manager::perform_major_compaction(compaction_group_view& t, 
     co_await perform_compaction<major_compaction_task_executor>({.type = major_compaction_task_type}, throw_if_stopping::no, info, &t, info.get_id(), consider_only_existing_data).discard_result();
 }
 
-class custom_compaction_task_executor : public compaction_task_executor, public compaction_task_impl {
+class custom_compaction_task_executor : public compaction_task_executor {
     noncopyable_function<future<>(::compaction::compaction_data&, compaction_progress_monitor&)> _job;
 
 public:
-    custom_compaction_task_executor(compaction_manager& mgr, throw_if_stopping do_throw_if_stopping, compaction_group_view* t, tasks::task_id parent_id, ::compaction::compaction_type type, sstring desc, noncopyable_function<future<>(::compaction::compaction_data&, compaction_progress_monitor&)> job)
+    custom_compaction_task_executor(compaction_manager& mgr, throw_if_stopping do_throw_if_stopping, compaction_group_view* t, ::compaction::compaction_type type, sstring desc, noncopyable_function<future<>(::compaction::compaction_data&, compaction_progress_monitor&)> job)
         : compaction_task_executor(mgr, do_throw_if_stopping, t, type, std::move(desc))
-        , compaction_task_impl(mgr._task_manager_module, tasks::task_id::create_random_id(), 0, "compaction group", t->schema()->ks_name(), t->schema()->cf_name(), "", parent_id)
         , _job(std::move(job))
-    {
-        _status.progress_units = "bytes";
-    }
+    {}
 
-    virtual std::string type() const override {
-        return fmt::format("{} compaction", compaction_type());
-    }
-
-    virtual future<tasks::task_manager::task::progress> get_progress() const override {
-        return compaction_task_impl::get_progress(_compaction_data, _progress_monitor);
-    }
-
-    virtual void abort() noexcept override {
-        return compaction_task_executor::abort(_as);
-    }
 protected:
-    virtual future<> run() override {
-        return perform();
-    }
-
     virtual future<compaction_manager::compaction_stats_opt> do_run() override {
         if (!can_proceed(throw_if_stopping::yes)) {
             co_return std::nullopt;
@@ -781,7 +763,7 @@ future<> compaction_manager::run_custom_job(compaction_group_view& t, compaction
         co_return;
     }
 
-    co_return co_await perform_compaction<custom_compaction_task_executor>({.type = fmt::format("{} compaction", type)}, do_throw_if_stopping, info, &t, info.get_id(), type, desc, std::move(job)).discard_result();
+    co_return co_await perform_compaction<custom_compaction_task_executor>({.type = fmt::format("{} compaction", type)}, do_throw_if_stopping, info, &t, type, desc, std::move(job)).discard_result();
 }
 
 future<> compaction_manager::update_static_shares(float static_shares) {
