@@ -93,10 +93,10 @@ bool hint_sender::can_send() noexcept {
     }
 }
 
-frozen_mutation_and_schema hint_sender::get_mutation(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fragmented_temporary_buffer& buf) {
+frozen_mutation_and_schema hint_sender::get_mutation(send_one_file_ctx& ctx, fragmented_temporary_buffer& buf) {
     hint_entry_reader hr(buf);
     auto& fm = hr.mutation();
-    auto& cm = get_column_mapping(std::move(ctx_ptr), fm, hr);
+    auto& cm = get_column_mapping(ctx, fm, hr);
     auto schema = _db.find_schema(fm.column_family_id());
 
     if (schema->version() != fm.schema_version()) {
@@ -108,15 +108,15 @@ frozen_mutation_and_schema hint_sender::get_mutation(lw_shared_ptr<send_one_file
     return {std::move(hr).mutation(), std::move(schema)};
 }
 
-const column_mapping& hint_sender::get_column_mapping(lw_shared_ptr<send_one_file_ctx> ctx_ptr, const frozen_mutation& fm, const hint_entry_reader& hr) {
-    auto cm_it = ctx_ptr->schema_ver_to_column_mapping.find(fm.schema_version());
-    if (cm_it == ctx_ptr->schema_ver_to_column_mapping.end()) {
+const column_mapping& hint_sender::get_column_mapping(send_one_file_ctx& ctx, const frozen_mutation& fm, const hint_entry_reader& hr) {
+    auto cm_it = ctx.schema_ver_to_column_mapping.find(fm.schema_version());
+    if (cm_it == ctx.schema_ver_to_column_mapping.end()) {
         if (!hr.get_column_mapping()) {
             throw no_column_mapping(fm.schema_version());
         }
 
         manager_logger.trace("hint_sender[{}]:get_column_mapping: new schema version {}", _ep_key, fm.schema_version());
-        cm_it = ctx_ptr->schema_ver_to_column_mapping.emplace(fm.schema_version(), *hr.get_column_mapping()).first;
+        cm_it = ctx.schema_ver_to_column_mapping.emplace(fm.schema_version(), *hr.get_column_mapping()).first;
     }
 
     return cm_it->second;
@@ -275,15 +275,15 @@ future<> hint_sender::send_one_mutation(frozen_mutation_and_schema m) {
     });
 }
 
-future<> hint_sender::send_one_hint(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fragmented_temporary_buffer buf, db::replay_position rp, gc_clock::duration secs_since_file_mod, const sstring& fname) {
-    return _resource_manager.get_send_units_for(buf.size_bytes()).then([this, secs_since_file_mod, &fname, buf = std::move(buf), rp, ctx_ptr] (auto units) mutable {
-        mark_hint_as_in_progress(*ctx_ptr, rp);
+future<> hint_sender::send_one_hint(send_one_file_ctx& ctx, fragmented_temporary_buffer buf, db::replay_position rp, gc_clock::duration secs_since_file_mod, const sstring& fname) {
+    return _resource_manager.get_send_units_for(buf.size_bytes()).then([this, secs_since_file_mod, &fname, buf = std::move(buf), rp, &ctx] (auto units) mutable {
+        mark_hint_as_in_progress(ctx, rp);
 
         // Future is waited on indirectly in `send_one_file()` (via `ctx_ptr->file_send_gate`).
-        auto h = ctx_ptr->file_send_gate.hold();
-        (void)std::invoke([this, secs_since_file_mod, &fname, buf = std::move(buf), rp, ctx_ptr] () mutable {
+        auto h = ctx.file_send_gate.hold();
+        (void)std::invoke([this, secs_since_file_mod, &fname, buf = std::move(buf), rp, &ctx] () mutable {
             try {
-                auto m = this->get_mutation(ctx_ptr, buf);
+                auto m = this->get_mutation(ctx, buf);
                 gc_clock::duration gc_grace_sec = m.s->gc_grace_seconds();
 
                 // The hint is too old - drop it.
@@ -298,10 +298,10 @@ future<> hint_sender::send_one_hint(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fr
                 }
 
                 const auto mutation_size = m.fm.representation().size();
-                return this->send_one_mutation(std::move(m)).then([this, ctx_ptr, mutation_size] {
+                return this->send_one_mutation(std::move(m)).then([this, mutation_size] {
                     ++this->shard_stats().sent_total;
                     this->shard_stats().sent_hints_bytes_total += mutation_size;
-                }).handle_exception([this, ctx_ptr] (auto eptr) {
+                }).handle_exception([this] (auto eptr) {
                     manager_logger.trace("hint_sender[{}]:send_one_hint: Failed to send: {}", end_point_key(), eptr);
                     ++this->shard_stats().send_errors;
                     return make_exception_future<>(std::move(eptr));
@@ -324,19 +324,19 @@ future<> hint_sender::send_one_hint(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fr
                 return make_exception_future<>(std::move(eptr));
             }
             return make_ready_future<>();
-        }).then_wrapped([this, units = std::move(units), rp, ctx_ptr, h = std::move(h)] (future<>&& f) {
+        }).then_wrapped([this, units = std::move(units), rp, &ctx, h = std::move(h)] (future<>&& f) {
             // Information about the error was already printed somewhere higher.
             // We just need to account in the ctx that sending of this hint has failed.
             if (!f.failed()) {
-                on_hint_send_success(*ctx_ptr, rp);
+                on_hint_send_success(ctx, rp);
             } else {
-                on_hint_send_failure(*ctx_ptr, rp);
+                on_hint_send_failure(ctx, rp);
             }
             f.ignore_ready_future();
         });
-    }).handle_exception([this, ctx_ptr, rp] (auto eptr) {
+    }).handle_exception([this, &ctx, rp] (auto eptr) {
         manager_logger.trace("hint_sender[{}]:send_one_hint: Exception occurred: {}", _ep_key, eptr);
-        on_hint_send_failure(*ctx_ptr, rp);
+        on_hint_send_failure(ctx, rp);
     });
 }
 
@@ -459,19 +459,19 @@ void hint_sender::rewind_sent_replay_position_to(db::replay_position rp) {
 bool hint_sender::send_one_file(const sstring& fname) {
     timespec last_mod = get_last_file_modification(fname).get();
     gc_clock::duration secs_since_file_mod = std::chrono::seconds(last_mod.tv_sec);
-    lw_shared_ptr<send_one_file_ctx> ctx_ptr = make_lw_shared<send_one_file_ctx>(_last_schema_ver_to_column_mapping);
+    send_one_file_ctx ctx = send_one_file_ctx(_last_schema_ver_to_column_mapping);
 
     struct canceled_draining_exception {};
 
     try {
-        commitlog::read_log_file(fname, manager::FILENAME_PREFIX, [this, secs_since_file_mod, &fname, ctx_ptr] (commitlog::buffer_and_replay_position buf_rp) -> future<> {
+        commitlog::read_log_file(fname, manager::FILENAME_PREFIX, [this, secs_since_file_mod, &fname, &ctx] (commitlog::buffer_and_replay_position buf_rp) -> future<> {
             auto& buf = buf_rp.buffer;
             auto& rp = buf_rp.position;
 
             while (true) {
                 // Check that we can still send the next hint. Don't try to send it if the destination host
                 // is DOWN or if we have already failed to send some of the previous hints.
-                if (!draining() && ctx_ptr->segment_replay_failed) {
+                if (!draining() && ctx.segment_replay_failed) {
                     co_return;
                 }
 
@@ -483,7 +483,7 @@ bool hint_sender::send_one_file(const sstring& fname) {
 
                 // Break early if stop() was called or the destination node went down.
                 if (!can_send()) {
-                    ctx_ptr->segment_replay_failed = true;
+                    ctx.segment_replay_failed = true;
                     co_return;
                 }
 
@@ -502,7 +502,7 @@ bool hint_sender::send_one_file(const sstring& fname) {
                     co_await sleep(std::chrono::milliseconds(100));
                     continue;
                 } else {
-                    co_await send_one_hint(ctx_ptr, std::move(buf), rp, secs_since_file_mod, fname);
+                    co_await send_one_hint(ctx, std::move(buf), rp, secs_since_file_mod, fname);
                     break;
                 }
             };
@@ -510,18 +510,18 @@ bool hint_sender::send_one_file(const sstring& fname) {
     } catch (db::commitlog::segment_error& ex) {
         manager_logger.error("hint_sender[{}]:send_one_file: Segment error in {}: {}. Last not complete position={}",
                 _ep_key, fname, ex.what(), _last_not_complete_rp);
-        ctx_ptr->segment_replay_failed = false;
+        ctx.segment_replay_failed = false;
         ++this->shard_stats().corrupted_files;
     } catch  (const canceled_draining_exception&) {
         manager_logger.debug("hint_sender[{}]:send_one_file: Loop in send_one_file finishes due to canceled draining", _ep_key);
     } catch (...) {
         manager_logger.debug("hint_sender[{}]:send_one_file: Sending of {} failed: {}. Last not complete position={}",
                 _ep_key, fname, std::current_exception(), _last_not_complete_rp);
-        ctx_ptr->segment_replay_failed = true;
+        ctx.segment_replay_failed = true;
     }
 
     // wait till all background hints sending is complete
-    ctx_ptr->file_send_gate.close().get();
+    ctx.file_send_gate.close().get();
 
     // If draining was canceled, we can't say anything about the segment's state,
     // so return immediately. We return false here because of that reason too.
@@ -530,17 +530,17 @@ bool hint_sender::send_one_file(const sstring& fname) {
     }
 
     // If we are draining ignore failures and drop the segment even if we failed to send it.
-    if (draining() && ctx_ptr->segment_replay_failed) {
+    if (draining() && ctx.segment_replay_failed) {
         manager_logger.debug("hint_sender[{}]:send_one_file: We are draining, so we are going to delete the segment anyway", _ep_key);
-        ctx_ptr->segment_replay_failed = false;
+        ctx.segment_replay_failed = false;
     }
 
     // update the next iteration replay position if needed
-    if (ctx_ptr->segment_replay_failed) {
+    if (ctx.segment_replay_failed) {
         // If some hints failed to be sent, first_failed_rp will tell the position of first such hint.
         // If there was an error thrown by read_log_file function itself, we will retry sending from
         // the last hint that was successfully sent (last_succeeded_rp).
-        _last_not_complete_rp = ctx_ptr->first_failed_rp.value_or(ctx_ptr->last_succeeded_rp.value_or(_last_not_complete_rp));
+        _last_not_complete_rp = ctx.first_failed_rp.value_or(ctx.last_succeeded_rp.value_or(_last_not_complete_rp));
         manager_logger.debug("hint_sender[{}]:send_one_file: Error while sending hints from {}, last RP is {}", _ep_key, fname, _last_not_complete_rp);
         return false;
     }

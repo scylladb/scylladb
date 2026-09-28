@@ -202,13 +202,13 @@ private:
     ///
     /// If sending fails we are going to set the state::segment_replay_failed in the _state and _first_failed_rp will be updated to min(_first_failed_rp, \ref rp).
     ///
-    /// \param ctx_ptr shared pointer to the file sending context
+    /// \param ctx file sending context
     /// \param buf buffer representing the hint
     /// \param rp replay position of this hint in the file (see commitlog for more details on "replay position")
     /// \param secs_since_file_mod last modification time stamp (in seconds since Epoch) of the current hints file
     /// \param fname name of the hints file this hint was read from
     /// \return future that resolves when next hint may be sent
-    future<> send_one_hint(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fragmented_temporary_buffer buf, db::replay_position rp, gc_clock::duration secs_since_file_mod, const sstring& fname);
+    future<> send_one_hint(send_one_file_ctx& ctx, fragmented_temporary_buffer buf, db::replay_position rp, gc_clock::duration secs_since_file_mod, const sstring& fname);
 
     /// \brief Send all hint from a single file and delete it after it has been successfully sent.
     /// Send all hints from the given file. If we failed to send the current segment we will pick up in the next
@@ -223,17 +223,17 @@ private:
     bool can_send() noexcept;
 
     /// \brief Restore a mutation object from the hints file entry.
-    /// \param ctx_ptr pointer to the send context
+    /// \param ctx send context
     /// \param buf hints file entry
     /// \return The mutation object representing the original mutation stored in the hints file.
-    frozen_mutation_and_schema get_mutation(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fragmented_temporary_buffer& buf);
+    frozen_mutation_and_schema get_mutation(send_one_file_ctx& ctx, fragmented_temporary_buffer& buf);
 
     /// \brief Get a reference to the column_mapping object for a given frozen mutation.
-    /// \param ctx_ptr pointer to the send context
+    /// \param ctx send context
     /// \param fm Frozen mutation object
     /// \param hr hint entry reader object
     /// \return
-    const column_mapping& get_column_mapping(lw_shared_ptr<send_one_file_ctx> ctx_ptr, const frozen_mutation& fm, const hint_entry_reader& hr);
+    const column_mapping& get_column_mapping(send_one_file_ctx& ctx, const frozen_mutation& fm, const hint_entry_reader& hr);
 
     /// \brief Send one mutation out.
     ///
