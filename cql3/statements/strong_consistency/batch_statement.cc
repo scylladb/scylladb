@@ -14,6 +14,7 @@
 #include "cql3/query_processor.hh"
 #include "service/strong_consistency/coordinator.hh"
 #include "cql3/statements/strong_consistency/statement_helpers.hh"
+#include "cql3/statements/strong_consistency/modification_executor.hh"
 #include "exceptions/exceptions.hh"
 
 namespace cql3::statements::strong_consistency {
@@ -60,25 +61,20 @@ future<shared_ptr<result_message>> batch_statement::execute_without_checking_exc
     std::optional<dht::decorated_key> batch_key;
     schema_ptr batch_schema;
 
-    struct statement_keys {
-        cql3::statements::modification_statement::json_cache_opt json_cache;
-        std::vector<dht::partition_range> keys;
-    };
-    std::vector<statement_keys> all_keys;
-    all_keys.reserve(_statements.size());
+    std::vector<modification_spec> specs;
+    specs.reserve(_statements.size());
 
     for (size_t i = 0; i < _statements.size(); ++i) {
         const auto& stmt = _statements[i].statement->inner_statement();
         const auto& statement_options = options.for_statement(i);
         stmt.validate_primary_key(statement_options);
-        auto json_cache = stmt.maybe_prepare_json_cache(statement_options);
-        auto keys = stmt.build_partition_keys(statement_options, json_cache);
+        modification_spec spec(stmt, statement_options);
 
-        if (keys.size() != 1 || !query::is_single_partition(keys[0])) {
+        if (spec.keys.size() != 1 || !query::is_single_partition(spec.keys[0])) {
             co_await coroutine::return_exception(exceptions::invalid_request_exception("Each statement in a strongly consistent batch must target a single partition"));
         }
 
-        auto key = keys[0].start()->value().as_decorated_key();
+        auto key = spec.keys[0].start()->value().as_decorated_key();
         if (!batch_key) {
             batch_key = key;
             batch_schema = stmt.s;
@@ -86,7 +82,7 @@ future<shared_ptr<result_message>> batch_statement::execute_without_checking_exc
             throw exceptions::invalid_request_exception("All statements in a strongly consistent batch must target the same partition");
         }
 
-        all_keys.push_back(statement_keys{std::move(json_cache), std::move(keys)});
+        specs.push_back(std::move(spec));
     }
 
     auto [coordinator, holder] = qp.acquire_strongly_consistent_coordinator();
@@ -97,7 +93,7 @@ future<shared_ptr<result_message>> batch_statement::execute_without_checking_exc
             std::optional<mutation> merged;
             for (size_t i = 0; i < _statements.size(); ++i) {
                 const auto& statement_options = options.for_statement(i);
-                auto m = _statements[i].statement->get_mutation(statement_options, ts, all_keys[i].json_cache, all_keys[i].keys);
+                auto m = get_mutation(_statements[i].statement->inner_statement(), statement_options, ts, specs[i]);
                 if (!merged) {
                     merged = std::move(m);
                 } else {
