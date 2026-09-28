@@ -16,6 +16,7 @@
 
 #undef SEASTAR_TESTING_MAIN
 #include <seastar/testing/test_case.hh>
+#include <seastar/testing/thread_test_case.hh>
 #include <seastar/util/closeable.hh>
 #include <seastar/util/defer.hh>
 #include <seastar/core/smp.hh>
@@ -23,6 +24,7 @@
 
 #include "db/cluster_config_manager.hh"
 #include "db/cluster_config_registry.hh"
+#include "db/config.hh"
 #include "exceptions/exceptions.hh"
 #include "replica/database.hh"
 #include "test/lib/cql_test_env.hh"
@@ -335,6 +337,19 @@ SEASTAR_TEST_CASE(test_callback_node_oriented_option_fires_for_local_node) {
         BOOST_REQUIRE_EQUAL(invocations, 2u);
         BOOST_REQUIRE_EQUAL(last_value.value_or(""), "9");
     });
+}
+
+// The registered defaults of the two auto repair options and the defaults of the deprecated
+// yaml options they replace must agree, since the scheduler uses the yaml value when no
+// scope stores an override.
+SEASTAR_THREAD_TEST_CASE(test_auto_repair_registry_defaults_match_yaml_defaults) {
+    db::config cfg;
+    const auto* enabled = db::cluster_config_registry::find("auto_repair_enabled");
+    const auto* threshold = db::cluster_config_registry::find("auto_repair_threshold_in_seconds");
+    BOOST_REQUIRE(enabled != nullptr);
+    BOOST_REQUIRE(threshold != nullptr);
+    BOOST_REQUIRE_EQUAL(std::get<bool>(enabled->default_value), cfg.auto_repair_enabled_default());
+    BOOST_REQUIRE_EQUAL(std::get<int64_t>(threshold->default_value), cfg.auto_repair_threshold_default_in_seconds());
 }
 
 // auto_repair_threshold_in_seconds is an integer option on the same table -> keyspace -> cluster chain

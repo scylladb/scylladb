@@ -65,14 +65,14 @@ constexpr std::array registry_options = {
         .description = "Enable automatic repair for tablet-based tables",
         .scopes = table_oriented_scopes,
         .min_version = version::v0,
-        .default_value = false,
+        .default_value = auto_repair_enabled_default,
     },
     option{
         .name = option_name::auto_repair_threshold_in_seconds,
         .description = "Time in seconds since the last repair after which a tablet is eligible for automatic repair; 0 disables time-based automatic repair",
         .scopes = table_oriented_scopes,
         .min_version = version::v0,
-        .default_value = int64_t(24 * 3600),
+        .default_value = auto_repair_threshold_default_seconds,
     },
 };
 
