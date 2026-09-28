@@ -76,6 +76,28 @@ static raft_ticker_type::duration get_tick_interval() {
             .value_or(raft_tick_interval);
 }
 
+// Returns the tokens the given group is responsible for: the range of the tablet it serves, or, for
+// a group which replaces the tablet's group once a resize is finalized, the range of the tablet it
+// will serve then. The range is the same before and after the finalization, and overlaps the
+// storage holding the group's data at both times.
+static dht::token_range token_range_of_group(const tablet_map& tablet_map, tablet_id tid, raft::group_id gid) {
+    if (tablet_map.get_tablet_raft_info(tid).group_id == gid) {
+        return tablet_map.get_token_range(tid);
+    }
+    // A child of this tablet's group. The left child of a split owns the tokens up to and
+    // including the split token, the right one the rest.
+    if (tablet_map.resize_decision().is_split()) {
+        const auto split_token = tablet_map.get_split_token(tid);
+        return tablet_map.get_token_range_after_split(
+                gid == tablet_map.get_split_child_gids(tid).first ? split_token : tablet_map.get_last_token(tid));
+    }
+    // A merge produces a single child, which owns every token of each of its parents. No merge
+    // decision is emitted for a strongly consistent table yet, so this is not exercised.
+    const auto [first, second] = tablet_map.sibling_tablets(tid);
+    return dht::token_range::make(*tablet_map.get_token_range(first).start_copy(),
+            *tablet_map.get_token_range(second.value_or(first)).end_copy());
+}
+
 class groups_manager::rpc_impl: public service::raft_rpc {
 public:
     rpc_impl(raft_state_machine& sm, netw::messaging_service& ms,
@@ -572,9 +594,10 @@ future<> groups_manager::wait_for_table_raft_groups_on_all_hosts(table_id table,
     });
 }
 
-future<> groups_manager::leader_info_updater(raft_group_state& state, global_tablet_id tablet, raft::group_id gid) {
+future<> groups_manager::leader_info_updater(raft_group_state& state, table_id table, raft::group_id gid,
+        dht::token_range range) {
     try {
-        const auto schema = _db.find_schema(tablet.table);
+        const auto schema = _db.find_schema(table);
         const auto server_id = state.server->id();
 
         while (true) {
@@ -583,7 +606,7 @@ future<> groups_manager::leader_info_updater(raft_group_state& state, global_tab
 
             if (current_leader == server_id) {
                 logger.debug("leader_info_updater({}-{}): current term {}, running read_barrier()",
-                    tablet, gid,
+                    table, gid,
                     current_term);
                 // We intentionally pass nullptr here. If the tablet is leaving this node,
                 // the Raft server will be aborted and the loop will break.
@@ -591,18 +614,30 @@ future<> groups_manager::leader_info_updater(raft_group_state& state, global_tab
                 // There's no reason to abort this operation in any other case.
                 co_await state.server->read_barrier(nullptr);
 
+                const auto last_timestamp = schema->table().get_max_timestamp_for_token_range(range);
+                if (!last_timestamp) {
+                    // This shard stores nothing for the group, so there is no clock here to seed
+                    // the term from. The tablet is not served here any more - the storage goes
+                    // when it leaves - and the group's own teardown follows. We end the fiber
+                    // rather than hand out timestamps this replica cannot back.
+                    logger.debug("leader_info_updater({}-{}): range {} is not stored by this shard, stopping",
+                        table, gid, range);
+                    state.leader_info = std::nullopt;
+                    state.leader_info_cond.broadcast();
+                    co_return;
+                }
                 state.leader_info = leader_info {
                     .term = current_term,
-                    .last_timestamp = schema->table().get_max_timestamp_for_tablet(tablet.tablet)
+                    .last_timestamp = *last_timestamp
                 };
                 logger.debug("leader_info_updater({}-{}): read_barrier() completed, "
                     "new leader term {}, last_timestamp {}",
-                    tablet, gid,
+                    table, gid,
                     state.leader_info->term,
                     state.leader_info->last_timestamp);
             } else if (state.leader_info) {
                 logger.debug("leader_info_updater({}-{}): this replica {} is no longer a leader, current leader {}",
-                    tablet, gid, server_id, current_leader);
+                    table, gid, server_id, current_leader);
                 state.leader_info = std::nullopt;
             }
             state.leader_info_cond.broadcast();
@@ -616,18 +651,18 @@ future<> groups_manager::leader_info_updater(raft_group_state& state, global_tab
     } catch (const raft::request_aborted&) {
         // thrown from read_barrier() and wait_for_state_change when the tablet leaves this shard
         logger.debug("leader_info_updater({}-{}): got raft::request_aborted {}",
-            tablet, gid, std::current_exception());
+            table, gid, std::current_exception());
     } catch (const raft::stopped_error&) {
         // thrown from read_barrier() and wait_for_state_change when the tablet leaves this shard
         logger.debug("leader_info_updater({}-{}): got raft::stopped_error {}",
-            tablet, gid, std::current_exception());
+            table, gid, std::current_exception());
     } catch (const replica::no_such_column_family&) {
         // thrown from find_schema() and schema->table() when the table is dropped
         logger.debug("leader_info_updater({}-{}): got replica::no_such_column_family {}",
-            tablet, gid, std::current_exception());
+            table, gid, std::current_exception());
     } catch (...) {
         on_internal_error(logger, ::format("leader_info_updater({}-{}): unexpected exception: {}",
-            tablet, gid, std::current_exception()));
+            table, gid, std::current_exception()));
     }
 }
 
@@ -1243,10 +1278,11 @@ void groups_manager::update(token_metadata_ptr new_tm) {
             if (!state.is_linked()) {
                 _starting_groups.push_back(state);
             }
-            chain_control_op(state, id, [&state, this, tablet, id, new_tm, g = state.gate] () mutable -> future<> {
+            const auto range = token_range_of_group(tablet_map, tid, id);
+            chain_control_op(state, id, [&state, this, tablet, id, new_tm, range, g = state.gate] () mutable -> future<> {
                 co_await start_raft_group(tablet, id, std::move(new_tm));
                 state.server = &_raft_gr.get_server(id);
-                state.leader_info_updater = leader_info_updater(state, tablet, id);
+                state.leader_info_updater = leader_info_updater(state, tablet.table, id, range);
 
                 // We want to make sure the server is ready to serve requests before
                 // we report it as started in wait_for_groups_to_start().
