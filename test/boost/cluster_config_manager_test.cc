@@ -337,6 +337,70 @@ SEASTAR_TEST_CASE(test_callback_node_oriented_option_fires_for_local_node) {
     });
 }
 
+// auto_repair_threshold_in_seconds is an integer option on the same table -> keyspace -> cluster chain
+// as auto_repair_enabled: each scope's override is stored and resolved in the option's native
+// type, the registered default applies when nothing is stored, and a non-integer value is
+// rejected before anything is written.
+SEASTAR_TEST_CASE(test_cluster_config_manager_resolves_auto_repair_threshold_in_seconds) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE KEYSPACE ks_cfg WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}").get();
+        e.execute_cql("CREATE TABLE ks_cfg.tbl (pk int PRIMARY KEY, v int)").get();
+
+        const auto* opt = db::cluster_config_registry::find("auto_repair_threshold_in_seconds");
+        BOOST_REQUIRE(opt != nullptr);
+        BOOST_REQUIRE(opt->type() == db::cluster_config_registry::value_type::integer);
+        BOOST_REQUIRE_EQUAL(std::get<int64_t>(opt->default_value), 24 * 3600);
+
+        db::cluster_config_manager::lookup_context ctx;
+        ctx.keyspace_name = "ks_cfg";
+        ctx.table_name = "tbl";
+
+        with_config_manager(e, [&] (sharded<db::cluster_config_manager>& mgr) {
+            BOOST_REQUIRE(!mgr.local().resolve_config("auto_repair_threshold_in_seconds", ctx));
+            BOOST_REQUIRE_EQUAL(mgr.local().resolve_integer_config(*opt, ctx), 24 * 3600);
+        });
+
+        e.execute_cql("ALTER CLUSTER WITH auto_repair_threshold_in_seconds = 3600").get();
+        with_config_manager(e, [&] (sharded<db::cluster_config_manager>& mgr) {
+            BOOST_REQUIRE_EQUAL(mgr.local().resolve_integer_config(*opt, ctx), 3600);
+        });
+
+        e.execute_cql("ALTER KEYSPACE ks_cfg WITH auto_repair_threshold_in_seconds = 7200").get();
+        with_config_manager(e, [&] (sharded<db::cluster_config_manager>& mgr) {
+            BOOST_REQUIRE_EQUAL(mgr.local().resolve_integer_config(*opt, ctx), 7200);
+        });
+
+        e.execute_cql("ALTER TABLE ks_cfg.tbl WITH auto_repair_threshold_in_seconds = 60").get();
+        with_config_manager(e, [&] (sharded<db::cluster_config_manager>& mgr) {
+            BOOST_REQUIRE_EQUAL(mgr.local().resolve_integer_config(*opt, ctx), 60);
+            ctx.table_name = std::nullopt;
+            BOOST_REQUIRE_EQUAL(mgr.local().resolve_integer_config(*opt, ctx), 7200);
+            ctx.table_name = "tbl";
+        });
+
+        // The cluster-scope statement and the table-scope property path report an invalid
+        // value through different exception types.
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("ALTER CLUSTER WITH auto_repair_threshold_in_seconds = 'abc'").get(),
+                exceptions::invalid_request_exception, [] (const exceptions::invalid_request_exception& ex) {
+            return std::string_view(ex.what()).find("Invalid value for cluster config 'auto_repair_threshold_in_seconds': expected 64-bit integer, got 'abc'") != std::string_view::npos;
+        });
+        BOOST_REQUIRE_EXCEPTION(e.execute_cql("ALTER TABLE ks_cfg.tbl WITH auto_repair_threshold_in_seconds = ''").get(),
+                exceptions::configuration_exception, [] (const exceptions::configuration_exception& ex) {
+            return std::string_view(ex.what()).find("Invalid value for property 'auto_repair_threshold_in_seconds': expected 64-bit integer, got ''") != std::string_view::npos;
+        });
+        with_config_manager(e, [&] (sharded<db::cluster_config_manager>& mgr) {
+            BOOST_REQUIRE_EQUAL(mgr.local().resolve_integer_config(*opt, ctx), 60);
+        });
+
+        e.execute_cql("ALTER TABLE ks_cfg.tbl WITH auto_repair_threshold_in_seconds = null").get();
+        e.execute_cql("ALTER KEYSPACE ks_cfg WITH auto_repair_threshold_in_seconds = null").get();
+        e.execute_cql("ALTER CLUSTER WITH auto_repair_threshold_in_seconds = null").get();
+        with_config_manager(e, [&] (sharded<db::cluster_config_manager>& mgr) {
+            BOOST_REQUIRE(!mgr.local().resolve_config("auto_repair_threshold_in_seconds", ctx));
+        });
+    });
+}
+
 // ALTER TABLE has no restriction on mixing registry-backed config properties (e.g.
 // auto_repair_enabled) with legacy schema properties (e.g. gc_grace_seconds) in the
 // same statement: the config write and the legacy schema rebuild target disjoint
