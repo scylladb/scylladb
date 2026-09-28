@@ -2544,6 +2544,13 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     // barrier at this stage used to be in.
                     transition_to_with_config_sync(locator::tablet_transition_stage::cleanup_target);
                     break;
+                case locator::tablet_transition_stage::sc_remove_pending:
+                    // Views of sc_rollback let the pending replica serve, so the barrier
+                    // drains the requests that may still be inside its raft server. The
+                    // sync then removes it from the group, and cleanup_target tears its
+                    // server down. Retried until it succeeds, like sc_rollback.
+                    transition_to_with_config_sync(locator::tablet_transition_stage::cleanup_target);
+                    break;
                 case locator::tablet_transition_stage::cleanup_target:
                     if (do_barrier()) {
                         if (advance_in_background(gid, tablet_state.cleanup, "cleanup_target",

@@ -630,6 +630,7 @@ static raft::config_member_set expected_raft_config(
         case tablet_transition_stage::restore:
         // The rollback path restores the old replica set.
         case tablet_transition_stage::sc_rollback:
+        case tablet_transition_stage::sc_remove_pending:
         case tablet_transition_stage::cleanup_target:
         case tablet_transition_stage::revert_migration:
             return to_voter_set(tinfo.replicas);
@@ -700,6 +701,9 @@ static bool hosts_raft_group(const locator::tablet_info& tinfo,
         // The rollback may be entered from sc_become_voter, where the pending replica
         // can already be a voter and the leader.
         case tablet_transition_stage::sc_rollback:
+        // The pending replica is removed by the sync of this stage, and tears its raft
+        // server down only at cleanup_target.
+        case tablet_transition_stage::sc_remove_pending:
             return locator::contains(tinfo.replicas, replica) || is_pending;
 
         case tablet_transition_stage::use_new:

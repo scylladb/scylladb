@@ -244,6 +244,9 @@ class coordinator::replica_selector {
                 // replica can already be a voter and the leader driving its own removal.
                 return current_plus_pending(tinfo, *trinfo);
 
+            case sc_remove_pending:
+                // The pending replica is no longer a voter by now: the rollback demoted
+                // it, or it was never promoted.
             case cleanup_target:
                 // The precondition of cleanup_target is that the pending replica is no
                 // longer a member of the raft group.
@@ -305,6 +308,7 @@ class coordinator::replica_selector {
                 return next(*trinfo);
 
             case sc_rollback:
+            case sc_remove_pending:
             case cleanup_target:
             case revert_migration:
                 // The rollback path keeps the old replica set, which never stopped
