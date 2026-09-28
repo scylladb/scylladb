@@ -133,19 +133,10 @@ void stats::register_stats() {
 }
 
 // Answers, for one request to a strongly consistent tablet, which replicas the request
-// may be served by, at the stage the tablet's migration is currently in.
+// may be served by: the serving set at the stage the tablet's migration is in.
 //
-// The answer depends on what the request needs. A request that has to reach the raft
-// leader may be sent to any replica that could currently be the leader: one that isn't
-// answers not_a_leader and names it, and the request is redirected. A read served from
-// local storage has no such second chance: a replica that doesn't have the data yet
-// returns a wrong result rather than a redirect, so it may only go to a replica that holds
-// the data. The two sets differ during a migration, and the second is a subset of the
-// first: a replica that holds the data can always be redirected to.
-//
-// Either set is made of the replica lists the tablet's metadata already holds, so nothing
-// is copied: the selector refers to those lists and looks replicas up in place. It owns
-// the effective replication map it was built from, which keeps that metadata alive.
+// The selector looks replicas up in the tablet's metadata in place, and owns the
+// effective replication map it was built from, which keeps that metadata alive.
 class coordinator::replica_selector {
     // One of the tablet's replica lists, optionally followed by the migration's pending
     // replica.
@@ -207,49 +198,47 @@ class coordinator::replica_selector {
                 "of a strongly consistent tablet", func, stage));
     }
 
-    // Replicas that may currently be the raft group's leader. This is the wider set,
-    // because it has to name every replica a redirect could legitimately come from - a
-    // leader missing from it would leave the request with nowhere to go.
-    static replica_set_view leader_capable(const locator::tablet_info& tinfo,
-            const locator::tablet_transition_info* trinfo) {
+    // The serving set of a strongly consistent tablet at the stage its migration is in:
+    // the replicas where a request with that view may run, whether it needs the raft leader
+    // or reads locally.
+    //
+    // It holds every voter the group may have while a view of the stage is live, so every
+    // leader a serving replica may name is in it. And every one of those voters is caught up
+    // and stays a member while such a view is live: the pending replica is promoted only
+    // after its snapshot transfer, and a replica is removed only after it is demoted and the
+    // requests of views in which it serves are drained. The serving sets of any two stages
+    // that can be live at once are nested, so a request is served within two routing hops.
+    // See "Strongly-consistent tablets" in docs/dev/topology-over-raft.md.
+    static replica_set_view serving(const locator::tablet_info& tinfo, const locator::tablet_transition_info* trinfo) {
         if (!trinfo) {
             return current(tinfo);
         }
 
-        // The pending replica joins the raft group as a non-voter at sc_add_nonvoter and
-        // is promoted at sc_become_voter, so it can win an election only from that stage
-        // on. A node that still sees an earlier stage can't be looking at a group where
-        // the promotion has already happened: the topology coordinator runs it only after
-        // the global barrier of sc_become_voter, which waits until no node holds a view
-        // of an earlier stage.
         using enum locator::tablet_transition_stage;
         switch (trinfo->stage) {
             case start_migration:
             case sc_add_nonvoter:
             case sc_snapshot_transfer:
+                // The pending replica is at most a non-voter, and nothing bounds how far
+                // behind it is until its snapshot transfer completes.
                 return current(tinfo);
 
             case sc_become_voter:
+                // The pending replica is promoted and the leaving one demoted, and either
+                // may lead. The leaving replica stays a member until the next stage's
+                // barrier has drained the requests of this one.
+            case sc_rollback:
+                // The same with the roles swapped: entered only from sc_become_voter, the
+                // rollback demotes the pending replica and promotes the leaving one.
                 return current_plus_pending(tinfo, *trinfo);
 
             case use_new:
-                // The precondition of use_new is that the leaving replica is no longer a
-                // member of the raft group, so it can no longer be the leader.
             case cleanup:
             case end_migration:
                 return next(*trinfo);
 
-            case sc_rollback:
-                // A rollback may be entered from sc_become_voter, where the pending
-                // replica can already be a voter and the leader driving its own removal.
-                return current_plus_pending(tinfo, *trinfo);
-
             case sc_remove_pending:
-                // The pending replica is no longer a voter by now: the rollback demoted
-                // it, or it was never promoted.
             case cleanup_target:
-                // The precondition of cleanup_target is that the pending replica is no
-                // longer a member of the raft group.
             case revert_migration:
                 return current(tinfo);
 
@@ -268,62 +257,7 @@ class coordinator::replica_selector {
                 // consistent tablet yet.
                 break;
         }
-        on_unexpected_stage("leader_capable", trinfo->stage);
-    }
-
-    // Replicas that hold the tablet's data at this stage.
-    //
-    // The pending replica joins this set at sc_become_voter and not before. That stage
-    // is published only after the snapshot transfer completed on it, which ends in a
-    // raft read barrier, which ends in waiting for the local state machine to apply up
-    // to the leader's read index. So from sc_become_voter on, the pending replica's
-    // staleness is ordinary follower lag; before it, nothing bounds it.
-    //
-    // Always a subset of leader_capable() for the same stage.
-    static replica_set_view readable(const locator::tablet_info& tinfo,
-            const locator::tablet_transition_info* trinfo) {
-        if (!trinfo) {
-            return current(tinfo);
-        }
-
-        using enum locator::tablet_transition_stage;
-        switch (trinfo->stage) {
-            case start_migration:
-            case sc_add_nonvoter:
-            case sc_snapshot_transfer:
-                // The pending replica is a member of the group by now, but nothing
-                // bounds how far behind it is until the snapshot transfer of
-                // sc_snapshot_transfer has completed - which is what publishing the next
-                // stage attests to.
-                return current(tinfo);
-
-            case sc_become_voter:
-            case use_new:
-            case cleanup:
-            case end_migration:
-                // The leaving replica still holds the data until the cleanup, but it is
-                // left out from here on so that this stays one set with the routing
-                // information drivers are given, and because by use_new it has torn its
-                // raft server down.
-                return next(*trinfo);
-
-            case sc_rollback:
-            case sc_remove_pending:
-            case cleanup_target:
-            case revert_migration:
-                // The rollback path keeps the old replica set, which never stopped
-                // holding the data.
-                return current(tinfo);
-
-            case write_both_read_old_fallback_cleanup:
-            case rebuild_repair:
-            case repair:
-            case end_repair:
-            case restore:
-                // See leader_capable().
-                break;
-        }
-        on_unexpected_stage("readable", trinfo->stage);
+        on_unexpected_stage("serving", trinfo->stage);
     }
 
     locator::effective_replication_map_ptr _erm;
@@ -337,17 +271,13 @@ class coordinator::replica_selector {
     replica_set_view _serving;
 
 public:
-    // `needs_leader` says whether the request has to be executed by the raft group's
-    // leader, which is true for writes and linearizable reads and false for a read that
-    // is served from local storage.
-    replica_selector(locator::effective_replication_map_ptr erm, table_id table, const dht::token& token,
-            bool needs_leader)
+    replica_selector(locator::effective_replication_map_ptr erm, table_id table, const dht::token& token)
         : _erm(std::move(erm))
         , _tablet_map(_erm->get_token_metadata().tablets().get_tablet_map(table))
         , _tablet_id(_tablet_map.get_tablet_id(token))
         , _tablet_info(_tablet_map.get_tablet_info(_tablet_id))
         , _trinfo(_tablet_map.get_tablet_transition_info(_tablet_id))
-        , _serving(needs_leader ? leader_capable(_tablet_info, _trinfo) : readable(_tablet_info, _trinfo))
+        , _serving(serving(_tablet_info, _trinfo))
     {}
 
     locator::tablet_id tablet_id() const {
@@ -400,13 +330,12 @@ public:
 
     // The routing information to hand back to a driver that sent `block` with the
     // request, or nullopt if the block matches the tablet's current version. That version
-    // is a hash of the replicas that hold the data, rotated to start with `leader`, so it
-    // is the same set a read is willing to be served from locally, and where a driver is
+    // is a hash of the serving set, rotated to start with `leader`, so where a driver is
     // told to go and where it will actually be answered agree. Nullopt as well when
-    // `leader` doesn't hold the data, or isn't known.
+    // `leader` isn't in the serving set, or isn't known.
     std::optional<locator::tablet_routing_info_v2> routing_info(raft::server_id leader,
             locator::tablet_version_block block) const {
-        auto replicas = readable(_tablet_info, _trinfo).materialize();
+        auto replicas = _serving.materialize();
         std::ranges::sort(replicas);
         const auto leader_it = std::ranges::find(replicas, locator::host_id{leader.uuid()}, &locator::tablet_replica::host);
         if (leader_it == replicas.end()) [[unlikely]] {
@@ -475,7 +404,7 @@ auto coordinator::create_operation_ctx(const schema& schema, const dht::token& t
                 schema.ks_name(), schema.cf_name()));
     }
 
-    replica_selector replicas(std::move(erm), schema.id(), token, needs_leader);
+    replica_selector replicas(std::move(erm), schema.id(), token);
 
     if (!replicas.may_serve_here()) {
         const auto group_id = replicas.group_id();
@@ -493,8 +422,6 @@ auto coordinator::create_operation_ctx(const schema& schema, const dht::token& t
             return make_ready_future<value_or_redirect<operation_ctx>>(
                 redirect_to_leader(replicas.closest_replica(_gossiper), _groups_manager, group_id));
         }
-        // Bounced to a replica that holds the data, never merely to one that could be
-        // the leader - the target serves the read itself, so it has to be able to.
         return make_ready_future<value_or_redirect<operation_ctx>>(redirect_to_replica(replicas.closest_replica(_gossiper)));
     }
 
