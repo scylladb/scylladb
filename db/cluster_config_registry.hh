@@ -57,6 +57,16 @@ enum class version : uint8_t {
 // option::type() is the index of the active alternative.
 using config_value = std::variant<std::string_view, int64_t, double, bool>;
 
+// The names of the registered options, for the subsystems that consume them. A consumer
+// looks its option up by one of these rather than by a bare literal, so that the registry
+// entry and its reader cannot drift apart without the compiler noticing.
+namespace option_name {
+
+inline constexpr std::string_view auto_repair_enabled = "auto_repair_enabled";
+inline constexpr std::string_view auto_repair_threshold_in_seconds = "auto_repair_threshold_in_seconds";
+
+}
+
 struct option {
     std::string_view name;
     std::string_view description;
