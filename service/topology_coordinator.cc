@@ -98,6 +98,12 @@ logging::logger rtlogger("raft_topology");
 // which the stage logic either retries or turns into a rollback.
 static constexpr auto tablet_config_sync_timeout = std::chrono::seconds(60);
 
+// How long one attempt at a strongly consistent tablet's snapshot transfer may take: the
+// RPC timeout and, on the pending replica, the deadline of the transfer's read barrier.
+// An attempt that runs out of it fails the tablet's streaming action, which the stage
+// logic either retries or turns into a rollback.
+static constexpr auto tablet_snapshot_transfer_timeout = std::chrono::minutes(5);
+
 locator::host_id to_host_id(raft::server_id id) {
     return locator::host_id{id.uuid()};
 }
@@ -2452,13 +2458,16 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         auto dst = trinfo.pending_replica->host;
                         if (is_strong_consistency) {
                             rtlogger.info("Initiating sc snapshot transfer ({}) of {} to {}", trinfo.transition, gid, *trinfo.pending_replica);
-                            const auto session_id = trinfo.session_id;
+                            const auto shard = trinfo.pending_replica->shard;
+                            const auto session = trinfo.session_id;
+                            const auto stage = locator::tablet_transition_stage_to_string(trinfo.stage);
                             const auto gids_and_group = gids | std::views::transform([&] (const auto& gid) {
                                 return std::make_pair(gid, tmap.get_tablet_raft_info(gid.tablet).group_id);
                             }) | std::ranges::to<std::vector>();
                             for (const auto& [tablet, group_id] : gids_and_group) {
                                 co_await ser::groups_manager_rpc_verbs::send_wait_for_snapshot_transfer(&_messaging,
-                                        dst, _as, raft::server_id(dst.uuid()), tablet, group_id, session_id.uuid());
+                                        dst, lowres_clock::now() + tablet_snapshot_transfer_timeout, _as,
+                                        raft::server_id(dst.uuid()), tablet, group_id, shard, session, stage);
                             }
                         } else {
                             rtlogger.info("Initiating tablet streaming ({}) of {} to {}", trinfo.transition, gid, *trinfo.pending_replica);

@@ -140,6 +140,11 @@ class groups_manager : public peering_sharded_service<groups_manager> {
         std::optional<leader_info> leader_info = std::nullopt;
         condition_variable leader_info_cond = condition_variable();
         future<> leader_info_updater = make_ready_future<>();
+
+        // Aborts the migration RPC running on the group. The next one aborts it: the
+        // coordinator retries a failed attempt on every replica, and the retry supersedes
+        // the calls of the previous attempt that are still running.
+        lw_shared_ptr<abort_source> migration_rpc_as;
     };
 
     netw::messaging_service& _ms;
@@ -198,6 +203,16 @@ class groups_manager : public peering_sharded_service<groups_manager> {
 
     void init_messaging_service();
 
+    // Makes the pending replica of a tablet at sc_snapshot_transfer catch up with the
+    // group's leader, with a read barrier. Called through the wait_for_snapshot_transfer
+    // RPC, on the pending replica.
+    //
+    // This and sync_raft_group_config() run on behalf of handle_migration_rpc(), with the
+    // group's raft server, the guard of the tablet's metadata, and an abort source the
+    // guard and the coordinator's deadline trigger.
+    future<> wait_for_snapshot_transfer(locator::global_tablet_id tablet, raft::group_id group_id, const raft_server& server,
+            locator::tablet_metadata_guard& guard, abort_source& as);
+
     // Drives the raft group of one tablet in transition to the configuration its
     // current migration stage implies, and doesn't return until it got there.
     //
@@ -207,14 +222,24 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     //
     // Called through the sync_raft_group_config RPC, on the serving replicas of the stage
     // the RPC was sent for: those that can be elected at the stage, and those whose
-    // configuration has to be checked. Fails unless the tablet is still at `stage` of
-    // the migration `session` identifies. The leader proposes the change; a follower
+    // configuration has to be checked. The leader proposes the change; a follower
     // catches up. Returns once this replica has the configuration and, if the stage
-    // expects it to be a voter, names a leader that is a voter of it. The call holds a
-    // tablet_metadata_guard, so it ends as soon as the stage moves on, and the barrier
-    // of a later stage waits for it.
-    future<> sync_raft_group_config(locator::global_tablet_id tablet, raft::group_id group_id,
-        service::session_id session, locator::tablet_transition_stage stage, lowres_clock::time_point deadline);
+    // expects it to be a voter, names a leader that is a voter of it.
+    future<> sync_raft_group_config(locator::global_tablet_id tablet, raft::group_id group_id, const raft_server& server,
+            locator::tablet_metadata_guard& guard, abort_source& as);
+
+    using migration_rpc_method = future<> (groups_manager::*)(locator::global_tablet_id tablet,
+            raft::group_id group_id, const raft_server& server, locator::tablet_metadata_guard& guard, abort_source& as);
+
+    // Handles an RPC the topology coordinator sends about one tablet at one stage of its
+    // migration: checks the destination, the deadline and the shard, and catches up with
+    // group0. Then, on the target shard, fails unless the tablet is still at `stage` of
+    // the migration `session` identifies, and runs `method`. The call holds a
+    // tablet_metadata_guard, so it ends as soon as the stage moves on, and the barrier of
+    // a later stage waits for it.
+    future<> handle_migration_rpc(const char* verb, seastar::rpc::opt_time_point timeout, raft::server_id dst_id,
+            locator::global_tablet_id tablet, raft::group_id group_id, unsigned shard,
+            service::session_id session, sstring stage_name, migration_rpc_method method);
 
 public:
     groups_manager(netw::messaging_service& ms, raft_group_registry& raft_gr,
@@ -256,8 +281,6 @@ public:
 
     future<> wait_for_groups_to_start(lowres_clock::time_point timeout);
 
-    future<> wait_for_snapshot_transfer(locator::global_tablet_id tablet, raft::group_id group_id, service::session_id session_id);
-
     // Called by tablet cleanup, the point at which a replica has definitively left the
     // group, before the tablet's storage is removed.
     //
@@ -290,6 +313,8 @@ class raft_server {
 private:
     groups_manager::raft_group_state& _state;
     gate::holder _holder;
+
+    friend class groups_manager;
 
 public:
     raft_server(groups_manager::raft_group_state& state, gate::holder holder);

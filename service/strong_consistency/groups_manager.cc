@@ -28,11 +28,11 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/as_future.hh>
-#include "service/topology_guard.hh"
 #include "utils/chain_abort_source.hh"
 #include "utils/exponential_backoff_retry.hh"
 
 #include <seastar/core/abort_source.hh>
+#include <seastar/util/defer.hh>
 
 namespace service::strong_consistency {
 
@@ -360,39 +360,6 @@ future<> groups_manager::wait_for_groups_to_start(lowres_clock::time_point timeo
     }
 }
 
-future<> groups_manager::wait_for_snapshot_transfer(locator::global_tablet_id tablet, raft::group_id group_id, service::session_id session_id) {
-    const auto timeout = lowres_clock::now() + std::chrono::minutes(5);
-
-    co_await wait_for_groups_to_start(timeout);
-
-    {
-        const auto it = _raft_groups.find(group_id);
-        if (it == _raft_groups.end()) {
-            throw std::runtime_error(format("No raft group {} for tablet {} on this host", group_id, tablet));
-        }
-        co_await it->second.server_control_op.get_future(timeout);
-    }
-
-    // The group may have been deleted while we waited - the migration was rolled back
-    // and this replica rolled away, or the table was dropped - so look it up again and
-    // hold the gate for the rest of the operation, or state.server would dangle. There
-    // is no scheduling point between the check and hold().
-    const auto it = _raft_groups.find(group_id);
-    if (it == _raft_groups.end() || !it->second.gate || it->second.gate->is_closed() || !it->second.server) {
-        throw std::runtime_error(format("Raft group {} for tablet {} is not running on this host", group_id, tablet));
-    }
-    auto& state = it->second;
-    auto holder = state.gate->hold();
-
-    topology_guard g(session_id);
-
-    co_await utils::get_local_injector().inject("sc_wait_for_snapshot_transfer", utils::wait_for_message(20min));
-
-    abort_on_expiry aoe(timeout);
-    auto sub = utils::chain_abort_source(aoe.abort_source(), g.abort_source());
-    co_await state.server->read_barrier(&aoe.abort_source());
-}
-
 future<> groups_manager::cleanup_group(global_tablet_id tablet, raft::group_id group_id) {
     if (const auto it = _raft_groups.find(group_id); it != _raft_groups.end()) {
         if (it->second.gate && !it->second.gate->is_closed()) {
@@ -424,52 +391,17 @@ void groups_manager::init_messaging_service() {
         }
     );
     ser::groups_manager_rpc_verbs::register_wait_for_snapshot_transfer(&_ms,
-        [this] (raft::server_id dst_id, locator::global_tablet_id tablet, raft::group_id group_id, utils::UUID session_id) -> future<> {
-            if (_raft_gr.get_my_raft_id() != dst_id) {
-                throw raft_destination_id_not_correct{_raft_gr.get_my_raft_id(), dst_id};
-            }
-            co_await _mm.get_group0_barrier().trigger();
-
-            const auto dst_shard = [&]() -> shard_id {
-                auto& table = _db.find_column_family(tablet.table);
-                auto erm = table.get_effective_replication_map();
-                const auto& tmap = erm->get_token_metadata().tablets().get_tablet_map(tablet.table);
-                const auto* trinfo = tmap.get_tablet_transition_info(tablet.tablet);
-                if (!trinfo || !trinfo->pending_replica) {
-                    throw std::runtime_error(fmt::format("No pending replica for group {}", group_id));
-                }
-                if (trinfo->pending_replica->host != erm->get_token_metadata().get_my_id()) {
-                    throw std::runtime_error(fmt::format("Tablet {} pending replica {} is not on this host", tablet, *trinfo->pending_replica));
-                }
-                return trinfo->pending_replica->shard;
-            }();
-
-            co_await container().invoke_on(dst_shard, [tablet, group_id, session_id] (groups_manager& gm) {
-                return gm.wait_for_snapshot_transfer(tablet, group_id, service::session_id(session_id));
-            });
+        [this] (rpc::opt_time_point timeout, raft::server_id dst_id, locator::global_tablet_id tablet,
+                raft::group_id group_id, unsigned shard, service::session_id session, sstring stage) {
+            return handle_migration_rpc("wait_for_snapshot_transfer", timeout, dst_id, tablet, group_id, shard, session,
+                    std::move(stage), &groups_manager::wait_for_snapshot_transfer);
         }
     );
     ser::groups_manager_rpc_verbs::register_sync_raft_group_config(&_ms,
         [this] (rpc::opt_time_point timeout, raft::server_id dst_id, locator::global_tablet_id tablet,
-                raft::group_id group_id, unsigned shard, service::session_id session, sstring stage_name) -> future<> {
-            if (_raft_gr.get_my_raft_id() != dst_id) {
-                throw raft_destination_id_not_correct{_raft_gr.get_my_raft_id(), dst_id};
-            }
-            // The coordinator owns the budget for one attempt.
-            if (!timeout) {
-                on_internal_error(logger, format("sync_raft_group_config({}-{}): no timeout", tablet, group_id));
-            }
-            if (shard >= this_smp_shard_count()) {
-                throw std::runtime_error(format("sync_raft_group_config({}-{}): shard {} out of range", tablet, group_id, shard));
-            }
-            const auto deadline = *timeout;
-            const auto stage = locator::tablet_transition_stage_from_string(stage_name);
-
-            co_await _mm.get_group0_barrier().trigger();
-
-            co_await container().invoke_on(shard, [tablet, group_id, session, stage, deadline] (groups_manager& gm) {
-                return gm.sync_raft_group_config(tablet, group_id, session, stage, deadline);
-            });
+                raft::group_id group_id, unsigned shard, service::session_id session, sstring stage) {
+            return handle_migration_rpc("sync_raft_group_config", timeout, dst_id, tablet, group_id, shard, session,
+                    std::move(stage), &groups_manager::sync_raft_group_config);
         }
     );
 }
@@ -725,50 +657,96 @@ static config_delta diff_config(const raft::config_member_set& expected, const r
     return delta;
 }
 
-future<> groups_manager::sync_raft_group_config(global_tablet_id tablet, raft::group_id gid,
-        service::session_id session, locator::tablet_transition_stage stage, lowres_clock::time_point deadline) {
-    locator::tablet_metadata_guard guard(_db.find_column_family(tablet.table), tablet);
+future<> groups_manager::handle_migration_rpc(const char* verb, rpc::opt_time_point timeout, raft::server_id dst_id,
+        global_tablet_id tablet, raft::group_id group_id, unsigned shard, service::session_id session,
+        sstring stage_name, migration_rpc_method method) {
+    if (_raft_gr.get_my_raft_id() != dst_id) {
+        throw raft_destination_id_not_correct{_raft_gr.get_my_raft_id(), dst_id};
+    }
+    // The coordinator owns the budget for one attempt.
+    if (!timeout) {
+        on_internal_error(logger, format("{}({}-{}): no timeout", verb, tablet, group_id));
+    }
+    if (shard >= this_smp_shard_count()) {
+        throw std::runtime_error(format("{}({}-{}): shard {} out of range", verb, tablet, group_id, shard));
+    }
+    const auto deadline = *timeout;
+    const auto stage = locator::tablet_transition_stage_from_string(stage_name);
 
-    // Taken from the guard's tablet map, which a later suspension may replace.
-    const auto expected_config = std::invoke([&] {
-        const auto& tinfo = guard.get_tablet_map().get_tablet_info(tablet.tablet);
-        const auto* trinfo = guard.get_tablet_map().get_tablet_transition_info(tablet.tablet);
+    // This node may not have applied the stage the RPC was sent for yet: a strongly
+    // consistent migration runs no barrier at some of its stages. Catching up keeps the
+    // target shard from refusing an RPC that is current.
+    co_await _mm.get_group0_barrier().trigger();
 
-        // A sync that arrives late was sent for an earlier stage, or for an earlier
-        // migration of this tablet, which the session identifies: a strongly consistent
+    // The explicit object parameter copies the captures into the coroutine frame.
+    co_await container().invoke_on(shard, [verb, tablet, group_id, session, stage, deadline, method]
+            (this auto, groups_manager& gm) -> future<> {
+        locator::tablet_metadata_guard guard(gm._db.find_column_family(tablet.table), tablet);
+
+        // An RPC that arrives late was sent for an earlier stage, or for an earlier
+        // migration of the tablet, which the session identifies: a strongly consistent
         // migration keeps one session from the stage after start_migration to its end.
-        // Driving the group towards the stage found here instead could run that stage's
-        // change before its barrier drained the requests the change puts at risk.
-        if (!trinfo || trinfo->session_id != session || trinfo->stage != stage) {
-            const auto msg = fmt::format("sync_raft_group_config({}-{}): sent for stage {} in session {}, but the tablet is {}",
-                    tablet, gid, stage, session, trinfo ? fmt::format("at stage {} in session {}", trinfo->stage, trinfo->session_id)
-                                                        : std::string("not in transition"));
-            logger.debug("{}", msg);
-            throw std::runtime_error(msg);
+        // Acting on the stage found here instead could run a sync's change before that
+        // stage's barrier drained the requests the change puts at risk, or reach for a
+        // raft server this replica no longer hosts.
+        {
+            const auto& tmap = guard.get_tablet_map();
+            const auto* trinfo = tmap.get_tablet_transition_info(tablet.tablet);
+            if (!trinfo || trinfo->session_id != session || trinfo->stage != stage) {
+                const auto msg = fmt::format("{}({}-{}): sent for stage {} in session {}, but the tablet is {}",
+                        verb, tablet, group_id, stage, session,
+                        trinfo ? fmt::format("at stage {} in session {}", trinfo->stage, trinfo->session_id)
+                               : std::string("not in transition"));
+                logger.debug("{}", msg);
+                throw std::runtime_error(msg);
+            }
+
+            const auto this_replica = locator::tablet_replica {
+                .host = guard.get_token_metadata()->get_my_id(),
+                .shard = this_shard_id()
+            };
+            if (!hosts_raft_group(tmap.get_tablet_info(tablet.tablet), trinfo, this_replica)) {
+                // The coordinator sends these RPCs only to replicas that host the group at
+                // the stage.
+                on_internal_error(logger, format("{}({}-{}): replica {} doesn't host the group at stage {}",
+                        verb, tablet, group_id, this_replica, trinfo->stage));
+            }
         }
 
-        const auto this_replica = locator::tablet_replica {
-            .host = guard.get_token_metadata()->get_my_id(),
-            .shard = this_shard_id()
-        };
-        if (!hosts_raft_group(tinfo, trinfo, this_replica)) {
-            // The coordinator sends a sync only to the serving replicas of the stage, and
-            // they host the group.
-            on_internal_error(logger, format("sync_raft_group_config({}-{}): replica {} doesn't host the group at stage {}",
-                    tablet, gid, this_replica, trinfo->stage));
-        }
+        // Ends the call at the coordinator's deadline or when the tablet's stage moves on,
+        // whichever comes first. The raft calls of `method` are aborted by it too.
+        abort_on_expiry aoe(deadline);
+        auto sub = utils::chain_abort_source(aoe.abort_source(), guard.get_abort_source());
+        const auto server = co_await gm.acquire_server(tablet.table, group_id, aoe.abort_source());
 
-        // Right for the whole call: a transition's replica sets don't change, and a
-        // change of stage aborts the call.
-        return expected_raft_config(tinfo, trinfo);
+        // Supersedes the migration RPC still running on the group, if any.
+        auto& state = server._state;
+        if (state.migration_rpc_as) {
+            state.migration_rpc_as->request_abort();
+        }
+        const auto rpc_as = make_lw_shared<abort_source>();
+        state.migration_rpc_as = rpc_as;
+        auto rpc_sub = utils::chain_abort_source(aoe.abort_source(), *rpc_as);
+        // Runs while `server` still holds the group's gate, so `state` is alive.
+        const auto uninstall = defer([&state, rpc_as] () noexcept {
+            if (state.migration_rpc_as == rpc_as) {
+                state.migration_rpc_as = nullptr;
+            }
+        });
+
+        co_await (gm.*method)(tablet, group_id, server, guard, aoe.abort_source());
     });
+}
 
-    // Ends the call at the coordinator's deadline or when the tablet's stage moves on,
-    // whichever comes first. The raft calls below are aborted by it too.
-    abort_on_expiry aoe(deadline);
-    auto sub = utils::chain_abort_source(aoe.abort_source(), guard.get_abort_source());
-    auto& as = aoe.abort_source();
-    auto server = co_await acquire_server(tablet.table, gid, as);
+future<> groups_manager::sync_raft_group_config(global_tablet_id tablet, raft::group_id gid, const raft_server& server,
+        locator::tablet_metadata_guard& guard, abort_source& as) {
+    // Taken from the guard's tablet map, which a later suspension may replace. Right for
+    // the whole call: a transition's replica sets don't change, and a change of stage
+    // aborts the call.
+    const auto expected_config = std::invoke([&] {
+        const auto& tmap = guard.get_tablet_map();
+        return expected_raft_config(tmap.get_tablet_info(tablet.tablet), tmap.get_tablet_transition_info(tablet.tablet));
+    });
 
     auto retry = exponential_backoff_retry(10ms, 1s);
     while (true) {
@@ -785,7 +763,8 @@ future<> groups_manager::sync_raft_group_config(global_tablet_id tablet, raft::g
         // moved on on this host, this call proposes nothing more.
         if (as.abort_requested()) {
             const auto msg = fmt::format("sync_raft_group_config({}-{}): raft configuration didn't converge before "
-                    "the deadline or the stage moved on: missing to_add={}, to_del={}, current config: {}",
+                    "the deadline, the stage moved on, or a newer call superseded this one: missing to_add={}, "
+                    "to_del={}, current config: {}",
                     tablet, gid, to_add, to_del, config);
             logger.debug("{}", msg);
             throw std::runtime_error(msg);
@@ -856,6 +835,12 @@ future<> groups_manager::sync_raft_group_config(global_tablet_id tablet, raft::g
 
     // Test-only: hold the migration at this stage once this replica has converged.
     co_await utils::get_local_injector().inject("sc_pause_after_config_sync", utils::wait_for_message(5min));
+}
+
+future<> groups_manager::wait_for_snapshot_transfer(global_tablet_id tablet, raft::group_id gid, const raft_server& server,
+        locator::tablet_metadata_guard& guard, abort_source& as) {
+    co_await utils::get_local_injector().inject("sc_wait_for_snapshot_transfer", utils::wait_for_message(20min));
+    co_await server.server().read_barrier(&as);
 }
 
 void groups_manager::schedule_raft_group_start(global_tablet_id tablet, raft::group_id id, raft_group_state& state,
