@@ -2242,7 +2242,7 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
     rjson::value* stream_specification = rjson::find(request, "StreamSpecification");
     bool stream_enabled = false;
     if (stream_specification && stream_specification->IsObject()) {
-        if (executor::add_stream_options(*stream_specification, builder, _proxy)) {
+        if (executor::add_stream_options(*stream_specification, builder)) {
             stream_enabled = true;
             validate_cdc_log_name_length(builder.cf_name());
             // If vector index was also enabled, it set up its desired CDC
@@ -2629,7 +2629,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
             }
             if (stream_specification && stream_specification->IsObject()) {
                 empty_request = false;
-                if (add_stream_options(*stream_specification, builder, p.local(), tab->cdc_options())) {
+                if (add_stream_options(*stream_specification, builder, tab->cdc_options())) {
                     validate_cdc_log_name_length(builder.cf_name());
                     // If the table already has a vector index, ensure CDC uses
                     // delta_mode=full so the vector store can read full column
