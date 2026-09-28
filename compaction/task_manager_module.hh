@@ -66,27 +66,6 @@ enum class flush_mode {
 
 inline constexpr auto major_compaction_task_type = "major compaction";
 
-class major_compaction_task_impl : public compaction_task_impl {
-public:
-    major_compaction_task_impl(tasks::task_manager::module_ptr module,
-            tasks::task_id id,
-            unsigned sequence_number,
-            std::string scope,
-            std::string keyspace,
-            std::string table,
-            std::string entity,
-            tasks::task_id parent_id) noexcept
-        : compaction_task_impl(module, id, sequence_number, std::move(scope), std::move(keyspace), std::move(table), std::move(entity), parent_id)
-    {}
-
-    virtual std::string type() const override {
-        return major_compaction_task_type;
-    }
-
-protected:
-    virtual future<> run() override = 0;
-};
-
 inline constexpr auto cleanup_compaction_task_type = "cleanup compaction";
 
 inline constexpr auto global_cleanup_compaction_task_type = "global cleanup compaction";
