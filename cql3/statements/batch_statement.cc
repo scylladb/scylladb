@@ -18,7 +18,7 @@
 #include <seastar/core/execution_stage.hh>
 #include "cql3/query_processor.hh"
 #include "tracing/trace_state.hh"
-#include "cql3/statements/strong_consistency/batch_statement.hh"
+#include "cql3/statements/strong_consistency/batch_executor.hh"
 #include "cql3/statements/eventual_consistency/batch_executor.hh"
 
 namespace cql3 {
@@ -254,16 +254,13 @@ batch_statement::prepare(data_dictionary::database db, cql_stats& stats, const c
         partition_key_bind_indices = meta.get_partition_key_bind_indexes(*statements[0].statement->s);
     }
 
-    shared_ptr<cql_statement> statement;
-    if (has_sc_statements) {
-        auto sc_statements = statements | std::views::as_rvalue | std::views::transform([] (auto&& s) {
-            return strong_consistency::batch_statement::single_statement{std::move(s.statement)};
-        }) | std::ranges::to<std::vector>();
-        statement = ::make_shared<strong_consistency::batch_statement>(meta.bound_variables_size(), _type, std::move(sc_statements), std::move(prep_attrs));
-    } else {
-        statement = ::make_shared<cql3::statements::batch_statement>(meta.bound_variables_size(), _type, std::move(statements), std::move(prep_attrs), stats,
-                eventual_consistency::batch_executor::instance());
-    }
+    // The keyspace decides how the batch reaches storage, the same way it does
+    // for a single modification.
+    const cql3::statements::batch_executor& executor = has_sc_statements
+            ? static_cast<const cql3::statements::batch_executor&>(strong_consistency::batch_executor::instance())
+            : static_cast<const cql3::statements::batch_executor&>(eventual_consistency::batch_executor::instance());
+    shared_ptr<cql_statement> statement = ::make_shared<cql3::statements::batch_statement>(
+            meta.bound_variables_size(), _type, std::move(statements), std::move(prep_attrs), stats, executor);
 
     auto ai = audit_info();
     if (ai) {
