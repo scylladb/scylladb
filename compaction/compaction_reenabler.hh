@@ -1,0 +1,37 @@
+/*
+ * Copyright (C) 2025-present ScyllaDB
+ */
+
+/*
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ */
+
+#pragma once
+
+#include <seastar/core/gate.hh>
+
+namespace compaction {
+    class compaction_manager;
+    class compaction_group_view;
+    class compaction_state;
+
+class compaction_reenabler {
+    compaction_manager& _cm;
+    compaction::compaction_group_view* _table;
+    // Null if compaction was not disabled, because the manager is stopped (see the constructor),
+    // or if moved from.
+    compaction::compaction_state* _compaction_state = nullptr;
+    seastar::gate::holder _holder;
+
+public:
+    compaction_reenabler(compaction_manager&, compaction::compaction_group_view&);
+    compaction_reenabler(compaction_reenabler&&) noexcept;
+
+    ~compaction_reenabler();
+
+    compaction::compaction_group_view* compacting_table() const noexcept {
+        return _table;
+    }
+};
+
+}
