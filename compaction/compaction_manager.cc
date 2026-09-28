@@ -1674,32 +1674,18 @@ future<> compaction_manager::maybe_wait_for_sstable_count_reduction(compaction_g
             elapsed_ms, t, count);
 }
 
-class offstrategy_compaction_task_executor : public compaction_task_executor, public offstrategy_compaction_task_impl {
+class offstrategy_compaction_task_executor : public compaction_task_executor {
     bool& _performed;
 public:
-    offstrategy_compaction_task_executor(compaction_manager& mgr, throw_if_stopping do_throw_if_stopping, compaction_group_view* t, tasks::task_id parent_id, bool& performed)
+    offstrategy_compaction_task_executor(compaction_manager& mgr, throw_if_stopping do_throw_if_stopping, compaction_group_view* t, bool& performed)
         : compaction_task_executor(mgr, do_throw_if_stopping, t, compaction_type::Reshape, "Offstrategy compaction")
-        , offstrategy_compaction_task_impl(mgr._task_manager_module, tasks::task_id::create_random_id(), parent_id ? 0 : mgr._task_manager_module->new_sequence_number(), "compaction group", t->schema()->ks_name(), t->schema()->cf_name(), "", parent_id)
         , _performed(performed)
     {
-        _status.progress_units = "bytes";
         _performed = false;
     }
 
     bool performed() const noexcept {
         return _performed;
-    }
-
-    virtual future<tasks::task_manager::task::progress> get_progress() const override {
-        return compaction_task_impl::get_progress(_compaction_data, _progress_monitor);
-    }
-
-    virtual void abort() noexcept override {
-        return compaction_task_executor::abort(_as);
-    }
-protected:
-    virtual future<> run() override {
-        return perform();
     }
 private:
     future<> run_offstrategy_compaction(::compaction::compaction_data& cdata) {
@@ -1827,7 +1813,7 @@ future<bool> compaction_manager::perform_offstrategy(compaction_group_view& t, t
     }
 
     bool performed;
-    co_await perform_compaction<offstrategy_compaction_task_executor>({.type = offstrategy_compaction_task_type}, throw_if_stopping::no, info, &t, info.get_id(), performed);
+    co_await perform_compaction<offstrategy_compaction_task_executor>({.type = offstrategy_compaction_task_type}, throw_if_stopping::no, info, &t, performed);
     co_return performed;
 }
 
