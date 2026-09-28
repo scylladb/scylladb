@@ -15,6 +15,7 @@
 #include "service_permit.hh"
 #include "exceptions/coordinator_result.hh"
 #include "tracing/trace_state.hh"
+#include "cql3/statements/batch_executor.hh"
 
 namespace cql_transport::messages {
     class result_message;
@@ -73,6 +74,7 @@ private:
     // all columns of the table, including the primary key.
     column_set _columns_of_cas_result_set;
     cql_stats& _stats;
+    const batch_executor* _executor;
 public:
     /**
      * Creates a new BatchStatement from a list of statements
@@ -84,12 +86,14 @@ public:
     batch_statement(int bound_terms, type type_,
                     std::vector<single_statement> statements,
                     std::unique_ptr<attributes> attrs,
-                    cql_stats& stats);
+                    cql_stats& stats,
+                    const batch_executor& executor);
 
     batch_statement(type type_,
                     std::vector<single_statement> statements,
                     std::unique_ptr<attributes> attrs,
-                    cql_stats& stats);
+                    cql_stats& stats,
+                    const batch_executor& executor);
 
     virtual bool depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const override;
 
@@ -103,8 +107,6 @@ public:
 
     virtual future<> check_access(query_processor& qp, const service::client_state& state) const override;
 
-    // Validates a prepared batch statement without validating its nested statements.
-    void validate();
 
     bool has_conditions() const { return _has_conditions; }
 
@@ -116,13 +118,21 @@ public:
 
     const std::vector<single_statement>& get_statements() const;
 
-    // What the storage_proxy execution needs from this batch. Everything else
-    // about the batch stays private.
+    // What a batch_executor needs to commit this batch. Everything else about
+    // the batch stays private.
     type batch_type() const { return _type; }
+    // Only the const predicates a batch_executor validates against. The one
+    // attribute that is evaluated rather than inspected is forwarded below,
+    // because evaluating it is not a const operation on attributes.
+    const attributes& get_attrs() const { return *_attrs; }
     int64_t get_timestamp(int64_t now, const query_options& options) const;
     cql_stats& stats() const { return _stats; }
     const column_set& columns_of_cas_result_set() const { return _columns_of_cas_result_set; }
     const seastar::shared_ptr<metadata>& cas_result_metadata() const { return _metadata; }
+
+    // How this batch reaches storage. Set when the batch is built and never null
+    // afterwards; see cql3::statements::batch_executor.
+    const batch_executor& executor() const { return *_executor; }
 
 public:
     /**
