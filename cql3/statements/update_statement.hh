@@ -55,7 +55,6 @@ public:
             std::unique_ptr<attributes> attrs,
             cql_stats& stats);
 
-public:
     /// Reads an UPDATE's WHERE clause, and checks that what it says agrees with what
     /// the statement writes.
     void process_where_clause(data_dictionary::database db, expr::expression where_clause, prepare_context& ctx);
@@ -75,6 +74,8 @@ public:
             const update_parameters& params) const override;
 
 private:
+    friend class raw::update_statement;
+
     void validate_where_clause_for_conditions() const;
 
     virtual void execute_operations_for_key(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params, const json_cache_opt& json_cache) const;

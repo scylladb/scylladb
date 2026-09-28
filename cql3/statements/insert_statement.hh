@@ -52,6 +52,9 @@ public:
             const modification_spec& spec,
             const update_parameters& params) const override;
 
+private:
+    friend class raw::insert_statement;
+
 protected:
     /// The value the statement gives the column, or nullptr if it does not name it.
     const expr::expression* value_for(const column_definition& def) const;
