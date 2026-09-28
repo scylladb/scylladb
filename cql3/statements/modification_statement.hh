@@ -256,18 +256,6 @@ public:
     execute_without_checking_exception_message(query_processor& qp, service::query_state& qs, const query_options& options, std::optional<service::group0_guard> guard) const override;
 
 public:
-    /**
-     * Convert statement into a list of mutations to apply on the server
-     *
-     * @param options value for prepared statement markers
-     * @param local if true, any requests (for collections) performed by getMutation should be done locally only.
-     * @param now the current timestamp in microseconds to use if no timestamp is user provided.
-     *
-     * @return vector of the mutations
-     * @throws invalid_request_exception on invalid requests
-     */
-    future<utils::chunked_vector<mutation>> get_mutations(query_processor& qp, const query_options& options, db::timeout_clock::time_point timeout, bool local, int64_t now, service::query_state& qs, modification_spec spec) const;
-
     // How this modification reaches storage. Set when the statement is prepared
     // and never null afterwards; see cql3::statements::modification_executor.
     const modification_executor& executor() const { return *_executor; }

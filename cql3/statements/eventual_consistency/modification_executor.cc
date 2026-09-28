@@ -90,7 +90,7 @@ execute_without_condition(const modification_statement& stmt, query_processor& q
         const query_options& options, modification_spec&& spec, db::large_data_violation_type* violations) {
     auto cl = options.get_consistency();
     auto timeout = db::timeout_clock::now() + stmt.get_timeout(qs.get_client_state(), options);
-    return stmt.get_mutations(qp, options, timeout, false, options.get_timestamp(qs), qs, std::move(spec)).then(
+    return get_mutations(stmt, qp, options, timeout, false, options.get_timestamp(qs), qs, std::move(spec)).then(
             [&stmt, cl, timeout, &qp, &qs, &options, violations] (auto mutations) {
         if (mutations.empty()) {
             return make_ready_future<coordinator_result<>>(bo::success());
