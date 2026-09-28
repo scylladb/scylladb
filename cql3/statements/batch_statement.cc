@@ -9,6 +9,7 @@
 
 #include "batch_statement.hh"
 #include "cql3/util.hh"
+#include "cql3/statements/eventual_consistency/modification_executor.hh"
 #include "raw/batch_statement.hh"
 #include "cql3/cql_config.hh"
 #include "db/consistency_level_validations.hh"
@@ -171,7 +172,7 @@ future<utils::chunked_vector<mutation>> batch_statement::get_mutations(query_pro
         auto&& statement_options = options.for_statement(i);
         auto timestamp = _attrs->get_timestamp(now, statement_options);
         modification_spec spec(*statement, statement_options);
-        auto more = co_await statement->get_mutations(qp, statement_options, timeout, local, timestamp, query_state, std::move(spec));
+        auto more = co_await eventual_consistency::get_mutations(*statement, qp, statement_options, timeout, local, timestamp, query_state, std::move(spec));
 
         for (auto&& m : more) {
             // We want unordered_set::try_emplace(), but we don't have it

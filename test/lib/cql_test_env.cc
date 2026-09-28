@@ -22,6 +22,7 @@
 #include "cql3/query_options.hh"
 #include "cql3/statements/batch_statement.hh"
 #include "cql3/statements/modification_statement.hh"
+#include "cql3/statements/eventual_consistency/modification_executor.hh"
 #include "cql3/cql_config.hh"
 #include "timeout_config.hh"
 #include <fmt/ranges.h>
@@ -330,7 +331,7 @@ public:
         auto timeout = db::timeout_clock::now() + qs->get_client_state().get_timeout_config().write_timeout;
         cql3::statements::modification_spec spec(*modif_stmt, qo);
 
-        return modif_stmt->get_mutations(local_qp(), qo, timeout, false, qo.get_timestamp(*qs), *qs, std::move(spec))
+        return cql3::statements::eventual_consistency::get_mutations(*modif_stmt, local_qp(), qo, timeout, false, qo.get_timestamp(*qs), *qs, std::move(spec))
             .finally([qs, modif_stmt = std::move(modif_stmt)] {});
     }
 
