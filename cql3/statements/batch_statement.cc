@@ -94,59 +94,6 @@ future<> batch_statement::check_access(query_processor& qp, const service::clien
     });
 }
 
-void batch_statement::validate()
-{
-    if (_attrs->is_time_to_live_set()) {
-        throw exceptions::invalid_request_exception("Global TTL on the BATCH statement is not supported.");
-    }
-
-    bool timestamp_set = _attrs->is_timestamp_set();
-    if (timestamp_set) {
-        if (_has_conditions) {
-            throw exceptions::invalid_request_exception("Cannot provide custom timestamp for conditional BATCH");
-        }
-        if (_type == type::COUNTER) {
-            throw exceptions::invalid_request_exception("Cannot provide custom timestamp for counter BATCH");
-        }
-    }
-
-    bool has_counters = std::ranges::any_of(_statements, [] (auto&& s) { return s.statement->is_counter(); });
-    bool has_non_counters = !std::ranges::all_of(_statements, [] (auto&& s) { return s.statement->is_counter(); });
-    if (timestamp_set && has_counters) {
-        throw exceptions::invalid_request_exception("Cannot provide custom timestamp for a BATCH containing counters");
-    }
-    if (timestamp_set && std::ranges::any_of(_statements, [] (auto&& s) { return s.statement->is_timestamp_set(); })) {
-        throw exceptions::invalid_request_exception("Timestamp must be set either on BATCH or individual statements");
-    }
-    if (_type == type::COUNTER && has_non_counters) {
-        throw exceptions::invalid_request_exception("Cannot include non-counter statement in a counter batch");
-    }
-    if (_type == type::LOGGED && has_counters) {
-        throw exceptions::invalid_request_exception("Cannot include a counter statement in a logged batch");
-    }
-    if (has_counters && has_non_counters) {
-        throw exceptions::invalid_request_exception("Counter and non-counter mutations cannot exist in the same batch");
-    }
-
-    if (_has_conditions
-            && !_statements.empty()
-            && (std::ranges::distance(_statements
-                            | std::views::transform([] (auto&& s) { return s.statement->keyspace(); })
-                            | utils::views::unique) != 1
-                || (std::ranges::distance(_statements
-                        | std::views::transform([] (auto&& s) { return s.statement->column_family(); })
-                        | utils::views::unique) != 1))) {
-        throw exceptions::invalid_request_exception("BATCH with conditions cannot span multiple tables");
-    }
-    std::optional<bool> raw_counter;
-    for (auto& s : _statements) {
-        if (raw_counter && s.statement->is_raw_counter_shard_write() != *raw_counter) {
-            throw exceptions::invalid_request_exception("Cannot mix raw and regular counter statements in batch");
-        }
-        raw_counter = s.statement->is_raw_counter_shard_write();
-    }
-}
-
 void batch_statement::validate(query_processor& qp, const service::client_state& state) const
 {
     for (auto&& s : _statements) {
@@ -157,40 +104,6 @@ void batch_statement::validate(query_processor& qp, const service::client_state&
 const std::vector<batch_statement::single_statement>& batch_statement::get_statements()
 {
     return _statements;
-}
-
-future<utils::chunked_vector<mutation>> batch_statement::get_mutations(query_processor& qp, const query_options& options,
-        db::timeout_clock::time_point timeout, bool local, api::timestamp_type now, service::query_state& query_state) const {
-    // Do not process in parallel because operations like list append/prepend depend on execution order.
-    using mutation_set_type = std::unordered_set<mutation, mutation_hash_by_key, mutation_equals_by_key>;
-    mutation_set_type result;
-    result.reserve(_statements.size());
-    for (size_t i = 0; i != _statements.size(); ++i) {
-        auto&& statement = _statements[i].statement;
-        statement->inc_cql_stats(query_state.get_client_state().is_internal());
-        auto&& statement_options = options.for_statement(i);
-        auto timestamp = _attrs->get_timestamp(now, statement_options);
-        modification_spec spec(*statement, statement_options);
-        auto more = co_await eventual_consistency::get_mutations(*statement, qp, statement_options, timeout, local, timestamp, query_state, std::move(spec));
-
-        for (auto&& m : more) {
-            // We want unordered_set::try_emplace(), but we don't have it
-            auto pos = result.find(m);
-            if (pos == result.end()) {
-                result.emplace(std::move(m));
-            } else {
-                const_cast<mutation&>(*pos).apply(std::move(m)); // Won't change key
-            }
-        }
-    }
-
-    // can't use range adaptors, because we want to move
-    auto vresult = utils::chunked_vector<mutation>();
-    vresult.reserve(result.size());
-    for (auto&& m : result) {
-        vresult.push_back(std::move(m));
-    }
-    co_return vresult;
 }
 
 void batch_statement::verify_batch_size(query_processor& qp, const utils::chunked_vector<mutation>& mutations) const {
@@ -250,70 +163,38 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::exe
                        seastar::cref(options), false, options.get_timestamp(state));
 }
 
-future<shared_ptr<cql_transport::messages::result_message>> batch_statement::do_execute(
-        query_processor& qp,
-        service::query_state& query_state, const query_options& options,
-        bool local, api::timestamp_type now) const
-{
-    // FIXME: we don't support nulls here
-#if 0
-    if (options.get_consistency() == null)
-        throw new InvalidRequestException("Invalid empty consistency level");
-    if (options.getSerialConsistency() == null)
-        throw new InvalidRequestException("Invalid empty serial consistency level");
-#endif
+future<utils::chunked_vector<mutation>> batch_statement::get_mutations(query_processor& qp, const query_options& options,
+        db::timeout_clock::time_point timeout, bool local, api::timestamp_type now, service::query_state& query_state) const {
+    // Do not process in parallel because operations like list append/prepend depend on execution order.
+    using mutation_set_type = std::unordered_set<mutation, mutation_hash_by_key, mutation_equals_by_key>;
+    mutation_set_type result;
+    result.reserve(_statements.size());
+    for (size_t i = 0; i != _statements.size(); ++i) {
+        auto&& statement = _statements[i].statement;
+        statement->inc_cql_stats(query_state.get_client_state().is_internal());
+        auto&& statement_options = options.for_statement(i);
+        auto timestamp = _attrs->get_timestamp(now, statement_options);
+        modification_spec spec(*statement, statement_options);
+        auto more = co_await eventual_consistency::get_mutations(*statement, qp, statement_options, timeout, local, timestamp, query_state, std::move(spec));
 
-    const auto cl = options.get_consistency();
-    const query_processor::write_consistency_guardrail_state guardrail_state = qp.check_write_consistency_levels_guardrail(cl);
-    if (guardrail_state == query_processor::write_consistency_guardrail_state::FAIL) {
-        return make_exception_future<shared_ptr<cql_transport::messages::result_message>>(
-                exceptions::invalid_request_exception(
-                        format("Write consistency level {} is forbidden by the current configuration "
-                               "setting of write_consistency_levels_disallowed. Please use a different "
-                               "consistency level, or remove {} from write_consistency_levels_disallowed "
-                               "set in the configuration.", cl, cl)));
-    }
-
-    for (size_t i = 0; i < _statements.size(); ++i) {
-        _statements[i].statement->validate_primary_key(options.for_statement(i));
-    }
-
-    if (_has_conditions) {
-        ++_stats.cas_batches;
-        _stats.statements_in_cas_batches += _statements.size();
-        return execute_with_conditions(qp, options, query_state).then([guardrail_state, cl] (auto result) {
-            if (guardrail_state == query_processor::write_consistency_guardrail_state::WARN) {
-                result->add_warning(format("Using write consistency level {} listed on the "
-                                           "write_consistency_levels_warned is not recommended.", cl));
+        for (auto&& m : more) {
+            // We want unordered_set::try_emplace(), but we don't have it
+            auto pos = result.find(m);
+            if (pos == result.end()) {
+                result.emplace(std::move(m));
+            } else {
+                const_cast<mutation&>(*pos).apply(std::move(m)); // Won't change key
             }
-            return result;
-        });
+        }
     }
 
-    ++_stats.batches;
-    _stats.statements_in_batches += _statements.size();
-
-    auto timeout = db::timeout_clock::now() + get_timeout(query_state.get_client_state(), options);
-    auto violations = make_lw_shared<db::large_data_violation_type>(db::large_data_violation_type::none);
-
-    return get_mutations(qp, options, timeout, local, now, query_state).then([this, &qp, cl, timeout, tr_state = query_state.get_trace_state(),
-                    permit = query_state.get_permit(), violations] (utils::chunked_vector<mutation> ms) mutable {
-        return execute_without_conditions(qp, std::move(ms), cl, timeout, std::move(tr_state), std::move(permit), violations.get());
-    }).then([guardrail_state, cl, violations] (coordinator_result<> res) {
-        if (!res) {
-            return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
-                    seastar::make_shared<cql_transport::messages::result_message::exception>(std::move(res).assume_error()));
-        }
-        auto result = make_shared<cql_transport::messages::result_message::void_message>();
-        if (guardrail_state == query_processor::write_consistency_guardrail_state::WARN) {
-            result->add_warning(format("Using write consistency level {} listed on the "
-                                       "write_consistency_levels_warned is not recommended.", cl));
-        }
-        if (auto warning = db::large_data_soft_violation_warning(*violations); !warning.empty()) [[unlikely]] {
-            result->add_warning(std::move(warning));
-        }
-        return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(std::move(result));
-    });
+    // can't use range adaptors, because we want to move
+    auto vresult = utils::chunked_vector<mutation>();
+    vresult.reserve(result.size());
+    for (auto&& m : result) {
+        vresult.push_back(std::move(m));
+    }
+    co_return vresult;
 }
 
 future<coordinator_result<>> batch_statement::execute_without_conditions(
@@ -419,6 +300,125 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::exe
             result->add_warning(std::move(warning));
         }
         return result;
+    });
+}
+
+void batch_statement::validate()
+{
+    if (_attrs->is_time_to_live_set()) {
+        throw exceptions::invalid_request_exception("Global TTL on the BATCH statement is not supported.");
+    }
+
+    bool timestamp_set = _attrs->is_timestamp_set();
+    if (timestamp_set) {
+        if (_has_conditions) {
+            throw exceptions::invalid_request_exception("Cannot provide custom timestamp for conditional BATCH");
+        }
+        if (_type == type::COUNTER) {
+            throw exceptions::invalid_request_exception("Cannot provide custom timestamp for counter BATCH");
+        }
+    }
+
+    bool has_counters = std::ranges::any_of(_statements, [] (auto&& s) { return s.statement->is_counter(); });
+    bool has_non_counters = !std::ranges::all_of(_statements, [] (auto&& s) { return s.statement->is_counter(); });
+    if (timestamp_set && has_counters) {
+        throw exceptions::invalid_request_exception("Cannot provide custom timestamp for a BATCH containing counters");
+    }
+    if (timestamp_set && std::ranges::any_of(_statements, [] (auto&& s) { return s.statement->is_timestamp_set(); })) {
+        throw exceptions::invalid_request_exception("Timestamp must be set either on BATCH or individual statements");
+    }
+    if (_type == type::COUNTER && has_non_counters) {
+        throw exceptions::invalid_request_exception("Cannot include non-counter statement in a counter batch");
+    }
+    if (_type == type::LOGGED && has_counters) {
+        throw exceptions::invalid_request_exception("Cannot include a counter statement in a logged batch");
+    }
+    if (has_counters && has_non_counters) {
+        throw exceptions::invalid_request_exception("Counter and non-counter mutations cannot exist in the same batch");
+    }
+
+    if (_has_conditions
+            && !_statements.empty()
+            && (std::ranges::distance(_statements
+                            | std::views::transform([] (auto&& s) { return s.statement->keyspace(); })
+                            | utils::views::unique) != 1
+                || (std::ranges::distance(_statements
+                        | std::views::transform([] (auto&& s) { return s.statement->column_family(); })
+                        | utils::views::unique) != 1))) {
+        throw exceptions::invalid_request_exception("BATCH with conditions cannot span multiple tables");
+    }
+    std::optional<bool> raw_counter;
+    for (auto& s : _statements) {
+        if (raw_counter && s.statement->is_raw_counter_shard_write() != *raw_counter) {
+            throw exceptions::invalid_request_exception("Cannot mix raw and regular counter statements in batch");
+        }
+        raw_counter = s.statement->is_raw_counter_shard_write();
+    }
+}
+
+future<shared_ptr<cql_transport::messages::result_message>> batch_statement::do_execute(
+        query_processor& qp,
+        service::query_state& query_state, const query_options& options,
+        bool local, api::timestamp_type now) const
+{
+    // FIXME: we don't support nulls here
+#if 0
+    if (options.get_consistency() == null)
+        throw new InvalidRequestException("Invalid empty consistency level");
+    if (options.getSerialConsistency() == null)
+        throw new InvalidRequestException("Invalid empty serial consistency level");
+#endif
+
+    const auto cl = options.get_consistency();
+    const query_processor::write_consistency_guardrail_state guardrail_state = qp.check_write_consistency_levels_guardrail(cl);
+    if (guardrail_state == query_processor::write_consistency_guardrail_state::FAIL) {
+        return make_exception_future<shared_ptr<cql_transport::messages::result_message>>(
+                exceptions::invalid_request_exception(
+                        format("Write consistency level {} is forbidden by the current configuration "
+                               "setting of write_consistency_levels_disallowed. Please use a different "
+                               "consistency level, or remove {} from write_consistency_levels_disallowed "
+                               "set in the configuration.", cl, cl)));
+    }
+
+    for (size_t i = 0; i < _statements.size(); ++i) {
+        _statements[i].statement->validate_primary_key(options.for_statement(i));
+    }
+
+    if (_has_conditions) {
+        ++_stats.cas_batches;
+        _stats.statements_in_cas_batches += _statements.size();
+        return execute_with_conditions(qp, options, query_state).then([guardrail_state, cl] (auto result) {
+            if (guardrail_state == query_processor::write_consistency_guardrail_state::WARN) {
+                result->add_warning(format("Using write consistency level {} listed on the "
+                                           "write_consistency_levels_warned is not recommended.", cl));
+            }
+            return result;
+        });
+    }
+
+    ++_stats.batches;
+    _stats.statements_in_batches += _statements.size();
+
+    auto timeout = db::timeout_clock::now() + get_timeout(query_state.get_client_state(), options);
+    auto violations = make_lw_shared<db::large_data_violation_type>(db::large_data_violation_type::none);
+
+    return get_mutations(qp, options, timeout, local, now, query_state).then([this, &qp, cl, timeout, tr_state = query_state.get_trace_state(),
+                    permit = query_state.get_permit(), violations] (utils::chunked_vector<mutation> ms) mutable {
+        return execute_without_conditions(qp, std::move(ms), cl, timeout, std::move(tr_state), std::move(permit), violations.get());
+    }).then([guardrail_state, cl, violations] (coordinator_result<> res) {
+        if (!res) {
+            return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
+                    seastar::make_shared<cql_transport::messages::result_message::exception>(std::move(res).assume_error()));
+        }
+        auto result = make_shared<cql_transport::messages::result_message::void_message>();
+        if (guardrail_state == query_processor::write_consistency_guardrail_state::WARN) {
+            result->add_warning(format("Using write consistency level {} listed on the "
+                                       "write_consistency_levels_warned is not recommended.", cl));
+        }
+        if (auto warning = db::large_data_soft_violation_warning(*violations); !warning.empty()) [[unlikely]] {
+            result->add_warning(std::move(warning));
+        }
+        return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(std::move(result));
     });
 }
 
