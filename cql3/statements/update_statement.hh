@@ -53,7 +53,8 @@ public:
             uint32_t bound_terms,
             schema_ptr s,
             std::unique_ptr<attributes> attrs,
-            cql_stats& stats);
+            cql_stats& stats,
+            const modification_executor& executor);
 
 public:
     /// Reads an UPDATE's WHERE clause, and checks that what it says agrees with what

@@ -43,8 +43,9 @@ update_statement::update_statement(
         uint32_t bound_terms,
         schema_ptr s,
         std::unique_ptr<attributes> attrs,
-        cql_stats& stats)
-    : modification_statement{type, bound_terms, std::move(s), std::move(attrs), stats}
+        cql_stats& stats,
+        const modification_executor& executor)
+    : modification_statement{type, bound_terms, std::move(s), std::move(attrs), stats, executor}
 {
     set_audit_info(std::move(audit_info));
 }
@@ -183,9 +184,10 @@ update_statement::update_statement(cf_name name,
 
 ::shared_ptr<cql3::statements::modification_statement>
 update_statement::prepare_internal(data_dictionary::database db, schema_ptr schema,
-    prepare_context& ctx, std::unique_ptr<attributes> attrs, cql_stats& stats) const
+    prepare_context& ctx, std::unique_ptr<attributes> attrs, cql_stats& stats,
+    const modification_executor& executor) const
 {
-    auto stmt = ::make_shared<cql3::statements::update_statement>(audit_info(), statement_type::UPDATE, ctx.bound_variables_size(), schema, std::move(attrs), stats);
+    auto stmt = ::make_shared<cql3::statements::update_statement>(audit_info(), statement_type::UPDATE, ctx.bound_variables_size(), schema, std::move(attrs), stats, executor);
 
     // FIXME: quadratic
     for (size_t i = 0; i < _updates.size(); ++i) {

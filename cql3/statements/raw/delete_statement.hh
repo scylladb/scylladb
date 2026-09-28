@@ -38,7 +38,8 @@ public:
            bool if_exists);
 protected:
     virtual ::shared_ptr<cql3::statements::modification_statement> prepare_internal(data_dictionary::database db, schema_ptr schema,
-        prepare_context& ctx, std::unique_ptr<attributes> attrs, cql_stats& stats) const override;
+        prepare_context& ctx, std::unique_ptr<attributes> attrs, cql_stats& stats,
+        const modification_executor& executor) const override;
 };
 
 }

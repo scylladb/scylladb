@@ -26,7 +26,8 @@ namespace statements {
 class delete_statement : public modification_statement {
     shared_ptr<const restrictions::delete_restrictions> _restrictions;
 public:
-    delete_statement(audit::audit_info_ptr&& audit_info, statement_type type, uint32_t bound_terms, schema_ptr s, std::unique_ptr<attributes> attrs, cql_stats& stats);
+    delete_statement(audit::audit_info_ptr&& audit_info, statement_type type, uint32_t bound_terms, schema_ptr s, std::unique_ptr<attributes> attrs, cql_stats& stats,
+            const modification_executor& executor);
 
 public:
     /// Reads a DELETE's WHERE clause, and checks that what it says agrees with what

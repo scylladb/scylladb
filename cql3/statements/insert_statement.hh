@@ -31,7 +31,8 @@ public:
             uint32_t bound_terms,
             schema_ptr s,
             std::unique_ptr<attributes> attrs,
-            cql_stats& stats);
+            cql_stats& stats,
+            const modification_executor& executor);
 
     void add_key_value(const column_definition& def, expr::expression value);
 
@@ -73,8 +74,9 @@ public:
             schema_ptr s,
             std::unique_ptr<attributes> attrs,
             cql_stats& stats,
+            const modification_executor& executor,
             expr::expression v, bool default_unset)
-        : insert_statement(std::move(audit_info), bound_terms, s, std::move(attrs), stats)
+        : insert_statement(std::move(audit_info), bound_terms, s, std::move(attrs), stats, executor)
         , _value(std::move(v))
         , _default_unset(default_unset) {
     }

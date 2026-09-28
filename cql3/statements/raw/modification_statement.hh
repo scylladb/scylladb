@@ -24,6 +24,7 @@ namespace cql3 {
 namespace statements {
 
 class modification_statement;
+class modification_executor;
 
 namespace raw {
 
@@ -45,7 +46,8 @@ public:
     const sstring& get_raw_cql() const { return _raw_cql; }
 protected:
     virtual ::shared_ptr<cql3::statements::modification_statement> prepare_internal(data_dictionary::database db, schema_ptr schema,
-        prepare_context& ctx, std::unique_ptr<attributes> attrs, cql_stats& stats) const = 0;
+        prepare_context& ctx, std::unique_ptr<attributes> attrs, cql_stats& stats,
+        const modification_executor& executor) const = 0;
 
     // Helper function used by child classes to prepare conditions for a prepared statement.
     // Must be called before processing WHERE clause, because to perform sanity checks there
