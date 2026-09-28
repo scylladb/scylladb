@@ -75,18 +75,7 @@ class hint_sender {
         state::draining,
         state::canceled_draining>>;
 
-    struct send_one_file_ctx {
-        send_one_file_ctx(std::unordered_map<table_schema_version, column_mapping>& last_schema_ver_to_column_mapping)
-            : schema_ver_to_column_mapping(last_schema_ver_to_column_mapping)
-            , file_send_gate("file_send_gate")
-        {}
-        std::unordered_map<table_schema_version, column_mapping>& schema_ver_to_column_mapping;
-        seastar::named_gate file_send_gate;
-        std::optional<db::replay_position> first_failed_rp;
-        std::optional<db::replay_position> last_succeeded_rp;
-        std::set<db::replay_position> in_progress_rps;
-        bool segment_replay_failed = false;
-    };
+    struct send_one_file_ctx;
 
 private:
     std::list<sstring> _segments_to_replay;

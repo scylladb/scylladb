@@ -64,6 +64,19 @@ future<> hint_sender::flush_maybe() noexcept {
     return make_ready_future<>();
 }
 
+struct hint_sender::send_one_file_ctx  {
+    send_one_file_ctx(std::unordered_map<table_schema_version, column_mapping>& last_schema_ver_to_column_mapping)
+        : schema_ver_to_column_mapping(last_schema_ver_to_column_mapping)
+        , file_send_gate("file_send_gate")
+    {}
+    std::unordered_map<table_schema_version, column_mapping>& schema_ver_to_column_mapping;
+    seastar::named_gate file_send_gate;
+    std::optional<db::replay_position> first_failed_rp;
+    std::optional<db::replay_position> last_succeeded_rp;
+    std::set<db::replay_position> in_progress_rps;
+    bool segment_replay_failed = false;
+};
+
 future<timespec> hint_sender::get_last_file_modification(const sstring& fname) {
     return open_file_dma(fname, open_flags::ro).then([] (file f) {
         return do_with(std::move(f), [] (file& f) {
