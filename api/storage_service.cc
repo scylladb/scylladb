@@ -794,14 +794,16 @@ rest_cleanup_all(http_context& ctx, sharded<service::storage_service>& ss, std::
 static future<tasks::task_manager::task_ptr> force_keyspace_cleanup(http_context& ctx, sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
         auto& db = ctx.db;
         auto [keyspace, table_infos] = parse_table_infos(ctx, *req);
-        const auto& rs = db.local().find_keyspace(keyspace).get_replication_strategy();
+        auto& ks = db.local().find_keyspace(keyspace);
+        const auto& rs = ks.get_replication_strategy();
         if (rs.is_local() || !rs.is_vnode_based()) {
             auto reason = rs.is_local() ? "require" : "support";
             apilog.info("Keyspace {} does not {} cleanup", keyspace, reason);
             co_return nullptr;
         }
         apilog.info("force_keyspace_cleanup: keyspace={} tables={}", keyspace, table_infos);
-        if (!co_await ss.local().is_vnodes_cleanup_allowed(keyspace)) {
+        const auto my_id = db.local().get_token_metadata().get_my_id();
+        if (!db.local().vnodes_cleanup_allowed() || ks.get_static_effective_replication_map()->has_pending_ranges(my_id)) {
             auto msg = "Can not perform cleanup operation when topology changes";
             apilog.warn("force_keyspace_cleanup: keyspace={} tables={}: {}", keyspace, table_infos, msg);
             co_await coroutine::return_exception(std::runtime_error(msg));

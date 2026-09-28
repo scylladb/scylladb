@@ -7413,17 +7413,6 @@ future<> storage_service::notify_client_routes_change(const client_routes_servic
     co_await _client_routes.local().notify_client_routes_change(client_route_keys);
 }
 
-future<bool> storage_service::is_vnodes_cleanup_allowed(sstring keyspace) {
-    return container().invoke_on(0, [keyspace = std::move(keyspace)] (storage_service& ss) {
-        const auto my_id = ss.get_token_metadata().get_my_id();
-        const auto pending_ranges = ss._db.local().find_keyspace(keyspace).get_static_effective_replication_map()->has_pending_ranges(my_id);
-        const bool is_bootstrap_mode = ss._operation_mode == mode::BOOTSTRAP;
-        slogger.debug("is_vnodes_cleanup_allowed: keyspace={}, is_bootstrap_mode={}, pending_ranges={}",
-                keyspace, is_bootstrap_mode, pending_ranges);
-        return !is_bootstrap_mode && !pending_ranges;
-    });
-}
-
 bool storage_service::is_repair_based_node_ops_enabled(streaming::stream_reason reason) {
     static const std::unordered_map<sstring, streaming::stream_reason> reason_map{
         {"replace", streaming::stream_reason::replace},
