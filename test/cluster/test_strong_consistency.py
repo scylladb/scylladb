@@ -2168,8 +2168,9 @@ async def test_tablet_migration_rollback_from_sc_become_voter(manager: ScyllaClu
     The coordinator enters sc_rollback with a plain transition, so the rollback
     is reachable even though the forward configuration change can't complete -
     here because attempts keep failing and the pending replica is dead. The
-    sc_rollback exit barrier is what repairs the group back to the old replica
-    set before anything is acknowledged.
+    forward change never landed, so the sync of sc_rollback finds the group
+    converged, and the migration parks at sc_remove_pending, whose sync has to
+    remove the dead pending replica.
     """
     logger.info("Bootstrapping cluster")
     cmdline = DEFAULT_CMDLINE + [
@@ -2244,7 +2245,7 @@ async def test_tablet_migration_rollback_from_sc_become_voter(manager: ScyllaClu
             await dst_log.wait_for("sc_wait_for_snapshot_transfer: waiting for message", from_mark=mark, timeout=60)
 
             # From now on every configuration change attempt fails, so the
-            # sc_become_voter barrier can't pass and the migration parks there.
+            # sync of sc_become_voter can't complete and the migration parks there.
             logger.info("Making all further configuration change attempts fail")
             for server in servers:
                 await manager.api.enable_injection(server.ip_addr, "sc_config_sync_fail", one_shot=False)
@@ -2263,8 +2264,8 @@ async def test_tablet_migration_rollback_from_sc_become_voter(manager: ScyllaClu
             await manager.server_not_sees_other_server(servers[0].ip_addr, dst_server.ip_addr)
             await manager.api.exclude_node(servers[0].ip_addr, [dst_host_id])
 
-            logger.info("Waiting for the coordinator to enter sc_rollback")
-            await wait_for(lambda: stage_is("sc_rollback"), time.time() + 120)
+            logger.info("Waiting for the coordinator to reach sc_remove_pending")
+            await wait_for(lambda: stage_is("sc_remove_pending"), time.time() + 120)
 
             # The rollback's own configuration change has to be able to complete.
             logger.info("Letting configuration changes succeed again")
