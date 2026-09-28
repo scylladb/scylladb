@@ -16,6 +16,7 @@
 #include "locator/tablet_replication_strategy.hh"
 #include "service/strong_consistency/state_machine.hh"
 #include "service/strong_consistency/groups_manager.hh"
+#include "service/strong_consistency/serving_set.hh"
 #include "utils/error_injection.hh"
 #include "idl/strong_consistency/state_machine.dist.hh"
 #include "idl/strong_consistency/state_machine.dist.impl.hh"
@@ -28,8 +29,6 @@
 #include <fmt/std.h>
 
 #include <algorithm>
-#include <concepts>
-#include <span>
 
 namespace service::strong_consistency {
 
@@ -133,134 +132,110 @@ void stats::register_stats() {
     });
 }
 
+template <std::predicate<const locator::tablet_replica&> Pred>
+const locator::tablet_replica* replica_set_view::find_if(Pred pred) const {
+    if (const auto it = std::ranges::find_if(_base, pred); it != _base.end()) {
+        return &*it;
+    }
+    return _extra && pred(*_extra) ? _extra : nullptr;
+}
+
+const locator::tablet_replica* replica_set_view::find_replica(locator::host_id host) const {
+    return find_if([host] (const locator::tablet_replica& r) { return r.host == host; });
+}
+
+const locator::tablet_replica* replica_set_view::find_replica(const locator::tablet_replica& replica) const {
+    return find_if([&replica] (const locator::tablet_replica& r) { return r == replica; });
+}
+
+locator::tablet_replica_set replica_set_view::materialize() const {
+    locator::tablet_replica_set replicas;
+    replicas.reserve(_base.size() + (_extra ? 1 : 0));
+    replicas.insert(replicas.end(), _base.begin(), _base.end());
+    if (_extra) {
+        replicas.push_back(*_extra);
+    }
+    return replicas;
+}
+
+static replica_set_view current_set(const locator::tablet_info& tinfo) {
+    return replica_set_view(tinfo.replicas);
+}
+
+static replica_set_view next_set(const locator::tablet_transition_info& trinfo) {
+    return replica_set_view(trinfo.next);
+}
+
+// A transition may have no pending replica: a rebuild that only drops a replica, which
+// is what lowering the replication factor schedules, goes through the same stages as
+// a migration.
+//
+// FIXME: of the transitions that aren't migrations, only a rebuild raising the
+// replication factor is tested with strongly consistent tablets. Rebuilds for
+// lowering it, for removenode and for replace have to be tested or refused.
+static replica_set_view current_plus_pending(const locator::tablet_info& tinfo,
+        const locator::tablet_transition_info& trinfo) {
+    return replica_set_view(tinfo.replicas, trinfo.pending_replica ? &*trinfo.pending_replica : nullptr);
+}
+
+replica_set_view serving_replicas(const locator::tablet_info& tinfo, const locator::tablet_transition_info* trinfo) {
+    if (!trinfo) {
+        return current_set(tinfo);
+    }
+
+    using enum locator::tablet_transition_stage;
+    switch (trinfo->stage) {
+        case start_migration:
+        case sc_add_nonvoter:
+        case sc_snapshot_transfer:
+            // The pending replica is at most a non-voter, and nothing bounds how far
+            // behind it is until its snapshot transfer completes.
+            return current_set(tinfo);
+
+        case sc_become_voter:
+            // The pending replica is promoted and the leaving one demoted, and either
+            // may lead. The leaving replica stays a member until the next stage's
+            // barrier has drained the requests of this one.
+        case sc_rollback:
+            // The same with the roles swapped: entered only from sc_become_voter, the
+            // rollback demotes the pending replica and promotes the leaving one.
+            return current_plus_pending(tinfo, *trinfo);
+
+        case use_new:
+        case cleanup:
+        case end_migration:
+            return next_set(*trinfo);
+
+        case sc_remove_pending:
+        case cleanup_target:
+        case revert_migration:
+            return current_set(tinfo);
+
+        case write_both_read_old_fallback_cleanup:
+            // A strongly consistent migration that fails at sc_become_voter rolls
+            // back through sc_rollback instead.
+        case rebuild_repair:
+            // A strongly consistent rebuild transfers a raft snapshot at
+            // sc_snapshot_transfer instead.
+        case repair:
+        case end_repair:
+            // A strongly consistent tablet needs no repair: raft keeps its replicas
+            // in sync.
+        case restore:
+            // FIXME: nothing refuses to schedule a repair or a restore of a strongly
+            // consistent tablet yet.
+            break;
+    }
+    on_internal_error(logger, format("serving_replicas: unexpected transition stage {} "
+            "of a strongly consistent tablet", trinfo->stage));
+}
+
 // Answers, for one request to a strongly consistent tablet, which replicas the request
 // may be served by: the serving set at the stage the tablet's migration is in.
 //
 // The selector looks replicas up in the tablet's metadata in place, and owns the
 // effective replication map it was built from, which keeps that metadata alive.
 class coordinator::replica_selector {
-    // One of the tablet's replica lists, optionally followed by the migration's pending
-    // replica.
-    struct replica_set_view {
-        std::span<const locator::tablet_replica> base;
-        const locator::tablet_replica* extra = nullptr;
-
-        // The first replica that satisfies `pred`, or null.
-        template <std::predicate<const locator::tablet_replica&> Pred>
-        const locator::tablet_replica* find_if(Pred pred) const {
-            if (const auto it = std::ranges::find_if(base, pred); it != base.end()) {
-                return &*it;
-            }
-            return extra && pred(*extra) ? extra : nullptr;
-        }
-
-        template <std::invocable<const locator::tablet_replica&> Func>
-        void for_each(Func func) const {
-            std::ranges::for_each(base, func);
-            if (extra) {
-                func(*extra);
-            }
-        }
-
-        locator::tablet_replica_set materialize() const {
-            locator::tablet_replica_set replicas(base.begin(), base.end());
-            if (extra) {
-                replicas.push_back(*extra);
-            }
-            return replicas;
-        }
-    };
-
-    static replica_set_view current(const locator::tablet_info& tinfo) {
-        return {.base = tinfo.replicas};
-    }
-
-    static replica_set_view next(const locator::tablet_transition_info& trinfo) {
-        return {.base = trinfo.next};
-    }
-
-    // A transition may have no pending replica: a rebuild that only drops a replica, which
-    // is what lowering the replication factor schedules, goes through the same stages as
-    // a migration.
-    //
-    // FIXME: of the transitions that aren't migrations, only a rebuild raising the
-    // replication factor is tested with strongly consistent tablets. Rebuilds for
-    // lowering it, for removenode and for replace have to be tested or refused.
-    static replica_set_view current_plus_pending(const locator::tablet_info& tinfo,
-            const locator::tablet_transition_info& trinfo) {
-        return {
-            .base = tinfo.replicas,
-            .extra = trinfo.pending_replica ? &*trinfo.pending_replica : nullptr,
-        };
-    }
-
-    [[noreturn]] static void on_unexpected_stage(const char* func, locator::tablet_transition_stage stage) {
-        on_internal_error(logger, format("replica_selector::{}: unexpected transition stage {} "
-                "of a strongly consistent tablet", func, stage));
-    }
-
-    // The serving set of a strongly consistent tablet at the stage its migration is in:
-    // the replicas where a request with that view may run, whether it needs the raft leader
-    // or reads locally.
-    //
-    // It holds every voter the group may have while a view of the stage is live, so every
-    // leader a serving replica may name is in it. And every one of those voters is caught up
-    // and stays a member while such a view is live: the pending replica is promoted only
-    // after its snapshot transfer, and a replica is removed only after it is demoted and the
-    // requests of views in which it serves are drained. The serving sets of any two stages
-    // that can be live at once are nested, so a request is served within two routing hops.
-    // See "Strongly-consistent tablets" in docs/dev/topology-over-raft.md.
-    static replica_set_view serving(const locator::tablet_info& tinfo, const locator::tablet_transition_info* trinfo) {
-        if (!trinfo) {
-            return current(tinfo);
-        }
-
-        using enum locator::tablet_transition_stage;
-        switch (trinfo->stage) {
-            case start_migration:
-            case sc_add_nonvoter:
-            case sc_snapshot_transfer:
-                // The pending replica is at most a non-voter, and nothing bounds how far
-                // behind it is until its snapshot transfer completes.
-                return current(tinfo);
-
-            case sc_become_voter:
-                // The pending replica is promoted and the leaving one demoted, and either
-                // may lead. The leaving replica stays a member until the next stage's
-                // barrier has drained the requests of this one.
-            case sc_rollback:
-                // The same with the roles swapped: entered only from sc_become_voter, the
-                // rollback demotes the pending replica and promotes the leaving one.
-                return current_plus_pending(tinfo, *trinfo);
-
-            case use_new:
-            case cleanup:
-            case end_migration:
-                return next(*trinfo);
-
-            case sc_remove_pending:
-            case cleanup_target:
-            case revert_migration:
-                return current(tinfo);
-
-            case write_both_read_old_fallback_cleanup:
-                // A strongly consistent migration that fails at sc_become_voter rolls
-                // back through sc_rollback instead.
-            case rebuild_repair:
-                // A strongly consistent rebuild transfers a raft snapshot at
-                // sc_snapshot_transfer instead.
-            case repair:
-            case end_repair:
-                // A strongly consistent tablet needs no repair: raft keeps its replicas
-                // in sync.
-            case restore:
-                // FIXME: nothing refuses to schedule a repair or a restore of a strongly
-                // consistent tablet yet.
-                break;
-        }
-        on_unexpected_stage("serving", trinfo->stage);
-    }
-
     locator::effective_replication_map_ptr _erm;
     const locator::tablet_map& _tablet_map;
     locator::tablet_id _tablet_id;
@@ -278,7 +253,7 @@ public:
         , _tablet_id(_tablet_map.get_tablet_id(token))
         , _tablet_info(_tablet_map.get_tablet_info(_tablet_id))
         , _trinfo(_tablet_map.get_tablet_transition_info(_tablet_id))
-        , _serving(serving(_tablet_info, _trinfo))
+        , _serving(serving_replicas(_tablet_info, _trinfo))
     {}
 
     locator::tablet_id tablet_id() const {
@@ -300,12 +275,12 @@ public:
             .host = _erm->get_token_metadata().get_my_id(),
             .shard = this_shard_id(),
         };
-        return _serving.find_if([&] (const locator::tablet_replica& r) { return r == this_replica; }) != nullptr;
+        return _serving.find_replica(this_replica) != nullptr;
     }
 
     // The replica on `host` the request may be served by, or null if there is none.
     const locator::tablet_replica* find_replica(locator::host_id host) const {
-        return _serving.find_if([host] (const locator::tablet_replica& r) { return r.host == host; });
+        return _serving.find_replica(host);
     }
 
     // The live replica the request may be served by that is closest to this node,
