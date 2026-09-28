@@ -58,6 +58,7 @@
 #include "topology_mutation.hh"
 #include "utils/UUID.hh"
 #include "utils/assert.hh"
+#include "utils/chain_abort_source.hh"
 #include "utils/error_injection.hh"
 #include "utils/overloaded_functor.hh"
 #include "utils/stall_free.hh"
@@ -2233,13 +2234,26 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     // it was sent for, possibly in an earlier migration. All the RPCs are
                     // sent before parallel_for_each() returns, so the replicas need not
                     // outlive it.
+                    //
+                    // The first failure fails the attempt: it cancels the other RPCs and
+                    // is the one reported. Otherwise a leader whose proposal failed would
+                    // be reported only once the followers, which wait for that proposal,
+                    // reach their deadline.
+                    auto as = make_lw_shared<abort_source>();
+                    auto sub = utils::chain_abort_source(*as, _as);
                     return seastar::parallel_for_each(std::move(replicas),
                             [this, gid, group_id, session = trinfo.session_id,
-                                    stage = locator::tablet_transition_stage_to_string(trinfo.stage)]
+                                    stage = locator::tablet_transition_stage_to_string(trinfo.stage), as]
                             (const locator::tablet_replica& r) {
                         return ser::groups_manager_rpc_verbs::send_sync_raft_group_config(&_messaging,
-                                r.host, lowres_clock::now() + tablet_config_sync_timeout, _as,
-                                raft::server_id(r.host.uuid()), gid, group_id, r.shard, session, stage);
+                                r.host, lowres_clock::now() + tablet_config_sync_timeout, *as,
+                                raft::server_id(r.host.uuid()), gid, group_id, r.shard, session, stage)
+                                .handle_exception([as] (std::exception_ptr ep) {
+                            as->request_abort_ex(ep);
+                            return make_exception_future<>(std::move(ep));
+                        });
+                    }).handle_exception([as, sub = std::move(sub)] (std::exception_ptr ep) {
+                        return make_exception_future<>(as->abort_requested() ? as->abort_requested_exception_ptr() : std::move(ep));
                     });
                 });
             };
