@@ -486,9 +486,9 @@ the current (post-compaction) SSTable set.
 
 ## Strongly-consistent tablets
 
-For tablets belonging to a strongly-consistent table, the migration also updates the tablet's raft group membership so that it stays compatible with the replica set used by the current migration stage.
-
-State transition diagram for strongly-consistent tablet migration stages:
+For tablets belonging to a strongly-consistent table, the migration also changes the tablet's raft group
+membership. A replica leaves the group in two changes: it is demoted to a non-voter, and removed by a later
+stage. The pending replica joins as a non-voter and is promoted after its snapshot transfer.
 
 ```mermaid
 stateDiagram-v2
@@ -500,56 +500,109 @@ stateDiagram-v2
     use_new --> cleanup
     cleanup --> end_migration
     end_migration --> [*]
-    start_migration --> sc_rollback: error
-    sc_add_nonvoter --> sc_rollback: error
-    sc_snapshot_transfer --> sc_rollback: error
+    start_migration --> sc_remove_pending: error
+    sc_add_nonvoter --> sc_remove_pending: error
+    sc_snapshot_transfer --> sc_remove_pending: error
     sc_become_voter --> sc_rollback: error
-    sc_rollback --> cleanup_target
+    sc_rollback --> sc_remove_pending
+    sc_remove_pending --> cleanup_target
     cleanup_target --> revert_migration
     revert_migration --> [*]
 ```
 
-For strongly-consistent tables, the following additional preconditions hold:
+C is the current replica set and next the new one; L is the leaving replica and P the pending one.
 
-1. start_migration
+| stage | voters / non-voters | serving | hosting | steps |
+| --- | --- | --- | --- | --- |
+| start_migration | C / none | C | C+P | none |
+| sc_add_nonvoter | C / P | C | C+P | sync |
+| sc_snapshot_transfer | C / P | C | C+P | transfer |
+| sc_become_voter | next / L | C+P | C+P | barrier, sync |
+| use_new | next / none | next | C+P | barrier, sync removing L |
+| cleanup | next / none | next | next | cleanup RPC |
+| end_migration | unchanged | next | next | barrier |
+| sc_rollback, only from sc_become_voter | C / P | C+P | C+P | barrier, sync |
+| sc_remove_pending | C / none | C | C+P | barrier, sync removing P |
+| cleanup_target | C / none | C | C | cleanup RPC |
+| revert_migration | unchanged | C | C | barrier |
 
-    Precondition: transition info in group0 is filled with information about migration.
+- **voters / non-voters** is the configuration the stage's sync drives the group to (expected_raft_config()).
+- **serving** is where a request with that view may run, whether it needs the leader or reads locally.
+- **hosting** is where the group's raft server runs (hosts_raft_group()).
+- A **sync** is the sync_raft_group_config RPC to the stage's serving set: every replica that can be
+  elected at the stage, and every one whose configuration has to be checked. The leader proposes the
+  change; the others catch up. The RPC carries the stage it was sent for and the migration's session, which
+  a strongly-consistent migration keeps from the stage after start_migration to its end, so it identifies the
+  migration. A replica whose tablet is at another stage, or in another migration, refuses it: driving the
+  group towards the stage found there could run that stage's change before its barrier. A **barrier** is
+  the global barrier_and_drain.
+- With no leaving replica, use_new needs no barrier and no sync. With no pending replica, sc_become_voter
+  needs no barrier. A failed sync of use_new, sc_rollback or sc_remove_pending is retried until it succeeds.
 
-2. sc_add_nonvoter
+### Facts, invariants and steps
 
-    Precondition: All old and new replicas see the transition info from step 1 via local token metadata and effective replication maps.
+A request's *view* is the stage in the effective replication map it pinned. A request is *inside* m's raft
+server from its call to acquire_server() on m until it drops the returned handle.
 
-3. sc_snapshot_transfer
+Correctness is argued with two facts, never with "the barrier ran":
 
-    Precondition: the pending replica is a non-voter member of the tablet's raft group.
+- **drained(h, K, S)**: on host h, nothing of kind K with a view older than S runs, and nothing can start
+  with one. K is either requests (inside the group's server, or holding a map and about to enter it) or
+  stage-scoped RPCs (snapshot transfer, cleanup). It stays true, because views only move forward. A global
+  barrier(S) establishes it for every host and kind.
+- **synced(S)**: the configuration is the stage's, non-joint, every expected voter has it and names a leader
+  that is a voter of it. The sync of S establishes it; it holds until the next sync.
 
-4. sc_become_voter
+Invariants:
 
-    Precondition: the pending replica has executed a raft read barrier.
+- **I1, leader coverage.** A leader a node of serving(V) may name is in serving(V), for every live view V.
+  The one exception is below.
+- **I2, membership.** A request inside m's server keeps m a member, with a running server, until it ends.
+- **I3, storage.** Nothing reads or applies to m's tablet storage after its cleanup.
+- **I4, nesting.** Of any two live views, one's serving set contains the other's, so a request is served
+  within two routing hops.
 
-5. use_new
+A stage S may be published only if every voter the group has, or is being changed to, and every leader a
+node of serving(S) may name, is in serving(S), and serving(S) nests with every live serving set.
 
-    Precondition: the pending replica is a voter member of the tablet's raft group, and the leaving replica is not a member of the group.
+Only these steps put an invariant at risk:
 
-6. cleanup
+| step | invariant at risk | precondition | drain on |
+| --- | --- | --- | --- |
+| sync that makes X a voter | I1 | drained(h, requests, S), S the first stage with X in serving(S) | every host of the group |
+| sync that removes m, or m's teardown | I2 | drained(m, requests, S), S the first stage with m not in serving(S) | m |
+| cleanup of m | I3 | m's server is gone, and m is drained as for its removal | m |
+| deleting the transition | a stale cleanup RPC erases a later copy of the tablet | drained(m, RPCs, S), S the stage after the cleanup | m |
 
-    Precondition: No request will reach tablet replica which does not belong to the new replica set.
+A sync handler starts only if its host sees the stage and migration it was sent for, and proposes nothing
+once that stage moves on there. Hosts see a new stage at slightly different times, though: a follower may judge convergence
+while a leader that hasn't applied the stage yet lands an older stage's change. So a sync whose older sync
+could still propose something runs a barrier first, which waits for every older handler. The only such
+sync is sc_rollback's, after sc_become_voter: sc_add_nonvoter's sync is the first one, and without a pending
+replica it targets the configuration the group already has.
 
-7. end_migration
+Every barrier in the table serves one of these needs; the others were dropped.
 
-    Precondition: the leaving replica has been cleaned up.
+Consequences:
 
-In the rollback path, the first stage is `sc_rollback`:
+- L is demoted at sc_become_voter and removed at use_new. Before use_new requests enter L's server, so its
+  removal waits for their drain; once use_new is published L must not be a voter, or it could be elected
+  outside the serving set. So one change can't do both.
+- A server is torn down only by publishing a stage, after the drain and the removal: cleanup for L,
+  cleanup_target for P. No request holds its gate then. The tablet cleanup waits for the teardown
+  (groups_manager::cleanup_group()) before it removes the tablet's storage.
+- synced() of a demoting stage makes every voter name a voter, so the data plane never meets a demoted
+  leader, and routing info always names a leader in the serving set.
 
-1. sc_rollback
+### A demoted replica can lead for one commit
 
-2. cleanup_target
-
-    Precondition: the raft group's config matches the old replica set.
-
-3. revert_migration
-
-    Precondition: the pending replica has been cleaned up.
+Raft lets a server campaign as a non-voter of its newest configuration if, as far as it knows, that
+configuration is uncommitted and it was a voter in the previous one. After L's demotion this happens if L's
+commit index is below the demotion entry - L restarted within a commitlog sync period of the commit, since
+the commit index is stored after the log, or the leader died within a tick of it - and L then reaches no
+leader for an election timeout. L can win; on its first commit it sees it can't vote and hands leadership
+over. For that one commit, requests with view use_new see a leader outside their serving set. The
+coordinator forgets that leader and waits for the next one. The same holds for P after sc_rollback.
 
 # Tablet resize
 
