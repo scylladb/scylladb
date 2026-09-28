@@ -55,6 +55,10 @@ constexpr bool is_single_domain(scope_set scopes) {
     return !(scopes.intersects(table_only_scopes) && scopes.intersects(node_only_scopes));
 }
 
+// The tablet repair scheduler reads auto_repair_enabled and auto_repair_threshold_in_seconds on demand.
+// When no scope stores an override it falls back to the deprecated yaml options
+// auto_repair_enabled_default and auto_repair_threshold_default_in_seconds instead of the
+// registered default, until those options are removed.
 constexpr std::array registry_options = {
     option{
         .name = option_name::auto_repair_enabled,
