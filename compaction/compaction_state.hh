@@ -65,9 +65,17 @@ namespace compaction {
 //    lock -> sstable_set_lock
 //
 struct compaction_state {
+private:
     // Used both by compaction tasks that refer to the compaction_state
     // and by any function running under run_with_compaction_disabled().
+    // It is held through compaction_manager::hold_compaction_state_gate(),
+    // which reports a gate closed by stopping the manager as an abort.
     seastar::named_gate gate;
+
+    friend class compaction_manager;
+    friend class compaction_reenabler;
+
+public:
 
     // Serializes major compaction selection against regular compaction selection.
     // Major takes write lock; regular takes read lock.

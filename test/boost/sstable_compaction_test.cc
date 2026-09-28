@@ -47,6 +47,7 @@
 #include "test/lib/sstable_run_based_compaction_strategy_for_tests.hh"
 #include "test/lib/random_schema.hh"
 #include "test/lib/error_injection.hh"
+#include "test/lib/eventually.hh"
 #include "mutation/mutation_compactor.hh"
 #include "db/config.hh"
 #include "mutation_writer/partition_based_splitting_writer.hh"
@@ -1376,6 +1377,41 @@ SEASTAR_TEST_CASE(leveled_estimated_tasks_L0_promotion) {
         // L0 holds exactly its max size (4 sstables' worth).
         add_sstable_for_leveled_test(env, cf, max_sstable_size_in_bytes * 5 / 2, /*level*/0, keys[0].key(), keys[1].key());
         check(true);
+    });
+}
+
+// The compaction manager closes the gates of the compaction states as soon as the node is asked
+// to stop, while other services still run: e.g. the group0 state machine can be truncating a
+// table for a schema change, and so disable its compaction. This must fail with an abort, not
+// with a closed gate: the raft applier stops the raft instance on anything but an abort.
+// Reproducer for SCYLLADB-4647.
+SEASTAR_TEST_CASE(disable_compaction_after_compaction_manager_stop_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto cf = env.make_table_for_tests(table_for_tests::make_default_schema());
+        auto& cm = env.test_compaction_manager().get_compaction_manager();
+        auto& view = cf.as_compaction_group_view();
+
+        // Stopping the manager only completes once the table is stopped: the table
+        // disables compaction on some of its own views for as long as it lives, so
+        // closing their gates waits for it. The gate of the view used here has no
+        // holders, it is closed as soon as the manager gets to closing the gates.
+        auto stop_cm = cm.stop();
+        auto stop = defer([&] noexcept {
+            cf.stop().get();
+            stop_cm.get();
+        });
+
+        BOOST_REQUIRE(eventually_true([&] {
+            try {
+                // Succeeds until the gate is closed.
+                cm.stop_and_disable_compaction("test", view).get();
+                return false;
+            } catch (const abort_requested_exception&) {
+                return true;
+            }
+        }));
+        BOOST_REQUIRE_THROW(cm.get_incremental_repair_read_lock(view, "test").get(), abort_requested_exception);
+        BOOST_REQUIRE_THROW(cm.get_incremental_repair_write_lock(view, "test").get(), abort_requested_exception);
     });
 }
 
