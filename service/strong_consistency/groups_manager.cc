@@ -1057,6 +1057,51 @@ future<> groups_manager::sync_raft_group_config(global_tablet_id tablet, raft::g
     co_await converge_group_config(tablet, gid, guard, deadline, aoe.abort_source());
 }
 
+void groups_manager::schedule_raft_group_start(global_tablet_id tablet, raft::group_id id, raft_group_state& state,
+        token_metadata_ptr tm) {
+    logger.info("update(): starting raft server for tablet {}, group id {}", tablet, id);
+    state.gate = make_lw_shared<gate>();
+    // Still linked if the previous start hasn't finished yet.
+    if (!state.is_linked()) {
+        _starting_groups.push_back(state);
+    }
+    chain_control_op(state, id, [this, &state, tablet, id, tm = std::move(tm), g = state.gate] () mutable -> future<> {
+        co_await start_raft_group(tablet, id, std::move(tm));
+        state.server = &_raft_gr.get_server(id);
+        state.leader_info_updater = leader_info_updater(state, tablet, id);
+        co_await wait_for_first_leader(tablet, id, state, *g);
+
+        // If a restart is already queued behind us, the group isn't started yet; that
+        // start will unlink the state.
+        if (state.gate.get() == g.get()) {
+            _starting_groups.erase(_starting_groups.iterator_to(state));
+        }
+        logger.info("update(): raft server for tablet {} and group id {} is started", tablet, id);
+    });
+}
+
+future<> groups_manager::wait_for_first_leader(global_tablet_id tablet, raft::group_id id, raft_group_state& state,
+        gate& g) {
+    // Up to a minute, and not beyond a deletion queued for this incarnation: `g` is its
+    // gate, while state.gate may already be a later incarnation's open gate. The server
+    // can't be destroyed meanwhile: a deletion runs only after the start that calls this.
+    abort_on_expiry aoe(lowres_clock::now() + std::chrono::seconds(60));
+    while (auto holder = g.try_hold()) {
+        auto srv = raft_server(state, std::move(*holder));
+        auto res = srv.begin_mutate(aoe.abort_source());
+        auto* w = get_if<raft_server::need_wait_for_leader>(&res);
+        if (!w) {
+            co_return;
+        }
+        auto f = co_await coroutine::as_future(std::move(w->future));
+        if (f.failed()) {
+            logger.warn("update(): waiting for leader timed out for tablet {}, group id {}: {}",
+                    tablet, id, f.get_exception());
+            co_return;
+        }
+    }
+}
+
 void groups_manager::update(token_metadata_ptr new_tm) {
     if (!_features.strongly_consistent_tables) {
         return;
@@ -1075,8 +1120,10 @@ void groups_manager::update(token_metadata_ptr new_tm) {
         .host = new_tm->get_my_id(),
         .shard = this_shard_id()
     };
-    _leader_cache.begin_sweep();
+
     const auto& tablets = new_tm->tablets();
+
+    _leader_cache.begin_sweep();
     for (const auto& [table_id, _]: tablets.all_table_groups()) {
         const auto& tablet_map = tablets.get_tablet_map(table_id);
         if (!tablet_map.has_raft_info()) {
@@ -1087,71 +1134,26 @@ void groups_manager::update(token_metadata_ptr new_tm) {
             const auto tablet = global_tablet_id{table_id, tid};
 
             _leader_cache.mark_seen(id);
+
             if (!hosts_raft_group(tablet_map.get_tablet_info(tid), tablet_map.get_tablet_transition_info(tid), this_replica)) {
                 // Either the tablet has no replica on this node, or a migration has
                 // ended this node's membership in the group. Leaving has_tablet false
                 // schedules the deletion of the raft server below.
                 continue;
             }
+
             auto& state = _raft_groups[id];
             state.has_tablet = true;
-
-            // Don't start the raft server if it is already (started or starting) and not stopping.
-            if (state.gate && !state.gate->is_closed()) {
-                continue;
+            // Start the server, unless it is started or starting already and not being
+            // deleted.
+            if (!state.gate || state.gate->is_closed()) {
+                schedule_raft_group_start(tablet, id, state, new_tm);
             }
-
-            logger.info("update(): starting raft server for tablet {}, group id {}", tablet, id);
-            state.gate = make_lw_shared<gate>();
-            // Still linked if the previous start hasn't finished yet.
-            if (!state.is_linked()) {
-                _starting_groups.push_back(state);
-            }
-            chain_control_op(state, id, [&state, this, tablet, id, new_tm, g = state.gate] () mutable -> future<> {
-                co_await start_raft_group(tablet, id, std::move(new_tm));
-                state.server = &_raft_gr.get_server(id);
-                state.leader_info_updater = leader_info_updater(state, tablet, id);
-
-                // We want to make sure the server is ready to serve requests before
-                // we report it as started in wait_for_groups_to_start().
-                //
-                // The server can't be destroyed under us: a deletion runs only
-                // after this operation. Probing `g`, the gate of this
-                // incarnation, just stops the wait once a deletion is queued;
-                // state.gate may already be a later incarnation's open gate.
-                abort_on_expiry aoe(lowres_clock::now() + std::chrono::seconds(60));
-                while (true) {
-                    auto holder = g->try_hold();
-                    if (!holder) {
-                        break;
-                    }
-                    auto srv = raft_server(state, std::move(*holder));
-                    auto res = srv.begin_mutate(aoe.abort_source());
-                    if (auto w = get_if<raft_server::need_wait_for_leader>(&res)) {
-                        auto f = co_await coroutine::as_future(std::move(w->future));
-                        if (f.failed()) {
-                            logger.warn("update(): waiting for leader timed out for tablet {}, "
-                                "group id {}: {}", tablet, id, f.get_exception());
-                            break;
-                        }
-                    } else {
-                        break;
-                    }
-                }
-
-                // If a restart is already queued behind us, the group isn't
-                // started yet; that start will unlink the state.
-                if (state.gate.get() == g.get()) {
-                    _starting_groups.erase(_starting_groups.iterator_to(state));
-                }
-
-                logger.info("update(): raft server for tablet {} and group id {} is started", tablet, id);
-            });
         }
     }
+    _leader_cache.end_sweep();
 
     schedule_raft_groups_deletion(false);
-    _leader_cache.end_sweep();
 }
 
 future<raft_server> groups_manager::acquire_server(table_id table_id, raft::group_id group_id, abort_source& as) {

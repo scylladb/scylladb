@@ -187,6 +187,15 @@ class groups_manager : public peering_sharded_service<groups_manager> {
         raft::group_id group_id,
         locator::token_metadata_ptr tm);
 
+    // Queues the start of the group's raft::server behind the previous control operation.
+    void schedule_raft_group_start(locator::global_tablet_id tablet, raft::group_id group_id,
+        raft_group_state& state, locator::token_metadata_ptr tm);
+
+    // Waits until a just started server knows a leader, so that it is ready to serve
+    // requests once wait_for_groups_to_start() reports it.
+    future<> wait_for_first_leader(locator::global_tablet_id tablet, raft::group_id group_id,
+        raft_group_state& state, gate& g);
+
     void schedule_raft_group_deletion(raft::group_id group_id, raft_group_state& group_state);
 
     void schedule_raft_groups_deletion(bool all);
