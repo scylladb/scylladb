@@ -595,33 +595,17 @@ protected:
     }
 };
 
-class major_compaction_task_executor : public compaction_task_executor, public major_compaction_task_impl {
+class major_compaction_task_executor : public compaction_task_executor {
     bool _consider_only_existing_data;
 public:
     major_compaction_task_executor(compaction_manager& mgr,
             throw_if_stopping do_throw_if_stopping,
             compaction_group_view* t,
-            tasks::task_id parent_id,
             bool consider_only_existing_data)
         : compaction_task_executor(mgr, do_throw_if_stopping, t, compaction_type::Major, "Major compaction")
-        , major_compaction_task_impl(mgr._task_manager_module, tasks::task_id::create_random_id(), 0, "compaction group", t->schema()->ks_name(), t->schema()->cf_name(), "", parent_id)
         , _consider_only_existing_data(consider_only_existing_data)
-    {
-        _status.progress_units = "bytes";
-    }
-
-    virtual future<tasks::task_manager::task::progress> get_progress() const override {
-        return compaction_task_impl::get_progress(_compaction_data, _progress_monitor);
-    }
-
-    virtual void abort() noexcept override {
-        return compaction_task_executor::abort(_as);
-    }
+    {}
 protected:
-    virtual future<> run() override {
-        return perform();
-    }
-
     // first take major compaction semaphore, then exclusely take compaction lock for table.
     // it cannot be the other way around, or minor compaction for this table would be
     // prevented while an ongoing major compaction doesn't release the semaphore.
@@ -719,7 +703,7 @@ future<> compaction_manager::perform_major_compaction(compaction_group_view& t, 
         co_return;
     }
 
-    co_await perform_compaction<major_compaction_task_executor>({.type = major_compaction_task_type}, throw_if_stopping::no, info, &t, info.get_id(), consider_only_existing_data).discard_result();
+    co_await perform_compaction<major_compaction_task_executor>({.type = major_compaction_task_type}, throw_if_stopping::no, info, &t, consider_only_existing_data).discard_result();
 }
 
 class custom_compaction_task_executor : public compaction_task_executor {
