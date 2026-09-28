@@ -1438,6 +1438,85 @@ async def test_tombstone_gc_no_resurrection_propagation_delay(manager: ManagerCl
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_tombstone_gc_no_resurrection_full_repair_demotes_repaired(manager: ManagerClient):
+    """Verify that a full incremental repair doesn't take previously repaired data
+    out of the repaired set, which would allow repaired compaction to purge a
+    tombstone shadowing that data.
+
+    Full mode includes repaired sstables in the repair and bumps their repaired_at
+    to sstables_repaired_at+1.  Until sstables_repaired_at+1 is committed, or
+    indefinitely if the repair fails after the replicas marked their sstables,
+    those sstables are no longer repaired.  Repaired sstables compacted after the
+    repair snapshot aren't bumped and remain repaired, so the repaired set can
+    hold a tombstone while the data it shadows is outside of it.
+
+    Scenario:
+      - D (ts=1) is flushed with filler rows into a large sstable B, repaired.
+      - T (ts=2) deleting D is flushed into a small sstable A, and an unrelated
+        row into a small sstable C; both repaired.  T is GC-eligible now.
+      - Full repair starts; it's paused after the snapshot, and repaired
+        compaction merges A and C into O (B is in a different STCS bucket).
+        T is kept since B is in the repaired set.
+      - Full repair marks B as B'(repaired_at=3), but sstables_repaired_at is
+        not advanced (error injection standing for a repair failing after the
+        replicas marked their sstables).  B' is now unrepaired, O is repaired.
+      - Repaired compaction of O checks only the repaired set for shadowed data,
+        so it purges T and D is resurrected.
+    """
+    servers, cql, hosts, ks, table_id, logs = await _setup_tombstone_gc_cluster(manager, tablets=1)
+
+    # min_sstable_size=1 so tiny sstables are bucketed by size only, keeping B
+    # away from A and C.
+    await cql.run_async(f"ALTER TABLE {ks}.test WITH compaction = "
+                        f"{{'class': 'SizeTieredCompactionStrategy', 'min_threshold': 2, 'min_sstable_size': 1}}")
+    for s in servers:
+        await manager.api.disable_autocompaction(s.ip_addr, ks, 'test')
+        await manager.api.set_logger_level(s.ip_addr, 'compaction', 'debug')
+
+    key = 42
+    await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({key}, 1) USING TIMESTAMP 1")
+    await insert_keys(cql, ks, 1000, 3000)
+    for s in servers:
+        await manager.api.flush_keyspace(s.ip_addr, ks)
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", "all", incremental_mode='incremental')
+
+    await cql.run_async(f"DELETE FROM {ks}.test USING TIMESTAMP 2 WHERE pk = {key}")
+    for s in servers:
+        await manager.api.flush_keyspace(s.ip_addr, ks)
+    await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({key + 1}, 1)")
+    for s in servers:
+        await manager.api.flush_keyspace(s.ip_addr, ks)
+    # Make T GC-eligible (T.deletion_time < repair_time).
+    await asyncio.sleep(1)
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", "all", incremental_mode='incremental')
+
+    marks = [await log.mark() for log in logs]
+    await inject_error_on(manager, "wait_after_prepare_sstables_for_incremental_repair", servers)
+    await inject_error_on(manager, "repair_tablet_no_update_sstables_repair_at", servers)
+    repair = asyncio.create_task(manager.api.tablet_repair(servers[0].ip_addr, ks, "test", "all", incremental_mode='full'))
+    for log, mark in zip(logs, marks):
+        await log.wait_for('Re-enabled compaction for range', from_mark=mark)
+
+    # Compact A and C into O, after the repair snapshot was taken.
+    for s in servers:
+        await manager.api.enable_autocompaction(s.ip_addr, ks, 'test')
+    for log, mark in zip(logs, marks):
+        await log.wait_for(rf'\[Compact {ks}\.test .*\] Compacted 2 sstables to', from_mark=mark)
+    for s in servers:
+        await manager.api.disable_autocompaction(s.ip_addr, ks, 'test')
+        await manager.api.message_injection(s.ip_addr, "wait_after_prepare_sstables_for_incremental_repair")
+    await repair
+    await inject_error_off(manager, "wait_after_prepare_sstables_for_incremental_repair", servers)
+    await inject_error_off(manager, "repair_tablet_no_update_sstables_repair_at", servers)
+
+    for s in servers:
+        await _trigger_repaired_compaction(manager, s, ks)
+
+    rows = await cql.run_async(SimpleStatement(f"SELECT pk FROM {ks}.test WHERE pk = {key} BYPASS CACHE", consistency_level=ConsistencyLevel.ALL))
+    assert not rows, "Data resurrection: T was GC'd while D was demoted out of the repaired set by full repair"
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tombstone_gc_mv_optimization_safe_via_hints(manager: ManagerClient):
     """Verify the repaired-only tombstone GC optimization is safe for non-co-located MVs
     when view hints deliver the shadowing row before the MV repair snapshot.
