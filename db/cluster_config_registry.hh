@@ -93,6 +93,13 @@ bool supports_scope(const option& opt, scope s);
 bool is_table_oriented(const option& opt);
 std::optional<version> current_version(const gms::feature_service& features);
 
+// Defaults of auto_repair_enabled and auto_repair_threshold_in_seconds. Also the defaults of the
+// deprecated yaml options auto_repair_enabled_default and
+// auto_repair_threshold_default_in_seconds in db/config.cc, which the tablet repair
+// scheduler falls back to when no scope stores an override, so the two cannot drift apart.
+constexpr bool auto_repair_enabled_default = false;
+constexpr int64_t auto_repair_threshold_default_seconds = 24 * 3600;
+
 // Returns nullopt on success. On failure, returns a human-readable reason.
 std::optional<seastar::sstring> validate_value(const option& opt, std::string_view value);
 
