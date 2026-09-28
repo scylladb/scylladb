@@ -94,13 +94,11 @@ void delete_statement::validate_where_clause_for_conditions() const {
 }
 
 utils::chunked_vector<mutation> delete_statement::apply_updates(
-        const std::vector<dht::partition_range>& keys,
-        const std::vector<query::clustering_range>& ranges,
-        const update_parameters& params,
-        const json_cache_opt& json_cache) const {
-    auto mutations = make_mutations(keys);
+        const modification_spec& spec,
+        const update_parameters& params) const {
+    auto mutations = make_mutations(spec.keys);
     for (auto& m : mutations) {
-        for (auto&& range : ranges) {
+        for (auto&& range : spec.ranges) {
             delete_row_range(m, range, params);
         }
     }
