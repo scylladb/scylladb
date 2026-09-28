@@ -1518,7 +1518,7 @@ protected:
     }
 
     virtual future<compaction_manager::compaction_stats_opt> do_run() override {
-        if (!is_system_keyspace(_status.keyspace)) {
+        if (!is_system_keyspace(_compacting_table->schema()->ks_name())) {
             co_await utils::get_local_injector().inject("compaction_regular_compaction_task_executor_do_run", utils::wait_for_message(10s));
         }
 
