@@ -12,6 +12,7 @@ import logging
 
 from test.pylib.util import wait_for_view
 from test.cluster.mv.tablets.test_mv_tablets import pin_the_only_tablet, get_tablet_replicas
+from test.cluster.mv.util import run_with_overload_retries
 from test.cluster.util import new_test_keyspace
 
 from cassandra.cluster import ConsistencyLevel, EXEC_PROFILE_DEFAULT # type: ignore
@@ -109,7 +110,7 @@ async def test_mv_retried_writes_reach_all_replicas(manager: ScyllaClusterManage
         for i in range(10):
             # Perform a write that will increase the view update backlog on the slow node
             # to a level causing admission control to reject the following writes.
-            await cql.run_async(stmt, [0, i, 240000*'a'], host=hosts[0])
+            await run_with_overload_retries(cql, stmt, [0, i, 240000*'a'], host=hosts[0])
             # Based on whether the response from the slow node is received before the next write,
             # the following small write can serve two purposes:
             # 1. If the response is received before the next write, the write will be rejected by
@@ -119,7 +120,7 @@ async def test_mv_retried_writes_reach_all_replicas(manager: ScyllaClusterManage
             #   due to cl=ALL, the coordinator will wait for the response from the slow node, which
             #   will carry an up-to-date view update backlog for the next large write.
             cl_all_execution_profile = cql.execution_profile_clone_update(EXEC_PROFILE_DEFAULT, consistency_level = ConsistencyLevel.ALL)
-            await cql.run_async(stmt, [0, 10 + i, 'a'], host=hosts[0], execution_profile=cl_all_execution_profile)
+            await run_with_overload_retries(cql, stmt, [0, 10 + i, 'a'], host=hosts[0], execution_profile=cl_all_execution_profile)
 
         # Verify that all writes reached the slow node
         await asyncio.gather(*(manager.server_stop_gracefully(s.server_id) for s in servers))
