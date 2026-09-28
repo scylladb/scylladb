@@ -1734,6 +1734,13 @@ future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
     // let it know that the bootstrap is completed as well
     co_await _sys_ks.local().set_bootstrap_state(db::system_keyspace::bootstrap_state::COMPLETED);
     set_mode(mode::NORMAL);
+    // Reaching NORMAL here means this node's ring/tablet ownership is settled,
+    // regardless of whether this run actually went through mode::BOOTSTRAP above
+    // (a node that was already bootstrapped skips that branch entirely). So this
+    // is the universal point to allow vnodes cleanup, not "leaving BOOTSTRAP".
+    co_await _db.invoke_on_all([] (replica::database& db) {
+        db.allow_vnodes_cleanup();
+    });
     // Load schema version into the database object
     co_await db::schema_tables::update_schema_version_and_announce(_sys_ks, proxy, co_await db::schema_tables::get_group0_schema_version(_sys_ks.local()));
 
