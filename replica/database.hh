@@ -16,7 +16,7 @@
 #include <seastar/core/execution_stage.hh>
 #include <seastar/core/when_all.hh>
 #include "replica/global_table_ptr.hh"
-#include "replica/logstor/compaction.hh"
+#include "replica/logstor/logstor_fwd.hh"
 #include "replica/logstor/types.hh"
 #include "types/user.hh"
 #include "utils/assert.hh"
@@ -38,7 +38,6 @@
 #include <seastar/core/condition-variable.hh>
 #include "db/commitlog/replay_position.hh"
 #include "db/commitlog/commitlog_types.hh"
-#include "logstor/logstor.hh"
 #include "schema/schema_fwd.hh"
 #include "db/view/view.hh"
 #include "db/snapshot-ctl.hh"
@@ -924,9 +923,7 @@ public:
 
     // The mutation sources of this table for SELECT ... FROM MUTATION_FRAGMENTS(), see
     // logstor::make_mutation_sources_for_dump(). Only valid when uses_logstor().
-    std::map<sstring, mutation_source> make_logstor_mutation_sources_for_dump(schema_ptr s, const dht::decorated_key& dk, reader_permit permit) {
-        return _logstor->make_mutation_sources_for_dump(std::move(s), *_logstor_index, dk, std::move(permit));
-    }
+    std::map<sstring, mutation_source> make_logstor_mutation_sources_for_dump(schema_ptr s, const dht::decorated_key& dk, reader_permit permit);
 
     logstor::primary_index& logstor_index() noexcept {
         return *_logstor_index;
@@ -1256,17 +1253,10 @@ public:
         return _compaction_manager;
     }
 
-    logstor::segment_manager& get_logstor_segment_manager() noexcept {
-        return _logstor->get_segment_manager();
-    }
+    logstor::segment_manager& get_logstor_segment_manager() noexcept;
+    const logstor::segment_manager& get_logstor_segment_manager() const noexcept;
 
-    const logstor::segment_manager& get_logstor_segment_manager() const noexcept {
-        return _logstor->get_segment_manager();
-    }
-
-    logstor::compaction_manager& get_logstor_compaction_manager() noexcept {
-        return _logstor->get_compaction_manager();
-    }
+    logstor::compaction_manager& get_logstor_compaction_manager() noexcept;
 
     future<> flush_separator(std::optional<logstor::segment_sequence> seq_num = std::nullopt);
 
