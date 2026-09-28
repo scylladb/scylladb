@@ -171,7 +171,7 @@ Adding new nodes
 
    .. code-block:: shell
 
-      docker exec -it <container-name> supervisorctl start scylla
+      docker start <container-name>
 
 #. Monitor the bootstrap process from an existing node:
 

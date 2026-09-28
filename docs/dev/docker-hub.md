@@ -161,11 +161,13 @@ disabling the overprovisioned flag as documented in the section "Command-line op
 
 ### Restart ScyllaDB
 
-The Docker image uses supervisord to manage ScyllaDB processes. You can restart ScyllaDB in a Docker container using:
+ScyllaDB runs as the container's main process, so restarting ScyllaDB means restarting the container:
 
 ```
-docker exec -it some-scylla supervisorctl restart scylla
+docker restart -t 900 some-scylla
 ```
+
+The `-t 900` option gives ScyllaDB up to 900 seconds to shut down gracefully; without it, Docker sends SIGKILL after 10 seconds.
 
 ### Command-line options
 

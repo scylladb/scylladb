@@ -10,6 +10,4 @@
 
       .. code-block:: shell
 
-         docker exec -it some-scylla supervisorctl restart scylla
-
-      (without restarting *some-scylla* container)
+         docker restart -t 900 some-scylla

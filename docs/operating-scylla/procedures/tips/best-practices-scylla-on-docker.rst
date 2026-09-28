@@ -121,13 +121,15 @@ To query when the node is up and running (and view the status of the entire clus
  UN  172.17.0.3  177.48 KB  256     100.0%            097caff5-892d-412f-af78-11d572795d6f  rack1
  UN  172.17.0.2  125 KB     256     100.0%            c1906b2b-ce0c-4890-a9d4-8c360f111ad0  rack1
 
-Restarting ScyllaDB from within the Running Node 
-+++++++++++++++++++++++++++++++++++++++++++++++++++
-The Docker image uses ``supervisord`` to manage ScyllaDB processes. You can restart ScyllaDB in a Docker container using:
+Restarting ScyllaDB
++++++++++++++++++++
+ScyllaDB runs as the container's main process, so restarting ScyllaDB means restarting the container:
 
 .. code-block:: console
 
- docker exec -it some-scylla supervisorctl restart scylla
+ docker restart -t 900 some-scylla
+
+The ``-t 900`` option gives ScyllaDB up to 900 seconds to shut down gracefully; without it, Docker sends SIGKILL after 10 seconds.
 
 Configuring a Data Volume for Storage
 +++++++++++++++++++++++++++++++++++++

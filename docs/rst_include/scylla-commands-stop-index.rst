@@ -10,6 +10,4 @@
 
       .. code-block:: shell
 
-         docker exec -it some-scylla supervisorctl stop scylla
-
-      (without stopping *some-scylla* container)
+         docker stop -t 900 some-scylla
