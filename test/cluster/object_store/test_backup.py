@@ -28,6 +28,7 @@ from test.pylib.util import unique_name, wait_all, wait_for_view
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas, get_tablet_count
 from cassandra import ReadFailure
 from cassandra.cluster import ConsistencyLevel
+from cassandra.query import SimpleStatement
 from collections import Counter, defaultdict
 from test.pylib.util import wait_for
 from test.pylib.rest_client import HTTPError
@@ -2275,15 +2276,16 @@ def snapshot_ref_gens(keys, tag):
 def snapshot_catalog_sstable_rows(cql, tag, ks, cf, servers):
     rows = []
     for dc, rack in {(s.datacenter, s.rack) for s in servers}:
-        rows.extend(cql.execute(f"""
+        rows.extend(cql.execute(SimpleStatement(f"""
                     SELECT * FROM system_distributed.snapshot_sstables WHERE
                     snapshot_name = '{tag}' AND \"keyspace\" = '{ks}' AND
                     \"table\" = '{cf}' AND datacenter = '{dc}' AND rack = '{rack}'
-                    """))
+                    """, consistency_level=ConsistencyLevel.QUORUM)))
     return rows
 
 def snapshot_commit_rows(cql, tag):
-    return list(cql.execute(f"SELECT * FROM system_distributed.snapshots WHERE name = '{tag}'"))
+    return list(cql.execute(SimpleStatement(f"SELECT * FROM system_distributed.snapshots WHERE name = '{tag}'",
+                                            consistency_level=ConsistencyLevel.QUORUM)))
 
 async def wait_node_refs_gone(object_storage, sids):
     """destroy() of compacted-away sstables runs asynchronously: wait until
@@ -3318,3 +3320,133 @@ async def test_object_storage_backup_survives_table_drop(manager: ScyllaClusterM
                 status = await manager.api.wait_task(server.ip_addr, tid)
                 assert status is not None and status.get('state') == 'done', f'Restore failed: {status}'
                 await check_mutation_replicas(cql, manager, servers, range(50), topology, logger, ks2, cf2)
+
+
+def assert_snapshot_cleared(cql, object_storage, tag, ks, cf, servers):
+    """No snapshot refs, no orphaned components, no catalog rows.
+    Every remaining sid is claimed by a live node reference."""
+    keys = object_storage_keys(object_storage)
+    leftover_refs = [k for k in keys if f'/refs/snapshot-{tag}/' in k]
+    assert not leftover_refs, f'Snapshot references survived the clear: {leftover_refs}'
+    component_sids = {k.split('/')[1] for k in keys
+                      if k.startswith('sstables/') and '/refs/' not in k and not k.startswith('sstables/snapshots/')}
+    node_ref_sids = {k.split('/')[1] for k in keys if '/refs/nodes/' in k}
+    orphans = component_sids - node_ref_sids
+    assert not orphans, f'Orphaned components after the clear: {sorted(orphans)}'
+    assert not snapshot_commit_rows(cql, tag), 'The commit marker survived the clear'
+    assert not snapshot_catalog_sstable_rows(cql, tag, ks, cf, servers), 'Catalog rows survived the clear'
+
+
+async def clear_cluster_snapshot(manager, server, tag, expect='done'):
+    tid = await manager.api.clear_cluster_snapshot(server.ip_addr, tag)
+    status = await manager.api.wait_task(server.ip_addr, tid)
+    assert status is not None and status.get('state') == expect, f'Clear of {tag}: expected {expect}, got {status}'
+
+
+async def test_object_storage_clear_snapshot(manager: ScyllaClusterManager, object_storage):
+    """Clearing a backed-up snapshot deletes its references,
+    the retained snapshot_owned registry rows, the manifest, the catalog rows
+    and the components if they are no longer referenced by any snapshot or live table."""
+    topology = topo(rf=3, nodes=3, racks=3, dcs=1)
+    servers, _ = await create_cluster(topology, manager, logger, object_storage)
+    await manager.disable_tablet_balancing()
+    cql = manager.get_cql()
+    server = servers[0]
+    tag = unique_name('snap_')
+
+    async with new_test_keyspace(manager, keyspace_options(object_storage, rf=topology.rf) + " AND tablets = {'initial': 4}") as ks:
+        async with new_test_table(manager, ks, "key int, c1 text, c2 text, PRIMARY KEY (key)") as tbl:
+            cf = tbl.split('.')[1]
+            await prepare_write_workload(cql, tbl, flush=False, n=50)
+            await asyncio.gather(*(manager.api.flush_keyspace(s.ip_addr, ks) for s in servers))
+            await take_in_place_backup(manager, server, object_storage, ks, cf, tag)
+            snapshotted, _ = snapshot_ref_gens(object_storage_keys(object_storage), tag)
+
+            # Compact the snapshotted sstables away, so the clear also has
+            # snapshot_owned residue to consume.
+            await prepare_write_workload(cql, tbl, flush=False)
+            await asyncio.gather(*(manager.api.flush_keyspace(s.ip_addr, ks) for s in servers))
+            await asyncio.gather(*(manager.api.keyspace_compaction(s.ip_addr, ks) for s in servers))
+            await wait_node_refs_gone(object_storage, snapshotted)
+            table_id = str(await manager.get_table_or_view_id(ks, cf))
+
+            await clear_cluster_snapshot(manager, server, tag)
+
+            assert_snapshot_cleared(cql, object_storage, tag, ks, cf, servers)
+            assert not any('manifest.json' in k for k in object_storage_keys(object_storage)), 'The manifest survived the clear'
+            for srv in servers:
+                host = (await wait_for_cql_and_get_hosts(cql, [srv], time.time() + 30))[0]
+                assert await snapshot_owned_rows(cql, table_id, host=host) is None, f'{srv.ip_addr}: snapshot_owned rows survived the clear'
+            assert len(list(cql.execute(f"SELECT key FROM {tbl}"))) == 100
+
+            # Clearing an unknown tag fails cleanly.
+            await clear_cluster_snapshot(manager, server, tag, expect='failed')
+
+
+async def test_object_storage_clear_snapshot_shared_sstables(manager: ScyllaClusterManager, object_storage):
+    """Two snapshots pin the same sstables. Clearing one releases only its own
+    references; the other keeps its pins, its data and its catalog rows."""
+    topology = topo(rf=3, nodes=3, racks=3, dcs=1)
+    servers, _ = await create_cluster(topology, manager, logger, object_storage)
+    await manager.disable_tablet_balancing()
+    cql = manager.get_cql()
+    server = servers[0]
+    tag_a = unique_name('snap_a_')
+    tag_b = unique_name('snap_b_')
+
+    async with new_test_keyspace(manager, keyspace_options(object_storage, rf=topology.rf) + " AND tablets = {'initial': 4}") as ks:
+        async with new_test_table(manager, ks, "key int, c1 text, c2 text, PRIMARY KEY (key)") as tbl:
+            cf = tbl.split('.')[1]
+            await prepare_write_workload(cql, tbl, flush=False, n=50)
+            await asyncio.gather(*(manager.api.flush_keyspace(s.ip_addr, ks) for s in servers))
+            await manager.api.take_cluster_snapshot(server.ip_addr, ks, tag=tag_a, tables=[cf])
+            await manager.api.take_cluster_snapshot(server.ip_addr, ks, tag=tag_b, tables=[cf])
+            refs_b, _ = snapshot_ref_gens(object_storage_keys(object_storage), tag_b)
+            assert refs_b
+            before = bucket_objects(object_storage)
+
+            await clear_cluster_snapshot(manager, server, tag_a)
+
+            # Only tag_a's references disappeared.
+            after = bucket_objects(object_storage)
+            gone = set(before) - set(after)
+            assert gone and all(f'/refs/snapshot-{tag_a}/' in k for k in gone), f'Clear of {tag_a} removed: {sorted(gone)}'
+            assert_objects_intact({k: v for k, v in before.items() if k in after}, after, 'clear')
+            assert snapshot_ref_gens(object_storage_keys(object_storage), tag_b)[0] == refs_b
+            assert len(snapshot_commit_rows(cql, tag_b)) == 1
+            assert snapshot_catalog_sstable_rows(cql, tag_b, ks, cf, servers)
+
+            # Clearing the second snapshot releases everything.
+            await clear_cluster_snapshot(manager, server, tag_b)
+            assert_snapshot_cleared(cql, object_storage, tag_b, ks, cf, servers)
+            assert len(list(cql.execute(f"SELECT key FROM {tbl}"))) == 50
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_object_storage_clear_snapshot_failure_resume(manager: ScyllaClusterManager, object_storage):
+    """A clear that fails midway leaves the catalog rows in place, so
+    re-running it converges to a fully cleared snapshot."""
+    topology = topo(rf=3, nodes=3, racks=3, dcs=1)
+    servers, _ = await create_cluster(topology, manager, logger, object_storage)
+    await manager.disable_tablet_balancing()
+    cql = manager.get_cql()
+    server = servers[0]
+    tag = unique_name('snap_')
+
+    async with new_test_keyspace(manager, keyspace_options(object_storage, rf=topology.rf) + " AND tablets = {'initial': 4}") as ks:
+        async with new_test_table(manager, ks, "key int, c1 text, c2 text, PRIMARY KEY (key)") as tbl:
+            cf = tbl.split('.')[1]
+            await prepare_write_workload(cql, tbl, flush=False, n=50)
+            await asyncio.gather(*(manager.api.flush_keyspace(s.ip_addr, ks) for s in servers))
+            await manager.api.take_cluster_snapshot(server.ip_addr, ks, tag=tag, tables=[cf])
+
+            await asyncio.gather(*(manager.api.enable_injection(s.ip_addr, 'cluster_clear_snapshot_release', one_shot=True)
+                                   for s in servers))
+            await clear_cluster_snapshot(manager, server, tag, expect='failed')
+
+            # The rows go last, so the failed clear left them for the re-run.
+            assert len(snapshot_commit_rows(cql, tag)) == 1
+
+            await clear_cluster_snapshot(manager, server, tag)
+            assert_snapshot_cleared(cql, object_storage, tag, ks, cf, servers)
+            assert len(list(cql.execute(f"SELECT key FROM {tbl}"))) == 50

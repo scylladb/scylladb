@@ -64,6 +64,65 @@ def test_clearnapshot_tag_and_keyspaces(nodetool):
     ])
 
 
+@pytest.mark.parametrize("nowait,task_state,task_error", [(False, "done", ""),
+                                                          (False, "failed", "error"),
+                                                          (True, "", "")])
+def test_cluster_clearsnapshot(nodetool, scylla_only, nowait, task_state, task_error):
+    tag = "snapshot_name"
+    task_id = "2c4a3e5f"
+    start_time = "2024-08-08T14:29:25Z"
+    end_time = "2024-08-08T14:30:42Z"
+    task_status = {
+        "id": task_id,
+        "type": "clear snapshot",
+        "kind": "cluster",
+        "scope": "cluster",
+        "state": task_state,
+        "is_abortable": True,
+        "start_time": start_time,
+        "end_time": end_time,
+        "error": task_error,
+        "sequence_number": 0,
+        "shard": 0,
+        "progress_total": 1.0,
+        "progress_completed": 1.0,
+        "children_ids": []
+    }
+    expected_requests = [
+        expected_request(
+            "DELETE",
+            "/storage_service/tablets/snapshots",
+            params={"tag": tag},
+            response=task_id)
+    ]
+    args = ["cluster", "clearsnapshot", "-t", tag]
+    if nowait:
+        args.append("--nowait")
+        res = nodetool(*args, expected_requests=expected_requests)
+        assert task_id in res.stdout
+    else:
+        expected_requests.append(
+            expected_request(
+                "GET",
+                f"/task_manager/wait_task/{task_id}",
+                response=task_status))
+        res = nodetool(*args, expected_requests=expected_requests, check_return_code=False)
+        if task_state == "done":
+            expected_returncode = 0
+            expected_state = ""
+        else:
+            expected_returncode = 1
+            expected_state = f": {task_error}"
+
+        expected_output = f"""Requested clearing of cluster snapshot [{tag}]
+{task_state}{expected_state}
+start: {start_time}
+end: {end_time}
+"""
+        assert res.returncode == expected_returncode
+        assert res.stdout == expected_output
+
+
 def test_listsnapshots(nodetool, request):
     res = nodetool("listsnapshots", expected_requests=[
         expected_request("GET", "/storage_service/snapshots", response=[
