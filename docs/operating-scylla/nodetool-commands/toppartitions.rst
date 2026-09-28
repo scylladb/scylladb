@@ -107,6 +107,33 @@ Example output:
 
    10.0.0.72
 
+Running over CQL
+----------------
+
+The same sampler is available remotely with the ``EXECUTE COMMAND toppartitions`` statement, for superusers only.
+It samples the node the statement is sent to, blocks for ``duration`` milliseconds, and returns one row
+per sampled partition. All parameters are named and optional:
+
+* ``keyspace_name``, ``table_name``: sample one keyspace or one table (default: all tables)
+* ``duration``: sampling window in milliseconds (``-d``, default 5000, max 60000)
+* ``capacity``: sampler capacity (``-s``, default 256, max 4096)
+* ``list_size``: partitions reported per sampler (``-k``, default 10 or ``capacity`` if smaller, at most ``capacity``)
+* ``kind``: ``'read'`` or ``'write'`` to run a single sampler (``-a``, default both)
+
+.. code-block:: cql
+
+   EXECUTE COMMAND toppartitions WITH keyspace_name = 'ks' AND table_name = 't'
+       AND duration = 3000 AND capacity = 64 AND list_size = 5;
+
+Example output (``t`` has an ``int`` partition key, so ``partition_key`` is the stringified integer):
+
+.. code-block:: text
+
+    keyspace_name | table_name | kind  | rank | partition_key | count | error
+   ---------------+------------+-------+------+---------------+-------+-------
+               ks |          t |  read |    0 |             0 |  4102 |     0
+               ks |          t | write |    0 |             0 |  4102 |     0
+
 Additional Information
 ----------------------
 

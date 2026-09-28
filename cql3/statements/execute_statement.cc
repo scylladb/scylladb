@@ -25,7 +25,7 @@ namespace cql3 {
 namespace statements {
 
 const command* find_command(std::string_view name) {
-    static const std::vector<const command*> commands{};
+    static const std::vector<const command*> commands{&toppartitions_command_instance()};
     auto it = std::ranges::find(commands, name, [](const command* c) { return c->name(); });
     return it == commands.end() ? nullptr : *it;
 }

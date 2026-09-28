@@ -73,6 +73,8 @@ public:
     virtual future<std::unique_ptr<result_set>> run(query_processor& qp, const command_args& args, abort_source& as) const = 0;
 };
 
+const command& toppartitions_command_instance();
+
 // nullptr if there is no such command.
 const command* find_command(std::string_view name);
 
