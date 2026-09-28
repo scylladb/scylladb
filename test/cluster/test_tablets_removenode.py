@@ -24,9 +24,29 @@ async def create_keyspace(cql, initial_tablets, rf):
                         f" AND tablets = {{'initial': {initial_tablets}}};")
 
 
-async def run_async_cl_all(cql, query: str):
-    stmt = SimpleStatement(query, consistency_level = ConsistencyLevel.ALL)
-    return await cql.run_async(stmt)
+async def create_keyspaces(cql) -> dict[int, str]:
+    """Create a keyspace with a `test` table for each replication factor, keyed by it."""
+    # The tests use RF=1 to check that losing a tablet's only replica doesn't crash
+    # anything, and RF=2 and RF=3 to check that the data survives.
+    ks_by_rf = {}
+    for rf in [1, 2, 3]:
+        ks = await create_keyspace(cql, 32, rf=rf)
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        ks_by_rf[rf] = ks
+    return ks_by_rf
+
+
+async def insert_rows(cql, table: str, keys):
+    await asyncio.gather(*[cql.run_async(SimpleStatement(f"INSERT INTO {table} (pk, c) VALUES ({k}, {k});",
+                                                         consistency_level=ConsistencyLevel.ALL)) for k in keys])
+
+
+async def check_rows(cql, table: str, keys, cl):
+    """Check that `table` holds exactly `keys`, each with c == pk."""
+    rows = await cql.run_async(SimpleStatement(f"SELECT * FROM {table};", consistency_level=cl), all_pages=True)
+    assert len(rows) == len(keys)
+    for r in rows:
+        assert r.c == r.pk
 
 
 async def test_removenode_with_coordinator_restart(manager: ScyllaClusterManager):
@@ -72,39 +92,29 @@ async def test_replace(manager: ScyllaClusterManager):
 
     cql = manager.get_cql()
 
-    ks1 = await create_keyspace(cql, 32, rf=1)
-    await cql.run_async(f"CREATE TABLE {ks1}.test (pk int PRIMARY KEY, c int);")
-
     # We want RF=2 table to validate that quorum reads work after replacing node finishes
     # bootstrap which indicates that bootstrap waits for rebuilt.
     # Otherwise, some reads would fail to find a quorum.
-    ks2 = await create_keyspace(cql, 32, rf=2)
-    await cql.run_async(f"CREATE TABLE {ks2}.test (pk int PRIMARY KEY, c int);")
-
-    ks3 = await create_keyspace(cql, 32, rf=3)
-    await cql.run_async(f"CREATE TABLE {ks3}.test (pk int PRIMARY KEY, c int);")
+    ks_by_rf = await create_keyspaces(cql)
+    ks3 = ks_by_rf[3]
     await cql.run_async(f"CREATE TABLE {ks3}.test2 (pk int PRIMARY KEY, c int);")
 
     logger.info("Populating table")
 
     keys = range(256)
-    await asyncio.gather(*[run_async_cl_all(cql, f"INSERT INTO {ks1}.test (pk, c) VALUES ({k}, {k});") for k in keys])
-    await asyncio.gather(*[run_async_cl_all(cql, f"INSERT INTO {ks2}.test (pk, c) VALUES ({k}, {k});") for k in keys])
-    await asyncio.gather(*[run_async_cl_all(cql, f"INSERT INTO {ks3}.test (pk, c) VALUES ({k}, {k});") for k in keys])
+    for ks in ks_by_rf.values():
+        await insert_rows(cql, f"{ks}.test", keys)
 
     async def check_ks(ks):
         logger.info(f"Checking {ks}")
-        query = SimpleStatement(f"SELECT * FROM {ks}.test;", consistency_level=ConsistencyLevel.QUORUM)
-        rows = await cql.run_async(query)
-        assert len(rows) == len(keys)
-        for r in rows:
-            assert r.c == r.pk
+        await check_rows(cql, f"{ks}.test", keys, ConsistencyLevel.QUORUM)
 
     async def check():
         # RF=1 keyspace will experience data loss so don't check it.
         # We include it in the test only to check that the system doesn't crash.
-        await check_ks(ks2)
-        await check_ks(ks3)
+        for rf, ks in ks_by_rf.items():
+            if rf > 1:
+                await check_ks(ks)
 
     await check()
 
@@ -121,11 +131,7 @@ async def test_replace(manager: ScyllaClusterManager):
     servers = servers[1:]
 
     key_count = await finish_writes()
-    stmt = SimpleStatement(f"SELECT * FROM {ks3}.test2;", consistency_level=ConsistencyLevel.QUORUM)
-    rows = await cql.run_async(stmt, all_pages=True)
-    assert len(rows) == key_count
-    for r in rows:
-        assert r.c == r.pk
+    await check_rows(cql, f"{ks3}.test2", range(key_count), ConsistencyLevel.QUORUM)
 
     await check()
 
@@ -151,42 +157,22 @@ async def test_removenode(manager: ScyllaClusterManager):
 
     cql = manager.get_cql()
 
-    # RF=1
-    ks1 = await create_keyspace(cql, 32, rf=1)
-    await cql.run_async(f"CREATE TABLE {ks1}.test (pk int PRIMARY KEY, c int);")
-
-    # RF=2
-    ks2 = await create_keyspace(cql, 32, rf=2)
-    await cql.run_async(f"CREATE TABLE {ks2}.test (pk int PRIMARY KEY, c int);")
-
-    # RF=3
-    ks3 = await create_keyspace(cql, 32, rf=3)
-    await cql.run_async(f"CREATE TABLE {ks3}.test (pk int PRIMARY KEY, c int);")
+    ks_by_rf = await create_keyspaces(cql)
+    ks3 = ks_by_rf[3]
 
     logger.info("Populating table")
 
     keys = range(256)
-    await asyncio.gather(*[run_async_cl_all(cql, f"INSERT INTO {ks1}.test (pk, c) VALUES ({k}, {k});") for k in keys])
-    await asyncio.gather(*[run_async_cl_all(cql, f"INSERT INTO {ks2}.test (pk, c) VALUES ({k}, {k});") for k in keys])
-    await asyncio.gather(*[run_async_cl_all(cql, f"INSERT INTO {ks3}.test (pk, c) VALUES ({k}, {k});") for k in keys])
+    for ks in ks_by_rf.values():
+        await insert_rows(cql, f"{ks}.test", keys)
 
     async def check():
         # RF=1 table "test" will experience data loss so don't check it.
         # We include it to check that the system doesn't crash.
-
-        logger.info("Checking table test2")
-        query = SimpleStatement(f"SELECT * FROM {ks2}.test;", consistency_level=ConsistencyLevel.ONE)
-        rows = await cql.run_async(query)
-        assert len(rows) == len(keys)
-        for r in rows:
-            assert r.c == r.pk
-
-        logger.info("Checking table test3")
-        query = SimpleStatement(f"SELECT * FROM {ks3}.test;", consistency_level=ConsistencyLevel.ONE)
-        rows = await cql.run_async(query)
-        assert len(rows) == len(keys)
-        for r in rows:
-            assert r.c == r.pk
+        for rf, ks in ks_by_rf.items():
+            if rf > 1:
+                logger.info(f"Checking the RF={rf} keyspace")
+                await check_rows(cql, f"{ks}.test", keys, ConsistencyLevel.ONE)
 
     await check()
 
@@ -226,15 +212,11 @@ async def test_removenode_with_ignored_node(manager: ScyllaClusterManager):
     logger.info("Populating table")
 
     keys = range(512)
-    await asyncio.gather(*[run_async_cl_all(cql, f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in keys])
+    await insert_rows(cql, f"{ks}.test", keys)
 
     async def check():
         logger.info("Checking")
-        query = SimpleStatement(f"SELECT * FROM {ks}.test;", consistency_level=ConsistencyLevel.ONE)
-        rows = await cql.run_async(query)
-        assert len(rows) == len(keys)
-        for r in rows:
-            assert r.c == r.pk
+        await check_rows(cql, f"{ks}.test", keys, ConsistencyLevel.ONE)
 
     await check()
 
