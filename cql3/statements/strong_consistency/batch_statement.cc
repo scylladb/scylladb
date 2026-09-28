@@ -65,7 +65,7 @@ future<shared_ptr<result_message>> batch_statement::execute_without_checking_exc
     specs.reserve(_statements.size());
 
     for (size_t i = 0; i < _statements.size(); ++i) {
-        const auto& stmt = _statements[i].statement->inner_statement();
+        const auto& stmt = *_statements[i].statement;
         const auto& statement_options = options.for_statement(i);
         stmt.validate_primary_key(statement_options);
         modification_spec spec(stmt, statement_options);
@@ -93,7 +93,7 @@ future<shared_ptr<result_message>> batch_statement::execute_without_checking_exc
             std::optional<mutation> merged;
             for (size_t i = 0; i < _statements.size(); ++i) {
                 const auto& statement_options = options.for_statement(i);
-                auto m = get_mutation(_statements[i].statement->inner_statement(), statement_options, ts, specs[i]);
+                auto m = get_mutation(*_statements[i].statement, statement_options, ts, specs[i]);
                 if (!merged) {
                     merged = std::move(m);
                 } else {
@@ -150,7 +150,7 @@ void batch_statement::validate() const {
 
     schema_ptr batch_schema;
     for (const auto& s: _statements) {
-        const auto& stmt = s.statement->inner_statement();
+        const auto& stmt = *s.statement;
         if (!batch_schema) {
             batch_schema = stmt.s;
         } else if (batch_schema != stmt.s) {

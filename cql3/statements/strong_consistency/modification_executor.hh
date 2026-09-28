@@ -22,8 +22,10 @@ namespace cql3::statements::strong_consistency {
 class modification_executor final : public cql3::statements::modification_executor {
 public:
     future<::shared_ptr<cql_transport::messages::result_message>>
-    commit(const cql3::statements::modification_statement& stmt, query_processor& qp,
+    commit(const modification_statement& stmt, query_processor& qp,
             service::query_state& qs, const query_options& options) const override;
+
+    bool is_strongly_consistent() const override { return true; }
 
     // Stateless, so one instance serves every statement that writes this way.
     static const modification_executor& instance();
@@ -32,7 +34,7 @@ public:
 // The single mutation a strongly consistent modification produces, for the given
 // timestamp. Shared by single modifications and batches, which build one per
 // modification and merge them.
-mutation get_mutation(const cql3::statements::modification_statement& stmt, const query_options& options,
+mutation get_mutation(const modification_statement& stmt, const query_options& options,
         api::timestamp_type ts, const modification_spec& spec);
 
 }

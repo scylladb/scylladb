@@ -44,6 +44,10 @@ public:
     virtual future<::shared_ptr<cql_transport::messages::result_message>>
     commit(const modification_statement& stmt, query_processor& qp,
             service::query_state& qs, const query_options& options) const = 0;
+
+    // Whether this commits through Raft. The native protocol handler asks,
+    // because a batch may not mix modifications that do with ones that do not.
+    virtual bool is_strongly_consistent() const { return false; }
 };
 
 }

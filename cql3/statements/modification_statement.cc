@@ -26,7 +26,7 @@
 #include <seastar/core/execution_stage.hh>
 #include "cql3/query_processor.hh"
 #include "service/storage_proxy.hh"
-#include "cql3/statements/strong_consistency/modification_statement.hh"
+#include "cql3/statements/strong_consistency/modification_executor.hh"
 #include "cql3/statements/strong_consistency/statement_helpers.hh"
 #include "cql3/statements/eventual_consistency/modification_executor.hh"
 
@@ -227,6 +227,10 @@ modification_statement::execute_without_checking_exception_message(query_process
     return modify_stage(this, seastar::ref(qp), seastar::ref(qs), seastar::cref(options));
 }
 
+bool modification_statement::is_strongly_consistent() const {
+    return executor().is_strongly_consistent();
+}
+
 future<::shared_ptr<cql_transport::messages::result_message>>
 modification_statement::do_execute(query_processor& qp, service::query_state& qs, const query_options& options) const {
     return executor().commit(*this, qp, qs, options);
@@ -280,15 +284,7 @@ modification_statement::prepare(data_dictionary::database db, cql_stats& stats, 
     schema_ptr schema = validation::validate_column_family(db, keyspace(), column_family());
     auto meta = get_prepare_context();
 
-    auto statement = std::invoke([&] -> shared_ptr<cql_statement> {
-        auto result = prepare(db, meta, stats);
-
-        if (strong_consistency::is_strongly_consistent(db, schema->ks_name())) {
-            return ::make_shared<strong_consistency::modification_statement>(std::move(result));
-        }
-
-        return result;
-    });
+    auto statement = prepare(db, meta, stats);
 
     auto partition_key_bind_indices = meta.get_partition_key_bind_indexes(*schema);
     return std::make_unique<prepared_statement>(audit_info(), std::move(statement), meta, 
@@ -322,6 +318,8 @@ modification_statement::prepare(data_dictionary::database db, prepare_context& c
                     ? "UPDATE is not supported on logstor tables in strongly consistent keyspaces"
                     : "Deleting individual columns is not supported on logstor tables in strongly consistent keyspaces");
         }
+        // The keyspace decides how the modification reaches storage.
+        prepared_stmt->set_executor(strong_consistency::modification_executor::instance());
     }
 
     // At this point the prepare context instance should have a list of
