@@ -66,10 +66,12 @@ snapshot_ctl::snapshot_ctl(sharded<replica::database>& db, sharded<service::stor
         _delete_expired_snapshots = delete_expired_snapshots();
     }
     ser::snapshot_backup_rpc_verbs::register_backup_snapshot_sstables(&_ms, std::bind_front(&snapshot_ctl::backup_sstables, this));
+    ser::snapshot_backup_rpc_verbs::register_clear_snapshot_sstables(&_ms, std::bind_front(&snapshot_ctl::clear_sstables_handler, this));
 }
 
 future<> snapshot_ctl::stop() {
     co_await ser::snapshot_backup_rpc_verbs::unregister_backup_snapshot_sstables(&_ms);
+    co_await ser::snapshot_backup_rpc_verbs::unregister_clear_snapshot_sstables(&_ms);
     co_await disable_all_operations();
     co_await _task_manager_module->stop();
 }
@@ -273,7 +275,14 @@ future<> snapshot_ctl::clear_snapshot(sstring tag, std::vector<sstring> keyspace
             // Resolve every keyspace first so a later failure doesn't delete
             // snapshots that were already matched in earlier keyspaces.
             for (const auto& ks_name : keyspace_names) {
-                resolved_targets.emplace_back(ks_name, resolve_table_name(ks_name, cf_name));
+                auto resolved = resolve_table_name(ks_name, cf_name);
+                // An object-storage table's snapshot has no local directory
+                // to clear. We throw here and instruct the user to use the cluster clearsnapshot API instead.
+                if (_db.local().find_column_family(ks_name, resolved).get_storage_options().is_object_storage_type()) {
+                    throw std::invalid_argument(fmt::format(
+                            "Cannot clear a snapshot of {}.{}: table is on object storage, use the cluster clearsnapshot API", ks_name, resolved));
+                }
+                resolved_targets.emplace_back(ks_name, std::move(resolved));
             }
             for (auto& [ks_name, resolved_cf_name] : resolved_targets) {
                 co_await _db.local().clear_snapshot(tag, {ks_name}, std::move(resolved_cf_name));
@@ -364,6 +373,20 @@ future<tasks::task_id> snapshot_ctl::start_backup(sstring endpoint, sstring buck
     auto task = co_await _task_manager_module->make_and_start_task<::db::snapshot::backup_task_impl>(
         tasks::make_empty_task_info(), *this, _storage_manager.container(), std::move(endpoint), std::move(bucket), std::move(prefix), keyspace, std::move(*dir), move_files);
     co_return task->id();
+}
+
+future<> snapshot_ctl::clear_sstables_handler(table_id tid, sstring tag) {
+    co_return co_await db::snapshot::clear_sstables(*this, tid, std::string(tag));
+}
+
+future<tasks::task_id> snapshot_ctl::clear_cluster_snapshot(sstring tag) {
+    if (this_shard_id() != 0) {
+        co_return co_await container().invoke_on(0, [&] (auto& local) {
+            return local.clear_cluster_snapshot(tag);
+        });
+    }
+    co_await coroutine::switch_to(_config.backup_sched_group);
+    co_return co_await snapshot::start_cluster_clear_snapshot(*this, static_pointer_cast<tasks::task_manager::module>(_task_manager_module), std::string(tag));
 }
 
 future<tasks::task_id> snapshot_ctl::start_global_backup(std::unordered_map<sstring, snapshot_dc_location> locations, std::vector<sstring> ks_names, std::vector<sstring> tables, sstring tag, bool move_files) {
