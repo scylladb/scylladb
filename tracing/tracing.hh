@@ -380,6 +380,7 @@ private:
     // track tracing sessions only. This is used to implement lightweight
     // slow query tracing.
     bool _ignore_trace_events = false;
+    bool _write_on_close = false;
     std::unique_ptr<i_tracing_backend_helper> _tracing_backend_helper_ptr;
     sstring _thread_name;
     sstring _tracing_backend_helper_class_name;
@@ -580,6 +581,14 @@ public:
 
     bool ignore_trace_events_enabled() const {
         return _ignore_trace_events;
+    }
+
+    void set_write_on_close(bool enable = true) {
+        _write_on_close = enable;
+    }
+
+    bool write_on_close_enabled() const {
+        return _write_on_close;
     }
 
     /**
