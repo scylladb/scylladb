@@ -562,7 +562,7 @@ struct fmt::formatter<Executor> : fmt::formatter<compaction::compaction_task_exe
 
 namespace compaction {
 
-class sstables_task_executor : public compaction_task_executor, public sstables_compaction_task_impl {
+class sstables_task_executor : public compaction_task_executor {
 protected:
     std::vector<sstables::shared_sstable> _sstables;
 
@@ -570,29 +570,15 @@ protected:
     sstables::shared_sstable consume_sstable();
 
 public:
-    explicit sstables_task_executor(compaction_manager& mgr, throw_if_stopping do_throw_if_stopping, compaction_group_view* t, ::compaction::compaction_type compaction_type, sstring desc, std::vector<sstables::shared_sstable> sstables, tasks::task_id parent_id, sstring entity = "")
+    explicit sstables_task_executor(compaction_manager& mgr, throw_if_stopping do_throw_if_stopping, compaction_group_view* t, ::compaction::compaction_type compaction_type, sstring desc, std::vector<sstables::shared_sstable> sstables)
         : compaction_task_executor(mgr, do_throw_if_stopping, t, compaction_type, std::move(desc))
-        , sstables_compaction_task_impl(mgr._task_manager_module, tasks::task_id::create_random_id(), 0, "compaction group", t->schema()->ks_name(), t->schema()->cf_name(), std::move(entity), parent_id)
     {
-        _status.progress_units = "bytes";
         set_sstables(std::move(sstables));
     }
 
     virtual ~sstables_task_executor() = default;
-
-    virtual future<> release_resources() noexcept override;
-
-    virtual future<tasks::task_manager::task::progress> get_progress() const override {
-        return compaction_task_impl::get_progress(_compaction_data, _progress_monitor);
-    }
-
-    virtual void abort() noexcept override {
-        return compaction_task_executor::abort(_as);
-    }
 protected:
-    virtual future<> run() override {
-        return perform();
-    }
+    virtual void release() noexcept override;
 };
 
 class major_compaction_task_executor : public compaction_task_executor {
@@ -968,10 +954,10 @@ void compaction::compaction_state::set_cleanup_owned_ranges(compaction::owned_ra
     _cleanup_state->owned_ranges_ptr = std::move(ranges);
 }
 
-future<> sstables_task_executor::release_resources() noexcept {
+void sstables_task_executor::release() noexcept {
     _cm._stats.pending_tasks -= _sstables.size() - (_state == state::pending);
     _sstables = {};
-    return make_ready_future();
+    compaction_task_executor::release();
 }
 
 void compaction_task_executor::release() noexcept {
@@ -1824,23 +1810,23 @@ class rewrite_sstables_compaction_task_executor : public sstables_task_executor 
     compaction_manager::can_purge_tombstones _can_purge;
 
 public:
-    rewrite_sstables_compaction_task_executor(compaction_manager& mgr, throw_if_stopping do_throw_if_stopping, compaction_group_view* t, tasks::task_id parent_id, compaction_type_options options, owned_ranges_ptr owned_ranges_ptr,
+    rewrite_sstables_compaction_task_executor(compaction_manager& mgr, throw_if_stopping do_throw_if_stopping, compaction_group_view* t, compaction_type_options options, owned_ranges_ptr owned_ranges_ptr,
                                      std::vector<sstables::shared_sstable> sstables, compacting_sstable_registration compacting,
-                                     compaction_manager::can_purge_tombstones can_purge, sstring type_options_desc = "")
-        : sstables_task_executor(mgr, do_throw_if_stopping, t, options.type(), sstring(to_string(options.type())), std::move(sstables), parent_id, std::move(type_options_desc))
+                                     compaction_manager::can_purge_tombstones can_purge)
+        : sstables_task_executor(mgr, do_throw_if_stopping, t, options.type(), sstring(to_string(options.type())), std::move(sstables))
         , _options(std::move(options))
         , _owned_ranges_ptr(std::move(owned_ranges_ptr))
         , _compacting(std::move(compacting))
         , _can_purge(can_purge)
     {}
 
-    virtual future<> release_resources() noexcept override {
+protected:
+    virtual void release() noexcept override {
         _compacting.release_all();
         _owned_ranges_ptr = nullptr;
-        co_await sstables_task_executor::release_resources();
+        sstables_task_executor::release();
     }
 
-protected:
     virtual future<compaction_manager::compaction_stats_opt> do_run() override {
         compaction_stats stats{};
 
@@ -1907,13 +1893,12 @@ public:
     rewrite_sstables_component_compaction_task_executor(compaction_manager& mgr,
                                        throw_if_stopping do_throw_if_stopping,
                                        compaction_group_view* t,
-                                       tasks::task_id parent_id,
                                        compaction_type_options options,
                                        std::vector<sstables::shared_sstable> sstables,
                                        compacting_sstable_registration compacting,
                                        std::unordered_map<sstables::shared_sstable, sstables::shared_sstable>& rewritten_sstables)
-            : rewrite_sstables_compaction_task_executor(mgr, do_throw_if_stopping, t, parent_id, options, {},
-                std::move(sstables), std::move(compacting), compaction_manager::can_purge_tombstones::no, "component_rewrite"),
+            : rewrite_sstables_compaction_task_executor(mgr, do_throw_if_stopping, t, options, {},
+                std::move(sstables), std::move(compacting), compaction_manager::can_purge_tombstones::no),
             _rewritten_sstables(rewritten_sstables)
     {}
 protected:
@@ -1942,12 +1927,11 @@ public:
     split_compaction_task_executor(compaction_manager& mgr,
                                        throw_if_stopping do_throw_if_stopping,
                                        compaction_group_view* t,
-                                       tasks::task_id parent_id,
                                        compaction_type_options options,
                                        owned_ranges_ptr owned_ranges,
                                        std::vector<sstables::shared_sstable> sstables,
                                        compacting_sstable_registration compacting)
-            : rewrite_sstables_compaction_task_executor(mgr, do_throw_if_stopping, t, parent_id, options, std::move(owned_ranges),
+            : rewrite_sstables_compaction_task_executor(mgr, do_throw_if_stopping, t, options, std::move(owned_ranges),
                 std::move(sstables), std::move(compacting), compaction_manager::can_purge_tombstones::yes)
             , _opt(options.as<compaction_type_options::split>())
     {
@@ -2060,15 +2044,14 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_tas
     if (sstables.empty()) {
         co_return std::nullopt;
     }
-    co_return co_await perform_compaction<TaskType>(std::move(params), do_throw_if_stopping, info, &t, info.get_id(), std::move(options), std::move(owned_ranges_ptr), std::move(sstables), std::move(compacting), std::forward<Args>(args)...);
+    co_return co_await perform_compaction<TaskType>(std::move(params), do_throw_if_stopping, info, &t, std::move(options), std::move(owned_ranges_ptr), std::move(sstables), std::move(compacting), std::forward<Args>(args)...);
 }
 
 future<compaction_manager::compaction_stats_opt>
 compaction_manager::rewrite_sstables(compaction_group_view& t, compaction_type_options options, owned_ranges_ptr owned_ranges_ptr,
                                      get_candidates_func get_func, tasks::task_info info, can_purge_tombstones can_purge,
                                      sstring options_desc) {
-    task_params params{.type = "sstables compaction", .entity = options_desc};
-    return perform_task_on_all_files<rewrite_sstables_compaction_task_executor>(std::move(params), "rewrite", info, t, std::move(options), std::move(owned_ranges_ptr), std::move(get_func), throw_if_stopping::no, can_purge, std::move(options_desc));
+    return perform_task_on_all_files<rewrite_sstables_compaction_task_executor>({.type = "sstables compaction", .entity = std::move(options_desc)}, "rewrite", info, t, std::move(options), std::move(owned_ranges_ptr), std::move(get_func), throw_if_stopping::no, can_purge);
 }
 
 future<compaction_manager::compaction_stats_opt>
@@ -2104,7 +2087,7 @@ compaction_manager::rewrite_sstables_component(compaction_group_view& t,
         co_return std::nullopt;
     }
 
-    co_return co_await perform_compaction<rewrite_sstables_component_compaction_task_executor>({.type = "sstables compaction", .entity = "component_rewrite"}, throw_if_stopping::no, info, &t, info.get_id(),
+    co_return co_await perform_compaction<rewrite_sstables_component_compaction_task_executor>({.type = "sstables compaction", .entity = "component_rewrite"}, throw_if_stopping::no, info, &t,
         std::move(options), std::move(sstables), std::move(compacting), rewritten_sstables);
 }
 
@@ -2112,9 +2095,9 @@ class validate_sstables_compaction_task_executor : public sstables_task_executor
     compaction_manager::quarantine_invalid_sstables _quarantine_sstables;
 public:
     validate_sstables_compaction_task_executor(compaction_manager& mgr, throw_if_stopping do_throw_if_stopping,
-            compaction_group_view* t, tasks::task_id parent_id, std::vector<sstables::shared_sstable> sstables,
+            compaction_group_view* t, std::vector<sstables::shared_sstable> sstables,
             compaction_manager::quarantine_invalid_sstables quarantine_sstables)
-        : sstables_task_executor(mgr, do_throw_if_stopping, t, compaction_type::Scrub, "Scrub compaction in validate mode", std::move(sstables), parent_id)
+        : sstables_task_executor(mgr, do_throw_if_stopping, t, compaction_type::Scrub, "Scrub compaction in validate mode", std::move(sstables))
         , _quarantine_sstables(quarantine_sstables)
     {}
 
@@ -2195,7 +2178,7 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_sst
         co_return compaction_stats_opt{};
     }
 
-    co_return co_await perform_compaction<validate_sstables_compaction_task_executor>({.type = "sstables compaction"}, throw_if_stopping::no, info, &t, info.get_id(), std::move(all_sstables), quarantine_sstables);
+    co_return co_await perform_compaction<validate_sstables_compaction_task_executor>({.type = "sstables compaction"}, throw_if_stopping::no, info, &t, std::move(all_sstables), quarantine_sstables);
 }
 
 class cleanup_sstables_compaction_task_executor : public compaction_task_executor {
@@ -2204,7 +2187,7 @@ class cleanup_sstables_compaction_task_executor : public compaction_task_executo
     compacting_sstable_registration _compacting;
     std::vector<compaction_descriptor> _pending_cleanup_jobs;
 public:
-    cleanup_sstables_compaction_task_executor(compaction_manager& mgr, throw_if_stopping do_throw_if_stopping, compaction_group_view* t, tasks::task_id parent_id, compaction_type_options options, owned_ranges_ptr owned_ranges_ptr,
+    cleanup_sstables_compaction_task_executor(compaction_manager& mgr, throw_if_stopping do_throw_if_stopping, compaction_group_view* t, compaction_type_options options, owned_ranges_ptr owned_ranges_ptr,
                                      std::vector<sstables::shared_sstable> candidates, compacting_sstable_registration compacting)
             : compaction_task_executor(mgr, do_throw_if_stopping, t, options.type(), sstring(to_string(options.type())))
             , _cleanup_options(std::move(options))
