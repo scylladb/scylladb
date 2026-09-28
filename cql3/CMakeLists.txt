@@ -103,6 +103,7 @@ target_sources(cql3
     statements/revoke_statement.cc
     statements/alter_type_statement.cc
     statements/alter_cluster_config_statement.cc
+    statements/execute_statement.cc
     statements/alter_keyspace_statement.cc
     statements/role-management-statements.cc
     statements/service_level_statement.cc
