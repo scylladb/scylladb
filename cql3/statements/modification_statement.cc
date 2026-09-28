@@ -31,6 +31,7 @@
 #include "db/large_data_handler.hh"
 #include "cql3/statements/strong_consistency/modification_statement.hh"
 #include "cql3/statements/strong_consistency/statement_helpers.hh"
+#include "cql3/statements/eventual_consistency/modification_executor.hh"
 
 #include <boost/lexical_cast.hpp>
 
@@ -67,6 +68,9 @@ modification_statement::modification_statement(statement_type type_, uint32_t bo
     , _column_operations{}
     , _stats(stats_)
     , _ks_sel(::is_internal_keyspace(schema_->ks_name()) ? ks_selector::SYSTEM : ks_selector::NONSYSTEM)
+    // Preparing the statement replaces this when the keyspace it addresses is
+    // strongly consistent; every other modification writes through storage_proxy.
+    , _executor(&eventual_consistency::modification_executor::instance())
 { }
 
 modification_statement::~modification_statement() = default;
@@ -265,6 +269,13 @@ modification_statement::execute_without_checking_exception_message(query_process
     return modify_stage(this, seastar::ref(qp), seastar::ref(qs), seastar::cref(options));
 }
 
+future<::shared_ptr<cql_transport::messages::result_message>>
+modification_statement::do_execute(query_processor& qp, service::query_state& qs, const query_options& options) const {
+    return executor().commit(*this, qp, qs, options);
+}
+
+namespace eventual_consistency {
+
 namespace {
 
 future<::shared_ptr<cql_transport::messages::result_message>>
@@ -318,27 +329,28 @@ process_forced_rebounce(unsigned shard, query_processor& qp, const query_options
         qp.bounce_to_shard(shard, std::move(const_cast<cql3::query_options&>(options).take_cached_pk_function_calls())));
 }
 
-} // namespace
-
 future<coordinator_result<>>
-modification_statement::execute_without_condition(query_processor& qp, service::query_state& qs, const query_options& options, modification_spec spec, db::large_data_violation_type* violations) const {
+execute_without_condition(const modification_statement& stmt, query_processor& qp, service::query_state& qs,
+        const query_options& options, modification_spec&& spec, db::large_data_violation_type* violations) {
     auto cl = options.get_consistency();
-    auto timeout = db::timeout_clock::now() + get_timeout(qs.get_client_state(), options);
-    return get_mutations(qp, options, timeout, false, options.get_timestamp(qs), qs, std::move(spec)).then([this, cl, timeout, &qp, &qs, &options, violations] (auto mutations) {
+    auto timeout = db::timeout_clock::now() + stmt.get_timeout(qs.get_client_state(), options);
+    return stmt.get_mutations(qp, options, timeout, false, options.get_timestamp(qs), qs, std::move(spec)).then(
+            [&stmt, cl, timeout, &qp, &qs, &options, violations] (auto mutations) {
         if (mutations.empty()) {
             return make_ready_future<coordinator_result<>>(bo::success());
         }
 
-        return qp.proxy().mutate_with_triggers(std::move(mutations), cl, timeout, false, qs.get_trace_state(), qs.get_permit(), db::allow_per_partition_rate_limit::yes, this->is_raw_counter_shard_write(), {
+        return qp.proxy().mutate_with_triggers(std::move(mutations), cl, timeout, false, qs.get_trace_state(), qs.get_permit(), db::allow_per_partition_rate_limit::yes, stmt.is_raw_counter_shard_write(), {
             .node_local_only = options.get_specific_options().node_local_only,
-            .bypass_large_data_guardrails = this->attrs->is_bypass_large_data_guardrails(),
+            .bypass_large_data_guardrails = stmt.attrs->is_bypass_large_data_guardrails(),
             .violations_out = violations
         });
     });
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>>
-modification_statement::execute_with_condition(query_processor& qp, service::query_state& qs, const query_options& options) const {
+execute_with_condition(const modification_statement& stmt, query_processor& qp, service::query_state& qs,
+        const query_options& options) {
 
     auto cl_for_learn = options.get_consistency();
     utils::result_with_exception_ptr<db::consistency_level> cl_for_paxos = options.check_serial_consistency();
@@ -352,26 +364,26 @@ modification_statement::execute_with_condition(query_processor& qp, service::que
     auto cas_timeout = now + cfg.cas_timeout;         // When to give up due to contention.
     auto read_timeout = now + cfg.read_timeout;       // When to give up on query.
 
-    modification_spec spec(*this, options);
+    modification_spec spec(stmt, options);
 
     if (spec.keys.empty()) {
         throw exceptions::invalid_request_exception(format("Unrestricted partition key in a conditional {}",
-                    type.is_update() ? "update" : "deletion"));
+                    stmt.type.is_update() ? "update" : "deletion"));
     }
     if (spec.ranges.empty()) {
         throw exceptions::invalid_request_exception(format("Unrestricted clustering key in a conditional {}",
-                    type.is_update() ? "update" : "deletion"));
+                    stmt.type.is_update() ? "update" : "deletion"));
     }
 
-    auto request = std::make_unique<cas_request>(s);
+    auto request = std::make_unique<cas_request>(stmt.s);
     auto* request_ptr = request.get();
     // cas_request can be used for batches as well single statements; Here we have just a single
     // modification in the list of CAS commands, since we're handling single-statement execution.
-    request->add_row_update(*this, std::move(spec), options);
+    request->add_row_update(stmt, std::move(spec), options);
 
     auto token = request->key()[0].start()->value().as_decorated_key().token();
 
-    auto cas_shard = service::cas_shard(*s, token);
+    auto cas_shard = service::cas_shard(*stmt.s, token);
 
     if (utils::get_local_injector().is_enabled("forced_bounce_to_shard_counter")) {
         return process_forced_rebounce(cas_shard.shard(), qp, options);
@@ -384,17 +396,17 @@ modification_statement::execute_with_condition(query_processor& qp, service::que
 
     std::optional<locator::tablet_routing_info> tablet_info;
 
-    auto&& table = s->table();
-    if (_may_use_token_aware_routing && table.uses_tablets() && qs.get_client_state().is_protocol_extension_set(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V1)) {
+    auto&& table = stmt.s->table();
+    if (stmt._may_use_token_aware_routing && table.uses_tablets() && qs.get_client_state().is_protocol_extension_set(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V1)) {
         auto erm = table.get_effective_replication_map();
         tablet_info = erm->check_locality(token, qs.get_client_state().get_original_shard());
     }
 
-    return qp.proxy().cas(s, std::move(cas_shard), *request_ptr, request->read_command(qp), request->key(),
+    return qp.proxy().cas(stmt.s, std::move(cas_shard), *request_ptr, request->read_command(qp), request->key(),
             {read_timeout, qs.get_permit(), qs.get_client_state(), qs.get_trace_state()},
             std::move(cl_for_paxos).assume_value(), cl_for_learn, statement_timeout, cas_timeout, true, {},
-            attrs->is_bypass_large_data_guardrails()).then([this, request = std::move(request), tablet_info = std::move(tablet_info)] (service::storage_proxy::cas_result cas_result) mutable {
-        auto result = request->build_cas_result_set(_metadata, _columns_of_cas_result_set, cas_result.is_applied);
+            stmt.attrs->is_bypass_large_data_guardrails()).then([&stmt, request = std::move(request), tablet_info = std::move(tablet_info)] (service::storage_proxy::cas_result cas_result) mutable {
+        auto result = request->build_cas_result_set(stmt.cas_result_metadata(), stmt.columns_of_cas_result_set(), cas_result.is_applied);
         if (tablet_info) {
             result->add_tablet_info(std::move(*tablet_info));
         }
@@ -407,17 +419,20 @@ modification_statement::execute_with_condition(query_processor& qp, service::que
     });
 }
 
+} // namespace
+
 future<::shared_ptr<cql_transport::messages::result_message>>
-modification_statement::do_execute(query_processor& qp, service::query_state& qs, const query_options& options) const {
-    if (!qp.db().try_find_table(s->id())) {
+modification_executor::commit(const modification_statement& stmt, query_processor& qp, service::query_state& qs,
+        const query_options& options) const {
+    if (!qp.db().try_find_table(stmt.s->id())) {
         co_return coroutine::exception(
                 std::make_exception_ptr(exceptions::invalid_request_exception(
-                        format("unconfigured table {}", column_family()))));
+                        format("unconfigured table {}", stmt.column_family()))));
     }
 
-    tracing::add_table_name(qs.get_trace_state(), keyspace(), column_family());
+    tracing::add_table_name(qs.get_trace_state(), stmt.keyspace(), stmt.column_family());
 
-    inc_cql_stats(qs.get_client_state().is_internal());
+    stmt.inc_cql_stats(qs.get_client_state().is_internal());
 
     const auto cl = options.get_consistency();
     const query_processor::write_consistency_guardrail_state guardrail_state = qp.check_write_consistency_levels_guardrail(cl);
@@ -430,10 +445,10 @@ modification_statement::do_execute(query_processor& qp, service::query_state& qs
                                "set in the configuration.", cl, cl))));
     }
 
-    validate_primary_key(options);
+    stmt.validate_primary_key(options);
 
-    if (has_conditions()) {
-        auto result = co_await execute_with_condition(qp, qs, options);
+    if (stmt.has_conditions()) {
+        auto result = co_await execute_with_condition(stmt, qp, qs, options);
         if (guardrail_state == query_processor::write_consistency_guardrail_state::WARN) {
             result->add_warning(format("Using write consistency level {} listed on the "
                                        "write_consistency_levels_warned is not recommended.", cl));
@@ -441,7 +456,7 @@ modification_statement::do_execute(query_processor& qp, service::query_state& qs
         co_return result;
     }
 
-    modification_spec spec(*this, options);
+    modification_spec spec(stmt, options);
 
     bool keys_size_one = spec.keys.size() == 1;
     auto token = dht::token();
@@ -450,8 +465,8 @@ modification_statement::do_execute(query_processor& qp, service::query_state& qs
     }
 
     auto violations = db::large_data_violation_type::none;
-    auto res = co_await execute_without_condition(qp, qs, options, std::move(spec), &violations);
-    
+    auto res = co_await execute_without_condition(stmt, qp, qs, options, std::move(spec), &violations);
+
     if (!res) {
         co_return seastar::make_shared<cql_transport::messages::result_message::exception>(std::move(res).assume_error());
     }
@@ -467,13 +482,13 @@ modification_statement::do_execute(query_processor& qp, service::query_state& qs
         result->add_warning(std::move(warning));
     }
 
-    auto&& table = s->table();
+    auto&& table = stmt.s->table();
 
-    if (keys_size_one && _may_use_token_aware_routing && table.uses_tablets()) {
+    if (keys_size_one && stmt._may_use_token_aware_routing && table.uses_tablets()) {
         auto erm = table.get_effective_replication_map();
         if (qs.get_client_state().is_protocol_extension_set(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V2_EXPERIMENTAL)) {
             // We only return routing information for EXECUTE requests.
-            // They will carry a tablet version block; QUERY reqeuests
+            // They will carry a tablet version block; QUERY requests
             // will not.
             if (options.get_tablet_version_block().has_value()) {
                 auto tablet_info_v2 = erm->check_tablet_version(token, *options.get_tablet_version_block());
@@ -490,6 +505,13 @@ modification_statement::do_execute(query_processor& qp, service::query_state& qs
     }
 
     co_return std::move(result);
+}
+
+const modification_executor& modification_executor::instance() {
+    static const modification_executor the_instance;
+    return the_instance;
+}
+
 }
 
 void modification_statement::build_cas_result_set_metadata() {
