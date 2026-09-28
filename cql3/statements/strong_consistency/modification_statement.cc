@@ -40,8 +40,9 @@ mutation modification_statement::get_mutation(const query_options& options, api:
     const auto prefetch_data = update_parameters::prefetch_data(_statement->s);
     const auto ttl = _statement->get_time_to_live(options);
     const auto params = update_parameters(_statement->s, options, ts, ttl, prefetch_data);
-    const auto ranges = _statement->create_clustering_ranges(options, json_cache);
-    auto muts = _statement->apply_updates(keys, ranges, params, json_cache);
+    // Recomputes the caller's keys; a later patch builds the spec only once.
+    const modification_spec spec(*_statement, options);
+    auto muts = _statement->apply_updates(spec, params);
     if (muts.size() != 1) {
         on_internal_error(logger, ::format("statement '{}' has unexpected number of mutations {}",
             raw_cql_statement.linearize(), muts.size()));

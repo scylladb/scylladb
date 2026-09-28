@@ -71,10 +71,8 @@ public:
     }
 
     virtual utils::chunked_vector<mutation> apply_updates(
-            const std::vector<dht::partition_range>& keys,
-            const std::vector<query::clustering_range>& ranges,
-            const update_parameters& params,
-            const json_cache_opt& json_cache) const override;
+            const modification_spec& spec,
+            const update_parameters& params) const override;
 
 private:
     void validate_where_clause_for_conditions() const;
