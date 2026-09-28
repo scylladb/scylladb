@@ -273,7 +273,7 @@ private:
     clock::duration next_sleep_duration() const;
 
     void mark_hint_as_in_progress(send_one_file_ctx&, db::replay_position rp) const;
-    void on_hint_send_success(send_one_file_ctx&, db::replay_position rp) const noexcept;
+    void on_hint_send_success(send_one_file_ctx&, db::replay_position rp) noexcept;
     void on_hint_send_failure(send_one_file_ctx&, db::replay_position rp) const noexcept;
 
     // Returns a position below which hints were successfully replayed.
