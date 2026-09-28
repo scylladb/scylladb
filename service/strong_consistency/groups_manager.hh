@@ -212,7 +212,8 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     // or (re)started. Unlike acquire_server(), doesn't wait for a start.
     static std::optional<raft_server> try_acquire_server(raft_group_state& state);
 
-    future<> leader_info_updater(raft_group_state& state, locator::global_tablet_id tablet, raft::group_id gid);
+    future<> leader_info_updater(raft_group_state& state, table_id table, raft::group_id gid,
+        dht::token_range range);
 
     void init_messaging_service();
     future<> uninit_messaging_service();

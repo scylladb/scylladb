@@ -1021,7 +1021,10 @@ public:
     api::timestamp_type min_memtable_timestamp() const;
     api::timestamp_type min_memtable_live_timestamp() const;
     api::timestamp_type min_memtable_live_row_marker_timestamp() const;
-    api::timestamp_type get_max_timestamp_for_tablet(locator::tablet_id) const;
+    // Returns the highest timestamp this shard has stored for tokens in `range`. An upper bound: it
+    // covers the whole of every storage group the range overlaps. Nullopt if this shard stores
+    // nothing overlapping the range, i.e. no tablet owning such tokens is served here.
+    std::optional<api::timestamp_type> get_max_timestamp_for_token_range(dht::token_range range) const;
 
     const row_cache& get_row_cache() const {
         return _cache;
