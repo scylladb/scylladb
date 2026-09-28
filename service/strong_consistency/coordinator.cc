@@ -534,22 +534,21 @@ auto coordinator::mutate(schema_ptr schema,
             const auto leader_host_id = locator::host_id{not_a_leader->leader.uuid()};
             const auto* target = op->replicas.find_replica(leader_host_id);
             if (!target) {
-                // The leader the local raft server reports is not among the replicas the
-                // tablet's current transition stage allows to be the leader, which is a
-                // stale report rather than an error: current_leader() on a follower is
-                // the last leader it heard from, so a replica that a migration has just
-                // removed from the raft group keeps being named until the new leader
-                // contacts this one. There is nowhere to redirect to, so tell the local
-                // server to forget that leader and wait for the next one.
+                // The leader the local raft server names is outside the serving set. A
+                // migration makes sure every serving replica names a voter before the
+                // next stage is published, so this happens in one corner only: a replica
+                // the migration demoted campaigns once more, and wins for one commit.
+                // Raft lets a server campaign as a non-voter of its newest configuration
+                // if, as far as it knows, that configuration is uncommitted and it was a
+                // voter in the previous one - after a restart that lost the stored commit
+                // index, or when the leader died before telling it about the commit. On
+                // its first commit it sees that it can't vote and hands leadership over.
+                // See "Strongly-consistent tablets" in docs/dev/topology-over-raft.md.
                 //
-                // The wait may well resolve with the same leader again: a message it sent
-                // before it stepped down can still arrive and re-set current_leader(). We
-                // retry with the same operation context, and the retries make progress
-                // rather than spin. The context holds the effective replication map,
-                // which blocks the global barrier of every later transition stage, and
-                // with it the configuration change that could make a replica outside the
-                // set the leader. So the change that removed the reported leader has
-                // already committed, and all that is left is for it to reach this node.
+                // It is a legal raft state, not an error. There is nowhere to redirect to,
+                // so tell the local server to forget that leader and wait for the next
+                // one. The wait may resolve with the same leader again, as long as it
+                // still leads; the retries end once it hands leadership over.
                 logger.debug("mutate(): table {}.{}, tablet {}, reported leader {} cannot be the leader "
                     "in transition stage {}, waiting for a new leader",
                     schema->ks_name(), schema->cf_name(), op->replicas.tablet_id(), leader_host_id,
@@ -705,12 +704,9 @@ auto coordinator::query(schema_ptr schema,
                 const auto leader_host_id = locator::host_id{not_a_leader->leader.uuid()};
                 const auto* target = op.replicas.find_replica(leader_host_id);
                 if (!target) {
-                    // A leader outside the replica set the current transition stage allows
-                    // is a stale report rather than an error: the local raft server keeps
-                    // naming the leader a migration has just removed from the group until
-                    // the new one contacts it. Forget it and wait for the next one. See
-                    // mutate() for why retrying with the same operation context makes
-                    // progress even when the wait resolves with the same leader again.
+                    // A leader outside the serving set: a replica a migration demoted,
+                    // leading for one commit. Forget it and wait for the next one; see
+                    // mutate().
                     logger.debug("query(): table {}.{}, tablet {}, reported leader {} cannot be the leader "
                         "in transition stage {}, waiting for a new leader",
                         schema->ks_name(), schema->cf_name(), op.replicas.tablet_id(), leader_host_id,

@@ -95,10 +95,8 @@ static future<> wait_with_abort_source(condition_variable& cv, abort_source& as)
     });
 }
 
-// Test-only: emulate a leader that is not a tablet replica, as reported by a follower
-// that hasn't noticed yet that the leader it knows was removed from the raft group by a
-// tablet migration - current_leader() keeps naming it until the new leader contacts
-// the follower.
+// Test-only: emulate a named leader outside the serving set, as when a replica a tablet
+// migration demoted leads for one commit. The real window is too short to hit.
 static std::optional<raft::server_id> injected_stale_leader() {
     if (utils::get_local_injector().enter("sc_report_stale_leader")) {
         return raft::server_id{utils::UUID(0, 1)};
